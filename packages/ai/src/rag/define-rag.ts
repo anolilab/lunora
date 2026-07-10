@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { EmbeddingModel } from "ai";
 import { embed as aiEmbed, jsonSchema, tool } from "ai";
 
@@ -140,24 +141,24 @@ const assembleContext = (chunks: ReadonlyArray<RetrievedChunk>): string =>
  */
 const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     if (typeof config.index !== "string" || config.index.length === 0) {
-        throw new TypeError("@lunora/ai/rag: `index` must be a non-empty Vectorize index name");
+        throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `index` must be a non-empty Vectorize index name");
     }
 
     const chunkSize = config.chunkSize ?? DEFAULT_CHUNK_SIZE;
     const chunkOverlap = config.chunkOverlap ?? DEFAULT_CHUNK_OVERLAP;
 
     if (!Number.isInteger(chunkSize) || chunkSize < 1) {
-        throw new TypeError("@lunora/ai/rag: `chunkSize` must be a positive integer");
+        throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `chunkSize` must be a positive integer");
     }
 
     if (!Number.isInteger(chunkOverlap) || chunkOverlap < 0 || chunkOverlap >= chunkSize) {
-        throw new TypeError("@lunora/ai/rag: `chunkOverlap` must be a non-negative integer smaller than `chunkSize`");
+        throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `chunkOverlap` must be a non-negative integer smaller than `chunkSize`");
     }
 
     const defaultTopK = config.topK ?? DEFAULT_TOP_K;
 
     if (!Number.isInteger(defaultTopK) || defaultTopK < 1) {
-        throw new TypeError("@lunora/ai/rag: `topK` must be a positive integer");
+        throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `topK` must be a positive integer");
     }
 
     const splitter = config.chunk ?? ((text: string): ReadonlyArray<string> => fixedWindowChunks(text, chunkSize, chunkOverlap));
@@ -184,7 +185,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             }
 
             if (config.requireNamespace) {
-                throw new TypeError(
+                throw new LunoraError(
+                    "BAD_REQUEST",
                     `@lunora/ai/rag: index "${config.index}" requires a namespace (requireNamespace is set) — pass the tenant/shard key on index()/retrieve()/remove()`,
                 );
             }
@@ -221,7 +223,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             checkNamespace(input.namespace);
 
             if (input.importance !== undefined && (typeof input.importance !== "number" || input.importance < 0 || input.importance > 1)) {
-                throw new TypeError("@lunora/ai/rag: `importance` must be a number in [0, 1]");
+                throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `importance` must be a number in [0, 1]");
             }
 
             const hash = await sha256Hex(input.text);
@@ -241,6 +243,10 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             const pieces = splitter(input.text);
             const ids = pieces.map((_, chunkIndex) => chunkVectorId(input.namespace, input.id, chunkIndex));
+
+            if (pieces.length === 0 && input.allowEmptySources === false) {
+                throw new LunoraError("BAD_REQUEST", `@lunora/ai/rag: source "${input.id}" produced zero chunks — set allowEmptySources: true to allow this`);
+            }
 
             // Text lands in the store BEFORE the vectors: a match must never
             // point at text that does not exist yet. The reverse failure mode —
@@ -382,7 +388,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             }
 
             if (!Number.isInteger(before) || before < 0 || !Number.isInteger(after) || after < 0) {
-                throw new TypeError("@lunora/ai/rag: `chunkContext.before`/`chunkContext.after` must be non-negative integers");
+                throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `chunkContext.before`/`chunkContext.after` must be non-negative integers");
             }
 
             const known = new Map(chunks.map((chunk) => [chunk.id, chunk.text]));
@@ -427,10 +433,13 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 const resolved = config.filters?.[filter];
 
                 if (!resolved) {
-                    throw new TypeError(`@lunora/ai/rag: unknown named filter "${filter}" — must be one of the keys declared in RagConfig.filters`);
+                    throw new LunoraError(
+                        "NOT_FOUND",
+                        `@lunora/ai/rag: unknown named filter "${filter}" — must be one of the keys declared in RagConfig.filters`,
+                    );
                 }
 
-                return resolved;
+                return resolved.filter;
             }
 
             return filter;
@@ -448,6 +457,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return {
                     chunkIndex: parsed.chunkIndex,
                     id: match.id,
+                    importance,
                     metadata: userMetadataOf(metadata),
                     score: match.score * importance,
                     sourceId: parsed.sourceId,
@@ -526,9 +536,11 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             for (const chunk of chunks) {
                 if (!seen.has(chunk.sourceId)) {
                     seen.add(chunk.sourceId);
-                    sources.push({ id: chunk.sourceId, metadata: chunk.metadata });
+                    sources.push({ id: chunk.sourceId, metadata: chunk.metadata, weight: chunk.importance });
                 }
             }
+
+            options?.onRetrieve?.({ matches: chunks.length, query });
 
             return { chunks, context: assembleContext(chunks), sources };
         };

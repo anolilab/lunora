@@ -101,14 +101,14 @@ export interface StoredRagChunk {
 
 /**
  * A pre-defined, reusable filter expression. Declared on `RagConfig.filters`
- * and referenced by name from `RetrieveOptions.filter` — avoids repeating the
- * same tenant/RBAC filter shape across every retrieval site.
+ * (keyed by name) and referenced by name from `RetrieveOptions.filter` — avoids
+ * repeating the same tenant/RBAC filter shape across every retrieval site.
  * @example
  * ```ts
  * const docs = defineRag({
  *   index: "docs",
  *   filters: {
- *     published: { status: "published", deleted: false },
+ *     published: { filter: { status: "published", deleted: false }, description: "Only published content" },
  *   },
  * });
  * // Later — reference by name:
@@ -120,8 +120,6 @@ export interface RagNamedFilter {
     description?: string;
     /** The filter expression passed verbatim to Vectorize's `filter` parameter. */
     filter: Record<string, unknown>;
-    /** The filter name — used as the key in `RagConfig.filters`. */
-    name: string;
 }
 
 /**
@@ -166,7 +164,7 @@ export interface RagConfig {
      * pass through `RetrieveOptions.filter`. Throws at retrieve-time if the
      * name is not found here — catches spelling mistakes early.
      */
-    filters?: Record<string, Record<string, unknown>>;
+    filters?: Record<string, RagNamedFilter>;
     /** The Vectorize index name (a `ctx.vectors` index binding key). */
     index: string;
 
@@ -191,6 +189,12 @@ export interface RagConfig {
 }
 
 export interface IndexInput {
+    /**
+     * When `false`, throws if the source text produces zero chunks (e.g. empty
+     * or whitespace-only text). Default `true` (silently produces zero chunks).
+     */
+    allowEmptySources?: boolean;
+
     /** Source document id — chunk ids derive from it as `${id}#${chunkIndex}`. */
     id: string;
 
@@ -251,12 +255,24 @@ export interface RetrieveOptions {
     /** Drop matches whose (importance-adjusted) score falls below this threshold. */
     minScore?: number;
     namespace?: string;
+
+    /**
+     * Fires after retrieval completes, before chunk expansion. Useful for
+     * observability — logging query latency, hit counts, etc.
+     */
+    onRetrieve?: (info: { matches: number; query: string }) => void;
     topK?: number;
 }
 
 export interface RetrievedChunk {
     chunkIndex: number;
     id: string;
+
+    /**
+     * The source-level importance weight that was multiplied into this chunk's
+     * score. `1` when no importance was set at index time.
+     */
+    importance: number;
     /** Caller metadata stored on the vector (internal `__rag*` keys stripped). */
     metadata?: Record<string, unknown>;
     /** Cosine similarity, multiplied by the source's `importance` when one was set. */
@@ -267,7 +283,15 @@ export interface RetrievedChunk {
 
 export interface RagSource {
     id: string;
+    /** Caller metadata from the source's first-seen chunk (internal keys stripped). */
     metadata?: Record<string, unknown>;
+
+    /**
+     * The source's importance weight (the `importance` value passed at index
+     * time, default 1), propagated so downstream consumers can factor it into
+     * their own ranking or UI.
+     */
+    weight?: number;
 }
 
 /** The retrieve return shape — designed so an agent memory step consumes it directly. */

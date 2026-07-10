@@ -1,8 +1,9 @@
+import { LunoraError } from "@lunora/errors";
 import type { EmbeddingModel } from "ai";
 import { embed } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
-import { contentHashFromArrayBuffer, defineRag, guessMimeTypeFromExtension } from "../src/rag";
+import { contentHash, defineRag, guessMimeTypeFromExtension } from "../src/rag";
 import type { RagContext, RagTextStore, RagVectorQueryInput, RagVectors } from "../src/rag/types";
 
 // Partial-mock the AI SDK: `embed` becomes a deterministic token-bag embedder
@@ -223,7 +224,7 @@ const pipeChunker = (text: string): ReadonlyArray<string> =>
 
 describe(defineRag, () => {
     it("rejects invalid configs", () => {
-        expect(() => defineRag({ index: "" })).toThrow(TypeError);
+        expect(() => defineRag({ index: "" })).toThrow(LunoraError);
         expect(() => defineRag({ chunkOverlap: 1000, chunkSize: 1000, index: "docs" })).toThrow(/chunkOverlap/u);
         expect(() => defineRag({ index: "docs", topK: 0 })).toThrow(/topK/u);
     });
@@ -415,6 +416,8 @@ describe(defineRag, () => {
         expect(result.chunks.map((chunk) => chunk.sourceId)).toStrictEqual(["canonical", "incidental"]);
         expect(result.chunks[1]!.score).toBeCloseTo(result.chunks[0]!.score * 0.2, 5);
         expect(result.chunks[1]!.metadata).toBeUndefined();
+        expect(result.chunks[0]!.importance).toBe(1);
+        expect(result.chunks[1]!.importance).toBe(0.2);
     });
 
     it("stitches neighbouring chunks into matches via chunkContext", async () => {
@@ -510,9 +513,9 @@ describe(defineRag, () => {
         const docs = defineRag({ index: "docs", requireNamespace: true });
         const rag = docs(ctx);
 
-        await expect(rag.index({ id: "doc-1", text: "hello" })).rejects.toThrow(/requires a namespace/u);
-        await expect(rag.retrieve("hello")).rejects.toThrow(/requires a namespace/u);
-        await expect(rag.remove({ id: "doc-1" })).rejects.toThrow(/requires a namespace/u);
+        await expect(rag.index({ id: "doc-1", text: "hello" })).rejects.toThrow(LunoraError);
+        await expect(rag.retrieve("hello")).rejects.toThrow(LunoraError);
+        await expect(rag.remove({ id: "doc-1" })).rejects.toThrow(LunoraError);
 
         // With the namespace supplied, the same calls go through.
         await expect(rag.index({ id: "doc-1", namespace: "tenant-a", text: "hello" })).resolves.toMatchObject({ chunks: 1 });
@@ -528,6 +531,48 @@ describe(defineRag, () => {
 
         expect(result).toStrictEqual({ chunks: 0, ids: [], unchanged: false });
         expect(store.size).toBe(0);
+    });
+
+    it("throws for empty text when allowEmptySources is false", async () => {
+        const { vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
+
+        await expect(docs(ctx).index({ allowEmptySources: false, id: "doc-1", text: "" })).rejects.toThrow(/zero chunks/u);
+        // Also catches whitespace-only text after a no-op chunker split
+        await expect(docs(ctx).index({ allowEmptySources: false, id: "doc-2", text: "   " })).rejects.toThrow(LunoraError);
+    });
+
+    it("fires onRetrieve callback after retrieval with match count", async () => {
+        const { vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
+        const rag = docs(ctx);
+        const onRetrieve = vi.fn();
+
+        await rag.index({ id: "weather", text: "rain storm cloud" });
+        await rag.retrieve("rain storm cloud", { onRetrieve, topK: 5 });
+
+        expect(onRetrieve).toHaveBeenCalledTimes(1);
+        expect(onRetrieve).toHaveBeenCalledWith({ matches: 1, query: "rain storm cloud" });
+    });
+
+    it("populates source weight from chunk importance", async () => {
+        const { vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
+        const rag = docs(ctx);
+
+        await rag.index({ id: "canonical", text: "rain storm cloud" });
+        await rag.index({ id: "incidental", importance: 0.3, text: "rain storm cloud" });
+
+        const result = await rag.retrieve("rain storm cloud", { topK: 2 });
+
+        const canonicalSource = result.sources.find((source) => source.id === "canonical");
+        const incidentalSource = result.sources.find((source) => source.id === "incidental");
+
+        expect(canonicalSource?.weight).toBe(1);
+        expect(incidentalSource?.weight).toBe(0.3);
     });
 
     it("exposes retrieve as an AI SDK tool", async () => {
@@ -563,26 +608,33 @@ describe(defineRag, () => {
         });
     });
 
-    describe("contentHashFromArrayBuffer", () => {
+    describe("contentHash", () => {
         it("produces a consistent SHA-256 hex digest", async () => {
             const encoder = new TextEncoder();
-            const { buffer } = encoder.encode("hello rag world");
-            const hash = await contentHashFromArrayBuffer(buffer);
+            const hash = await contentHash(encoder.encode("hello rag world"));
 
             expect(hash).toBe("4e520b6e777a6501de8c6d5188bd5f2639137a6ef34a5601047fef3c68e35a12");
 
             // Same input yields same hash
-            const hash2 = await contentHashFromArrayBuffer(buffer);
+            const hash2 = await contentHash(encoder.encode("hello rag world"));
 
             expect(hash2).toBe(hash);
         });
 
         it("produces different hashes for different inputs", async () => {
             const encoder = new TextEncoder();
-            const hash1 = await contentHashFromArrayBuffer(encoder.encode("alpha").buffer);
-            const hash2 = await contentHashFromArrayBuffer(encoder.encode("beta").buffer);
+            const hash1 = await contentHash(encoder.encode("alpha"));
+            const hash2 = await contentHash(encoder.encode("beta"));
 
             expect(hash1).not.toBe(hash2);
+        });
+
+        it("accepts both ArrayBuffer and Uint8Array", async () => {
+            const encoder = new TextEncoder();
+            const asBuffer = await contentHash(encoder.encode("test").buffer);
+            const asView = await contentHash(encoder.encode("test"));
+
+            expect(asBuffer).toBe(asView);
         });
     });
 
@@ -590,7 +642,11 @@ describe(defineRag, () => {
         it("resolves a named filter from config.filters", async () => {
             const { queryCalls, vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
-            const docs = defineRag({ allowSharedNamespace: true, filters: { published: { status: "published", deleted: false } }, index: "docs" });
+            const docs = defineRag({
+                allowSharedNamespace: true,
+                filters: { published: { filter: { status: "published", deleted: false }, description: "Only published content" } },
+                index: "docs",
+            });
             const rag = docs(ctx);
 
             await rag.index({ id: "doc-1", text: "hello world" });
@@ -602,12 +658,12 @@ describe(defineRag, () => {
         it("throws for unknown named filter", async () => {
             const { vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
-            const docs = defineRag({ allowSharedNamespace: true, filters: { published: { status: "published" } }, index: "docs" });
+            const docs = defineRag({ allowSharedNamespace: true, filters: { published: { filter: { status: "published" } } }, index: "docs" });
             const rag = docs(ctx);
 
             await rag.index({ id: "doc-1", text: "hello world" });
 
-            await expect(rag.retrieve("hello", { filter: "nonexistent" })).rejects.toThrow(/unknown named filter "nonexistent"/u);
+            await expect(rag.retrieve("hello", { filter: "nonexistent" })).rejects.toThrow(LunoraError);
         });
 
         it("passes through a literal Record filter unchanged", async () => {

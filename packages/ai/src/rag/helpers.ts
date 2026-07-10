@@ -105,13 +105,14 @@ const guessMimeTypeFromExtension = (extension: string): string => {
 };
 
 /**
- * SHA-256 hex digest of an `ArrayBuffer`. Useful for content-addressable
+ * SHA-256 hex digest of binary data. Accepts a `BufferSource` (`ArrayBuffer` or
+ * `ArrayBufferView` such as `Uint8Array`). Useful for content-addressable
  * storage — pair with `IndexInput.text` to detect duplicates across re-indexes.
  */
-const contentHashFromArrayBuffer = async (buffer: ArrayBuffer): Promise<string> => {
-    const digest = await crypto.subtle.digest("SHA-256", buffer);
+const contentHash = async (data: BufferSource): Promise<string> => {
+    const digest = await crypto.subtle.digest("SHA-256", data);
 
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 };
 
-export { contentHashFromArrayBuffer, guessMimeTypeFromExtension };
+export { contentHash, guessMimeTypeFromExtension };
