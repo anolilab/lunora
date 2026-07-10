@@ -5,6 +5,7 @@ import { createMemo, createSignal } from "solid-js";
 import type { AgentThreadRecord, AgentThreadStatus, MaybeAccessor } from "./create-agent";
 import { NO_MUTATION_REF, resolveMaybe } from "./create-agent";
 import { createMutation } from "./create-mutation";
+import { createStream } from "./create-stream";
 import { createSubscription } from "./create-subscription";
 
 /**
@@ -32,6 +33,47 @@ interface AgentChatMessage {
     toolName?: string;
 }
 
+/**
+ * A live token delta streamed while a turn is generating. Client-safe mirror of
+ * `@lunora/agent`'s `AgentTokenDelta`. Ephemeral — deltas feed
+ * {@link CreateAgentChatResult.streamingText} live and are never replayed; the
+ * persisted assistant message stays the single source of truth.
+ */
+interface AgentTokenDelta {
+    /** Discriminates the token arm of {@link AgentLiveEvent}; unset on the wire (token is the default). */
+    kind?: "token";
+    /** The incremental text chunk the model just produced. */
+    text: string;
+    /** The thread this delta belongs to. */
+    threadKey: string;
+    /** The zero-based index of the turn producing the delta. */
+    turn: number;
+}
+
+/**
+ * A live tool-progress event streamed via `ctx.reportProgress(...)`. Client-safe
+ * mirror of `@lunora/agent`'s `AgentProgressEvent`. Ephemeral and `toolCallId`-keyed;
+ * surfaced by `createAgentToolEvents`, ignored by {@link CreateAgentChatResult.streamingText}.
+ */
+interface AgentProgressEvent {
+    /** The arbitrary, JSON-serializable payload the tool reported. */
+    data: unknown;
+    /** Discriminates the progress arm of {@link AgentLiveEvent}. */
+    kind: "progress";
+    /** The thread this event belongs to. */
+    threadKey: string;
+    /** The tool call this progress belongs to. */
+    toolCallId: string;
+}
+
+/**
+ * A single event on the agent's live-only channel — a streamed token delta or a
+ * tool progress event. Client-safe mirror of `@lunora/agent`'s `AgentLiveEvent`.
+ * Discriminate on `kind` (`"progress"` for the progress arm; token deltas leave
+ * it unset).
+ */
+type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
+
 /** The `agents:agentMessages` reference — live durable thread history. */
 type AgentMessagesReference = FunctionReference<"query", { key: string; limit?: number }, ReadonlyArray<Record<string, unknown>>>;
 
@@ -44,6 +86,13 @@ type AgentApprovalReference = FunctionReference<
 
 /** The `agents:agentThread` reference — live thread status + in-flight `instanceId`. */
 type AgentThreadReference = FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;
+
+/**
+ * An app stream reference that tees the agent's in-flight live events, keyed by
+ * thread. Carries token deltas and — since `ctx.reportProgress` rides the same
+ * sink — tool progress events; this primitive consumes only the token arm.
+ */
+type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, AgentLiveEvent>;
 
 /**
  * The `agents.*` reference surface the chat primitive reads. A structural subset
@@ -80,6 +129,13 @@ interface CreateAgentChatOptions {
     send: FunctionReference<"mutation">;
     /** Extra args merged into every `send` call (e.g. an `owner` or `title`). */
     sendArgs?: Record<string, unknown>;
+
+    /**
+     * Optional live token-delta stream — an app stream function that tees the
+     * agent's in-flight deltas. When omitted {@link CreateAgentChatResult.streamingText}
+     * stays empty and the UI updates message-by-message from durable history.
+     */
+    stream?: AgentTokenStreamReference;
     /** The thread to observe and continue — a plain value or accessor (an accessor re-subscribes on change). */
     threadKey: MaybeAccessor<string>;
 }
@@ -102,12 +158,7 @@ interface CreateAgentChatResult {
     /** The live thread status, or `undefined` before the thread exists. */
     status: Accessor<AgentThreadStatus | undefined>;
 
-    /**
-     * The in-flight turn's streamed text. `@lunora/solid` ships no token-stream
-     * primitive (unlike `@lunora/react`'s `useStream`), so this stays `""` and the
-     * UI updates message-by-message from durable history — message-level liveness.
-     * See the package followups for the token-stream gap.
-     */
+    /** The in-flight turn's streamed text — live-only, empty once the turn persists to `messages`. */
     streamingText: Accessor<string>;
 }
 
@@ -116,6 +167,13 @@ interface OptimisticMessage {
     content: string;
     id: number;
 }
+
+/**
+ * A placeholder stream reference so `createStream` is called unconditionally even
+ * when the caller supplies no token stream. Paired with `"skip"` args, it never
+ * opens a stream.
+ */
+const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
 
 /**
  * Drop the optimistic user turns the durable history has now caught up on:
@@ -140,33 +198,46 @@ const reconcileOptimistic = (optimistic: ReadonlyArray<OptimisticMessage>, durab
 };
 
 /**
- * A first-class agent chat surface: live durable history + the send / approve /
- * reject / cancel writes, keyed by `threadKey` — the Solid counterpart to React's
- * `useAgentChat`, re-expressed with signals.
+ * A first-class agent chat surface: live durable history + in-flight token
+ * streaming + the send / approve / reject / cancel writes, keyed by `threadKey` —
+ * the Solid counterpart to React's `useAgentChat`, re-expressed with signals.
  *
  * It composes the existing primitives rather than adding transport:
  * `createSubscription(api.agents.agentMessages)` for durable history,
  * `createSubscription(api.agents.agentThread)` for live status + the in-flight
- * `instanceId`, and `createMutation` for the writes (`api.agents.agentResolveApproval`
- * for approvals; app-defined wrappers for `send`/`cancel`). Only the `agents:*`
- * surface is hard-coded — `send`/`cancel` stay generic references.
+ * `instanceId`, {@link createStream} over an app token stream for in-flight deltas,
+ * and `createMutation` for the writes (`api.agents.agentResolveApproval` for
+ * approvals; app-defined wrappers for `send`/`cancel`). Only the `agents:*`
+ * surface is hard-coded — `send`/`cancel`/`stream` stay generic references.
  *
  * A `send` optimistically appends the user turn so it renders immediately; the
  * optimistic row clears once the durable history carries the acknowledged turn.
- *
- * `@lunora/solid` exposes no token-stream primitive, so {@link CreateAgentChatResult.streamingText}
- * stays `""` and the UI advances message-by-message from durable history
- * (message-level liveness). When a Solid token-stream primitive lands this
- * primitive can tee in-flight deltas the same way the React hook does.
+ * `streamingText` is live-only: it holds the current turn's streamed text and
+ * empties as soon as that turn's assistant message lands in `messages` (the
+ * persisted message is the source of truth), consistent with the loop's
+ * replay-safe, live-only delta design.
  */
 const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult => {
-    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, threadKey } = options;
+    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
 
-    const { data: history } = createSubscription(api.agents.agentMessages, () =>
-        (limit === undefined ? { key: resolveMaybe(threadKey) } : { key: resolveMaybe(threadKey), limit }), );
+    const { data: history } = createSubscription(api.agents.agentMessages, () => {
+        const key = resolveMaybe(threadKey);
+
+        return limit === undefined ? { key } : { key, limit };
+    });
     const { data: threadData } = createSubscription(api.agents.agentThread, () => {
         return { key: resolveMaybe(threadKey) };
     });
+
+    // The token stream is optional: with no reference we pass the sentinel + "skip"
+    // so `createStream` never opens a stream (and `streamingText` stays empty).
+    const streamArguments: "skip" | (() => { key: string }) =
+        streamReference === undefined
+            ? "skip"
+            : () => {
+                  return { key: resolveMaybe(threadKey) };
+              };
+    const { chunks } = createStream(streamReference ?? NO_STREAM_REF, streamArguments);
 
     const sendMutation = createMutation(sendReference);
     const cancelMutation = createMutation(cancelReference ?? NO_MUTATION_REF);
@@ -204,8 +275,22 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
         ];
     });
 
-    // No token-stream primitive on this adapter — see the type doc above.
-    const streamingText = (): string => "";
+    // The in-flight turn is the one whose assistant message hasn't persisted yet:
+    // each completed turn persists exactly one assistant row, so `turn >= <count of
+    // durable assistant rows>` isolates deltas that have NOT been superseded. Once
+    // the turn's message lands the count advances and its deltas fall away — the
+    // persisted message becomes the source of truth. Token deltas only — progress
+    // events (`kind === "progress"`) ride the same stream but carry no turn text;
+    // `createAgentToolEvents` surfaces those.
+    const streamingText = createMemo<string>(() => {
+        const key = resolveMaybe(threadKey);
+        const assistantCount = durable().filter((message) => message.role === "assistant").length;
+
+        return chunks()
+            .filter((event): event is AgentTokenDelta => event.kind !== "progress" && event.threadKey === key && event.turn >= assistantCount)
+            .map((delta) => delta.text)
+            .join("");
+    });
 
     const send = async (input: string, arguments_?: Record<string, unknown>): Promise<void> => {
         const id = nextId;
@@ -265,5 +350,5 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
     return { approve, cancel, messages, reject, send, status, streamingText };
 };
 
-export type { AgentChatMessage, CreateAgentChatApi, CreateAgentChatOptions, CreateAgentChatResult };
+export type { AgentChatMessage, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta, CreateAgentChatApi, CreateAgentChatOptions, CreateAgentChatResult };
 export { createAgentChat };
