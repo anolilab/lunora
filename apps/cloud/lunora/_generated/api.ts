@@ -82,6 +82,7 @@ export interface InternalApiTypes {
         tick: FunctionReference<"mutation", {}, { ok: true; }>;
     };
     usage: {
+        enforceSpendCaps: FunctionReference<"mutation", {}, { suspended: number; unsuspended: number; }>;
         record: FunctionReference<"mutation", { deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }, Id<"platformUsage">>;
         rollup: FunctionReference<"mutation", {}, { compacted: number; }>;
     };
