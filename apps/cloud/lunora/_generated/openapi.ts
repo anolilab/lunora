@@ -3134,6 +3134,9 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "cells"
                                             },
+                                            "jurisdiction": {
+                                                "type": "string"
+                                            },
                                             "name": {
                                                 "type": "string"
                                             },
@@ -3158,7 +3161,6 @@ export const openApiSpec: Record<string, unknown> = {
                                             }
                                         },
                                         "required": [
-                                            "cellId",
                                             "name",
                                             "slug"
                                         ],
