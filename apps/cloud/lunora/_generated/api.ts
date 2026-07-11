@@ -29,11 +29,14 @@ export interface ApiTypes {
         verify: FunctionReference<"mutation", { key: string }, { deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
     };
     deployments: {
+        activate: FunctionReference<"mutation", { deployKey?: string; id: Id<"deployments"> }, void>;
         adminTarget: FunctionReference<"query", { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken: string; url: string; } | null>;
-        create: FunctionReference<"mutation", { adminToken?: string; branch?: string; cronSpecs?: Array<string>; deployKey?: string; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string }, Id<"deployments">>;
-        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"deployments">; adminToken?: string; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued"; updatedAt: number; url?: string }[]>;
+        create: FunctionReference<"mutation", { adminToken?: string; branch?: string; cronSpecs?: Array<string>; deployKey?: string; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string }, { deploymentId: Id<"deployments">; scriptName: string; version: number; }>;
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"deployments">; adminToken?: string; alias?: string; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued" | "superseded" | "verifying"; updatedAt: number; url?: string; version?: number }[]>;
         planForScript: FunctionReference<"query", { scriptName: string }, { plan: string; }>;
-        updateStatus: FunctionReference<"mutation", { bundleHash?: string; deployKey?: string; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "live" | "failed" | "destroyed"; url?: string }, void>;
+        rollback: FunctionReference<"mutation", { deployKey?: string; id: Id<"deployments">; organizationId: Id<"organizations"> }, { scriptName: string; version?: number; }>;
+        routeForAlias: FunctionReference<"query", { alias: string }, { scriptName: string; } | null>;
+        updateStatus: FunctionReference<"mutation", { bundleHash?: string; deployKey?: string; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: string }, void>;
     };
     invitations: {
         accept: FunctionReference<"mutation", { token: string }, { organizationId: Id<"organizations">; }>;

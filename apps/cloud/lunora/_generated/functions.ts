@@ -55,11 +55,14 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "deploy_keys:list": lunora_deploy_keys_3.list as unknown as RegisteredLunoraFunction,
     "deploy_keys:revoke": lunora_deploy_keys_3.revoke as unknown as RegisteredLunoraFunction,
     "deploy_keys:verify": lunora_deploy_keys_3.verify as unknown as RegisteredLunoraFunction,
+    "deployments:activate": lunora_deployments_4.activate as unknown as RegisteredLunoraFunction,
     "deployments:adminTarget": lunora_deployments_4.adminTarget as unknown as RegisteredLunoraFunction,
     "deployments:cleanupExpiredPreviews": lunora_deployments_4.cleanupExpiredPreviews as unknown as RegisteredLunoraFunction,
     "deployments:create": lunora_deployments_4.create as unknown as RegisteredLunoraFunction,
     "deployments:listByProject": lunora_deployments_4.listByProject as unknown as RegisteredLunoraFunction,
     "deployments:planForScript": lunora_deployments_4.planForScript as unknown as RegisteredLunoraFunction,
+    "deployments:rollback": lunora_deployments_4.rollback as unknown as RegisteredLunoraFunction,
+    "deployments:routeForAlias": lunora_deployments_4.routeForAlias as unknown as RegisteredLunoraFunction,
     "deployments:updateStatus": lunora_deployments_4.updateStatus as unknown as RegisteredLunoraFunction,
     "fanout:tick": lunora_fanout_5.tick as unknown as RegisteredLunoraFunction,
     "invitations:accept": lunora_invitations_6.accept as unknown as RegisteredLunoraFunction,
@@ -168,6 +171,18 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (typeof source["key"] !== "string") return DEFER;
 return { "key": source["key"] };
 });
+installCompiledValidatorMap(lunora_deployments_4.activate.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["deployKey"] !== undefined) {
+if (typeof source["deployKey"] !== "string") return DEFER;
+__val1 = source["deployKey"];
+__has1 = true;
+}
+if (typeof source["id"] !== "string") return DEFER;
+return { ...(__has1 ? { "deployKey": __val1 } : {}), "id": source["id"] };
+});
 installCompiledValidatorMap(lunora_deployments_4.adminTarget.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["deploymentId"] !== "string") return DEFER;
@@ -184,6 +199,24 @@ installCompiledValidatorMap(lunora_deployments_4.planForScript.args, (source) =>
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["scriptName"] !== "string") return DEFER;
 return { "scriptName": source["scriptName"] };
+});
+installCompiledValidatorMap(lunora_deployments_4.rollback.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["deployKey"] !== undefined) {
+if (typeof source["deployKey"] !== "string") return DEFER;
+__val1 = source["deployKey"];
+__has1 = true;
+}
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { ...(__has1 ? { "deployKey": __val1 } : {}), "id": source["id"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_deployments_4.routeForAlias.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["alias"] !== "string") return DEFER;
+return { "alias": source["alias"] };
 });
 installCompiledValidatorMap(lunora_invitations_6.accept.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -396,12 +429,15 @@ export interface Caller {
         verify: (args: { key: string }) => Promise<{ deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
     };
     deployments: {
+        activate: (args: { deployKey?: string; id: Id<"deployments"> }) => Promise<void>;
         adminTarget: (args: { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken: string; url: string; } | null>;
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
-        create: (args: { adminToken?: string; branch?: string; cronSpecs?: Array<string>; deployKey?: string; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string }) => Promise<Id<"deployments">>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"deployments">; adminToken?: string; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued"; updatedAt: number; url?: string }[]>;
+        create: (args: { adminToken?: string; branch?: string; cronSpecs?: Array<string>; deployKey?: string; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string }) => Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number; }>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"deployments">; adminToken?: string; alias?: string; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued" | "superseded" | "verifying"; updatedAt: number; url?: string; version?: number }[]>;
         planForScript: (args: { scriptName: string }) => Promise<{ plan: string; }>;
-        updateStatus: (args: { bundleHash?: string; deployKey?: string; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "live" | "failed" | "destroyed"; url?: string }) => Promise<void>;
+        rollback: (args: { deployKey?: string; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ scriptName: string; version?: number; }>;
+        routeForAlias: (args: { alias: string }) => Promise<{ scriptName: string; } | null>;
+        updateStatus: (args: { bundleHash?: string; deployKey?: string; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: string }) => Promise<void>;
     };
     fanout: {
         tick: (args?: {}) => Promise<{ ok: true; }>;
@@ -479,11 +515,14 @@ export const createCaller = (context: CallerCtx): Caller => ({
         verify: (args) => callRegistered(context, "deploy_keys:verify", args),
     },
     deployments: {
+        activate: (args) => callRegistered(context, "deployments:activate", args),
         adminTarget: (args) => callRegistered(context, "deployments:adminTarget", args),
         cleanupExpiredPreviews: (args) => callRegistered(context, "deployments:cleanupExpiredPreviews", args),
         create: (args) => callRegistered(context, "deployments:create", args),
         listByProject: (args) => callRegistered(context, "deployments:listByProject", args),
         planForScript: (args) => callRegistered(context, "deployments:planForScript", args),
+        rollback: (args) => callRegistered(context, "deployments:rollback", args),
+        routeForAlias: (args) => callRegistered(context, "deployments:routeForAlias", args),
         updateStatus: (args) => callRegistered(context, "deployments:updateStatus", args),
     },
     fanout: {

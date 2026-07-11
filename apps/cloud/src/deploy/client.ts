@@ -34,6 +34,37 @@ const stripTrailingSlashes = (value: string): string => {
     return result;
 };
 
+export interface RollbackClientOptions {
+    apiUrl: string;
+    deployKey: string;
+    deploymentId: string;
+    fetch?: typeof globalThis.fetch;
+    organizationId: string;
+}
+
+/**
+ * `POST /v1/deployments/rollback` — swap the project's stable URL back to a
+ * retained release (GAPS.md A1). Returns the script that now serves the alias.
+ */
+export const rollbackDeployment = async (options: RollbackClientOptions): Promise<{ scriptName: string; version?: number }> => {
+    const fetchImpl = options.fetch ?? globalThis.fetch;
+
+    const response = await fetchImpl(`${stripTrailingSlashes(options.apiUrl)}/v1/deployments/rollback`, {
+        body: JSON.stringify({ deploymentId: options.deploymentId, organizationId: options.organizationId }),
+        headers: { authorization: `Bearer ${options.deployKey}`, "content-type": "application/json" },
+        method: "POST",
+    });
+
+    if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+
+        throw new Error(`rollback failed (${String(response.status)})${detail ? `: ${detail}` : ""}`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
+    return (await response.json()) as { scriptName: string; version?: number };
+};
+
 export const deployToCloud = async (options: DeployClientOptions, onEvent: (event: DeployEvent) => void): Promise<DeployResult> => {
     const fetchImpl = options.fetch ?? globalThis.fetch;
 
@@ -42,7 +73,7 @@ export const deployToCloud = async (options: DeployClientOptions, onEvent: (even
             branch: options.branch,
             bundle: options.bundle,
             kind: options.kind,
-            projectId: options.projectId,
+            projectId: options.projectId, // secret-scanner:allow -- domain field name
             scriptName: options.scriptName,
         }), // secret-scanner:allow -- domain field name
         headers: { authorization: `Bearer ${options.deployKey}`, "content-type": "application/json" },

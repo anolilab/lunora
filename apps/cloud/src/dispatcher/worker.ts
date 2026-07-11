@@ -1,7 +1,7 @@
 import { limitsForPlan } from "../billing/plans";
 import type { AnalyticsEngineDatasetLike } from "../metering/analytics";
 import { recordRequestUsage } from "../metering/analytics";
-import { createPlanResolver, resolveTenant } from "./route";
+import { createPlanResolver, createRouteResolver, resolveTenant } from "./route";
 
 /**
  * The Lunora Cloud dispatcher Worker (CLOUD-PLAN.md §2.1) — a SEPARATE,
@@ -29,36 +29,47 @@ interface DispatcherEnv {
     CONTROL_PLANE_URL?: string;
     DISPATCHER: DispatchNamespace;
     LUNORA_APP_DOMAIN?: string;
+    /** Cell name stamped into the `X-Lunora-Id` debug header (GAPS.md B3). */
+    LUNORA_CELL?: string;
     /** Analytics Engine dataset for per-request metering (§4). Optional. */
     USAGE_ANALYTICS?: AnalyticsEngineDatasetLike;
 }
 
 const NOT_FOUND = (message: string): Response => new Response(message, { status: 404 });
 
-// Per-isolate plan resolver, rebuilt only when the control-plane config changes.
+// Per-isolate plan + route resolvers, rebuilt only when the control-plane
+// config changes.
 let planResolver: ((scriptName: string) => Promise<string | undefined>) | undefined;
-let planResolverKey = "";
+let routeResolver: ((label: string) => Promise<null | string>) | undefined;
+let resolverKey = "";
 
-const resolvePlanFor = (env: DispatcherEnv): ((scriptName: string) => Promise<string | undefined>) | undefined => {
+const buildResolvers = (env: DispatcherEnv): void => {
     if (!env.CONTROL_PLANE_URL || !env.CONTROL_PLANE_TOKEN) {
-        return undefined;
+        planResolver = undefined;
+        routeResolver = undefined;
+
+        return;
     }
 
     const key = `${env.CONTROL_PLANE_URL}|${env.CONTROL_PLANE_TOKEN}`;
 
-    if (!planResolver || planResolverKey !== key) {
-        planResolver = createPlanResolver({ controlPlaneToken: env.CONTROL_PLANE_TOKEN, controlPlaneUrl: env.CONTROL_PLANE_URL });
-        planResolverKey = key;
-    }
+    if (resolverKey !== key) {
+        const options = { controlPlaneToken: env.CONTROL_PLANE_TOKEN, controlPlaneUrl: env.CONTROL_PLANE_URL };
 
-    return planResolver;
+        planResolver = createPlanResolver(options);
+        routeResolver = createRouteResolver(options);
+        resolverKey = key;
+    }
 };
 
 export default {
     async fetch(request: Request, env: DispatcherEnv): Promise<Response> {
+        buildResolvers(env);
+
         const route = await resolveTenant(new URL(request.url).hostname, {
             appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app",
-            resolvePlan: resolvePlanFor(env),
+            resolveAlias: routeResolver,
+            resolvePlan: planResolver,
         });
 
         if (!route) {
@@ -82,7 +93,17 @@ export default {
             // metered by the DO/AE path, not re-counted on every frame.
             recordRequestUsage(env.USAGE_ANALYTICS, { plan: route.plan ?? "free", scriptName: route.scriptName });
 
-            return response;
+            // Debug header (GAPS.md B3): which cell + script served this. A 101
+            // upgrade response is immutable — return it verbatim.
+            if (response.status === 101) {
+                return response;
+            }
+
+            const stamped = new Response(response.body, response);
+
+            stamped.headers.set("x-lunora-id", `${env.LUNORA_CELL ?? "default"}:${route.scriptName}`);
+
+            return stamped;
         } catch (error) {
             if (error instanceof Error && error.message.startsWith("Worker not found")) {
                 return NOT_FOUND("worker not found");

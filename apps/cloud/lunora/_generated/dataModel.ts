@@ -69,6 +69,8 @@ export interface Doc_members {
 export interface Doc_projects {
     _id: Id<"projects">;
     _creationTime: number;
+    activeDeploymentId?: string;
+    activeScriptName?: string;
     createdAt: number;
     framework?: string;
     githubRepo?: string;
@@ -81,6 +83,7 @@ export interface Doc_deployments {
     _id: Id<"deployments">;
     _creationTime: number;
     adminToken?: string;
+    alias?: string;
     branch?: string;
     cronSpecs?: Array<string>;
     bundleHash?: string;
@@ -94,6 +97,14 @@ export interface Doc_deployments {
     status: unknown;
     updatedAt: number;
     url?: string;
+    version?: number;
+    queuedAt?: number;
+    provisioningAt?: number;
+    verifyingAt?: number;
+    liveAt?: number;
+    supersededAt?: number;
+    failedAt?: number;
+    destroyedAt?: number;
 }
 
 export interface Doc_deployKeys {
@@ -246,7 +257,7 @@ export interface IndexNamesByTable {
     organizations: "by_slug";
     members: "by_org_user";
     projects: "by_org_slug" | "by_github_repo";
-    deployments: "by_script" | "by_project" | "by_kind";
+    deployments: "by_script" | "by_project" | "by_kind" | "by_alias";
     deployKeys: "by_org" | "by_hash";
     auditLog: "by_org";
     invitations: "by_token" | "by_org";
@@ -338,6 +349,8 @@ export interface Insert_members {
 export interface Insert_projects {
     _id?: Id<"projects">;
     _creationTime?: number;
+    activeDeploymentId?: string;
+    activeScriptName?: string;
     createdAt: number;
     framework?: string;
     githubRepo?: string;
@@ -350,6 +363,7 @@ export interface Insert_deployments {
     _id?: Id<"deployments">;
     _creationTime?: number;
     adminToken?: string;
+    alias?: string;
     branch?: string;
     cronSpecs?: Array<string>;
     bundleHash?: string;
@@ -363,6 +377,14 @@ export interface Insert_deployments {
     status: unknown;
     updatedAt: number;
     url?: string;
+    version?: number;
+    queuedAt?: number;
+    provisioningAt?: number;
+    verifyingAt?: number;
+    liveAt?: number;
+    supersededAt?: number;
+    failedAt?: number;
+    destroyedAt?: number;
 }
 
 export interface Insert_deployKeys {
