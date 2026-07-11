@@ -14,6 +14,12 @@ const DEFAULT_EPISODE_RECALL = 5;
 /** Hard ceiling on recalled episodes so a misconfigured `recall` can't flood the prompt. */
 const MAX_EPISODE_RECALL = 20;
 
+/** Max stored summary length — bounds per-episode prompt cost (model output is untrusted). */
+const MAX_EPISODE_SUMMARY_CHARS = 500;
+
+/** Collapse any whitespace run (incl. newlines) to a single space — hoisted, avoids recompilation. */
+const WHITESPACE_RUN = /\s+/gu;
+
 /** Clamp a `recall` count into `[1, MAX_EPISODE_RECALL]`, defaulting an absent/garbage value. */
 const clampRecall = (value: number | undefined): number => {
     if (value === undefined || !Number.isFinite(value)) {
@@ -90,7 +96,10 @@ const episodicComponent = (): EpisodicComponentFunctions => {
             threadKey: v.optional(v.string()),
         })
         .mutation(async ({ args, ctx: context }): Promise<{ recorded: boolean }> => {
-            const summary = args.summary.trim();
+            // The summary is MODEL-generated; collapse newlines (so it can't forge
+            // extra `- ...` memory-log lines when injected) and cap its length (so
+            // one row can't bloat every future prompt) before storing.
+            const summary = args.summary.replaceAll(WHITESPACE_RUN, " ").trim().slice(0, MAX_EPISODE_SUMMARY_CHARS);
 
             if (summary.length === 0) {
                 return { recorded: false };
@@ -129,20 +138,27 @@ const episodicComponent = (): EpisodicComponentFunctions => {
             owner: v.string(),
         })
         .query(async ({ args, ctx: context }): Promise<{ context: string }> => {
-            const rows = await context.db
+            // Bounded read: pull only the most-recent `limit` rows via the index
+            // (createdAt desc), NOT every owner episode — recall runs on the hot
+            // path of every run, so an owner's lifetime episode count must not
+            // drive per-run cost.
+            const recent = await context.db
                 .query(EPISODES_TABLE)
                 .withIndex("byOwnerCreatedAt", (q) => q.eq("owner", args.owner))
-                .collect();
-
-            // Sort explicitly (not on index/scan order) for replay-stable recall;
-            // take the most-recent `limit`, then render oldest → newest.
-            const recent = rows.toSorted((a, b) => (a["createdAt"] as number) - (b["createdAt"] as number)).slice(-clampRecall(args.limit));
+                .order("desc")
+                .take(clampRecall(args.limit));
 
             if (recent.length === 0) {
                 return { context: "" };
             }
 
-            return { context: recent.map((row) => `- ${row["summary"] as string}`).join("\n") };
+            // `take("desc")` yields newest-first; reverse to render oldest → newest.
+            return {
+                context: recent
+                    .toReversed()
+                    .map((row) => `- ${row["summary"] as string}`)
+                    .join("\n"),
+            };
         });
 
     return {

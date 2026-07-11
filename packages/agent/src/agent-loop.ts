@@ -358,7 +358,21 @@ const splitForCompaction = (
         return undefined;
     }
 
-    const cut = history.length - keepRecent;
+    // Snap the boundary OFF a `tool` row: a kept `recent` tail that starts on a
+    // tool-result whose assistant tool-call was summarized into `older` produces
+    // an orphaned tool-result the model provider rejects (400). Moving the cut
+    // earlier (past leading tool rows onto the assistant/user/system row) keeps
+    // every tool-call/result pair on one side — which also stops `older` ending
+    // mid-pair. If that consumes the whole older set, skip compaction this turn.
+    let cut = history.length - keepRecent;
+
+    while (cut > 0 && history[cut]?.role === "tool") {
+        cut -= 1;
+    }
+
+    if (cut <= 0) {
+        return undefined;
+    }
 
     return { older: history.slice(0, cut), recent: history.slice(cut) };
 };
@@ -611,8 +625,20 @@ const retrieveMemoryContext = async (
     const graphTraverse = toFunctionReference(paths.graphTraverse);
     const episodeRecall = toFunctionReference(paths.episodeRecall);
     const contexts: string[] = [];
+    // Episodic recall is owner-global (identical for every episodic source) and
+    // only the first episodic source is the write target, so inject it once —
+    // multiple episodic sources would otherwise duplicate the same timeline.
+    let episodicInjected = false;
 
     for (const source of sources) {
+        if (source.kind === "episodic") {
+            if (episodicInjected) {
+                continue;
+            }
+
+            episodicInjected = true;
+        }
+
         // eslint-disable-next-line no-await-in-loop -- sequential durable steps in a stable order ARE the replay-safe execution model
         const context = await dispatchInjectedSource(source, { episodeRecall, graphTraverse, input, owner, run, step });
 

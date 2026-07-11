@@ -44,9 +44,21 @@ interface R2BucketLike {
     delete: (key: string) => Promise<void>;
     get: (key: string) => Promise<{ text: () => Promise<string> } | null>;
     head: (key: string) => Promise<R2ObjectLike | null>;
-    list: (options?: { limit?: number; prefix?: string }) => Promise<{ objects: ReadonlyArray<R2ObjectLike> }>;
+    list: (options?: {
+        cursor?: string;
+        limit?: number;
+        prefix?: string;
+    }) => Promise<{ cursor?: string; objects: ReadonlyArray<R2ObjectLike>; truncated?: boolean }>;
     put: (key: string, value: string) => Promise<unknown>;
 }
+
+/** Max bytes read/written in one fs op — bounds Worker memory + prompt/token cost (model input is untrusted). */
+const MAX_FS_BYTES = 1_000_000;
+
+/** Max R2 list pages walked for one `ls` (each ~1000 objects) before surfacing `truncated`. */
+const MAX_LS_PAGES = 20;
+
+const fsEncoder = new TextEncoder();
 
 /** The action ctx the dispatcher casts to — codegen attaches these on an action ctx. */
 interface SandboxActionContext {
@@ -201,6 +213,36 @@ const resolveFsKey = (root: string, path: string): string => {
 };
 
 /**
+ * List a directory across R2 list-cursor pages (root-relative keys), bounded by
+ * `MAX_LS_PAGES` so a huge prefix can't spin unboundedly — `truncated` signals
+ * the listing was cut off. Extracted from `runFsOp` to keep its complexity flat.
+ */
+const listFsEntries = async (bucket: R2BucketLike, key: string, base: string): Promise<{ entries: string[]; truncated: boolean }> => {
+    const prefix = key.length > 0 ? `${key}/` : "";
+    // Strip the sandbox root so the model sees root-relative paths.
+    const strip = base.length > 0 ? base.length + 1 : 0;
+    const entries: string[] = [];
+    let cursor: string | undefined;
+
+    for (let page = 0; page < MAX_LS_PAGES; page += 1) {
+        // eslint-disable-next-line no-await-in-loop -- cursor pagination is inherently sequential
+        const result = await bucket.list({ prefix, ...(cursor === undefined ? {} : { cursor }) });
+
+        for (const object of result.objects) {
+            entries.push(object.key.slice(strip));
+        }
+
+        if (!result.truncated || result.cursor === undefined) {
+            return { entries, truncated: false };
+        }
+
+        cursor = result.cursor;
+    }
+
+    return { entries, truncated: true };
+};
+
+/**
  * Run one R2-backed virtual-filesystem op, scoped under `root`. `ls` lists the
  * keys under a directory (root-relative), `read`/`write`/`rm`/`stat` operate on a
  * single file. workerd has no real shell; this is a persistent object-store FS.
@@ -211,14 +253,21 @@ const runFsOp = async (bucket: R2BucketLike, root: string, request: SandboxInvok
 
     switch (request.op) {
         case "ls": {
-            const prefix = key.length > 0 ? `${key}/` : "";
-            const { objects } = await bucket.list({ prefix });
-            // Strip the sandbox root so the model sees root-relative paths.
-            const strip = base.length > 0 ? base.length + 1 : 0;
+            const { entries, truncated } = await listFsEntries(bucket, key, base);
 
-            return { entries: objects.map((object) => object.key.slice(strip)) };
+            return truncated ? { entries, truncated: true } : { entries };
         }
         case "read": {
+            // Reject an oversized object BEFORE pulling it into memory/context.
+            const head = await bucket.head(key);
+
+            if (head && head.size > MAX_FS_BYTES) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `@lunora/agent: fs read: "${request.path ?? ""}" is ${String(head.size)} bytes (max ${String(MAX_FS_BYTES)})`,
+                );
+            }
+
             const object = await bucket.get(key);
 
             if (!object) {
@@ -238,9 +287,16 @@ const runFsOp = async (bucket: R2BucketLike, root: string, request: SandboxInvok
             return head ? { exists: true, size: head.size } : { exists: false };
         }
         case "write": {
-            await bucket.put(key, request.content ?? "");
+            const content = request.content ?? "";
+            const bytes = fsEncoder.encode(content).length;
 
-            return { bytes: (request.content ?? "").length, path: request.path ?? "", wrote: true };
+            if (bytes > MAX_FS_BYTES) {
+                throw new LunoraError("BAD_REQUEST", `@lunora/agent: fs write: ${String(bytes)} bytes exceeds the max (${String(MAX_FS_BYTES)})`);
+            }
+
+            await bucket.put(key, content);
+
+            return { bytes, path: request.path ?? "", wrote: true };
         }
         default: {
             throw new LunoraError("INTERNAL", `@lunora/agent: sandbox fs op "${request.op}" is not supported`);

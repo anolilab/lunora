@@ -9,6 +9,11 @@ const rows = (n: number): AgentMessageRow[] =>
         return { content: `m${String(index)}`, role: "user" as const, seq: index };
     });
 
+/** One message row of a given role (for the tool-pairing boundary test). */
+const msg = (role: AgentMessageRow["role"], seq: number, extra: Partial<AgentMessageRow> = {}): AgentMessageRow => {
+    return { content: `m${String(seq)}`, role, seq, ...extra };
+};
+
 describe(splitForCompaction, () => {
     it("returns undefined when compaction is unset", () => {
         expect(splitForCompaction(rows(50), undefined)).toBeUndefined();
@@ -37,5 +42,31 @@ describe(splitForCompaction, () => {
     it("returns undefined when the kept tail would swallow the whole history", () => {
         // keepRecent ≥ history length ⇒ nothing older to summarize.
         expect(splitForCompaction(rows(6), { keepRecent: 10, maxMessages: 4 })).toBeUndefined();
+    });
+
+    it("never lets the recent tail start on an orphan tool row — keeps tool-call/result paired", () => {
+        // Naive cut (len 12, keepRecent ceil(6/2)=3 → cut 9) lands on the tool row.
+        const history: AgentMessageRow[] = [
+            msg("user", 0),
+            msg("assistant", 1),
+            msg("user", 2),
+            msg("assistant", 3),
+            msg("user", 4),
+            msg("assistant", 5),
+            msg("user", 6),
+            msg("assistant", 7),
+            msg("assistant", 8, { toolCalls: [{ id: "c", input: {}, name: "t" }] }),
+            msg("tool", 9, { toolCallId: "c", toolName: "t" }),
+            msg("assistant", 10),
+            msg("user", 11),
+        ];
+
+        const split = splitForCompaction(history, { maxMessages: 6 });
+
+        // The boundary snapped back off the tool row onto its assistant tool-call,
+        // pulling the pair into `recent` and ending `older` on a clean row.
+        expect(split?.recent[0]?.role).not.toBe("tool");
+        expect(split?.recent[0]?.seq).toBe(8);
+        expect(split?.older).toHaveLength(8);
     });
 });

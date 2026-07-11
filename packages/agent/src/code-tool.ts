@@ -35,20 +35,26 @@ interface CodeToolOptions {
     maxSteps?: number;
 
     /**
-     * Gate a whole script behind a human approval. Default: unattended (the
-     * composed tools keep their OWN gates — a script can't bypass a sub-tool's
-     * `needsApproval`, which the loop still enforces per call). Evaluated from
-     * replay-stable input, so keep it deterministic.
+     * Gate a whole script behind a human approval. Default: unattended. Note the
+     * COMPOSED tools cannot carry their own approval gate — `codeTool` rejects any
+     * tool with a `needsApproval`, because a code-mode script runs its steps in one
+     * shot and can't pause mid-script to hibernate for HITL. Gate the whole script
+     * here instead. Evaluated from replay-stable input, so keep it deterministic.
      */
     needsApproval?: ((input: ToolScript) => boolean) | boolean;
 }
 
-/** Read a dot-path (`"a.b.0.c"`) out of a value; `undefined` for a miss. */
+/**
+ * Read a dot-path (`"a.b.0.c"`) out of a value; `undefined` for a miss. Only
+ * OWN enumerable properties are traversed — a model-supplied `$path` of
+ * `__proto__` / `constructor` / `prototype` (or any inherited key) resolves to
+ * `undefined`, so untrusted input can't walk the prototype chain into internals.
+ */
 const getPath = (value: unknown, path: string): unknown => {
     let current = value;
 
     for (const key of path.split(".")) {
-        if (current === null || typeof current !== "object") {
+        if (current === null || typeof current !== "object" || !Object.hasOwn(current, key)) {
             return undefined;
         }
 
@@ -120,8 +126,16 @@ const runToolScript = async (
         }
 
         const input = resolveReferences(step.input ?? {}, byId);
+        // Give each sub-call its OWN idempotency key / tool-call id (derived from
+        // the code tool's, suffixed by the step id) so two side-effecting sub-calls
+        // in one script don't collide on a shared key when they dedupe on it.
+        const stepContext: AgentToolContext = {
+            ...context,
+            idempotencyKey: `${context.idempotencyKey}:${step.id}`,
+            toolCallId: `${context.toolCallId}:${step.id}`,
+        };
         // eslint-disable-next-line no-await-in-loop -- steps are sequential by design: a later input can reference an earlier output
-        const output: unknown = await tool.execute(input, context);
+        const output: unknown = await tool.execute(input, stepContext);
 
         byId[step.id] = output;
         results.push({ id: step.id, output });
@@ -168,8 +182,11 @@ const CODE_TOOL_SCHEMA = jsonSchema<ToolScript>({
  * execution (the Cloudflare Worker Loader path) is a separate future mode.
  *
  * Each composed tool dispatches through the same durable context a normal call
- * gets, so it keeps its RLS and its own `needsApproval` gate — a script can't
- * smuggle a call past a sub-tool's approval.
+ * gets (inheriting RLS), with a per-step idempotency key. A code-mode script runs
+ * its steps in one shot and CANNOT pause mid-script for a human approval, so
+ * `codeTool` REJECTS at construction any tool carrying a `needsApproval` gate —
+ * keep approval-gated tools as normal top-level tools. Gate the whole script via
+ * `opts.needsApproval` instead.
  *
  * ```ts
  * import { codeTool, defineAgent, functionTool } from "@lunora/agent";
@@ -193,6 +210,18 @@ const codeTool = (tools: Record<string, AnyAgentTool>, options: CodeToolOptions 
 
     if (!provided || typeof provided !== "object" || Object.keys(provided).length === 0) {
         throw new LunoraError("INTERNAL", "@lunora/agent: codeTool requires a non-empty map of tools to compose");
+    }
+
+    // Fail closed on approval-gated tools: a script runs its steps in one shot
+    // and can't hibernate for HITL, so composing a `needsApproval` tool would
+    // silently bypass its gate. Reject it at declaration time.
+    for (const [name, tool] of Object.entries(provided)) {
+        if (tool.needsApproval !== undefined && tool.needsApproval !== false) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/agent: codeTool cannot compose "${name}" — it has a \`needsApproval\` gate a code-mode script can't pause for. Expose it as a normal top-level tool, or gate the whole script via codeTool's \`needsApproval\`.`,
+            );
+        }
     }
 
     const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;

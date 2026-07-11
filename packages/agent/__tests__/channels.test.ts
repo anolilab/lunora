@@ -70,16 +70,28 @@ describe(verifyDiscord, () => {
     });
 });
 
-/** A fake `AGENT_*` Workflow binding recording `create()` params. */
-const fakeBinding = (): { binding: { create: (options?: { params?: unknown }) => Promise<{ id: string }>; get: () => Promise<never> }; created: unknown[] } => {
+/** A fake `AGENT_*` Workflow binding recording `create()` params; rejects a duplicate `id` like CF Workflows. */
+const fakeBinding = (): {
+    binding: { create: (options?: { id?: string; params?: unknown }) => Promise<{ id: string }>; get: () => Promise<never> };
+    created: unknown[];
+} => {
     const created: unknown[] = [];
+    const ids = new Set<string>();
 
     return {
         binding: {
             create: async (options) => {
+                if (options?.id !== undefined) {
+                    if (ids.has(options.id)) {
+                        throw new Error("instance already exists");
+                    }
+
+                    ids.add(options.id);
+                }
+
                 created.push(options?.params);
 
-                return { id: "wf-1" };
+                return { id: options?.id ?? "wf-1" };
             },
             get: async () => {
                 throw new Error("unused");
@@ -96,6 +108,24 @@ const slackRequest = async (secret: string, body: string): Promise<Request> => {
     return new Request("https://app/webhooks/agent", {
         body,
         headers: { "x-slack-request-timestamp": timestamp, "x-slack-signature": signature },
+        method: "POST",
+    });
+};
+
+const githubRequest = async (secret: string, body: string): Promise<Request> =>
+    new Request("https://app/webhooks/agent", {
+        body,
+        headers: { "x-github-delivery": "abc-123", "x-hub-signature-256": `sha256=${await hmacHex(secret, body)}` },
+        method: "POST",
+    });
+
+const discordRequest = async (privateKey: CryptoKey, body: string): Promise<Request> => {
+    const timestamp = "1700000000";
+    const signature = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, privateKey, encoder.encode(timestamp + body))));
+
+    return new Request("https://app/webhooks/agent", {
+        body,
+        headers: { "x-signature-ed25519": signature, "x-signature-timestamp": timestamp },
         method: "POST",
     });
 };
@@ -155,5 +185,134 @@ describe(dispatchAgentChannel, () => {
 
         expect(response.status).toBe(204);
         expect(created).toStrictEqual([]);
+    });
+
+    it("verifies each target against its OWN secret (no cross-tenant trigger)", async () => {
+        const one = fakeBinding();
+        const two = fakeBinding();
+        let mappedOne = false;
+        const agentOne = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    mappedOne = true;
+
+                    return { input: "one", threadKey: "t1" };
+                },
+                secret: "SECRET_ONE",
+            },
+        };
+        const agentTwo = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return { input: "two", threadKey: "t2" };
+                },
+                secret: "SECRET_TWO",
+            },
+        };
+        const handler = dispatchAgentChannel([
+            { agent: agentOne, binding: "AGENT_ONE" },
+            { agent: agentTwo, binding: "AGENT_TWO" },
+        ]);
+
+        // Signed with tenant TWO's secret — only tenant two verifies and claims.
+        const response = await handler(await slackRequest("secret-two", '{"event":{}}'), {
+            AGENT_ONE: one.binding,
+            AGENT_TWO: two.binding,
+            SECRET_ONE: "secret-one",
+            SECRET_TWO: "secret-two",
+        });
+
+        expect(response.status).toBe(200);
+        expect(mappedOne).toBe(false); // tenant one's secret never verified → its mapper never ran
+        expect(one.created).toStrictEqual([]);
+        expect(two.created).toStrictEqual([{ input: "two", threadKey: "t2" }]);
+    });
+
+    it("verifies and dispatches a GitHub webhook", async () => {
+        const { binding, created } = fakeBinding();
+        const agent = {
+            onInbound: {
+                channel: "github" as const,
+                map: () => {
+                    return { input: "gh", threadKey: "pr-1" };
+                },
+                secret: "GH_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_GH" }]);
+
+        const response = await handler(await githubRequest("gh-secret", '{"action":"opened"}'), { AGENT_GH: binding, GH_SECRET: "gh-secret" });
+
+        expect(response.status).toBe(200);
+        expect(created).toStrictEqual([{ input: "gh", threadKey: "pr-1" }]);
+    });
+
+    it("answers a verified Discord PING with a PONG and starts no run", async () => {
+        const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+        const publicKey = bytesToHex(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
+        const { binding, created } = fakeBinding();
+        const agent = {
+            onInbound: {
+                channel: "discord" as const,
+                map: () => {
+                    return { input: "x", threadKey: "t" };
+                },
+                secret: "DISCORD_KEY",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_D" }]);
+
+        const response = await handler(await discordRequest(pair.privateKey, '{"type":1}'), { AGENT_D: binding, DISCORD_KEY: publicKey });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ type: 1 });
+        expect(created).toStrictEqual([]);
+    });
+
+    it("dedupes a redelivered webhook (same delivery id) to a single run", async () => {
+        const { binding, created } = fakeBinding();
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return { input: "hi", threadKey: "t" };
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const body = JSON.stringify({ event: {}, event_id: "Ev123" });
+
+        const first = await handler(await slackRequest(secret, body), env);
+        const second = await handler(await slackRequest(secret, body), env);
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+        // The redelivery's duplicate instance id is rejected → no second run.
+        expect(created).toStrictEqual([{ input: "hi", threadKey: "t" }]);
+    });
+
+    it("returns 400 for a request with no recognized signature headers", async () => {
+        const { binding } = fakeBinding();
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return { input: "x", threadKey: "t" };
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+
+        const response = await handler(new Request("https://app/webhooks/agent", { body: "{}", method: "POST" }), {
+            AGENT_SUPPORT: binding,
+            SLACK_SECRET: secret,
+        });
+
+        expect(response.status).toBe(400);
     });
 });

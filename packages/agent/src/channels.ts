@@ -207,14 +207,66 @@ const discordPongResponse = (channel: AgentInboundChannelKind, body: string): Re
 /** The eligible targets for a channel, paired with their resolved `onInbound` config. */
 type EligibleTarget = { config: NonNullable<AgentDefinition["onInbound"]>; target: AgentChannelTarget };
 
+/** Characters not allowed in a Cloudflare Workflow instance id — hoisted, avoids recompilation. */
+const UNSAFE_INSTANCE_ID = /[^\w-]/gu;
+
+/**
+ * A stable per-delivery id for idempotent dispatch: GitHub's `X-GitHub-Delivery`
+ * header, else Slack's `event_id` / Discord's interaction `id` from the (already
+ * verified) body. `undefined` when none is present.
+ */
+const deliveryId = (channel: AgentInboundChannelKind, headers: Headers, body: string): string | undefined => {
+    if (channel === "github") {
+        return headers.get("x-github-delivery") ?? undefined;
+    }
+
+    try {
+        const parsed = JSON.parse(body) as { event_id?: unknown; id?: unknown };
+        const raw = channel === "slack" ? parsed.event_id : parsed.id;
+
+        return typeof raw === "string" ? raw : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Start the run for a claimed event, idempotently. A provider redelivery carries
+ * the SAME delivery id, and Cloudflare Workflows rejects a duplicate instance id
+ * — so a retry acks `200` (already handled) instead of starting a second run.
+ * When no delivery id is available, falls back to a non-idempotent create.
+ */
+const startChannelRun = async (
+    workflow: AgentWorkflowBindingLike,
+    run: AgentChannelRun,
+    channel: AgentInboundChannelKind,
+    id: string | undefined,
+): Promise<Response> => {
+    if (id === undefined) {
+        await workflow.create({ params: run });
+
+        return new Response(undefined, { status: 200 });
+    }
+
+    try {
+        await workflow.create({ id: `${channel}-${id}`.replaceAll(UNSAFE_INSTANCE_ID, "").slice(0, 60), params: run });
+    } catch {
+        // A duplicate instance id ⇒ this delivery was already handled; ack it.
+        return new Response(undefined, { status: 200 });
+    }
+
+    return new Response(undefined, { status: 200 });
+};
+
 /**
  * Build an HTTP handler that starts a durable agent run from a verified inbound
- * webhook. The channel is detected from the signature headers; the request is
- * verified against the first matching target's secret; on success the parsed
- * event is offered to each matching agent's `onInbound.map` and the first
- * non-null run is started on that agent's Workflow binding. Returns `401` on a
- * failed/absent signature, `200` on a claim (or a Discord PONG), `204` when no
- * agent claims the event, and `400` for an unrecognized webhook.
+ * webhook. The channel is detected from the signature headers; EACH eligible
+ * target is verified against ITS OWN secret before its mapper is offered the
+ * event (so one app's valid signature can't trigger another app's agent), and
+ * the first target that both verifies and claims starts a run on its Workflow
+ * binding. Returns `401` when NO target's signature verifies, `200` on a claim
+ * (or a Discord PONG), `204` when a verified event is declined by every mapper,
+ * and `400` for an unrecognized webhook.
  */
 const dispatchAgentChannel =
     (targets: ReadonlyArray<AgentChannelTarget>): InboundChannelHandler =>
@@ -226,32 +278,34 @@ const dispatchAgentChannel =
             return new Response("Unrecognized webhook", { status: 400 });
         }
 
-        // Only agents configured for THIS channel with a resolvable secret are eligible.
+        // Only agents configured for THIS channel are eligible.
         const eligible = targets
             .map((target) => {
                 return { config: target.agent.onInbound, target };
             })
             .filter((entry): entry is EligibleTarget => entry.config?.channel === channel);
 
-        // Verify against the first eligible target's secret (all channel targets
-        // share the channel's app credential).
-        const [first] = eligible;
-        const secret = first ? resolveSecret(first.config.secret, env) : undefined;
-
-        if (secret === undefined || !(await verifyChannel(channel, secret, request.headers, body))) {
-            return new Response("Invalid signature", { status: 401 });
-        }
-
-        const pong = discordPongResponse(channel, body);
-
-        if (pong) {
-            return pong;
-        }
-
         const event: InboundChannelEvent = { channel, headers: request.headers, json: (): unknown => JSON.parse(body), rawBody: body };
+        let verifiedAny = false;
 
         for (const { config, target } of eligible) {
-            // eslint-disable-next-line no-await-in-loop -- ordered first-match-wins routing, mirroring dispatchAgentEmail
+            const secret = resolveSecret(config.secret, env);
+
+            // eslint-disable-next-line no-await-in-loop -- per-target signature check, ordered first-match-wins
+            if (secret === undefined || !(await verifyChannel(channel, secret, request.headers, body))) {
+                continue;
+            }
+
+            verifiedAny = true;
+
+            // Discord PING → PONG, but only once the request's signature verified.
+            const pong = discordPongResponse(channel, body);
+
+            if (pong) {
+                return pong;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- see above
             const run = await config.map(event);
 
             // A mapper returns null/undefined to decline; a run is always an object.
@@ -269,12 +323,11 @@ const dispatchAgentChannel =
             }
 
             // eslint-disable-next-line no-await-in-loop -- single dispatch then return; never iterates past the first claim
-            await workflow.create({ params: run satisfies AgentChannelRun });
-
-            return new Response(undefined, { status: 200 });
+            return await startChannelRun(workflow, run satisfies AgentChannelRun, channel, deliveryId(channel, request.headers, body));
         }
 
-        return new Response(undefined, { status: 204 });
+        // No target's secret verified ⇒ unauthenticated; a verified-but-declined event is a 204.
+        return verifiedAny ? new Response(undefined, { status: 204 }) : new Response("Invalid signature", { status: 401 });
     };
 
 export type { AgentChannelTarget, InboundChannelHandler };

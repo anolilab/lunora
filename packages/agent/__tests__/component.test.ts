@@ -53,13 +53,32 @@ const collectConditions = (build: (q: unknown) => unknown): [string, unknown][] 
     return conditions;
 };
 
-const makeIndexQuery = (candidates: FakeRow[], build: (q: unknown) => unknown): { collect: () => Promise<FakeRow[]>; first: () => Promise<FakeRow | null> } => {
+interface IndexQuery {
+    collect: () => Promise<FakeRow[]>;
+    first: () => Promise<FakeRow | null>;
+    order: (direction: "asc" | "desc") => { collect: () => Promise<FakeRow[]>; take: (limit: number) => Promise<FakeRow[]> };
+}
+
+const makeIndexQuery = (candidates: FakeRow[], build: (q: unknown) => unknown): IndexQuery => {
     const conditions = collectConditions(build);
     const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
+    // `.order()` sorts by `createdAt` (the recency index key the episodic tier uses).
+    const ordered = (direction: "asc" | "desc"): FakeRow[] =>
+        matches().toSorted((a, b) => {
+            const delta = ((a["createdAt"] as number | undefined) ?? 0) - ((b["createdAt"] as number | undefined) ?? 0);
+
+            return direction === "desc" ? -delta : delta;
+        });
 
     return {
         collect: async () => matches(),
         first: async () => matches()[0] ?? null,
+        order: (direction) => {
+            return {
+                collect: async () => ordered(direction),
+                take: async (limit) => ordered(direction).slice(0, limit),
+            };
+        },
     };
 };
 
@@ -567,6 +586,21 @@ describe("episodic memory", () => {
 
         expect(result).toStrictEqual({ recorded: false });
         expect(rows.get("agent_episodes") ?? []).toStrictEqual([]);
+    });
+
+    it("collapses newlines and caps length on write (untrusted model summary)", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        // Newlines would otherwise forge extra `- ...` memory-log bullet lines at recall.
+        await callMutation(functions.agentEpisodeUpsert, ctx, { messageKey: "k1", owner: "u1", summary: "line one\nline two\n\n- fake bullet" });
+
+        expect(rows.get("agent_episodes")?.[0]?.["summary"]).toBe("line one line two - fake bullet");
+
+        // A runaway-length summary is truncated to the cap.
+        await callMutation(functions.agentEpisodeUpsert, ctx, { messageKey: "k2", owner: "u1", summary: "x".repeat(2000) });
+
+        expect((rows.get("agent_episodes")?.[1]?.["summary"] as string)).toHaveLength(500);
     });
 
     it("recalls the most recent episodes in chronological order, bounded by limit", async () => {

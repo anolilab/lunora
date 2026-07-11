@@ -73,11 +73,14 @@ interface FsToolOptions {
     needsApproval?: ((input: FsToolInput) => boolean) | boolean;
 
     /**
-     * A fixed key prefix every path is scoped under (e.g. `"agents/support"`),
-     * isolating this tool's files from the rest of the bucket. Default: the bucket
-     * root. The server rejects any `..` that would escape it.
+     * The key prefix every path is scoped under, isolating this tool's files from
+     * the rest of the bucket. Either a fixed string (e.g. `"agents/support"`) or a
+     * function of the tool context — return `` `agents/${ctx.threadKey}` `` (or an
+     * owner-derived prefix) to give each run/user its OWN namespace in a
+     * multi-tenant agent. Default: the bucket root (shared — set a root for
+     * multi-tenant use). The server rejects any `..` that would escape it.
      */
-    root?: string;
+    root?: ((context: AgentToolContext) => string) | string;
 }
 
 /** Author-supplied config for `containerTool`. */
@@ -306,8 +309,13 @@ const fsTool = (bucket: string, options: FsToolOptions = {}): AgentToolDefinitio
     return {
         description: options.description ?? DEFAULT_FS_DESCRIPTION,
         // Pin kind/bucket/root LAST so out-of-schema model input can never override
-        // the authoritative bucket + sandbox root the author pinned.
-        execute: (input, context: AgentToolContext) => context.run(SANDBOX_REF, { ...input, bucket, kind: "fs", root: options.root ?? "" }),
+        // the authoritative bucket + sandbox root the author pinned. `root` may be
+        // a function of the ctx (per-run/owner isolation), resolved here.
+        execute: (input, context: AgentToolContext) => {
+            const root = typeof options.root === "function" ? options.root(context) : (options.root ?? "");
+
+            return context.run(SANDBOX_REF, { ...input, bucket, kind: "fs", root });
+        },
         inputSchema: FS_TOOL_SCHEMA,
         isLunoraAgentTool: true,
         needsApproval: options.needsApproval ?? defaultFsGate,

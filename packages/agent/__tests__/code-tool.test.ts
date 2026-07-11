@@ -6,6 +6,7 @@ import type { AgentToolContext, AgentToolDefinition, AnyAgentTool } from "../src
 const UNKNOWN_REF_PATTERN = /unknown result "missing"/u;
 const UNKNOWN_TOOL_PATTERN = /unknown tool "nope"/u;
 const EMPTY_TOOLS_PATTERN = /non-empty map of tools/u;
+const GATED_TOOL_PATTERN = /cannot compose "gated"/u;
 
 const context = {} as AgentToolContext;
 
@@ -40,6 +41,16 @@ describe(resolveReferences, () => {
 
     it("throws on an unknown `$from` reference", () => {
         expect(() => resolveReferences({ $from: "missing" }, {})).toThrow(UNKNOWN_REF_PATTERN);
+    });
+
+    it("does not resolve a `$path` onto the prototype chain", () => {
+        const resolved = resolveReferences({ x: { $from: "u", $path: "__proto__" }, y: { $from: "u", $path: "constructor" } }, { u: { a: 1 } }) as {
+            x: unknown;
+            y: unknown;
+        };
+
+        expect(resolved.x).toBeUndefined();
+        expect(resolved.y).toBeUndefined();
     });
 });
 
@@ -88,6 +99,38 @@ describe(runToolScript, () => {
         expect(calls).toHaveLength(3);
         expect(result.results).toHaveLength(3);
     });
+
+    it("gives each step its own idempotency key / tool-call id derived from the code tool's", async () => {
+        const seen: { idempotencyKey: string; toolCallId: string }[] = [];
+        const tool: AgentToolDefinition = {
+            description: "t",
+            execute: (_input, ctx) => {
+                seen.push({ idempotencyKey: ctx.idempotencyKey, toolCallId: ctx.toolCallId });
+
+                return "ok";
+            },
+            inputSchema: {} as never,
+            isLunoraAgentTool: true,
+        };
+        const baseContext = { idempotencyKey: "tool:code:call_1", toolCallId: "call_1" } as AgentToolContext;
+
+        await runToolScript(
+            {
+                steps: [
+                    { id: "a", tool: "t" },
+                    { id: "b", tool: "t" },
+                ],
+            },
+            { t: tool },
+            baseContext,
+            16,
+        );
+
+        expect(seen).toStrictEqual([
+            { idempotencyKey: "tool:code:call_1:a", toolCallId: "call_1:a" },
+            { idempotencyKey: "tool:code:call_1:b", toolCallId: "call_1:b" },
+        ]);
+    });
 });
 
 describe(codeTool, () => {
@@ -104,5 +147,11 @@ describe(codeTool, () => {
 
     it("throws without any tools to compose", () => {
         expect(() => codeTool({})).toThrow(EMPTY_TOOLS_PATTERN);
+    });
+
+    it("rejects composing an approval-gated tool (a script can't pause for HITL)", () => {
+        const gated: AgentToolDefinition = { ...fakeTool("x"), needsApproval: true };
+
+        expect(() => codeTool({ gated })).toThrow(GATED_TOOL_PATTERN);
     });
 });
