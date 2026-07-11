@@ -92,6 +92,7 @@ const prepareAgentTurn = (agent: AgentDefinition, env: Record<string, unknown>) 
         ...(agent.temperature === undefined ? {} : { temperature: agent.temperature }),
         ...(agent.maxOutputTokens === undefined ? {} : { maxOutputTokens: agent.maxOutputTokens }),
         ...(agent.telemetry === undefined ? {} : { telemetry: agent.telemetry }),
+        ...(agent.repairToolCall === undefined ? {} : { experimental_repairToolCall: agent.repairToolCall }),
     };
 
     return { defaultModel, output, staticSettings, tools };

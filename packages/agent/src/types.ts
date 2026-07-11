@@ -1,5 +1,5 @@
 import type { InboundEmail } from "@lunora/mail/inbound";
-import type { FlexibleSchema, LanguageModel, ModelMessage, StopCondition, TelemetryOptions, ToolChoice, ToolSet } from "ai";
+import type { FlexibleSchema, LanguageModel, ModelMessage, StopCondition, TelemetryOptions, ToolCallRepairFunction, ToolChoice, ToolSet } from "ai";
 
 /**
  * Structural mirror of the Lunora function reference (`{ __lunoraRef }`).
@@ -583,6 +583,16 @@ export interface AgentConfig {
      * literal), so it must be inline in the `defineAgent({ ... })` object literal.
      */
     publicRun?: boolean;
+
+    /**
+     * Repair a malformed tool call the model emits (AI SDK
+     * `experimental_repairToolCall`): given the failing `{ toolCall, error, tools,
+     * inputSchema, messages, system }`, return a corrected tool call or `null` to
+     * give up. Runs inside the model turn, so keep it deterministic (it re-runs on
+     * a replay). Unset (the default) leaves the loop's existing
+     * unknown-tool-name recovery as the only repair path.
+     */
+    repairToolCall?: ToolCallRepairFunction<ToolSet>;
 
     /**
      * Reusable {@link SkillDefinition}s to compose in — each contributes an

@@ -98,6 +98,10 @@ the durable loop:
   final answer (no pending tool calls) reports `result.stopped === "final"`.
 - **`prepareStep`** — mutate the request just before a turn (swap the model,
   trim messages, force a tool). Must be deterministic — it runs on replay.
+- **`repairToolCall`** — repair a malformed tool call the model emits (AI SDK
+  `experimental_repairToolCall`): given `{ toolCall, error, tools, inputSchema }`,
+  return a corrected call or `null` to give up. Runs inside the turn, so keep it
+  deterministic.
 - **`compaction`** — automatic history compaction. Set
   `compaction: { maxMessages }` and once the thread history exceeds
   `maxMessages`, the loop summarizes the older messages (all but the most recent
