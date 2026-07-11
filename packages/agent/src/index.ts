@@ -3,6 +3,8 @@ export { runAgentLoop, splitForCompaction } from "./agent-loop";
 export type { AgentMemoryReadInput, AgentMemorySearchHit, AgentMemorySearchInput, AgentMemorySearchResult } from "./agentic-memory";
 export { collectAgenticMemoryTools, toSearchResults } from "./agentic-memory";
 export { agentAsTool } from "./as-tool";
+export type { CodeToolOptions, ToolScript, ToolScriptResult, ToolScriptStep } from "./code-tool";
+export { codeTool } from "./code-tool";
 export type { AgentComponent } from "./component";
 export { agentComponent, agentExtension } from "./component";
 export { default as createAgentContext } from "./create-agent-context";

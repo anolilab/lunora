@@ -411,6 +411,40 @@ injects that peer, so the browser op throws a directed error until it is wired.
 Payloads are replay-stable, so a workflow replay re-encodes identical bytes to
 identical text.
 
+## Code mode (`codeTool`)
+
+Normally the model calls one tool per turn — a round-trip each. `codeTool` lets
+it compose **several** tool calls in **one** turn as a script, feeding a later
+call's input from an earlier call's output:
+
+```ts
+import { codeTool, defineAgent, functionTool } from "@lunora/agent";
+
+export const analyst = defineAgent({
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    tools: {
+        run: codeTool({
+            findUser: functionTool("users:byEmail", { description: "Look up a user by email.", inputSchema }),
+            recentOrders: functionTool("orders:recent", { description: "List a user's recent orders.", inputSchema }),
+        }),
+    },
+});
+```
+
+The model writes `steps: [{ id, tool, input }]`; a later `input` references an
+earlier output with `{ "$from": "<stepId>", "$path": "optional.dot.path" }`. So
+in one turn it can `findUser`, then feed `{ "$from": "u", "$path": "id" }` into
+`recentOrders`. The whole script runs in a single `codeTool` call and returns
+each step's output plus the `final` one.
+
+This is a **safe interpreted data-flow** between the whitelisted tools you hand
+`codeTool` — not arbitrary JavaScript — so there is no `eval` or isolate and it
+runs natively in workerd. Each composed tool still dispatches through the same
+durable context a normal call gets, keeping its RLS and its own `needsApproval`
+gate (a script can't smuggle a call past a sub-tool's approval). Scripts are
+capped at `maxSteps` (default 16). Running arbitrary model-authored _code_ in an
+isolate (the Cloudflare Worker Loader path) is a separate future mode.
+
 ## Skills
 
 A **skill** is a reusable bundle of expertise — an instruction fragment, tools,
