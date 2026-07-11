@@ -46,7 +46,11 @@ export const getBySlug = query.input({ slug: v.string() }).query(async ({ ctx: c
  */
 export const create = mutation
     .input({
-        cellId: v.id("cells"),
+        // Explicit cell placement; omit to let `jurisdiction` (or the default
+        // pool) pick an active cell (GAPS.md F data-residency).
+        cellId: v.optional(v.id("cells")),
+        // "eu" | "fedramp" — restricts placement to cells in that jurisdiction.
+        jurisdiction: v.optional(v.string()),
         name: v.string(),
         plan: v.optional(v.union(v.literal("free"), v.literal("pro"), v.literal("enterprise"))),
         slug: v.string(),
@@ -55,8 +59,27 @@ export const create = mutation
         const userId = assertSignedIn(context.auth.userId);
         const now = Date.now();
 
+        let { cellId } = arguments_;
+
+        if (!cellId) {
+            const { page: cellPage } = await context.db.cells.findMany({});
+            const candidate = (cellPage as unknown as { _id: Id<"cells">; jurisdiction?: string; status: string }[]).find(
+                (cell) => cell.status === "active" && (arguments_.jurisdiction === undefined || cell.jurisdiction === arguments_.jurisdiction),
+            );
+            const picked = candidate;
+
+            if (!picked) {
+                throw new LunoraError(
+                    "UNPROCESSABLE",
+                    arguments_.jurisdiction ? `no active cell in jurisdiction "${arguments_.jurisdiction}"` : "no active cell available",
+                );
+            }
+
+            cellId = picked._id;
+        }
+
         const organizationId = await context.db.insert("organizations", {
-            cellId: arguments_.cellId,
+            cellId,
             createdAt: now,
             name: arguments_.name,
             plan: arguments_.plan ?? "free",
