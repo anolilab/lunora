@@ -71,6 +71,15 @@ export interface RagVectors {
  */
 export interface RagContext {
     ai: Pick<LunoraAi, "embeddingModel">;
+
+    /**
+     * The verified retrieval identity, read by {@link RagConfig.rlsFilter} to
+     * derive a per-request row filter. An `ActionCtx` carrying `ctx.auth`
+     * satisfies this structurally, so `docs(ctx)` picks the identity up
+     * automatically; tests pass any value. `unknown` on purpose — `@lunora/ai`
+     * stays decoupled from `@lunora/server`'s identity type; `rlsFilter` narrows.
+     */
+    auth?: unknown;
     vectors: RagVectors;
 }
 
@@ -91,12 +100,49 @@ export interface RagTextStore {
     remove?: (ids: ReadonlyArray<string>, options: { namespace?: string }) => Promise<void>;
 }
 
-/** A chunk handed to {@link RagTextStore.put}. */
+/** A chunk handed to {@link RagTextStore.put} / {@link RagLexicalStore.index}. */
 export interface StoredRagChunk {
     chunkIndex: number;
     id: string;
     sourceId: string;
     text: string;
+}
+
+/** One lexical (BM25) hit returned by {@link RagLexicalStore.search}. */
+export interface LexicalMatch {
+    /** The chunk vector id — the same id scheme the vector leg uses, so RRF can fuse the two. */
+    id: string;
+    /** BM25 relevance score (higher = better). Used only for the leg's internal ranking; RRF fuses by rank. */
+    score: number;
+    /** The chunk text, returned so a fused lexical-only hit needs no extra hydration round-trip. */
+    text: string;
+}
+
+/**
+ * Pluggable lexical (BM25 / keyword) store — the production seam for hybrid
+ * retrieval. When {@link RagConfig.lexicalStore} is set, `index()` mirrors each
+ * chunk's text here and `retrieve()` fuses this store's keyword ranking with the
+ * vector store's semantic ranking via Reciprocal Rank Fusion. Mirrors the
+ * {@link RagTextStore} shape (idempotent by chunk `id`, namespace-partitioned).
+ *
+ * `@lunora/ai/rag` ships `bm25LexicalStore()`, an in-memory reference adapter;
+ * production deployments plug a durable one (DO SQLite inverted index, D1,
+ * Vectorize-adjacent search service, …) behind this same interface.
+ */
+export interface RagLexicalStore {
+    /** Index chunk texts for keyword search. Must be idempotent by chunk `id` (re-index re-puts). */
+    index: (chunks: ReadonlyArray<StoredRagChunk>, options: { namespace?: string }) => Promise<void>;
+    /** Optional cleanup hook, invoked when a source's chunks are deleted or a re-index shrinks it. */
+    remove?: (ids: ReadonlyArray<string>, options: { namespace?: string }) => Promise<void>;
+
+    /**
+     * Rank chunks by lexical relevance to `query`. `filter` carries the same
+     * (RLS-merged) metadata predicate handed to the vector leg — a store that
+     * indexes metadata MUST honour it so hybrid retrieval can't surface a row
+     * the RLS filter would exclude; a namespace-only store (the reference
+     * adapter) isolates by `namespace` and documents that it ignores `filter`.
+     */
+    search: (query: string, options: { filter?: Record<string, unknown>; namespace?: string; topK: number }) => Promise<ReadonlyArray<LexicalMatch>>;
 }
 
 /**
@@ -120,21 +166,6 @@ export interface RagNamedFilter {
     description?: string;
     /** The filter expression passed verbatim to Vectorize's `filter` parameter. */
     filter: Record<string, unknown>;
-}
-
-/**
- * Text-search index configuration for hybrid (vector + BM25) retrieval.
- *
- * When set, each `index()` call also upserts chunk text to the text-search
- * index, and each `retrieve()` query fuses results from both indexes via
- * Reciprocal Rank Fusion (RRF) — combining semantic (vector) and keyword
- * (BM25) relevance signals.
- */
-export interface RagTextSearchConfig {
-    /** The Vectorize text-search index name (a `ctx.vectors` index binding key). */
-    index: string;
-    /** Retrieval depth for the text-search leg. Defaults to the RAG `topK`. */
-    topK?: number;
 }
 
 export interface RagConfig {
@@ -186,6 +217,18 @@ export interface RagConfig {
     index: string;
 
     /**
+     * Pluggable lexical (BM25) store for hybrid retrieval. When set, `index()`
+     * mirrors chunk text into it and `retrieve()` fuses the vector (semantic)
+     * and lexical (keyword) rankings via Reciprocal Rank Fusion — recovering the
+     * exact-term / rare-token matches a pure-embedding search misses. Use the
+     * shipped `bm25LexicalStore()` reference adapter or plug your own durable
+     * one. See {@link RagLexicalStore}.
+     */
+    lexicalStore?: RagLexicalStore;
+    /** Retrieval depth for the lexical leg of hybrid search. Defaults to the effective `topK`. */
+    lexicalTopK?: number;
+
+    /**
      * Enforce tenant isolation: throw (instead of the one-time dev warning)
      * when `index`/`retrieve`/`remove` run without a `namespace`. Recommended
      * for every multi-tenant app — Vectorize indexes are account-global, and
@@ -194,11 +237,24 @@ export interface RagConfig {
     requireNamespace?: boolean;
 
     /**
-     * Optional text-search index for hybrid (vector + BM25) retrieval. When
-     * set, `index()` writes to both indexes and `retrieve()` fuses results
-     * from both via Reciprocal Rank Fusion.
+     * Row-level-security filter derived from the retrieval identity. Called once
+     * per `retrieve()` with {@link RagContext.auth} (the bound ctx's `auth`); the
+     * returned Vectorize metadata filter is merged over the caller's `filter`
+     * with **RLS keys winning** (a caller can never widen past what RLS allows),
+     * then applied to both the vector and the lexical legs. Return `undefined` to
+     * add no constraint (e.g. an admin identity). Runs on retrieval only —
+     * indexing is a trusted server path.
+     * @example
+     * ```ts
+     * const docs = defineRag({
+     *   index: "docs",
+     *   // only ever return the caller's own org, whatever else they ask for:
+     *   rlsFilter: (auth) => ({ orgId: (auth as { orgId: string }).orgId }),
+     * });
+     * ```
      */
-    textSearch?: RagTextSearchConfig;
+    rlsFilter?: (auth: unknown) => Promise<Record<string, unknown> | undefined> | Record<string, unknown> | undefined;
+
     /** Chunk-text storage override — see {@link RagTextStore}. */
     textStore?: RagTextStore;
     /** Default retrieval depth. Default 5. Capped at 20 (metadata mode) / 100 (text-store mode). */

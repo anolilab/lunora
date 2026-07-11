@@ -243,6 +243,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             await context.vectors.deleteByIds(config.index, ids, namespace);
             await textStore?.remove?.(ids, { namespace });
+            await config.lexicalStore?.remove?.(ids, { namespace });
         };
 
         const index = async (input: IndexInput): Promise<IndexResult> => {
@@ -275,17 +276,24 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 throw new LunoraError("BAD_REQUEST", `@lunora/ai/rag: source "${input.id}" produced zero chunks — set allowEmptySources: true to allow this`);
             }
 
-            // Text lands in the store BEFORE the vectors: a match must never
+            // Text lands in the store(s) BEFORE the vectors: a match must never
             // point at text that does not exist yet. The reverse failure mode —
             // orphaned text after a failed upsert — is harmless and converges
             // on the (idempotent) retry.
-            if (textStore && pieces.length > 0) {
-                await textStore.put(
-                    pieces.map((text, chunkIndex) => {
-                        return { chunkIndex, id: ids[chunkIndex] as string, sourceId: input.id, text };
-                    }),
-                    { namespace: effectiveNamespace },
-                );
+            if (pieces.length > 0) {
+                const storedChunks = pieces.map((text, chunkIndex) => {
+                    return { chunkIndex, id: ids[chunkIndex] as string, sourceId: input.id, text };
+                });
+
+                if (textStore) {
+                    await textStore.put(storedChunks, { namespace: effectiveNamespace });
+                }
+
+                // Lexical (BM25) mirror for hybrid retrieval — same chunk ids, so
+                // RRF can fuse the two legs at query time.
+                if (config.lexicalStore) {
+                    await config.lexicalStore.index(storedChunks, { namespace: effectiveNamespace });
+                }
             }
 
             await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
@@ -324,20 +332,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                     namespace: effectiveNamespace,
                 });
 
-                // Text-search upsert (hybrid mode): upsert without an embed
-                // function — Vectorize text-search indexes tokenise the input
-                // text directly and use BM25 at query time.
-                if (config.textSearch) {
-                    await context.vectors.upsert(config.textSearch.index, {
-                        id,
-                        input: piece,
-                        metadata,
-                        namespace: effectiveNamespace,
-                    });
-                }
-
-                // Progress callback — fires after both upserts so callers see
-                // a consistent state when the callback runs.
+                // Progress callback — fires after the upsert so callers see a
+                // consistent state when the callback runs.
                 input.onChunk?.({ chunkIndex, id, text: piece, total: pieces.length });
             });
 
@@ -358,16 +354,11 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             const previous = await readHead(input.id, effectiveNamespace);
             const totalChunks = previous.chunks ?? 1;
 
-            // Clean up the text-search index first (if configured), then vectors.
-            if (config.textSearch) {
-                const ids = Array.from({ length: totalChunks }, (_, offset) => chunkVectorId(effectiveNamespace, input.id, offset));
-
-                await context.vectors.deleteByIds(config.textSearch.index, ids, effectiveNamespace);
-            }
-
-            // Without a head record there is nothing reliable to delete; a
-            // head without a count (never written by this helper) still has
-            // chunk #0 itself to clean up.
+            // Delete every chunk across the vector, text, and lexical stores.
+            // `deleteChunkRange` fans out to `textStore.remove` + `lexicalStore.remove`.
+            // Without a head record there is nothing reliable to delete; a head
+            // without a count (never written by this helper) still has chunk #0
+            // itself to clean up.
             await deleteChunkRange(input.id, 0, totalChunks, effectiveNamespace);
         };
 
@@ -524,12 +515,18 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             const effectiveNamespace = withModelTag(options?.namespace);
             const resolvedFilter = resolveFilter(options?.filter);
+
+            // Row-level security: derive a filter from the bound ctx's identity
+            // and merge it OVER the caller's filter (RLS keys win) so a caller can
+            // never widen past what RLS allows. Applied to both retrieval legs.
+            const rlsFilter = config.rlsFilter ? await config.rlsFilter(context.auth) : undefined;
+            const effectiveFilter = rlsFilter ? { ...resolvedFilter, ...rlsFilter } : resolvedFilter;
             const topK = Math.min(options?.topK ?? defaultTopK, topKCeiling);
 
-            // Vector query (primary leg)
+            // Vector query (primary, semantic leg)
             const vectorResult = await context.vectors.query(config.index, {
                 embed: embedText,
-                filter: resolvedFilter,
+                filter: effectiveFilter,
                 input: query,
                 namespace: effectiveNamespace,
                 returnMetadata: textStore ? "indexed" : "all",
@@ -538,21 +535,32 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             let chunks = await hydrateFromStore(parseMatches(vectorResult, effectiveNamespace), effectiveNamespace);
 
-            // Hybrid search: also query the text-search index and fuse via RRF.
-            if (config.textSearch) {
-                const textTopK = config.textSearch.topK ?? topK;
-
-                const textResult = await context.vectors.query(config.textSearch.index, {
-                    input: query,
-                    filter: resolvedFilter,
+            // Hybrid search: also rank via the lexical (BM25) leg and fuse the
+            // two rankings with RRF — recovering exact-term matches the embedding
+            // misses. Lexical-only hits carry no stored metadata/importance; a hit
+            // shared with the vector leg keeps the (richer) vector chunk in RRF.
+            if (config.lexicalStore) {
+                const lexicalMatches = await config.lexicalStore.search(query, {
+                    filter: effectiveFilter,
                     namespace: effectiveNamespace,
-                    returnMetadata: textStore ? "indexed" : "all",
-                    topK: textTopK,
+                    topK: config.lexicalTopK ?? topK,
                 });
 
-                const textChunks = await hydrateFromStore(parseMatches(textResult, effectiveNamespace), effectiveNamespace);
+                const lexicalChunks: RetrievedChunk[] = lexicalMatches.map((match) => {
+                    const parsed = parseChunkVectorId(match.id, effectiveNamespace);
 
-                chunks = [...hybridRank(chunks, textChunks)];
+                    return {
+                        chunkIndex: parsed.chunkIndex,
+                        id: match.id,
+                        importance: 1,
+                        metadata: undefined,
+                        score: match.score,
+                        sourceId: parsed.sourceId,
+                        text: match.text,
+                    };
+                });
+
+                chunks = [...hybridRank(chunks, lexicalChunks)];
             }
 
             // Importance weighting can reorder; re-rank on the adjusted score

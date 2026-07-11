@@ -3,8 +3,8 @@ import type { EmbeddingModel } from "ai";
 import { embed } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
-import { contentHash, defineRag, guessMimeTypeFromExtension } from "../src/rag";
-import type { RagContext, RagTextStore, RagVectorQueryInput, RagVectors } from "../src/rag/types";
+import { bm25LexicalStore, contentHash, defineRag, guessMimeTypeFromExtension } from "../src/rag";
+import type { RagContext, RagLexicalStore, RagTextStore, RagVectorQueryInput, RagVectors } from "../src/rag/types";
 
 // Partial-mock the AI SDK: `embed` becomes a deterministic token-bag embedder
 // (similar text → similar vectors) so ranking is assertable without a model;
@@ -53,66 +53,26 @@ interface StoredVector {
  * upserted vectors, namespace filtering, `returnMetadata` projection, and the
  * real topK ceilings (20 with full metadata, 100 otherwise) enforced with the
  * same `RangeError` the live facade throws.
- *
- * Accepts an optional set of text-search index names. Indexes in this set
- * use word-overlap (BM25-simulated) scoring and accept upserts without an
- * `embed` function — modelling Vectorize text-search indexes faithfully
- * enough for hybrid-search tests to make assertions.
  */
-const memoryVectors = (_textSearchIndexes?: Set<string>): { queryCalls: RagVectorQueryInput[]; store: Map<string, StoredVector>; vectors: RagVectors } => {
-    // Per-index stores so text-search upserts (no embed → values: []) don't
-    // overwrite vector data in the same memory space.
-    const stores = new Map<string, Map<string, StoredVector>>();
+const memoryVectors = (): { queryCalls: RagVectorQueryInput[]; store: Map<string, StoredVector>; vectors: RagVectors } => {
+    const store = new Map<string, StoredVector>();
     const queryCalls: RagVectorQueryInput[] = [];
-
-    const getStore = (indexName: string): Map<string, StoredVector> => {
-        let store = stores.get(indexName);
-
-        if (!store) {
-            store = new Map<string, StoredVector>();
-            stores.set(indexName, store);
-        }
-
-        return store;
-    };
 
     const dot = (a: ReadonlyArray<number>, b: ReadonlyArray<number>): number => a.reduce((sum, value, index) => sum + value * (b[index] as number), 0);
 
-    /** Simple word-overlap similarity for text-search simulation. */
-    const wordOverlap = (query: string, text: string): number => {
-        const queryWords = new Set(
-            query
-                .toLowerCase()
-                .split(/[^a-z0-9]+/u)
-                .filter(Boolean),
-        );
-        const docWords = text
-            .toLowerCase()
-            .split(/[^a-z0-9]+/u)
-            .filter(Boolean);
-        const overlap = docWords.filter((word) => queryWords.has(word)).length;
-
-        return docWords.length > 0 ? overlap / docWords.length : 0;
-    };
-
     const vectors: RagVectors = {
-        deleteByIds: async (indexName, ids) => {
-            const store = getStore(indexName);
-
+        deleteByIds: async (_indexName, ids) => {
             for (const id of ids) {
                 store.delete(id);
             }
         },
-        getByIds: async (indexName, ids) => {
-            const store = getStore(indexName);
-
-            return ids.flatMap((id) => {
+        getByIds: async (_indexName, ids) =>
+            ids.flatMap((id) => {
                 const record = store.get(id);
 
                 return record ? [{ id: record.id, metadata: record.metadata }] : [];
-            });
-        },
-        query: async (indexName, input) => {
+            }),
+        query: async (_indexName, input) => {
             queryCalls.push(input);
 
             const topK = input.topK ?? 5;
@@ -126,52 +86,73 @@ const memoryVectors = (_textSearchIndexes?: Set<string>): { queryCalls: RagVecto
                 throw new TypeError("memoryVectors: query requires `input`");
             }
 
-            const store = getStore(indexName);
-            const matches = await Promise.all(
-                [...store.values()]
-                    .filter((record) => input.namespace === undefined || record.namespace === input.namespace)
-                    .map(async (record) => {
-                        let score: number;
+            if (!input.embed) {
+                throw new TypeError("memoryVectors: query requires `embed`");
+            }
 
-                        if (input.embed) {
-                            // Vector mode: cosine similarity.
-                            score = dot(await (input.embed as (text: string) => Promise<ReadonlyArray<number>>)(input.input as string), record.values);
-                        } else {
-                            // Text-search mode: score by word overlap against stored text.
-                            // We store the raw input text in __ragText metadata for retrieval.
-                            const rawText = typeof record.metadata?.["__ragText"] === "string" ? record.metadata["__ragText"] : "";
-                            score = wordOverlap(input.input as string, rawText);
-                        }
-
-                        return {
-                            id: record.id,
-                            metadata: input.returnMetadata === "all" ? record.metadata : undefined,
-                            score,
-                        };
-                    }),
-            );
+            const embedder = input.embed as (text: string) => Promise<ReadonlyArray<number>>;
+            const queryVector = await embedder(input.input);
+            const matches = [...store.values()]
+                .filter((record) => input.namespace === undefined || record.namespace === input.namespace)
+                .map((record) => {
+                    return {
+                        id: record.id,
+                        metadata: input.returnMetadata === "all" ? record.metadata : undefined,
+                        score: dot(queryVector, record.values),
+                    };
+                });
             const sorted = matches.toSorted((a, b) => b.score - a.score).slice(0, topK);
 
             return { count: sorted.length, matches: sorted };
         },
-        upsert: async (indexName, input) => {
-            const store = getStore(indexName);
-
-            if (input.embed) {
-                const values = await input.embed(input.input);
-
-                store.set(input.id, { id: input.id, metadata: input.metadata, namespace: input.namespace, values });
-            } else {
-                // Text-search upsert without embed: store with zero-values vector.
-                store.set(input.id, { id: input.id, metadata: input.metadata, namespace: input.namespace, values: [] });
+        upsert: async (_indexName, input) => {
+            if (!input.embed) {
+                throw new TypeError("memoryVectors: upsert requires `embed`");
             }
+
+            const values = await input.embed(input.input);
+
+            store.set(input.id, { id: input.id, metadata: input.metadata, namespace: input.namespace, values });
         },
     };
 
-    // Expose the primary index store for test assertions (backward compat).
-    const store = getStore("docs");
-
     return { queryCalls, store, vectors };
+};
+
+/** Wrap a real {@link bm25LexicalStore} to record its `index`/`remove`/`search` calls for assertions. */
+const recordingLexicalStore = (): {
+    indexed: number[];
+    removed: string[][];
+    searches: { filter?: Record<string, unknown>; namespace?: string; query: string; topK: number }[];
+    store: RagLexicalStore;
+} => {
+    const inner = bm25LexicalStore();
+    const indexed: number[] = [];
+    const removed: string[][] = [];
+    const searches: { filter?: Record<string, unknown>; namespace?: string; query: string; topK: number }[] = [];
+
+    return {
+        indexed,
+        removed,
+        searches,
+        store: {
+            index: async (chunks, options) => {
+                indexed.push(chunks.length);
+
+                await inner.index(chunks, options);
+            },
+            remove: async (ids, options) => {
+                removed.push([...ids]);
+
+                await inner.remove?.(ids, options);
+            },
+            search: async (query, options) => {
+                searches.push({ filter: options.filter, namespace: options.namespace, query, topK: options.topK });
+
+                return inner.search(query, options);
+            },
+        },
+    };
 };
 
 const memoryTextStore = (): { removed: string[][]; store: RagTextStore; texts: Map<string, string> } => {
@@ -199,7 +180,7 @@ const memoryTextStore = (): { removed: string[][]; store: RagTextStore; texts: M
     };
 };
 
-const fakeCtx = (vectors: RagVectors): RagContext & { embeddingModelCalls: unknown[] } => {
+const fakeCtx = (vectors: RagVectors, auth?: unknown): RagContext & { embeddingModelCalls: unknown[] } => {
     const embeddingModelCalls: unknown[] = [];
 
     return {
@@ -210,6 +191,7 @@ const fakeCtx = (vectors: RagVectors): RagContext & { embeddingModelCalls: unkno
                 return { __embeddingModel: model ?? "default" } as unknown as EmbeddingModel;
             },
         },
+        auth,
         embeddingModelCalls,
         vectors,
     };
@@ -736,40 +718,90 @@ describe(defineRag, () => {
         });
     });
 
-    describe("hybrid search", () => {
-        it("queries both indexes and fuses via RRF", async () => {
-            const { queryCalls, vectors } = memoryVectors(new Set(["docs-text"]));
+    describe("hybrid search (lexical store)", () => {
+        it("mirrors chunk text into the lexical store and fuses both legs via RRF", async () => {
+            const { queryCalls, vectors } = memoryVectors();
+            const lexical = recordingLexicalStore();
             const ctx = fakeCtx(vectors);
-            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", textSearch: { index: "docs-text" } });
+            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", lexicalStore: lexical.store });
             const rag = docs(ctx);
 
             await rag.index({ id: "doc-1", metadata: { title: "Weather" }, text: "sunny warm bright sunshine | rain rain storm cloud" });
             await rag.index({ id: "doc-2", metadata: { title: "Cooking" }, text: "pasta tomato basil dinner" });
 
+            // Each source mirrored its chunks into the lexical store.
+            expect(lexical.indexed).toStrictEqual([2, 1]);
+
             const result = await rag.retrieve("rain storm cloud", { topK: 5 });
 
-            // Both indexes were queried
-            expect(queryCalls).toHaveLength(2);
-            expect(queryCalls[0]?.input).toBe("rain storm cloud");
-            expect(queryCalls[1]?.input).toBe("rain storm cloud");
+            // The vector index was queried once; the lexical leg is the separate store.
+            expect(queryCalls).toHaveLength(1);
+            expect(lexical.searches).toHaveLength(1);
+            expect(lexical.searches[0]?.query).toBe("rain storm cloud");
 
-            // The weather doc should rank first (best semantic + keyword match)
+            // The weather doc's storm chunk ranks first (best semantic + keyword match).
             expect(result.chunks.length).toBeGreaterThan(0);
             expect(result.chunks[0]?.sourceId).toBe("doc-1");
             expect(result.chunks[0]?.text).toBe("rain rain storm cloud");
             expect(result.sources.map((source) => source.id)).toContain("doc-1");
         });
 
-        it("handles text search when no vector embed is provided", async () => {
-            const { vectors } = memoryVectors(new Set(["docs-text"]));
+        it("recovers an exact-term chunk the vector leg ranks below topK", async () => {
+            const { vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
-            // The text-search index upsert happens without embed; the vector
-            // index still requires one. This test verifies the dual upsert
-            // does not throw when embed is omitted for the text-search leg.
-            const docs = defineRag({ allowSharedNamespace: true, index: "docs", textSearch: { index: "docs-text" } });
+            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", lexicalStore: bm25LexicalStore() });
             const rag = docs(ctx);
 
-            await expect(rag.index({ id: "doc-1", text: "hello world" })).resolves.toMatchObject({ chunks: 1, unchanged: false });
+            // One chunk holds a rare exact term ("qwerty"); many decoys crowd it
+            // out of the vector top-1, but the lexical leg pins it via RRF.
+            await rag.index({
+                id: "doc-1",
+                text: "alpha beta gamma | delta epsilon zeta | the qwerty token lives here | eta theta iota | kappa lambda mu",
+            });
+
+            const result = await rag.retrieve("qwerty", { topK: 1 });
+
+            expect(result.chunks[0]?.text).toBe("the qwerty token lives here");
+        });
+
+        it("removes chunks from the lexical store on remove()", async () => {
+            const { store, vectors } = memoryVectors();
+            const lexical = recordingLexicalStore();
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", lexicalStore: lexical.store });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "one | two | three" });
+
+            expect(store.size).toBe(3);
+
+            await rag.remove({ id: "doc-1" });
+
+            // Vector store emptied AND the lexical store's remove hook fired for all chunks.
+            expect(store.size).toBe(0);
+            expect(lexical.removed).toStrictEqual([["doc-1#0", "doc-1#1", "doc-1#2"]]);
+
+            const survivors = await lexical.store.search("one two three", { namespace: undefined, topK: 5 });
+
+            expect(survivors).toStrictEqual([]);
+        });
+
+        it("cleans up stale lexical chunks when a re-index shrinks the source", async () => {
+            const { vectors } = memoryVectors();
+            const lexical = recordingLexicalStore();
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", lexicalStore: lexical.store });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "one | two | three" });
+            await rag.index({ id: "doc-1", text: "one" });
+
+            // The shrink deleted the two trailing chunks from the lexical store too.
+            expect(lexical.removed).toStrictEqual([["doc-1#1", "doc-1#2"]]);
+
+            const hits = await lexical.store.search("two three", { namespace: undefined, topK: 5 });
+
+            expect(hits).toStrictEqual([]);
         });
     });
 
@@ -811,21 +843,161 @@ describe(defineRag, () => {
         });
     });
 
-    describe("text-search cleanup on remove", () => {
-        it("deletes from both vector and text-search indexes", async () => {
-            const { store, vectors } = memoryVectors(new Set(["docs-text"]));
-            const ctx = fakeCtx(vectors);
-            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", textSearch: { index: "docs-text" } });
+    describe("rLS-filtered retrieval", () => {
+        it("derives a filter from ctx.auth and applies it to the vector query", async () => {
+            const { queryCalls, vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors, { orgId: "org-a" });
+            const docs = defineRag({
+                allowSharedNamespace: true,
+                index: "docs",
+                rlsFilter: (auth) => {
+                    return { orgId: (auth as { orgId: string }).orgId };
+                },
+            });
             const rag = docs(ctx);
 
-            await rag.index({ id: "doc-1", text: "one | two | three" });
+            await rag.index({ id: "doc-1", text: "hello world" });
+            await rag.retrieve("hello");
 
-            // Both indexes share the same store in this double — verify all chunks exist
-            expect(store.size).toBe(3);
-
-            await rag.remove({ id: "doc-1" });
-
-            expect(store.size).toBe(0);
+            expect(queryCalls[0]?.filter).toStrictEqual({ orgId: "org-a" });
         });
+
+        it("merges the RLS filter OVER the caller filter (RLS wins on key collision)", async () => {
+            const { queryCalls, vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors, { orgId: "org-a" });
+            const docs = defineRag({
+                allowSharedNamespace: true,
+                index: "docs",
+                rlsFilter: (auth) => {
+                    return { orgId: (auth as { orgId: string }).orgId };
+                },
+            });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "hello world" });
+            // Caller tries to widen to another org + adds an orthogonal key.
+            await rag.retrieve("hello", { filter: { orgId: "org-b", status: "published" } });
+
+            // RLS orgId overrides the caller's; the orthogonal key is preserved.
+            expect(queryCalls[0]?.filter).toStrictEqual({ orgId: "org-a", status: "published" });
+        });
+
+        it("supports an async rlsFilter and an undefined (no-constraint) result", async () => {
+            const { queryCalls, vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors, { role: "admin" });
+            const docs = defineRag({
+                allowSharedNamespace: true,
+                index: "docs",
+                // Admins get no constraint; everyone else is scoped to their org.
+                rlsFilter: (auth) => Promise.resolve((auth as { role: string }).role === "admin" ? undefined : { orgId: "x" }),
+            });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "hello world" });
+            await rag.retrieve("hello", { filter: { status: "published" } });
+
+            // undefined RLS → only the caller filter survives.
+            expect(queryCalls[0]?.filter).toStrictEqual({ status: "published" });
+        });
+
+        it("applies the RLS-merged filter to the lexical leg too", async () => {
+            const { vectors } = memoryVectors();
+            const lexical = recordingLexicalStore();
+            const ctx = fakeCtx(vectors, { orgId: "org-a" });
+            const docs = defineRag({
+                allowSharedNamespace: true,
+                index: "docs",
+                lexicalStore: lexical.store,
+                rlsFilter: (auth) => {
+                    return { orgId: (auth as { orgId: string }).orgId };
+                },
+            });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "hello world" });
+            await rag.retrieve("hello");
+
+            expect(lexical.searches[0]?.filter).toStrictEqual({ orgId: "org-a" });
+        });
+    });
+});
+
+describe(bm25LexicalStore, () => {
+    const chunk = (id: string, text: string, chunkIndex = 0): { chunkIndex: number; id: string; sourceId: string; text: string } => {
+        return {
+            chunkIndex,
+            id,
+            sourceId: id.split("#")[0] as string,
+            text,
+        };
+    };
+
+    it("ranks documents by BM25 relevance and honours topK", async () => {
+        const store = bm25LexicalStore();
+
+        await store.index(
+            [chunk("a#0", "the quick brown fox jumps"), chunk("b#0", "a lazy dog sleeps all day"), chunk("c#0", "quick quick quick reflexes win")],
+            {},
+        );
+
+        const matches = await store.search("quick", { topK: 2 });
+
+        expect(matches).toHaveLength(2);
+        // "c" repeats "quick" three times → higher term frequency → ranks first.
+        expect(matches[0]?.id).toBe("c#0");
+        expect(matches[0]?.text).toBe("quick quick quick reflexes win");
+        expect(matches[1]?.id).toBe("a#0");
+        expect(matches[0]?.score).toBeGreaterThan(matches[1]?.score as number);
+    });
+
+    it("is idempotent across re-index and forgets removed docs", async () => {
+        const store = bm25LexicalStore();
+
+        await store.index([chunk("a#0", "storm cloud rain")], {});
+        // Re-index the same id with different text — the old terms must not linger.
+        await store.index([chunk("a#0", "sunshine bright warm")], {});
+
+        await expect(store.search("storm", { topK: 5 })).resolves.toStrictEqual([]);
+
+        const afterReindex = await store.search("sunshine", { topK: 5 });
+
+        expect(afterReindex[0]?.id).toBe("a#0");
+
+        await store.remove?.(["a#0"], {});
+
+        await expect(store.search("sunshine", { topK: 5 })).resolves.toStrictEqual([]);
+    });
+
+    it("isolates namespaces", async () => {
+        const store = bm25LexicalStore();
+
+        await store.index([chunk("a#0", "tenant alpha secret")], { namespace: "org-a" });
+        await store.index([chunk("a#0", "tenant beta secret")], { namespace: "org-b" });
+
+        const inA = await store.search("secret", { namespace: "org-a", topK: 5 });
+
+        expect(inA).toHaveLength(1);
+        expect(inA[0]?.text).toBe("tenant alpha secret");
+
+        // A namespace-less query sees neither tenant's docs.
+        await expect(store.search("secret", { topK: 5 })).resolves.toStrictEqual([]);
+    });
+
+    it("fails closed when handed a metadata filter it cannot evaluate", async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            const store = bm25LexicalStore();
+
+            await store.index([chunk("a#0", "public knowledge base entry")], {});
+
+            // An operator-object filter is beyond a metadata-less store → no hits.
+            const matches = await store.search("public", { filter: { visibility: { $ne: "private" } }, topK: 5 });
+
+            expect(matches).toStrictEqual([]);
+            expect(warn).toHaveBeenCalledTimes(1);
+        } finally {
+            warn.mockRestore();
+        }
     });
 });
