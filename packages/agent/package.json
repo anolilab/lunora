@@ -46,6 +46,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./channels": {
+            "types": "./dist/channels.d.ts",
+            "import": "./dist/channels.mjs"
+        },
         "./component": {
             "types": "./dist/component.d.ts",
             "import": "./dist/component.mjs"

@@ -421,6 +421,54 @@ export interface AgentEmailRun {
  */
 export type AgentEmailMapper = (email: InboundEmail) => AgentEmailRun | null | Promise<AgentEmailRun | null | undefined> | undefined;
 
+/** The inbound webhook channels an agent can be triggered from — see `@lunora/agent/channels`. */
+export type AgentInboundChannelKind = "discord" | "github" | "slack";
+
+/** The run-input an inbound-channel mapper returns — the same shape as {@link AgentEmailRun}. */
+export type AgentChannelRun = AgentEmailRun;
+
+/** The verified, parsed webhook event handed to an {@link AgentInboundChannel.map} mapper. */
+export interface InboundChannelEvent {
+    /** Which channel delivered it. */
+    channel: AgentInboundChannelKind;
+    /** The raw request headers. */
+    headers: Headers;
+    /** Parse the body as JSON (throws on malformed JSON). */
+    json: () => unknown;
+    /** The raw (verified) request body. */
+    rawBody: string;
+}
+
+/**
+ * Map a VERIFIED inbound channel event into an agent run, or `null`/`undefined`
+ * to DECLINE it. Runs only AFTER the channel signature check passes.
+ *
+ * SECURITY: the payload is attacker-controlled and the run dispatches RLS
+ * bypassed. Derive the run `owner` from the verified channel identity (the
+ * workspace/installation the signing secret belongs to), never from an arbitrary
+ * payload field, and treat every returned field as untrusted input.
+ */
+export type AgentChannelMapper = (event: InboundChannelEvent) => AgentChannelRun | null | Promise<AgentChannelRun | null | undefined> | undefined;
+
+/**
+ * Trigger an agent from a verified inbound webhook. Codegen wires the developer's
+ * chosen HTTP route to `dispatchAgentChannel(...)` (from `@lunora/agent/channels`),
+ * which verifies the channel signature over the raw body before calling `map`.
+ */
+export interface AgentInboundChannel {
+    /** Which channel this agent listens on (selects the signature scheme). */
+    channel: AgentInboundChannelKind;
+    /** Map a verified event to a run (or `null` to decline). */
+    map: AgentChannelMapper;
+
+    /**
+     * The verification credential, from `env`: an env-var NAME (string) or an
+     * `(env) => value` resolver. Slack → signing secret; GitHub → webhook secret;
+     * Discord → the application's Ed25519 public key (hex).
+     */
+    secret: string | ((env: Record<string, unknown>) => string | undefined);
+}
+
 export interface AgentConfig {
     /** Restrict the tools the model may call, by name. Default: all tools. */
     activeTools?: ReadonlyArray<string>;
@@ -503,6 +551,14 @@ export interface AgentConfig {
      * durable run. Return `null`/`undefined` to drop the message.
      */
     onEmail?: AgentEmailMapper;
+
+    /**
+     * Trigger this agent from a verified inbound webhook (Slack / GitHub /
+     * Discord) — see {@link AgentInboundChannel}. Mount `dispatchAgentChannel(...)`
+     * (from `@lunora/agent/channels`) on an HTTP route; it verifies the channel
+     * signature over the raw body before calling `map`.
+     */
+    onInbound?: AgentInboundChannel;
     /** Called after each LLM turn — see {@link AgentOnStepFinish}. */
     onStepFinish?: AgentOnStepFinish;
 

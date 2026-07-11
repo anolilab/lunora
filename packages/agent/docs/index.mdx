@@ -536,6 +536,51 @@ The auto-wired handler is registered _before_ any manual `.onEmail(...)` you add
 to the app builder, so a hand-registered handler still wins if you need full
 control.
 
+## Inbound channels (Slack / GitHub / Discord)
+
+Trigger an agent from a **verified** inbound webhook. Give it an `onInbound`
+config naming the channel, the verification `secret` (an env var), and a `map`
+mapper, then mount `dispatchAgentChannel(...)` (from `@lunora/agent/channels`) on
+an HTTP route:
+
+```ts
+import { defineAgent } from "@lunora/agent";
+
+export const support = defineAgent({
+    model: "...",
+    onInbound: {
+        channel: "slack",
+        secret: "SLACK_SIGNING_SECRET", // env var — Slack signing secret / GitHub webhook secret / Discord Ed25519 public key (hex)
+        map: (event) => {
+            const payload = event.json() as { event?: { text?: string } };
+            // SECURITY: derive `owner` from the VERIFIED channel identity, never a payload field.
+            return { input: payload.event?.text ?? "", owner: "slack-workspace", threadKey: "slack-thread" };
+        },
+    },
+});
+```
+
+```ts
+// mount on any HTTP route (e.g. an httpRouter POST handler):
+import { dispatchAgentChannel } from "@lunora/agent/channels";
+
+const handler = dispatchAgentChannel([{ agent: support, binding: "SUPPORT_AGENT" }]);
+// handler(request, env) → 200 (claimed / Discord PONG), 401 (bad signature), 204 (declined)
+```
+
+`dispatchAgentChannel` detects the channel from the signature headers and
+verifies the request **over the raw body** before any mapper runs — Slack HMAC
+over `v0:timestamp:body` (with a timestamp-freshness replay guard), GitHub HMAC
+over the body, Discord Ed25519 over `timestamp+body` (and it answers the Discord
+PING with a PONG). A request that fails verification is rejected `401` and never
+reaches `map`. The verifiers (`verifySlack` / `verifyGithub` / `verifyDiscord`)
+are exported too if you wire your own routing.
+
+> **Security.** Trust comes ONLY from the signature check; the payload is
+> attacker-controlled. Derive the run `owner` from the verified channel identity
+> (the workspace / installation the secret belongs to), never from an arbitrary
+> payload field — the run dispatches RLS-bypassed under whatever `owner` you set.
+
 ## Access control
 
 Pass `owner: ctx.auth.userId` when starting a run. An **owned** thread's public
