@@ -384,6 +384,11 @@ const splitForCompaction = (
  * history unchanged. Called INSIDE the turn's memoized step, so the LLM
  * summarization is replay-safe. Best-effort: a summarization throw falls back to
  * the full, uncompacted history rather than failing the turn.
+ *
+ * COST: the brief is recomputed per FRESH turn (a replay serves it from the memo),
+ * so a long multi-turn run over the threshold issues one summarization call per
+ * turn — the price of the per-turn memoized-step model. Persisting a running brief
+ * to reuse across turns is a deliberate future optimization.
  */
 const compactHistory = async (turnContext: TurnContext, history: AgentMessageRow[]): Promise<{ history: AgentMessageRow[]; summary: string | undefined }> => {
     const { agent, compact, env } = turnContext;
@@ -566,8 +571,8 @@ const dispatchEpisodicMemory = async (
     }
 
     const stepName = memoryStepName("memory:recall", source.key);
-    const retrieved = await step.do(stepName, async () =>
-        run(episodeRecall, { owner, ...(source.episodic?.recall === undefined ? {} : { limit: source.episodic.recall }) }), );
+    const recallArgs = { owner, ...(source.episodic?.recall === undefined ? {} : { limit: source.episodic.recall }) };
+    const retrieved = await step.do(stepName, async () => run(episodeRecall, recallArgs));
 
     return readRetrievedContext(retrieved);
 };
@@ -688,8 +693,8 @@ const extractGraphMemoryAtRunEnd = async (options: {
     }
 
     try {
-        const extracted = await step.do(memoryStepName("memory:extract", source.key), async () =>
-            extractGraph({ assistantText: finalText, env, model: source.graph?.extractionModel ?? agent.model, userInput: input }), );
+        const graphInput = { assistantText: finalText, env, model: source.graph?.extractionModel ?? agent.model, userInput: input };
+        const extracted = await step.do(memoryStepName("memory:extract", source.key), async () => extractGraph(graphInput));
 
         await run(toFunctionReference(paths.graphUpsert), { ...extracted, messageKey: `${instanceId}:${memoryStepName("extract", source.key)}`, owner });
     } catch {
@@ -735,8 +740,8 @@ const extractEpisodeAtRunEnd = async (options: {
     }
 
     try {
-        const { summary } = await step.do(memoryStepName("memory:episode", source.key), async () =>
-            extractEpisode({ assistantText: finalText, env, model: source.episodic?.extractionModel ?? agent.model, userInput: input }), );
+        const episodeInput = { assistantText: finalText, env, model: source.episodic?.extractionModel ?? agent.model, userInput: input };
+        const { summary } = await step.do(memoryStepName("memory:episode", source.key), async () => extractEpisode(episodeInput));
 
         await run(toFunctionReference(paths.episodeUpsert), {
             messageKey: `${instanceId}:${memoryStepName("episode", source.key)}`,

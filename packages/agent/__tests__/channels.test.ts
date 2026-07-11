@@ -5,6 +5,8 @@ import { dispatchAgentChannel, verifyDiscord, verifyGithub, verifySlack } from "
 
 const encoder = new TextEncoder();
 
+const NO_BINDING_PATTERN = /no Workflow binding/u;
+
 const bytesToHex = (bytes: Uint8Array): string => [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /** HMAC-SHA256 hex of `message` under `secret` (the signing side of Slack/GitHub). */
@@ -314,5 +316,21 @@ describe(dispatchAgentChannel, () => {
         });
 
         expect(response.status).toBe(400);
+    });
+
+    it("throws when a claimed event has no Workflow binding on env", async () => {
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return { input: "x", threadKey: "t" };
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_MISSING" }]);
+
+        // Verified + claimed, but AGENT_MISSING is absent from env.
+        await expect(handler(await slackRequest(secret, '{"event":{}}'), { SLACK_SECRET: secret })).rejects.toThrow(NO_BINDING_PATTERN);
     });
 });

@@ -5,7 +5,9 @@ import { runAgentLoop } from "../src/agent-loop";
 import { defineAgent, defineAgentTool } from "../src/define-agent";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import type {
+    AgentCompact,
     AgentDefinition,
+    AgentEpisodeExtract,
     AgentFunctionReference,
     AgentGenerate,
     AgentGenerateResult,
@@ -808,6 +810,173 @@ describe(runAgentLoop, () => {
 
         expect(extractCalls).toBe(0);
         expect(journal.invoked).not.toContain("memory:extract");
+    });
+
+    it("episodic memory recalls the owner timeline and injects it as context", async () => {
+        const timeline = "- fixed the login bug";
+        const runtime = memoryRuntime({
+            handlers: {
+                [DEFAULT_AGENT_FUNCTION_PATHS.episodeRecall]: (): unknown => {
+                    return { context: timeline };
+                },
+            },
+        });
+        const generate = scriptedGenerate([finalTurn("answered")]);
+        const agent = defineAgent({ memory: { episodic: { recall: 3 }, kind: "episodic" }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const journal = new DurableStepJournal();
+
+        await runAgentLoop(
+            loopDefaults(agent, { generate, params: { input: "what next?", owner: "user-a", threadKey: "thread-1" }, run: runtime.run, step: journal }),
+        );
+
+        // The read is a `memory:recall` step (its own namespace), dispatching with owner + limit.
+        expect(journal.invoked).toContain("memory:recall");
+
+        const recall = runtime.dispatches.find((dispatch) => dispatch.path === DEFAULT_AGENT_FUNCTION_PATHS.episodeRecall);
+
+        expect(recall?.args).toStrictEqual({ limit: 3, owner: "user-a" });
+
+        const shown = generate.seen[0] as { content: unknown; role: string }[];
+
+        expect(shown.some((message) => message.role === "system" && String(message.content).includes(timeline))).toBe(true);
+    });
+
+    it("episodic memory no-ops for an anonymous run (no owner)", async () => {
+        const runtime = memoryRuntime({
+            handlers: {
+                [DEFAULT_AGENT_FUNCTION_PATHS.episodeRecall]: (): unknown => {
+                    return { context: "should not run" };
+                },
+            },
+        });
+        const agent = defineAgent({ memory: { kind: "episodic" }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const journal = new DurableStepJournal();
+
+        await runAgentLoop(loopDefaults(agent, { generate: scriptedGenerate([finalTurn("hi")]), run: runtime.run, step: journal }));
+
+        expect(journal.invoked).not.toContain("memory:recall");
+        expect(runtime.dispatches.some((dispatch) => dispatch.path === DEFAULT_AGENT_FUNCTION_PATHS.episodeRecall)).toBe(false);
+    });
+
+    it("records an episode at run end via a memory:episode step, keyed by owner + instance", async () => {
+        let extractCalls = 0;
+        const extractEpisode: AgentEpisodeExtract = async ({ assistantText, userInput }) => {
+            extractCalls += 1;
+
+            expect(userInput).toBe("tell me about the outage");
+            expect(assistantText).toBe("The outage was DNS.");
+
+            return { summary: "diagnosed the DNS outage" };
+        };
+        const runtime = memoryRuntime({
+            handlers: {
+                [DEFAULT_AGENT_FUNCTION_PATHS.episodeRecall]: (): unknown => {
+                    return { context: "" };
+                },
+                [DEFAULT_AGENT_FUNCTION_PATHS.episodeUpsert]: (): unknown => {
+                    return { recorded: true };
+                },
+            },
+        });
+        const agent = defineAgent({ memory: { kind: "episodic" }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const journal = new DurableStepJournal();
+
+        await runAgentLoop(
+            loopDefaults(agent, {
+                extractEpisode,
+                generate: scriptedGenerate([finalTurn("The outage was DNS.")]),
+                params: { input: "tell me about the outage", owner: "user-a", threadKey: "thread-1" },
+                run: runtime.run,
+                step: journal,
+            }),
+        );
+
+        expect(extractCalls).toBe(1);
+        expect(journal.invoked).toContain("memory:episode");
+
+        const upsert = runtime.dispatches.find((dispatch) => dispatch.path === DEFAULT_AGENT_FUNCTION_PATHS.episodeUpsert);
+
+        expect(upsert?.args).toStrictEqual({ messageKey: "wf-1:episode", owner: "user-a", summary: "diagnosed the DNS outage", threadKey: "thread-1" });
+    });
+
+    it("swallows a thrown episode extraction (best-effort — the answer is already persisted)", async () => {
+        const extractEpisode: AgentEpisodeExtract = async () => {
+            throw new Error("extraction boom");
+        };
+        const runtime = memoryRuntime({
+            handlers: {
+                [DEFAULT_AGENT_FUNCTION_PATHS.episodeRecall]: (): unknown => {
+                    return { context: "" };
+                },
+            },
+        });
+        const agent = defineAgent({ memory: { kind: "episodic" }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const journal = new DurableStepJournal();
+
+        // The run completes despite the extraction throwing.
+        const result = await runAgentLoop(
+            loopDefaults(agent, {
+                extractEpisode,
+                generate: scriptedGenerate([finalTurn("done")]),
+                params: { input: "hi", owner: "user-a", threadKey: "thread-1" },
+                run: runtime.run,
+                step: journal,
+            }),
+        );
+
+        expect(result.text).toBe("done");
+        expect(runtime.dispatches.some((dispatch) => dispatch.path === DEFAULT_AGENT_FUNCTION_PATHS.episodeUpsert)).toBe(false);
+    });
+
+    it("compaction summarizes older history and injects the brief into the turn", async () => {
+        // A long thread history so compaction fires (maxMessages 2, keepRecent 1).
+        const history = Array.from({ length: 6 }, (_, index) => {
+            return { content: `m${String(index)}`, role: "user" as const, seq: index };
+        });
+        const runtime = memoryRuntime({ handlers: { [DEFAULT_AGENT_FUNCTION_PATHS.listMessages]: (): unknown => history } });
+        let compactCalls = 0;
+        const compact: AgentCompact = async () => {
+            compactCalls += 1;
+
+            return "earlier: the user asked several things";
+        };
+        const generate = scriptedGenerate([finalTurn("ok")]);
+        const agent = defineAgent({ compaction: { keepRecent: 1, maxMessages: 2 }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const journal = new DurableStepJournal();
+
+        await runAgentLoop(
+            loopDefaults(agent, { compact, generate, params: { input: "hi", owner: "user-a", threadKey: "thread-1" }, run: runtime.run, step: journal }),
+        );
+
+        expect(compactCalls).toBe(1);
+
+        const shown = generate.seen[0] as { content: unknown; role: string }[];
+
+        expect(shown.some((message) => message.role === "system" && String(message.content).includes("earlier: the user asked several things"))).toBe(true);
+    });
+
+    it("compaction falls back to the full history when the summarizer throws", async () => {
+        const history = Array.from({ length: 6 }, (_, index) => {
+            return { content: `m${String(index)}`, role: "user" as const, seq: index };
+        });
+        const runtime = memoryRuntime({ handlers: { [DEFAULT_AGENT_FUNCTION_PATHS.listMessages]: (): unknown => history } });
+        const compact: AgentCompact = async () => {
+            throw new Error("summarizer down");
+        };
+        const generate = scriptedGenerate([finalTurn("ok")]);
+        const agent = defineAgent({ compaction: { keepRecent: 1, maxMessages: 2 }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const journal = new DurableStepJournal();
+
+        const result = await runAgentLoop(
+            loopDefaults(agent, { compact, generate, params: { input: "hi", owner: "user-a", threadKey: "thread-1" }, run: runtime.run, step: journal }),
+        );
+
+        // The run still completes; the full (uncompacted) history reached the model.
+        expect(result.text).toBe("ok");
+
+        const shown = generate.seen[0] as { content: unknown; role: string }[];
+
+        expect(shown.filter((message) => message.role === "user")).toHaveLength(6);
     });
 
     it("forwards the run owner to the thread bootstrap", async () => {

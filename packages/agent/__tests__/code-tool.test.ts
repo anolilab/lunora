@@ -87,6 +87,38 @@ describe(runToolScript, () => {
         await expect(runToolScript({ steps: [{ id: "x", tool: "nope" }] }, { real: fakeTool(1) }, context, 16)).rejects.toThrow(UNKNOWN_TOOL_PATTERN);
     });
 
+    it("caps a large step output in the returned results while the full value still flows to refs", async () => {
+        const big = "z".repeat(5000);
+        let echoInput: unknown;
+        const echo: AgentToolDefinition = {
+            description: "echo",
+            execute: (input) => {
+                echoInput = input;
+
+                return "done";
+            },
+            inputSchema: {} as never,
+            isLunoraAgentTool: true,
+        };
+
+        const result = await runToolScript(
+            {
+                steps: [
+                    { id: "b", tool: "big" },
+                    { id: "e", input: { data: { $from: "b" } }, tool: "echo" },
+                ],
+            },
+            { big: fakeTool(big), echo },
+            context,
+            16,
+        );
+
+        // The returned result for step "b" is truncated…
+        expect((result.results[0]?.output as string).endsWith("… [truncated]")).toBe(true);
+        // …but the FULL value flowed into step "e" via `$from`.
+        expect((echoInput as { data: string }).data).toBe(big);
+    });
+
     it("caps the number of steps run", async () => {
         const calls: unknown[] = [];
         const tools = { t: fakeTool("ok", calls) };

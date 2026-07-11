@@ -8,6 +8,7 @@ import type { AgentToolContext } from "../src/types";
 const EMPTY_NAME_ERROR = /requires a container `name`/u;
 const MISSING_BROWSER_ERROR = /needs `ctx\.browser`/u;
 const UNKNOWN_CONTAINER_ERROR = /no ctx\.containers\["missing"\]/u;
+const NO_FS_BUCKET_ERROR = /found no R2 bucket/u;
 
 /** A tool `execute` context whose `run` records the dispatched (ref, args). */
 const recordingContext = (): { calls: { args: unknown; ref: unknown }[]; context: AgentToolContext } => {
@@ -216,5 +217,34 @@ describe("sandboxComponent().invoke", () => {
         await expect(invokeSandbox({ containers: {} }, { kind: "container", name: "missing", op: "fetch", path: "/" })).rejects.toThrow(
             UNKNOWN_CONTAINER_ERROR,
         );
+    });
+
+    it("routes a fs op to the R2 bucket resolved from ctx.env[bucket]", async () => {
+        const store = new Map<string, string>();
+        const bucket = {
+            delete: async (key: string) => {
+                store.delete(key);
+            },
+            get: async (key: string) => (store.has(key) ? { text: async () => store.get(key) ?? "" } : null),
+            head: async () => null,
+            list: async () => {
+                return { objects: [] };
+            },
+            put: async (key: string, value: string) => {
+                store.set(key, value);
+            },
+        };
+
+        const wrote = await invokeSandbox(
+            { env: { SANDBOX_BUCKET: bucket } },
+            { bucket: "SANDBOX_BUCKET", content: "hi", kind: "fs", op: "write", path: "a.txt", root: "agents/x" },
+        );
+
+        expect(wrote).toStrictEqual({ bytes: 2, path: "a.txt", wrote: true });
+        expect(store.get("agents/x/a.txt")).toBe("hi");
+    });
+
+    it("errors when a fs op finds no R2 bucket on env", async () => {
+        await expect(invokeSandbox({ env: {} }, { bucket: "MISSING", kind: "fs", op: "ls", root: "" })).rejects.toThrow(NO_FS_BUCKET_ERROR);
     });
 });

@@ -6,6 +6,29 @@ import type { AgentToolContext, AgentToolDefinition, AnyAgentTool } from "./type
 /** Default cap on script steps so one code call can't fan out unboundedly. */
 const DEFAULT_MAX_STEPS = 16;
 
+/** Max serialized chars kept per step output in the returned/persisted result (bounds re-injected token cost). */
+const MAX_STEP_OUTPUT_CHARS = 4000;
+
+/**
+ * Cap a step output for the RETURNED result: a small value passes through
+ * unchanged; a large one is truncated to a string (with an ellipsis) so a script
+ * chaining big-output tools can't balloon the persisted, re-injected tool message.
+ * The full output is still available to later `$from` refs (kept separately).
+ */
+const capOutput = (output: unknown): unknown => {
+    if (output === undefined) {
+        return output;
+    }
+
+    const serialized = typeof output === "string" ? output : JSON.stringify(output);
+
+    if (serialized.length <= MAX_STEP_OUTPUT_CHARS) {
+        return output;
+    }
+
+    return `${serialized.slice(0, MAX_STEP_OUTPUT_CHARS)}… [truncated]`;
+};
+
 /** One step of a tool-composition script — call `tool` with `input`, bind the result to `id`. */
 interface ToolScriptStep {
     /** A stable name later steps reference the output by. */
@@ -137,8 +160,11 @@ const runToolScript = async (
         // eslint-disable-next-line no-await-in-loop -- steps are sequential by design: a later input can reference an earlier output
         const output: unknown = await tool.execute(input, stepContext);
 
+        // `byId` keeps the FULL output for later `$from` refs; the RETURNED results
+        // (persisted as the tool message and re-injected every turn) get each output
+        // capped so a multi-step script chaining large outputs can't balloon it.
         byId[step.id] = output;
-        results.push({ id: step.id, output });
+        results.push({ id: step.id, output: capOutput(output) });
     }
 
     return { final: results.at(-1)?.output, results };

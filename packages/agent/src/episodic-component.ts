@@ -17,6 +17,9 @@ const MAX_EPISODE_RECALL = 20;
 /** Max stored summary length — bounds per-episode prompt cost (model output is untrusted). */
 const MAX_EPISODE_SUMMARY_CHARS = 500;
 
+/** Per-owner episode retention cap — the oldest beyond this are pruned on write so storage stays bounded. */
+const MAX_EPISODE_RETENTION = 200;
+
 /** Collapse any whitespace run (incl. newlines) to a single space — hoisted, avoids recompilation. */
 const WHITESPACE_RUN = /\s+/gu;
 
@@ -121,6 +124,21 @@ const episodicComponent = (): EpisodicComponentFunctions => {
                 summary,
                 ...(args.threadKey === undefined ? {} : { threadKey: args.threadKey }),
             });
+
+            // Bound storage: delete the owner's oldest episodes beyond the retention
+            // cap. Bounded read (cap + 1); at steady state each insert trims one, so
+            // it self-corrects. Runs once per new episode (a replay dedups above), and
+            // the delete is deterministic (oldest-first) — replay-safe.
+            const overflow = await context.db
+                .query(EPISODES_TABLE)
+                .withIndex("byOwnerCreatedAt", (q) => q.eq("owner", args.owner))
+                .order("asc")
+                .take(MAX_EPISODE_RETENTION + 1);
+
+            for (const stale of overflow.slice(0, Math.max(0, overflow.length - MAX_EPISODE_RETENTION))) {
+                // eslint-disable-next-line no-await-in-loop -- sequential deletes in a serialized mutation
+                await context.db.delete(stale["_id"] as never);
+            }
 
             return { recorded: true };
         });

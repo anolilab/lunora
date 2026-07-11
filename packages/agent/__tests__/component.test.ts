@@ -101,6 +101,15 @@ const fakeDatabase = (auth?: { userId?: string }): { ctx: { auth: { userId?: str
     };
 
     const database = {
+        delete: async (id: string) => {
+            for (const tableContent of rows.values()) {
+                const index = tableContent.findIndex((candidate) => candidate["_id"] === id);
+
+                if (index !== -1) {
+                    tableContent.splice(index, 1);
+                }
+            }
+        },
         insert: async (table: string, document: Record<string, unknown>) => {
             const id = `id-${String(nextId)}`;
 
@@ -600,7 +609,32 @@ describe("episodic memory", () => {
         // A runaway-length summary is truncated to the cap.
         await callMutation(functions.agentEpisodeUpsert, ctx, { messageKey: "k2", owner: "u1", summary: "x".repeat(2000) });
 
-        expect((rows.get("agent_episodes")?.[1]?.["summary"] as string)).toHaveLength(500);
+        expect(rows.get("agent_episodes")?.[1]?.["summary"] as string).toHaveLength(500);
+    });
+
+    it("prunes the oldest episodes beyond the retention cap on write", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        for (let index = 0; index < 205; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential inserts to exercise the prune
+            await callMutation(functions.agentEpisodeUpsert, ctx, {
+                createdAt: index,
+                messageKey: `k${String(index)}`,
+                owner: "u1",
+                summary: `s${String(index)}`,
+            });
+        }
+
+        const stored = rows.get("agent_episodes") ?? [];
+
+        // Capped at 200; the newest 200 (createdAt 5..204) survive, the oldest 5 pruned.
+        expect(stored).toHaveLength(200);
+
+        const createdAts = stored.map((row) => row["createdAt"] as number).toSorted((a, b) => a - b);
+
+        expect(createdAts[0]).toBe(5);
+        expect(createdAts.at(-1)).toBe(204);
     });
 
     it("recalls the most recent episodes in chronological order, bounded by limit", async () => {
