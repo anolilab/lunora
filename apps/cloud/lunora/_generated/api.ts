@@ -128,7 +128,9 @@ export interface InternalApiTypes {
     };
     usage: {
         enforceSpendCaps: FunctionReference<"mutation", {}, { suspended: number; unsuspended: number; }>;
+        overageWatermark: FunctionReference<"query", { organizationId: Id<"organizations">; periodStart: number }, { debitedCredits: number; }>;
         record: FunctionReference<"mutation", { deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }, Id<"platformUsage">>;
+        recordOverageDebit: FunctionReference<"mutation", { debitedCredits: number; organizationId: Id<"organizations">; periodStart: number }, void>;
         rollup: FunctionReference<"mutation", {}, { compacted: number; }>;
     };
 }

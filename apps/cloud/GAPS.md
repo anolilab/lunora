@@ -143,6 +143,20 @@ platform never inherits worldwide tax compliance. Product-based checkout
 (Creem product ids in `LUNORA_CLOUD_PLANS.priceIds`), hosted billing portal,
 `creem-signature` webhooks, sandbox via `CREEM_TEST_MODE`.
 
+**Overage billing = prepaid credits (✅ core shipped).** Creem has no metered
+subscription pricing (products are `recurring`/`onetime` only), but ships a
+first-party credits ledger (per-customer accounts, idempotent credit/debit by
+`reference`, balance/freeze) built for API metering. So overage is prepaid:
+orgs buy credit packs (one-time Creem products; the purchase webhook credits
+the account) and the platform debits usage beyond the plan's included quota —
+`src/billing/overage.ts` (included quotas per plan, cost-plus overage rates,
+watermark-delta debits that are crash-safe idempotent) + the `overageDebits`
+watermark table. An exhausted balance degrades service via the existing C1
+suspension machinery — no negative balances, no surprise invoices, and every
+credit purchase is a normal taxed MoR sale. 🌐 remaining: create the credit-pack
+products, wire the reconciliation cron to the live Creem credits API
+(`CreditsLedgerPort`), and credit accounts from the purchase webhook.
+
 ## D. Data & trust
 
 ### D1. Control-plane + tenant backups, PITR, restore runbook (🌐)

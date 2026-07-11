@@ -1,7 +1,7 @@
 import { evaluateSpendCap } from "../src/billing/spend";
 import { aggregateUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, v } from "./_generated/server.js";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 
 /**
@@ -205,3 +205,47 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
 
     return { suspended, unsuspended };
 });
+
+interface OverageDebitRow {
+    _id: Id<"overageDebits">;
+    debitedCredits: number;
+    organizationId: Id<"organizations">;
+    periodStart: number;
+}
+
+/**
+ * The overage-debit watermark for (org, period) — how many prepaid credits
+ * previous reconciliation runs already debited (GAPS.md C3 follow-up).
+ * SYSTEM only (reconciliation dispatch).
+ */
+export const overageWatermark = internalQuery
+    .input({ organizationId: v.id("organizations"), periodStart: v.number() })
+    .query(async ({ ctx: context, args: { organizationId, periodStart } }): Promise<{ debitedCredits: number }> => {
+        const { page } = await context.db.overageDebits.findMany({ where: { organizationId, periodStart } });
+        const row = (page as unknown as OverageDebitRow[])[0];
+
+        return { debitedCredits: row?.debitedCredits ?? 0 };
+    });
+
+/**
+ * Advance the overage-debit watermark after a successful Creem debit. The
+ * watermark only moves forward — a stale writer can never roll it back and
+ * cause a double charge. SYSTEM only (reconciliation dispatch).
+ */
+export const recordOverageDebit = internalMutation
+    .input({ debitedCredits: v.number(), organizationId: v.id("organizations"), periodStart: v.number() })
+    .mutation(async ({ ctx: context, args: { debitedCredits, organizationId, periodStart } }): Promise<void> => {
+        const { page } = await context.db.overageDebits.findMany({ where: { organizationId, periodStart } });
+        const row = (page as unknown as OverageDebitRow[])[0];
+        const now = Date.now();
+
+        if (!row) {
+            await context.db.insert("overageDebits", { debitedCredits, organizationId, periodStart, updatedAt: now });
+
+            return;
+        }
+
+        if (debitedCredits > row.debitedCredits) {
+            await context.db.patch(row._id, { debitedCredits, updatedAt: now });
+        }
+    });
