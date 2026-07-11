@@ -81,7 +81,7 @@ describe(handleDeployRequest, () => {
         const response = await handleDeployRequest(request("k", { projectId: "proj_1", scriptName: "s" }), deps(backendWith({}), okProvisioner));
 
         expect(response.status).toBe(400);
-        expect(await response.json()).toMatchObject({ error: expect.stringContaining("bundle") as string });
+        await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining("bundle") as string });
     });
 
     it("400 when the bundle is not valid base64", async () => {

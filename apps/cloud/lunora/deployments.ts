@@ -7,9 +7,12 @@ import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
 
+type DeploymentStatus = "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued" | "superseded" | "verifying";
+
 interface DeploymentRow {
     _id: Id<"deployments">;
     adminToken?: string;
+    alias?: string;
     branch?: string;
     bundleHash?: string;
     createdAt: number;
@@ -19,14 +22,30 @@ interface DeploymentRow {
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     scriptName: string;
-    status: "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued";
+    status: DeploymentStatus;
     updatedAt: number;
     url?: string;
+    version?: number;
 }
 
 interface ProjectRow {
     _id: Id<"projects">;
+    activeDeploymentId?: Id<"deployments">;
+    activeScriptName?: string;
 }
+
+/** The `${status}At` timestamp column stamped on each phase transition (GAPS.md A2). */
+const PHASE_TIMESTAMP: Record<DeploymentStatus, "destroyedAt" | "failedAt" | "liveAt" | "provisioningAt" | "queuedAt" | "supersededAt" | "verifyingAt" | null> =
+    {
+        building: null,
+        destroyed: "destroyedAt",
+        failed: "failedAt",
+        live: "liveAt",
+        provisioning: "provisioningAt",
+        queued: "queuedAt",
+        superseded: "supersededAt",
+        verifying: "verifyingAt",
+    };
 
 /**
  * Resolve a deployment's tenant URL + admin token for the hosted-studio admin
@@ -98,7 +117,7 @@ export const create = mutation
         projectId: v.id("projects"),
         scriptName: v.string(),
     })
-    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"deployments">> => {
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number }> => {
         let createdBy: string;
 
         if (arguments_.deployKey) {
@@ -118,10 +137,16 @@ export const create = mutation
             throw new LunoraError("NOT_FOUND", "project not found in this organization");
         }
 
-        const now = Date.now();
+        // Versioned, immutable release: `{alias}-v{n}` per (project, kind). The
+        // stable alias keeps serving the previous version until `activate`
+        // swaps the pointer after the health check (GAPS.md A1).
+        const { page: existing } = await context.db.deployments.findMany({ where: { projectId: arguments_.projectId } }); // secret-scanner:allow -- domain field name
+        const version = 1 + Math.max(0, ...(existing as unknown as DeploymentRow[]).filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
 
-        return context.db.insert("deployments", {
+        const now = Date.now();
+        const deploymentId = await context.db.insert("deployments", {
             ...(arguments_.adminToken ? { adminToken: arguments_.adminToken } : {}),
+            alias: arguments_.scriptName,
             branch: arguments_.branch,
             ...(arguments_.cronSpecs && arguments_.cronSpecs.length > 0 ? { cronSpecs: arguments_.cronSpecs } : {}),
             createdAt: now,
@@ -131,11 +156,111 @@ export const create = mutation
             kind: arguments_.kind,
             organizationId: arguments_.organizationId,
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name, not a Cypress projectId
-            scriptName: arguments_.scriptName,
+            queuedAt: now,
+            scriptName: `${arguments_.scriptName}-v${String(version)}`,
             status: "queued",
             updatedAt: now,
+            version,
         });
+
+        return { deploymentId, scriptName: `${arguments_.scriptName}-v${String(version)}`, version };
     });
+
+/**
+ * Point the project's stable URL at a health-checked live deployment (the
+ * blue/green pointer swap, GAPS.md A1). Marks every other live deployment of
+ * the same (project, kind) `superseded` — retained for rollback. Authorized by
+ * the deploy key (CI) or an owner/admin member session.
+ */
+export const activate = mutation
+    .input({ deployKey: v.optional(v.string()), id: v.id("deployments") })
+    .mutation(async ({ ctx: context, args: { deployKey, id } }): Promise<void> => {
+        const deployment = (await context.db.get(id)) as DeploymentRow | null;
+
+        if (!deployment) {
+            throw new LunoraError("NOT_FOUND", "deployment not found");
+        }
+
+        await (deployKey
+            ? authorizeDeployKey(context, deployment.organizationId, deployKey, deployment.projectId)
+            : assertMember(context, deployment.organizationId, ["owner", "admin"]));
+
+        if (deployment.status !== "live" && deployment.status !== "verifying") {
+            throw new LunoraError("CONFLICT", `cannot activate a ${deployment.status} deployment`);
+        }
+
+        const now = Date.now();
+        const { page } = await context.db.deployments.findMany({ where: { projectId: deployment.projectId } }); // secret-scanner:allow -- domain field name
+        const others = (page as unknown as DeploymentRow[]).filter((d) => d._id !== id && d.kind === deployment.kind && d.status === "live");
+
+        for (const other of others) {
+            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+            await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
+        }
+
+        await context.db.patch(deployment.projectId, { activeDeploymentId: id, activeScriptName: deployment.scriptName });
+    });
+
+/**
+ * Roll the project's stable URL back to a retained deployment (GAPS.md A1).
+ * The target must be a `superseded` (or still-`live`) release of the same
+ * project; it becomes `live` and the pointer swaps to it, while the currently
+ * active deployment is marked `superseded`.
+ */
+export const rollback = mutation
+    .input({ deployKey: v.optional(v.string()), id: v.id("deployments"), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { deployKey, id, organizationId } }): Promise<{ scriptName: string; version?: number }> => {
+        await (deployKey ? authorizeDeployKey(context, organizationId, deployKey) : assertMember(context, organizationId, ["owner", "admin"]));
+
+        const target = (await context.db.get(id)) as DeploymentRow | null;
+
+        if (target?.organizationId !== organizationId) {
+            throw new LunoraError("NOT_FOUND", "deployment not found in this organization");
+        }
+
+        if (target.status !== "superseded" && target.status !== "live") {
+            throw new LunoraError("CONFLICT", `cannot roll back to a ${target.status} deployment`);
+        }
+
+        const now = Date.now();
+        const project = (await context.db.get(target.projectId)) as ProjectRow | null;
+
+        if (project?.activeDeploymentId && project.activeDeploymentId !== id) {
+            await context.db.patch(project.activeDeploymentId, { status: "superseded", supersededAt: now, updatedAt: now });
+        }
+
+        await context.db.patch(id, { liveAt: now, status: "live", updatedAt: now });
+        await context.db.patch(target.projectId, { activeDeploymentId: id, activeScriptName: target.scriptName });
+
+        return { scriptName: target.scriptName, version: target.version };
+    });
+
+/**
+ * Resolve a stable alias (the project's public subdomain label) to the active
+ * versioned script. Public + unauthenticated like {@link planForScript} (returns
+ * only a script id); the dispatcher reaches it through a bearer-gated
+ * control-plane endpoint. Falls back to the newest live deployment when the
+ * pointer was never set (pre-blue/green rows).
+ */
+export const routeForAlias = query.input({ alias: v.string() }).query(async ({ ctx: context, args: { alias } }): Promise<{ scriptName: string } | null> => {
+    const { page } = await context.db.deployments.findMany({ where: { alias } });
+    const rows = page as unknown as DeploymentRow[];
+    const first = rows[0];
+
+    if (!first) {
+        return null;
+    }
+
+    const project = (await context.db.get(first.projectId)) as ProjectRow | null;
+
+    if (project?.activeScriptName) {
+        return { scriptName: project.activeScriptName };
+    }
+
+    const live = rows.filter((d) => d.status === "live").toSorted((a, b) => b.createdAt - a.createdAt)[0];
+
+    return live ? { scriptName: live.scriptName } : null;
+});
 
 /**
  * Mark expired preview deployments as `destroyed` (CLOUD-PLAN.md §2.3). Driven
@@ -177,7 +302,16 @@ export const updateStatus = mutation
         bundleHash: v.optional(v.string()),
         deployKey: v.optional(v.string()),
         id: v.id("deployments"),
-        status: v.union(v.literal("queued"), v.literal("provisioning"), v.literal("building"), v.literal("live"), v.literal("failed"), v.literal("destroyed")),
+        status: v.union(
+            v.literal("queued"),
+            v.literal("provisioning"),
+            v.literal("building"),
+            v.literal("verifying"),
+            v.literal("live"),
+            v.literal("superseded"),
+            v.literal("failed"),
+            v.literal("destroyed"),
+        ),
         url: v.optional(v.string()),
     })
     .mutation(async ({ ctx: context, args: { bundleHash, deployKey, id, status, url } }): Promise<void> => {
@@ -191,10 +325,14 @@ export const updateStatus = mutation
             ? authorizeDeployKey(context, existing.organizationId, deployKey, existing.projectId)
             : assertMember(context, existing.organizationId));
 
+        const now = Date.now();
+        const phaseColumn = PHASE_TIMESTAMP[status];
+
         await context.db.patch(id, {
             ...(bundleHash === undefined ? {} : { bundleHash }),
             ...(url === undefined ? {} : { url }),
+            ...(phaseColumn ? { [phaseColumn]: now } : {}),
             status,
-            updatedAt: Date.now(),
+            updatedAt: now,
         });
     });
