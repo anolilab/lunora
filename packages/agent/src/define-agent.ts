@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { collectAgenticMemoryTools } from "./agentic-memory";
 import { agentAsTool } from "./as-tool";
+import { isInjectedMemorySource } from "./memory";
 import { RESERVED_SKILL_NAME, SKILL_NAME_PATTERN } from "./skill";
 import type {
     AgentConfig,
@@ -72,15 +73,6 @@ const composeInstructions = (config: AgentConfig, skills: ReadonlyArray<SkillDef
 };
 
 /**
- * Whether a memory source is AUTO-INJECTED at run start (vs. driven by a minted
- * tool). Every `"graph"`-kind source is injected — it traverses the owner graph
- * per run and `mode` doesn't apply. A `"semantic"` source is injected only in
- * `"inject"` mode; its `"agentic"` mode mints a `searchMemory` tool instead
- * (see {@link collectAgenticMemoryTools}), so it is never one-shot injected.
- */
-const isInjectedMemorySource = (memory: AgentMemoryOptions): boolean => memory.kind === "graph" || memory.mode !== "agentic";
-
-/**
  * Collect the keyed memory sources the loop AUTO-INJECTS per run: the config's
  * `memory` as the default source (its step name stays `"memory:retrieve"` /
  * `"memory:traverse"` for graph), then each skill's `knowledge` keyed by the
@@ -139,6 +131,30 @@ const assertValidSkillNames = (skills: ReadonlyArray<SkillDefinition>): void => 
         }
 
         seen.add(skill.name);
+    }
+};
+
+/**
+ * If an author pins `activeTools`, every minted agentic-memory tool must appear
+ * in it — otherwise the tool is enabled but the model can never call it, so
+ * retrieval silently never happens. Fail loud at declaration time rather than
+ * hide the tool (the plan's documented silent-hide foot-gun), so the
+ * misconfiguration surfaces here, not as a mysterious no-retrieval run. A no-op
+ * when `activeTools` is unset or no agentic-memory tools were minted.
+ */
+const assertActiveToolsExposeMemory = (activeTools: ReadonlyArray<string> | undefined, agenticMemoryTools: Record<string, AnyAgentTool>): void => {
+    if (activeTools === undefined) {
+        return;
+    }
+
+    const unreachable = Object.keys(agenticMemoryTools).filter((name) => !activeTools.includes(name));
+
+    if (unreachable.length > 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/agent: \`activeTools\` omits the agentic-memory tool(s) ${unreachable.map((name) => `"${name}"`).join(", ")} — ` +
+                `the model could never call them; add them to \`activeTools\` (or drop \`activeTools\` to expose every tool)`,
+        );
     }
 };
 
@@ -235,6 +251,9 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
     }
 
     const hasAgenticTools = Object.keys(agenticMemoryTools).length > 0;
+
+    // A pinned `activeTools` that omits a minted memory tool makes it unreachable.
+    assertActiveToolsExposeMemory(config.activeTools, agenticMemoryTools);
 
     // Validate the MERGED namespace so a skill-contributed name is checked too.
     for (const name of Object.keys(tools)) {

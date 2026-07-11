@@ -458,6 +458,33 @@ describe("graph memory", () => {
         expect(result.context).toBe("- alice —[works_at]→ acme\n- carol —[manages]→ alice");
     });
 
+    it("walks multiple hops up to `depth`, reaching a node no seed edge touches", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        // A chain: Alice —works_at→ Acme —located_in→ Berlin. Only Alice matches the
+        // seed; Berlin is two hops away, reachable solely by traversing through Acme.
+        await callMutation(functions.agentGraphUpsert, ctx, {
+            entities: [],
+            messageKey: "k",
+            owner: "u1",
+            relations: [
+                { dst: "Acme", label: "works_at", src: "Alice" },
+                { dst: "Berlin", label: "located_in", src: "Acme" },
+            ],
+        });
+
+        // depth 1 stops at the seed's own edge — Berlin is out of reach.
+        await expect(callMutation(functions.agentGraphTraverse, ctx, { depth: 1, owner: "u1", query: "Alice" })).resolves.toStrictEqual({
+            context: "- alice —[works_at]→ acme",
+        });
+
+        // depth 2 follows the chain through Acme to Berlin — both hops rendered.
+        await expect(callMutation(functions.agentGraphTraverse, ctx, { depth: 2, owner: "u1", query: "Alice" })).resolves.toStrictEqual({
+            context: "- acme —[located_in]→ berlin\n- alice —[works_at]→ acme",
+        });
+    });
+
     it("returns empty context for no seed match and for token-less queries", async () => {
         const { functions } = agentComponent();
         const { ctx } = fakeDatabase();

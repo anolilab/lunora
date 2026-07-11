@@ -616,10 +616,12 @@ resume replays completed searches from the journal rather than re-querying. A
 skill's agentic `knowledge` mints the same tools namespaced by skill name
 (`search_<skill>` / `read_<skill>`).
 
-> **`activeTools` foot-gun.** The memory tools are ordinary tools — subject to
-> `activeTools`, `toolChoice`, `stopWhen`, and bounded by `maxTurns`. If you set
-> `activeTools`, you **must** include the memory tool name (e.g. `searchMemory`)
-> or the model can never retrieve.
+> **`activeTools` and the memory tools.** The memory tools are ordinary tools —
+> subject to `activeTools`, `toolChoice`, `stopWhen`, and bounded by `maxTurns`.
+> If you pin `activeTools`, you **must** list every minted memory tool name (e.g.
+> `searchMemory`); `defineAgent` **throws at declaration time** if `activeTools`
+> omits one, rather than silently hiding it and leaving the model unable to
+> retrieve. Drop `activeTools` entirely to expose all tools.
 
 ### Graph memory (`kind: "graph"`)
 
@@ -641,6 +643,13 @@ export const support = defineAgent({
   available in _every_ later conversation that same user has. An **anonymous run
   (no `owner`) no-ops** the graph tier for that run — it is owner-scoped by
   design.
+- **Owner-scoped, _not_ agent-scoped.** The `agent_entities` / `agent_edges`
+  rows carry an `owner` but no agent discriminator, so **every graph-memory agent
+  in the deployment shares one graph per owner**. A fact one agent extracts is
+  visible to another agent's traversal for the same owner. That is often the
+  point (shared long-term knowledge of the user), but if two agents must not see
+  each other's memory, give them **separate deployments** or don't enable the
+  graph tier on both.
 - **No external graph DB.** Entities and relations live in the agent's own
   DO-SQLite as the `agent_entities` / `agent_edges` tables (shipped with the
   `agent` schema extension). Nothing to provision.
@@ -655,7 +664,15 @@ export const support = defineAgent({
   matches seed entities, then walks the graph with a **bounded JS breadth-first
   search** (`depth`, `maxSeeds`, `fanOut`, `maxNodes` — defaults 2 / 4 / 8 / 32),
   rendering deterministic `- alice —[works_at]→ acme` triples that are injected
-  like any other memory context.
+  like any other memory context. Reads are always bounded; **storage is not**.
+- **Storage grows unbounded — no eviction or TTL (yet).** Every run appends new
+  entities/edges (deduped by normalized name / triple, weight last-write-wins),
+  and nothing prunes stale ones. Traversal stays fast because it is bounded by
+  the knobs above, but the tables keep growing over an owner's lifetime; a
+  weight/age-based prune is a planned follow-up. Note too that normalization is
+  light (trim / collapse whitespace / lowercase), so distinct senses of the same
+  string (e.g. two people named "alex") **merge into one node** — keep names
+  specific if that matters.
 
 > **Why JS-BFS, not `WITH RECURSIVE`.** The loop runs inside a Workflow with no
 > DB handle — it reaches SQLite only by dispatching a registered function whose

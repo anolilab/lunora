@@ -10,6 +10,7 @@ const TOOL_NAME_PATTERN = /tool name/u;
 const DESCRIPTION_PATTERN = /description/u;
 const EXECUTE_PATTERN = /execute/u;
 const AGENTIC_COLLISION_PATTERN = /agentic-memory tool "searchMemory" collides/u;
+const ACTIVE_TOOLS_MEMORY_PATTERN = /`activeTools` omits the agentic-memory tool\(s\) "searchMemory"/u;
 const MEMORY_SOURCE_PATTERN = /`memory` requires a `source`/u;
 const SKILL_KNOWLEDGE_SOURCE_PATTERN = /skill "billing" `knowledge` requires a `source`/u;
 
@@ -95,6 +96,28 @@ describe(defineAgent, () => {
                 },
             }),
         ).toThrow(AGENTIC_COLLISION_PATTERN);
+    });
+
+    it("throws when `activeTools` omits a minted agentic-memory tool", () => {
+        // Enabling agentic memory but pinning `activeTools` to a set that excludes
+        // `searchMemory` makes the memory tool unreachable — fail loud, don't hide.
+        expect(() =>
+            defineAgent({
+                activeTools: ["someOtherTool"],
+                memory: { mode: "agentic", source: "rag:searchDocs" },
+                model: "m",
+            }),
+        ).toThrow(ACTIVE_TOOLS_MEMORY_PATTERN);
+    });
+
+    it("accepts `activeTools` that includes the minted agentic-memory tool", () => {
+        expect(() =>
+            defineAgent({
+                activeTools: ["searchMemory"],
+                memory: { mode: "agentic", source: "rag:searchDocs" },
+                model: "m",
+            }),
+        ).not.toThrow();
     });
 
     it("routes a graph-kind memory to `memorySources` (no `source`) and mints no tool", () => {

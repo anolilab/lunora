@@ -6,6 +6,14 @@ import type { AgentConfig, AgentFunctionReference, AgentMemorySource, AgentToolD
 /** Per-hit snippet truncation when a source doesn't set `snippetChars`. */
 const DEFAULT_SNIPPET_CHARS = 240;
 
+/**
+ * Hard ceiling on a model-supplied `topK` for a minted `searchMemory` tool. The
+ * model picks `topK` mid-reasoning, so an unbounded value would let it request
+ * an arbitrarily large (token-expensive) retrieval; clamp to a sane maximum. An
+ * author's configured `topK` is trusted and NOT capped here.
+ */
+const MAX_SEARCH_TOPK = 50;
+
 /** Input the model provides to a minted `searchMemory` tool. */
 interface AgentMemorySearchInput {
     /** The natural-language query. */
@@ -50,6 +58,20 @@ interface RetrievedChunkLike {
 
 /** Truncate a snippet to `max` chars, appending an ellipsis when it was cut. */
 const snippet = (text: string, max: number): string => (text.length <= max ? text : `${text.slice(0, max)}…`);
+
+/**
+ * Clamp a MODEL-supplied `topK` into `[1, MAX_SEARCH_TOPK]` (truncating to an
+ * integer), or `undefined` for an absent/garbage value so the caller can fall
+ * back to the author's configured `topK`. Guards against a model requesting an
+ * unbounded, zero, negative, or non-finite retrieval depth.
+ */
+const clampSearchTopK = (value: number | undefined): number | undefined => {
+    if (value === undefined || !Number.isFinite(value)) {
+        return undefined;
+    }
+
+    return Math.min(MAX_SEARCH_TOPK, Math.max(1, Math.trunc(value)));
+};
 
 /**
  * Project a `@lunora/ai/rag` `RetrieveResult` into the compact
@@ -103,7 +125,9 @@ const buildSearchTool = (
     readToolName: string | undefined,
 ): AgentToolDefinition<AgentMemorySearchInput, AgentMemorySearchResult> => {
     const target = toFunctionReference(sourceReference);
-    const snippetChars = source.snippetChars ?? DEFAULT_SNIPPET_CHARS;
+    // Floor to 1 so a misconfigured `snippetChars: 0` (or negative) can't collapse
+    // every hit to a bare ellipsis, hiding the passage text the model needs.
+    const snippetChars = Math.max(1, source.snippetChars ?? DEFAULT_SNIPPET_CHARS);
     const configuredTopK = source.topK;
     const pull = readToolName === undefined ? "" : ` Use \`${readToolName}\` with a hit's \`id\` to fetch its full text.`;
 
@@ -112,7 +136,9 @@ const buildSearchTool = (
             `Search long-term memory for passages relevant to a query. Returns ranked ` +
             `{ id, sourceId, score, snippet } hits — call again with a refined query to dig deeper.${pull}`,
         execute: async (input, context) => {
-            const topK = input.topK ?? configuredTopK;
+            // A model-supplied `topK` is clamped to `[1, MAX_SEARCH_TOPK]`; an absent
+            // or garbage value falls back to the author's trusted configured `topK`.
+            const topK = clampSearchTopK(input.topK) ?? configuredTopK;
             const retrieved = await context.run(target, { query: input.query, ...(topK === undefined ? {} : { topK }) });
 
             return toSearchResults(retrieved, snippetChars);
