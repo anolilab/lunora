@@ -1,3 +1,11 @@
+## @lunora/do [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/%40lunora%2Fdo%401.0.0-alpha.26...%40lunora%2Fdo%401.0.0-alpha.27) (2026-07-11)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.4
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.7
+
 ## @lunora/do [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/%40lunora%2Fdo%401.0.0-alpha.25...%40lunora%2Fdo%401.0.0-alpha.26) (2026-07-08)
 
 
