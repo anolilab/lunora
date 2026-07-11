@@ -33,7 +33,7 @@ describe(parsePullRequestEvent, () => {
 
     it("maps opened/synchronize/reopened to upsert", () => {
         for (const action of ["opened", "synchronize", "reopened"]) {
-            expect(parsePullRequestEvent(payload(action))).toStrictEqual({ action: "upsert", branch: "feat/x", number: 7, repository: "acme/app" });
+            expect(parsePullRequestEvent(payload(action))).toMatchObject({ action: "upsert", branch: "feat/x", number: 7, repository: "acme/app" });
         }
     });
 

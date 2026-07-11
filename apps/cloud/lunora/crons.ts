@@ -27,6 +27,13 @@ crons.interval("enforce dunning", { hours: 6 }, internal.billing.enforceDunning,
 // Prune tenant runtime logs past the 48h retention window (GAPS.md B2).
 crons.interval("prune tenant logs", { hours: 6 }, internal.logs.prune, {});
 
+// Prune superseded releases past the rollback retention (GAPS.md A1) so
+// dispatch namespaces never accumulate unboundedly.
+crons.interval("prune superseded releases", { hours: 6 }, internal.deployments.pruneSuperseded, {});
+
+// Self-heal the build queue: fail never-claimed and lease-stuck builds (A3).
+crons.interval("expire stale builds", { hours: 1 }, internal.builds.expireStale, {});
+
 // Erase orgs whose deletion request aged past the 30-day retention window
 // (GAPS.md D3 right-to-erasure). Every 12h — the purge itself gates on the
 // per-org retention cutoff, so cadence only affects erasure latency.

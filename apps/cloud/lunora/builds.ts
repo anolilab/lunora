@@ -46,12 +46,22 @@ export const LEASE_STALE_MS = 30 * 60 * 1000;
  * as-is (`reused: true`) instead of queuing a rebuild.
  */
 export const recordPush = mutation
-    .input({ branch: v.string(), commitSha: v.string(), repository: v.string() })
-    .mutation(async ({ ctx: context, args: { branch, commitSha, repository } }): Promise<null | { buildId: Id<"builds">; reused: boolean }> => {
+    .input({ branch: v.string(), commitSha: v.string(), installationId: v.number(), repository: v.string() })
+    .mutation(async ({ ctx: context, args: { branch, commitSha, installationId, repository } }): Promise<null | { buildId: Id<"builds">; reused: boolean }> => {
         const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
         const project = (page as unknown as ProjectRow[])[0];
 
         if (!project) {
+            return null;
+        }
+
+        // Only pushes from an installation the project's org has *claimed*
+        // build (staged-claim model, github-installations.ts). A spoofed RPC
+        // call must present a valid (org, installation) pair.
+        const { page: installationPage } = await context.db.githubInstallations.findMany({ where: { installationId } });
+        const installation = (installationPage as unknown as { organizationId?: Id<"organizations"> }[])[0];
+
+        if (installation?.organizationId !== project.organizationId) {
             return null;
         }
 
@@ -60,6 +70,15 @@ export const recordPush = mutation
 
         if (successful) {
             return { buildId: successful._id, reused: true };
+        }
+
+        // Backpressure: cap unfinished builds per project so a webhook storm
+        // (or spoofed spam) can't flood the queue.
+        const { page: projectBuilds } = await context.db.builds.findMany({ where: { projectId: project._id } }); // secret-scanner:allow -- domain field name
+        const inFlight = (projectBuilds as unknown as BuildRow[]).filter((build) => build.status === "pending" || build.status === "building").length;
+
+        if (inFlight >= 5) {
+            throw new LunoraError("TOO_MANY_REQUESTS", "too many unfinished builds for this project");
         }
 
         const now = Date.now();
@@ -206,3 +225,36 @@ export const logs = query
                 .toSorted((a, b) => a.createdAt - b.createdAt);
         },
     );
+
+/** A pending build older than this never got a runner — fail it visibly. */
+export const PENDING_EXPIRY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Self-heal the build queue (GAPS.md A3 seam): fail pending builds nothing
+ * ever claimed within 24h, and fail building rows whose lease has been stale
+ * for over 2h (a claim-crash loop shouldn't pin the dashboard on "building"
+ * forever — a fresh push can always re-queue). SYSTEM only (cron dispatch).
+ */
+export const expireStale = internalMutation.mutation(async ({ ctx: context }): Promise<{ expired: number }> => {
+    const now = Date.now();
+    const { page } = await context.db.builds.findMany({});
+    const stale = (page as unknown as BuildRow[]).filter(
+        (build) =>
+            (build.status === "pending" && now - build.createdAt > PENDING_EXPIRY_MS) ||
+            (build.status === "building" && build.processingStartedAt !== undefined && now - build.processingStartedAt > 4 * LEASE_STALE_MS),
+    );
+
+    for (const build of stale) {
+        // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+        await context.db.patch(build._id, {
+            error: build.status === "pending" ? "no build runner picked this up within 24h" : "build lease expired without completion",
+            failedAt: now,
+            processingBy: undefined,
+            processingStartedAt: undefined,
+            status: "failed",
+            updatedAt: now,
+        });
+    }
+
+    return { expired: stale.length };
+});

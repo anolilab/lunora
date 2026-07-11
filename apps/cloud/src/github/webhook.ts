@@ -45,14 +45,18 @@ export interface PreviewIntent {
     /** `upsert` for opened/synchronize/reopened; `remove` for closed/merged. */
     action: "remove" | "upsert";
     branch: string;
+    /** PR head commit — the server-side preview build target (GAPS.md A3). */
+    commitSha?: string;
+    installationId?: number;
     number: number;
     repository: string;
 }
 
 interface PullRequestPayload {
     action?: string;
+    installation?: { id?: number };
     number?: number;
-    pull_request?: { head?: { ref?: string } };
+    pull_request?: { head?: { ref?: string; sha?: string } };
     repository?: { full_name?: string };
 }
 
@@ -67,6 +71,8 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
 
     const event = payload as PullRequestPayload;
     const branch = event.pull_request?.head?.ref;
+    const commitSha = event.pull_request?.head?.sha;
+    const installationId = event.installation?.id;
     const repository = event.repository?.full_name;
     const { action, number } = event;
 
@@ -75,7 +81,7 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
     }
 
     if (action === "opened" || action === "synchronize" || action === "reopened") {
-        return { action: "upsert", branch, number, repository };
+        return { action: "upsert", branch, commitSha, installationId, number, repository };
     }
 
     if (action === "closed") {
@@ -88,11 +94,13 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
 export interface PushIntent {
     branch: string;
     commitSha: string;
+    installationId: number;
     repository: string;
 }
 
 interface PushPayload {
     after?: string;
+    installation?: { id?: number };
     ref?: string;
     repository?: { default_branch?: string; full_name?: string };
 }
@@ -113,8 +121,9 @@ export const parsePushEvent = (payload: unknown): null | PushIntent => {
     const repository = event.repository?.full_name;
     const defaultBranch = event.repository?.default_branch ?? "main";
     const commitSha = event.after;
+    const installationId = event.installation?.id;
 
-    if (typeof repository !== "string" || typeof commitSha !== "string" || event.ref !== `refs/heads/${defaultBranch}`) {
+    if (typeof repository !== "string" || typeof commitSha !== "string" || typeof installationId !== "number" || event.ref !== `refs/heads/${defaultBranch}`) {
         return null;
     }
 
@@ -122,7 +131,7 @@ export const parsePushEvent = (payload: unknown): null | PushIntent => {
         return null;
     }
 
-    return { branch: defaultBranch, commitSha, repository };
+    return { branch: defaultBranch, commitSha, installationId, repository };
 };
 
 export interface InstallationIntent {
@@ -173,11 +182,51 @@ export type ResolveProject = (repository: string) => Promise<null | { organizati
 export interface GitHubWebhookHooks {
     /** Link/unlink a GitHub App installation (`installation` events, GAPS.md A4). */
     onInstallation?: (intent: InstallationIntent) => Promise<void>;
+    /** Record a server-side preview build for a PR head (upsert events, GAPS.md A3). */
+    onPreviewBuild?: (intent: {
+        branch: string;
+        commitSha: string;
+        installationId: number;
+        repository: string;
+    }) => Promise<null | { buildId: string; reused: boolean }>;
     /** Record a build for a default-branch push (`push` events, GAPS.md A4). Returns the build id or null when the repo isn't connected. */
     onPush?: (intent: PushIntent) => Promise<null | { buildId: string; reused: boolean }>;
     resolveProject: ResolveProject;
     secret: string;
 }
+
+/** Handle a parsed PR intent: resolve the project, optionally queue a preview build, acknowledge. */
+const handlePullRequestIntent = async (intent: PreviewIntent, options: GitHubWebhookHooks): Promise<Response> => {
+    const project = await options.resolveProject(intent.repository);
+
+    if (!project) {
+        return Response.json({ ignored: true, reason: "repository not connected to a project" }, { status: 202 });
+    }
+
+    // Server-side preview build (GAPS.md A3): a PR upsert with a known head
+    // commit + installation queues a build just like a default-branch push.
+    let previewBuild: null | { buildId: string; reused: boolean } = null;
+
+    if (intent.action === "upsert" && intent.commitSha && intent.installationId !== undefined && options.onPreviewBuild) {
+        previewBuild = await options.onPreviewBuild({
+            branch: intent.branch,
+            commitSha: intent.commitSha,
+            installationId: intent.installationId,
+            repository: intent.repository,
+        });
+    }
+
+    return Response.json(
+        {
+            accepted: true,
+            intent,
+            ...(previewBuild ? { previewBuild } : {}),
+            previewScriptName: previewScriptName(project.slug, intent.branch),
+            projectId: project.projectId, // secret-scanner:allow -- domain field name
+        },
+        { status: 200 },
+    );
+};
 
 export const handleGitHubWebhook = async (request: Request, options: GitHubWebhookHooks): Promise<Response> => {
     const body = await request.text();
@@ -230,19 +279,5 @@ export const handleGitHubWebhook = async (request: Request, options: GitHubWebho
         return Response.json({ ignored: true }, { status: 202 });
     }
 
-    const project = await options.resolveProject(intent.repository);
-
-    if (!project) {
-        return Response.json({ ignored: true, reason: "repository not connected to a project" }, { status: 202 });
-    }
-
-    return Response.json(
-        {
-            accepted: true,
-            intent,
-            previewScriptName: previewScriptName(project.slug, intent.branch),
-            projectId: project.projectId, // secret-scanner:allow -- domain field name
-        },
-        { status: 200 },
-    );
+    return handlePullRequestIntent(intent, options);
 };

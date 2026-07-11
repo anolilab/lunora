@@ -44,7 +44,7 @@ export interface DeployBackend {
         scriptName: string;
     }) => Promise<{ deploymentId: string; scriptName?: string; version?: number }>;
     /** Decrypted tenant env secrets to inject into the deployed Worker (§7). Optional. */
-    resolveSecrets?: (input: { key: string; organizationId: string; projectId: string }) => Promise<Record<string, string>>; // secret-scanner:allow -- domain field name
+    resolveSecrets?: (input: { key: string; kind: DeployKind; organizationId: string; projectId: string }) => Promise<Record<string, string>>; // secret-scanner:allow -- domain field name
     updateStatus: (input: {
         bundleHash?: string;
         deploymentId: string;
@@ -191,7 +191,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
             let tenantSecrets: Record<string, string>;
 
             try {
-                tenantSecrets = (await deps.backend.resolveSecrets?.({ key, organizationId: target.organizationId, projectId })) ?? {};
+                tenantSecrets = (await deps.backend.resolveSecrets?.({ key, kind, organizationId: target.organizationId, projectId })) ?? {};
             } catch (error) {
                 const message = error instanceof Error ? error.message : "failed to resolve tenant secrets";
 
