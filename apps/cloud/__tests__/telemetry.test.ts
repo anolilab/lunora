@@ -2,7 +2,7 @@ import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { describe, expect, it } from "vitest";
 
-import { crossesThreshold, renderAlert } from "../src/telemetry/alerts";
+import { crossesThreshold, isSafeWebhookUrl, renderAlert } from "../src/telemetry/alerts";
 import type { OtlpTracePayload } from "../src/telemetry/otlp";
 import { decodeTelemetryEvents } from "../src/telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../src/telemetry/store";
@@ -159,5 +159,33 @@ describe(renderAlert, () => {
         );
 
         expect(rendered.body).toContain('Incident "exit 137" (container:transcoder)');
+    });
+});
+
+describe(isSafeWebhookUrl, () => {
+    it("accepts an https URL to a public host", () => {
+        expect(isSafeWebhookUrl("https://hooks.example.com/lunora")).toBe(true);
+        expect(isSafeWebhookUrl("https://203.0.113.10/hook")).toBe(true);
+    });
+
+    it("rejects SSRF-prone destinations", () => {
+        for (const bad of [
+            "http://hooks.example.com/x", // not https
+            "https://someone@hooks.example.com/x", // embedded credentials (userinfo)
+            "https://localhost/x",
+            "https://svc.internal/x",
+            "https://api.local/x",
+            "https://127.0.0.1/x", // loopback
+            "https://169.254.169.254/latest/meta-data", // cloud metadata
+            "https://10.0.0.5/x",
+            "https://192.168.1.1/x",
+            "https://172.16.0.9/x",
+            "https://100.64.0.1/x", // CGNAT
+            "https://[::1]/x", // IPv6 loopback
+            "ftp://example.com/x",
+            "not a url",
+        ]) {
+            expect(isSafeWebhookUrl(bad)).toBe(false);
+        }
     });
 });

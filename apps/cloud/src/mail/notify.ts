@@ -1,5 +1,7 @@
 import { createMailerFromEnv } from "@lunora/mail";
 
+import { isSafeWebhookUrl } from "../telemetry/alerts";
+
 /**
  * Transactional email for the control plane (CLOUD-PLAN.md §3). Built on
  * `@lunora/mail`'s env-driven mailer: a Resend transport in production (or the
@@ -49,6 +51,12 @@ export interface AlertNotification {
  */
 export const deliverAlert = async (env: Record<string, unknown>, alert: AlertNotification): Promise<void> => {
     if (alert.channel === "webhook") {
+        // Defense in depth against SSRF: never fetch an unsafe destination, even if
+        // one slipped past `createRule` (e.g. a rule created before this guard).
+        if (!isSafeWebhookUrl(alert.destination)) {
+            throw new Error("unsafe webhook destination");
+        }
+
         await fetch(alert.destination, {
             body: JSON.stringify({ body: alert.body, subject: alert.subject }),
             headers: { "content-type": "application/json" },

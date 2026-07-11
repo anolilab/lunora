@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
+import { isSafeWebhookUrl } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
@@ -62,6 +63,11 @@ export const createRule = mutation
 
         if (args.threshold < 1) {
             throw new LunoraError("BAD_REQUEST", "threshold must be at least 1");
+        }
+
+        // SSRF guard: the edge `fetch`es a webhook destination when the alert fires.
+        if (args.channel === "webhook" && !isSafeWebhookUrl(args.destination)) {
+            throw new LunoraError("BAD_REQUEST", "webhook destination must be an https:// URL to a public host");
         }
 
         const now = Date.now();
