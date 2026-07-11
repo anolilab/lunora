@@ -126,9 +126,10 @@ export const githubInstallations = sqliteTable("githubInstallations", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     accountLogin: text("accountLogin").notNull(),
+    claimedAt: real("claimedAt"),
     createdAt: real("createdAt").notNull(),
     installationId: real("installationId").notNull(),
-    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    organizationId: text("organizationId").references(() => organizations._id),
 }, (t) => ({
     by_org: index("by_org").on(t.organizationId),
     by_installation: uniqueIndex("by_installation").on(t.installationId),
@@ -233,13 +234,14 @@ export const secrets = sqliteTable("secrets", {
     _creationTime: integer("_creationTime").notNull(),
     ciphertext: text("ciphertext").notNull(),
     createdAt: real("createdAt").notNull(),
+    environment: text("environment", { mode: "json" }).$type<"all" | "production" | "preview" | "dev">().notNull(),
     iv: text("iv").notNull(),
     name: text("name").notNull(),
     organizationId: text("organizationId").references(() => organizations._id).notNull(),
     projectId: text("projectId").references(() => projects._id).notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_project_name: uniqueIndex("by_project_name").on(t.projectId, t.name),
+    by_project_env_name: uniqueIndex("by_project_env_name").on(t.projectId, t.environment, t.name),
     by_project: index("by_project").on(t.projectId),
 }));
 

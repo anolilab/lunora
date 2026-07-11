@@ -215,3 +215,41 @@ this decision either way.
 | 7   | C2 state machine, D2 eject CLI, F residency picker                                 | next             |
 | 8   | 🌐 set: D1 backups, E1 observability, E3 staging cell, SSO                         | needs live infra |
 | 9   | 🧭 set: C3 MoR, D4 DR posture, E4 fat-vs-thin spike, F frontend scope              | decisions        |
+
+---
+
+## Ring 2 (post-build integration pass, 2026-07-11) — ✅ shipped
+
+Building ring 1 surfaced a second ring of gaps: seams _between_ the new
+features and findings _in_ them. All code-tractable items shipped:
+
+- **Hardened webhook-backed mutations.** GitHub installations moved to a
+  staged-claim model (webhook stages with no org linkage; an owner/admin claims
+  from the dashboard); `builds.recordPush` only accepts pushes whose
+  installation is claimed by the project's org and caps unfinished builds per
+  project (backpressure against webhook storms and spoofed spam).
+- **`domains.add` enforces the `customDomains` entitlement** — a paid feature
+  is now actually paid.
+- **Audit coverage** for domain add/remove, rollback, deletion request/cancel,
+  installation claims, and both suspension mechanisms (`system:spend-cap` /
+  `system:dunning` actors).
+- **Build → deploy handoff**: the runner's optional `release` port feeds a
+  completed bundle into the health-gated blue/green pipeline; a failed release
+  keeps the build successful (artifact stays reusable for dedup).
+- **Queue self-healing + retention**: stale/never-claimed builds fail visibly
+  (hourly cron); superseded releases beyond the rollback retention (3/project)
+  are destroyed (6-hourly cron) so dispatch namespaces never grow unboundedly.
+- **Server-built PR previews**: PR upsert events queue a build for the head
+  commit through the same pipeline as pushes.
+- **Per-environment secrets**: `all`/`production`/`preview`/`dev` scoping with
+  kind-overrides-shared resolution at deploy time; studio picker included.
+- **Studio polish**: rollback button on superseded releases, suspension +
+  pending-deletion banners.
+- **CRUD edges**: org rename, member role change (last-owner protected),
+  project rename — all audited.
+
+Deliberate leftovers: dunning _emails_ (Stripe Smart Retries covers the
+provider side; our suspension notice needs the mail-capable edge path — 🌐),
+control-plane PATs (decision: org-scoped deploy keys ARE the API tokens), and
+the dispatcher cache's ≤60 s pointer-swap propagation (documented behavior; a
+purge ping is a later optimization).

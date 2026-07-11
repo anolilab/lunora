@@ -67,6 +67,7 @@ interface InviteBody {
 }
 
 interface SecretBody {
+    environment?: "all" | "dev" | "preview" | "production";
     name?: string;
     organizationId?: string;
     projectId?: string;
@@ -100,11 +101,20 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
                 ? context.runMutation(api.github_installations.record, { accountLogin: intent.accountLogin, installationId: intent.installationId })
                 : context.runMutation(api.github_installations.remove, { installationId: intent.installationId }));
         },
+        // PR upsert → server-side preview build (same pipeline, GAPS.md A3).
+        onPreviewBuild: (intent) =>
+            context.runMutation<null | { buildId: string; reused: boolean }>(api.builds.recordPush, {
+                branch: intent.branch,
+                commitSha: intent.commitSha,
+                installationId: intent.installationId,
+                repository: intent.repository,
+            }),
         // default-branch push → record a build (dedup by commit SHA, GAPS.md A3).
         onPush: (intent) =>
             context.runMutation<null | { buildId: string; reused: boolean }>(api.builds.recordPush, {
                 branch: intent.branch,
                 commitSha: intent.commitSha,
+                installationId: intent.installationId,
                 repository: intent.repository,
             }),
         resolveProject: (repository) => context.runMutation<null | ProjectResolution>(api.projects.byGithubRepo, { repository }),
@@ -279,6 +289,7 @@ const handleSecretRoute = async (request: Request, environment: RouterEnv): Prom
     try {
         await context.runMutation(api.secrets.store, {
             ciphertext,
+            environment: secret.environment,
             iv,
             name: secret.name,
             organizationId: secret.organizationId,
@@ -560,12 +571,17 @@ export const createDeployRouter = (): HttpRouterLike => {
             verifyKey: (key) => context.runMutation<DeployTarget | null>(api.deploy_keys.verify, { key }),
             // Decrypt the project's stored secrets at the edge and hand them to the
             // deploy spec. No-op when the master key isn't configured.
-            resolveSecrets: async ({ key, organizationId, projectId }) => {
+            resolveSecrets: async ({ key, kind, organizationId, projectId }) => {
                 if (!environment.SECRET_ENCRYPTION_KEY) {
                     return {};
                 }
 
-                const rows = await context.runQuery<EncryptedSecretRow[]>(api.secrets.listEncrypted, { deployKey: key, organizationId, projectId });
+                const rows = await context.runQuery<EncryptedSecretRow[]>(api.secrets.listEncrypted, {
+                    deployKey: key,
+                    environment: kind,
+                    organizationId,
+                    projectId,
+                });
                 const entries = await Promise.all(
                     rows.map(async (row): Promise<[string, string]> => [
                         row.name,
