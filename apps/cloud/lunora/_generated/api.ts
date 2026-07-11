@@ -73,7 +73,7 @@ export interface ApiTypes {
     };
     organizations: {
         cancelDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
-        create: FunctionReference<"mutation", { cellId: Id<"cells">; name: string; plan?: "free" | "pro" | "enterprise"; slug: string }, Id<"organizations">>;
+        create: FunctionReference<"mutation", { cellId?: Id<"cells">; jurisdiction?: string; name: string; plan?: "free" | "pro" | "enterprise"; slug: string }, Id<"organizations">>;
         getBySlug: FunctionReference<"query", { slug: string }, null | { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }>;
         list: FunctionReference<"query", {}, { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }[]>;
         requestDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
@@ -99,6 +99,9 @@ export const api = anyApi as unknown as ApiTypes;
 
 /** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
 export interface InternalApiTypes {
+    billing: {
+        enforceDunning: FunctionReference<"mutation", {}, { graced: number; recovered: number; suspended: number; }>;
+    };
     builds: {
         appendLog: FunctionReference<"mutation", { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }, void>;
         claimNext: FunctionReference<"mutation", { runnerId: string }, { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; } | null>;

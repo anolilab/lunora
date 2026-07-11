@@ -168,7 +168,13 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
     }
 
     const { page: organizationPage } = await context.db.organizations.findMany({});
-    const organizations = organizationPage as unknown as { _id: string; plan: string; spendCapMinor?: number; suspendedAt?: number }[];
+    const organizations = organizationPage as unknown as {
+        _id: string;
+        plan: string;
+        spendCapMinor?: number;
+        suspendedAt?: number;
+        suspendedReason?: string;
+    }[];
 
     let suspended = 0;
     let unsuspended = 0;
@@ -179,11 +185,12 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
 
         if (decision.suspend && organization.suspendedAt === undefined) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: Date.now() });
+            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: Date.now(), suspendedReason: "spend-cap" });
             suspended += 1;
-        } else if (!decision.suspend && organization.suspendedAt !== undefined) {
+        } else if (!decision.suspend && organization.suspendedAt !== undefined && organization.suspendedReason === "spend-cap") {
+            // Only lift our own suspensions — dunning/support ones stay (GAPS.md C2).
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: undefined });
+            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: undefined, suspendedReason: undefined });
             unsuspended += 1;
         }
     }
