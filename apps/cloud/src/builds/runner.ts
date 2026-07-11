@@ -30,9 +30,17 @@ export interface BuildRunnerPorts {
     fail: (buildId: string, error: string) => Promise<void>;
     /** Fetch the repo tarball at the build's commit (GitHub App token). 🌐 in production. */
     fetchSource: (build: ClaimedBuild) => Promise<ArrayBuffer>;
+
+    /**
+     * Build → deploy handoff (GAPS.md ring-2): feed the built bundle into the
+     * release path (`POST /v1/deploy` with the project's deploy key — the
+     * health-gated blue/green pipeline takes it from there). A release failure
+     * fails the *deploy*, never the completed build. Omit for build-only runs.
+     */
+    release?: (build: ClaimedBuild, execution: BuildExecution) => Promise<{ deploymentId: string }>;
 }
 
-export type BuildOutcome = { bundleHash: string; status: "successful" } | { error: string; status: "failed" };
+export type BuildOutcome = { bundleHash: string; deploymentId?: string; status: "successful" } | { error: string; status: "failed" };
 
 /** Drive one claimed build through fetch → execute → complete/fail. Never throws. */
 export const runBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Promise<BuildOutcome> => {
@@ -46,6 +54,22 @@ export const runBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Pr
         const result = await ports.execute(source, (line) => ports.appendLog(build.buildId, "info", line));
 
         await ports.complete(build.buildId, result.bundleHash);
+
+        // The build is done regardless of what happens next; a failed release
+        // is reported in the logs but keeps the artifact reusable (dedup).
+        if (ports.release) {
+            try {
+                const { deploymentId } = await ports.release(build, result);
+
+                await ports.appendLog(build.buildId, "info", `released as deployment ${deploymentId}`);
+
+                return { bundleHash: result.bundleHash, deploymentId, status: "successful" };
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+
+                await ports.appendLog(build.buildId, "error", `release failed: ${message}`).catch(() => {});
+            }
+        }
 
         return { bundleHash: result.bundleHash, status: "successful" };
     } catch (error) {

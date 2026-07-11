@@ -194,13 +194,17 @@ export default defineSchema({
         .index("by_org", ["organizationId"])
         .index("by_script", ["scriptName"]),
 
-    // GitHub App installations (GAPS.md A4): which org a GitHub App install
-    // belongs to; push webhooks are scoped to the triggering installation.
+    // GitHub App installations (GAPS.md A4). Two-phase: the webhook *stages* an
+    // installation (no org linkage — a spoofed call is harmless), then an org
+    // owner/admin *claims* it from the dashboard. Push-to-deploy only accepts
+    // pushes whose installation is claimed by the project's org.
     githubInstallations: defineTable({
         accountLogin: v.string(),
+        claimedAt: v.optional(v.number()),
         createdAt: v.number(),
         installationId: v.number(),
-        organizationId: v.id("organizations"),
+        // Set at claim time (owner/admin session), never by the webhook.
+        organizationId: v.optional(v.id("organizations")),
     })
         .global()
         .index("by_installation", ["installationId"], { unique: true })
@@ -315,6 +319,9 @@ export default defineSchema({
     secrets: defineTable({
         ciphertext: v.string(),
         createdAt: v.number(),
+        // Which deployment kind sees this secret; "all" is shared across
+        // environments and overridden by a kind-specific row of the same name.
+        environment: v.union(v.literal("all"), v.literal("production"), v.literal("preview"), v.literal("dev")),
         iv: v.string(),
         name: v.string(),
         organizationId: v.id("organizations"),
@@ -323,7 +330,7 @@ export default defineSchema({
     })
         .global()
         .index("by_project", ["projectId"])
-        .index("by_project_name", ["projectId", "name"], { unique: true }),
+        .index("by_project_env_name", ["projectId", "environment", "name"], { unique: true }),
 
     // ── @lunora/payment tables (§4 billing) ───────────────────────────────────
     // Declared inline (codegen parses this file's AST and can't resolve a cross-

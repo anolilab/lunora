@@ -1,6 +1,6 @@
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
-import { assertMember } from "./authz";
+import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota } from "./entitlements";
 
 interface ProjectRow {
@@ -63,4 +63,15 @@ export const create = mutation
             organizationId: arguments_.organizationId,
             slug: arguments_.slug,
         });
+    });
+
+/** Rename a project (owner/admin). The slug (and its URL alias) is immutable. */
+export const rename = mutation
+    .input({ id: v.id("projects"), name: v.string(), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { id, name, organizationId } }): Promise<void> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        await assertRowInOrg(context, id, organizationId, "project");
+        await context.db.patch(id, { name });
+        await context.db.insert("auditLog", { action: "project.rename", actorUserId: member.userId, createdAt: Date.now(), organizationId, target: name });
     });

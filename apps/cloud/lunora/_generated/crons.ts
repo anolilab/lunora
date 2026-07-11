@@ -34,10 +34,12 @@ export const LUNORA_CRONS: Record<string, ReadonlyArray<LunoraCronJob>> = {
     "0 */1 * * *": [
         { name: "cleanup expired previews", functionPath: "deployments:cleanupExpiredPreviews", args: {} },
         { name: "enforce spend caps", functionPath: "usage:enforceSpendCaps", args: {} },
+        { name: "expire stale builds", functionPath: "builds:expireStale", args: {} },
         { name: "rollup platform usage", functionPath: "usage:rollup", args: {} },
     ],
     "0 */6 * * *": [
         { name: "enforce dunning", functionPath: "billing:enforceDunning", args: {} },
+        { name: "prune superseded releases", functionPath: "deployments:pruneSuperseded", args: {} },
         { name: "prune tenant logs", functionPath: "logs:prune", args: {} },
     ],
     "0 */12 * * *": [

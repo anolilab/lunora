@@ -10,22 +10,43 @@ describe(parsePushEvent, () => {
     it("accepts a default-branch push", () => {
         const intent = parsePushEvent({
             after: "abc123",
+            installation: { id: 42 },
             ref: "refs/heads/main",
             repository: { default_branch: "main", full_name: "acme/app" },
         });
 
-        expect(intent).toStrictEqual({ branch: "main", commitSha: "abc123", repository: "acme/app" });
+        expect(intent).toStrictEqual({ branch: "main", commitSha: "abc123", installationId: 42, repository: "acme/app" });
     });
 
     it("ignores non-default branches, branch deletes, and malformed payloads", () => {
-        expect(parsePushEvent({ after: "abc", ref: "refs/heads/feature", repository: { default_branch: "main", full_name: "acme/app" } })).toBeNull();
-        expect(parsePushEvent({ after: "0000000000", ref: "refs/heads/main", repository: { default_branch: "main", full_name: "acme/app" } })).toBeNull();
+        expect(
+            parsePushEvent({
+                after: "abc",
+                installation: { id: 42 },
+                ref: "refs/heads/feature",
+                repository: { default_branch: "main", full_name: "acme/app" },
+            }),
+        ).toBeNull();
+        expect(
+            parsePushEvent({
+                after: "0000000000",
+                installation: { id: 42 },
+                ref: "refs/heads/main",
+                repository: { default_branch: "main", full_name: "acme/app" },
+            }),
+        ).toBeNull();
+        expect(parsePushEvent({ after: "abc", ref: "refs/heads/main", repository: { default_branch: "main", full_name: "acme/app" } })).toBeNull();
         expect(parsePushEvent({})).toBeNull();
         expect(parsePushEvent(null)).toBeNull();
     });
 
     it("honors a non-main default branch", () => {
-        const intent = parsePushEvent({ after: "abc", ref: "refs/heads/trunk", repository: { default_branch: "trunk", full_name: "acme/app" } });
+        const intent = parsePushEvent({
+            after: "abc",
+            installation: { id: 42 },
+            ref: "refs/heads/trunk",
+            repository: { default_branch: "trunk", full_name: "acme/app" },
+        });
 
         expect(intent?.branch).toBe("trunk");
     });
@@ -91,6 +112,23 @@ describe(runBuild, () => {
 
         expect(outcome).toStrictEqual({ error: "tarball 404", status: "failed" });
         expect(terminal).toStrictEqual(["fail:tarball 404"]);
+    });
+
+    it("hands a completed build to the release port and reports the deployment", async () => {
+        const { logs, ports } = portsWith({ release: () => Promise.resolve({ deploymentId: "dep_9" }) });
+        const outcome = await runBuild(build, ports);
+
+        expect(outcome).toStrictEqual({ bundleHash: "hash-1", deploymentId: "dep_9", status: "successful" });
+        expect(logs).toContain("info:released as deployment dep_9");
+    });
+
+    it("keeps the build successful when the release fails — the artifact stays reusable", async () => {
+        const { logs, ports, terminal } = portsWith({ release: () => Promise.reject(new Error("health check failed")) });
+        const outcome = await runBuild(build, ports);
+
+        expect(outcome).toStrictEqual({ bundleHash: "hash-1", status: "successful" });
+        expect(terminal).toStrictEqual(["complete:hash-1"]);
+        expect(logs).toContain("error:release failed: health check failed");
     });
 
     it("fails the build when execution throws", async () => {

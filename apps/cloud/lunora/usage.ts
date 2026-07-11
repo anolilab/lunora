@@ -186,6 +186,14 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         if (decision.suspend && organization.suspendedAt === undefined) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
             await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: Date.now(), suspendedReason: "spend-cap" });
+            // eslint-disable-next-line no-await-in-loop -- one audit row per transition
+            await context.db.insert("auditLog", {
+                action: "organization.suspend",
+                actorUserId: "system:spend-cap",
+                createdAt: Date.now(),
+                organizationId: organization._id,
+                target: `spend ${String(decision.spendMinor)} >= cap ${String(decision.capMinor)}`,
+            });
             suspended += 1;
         } else if (!decision.suspend && organization.suspendedAt !== undefined && organization.suspendedReason === "spend-cap") {
             // Only lift our own suspensions — dunning/support ones stay (GAPS.md C2).

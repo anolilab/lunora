@@ -243,6 +243,13 @@ export const rollback = mutation
 
         await context.db.patch(id, { liveAt: now, status: "live", updatedAt: now });
         await context.db.patch(target.projectId, { activeDeploymentId: id, activeScriptName: target.scriptName });
+        await context.db.insert("auditLog", {
+            action: "deployment.rollback",
+            actorUserId: deployKey ? "deploy-key" : (context.auth.userId ?? "unknown"),
+            createdAt: now,
+            organizationId,
+            target: target.scriptName,
+        });
 
         return { scriptName: target.scriptName, version: target.version };
     });
@@ -272,6 +279,46 @@ export const routeForAlias = query.input({ alias: v.string() }).query(async ({ c
     const live = rows.filter((d) => d.status === "live").toSorted((a, b) => b.createdAt - a.createdAt)[0];
 
     return live ? { scriptName: live.scriptName } : null;
+});
+
+/** Superseded production releases retained per project for rollback (GAPS.md A1). */
+export const SUPERSEDED_RETENTION = 3;
+
+/**
+ * Prune old superseded releases beyond the rollback retention window: per
+ * (project, kind), keep the newest {@link SUPERSEDED_RETENTION} superseded
+ * deployments and mark the rest `destroyed` — the 🌐 teardown path deletes the
+ * actual dispatch scripts off that status, so namespaces never accumulate
+ * unboundedly. SYSTEM only (cron dispatch).
+ */
+export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
+    const now = Date.now();
+    const { page } = await context.db.deployments.findMany({});
+    const superseded = (page as unknown as DeploymentRow[]).filter((deployment) => deployment.status === "superseded");
+
+    const byProjectKind = new Map<string, DeploymentRow[]>();
+
+    for (const deployment of superseded) {
+        const groupKey = `${deployment.projectId}|${deployment.kind}`;
+        const group = byProjectKind.get(groupKey) ?? [];
+
+        group.push(deployment);
+        byProjectKind.set(groupKey, group);
+    }
+
+    let pruned = 0;
+
+    for (const group of byProjectKind.values()) {
+        const excess = group.toSorted((a, b) => b.createdAt - a.createdAt).slice(SUPERSEDED_RETENTION);
+
+        for (const deployment of excess) {
+            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+            await context.db.patch(deployment._id, { destroyedAt: now, status: "destroyed", updatedAt: now });
+            pruned += 1;
+        }
+    }
+
+    return { pruned };
 });
 
 /**

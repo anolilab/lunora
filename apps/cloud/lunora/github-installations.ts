@@ -1,44 +1,34 @@
+import { LunoraError } from "@lunora/server";
+
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 
 /**
- * GitHub App installations (GAPS.md A4): which org an App install belongs to.
- * Recorded/removed from the HMAC-verified webhook edge route (`installation`
- * events); the org linkage is claimed by slug match at install time and
- * confirmed by an org admin in the dashboard flow.
+ * GitHub App installations (GAPS.md A4), staged-claim model: the HMAC-verified
+ * webhook {@link record}s an installation with **no org linkage** (so a spoofed
+ * RPC call stages a harmless orphan row at worst), and an org owner/admin
+ * {@link claim}s it from the dashboard. Push-to-deploy only trusts claimed
+ * installations (`builds.recordPush` checks the pair).
  */
 
 interface InstallationRow {
     _id: Id<"githubInstallations">;
     accountLogin: string;
+    claimedAt?: number;
     createdAt: number;
     installationId: number;
-    organizationId: Id<"organizations">;
-}
-
-interface OrganizationRow {
-    _id: Id<"organizations">;
-    slug: string;
+    organizationId?: Id<"organizations">;
 }
 
 /**
- * Record an installation, linking it to the org whose slug matches the GitHub
- * account login (Zeitwork's convention). Upserts by installation id; a
- * non-matching login is ignored (returns null) — nothing to link against.
- * Reached via the HMAC-verified webhook route.
+ * Stage an installation (webhook `installation created`). Upserts by
+ * installation id; deliberately records no org — claiming is a separate,
+ * session-authorized step.
  */
 export const record = mutation
     .input({ accountLogin: v.string(), installationId: v.number() })
-    .mutation(async ({ ctx: context, args: { accountLogin, installationId } }): Promise<null | Id<"githubInstallations">> => {
-        const login = accountLogin.toLowerCase();
-        const { page: organizationPage } = await context.db.organizations.findMany({ where: { slug: login } });
-        const organization = (organizationPage as unknown as OrganizationRow[])[0];
-
-        if (!organization) {
-            return null;
-        }
-
+    .mutation(async ({ ctx: context, args: { accountLogin, installationId } }): Promise<Id<"githubInstallations">> => {
         const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
         const existing = (page as unknown as InstallationRow[])[0];
 
@@ -47,14 +37,47 @@ export const record = mutation
         }
 
         return context.db.insert("githubInstallations", {
-            accountLogin: login,
+            accountLogin: accountLogin.toLowerCase(),
             createdAt: Date.now(),
             installationId,
-            organizationId: organization._id,
         });
     });
 
-/** Remove an installation (the App was uninstalled). Reached via the webhook route. */
+/**
+ * Claim a staged installation for the caller's org (owner/admin). The audit
+ * trail records who linked what; an already-claimed installation cannot be
+ * re-claimed by another org.
+ */
+export const claim = mutation
+    .input({ installationId: v.number(), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { installationId, organizationId } }): Promise<void> => {
+        const { userId } = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
+        const installation = (page as unknown as InstallationRow[])[0];
+
+        if (!installation) {
+            throw new LunoraError("NOT_FOUND", "installation not found — install the GitHub App first");
+        }
+
+        if (installation.organizationId !== undefined && installation.organizationId !== organizationId) {
+            throw new LunoraError("CONFLICT", "installation is already claimed by another organization");
+        }
+
+        await context.db.patch(installation._id, { claimedAt: Date.now(), organizationId });
+        await context.db.insert("auditLog", {
+            action: "github.installation.claim",
+            actorUserId: userId,
+            createdAt: Date.now(),
+            organizationId,
+            target: `${installation.accountLogin}#${String(installationId)}`,
+        });
+    });
+
+/**
+ * Remove an installation (webhook `installation deleted` — GitHub-driven). A
+ * spoofed call can only force a re-claim, never link data across orgs.
+ */
 export const remove = mutation.input({ installationId: v.number() }).mutation(async ({ ctx: context, args: { installationId } }): Promise<void> => {
     const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
     const existing = (page as unknown as InstallationRow[])[0];
@@ -64,7 +87,7 @@ export const remove = mutation.input({ installationId: v.number() }).mutation(as
     }
 });
 
-/** An org's GitHub installations (members). */
+/** An org's claimed GitHub installations (members). */
 export const list = query
     .input({ organizationId: v.id("organizations") })
     .query(async ({ ctx: context, args: { organizationId } }): Promise<InstallationRow[]> => {
