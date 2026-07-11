@@ -325,3 +325,22 @@ button.link.danger {
     font-size: 1.6rem;
     font-weight: 700;
 }
+
+/* Log viewers (builds + runtime logs, GAPS.md A3/B2) */
+.log-view {
+    background: #0d1117;
+    border-radius: 6px;
+    color: #c9d1d9;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 480px;
+    overflow: auto;
+    padding: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.log-line.error {
+    color: #f85149;
+}
