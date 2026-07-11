@@ -7,7 +7,7 @@
 > our Workers-for-Platforms substrate, and its build status.
 
 Legend: ✅ shipped here · 🔨 code-tractable now (no live infra needed) ·
-🌐 needs live Cloudflare/Stripe/GitHub credentials · 🧭 decision, not code.
+🌐 needs live Cloudflare/Creem/GitHub credentials · 🧭 decision, not code.
 
 ---
 
@@ -128,15 +128,20 @@ a `suspended` bit and serves 503 with a billing link). Unsuspend on
 plan-upgrade webhook or support action. The AUP (🧭 legal doc) is the authority;
 this is the mechanism.
 
-### C2. Dunning / payment-failure lifecycle (✅ state machine shipped, 🌐 Stripe config)
+### C2. Dunning / payment-failure lifecycle (✅ state machine shipped, 🌐 Creem config)
 
 Payment-failure → email → grace period → suspend → delete, driven off
-`@lunora/payment` webhook events. The state machine + crons are 🔨; the Stripe
-dunning configuration and real charge flows are 🌐.
+`@lunora/payment` webhook events. The state machine + crons are 🔨; Creem's
+own retry/notification flows and real charge testing are 🌐.
 
-### C3. Merchant of Record vs Stripe Tax (🧭)
+### C3. Merchant of Record vs Stripe Tax (✅ decided: Creem MoR)
 
-Global sales-tax/VAT exposure. Decide before public launch; hard to unwind.
+Creem (creem.io) is the platform's payment provider via
+`@lunora/payment/creem`. As a Merchant of Record it is the legal seller and
+calculates/collects/remits sales tax/VAT across 190+ jurisdictions — the
+platform never inherits worldwide tax compliance. Product-based checkout
+(Creem product ids in `LUNORA_CLOUD_PLANS.priceIds`), hosted billing portal,
+`creem-signature` webhooks, sandbox via `CREEM_TEST_MODE`.
 
 ## D. Data & trust
 
@@ -248,8 +253,9 @@ features and findings _in_ them. All code-tractable items shipped:
 - **CRUD edges**: org rename, member role change (last-owner protected),
   project rename — all audited.
 
-Deliberate leftovers: dunning _emails_ (Stripe Smart Retries covers the
-provider side; our suspension notice needs the mail-capable edge path — 🌐),
+Deliberate leftovers: dunning _emails_ (Creem's own payment-retry
+notifications cover the provider side; our suspension notice needs the
+mail-capable edge path — 🌐),
 control-plane PATs (decision: org-scoped deploy keys ARE the API tokens), and
 the dispatcher cache's ≤60 s pointer-swap propagation (documented behavior; a
 purge ping is a later optimization).
