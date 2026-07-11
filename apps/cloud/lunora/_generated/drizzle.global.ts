@@ -78,6 +78,7 @@ export const deployments = sqliteTable("deployments", {
     updatedAt: real("updatedAt").notNull(),
     url: text("url"),
     version: real("version"),
+    runtimeVersion: text("runtimeVersion"),
     queuedAt: real("queuedAt"),
     provisioningAt: real("provisioningAt"),
     verifyingAt: real("verifyingAt"),

@@ -142,6 +142,10 @@ export default defineSchema({
         url: v.optional(v.string()),
         // Monotonic release number per (project, kind).
         version: v.optional(v.number()),
+        // @lunora/runtime version bundled into this release (GAPS.md E4) — the
+        // fleet-upgrade planner targets deployments pinned below the fleet
+        // minimum for forced re-release.
+        runtimeVersion: v.optional(v.string()),
         // Phase-transition timestamps (GAPS.md A2) — status history for free.
         queuedAt: v.optional(v.number()),
         provisioningAt: v.optional(v.number()),
