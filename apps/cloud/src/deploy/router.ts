@@ -4,6 +4,7 @@ import type { ExecutionContextLike } from "@lunora/runtime";
 import { api } from "../../lunora/_generated/api.js";
 import { proxyAdminRequest } from "../admin/proxy";
 import { createHttpCloudflareApi } from "../cloudflare/api";
+import { createDohResolver, verifyDomain } from "../domains/verify";
 import { handleGitHubWebhook } from "../github/webhook";
 import { sendInvitationEmail } from "../mail/notify";
 import { createCloudflareProvisioner } from "../provision";
@@ -337,6 +338,124 @@ const handleTenantRouteRoute = async (request: Request, environment: RouterEnv):
     return Response.json(result ?? { scriptName: null });
 };
 
+interface DomainBody {
+    hostname?: string;
+    id?: string;
+    organizationId?: string;
+    projectId?: string; // secret-scanner:allow -- domain field name
+    redirectStatusCode?: number;
+    redirectTo?: string;
+}
+
+interface DomainRowLike {
+    hostname: string;
+    txtToken: string;
+}
+
+/**
+ * `POST /v1/domains` — add a hostname to a project under the caller's session
+ * (GAPS.md B1). Returns the `_lunora.&lt;host>` TXT record the user must create.
+ */
+const handleDomainAddRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const body = (await request.json().catch(() => null)) as DomainBody | null;
+
+    if (!body?.hostname || !body.organizationId || !body.projectId) {
+        return jsonError(400, "hostname, organizationId and projectId are required");
+    }
+
+    try {
+        const result = await context.runMutation<{ id: string; txtName: string; txtToken: string }>(api.domains.add, {
+            hostname: body.hostname,
+            organizationId: body.organizationId,
+            projectId: body.projectId, // secret-scanner:allow -- domain field name
+            redirectStatusCode: body.redirectStatusCode,
+            redirectTo: body.redirectTo,
+        });
+
+        return Response.json(result);
+    } catch (error) {
+        return jsonError(403, error instanceof Error ? error.message : "domain add failed");
+    }
+};
+
+/**
+ * `POST /v1/domains/verify` — run the DNS checks for a domain (TXT token +
+ * pointing at the platform) and record the outcome (GAPS.md B1). Runs under
+ * the caller's session; the DNS lookups use DNS-over-HTTPS at the edge.
+ */
+const handleDomainVerifyRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const body = (await request.json().catch(() => null)) as DomainBody | null;
+
+    if (!body?.id || !body.organizationId) {
+        return jsonError(400, "id and organizationId are required");
+    }
+
+    try {
+        const domain = await context.runQuery<DomainRowLike | null>(api.domains.get, { id: body.id, organizationId: body.organizationId });
+
+        if (!domain) {
+            return jsonError(404, "domain not found");
+        }
+
+        const appDomain = environment.LUNORA_APP_DOMAIN ?? "lunora.app";
+        const result = await verifyDomain(domain.hostname, {
+            platformTargets: [appDomain],
+            resolve: createDohResolver(),
+            txtToken: domain.txtToken,
+        });
+
+        await context.runMutation(api.domains.markVerified, { id: body.id, organizationId: body.organizationId, verified: result.verified });
+
+        return Response.json(result);
+    } catch (error) {
+        return jsonError(403, error instanceof Error ? error.message : "domain verification failed");
+    }
+};
+
+/**
+ * `GET /v1/tenants/custom-domain?host=&lt;hostname>` — resolve a verified custom
+ * hostname to a redirect or the owning project's active script, for the
+ * dispatcher (GAPS.md B1). Bearer-gated with `LUNORA_ADMIN_TOKEN`.
+ */
+const handleTenantCustomDomainRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const authorization = request.headers.get("authorization") ?? "";
+    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+
+    if (!environment.LUNORA_ADMIN_TOKEN || token !== environment.LUNORA_ADMIN_TOKEN) {
+        return jsonError(401, "unauthorized");
+    }
+
+    const host = new URL(request.url).searchParams.get("host");
+
+    if (!host) {
+        return jsonError(400, "host is required");
+    }
+
+    const result = await context.runQuery<null | { redirectStatusCode?: number; redirectTo?: string; scriptName?: string }>(api.domains.routeForHostname, {
+        hostname: host,
+    });
+
+    return Response.json(result ?? {});
+};
+
 /**
  * The control-plane HTTP API, mounted as the worker's `httpRouter` (lowest-
  * priority matcher). Routes `POST /v1/{deploy,github/webhook,admin,usage,
@@ -471,6 +590,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         "/v1/billing/webhook": handleBillingWebhookRoute,
         "/v1/deploy": handleDeployRoute,
         "/v1/deployments/rollback": handleRollbackRoute,
+        "/v1/domains": handleDomainAddRoute,
+        "/v1/domains/verify": handleDomainVerifyRoute,
         "/v1/github/webhook": handleWebhookRoute,
         "/v1/invitations/send": handleInviteRoute,
         "/v1/secrets": handleSecretRoute,
@@ -514,6 +635,10 @@ export const createDeployRouter = (): HttpRouterLike => {
 
             if (request.method === "GET" && url.pathname === "/v1/tenants/route") {
                 return handleTenantRouteRoute(request, routerEnv);
+            }
+
+            if (request.method === "GET" && url.pathname === "/v1/tenants/custom-domain") {
+                return handleTenantCustomDomainRoute(request, routerEnv);
             }
 
             const handler = request.method === "POST" ? postRoutes[url.pathname] : undefined;
