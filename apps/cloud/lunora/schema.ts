@@ -179,6 +179,20 @@ export default defineSchema({
         .index("by_hash", ["hashedKey"], { unique: true })
         .index("by_org", ["organizationId"]),
 
+    // Overage-debit watermarks (GAPS.md C3 follow-up): cumulative credits
+    // already debited from the org's Creem prepaid-credits account per billing
+    // period. The reconciliation loop debits only the delta between credits
+    // owed (from platformUsage) and this watermark, with an idempotent
+    // reference, so re-runs and crashes never double-charge.
+    overageDebits: defineTable({
+        debitedCredits: v.number(),
+        organizationId: v.id("organizations"),
+        periodStart: v.number(),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_org_period", ["organizationId", "periodStart"], { unique: true }),
+
     // Tenant runtime logs (GAPS.md B2): console/exception events batched in by
     // the dispatch-namespace tail worker via `POST /v1/logs/ingest`. Retention-
     // capped by the prune cron; the ingest seam can re-point to Analytics

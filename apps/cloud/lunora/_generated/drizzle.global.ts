@@ -109,6 +109,17 @@ export const deployKeys = sqliteTable("deployKeys", {
     by_hash: uniqueIndex("by_hash").on(t.hashedKey),
 }));
 
+export const overageDebits = sqliteTable("overageDebits", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    debitedCredits: real("debitedCredits").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    periodStart: real("periodStart").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org_period: uniqueIndex("by_org_period").on(t.organizationId, t.periodStart),
+}));
+
 export const tenantLogs = sqliteTable("tenantLogs", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
