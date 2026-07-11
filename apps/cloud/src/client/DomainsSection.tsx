@@ -161,7 +161,8 @@ export const DomainsSection = ({ organizationId }: DomainsSectionProps): ReactEl
                                     return;
                                 }
 
-                                const record = await response.json();
+                                // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
+                                const record = (await response.json()) as TxtRecord;
 
                                 setTxtRecord(record);
                                 setHostname("");
