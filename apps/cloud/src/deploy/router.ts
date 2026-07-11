@@ -94,6 +94,19 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
     }
 
     return handleGitHubWebhook(request, {
+        // installation created/deleted → link/unlink the org (GAPS.md A4).
+        onInstallation: async (intent) => {
+            await (intent.action === "created"
+                ? context.runMutation(api.github_installations.record, { accountLogin: intent.accountLogin, installationId: intent.installationId })
+                : context.runMutation(api.github_installations.remove, { installationId: intent.installationId }));
+        },
+        // default-branch push → record a build (dedup by commit SHA, GAPS.md A3).
+        onPush: (intent) =>
+            context.runMutation<null | { buildId: string; reused: boolean }>(api.builds.recordPush, {
+                branch: intent.branch,
+                commitSha: intent.commitSha,
+                repository: intent.repository,
+            }),
         resolveProject: (repository) => context.runMutation<null | ProjectResolution>(api.projects.byGithubRepo, { repository }),
         secret: environment.GITHUB_WEBHOOK_SECRET,
     });

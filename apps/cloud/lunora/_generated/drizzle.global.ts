@@ -105,6 +105,53 @@ export const deployKeys = sqliteTable("deployKeys", {
     by_hash: uniqueIndex("by_hash").on(t.hashedKey),
 }));
 
+export const githubInstallations = sqliteTable("githubInstallations", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    accountLogin: text("accountLogin").notNull(),
+    createdAt: real("createdAt").notNull(),
+    installationId: real("installationId").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+    by_installation: uniqueIndex("by_installation").on(t.installationId),
+}));
+
+export const builds = sqliteTable("builds", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    branch: text("branch").notNull(),
+    bundleHash: text("bundleHash"),
+    commitSha: text("commitSha").notNull(),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId"),
+    error: text("error"),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    processingBy: text("processingBy"),
+    processingStartedAt: real("processingStartedAt"),
+    projectId: text("projectId").references(() => projects._id).notNull(),
+    status: text("status", { mode: "json" }).$type<"pending" | "building" | "successful" | "failed">().notNull(),
+    updatedAt: real("updatedAt").notNull(),
+    buildingAt: real("buildingAt"),
+    successfulAt: real("successfulAt"),
+    failedAt: real("failedAt"),
+}, (t) => ({
+    by_project_commit: index("by_project_commit").on(t.projectId, t.commitSha),
+    by_project: index("by_project").on(t.projectId),
+}));
+
+export const buildLogs = sqliteTable("buildLogs", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    buildId: text("buildId").references(() => builds._id).notNull(),
+    createdAt: real("createdAt").notNull(),
+    level: text("level", { mode: "json" }).$type<"info" | "error">().notNull(),
+    line: text("line").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+}, (t) => ({
+    by_build: index("by_build").on(t.buildId),
+}));
+
 export const domains = sqliteTable("domains", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
