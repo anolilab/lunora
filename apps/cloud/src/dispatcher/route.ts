@@ -108,6 +108,52 @@ export const createRouteResolver = (options: PlanResolverOptions): ((label: stri
     };
 };
 
+export interface CustomDomainRoute {
+    redirectStatusCode?: number;
+    redirectTo?: string;
+    scriptName?: string;
+}
+
+/**
+ * Build a cached custom-hostname resolver over the control plane's
+ * `GET /v1/tenants/custom-domain` (GAPS.md B1). Returns the redirect or the
+ * owning project's active script for a *verified* domain; unknown hostnames
+ * and control-plane blips fail open to `null` (→ 404 at the dispatcher).
+ */
+export const createCustomDomainResolver = (options: PlanResolverOptions): ((hostname: string) => Promise<CustomDomainRoute | null>) => {
+    const fetchImpl = options.fetch ?? fetch;
+    const now = options.now ?? Date.now;
+    const ttl = options.ttlMs ?? 60_000;
+    const cache = new Map<string, { expires: number; route: CustomDomainRoute | null }>();
+
+    return async (hostname: string): Promise<CustomDomainRoute | null> => {
+        const cached = cache.get(hostname);
+
+        if (cached && cached.expires > now()) {
+            return cached.route;
+        }
+
+        try {
+            const url = `${options.controlPlaneUrl}/v1/tenants/custom-domain?host=${encodeURIComponent(hostname)}`;
+            const response = await fetchImpl(url, { headers: { authorization: `Bearer ${options.controlPlaneToken}` } });
+
+            if (!response.ok) {
+                return null;
+            }
+
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
+            const data = (await response.json()) as CustomDomainRoute;
+            const route = data.scriptName || data.redirectTo ? data : null;
+
+            cache.set(hostname, { expires: now() + ttl, route });
+
+            return route;
+        } catch {
+            return null;
+        }
+    };
+};
+
 /**
  * Build a cached `resolvePlan` that asks the control plane for a script's plan
  * tier (`GET /v1/tenants/plan`). Per-isolate TTL cache keeps the hot path off a

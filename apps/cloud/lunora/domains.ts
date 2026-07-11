@@ -133,3 +133,14 @@ export const routeForHostname = query
 
         return project?.activeScriptName ? { scriptName: project.activeScriptName } : null;
     });
+
+/** A single domain row (members) — the edge verify route reads the TXT token through this. */
+export const get = query
+    .input({ id: v.id("domains"), organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { id, organizationId } }): Promise<DomainRow | null> => {
+        await assertMember(context, organizationId);
+
+        const domain = (await context.db.get(id)) as DomainRow | null;
+
+        return domain?.organizationId === organizationId ? domain : null;
+    });

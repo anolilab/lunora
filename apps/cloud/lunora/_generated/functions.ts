@@ -66,6 +66,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "deployments:routeForAlias": lunora_deployments_4.routeForAlias as unknown as RegisteredLunoraFunction,
     "deployments:updateStatus": lunora_deployments_4.updateStatus as unknown as RegisteredLunoraFunction,
     "domains:add": lunora_domains_5.add as unknown as RegisteredLunoraFunction,
+    "domains:get": lunora_domains_5.get as unknown as RegisteredLunoraFunction,
     "domains:list": lunora_domains_5.list as unknown as RegisteredLunoraFunction,
     "domains:markVerified": lunora_domains_5.markVerified as unknown as RegisteredLunoraFunction,
     "domains:remove": lunora_domains_5.remove as unknown as RegisteredLunoraFunction,
@@ -245,6 +246,12 @@ __val2 = source["redirectTo"];
 __has2 = true;
 }
 return { "hostname": source["hostname"], "organizationId": source["organizationId"], "projectId": source["projectId"], ...(__has1 ? { "redirectStatusCode": __val1 } : {}), ...(__has2 ? { "redirectTo": __val2 } : {}) };
+});
+installCompiledValidatorMap(lunora_domains_5.get.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_domains_5.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -500,6 +507,7 @@ export interface Caller {
     };
     domains: {
         add: (args: { hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string }) => Promise<{ id: Id<"domains">; txtName: string; txtToken: string; }>;
+        get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
         list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
         markVerified: (args: { customHostnameId?: string; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }) => Promise<void>;
         remove: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<void>;
@@ -594,6 +602,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     domains: {
         add: (args) => callRegistered(context, "domains:add", args),
+        get: (args) => callRegistered(context, "domains:get", args),
         list: (args) => callRegistered(context, "domains:list", args),
         markVerified: (args) => callRegistered(context, "domains:markVerified", args),
         remove: (args) => callRegistered(context, "domains:remove", args),
