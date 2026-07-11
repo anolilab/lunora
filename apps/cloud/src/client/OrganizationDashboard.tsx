@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import { ActivitySection } from "./ActivitySection";
+import { AlertsSection } from "./AlertsSection";
 import { BillingSection } from "./BillingSection";
 import { BuildsSection } from "./BuildsSection";
 import { DeployKeysSection } from "./DeployKeysSection";
@@ -24,7 +25,20 @@ interface OrganizationDashboardProps {
 }
 
 type Tab =
-    "activity" | "billing" | "builds" | "domains" | "incidents" | "invitations" | "issues" | "keys" | "logs" | "members" | "projects" | "secrets" | "usage";
+    | "activity"
+    | "alerts"
+    | "billing"
+    | "builds"
+    | "domains"
+    | "incidents"
+    | "invitations"
+    | "issues"
+    | "keys"
+    | "logs"
+    | "members"
+    | "projects"
+    | "secrets"
+    | "usage";
 
 const TABS: { id: Tab; label: string }[] = [
     { id: "projects", label: "Projects" },
@@ -36,6 +50,7 @@ const TABS: { id: Tab; label: string }[] = [
     { id: "logs", label: "Logs" },
     { id: "issues", label: "Issues" },
     { id: "incidents", label: "Incidents" },
+    { id: "alerts", label: "Alerts" },
     { id: "invitations", label: "Invitations" },
     { id: "usage", label: "Usage" },
     { id: "billing", label: "Billing" },
@@ -45,6 +60,7 @@ const TABS: { id: Tab; label: string }[] = [
 /** Tab → live section. Every section mounts against the same `organizationId`. */
 const SECTIONS: Record<Tab, (props: { organizationId: OrgId }) => ReactElement> = {
     activity: ActivitySection,
+    alerts: AlertsSection,
     billing: BillingSection,
     builds: BuildsSection,
     domains: DomainsSection,

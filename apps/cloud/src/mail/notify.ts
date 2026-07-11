@@ -28,3 +28,35 @@ export const sendInvitationEmail = async (env: Record<string, unknown>, invitati
         to: invitation.to,
     });
 };
+
+/** A fired alert to deliver over its rule's channel. */
+export interface AlertNotification {
+    /** Rendered notification body. */
+    body: string;
+    channel: "email" | "webhook";
+    /** Email address (`email`) or URL to POST (`webhook`). */
+    destination: string;
+    /** Notification subject / summary line. */
+    subject: string;
+}
+
+/**
+ * Deliver a fired Observability alert over its channel. A webhook is a JSON POST
+ * of `{ subject, body }`; email goes through the same env-driven mailer as
+ * invitations. Runs at the Worker edge (the telemetry ingest handler); throws on
+ * transport failure so the caller can mark the alert failed (best-effort — a
+ * failed send never blocks ingest).
+ */
+export const deliverAlert = async (env: Record<string, unknown>, alert: AlertNotification): Promise<void> => {
+    if (alert.channel === "webhook") {
+        await fetch(alert.destination, {
+            body: JSON.stringify({ body: alert.body, subject: alert.subject }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        });
+
+        return;
+    }
+
+    await createMailerFromEnv(env).send({ subject: alert.subject, text: alert.body, to: alert.destination });
+};

@@ -271,6 +271,42 @@ export const incidents = sqliteTable("incidents", {
     by_org: index("by_org").on(t.organizationId),
 }));
 
+export const alertRules = sqliteTable("alertRules", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    channel: text("channel", { mode: "json" }).$type<"email" | "webhook">().notNull(),
+    createdAt: real("createdAt").notNull(),
+    destination: text("destination").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull(),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident">().notNull(),
+    threshold: real("threshold").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const alerts = sqliteTable("alerts", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    body: text("body").notNull(),
+    channel: text("channel", { mode: "json" }).$type<"email" | "webhook">().notNull(),
+    createdAt: real("createdAt").notNull(),
+    deliveredAt: real("deliveredAt"),
+    destination: text("destination").notNull(),
+    hash: text("hash").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    ruleId: text("ruleId").references(() => alertRules._id).notNull(),
+    status: text("status", { mode: "json" }).$type<"firing" | "delivered" | "failed">().notNull(),
+    subject: text("subject").notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident">().notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_status: index("by_status").on(t.status),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
 export const secrets = sqliteTable("secrets", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
