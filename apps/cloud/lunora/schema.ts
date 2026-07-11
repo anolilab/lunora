@@ -25,7 +25,9 @@ const deploymentStatus = v.union(
     v.literal("queued"),
     v.literal("provisioning"),
     v.literal("building"),
+    v.literal("verifying"),
     v.literal("live"),
+    v.literal("superseded"),
     v.literal("failed"),
     v.literal("destroyed"),
 );
@@ -69,6 +71,15 @@ export default defineSchema({
         .index("by_org_user", ["organizationId", "userId"]),
 
     projects: defineTable({
+        // Blue/green pointer (GAPS.md A1): the deployment currently serving the
+        // project's stable URL. Swapped only after a health-checked release;
+        // rollback is a swap back to a retained superseded deployment. A plain
+        // string (not v.id) deliberately: projects ↔ deployments would otherwise
+        // be circularly typed in the generated Drizzle schema.
+        activeDeploymentId: v.optional(v.string()),
+        // Denormalized script id of the active deployment, so the dispatcher's
+        // route lookup resolves alias → script in one read.
+        activeScriptName: v.optional(v.string()),
         createdAt: v.number(),
         // Optional meta-framework hint (tanstack-start, astro, …) for the build step.
         framework: v.optional(v.string()),
@@ -88,6 +99,9 @@ export default defineSchema({
         // hosted-studio admin proxy (§3) call its /_lunora/admin/*. Should be
         // envelope-encrypted at rest (§7) — stored plain here for the scaffold.
         adminToken: v.optional(v.string()),
+        // Stable (unversioned) script label — the project's public subdomain.
+        // The dispatcher resolves alias → the project's active versioned script.
+        alias: v.optional(v.string()),
         // Preview deployments carry the originating git branch (§2.3).
         branch: v.optional(v.string()),
         // The tenant's compiled cron expressions (wrangler `triggers.crons`). WfP
@@ -104,13 +118,27 @@ export default defineSchema({
         kind: deploymentKind,
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
-        // Dispatch-namespace script id this deployment provisioned.
+        // Dispatch-namespace script id this deployment provisioned. Versioned
+        // per release (`{alias}-v{version}`) so every deployment is immutable
+        // and rollback is a pointer swap (GAPS.md A1).
         scriptName: v.string(),
         status: deploymentStatus,
         updatedAt: v.number(),
         url: v.optional(v.string()),
+        // Monotonic release number per (project, kind).
+        version: v.optional(v.number()),
+        // Phase-transition timestamps (GAPS.md A2) — status history for free.
+        queuedAt: v.optional(v.number()),
+        provisioningAt: v.optional(v.number()),
+        verifyingAt: v.optional(v.number()),
+        liveAt: v.optional(v.number()),
+        supersededAt: v.optional(v.number()),
+        failedAt: v.optional(v.number()),
+        destroyedAt: v.optional(v.number()),
     })
         .global()
+        // Dispatcher resolves a stable alias → the project's active script.
+        .index("by_alias", ["alias"])
         .index("by_kind", ["kind"])
         .index("by_project", ["projectId"])
         // Dispatcher resolves a request's script id → org plan via this index.

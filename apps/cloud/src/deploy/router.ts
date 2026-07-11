@@ -308,6 +308,36 @@ const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): 
 };
 
 /**
+ * `GET /v1/tenants/route?alias=&lt;label>` — resolve a stable subdomain alias to
+ * the project's active versioned script (the blue/green pointer, GAPS.md A1).
+ * Bearer-gated with `LUNORA_ADMIN_TOKEN`, same trust model as the plan lookup.
+ */
+const handleTenantRouteRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const authorization = request.headers.get("authorization") ?? "";
+    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+
+    if (!environment.LUNORA_ADMIN_TOKEN || token !== environment.LUNORA_ADMIN_TOKEN) {
+        return jsonError(401, "unauthorized");
+    }
+
+    const alias = new URL(request.url).searchParams.get("alias");
+
+    if (!alias) {
+        return jsonError(400, "alias is required");
+    }
+
+    const result = await context.runQuery<null | { scriptName: string }>(api.deployments.routeForAlias, { alias });
+
+    return Response.json(result ?? { scriptName: null });
+};
+
+/**
  * The control-plane HTTP API, mounted as the worker's `httpRouter` (lowest-
  * priority matcher). Routes `POST /v1/{deploy,github/webhook,admin,usage,
  * billing/webhook,invitations/send}` and 404s the rest. The worker injects the
@@ -338,8 +368,13 @@ export const createDeployRouter = (): HttpRouterLike => {
         const provisioner = createCloudflareProvisioner({ api: cloudflareApi, urlForScript: (scriptName) => `https://${scriptName}.${appDomain}` });
 
         const backend: DeployBackend = {
-            createDeployment: async ({ adminToken, branch, key, kind, organizationId, projectId, scriptName }) => {
-                const deploymentId = await context.runMutation<string>(api.deployments.create, {
+            // Health-checked blue/green release: swap the stable-URL pointer
+            // and supersede the previous live deployment (GAPS.md A1).
+            activateDeployment: async ({ deploymentId, key }) => {
+                await context.runMutation(api.deployments.activate, { deployKey: key, id: deploymentId });
+            },
+            createDeployment: ({ adminToken, branch, key, kind, organizationId, projectId, scriptName }) =>
+                context.runMutation<{ deploymentId: string; scriptName: string; version: number }>(api.deployments.create, {
                     adminToken,
                     branch,
                     deployKey: key,
@@ -347,10 +382,7 @@ export const createDeployRouter = (): HttpRouterLike => {
                     organizationId,
                     projectId,
                     scriptName,
-                });
-
-                return { deploymentId };
-            },
+                }),
             updateStatus: async ({ bundleHash, deploymentId, key, status, url: deployedUrl }) => {
                 await context.runMutation(api.deployments.updateStatus, { bundleHash, deployKey: key, id: deploymentId, status, url: deployedUrl });
             },
@@ -364,19 +396,72 @@ export const createDeployRouter = (): HttpRouterLike => {
 
                 const rows = await context.runQuery<EncryptedSecretRow[]>(api.secrets.listEncrypted, { deployKey: key, organizationId, projectId });
                 const entries = await Promise.all(
-                    rows.map(
-                        async (row): Promise<[string, string]> => [
-                            row.name,
-                            await decryptSecret(environment.SECRET_ENCRYPTION_KEY as string, { ciphertext: row.ciphertext, iv: row.iv }),
-                        ],
-                    ),
+                    rows.map(async (row): Promise<[string, string]> => [
+                        row.name,
+                        await decryptSecret(environment.SECRET_ENCRYPTION_KEY as string, { ciphertext: row.ciphertext, iv: row.iv }),
+                    ]),
                 );
 
                 return Object.fromEntries(entries);
             },
         };
 
-        return handleDeployRequest(request, { backend, cell, dispatchNamespace: (kind) => `lunora-${kind}`, provisioner, scheduler });
+        // Probe the freshly uploaded script before the pointer swap (GAPS.md
+        // A1): any response below 500 counts as healthy (the app may 404 its
+        // root route); a network error or 5xx fails the release.
+        const healthCheck = async (url: string): Promise<boolean> => {
+            try {
+                const response = await fetch(url, { method: "GET" });
+
+                return response.status < 500;
+            } catch {
+                return false;
+            }
+        };
+
+        return handleDeployRequest(request, { backend, cell, dispatchNamespace: (kind) => `lunora-${kind}`, healthCheck, provisioner, scheduler });
+    };
+
+    // POST /v1/deployments/rollback — swap the stable URL back to a retained
+    // release (GAPS.md A1). Deploy-key bearer authorized; body carries the
+    // target deployment + org.
+    const handleRollbackRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+        const context = environment.__lunoraCtx;
+
+        if (!context) {
+            return jsonError(500, "lunora context unavailable");
+        }
+
+        const authorization = request.headers.get("authorization") ?? "";
+        const key = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+
+        if (!key) {
+            return jsonError(401, "missing bearer deploy key");
+        }
+
+        let body: { deploymentId?: string; organizationId?: string };
+
+        try {
+            body = await request.json();
+        } catch {
+            return jsonError(400, "invalid JSON body");
+        }
+
+        if (!body.deploymentId || !body.organizationId) {
+            return jsonError(400, "deploymentId and organizationId are required");
+        }
+
+        try {
+            const result = await context.runMutation<{ scriptName: string; version?: number }>(api.deployments.rollback, {
+                deployKey: key,
+                id: body.deploymentId,
+                organizationId: body.organizationId,
+            });
+
+            return Response.json({ ok: true, ...result });
+        } catch (error) {
+            return jsonError(403, error instanceof Error ? error.message : "rollback failed");
+        }
     };
 
     // POST route table — keeps the `fetch` dispatcher flat (one lookup, no
@@ -385,6 +470,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         "/v1/admin": handleAdminRoute,
         "/v1/billing/webhook": handleBillingWebhookRoute,
         "/v1/deploy": handleDeployRoute,
+        "/v1/deployments/rollback": handleRollbackRoute,
         "/v1/github/webhook": handleWebhookRoute,
         "/v1/invitations/send": handleInviteRoute,
         "/v1/secrets": handleSecretRoute,
@@ -424,6 +510,10 @@ export const createDeployRouter = (): HttpRouterLike => {
 
             if (request.method === "GET" && url.pathname === "/v1/tenants/plan") {
                 return handleTenantPlanRoute(request, routerEnv);
+            }
+
+            if (request.method === "GET" && url.pathname === "/v1/tenants/route") {
+                return handleTenantRouteRoute(request, routerEnv);
             }
 
             const handler = request.method === "POST" ? postRoutes[url.pathname] : undefined;
