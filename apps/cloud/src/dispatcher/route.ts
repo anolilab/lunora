@@ -15,6 +15,8 @@ export interface TenantRoute {
 export interface ResolveTenantOptions {
     /** The platform apex, e.g. `lunora.app`. */
     appDomain: string;
+    /** Resolve a stable alias to the active versioned script (blue/green pointer, GAPS.md A1); null falls back to the literal label (previews, legacy rows). */
+    resolveAlias?: (label: string) => Promise<null | string>;
     /** Resolve a custom (non-apex) hostname to a script id, or null if unknown. */
     resolveCustomDomain?: (hostname: string) => Promise<null | string>;
     /** Resolve a script id to its org's plan name (for per-plan runtime limits). */
@@ -30,7 +32,13 @@ export const resolveTenant = async (hostname: string, options: ResolveTenantOpti
             const label = host.slice(0, -suffix.length);
 
             // Single-label subdomains only (`proj.lunora.app`, not `a.b.lunora.app`).
-            return label !== "" && !label.includes(".") ? label : null;
+            if (label === "" || label.includes(".")) {
+                return null;
+            }
+
+            // Stable alias → active versioned script; a miss means the label
+            // is itself a script id (previews carry their own unique names).
+            return (await options.resolveAlias?.(label)) ?? label;
         }
 
         return (await options.resolveCustomDomain?.(host)) ?? null;
@@ -59,6 +67,46 @@ export interface PlanResolverOptions {
     /** Cache TTL in ms. Defaults to 60s. */
     ttlMs?: number;
 }
+
+/**
+ * Build a cached `resolveAlias` that asks the control plane for the active
+ * versioned script behind a stable alias (`GET /v1/tenants/route`, GAPS.md A1).
+ * Same TTL-cache + fail-open shape as {@link createPlanResolver}: a miss or
+ * control-plane blip resolves to `null`, which falls back to the literal label.
+ */
+export const createRouteResolver = (options: PlanResolverOptions): ((label: string) => Promise<null | string>) => {
+    const fetchImpl = options.fetch ?? fetch;
+    const now = options.now ?? Date.now;
+    const ttl = options.ttlMs ?? 60_000;
+    const cache = new Map<string, { expires: number; scriptName: null | string }>();
+
+    return async (label: string): Promise<null | string> => {
+        const cached = cache.get(label);
+
+        if (cached && cached.expires > now()) {
+            return cached.scriptName;
+        }
+
+        try {
+            const url = `${options.controlPlaneUrl}/v1/tenants/route?alias=${encodeURIComponent(label)}`;
+            const response = await fetchImpl(url, { headers: { authorization: `Bearer ${options.controlPlaneToken}` } });
+
+            if (!response.ok) {
+                return null;
+            }
+
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
+            const { scriptName } = (await response.json()) as { scriptName?: null | string };
+            const resolved = typeof scriptName === "string" ? scriptName : null;
+
+            cache.set(label, { expires: now() + ttl, scriptName: resolved });
+
+            return resolved;
+        } catch {
+            return null;
+        }
+    };
+};
 
 /**
  * Build a cached `resolvePlan` that asks the control plane for a script's plan

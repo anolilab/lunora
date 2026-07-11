@@ -1,5 +1,5 @@
 import type { DeployEvent, DeployResult } from "../deploy/client";
-import { deployToCloud } from "../deploy/client";
+import { deployToCloud, rollbackDeployment } from "../deploy/client";
 import type { CliConfig, ConfigStore } from "./config";
 
 /**
@@ -64,4 +64,28 @@ export const deploy = async (
         },
         onEvent,
     );
+};
+
+/**
+ * `lunora rollback` — point the linked project's stable URL back at a retained
+ * release (GAPS.md A1). Requires a prior `login`; the org comes from the input
+ * (the CLI resolves it from the linked project's context).
+ */
+export const rollback = async (
+    store: ConfigStore,
+    input: { deploymentId: string; organizationId: string },
+    rollbackFunction: typeof rollbackDeployment = rollbackDeployment,
+): Promise<{ scriptName: string; version?: number }> => {
+    const config = await store.read();
+
+    if (!config.apiUrl || !config.deployKey) {
+        throw new Error("not logged in — run `lunora login` first");
+    }
+
+    return rollbackFunction({
+        apiUrl: config.apiUrl,
+        deploymentId: input.deploymentId,
+        deployKey: config.deployKey,
+        organizationId: input.organizationId,
+    });
 };
