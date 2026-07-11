@@ -40,6 +40,7 @@ export interface ApiTypes {
     };
     domains: {
         add: FunctionReference<"mutation", { hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string }, { id: Id<"domains">; txtName: string; txtToken: string; }>;
+        get: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, null | { _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
         list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
         markVerified: FunctionReference<"mutation", { customHostnameId?: string; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }, void>;
         remove: FunctionReference<"mutation", { id: Id<"domains">; organizationId: Id<"organizations"> }, void>;
