@@ -20,6 +20,10 @@ crons.interval("rollup platform usage", { hours: 1 }, internal.usage.rollup, {})
 // recovered ones (GAPS.md C1 abuse/bill-shock control).
 crons.interval("enforce spend caps", { hours: 1 }, internal.usage.enforceSpendCaps, {});
 
+// Dunning (GAPS.md C2): payment failure → 14-day grace → suspend; recovery
+// lifts only dunning suspensions.
+crons.interval("enforce dunning", { hours: 6 }, internal.billing.enforceDunning, {});
+
 // Prune tenant runtime logs past the 48h retention window (GAPS.md B2).
 crons.interval("prune tenant logs", { hours: 6 }, internal.logs.prune, {});
 

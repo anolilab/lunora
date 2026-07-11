@@ -37,6 +37,7 @@ export const LUNORA_CRONS: Record<string, ReadonlyArray<LunoraCronJob>> = {
         { name: "rollup platform usage", functionPath: "usage:rollup", args: {} },
     ],
     "0 */6 * * *": [
+        { name: "enforce dunning", functionPath: "billing:enforceDunning", args: {} },
         { name: "prune tenant logs", functionPath: "logs:prune", args: {} },
     ],
     "0 */12 * * *": [

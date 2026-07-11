@@ -49,6 +49,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "audit_log:list": lunora_audit_log_0.list as unknown as RegisteredLunoraFunction,
     "audit_log:record": lunora_audit_log_0.record as unknown as RegisteredLunoraFunction,
     "billing:checkout": lunora_billing_1.checkout as unknown as RegisteredLunoraFunction,
+    "billing:enforceDunning": lunora_billing_1.enforceDunning as unknown as RegisteredLunoraFunction,
     "billing:entitlements": lunora_billing_1.entitlements as unknown as RegisteredLunoraFunction,
     "billing:portal": lunora_billing_1.portal as unknown as RegisteredLunoraFunction,
     "billing:processWebhook": lunora_billing_1.processWebhook as unknown as RegisteredLunoraFunction,
@@ -589,6 +590,7 @@ export interface Caller {
     };
     billing: {
         checkout: (args: { cancelUrl: string; organizationId: Id<"organizations">; priceId: string; successUrl: string }) => Promise<{ url: string; }>;
+        enforceDunning: (args?: {}) => Promise<{ graced: number; recovered: number; suspended: number; }>;
         entitlements: (args: { organizationId: Id<"organizations"> }) => Promise<{ features: string[]; limits: Record<"members" | "previewDeployments" | "projects", number>; plans: string[]; }>;
         portal: (args: { organizationId: Id<"organizations">; returnUrl: string }) => Promise<{ url: string; }>;
         processWebhook: (args: { body: string; signature: string }) => Promise<{ applied: boolean; status: number; }>;
@@ -658,7 +660,7 @@ export interface Caller {
     };
     organizations: {
         cancelDeletion: (args: { organizationId: Id<"organizations"> }) => Promise<void>;
-        create: (args: { cellId: Id<"cells">; name: string; plan?: "free" | "pro" | "enterprise"; slug: string }) => Promise<Id<"organizations">>;
+        create: (args: { cellId?: Id<"cells">; jurisdiction?: string; name: string; plan?: "free" | "pro" | "enterprise"; slug: string }) => Promise<Id<"organizations">>;
         getBySlug: (args: { slug: string }) => Promise<null | { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }>;
         list: (args?: {}) => Promise<{ _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }[]>;
         purgeDeleted: (args?: {}) => Promise<{ purged: number; }>;
@@ -706,6 +708,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     billing: {
         checkout: (args) => callRegistered(context, "billing:checkout", args),
+        enforceDunning: (args) => callRegistered(context, "billing:enforceDunning", args),
         entitlements: (args) => callRegistered(context, "billing:entitlements", args),
         portal: (args) => callRegistered(context, "billing:portal", args),
         processWebhook: (args) => callRegistered(context, "billing:processWebhook", args),
