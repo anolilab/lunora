@@ -1,3 +1,4 @@
+import type { TableDefinition } from "@lunora/server";
 import { defineTable, initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
@@ -18,8 +19,15 @@ const EDGES_TABLE: "agent_edges" = `${AGENT_EXTENSION_KEY}_${EDGES_BARE_TABLE}`;
  * extracted in one conversation is traversable in the next, and `.public()` +
  * RLS-exempt like the thread tables (package code, access-controlled inside the
  * dispatched functions).
+ *
+ * Explicitly typed as a `Record` of `TableDefinition` values because it is an
+ * EXPORTED const with computed (`[BARE]`) keys — under `--isolatedDeclarations`
+ * (packem's `.d.ts` emit) a bare exported object literal with computed keys
+ * can't have its type inferred (TS9038). The annotation erases nothing that
+ * matters: the consumer (`agentExtension`) is already typed `SchemaExtension`,
+ * and codegen discovers these tables at runtime.
  */
-const graphTables = {
+const graphTables: Record<string, TableDefinition> = {
     /**
      * Graph-memory nodes — one per normalized entity name per owner. `weight` is
      * salience (last-write-wins, absolute set → replay-idempotent),
