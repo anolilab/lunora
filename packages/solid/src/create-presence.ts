@@ -1,6 +1,7 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { createSignal, onCleanup, onMount } from "solid-js";
 
+import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./context";
 
 /**
@@ -52,18 +53,6 @@ interface CreatePresenceResult<L extends ListPresentReference> {
     setData: (data: Record<string, unknown> | undefined) => void;
 }
 
-/** Best-effort unique id for a presence session. */
-const makeSessionId = (): string => {
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- crypto is a browser global, not just a Node built-in; guarded for SSR environments
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- same guard as above
-        return crypto.randomUUID();
-    }
-
-    // eslint-disable-next-line sonarjs/pseudo-random -- presence session id, not a credential
-    return `sess-${Math.random().toString(36).slice(2)}-${String(Date.now())}`;
-};
-
 const DEFAULT_INTERVAL_MS = 10_000;
 
 const createPresence = <H extends HeartbeatReference, L extends ListPresentReference>(
@@ -73,7 +62,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     const client = useLunora();
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
-    const sessionId = options.sessionId ?? makeSessionId();
+    const sessionId = options.sessionId ?? randomSessionId();
 
     const [present, setPresent] = createSignal<ReturnOf<L> | undefined>(undefined);
 

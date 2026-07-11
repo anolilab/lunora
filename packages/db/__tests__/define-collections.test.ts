@@ -1,6 +1,6 @@
 /* eslint-disable no-underscore-dangle -- `_id`/`_creationTime` are Lunora document fields the fixtures mirror */
-import type { OfflineExecutor } from "@tanstack/offline-transactions";
 import { LunoraError } from "@lunora/errors";
+import type { OfflineExecutor } from "@tanstack/offline-transactions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollections } from "../src";
@@ -23,7 +23,7 @@ interface SubscribeCall {
 /** A mock `LunoraClient` recording every `subscribe`, with a configurable `mutation`. */
 const makeClient = (mutation: () => Promise<unknown> = async () => "server-id") => {
     const subscribes: SubscribeCall[] = [];
-    const mutationMock = vi.fn<(reference: unknown, args: Record<string, unknown>) => Promise<unknown>>(mutation);
+    const mutationMock = vi.fn<(reference: unknown, args: Record<string, unknown>, options?: { mutationId?: string }) => Promise<unknown>>(mutation);
     const client = {
         // The list-path row callback advances the checkpoint registry from this
         // (server-confirmed custom-mutator watermark); no custom mutators here → 0.
@@ -224,8 +224,39 @@ describe(defineCollections, () => {
         });
 
         // `toArgs` maps the optimistic row's `_id` onto the mutation's `id` arg, so
-        // a retry replays the same clientId and the server can dedupe it.
-        expect(mutation).toHaveBeenCalledWith(messagesSend, { channelId: "c1", id, text: "hi" });
+        // a retry replays the same clientId and the server can dedupe it — and the
+        // write also carries a stable `mutationId` (the executor's idempotency key)
+        // so the server dedupes a committed-but-unacked retry at the transport
+        // layer, not only by the app's manual `id`-arg dedup.
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- test fixture id from a mocked runtime
+        expect(mutation).toHaveBeenCalledWith(messagesSend, { channelId: "c1", id, text: "hi" }, { mutationId: expect.any(String) });
+    });
+
+    it("passes a stable idempotency key on the insert replay so a retry dedupes", async () => {
+        expect.hasAssertions();
+
+        const { client, mutation } = makeClient();
+        const database = build(client);
+
+        database.collections.messages.subscribeChanges(() => {});
+        database.scope.messages({ channelId: "c1" });
+        await database.executor.waitForInit();
+        await flush();
+
+        database.actions.messages({ channelId: "c1", text: "hi" });
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        // The write carries an explicit `mutationId` — the executor's stable
+        // idempotency key, NOT a fresh id minted per call — so a committed-but-
+        // unacked write the outbox retries resends the same `x-lunora-mutation-id`
+        // and the server dedupes it instead of inserting the row twice.
+        const options = mutation.mock.calls[0]?.[2];
+
+        expect(options?.mutationId).toBeTypeOf("string");
+        expect((options?.mutationId ?? "").length).toBeGreaterThan(0);
     });
 
     it("reports a permanently-rejected write on onWriteRejected (fire-and-forget safe)", async () => {
@@ -310,5 +341,55 @@ describe(defineCollections, () => {
         // The user's onError fired and the collection left `loading` (not stuck).
         expect(onError).toHaveBeenCalledWith({ code: "forbidden", message: "denied" });
         expect(database.collections.users.status).not.toBe("loading");
+    });
+
+    it("mints an action id in a non-secure context (crypto.randomUUID unavailable)", async () => {
+        expect.hasAssertions();
+
+        // Simulate a plain-HTTP dev/LAN origin: `crypto.randomUUID` is gated
+        // (undefined) but `crypto.getRandomValues` still works, so `safeRandomUUID`
+        // must fall back. A bare `crypto.randomUUID()` here would throw and break
+        // every `db.actions.*` call.
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- test stubs globalThis.crypto to exercise the non-secure-context fallback
+        const realCrypto = globalThis.crypto;
+        const nonSecureCrypto = new Proxy(realCrypto, {
+            get(target, property) {
+                if (property === "randomUUID") {
+                    return undefined;
+                }
+
+                const value = Reflect.get(target, property) as unknown;
+
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- Reflect.get over a stubbed crypto proxy
+                return typeof value === "function" ? value.bind(target) : value;
+            },
+        });
+
+        vi.stubGlobal("crypto", nonSecureCrypto);
+
+        try {
+            // Keep the send in-flight so the optimistic row isn't settled away.
+            const { client } = makeClient(
+                () =>
+                    new Promise(() => {
+                        /* never settles */
+                    }),
+            );
+            const database = build(client);
+
+            database.collections.messages.subscribeChanges(() => {});
+            database.scope.messages({ channelId: "c1" });
+            await database.executor.waitForInit();
+            await flush();
+
+            const { id } = database.actions.messages({ channelId: "c1", text: "hi" });
+            await flush();
+
+            expect(id).toBeTypeOf("string");
+            expect(id.length).toBeGreaterThan(0);
+            expect(database.collections.messages.get(id)).toMatchObject({ channelId: "c1", text: "hi" });
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });

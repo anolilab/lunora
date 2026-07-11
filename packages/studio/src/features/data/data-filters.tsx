@@ -21,18 +21,41 @@ const OPERATORS: ReadonlyArray<{ label: string; value: FilterOperator }> = [
 ];
 
 /**
+ * Coerce a filter value to a number ONLY when it is a *canonical* number literal —
+ * i.e. it round-trips exactly (`String(Number(v)) === v`) and is finite. This keeps
+ * `age > 18` numeric while leaving numeric-LOOKING strings that are not canonical
+ * literals as strings: leading-zero codes (`"00123"`), zip codes, hex (`"0x10"`),
+ * exponent shorthand (`"1e3"`), and `"Infinity"` all stay text. That matters because
+ * the server binds the value against a `json_extract(__doc__, …)` expression, which
+ * has no SQL type affinity — a number bound against a stored TEXT value never matches
+ * (`123 = "00123"` is false), so an `eq`/`ne` on such a column (or a facet-value
+ * click for it) would silently return zero rows if we coerced. A genuinely-numeric
+ * value (`"123"`, `"12.5"`, `"-4"`) still coerces so numeric columns compare right.
+ */
+const coerceFilterValue = (value: string): number | string => {
+    const trimmed = value.trim();
+    const asNumber = Number(trimmed);
+
+    return trimmed !== "" && Number.isFinite(asNumber) && String(asNumber) === trimmed ? asNumber : value;
+};
+
+/**
  * Convert the UI's string-valued filter rows into wire {@link FilterClause}s:
- * drops rows with no column, and coerces a numeric string to a number for the
- * comparison operators (so `age > 18` compares numerically, not lexically).
- * `contains` always stays a string.
+ * drops rows with no column, and coerces a canonical numeric string to a number for
+ * every comparison operator (so `age > 18` compares numerically, not lexically, and
+ * an `eq` on a numeric column still matches — see {@link coerceFilterValue} for why a
+ * numeric-looking but non-canonical string like a zip code stays text). `contains`
+ * always stays a string.
  */
 const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[] =>
     filters
         .filter((filter) => filter.column !== "")
         .map((filter) => {
-            const numeric = filter.operator !== "contains" && filter.value.trim() !== "" && !Number.isNaN(Number(filter.value));
-
-            return { column: filter.column, operator: filter.operator, value: numeric ? Number(filter.value) : filter.value };
+            return {
+                column: filter.column,
+                operator: filter.operator,
+                value: filter.operator === "contains" ? filter.value : coerceFilterValue(filter.value),
+            };
         });
 
 /**

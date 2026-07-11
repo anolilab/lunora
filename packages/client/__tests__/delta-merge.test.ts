@@ -48,6 +48,31 @@ describe("applyDelta", () => {
         expect(applyDelta(current, delta)).toStrictEqual([row("a", { _creationTime: 10 }), row("b", { _creationTime: 20 }), row("c", { _creationTime: 30 })]);
     });
 
+    it("inserts a newest row at the FRONT of a descending (newest-first) list", () => {
+        expect.assertions(1);
+
+        // A newest-first feed: _creationTime descending. A freshly created row
+        // (largest _creationTime) must land at index 0, not be appended to the end.
+        const current = [row("c", { _creationTime: 30 }), row("b", { _creationTime: 20 }), row("a", { _creationTime: 10 })];
+        const delta: MutationDelta = { key: "d", op: "insert", row: row("d", { _creationTime: 40 }), table: "messages" };
+
+        expect(applyDelta(current, delta)).toStrictEqual([
+            row("d", { _creationTime: 40 }),
+            row("c", { _creationTime: 30 }),
+            row("b", { _creationTime: 20 }),
+            row("a", { _creationTime: 10 }),
+        ]);
+    });
+
+    it("inserts mid-list in a descending list, preserving sorted position", () => {
+        expect.assertions(1);
+
+        const current = [row("c", { _creationTime: 30 }), row("a", { _creationTime: 10 })];
+        const delta: MutationDelta = { key: "b", op: "insert", row: row("b", { _creationTime: 20 }), table: "messages" };
+
+        expect(applyDelta(current, delta)).toStrictEqual([row("c", { _creationTime: 30 }), row("b", { _creationTime: 20 }), row("a", { _creationTime: 10 })]);
+    });
+
     it("updates a matching row in place, preserving position", () => {
         expect.assertions(1);
 

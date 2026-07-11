@@ -22,11 +22,14 @@
  * error. Children are arbitrary user workflows — nothing about their bodies
  * changes; only the base class learns to call home.
  */
+import { LunoraError } from "@lunora/errors";
+
 import { NonRetryableError } from "./errors";
 import type {
     BranchCompensationParams,
     WorkflowBranch,
     WorkflowInstanceLike,
+    WorkflowLogger,
     WorkflowParallelFunction,
     WorkflowSpawnFunction,
     WorkflowStepLike,
@@ -76,6 +79,8 @@ interface FanOutDeps {
     env: Record<string, unknown>;
     /** The running workflow's instance id — the parent id stamped into each child. */
     instanceId: string;
+    /** Optional structured logger — used to surface best-effort failures (e.g. a stranded group-saga compensation) without aborting the flow. */
+    log?: WorkflowLogger;
     /** Allocate the next deterministic child instance id (replay-stable; honors an explicit id). */
     nextChildId: (explicit?: string) => string;
     /** The running workflow's own `WORKFLOW_*` binding name — passed to children so they can signal back. */
@@ -149,20 +154,35 @@ const compensateCompleted = async (
             continue;
         }
 
-        // eslint-disable-next-line no-await-in-loop -- reverse-order group-saga compensation, one durable spawn per completed branch
-        await deps.step.do(`${COMPENSATE_STEP_PREFIX}${done.plan.childId}`, async (): Promise<string> => {
-            const compensateId = `${done.plan.childId}:compensate`;
-            const compensationParams: BranchCompensationParams = {
-                branch: done.plan.item.workflow,
-                error,
-                index: done.plan.index,
-                output: done.output,
-            };
+        try {
+            // Resolve the compensation binding OUTSIDE the durable step: a missing or
+            // typo'd `compensateWith` export throws deterministically here (no wasted
+            // step retries on an error that can never succeed) and is caught below.
+            const compensation = deps.resolveBinding(compensateWith);
 
-            await deps.resolveBinding(compensateWith).create({ id: compensateId, params: compensationParams });
+            // eslint-disable-next-line no-await-in-loop -- reverse-order group-saga compensation, one durable spawn per completed branch
+            await deps.step.do(`${COMPENSATE_STEP_PREFIX}${done.plan.childId}`, async (): Promise<string> => {
+                const compensateId = `${done.plan.childId}:compensate`;
+                const compensationParams: BranchCompensationParams = {
+                    branch: done.plan.item.workflow,
+                    error,
+                    index: done.plan.index,
+                    output: done.output,
+                };
 
-            return compensateId;
-        });
+                await compensation.create({ id: compensateId, params: compensationParams });
+
+                return compensateId;
+            });
+        } catch (compensationError: unknown) {
+            // A single failed compensation (unresolvable binding, create rejection)
+            // must not strand the earlier-declared siblings' rollbacks nor mask the
+            // original group failure — log it and continue the reverse loop.
+            deps.log?.error(
+                `ctx.parallel: group-saga compensation "${compensateWith}" for branch "${done.plan.item.workflow}" (#${String(done.plan.index)}) failed`,
+                compensationError,
+            );
+        }
     }
 };
 
@@ -202,6 +222,23 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
             return { childId, eventType: `${BRANCH_EVENT_PREFIX}${childId}`, index, item };
         });
 
+        // Reject duplicate child ids up front. Two branches resolving to the same id
+        // (a repeated explicit `id`, or an explicit id colliding with a derived one)
+        // share a spawn/await/event step name, so `step.do` memoization would silently
+        // drop the second spawn and both joins would wait on the same event — wrong
+        // output or a hang. Fail loud and non-retryable instead.
+        const seenIds = new Set<string>();
+
+        for (const plan of planned) {
+            if (seenIds.has(plan.childId)) {
+                throw new NonRetryableError(
+                    `ctx.parallel: duplicate branch id "${plan.childId}" — each branch in a group must resolve to a unique child instance id (check explicit \`id\` options)`,
+                );
+            }
+
+            seenIds.add(plan.childId);
+        }
+
         // 1. Spawn all branches concurrently. `step.do` memoizes by name, so the
         //    create runs exactly once across replays/restarts.
         await Promise.all(
@@ -224,12 +261,30 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
         const completed: { output: unknown; plan: PlannedBranch }[] = [];
 
         for (const plan of planned) {
-            // eslint-disable-next-line no-await-in-loop -- sequential, ordered join; per-type event buffering keeps wall-clock at max(branch), not the sum
-            const event = await deps.step.waitForEvent<BranchOutcome>(`${AWAIT_STEP_PREFIX}${plan.childId}`, {
-                timeout: plan.item.timeout,
-                type: plan.eventType,
-            });
-            const outcome = event.payload;
+            let outcome: BranchOutcome;
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- sequential, ordered join; per-type event buffering keeps wall-clock at max(branch), not the sum
+                const event = await deps.step.waitForEvent<BranchOutcome>(`${AWAIT_STEP_PREFIX}${plan.childId}`, {
+                    timeout: plan.item.timeout,
+                    type: plan.eventType,
+                });
+
+                outcome = event.payload;
+            } catch (joinError: unknown) {
+                // The join itself failed — the per-branch `timeout` elapsed because
+                // the child was terminated (or its parent binding was absent, so its
+                // signal no-op'd) before it could report back. Roll back the
+                // already-completed siblings before failing the group, exactly as a
+                // reported branch error does; otherwise a timed-out join would strand
+                // their compensations.
+                const joinFailure = serializeError(joinError);
+
+                // eslint-disable-next-line no-await-in-loop -- compensation must finish before the group's terminal throw
+                await compensateCompleted(deps, completed, joinFailure);
+
+                throw new NonRetryableError(`ctx.parallel: branch "${plan.item.workflow}" (#${String(plan.index)}) join failed: ${joinFailure.message}`);
+            }
 
             if (outcome.status === "error") {
                 // Group saga: roll back completed siblings before failing the group.
@@ -257,6 +312,12 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
 const createSpawn =
     (deps: FanOutDeps): WorkflowSpawnFunction =>
     async (workflow: string, params?: Record<string, unknown>, options?: { id?: string }): Promise<WorkflowInstanceLike> => {
+        // Reject a caller-supplied reserved branch marker at the trust boundary —
+        // only `createParallel`'s internal injection may set `__lunoraBranch`.
+        if (params !== undefined && Object.hasOwn(params, BRANCH_MARKER_KEY)) {
+            throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params may not contain the reserved key "${BRANCH_MARKER_KEY}"`);
+        }
+
         const childId = deps.nextChildId(options?.id);
 
         await deps.step.do(`${SPAWN_STEP_PREFIX}${childId}`, async (): Promise<string> => {
@@ -295,6 +356,14 @@ const extractBranchMarker = (payload: unknown): BranchMarker | undefined => {
         typeof candidate.parentId !== "string" ||
         typeof candidate.index !== "number"
     ) {
+        return undefined;
+    }
+
+    // Defense-in-depth: even if a marker slips past the create-surface guard,
+    // constrain the parent dereference to a `WORKFLOW_*` binding and the send to
+    // the branch event namespace. Legitimate markers always satisfy both
+    // (createParallel builds `WORKFLOW_*` bindings and `lunora:branch:*` types).
+    if (!candidate.parentBinding.startsWith("WORKFLOW_") || !candidate.eventType.startsWith(BRANCH_EVENT_PREFIX)) {
         return undefined;
     }
 
@@ -342,6 +411,26 @@ const signalBranchParent = async (
     });
 };
 
+/**
+ * A never-throwing wrapper over {@link signalBranchParent}. A failed parent signal —
+ * the parent instance was terminated, or `sendEvent` rejects after its durable
+ * step retries — must not become the child's own recorded failure (success path)
+ * nor mask the handler's real error (error path). The parent simply falls back to
+ * its `waitForEvent` timeout when the signal is lost. The failure is logged when a
+ * logger is provided.
+ */
+const signalBranchParentSafe = async (
+    deps: { env: Record<string, unknown>; log?: WorkflowLogger; step: WorkflowStepLike },
+    marker: BranchMarker,
+    outcome: BranchOutcome,
+): Promise<void> => {
+    try {
+        await signalBranchParent(deps, marker, outcome);
+    } catch (signalError: unknown) {
+        deps.log?.error(`@lunora/workflow: failed to signal branch parent "${marker.parentId}" (event "${marker.eventType}")`, signalError);
+    }
+};
+
 export type { BranchMarker, BranchOutcome, FanOutDeps, WorkflowBindingResolver };
 export {
     branch,
@@ -353,5 +442,6 @@ export {
     MAX_BRANCHES,
     okOutcome,
     signalBranchParent,
+    signalBranchParentSafe,
     stripBranchMarker,
 };

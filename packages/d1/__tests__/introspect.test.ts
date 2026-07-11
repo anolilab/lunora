@@ -163,6 +163,38 @@ describe("d1 introspect", () => {
                 readGlobalTablePage(harness.exec, schema, { filters: [{ column: "nope", value: "x" }], table: "organizations" }),
             ).rejects.toMatchObject({ code: "UNKNOWN_COLUMN" });
         });
+
+        it("rejects an eq filter on a sensitive external column (no equality oracle past the redaction)", async () => {
+            expect.assertions(2);
+
+            // A correct guess and a wrong guess both throw the same 403 — the `total`
+            // never leaks whether `passwordHash = <guess>` matched a real row.
+            await expect(
+                readGlobalTablePage(harness.exec, schema, { filters: [{ column: "passwordHash", value: "super-secret-hash" }], table: "user" }),
+            ).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+
+            await expect(
+                readGlobalTablePage(harness.exec, schema, { filters: [{ column: "passwordHash", value: "wrong-guess" }], table: "user" }),
+            ).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+        });
+
+        it("allows an eq filter on a non-sensitive external column", async () => {
+            expect.assertions(2);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { filters: [{ column: "email", value: "ada@example.com" }], table: "user" });
+
+            expect(page.total).toBe(1);
+            expect(page.rows[0]).toMatchObject({ email: "ada@example.com", id: "u1", passwordHash: "•••" });
+        });
+
+        it("allows an eq filter on a schema `.global()` table (not redacted, so the guard is bypassed)", async () => {
+            expect.assertions(2);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { filters: [{ column: "name", value: "Acme" }], table: "organizations" });
+
+            expect(page.total).toBe(1);
+            expect(page.rows[0]).toMatchObject({ _id: "o1", name: "Acme" });
+        });
     });
 
     describe("facetGlobalColumn", () => {
@@ -229,6 +261,33 @@ describe("d1 introspect", () => {
 
             // Never groups by the real secret — one masked bucket counting the rows.
             expect(facet.values).toEqual([{ count: 1, value: "•••" }]);
+        });
+
+        it("rejects an eq filter on a sensitive external column (facet path shares the guard, no count oracle)", async () => {
+            expect.assertions(2);
+
+            // Faceting a benign column while filtering on the redacted `passwordHash`
+            // routes through buildEqPredicate — a correct and a wrong guess both 403,
+            // so the masked-bucket count never confirms a value.
+            await expect(
+                facetGlobalColumn(harness.exec, schema, { column: "email", filters: [{ column: "passwordHash", value: "super-secret-hash" }], table: "user" }),
+            ).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+
+            await expect(
+                facetGlobalColumn(harness.exec, schema, { column: "email", filters: [{ column: "passwordHash", value: "wrong-guess" }], table: "user" }),
+            ).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+        });
+
+        it("allows a facet filter on a non-sensitive external column", async () => {
+            expect.assertions(1);
+
+            const facet = await facetGlobalColumn(harness.exec, schema, {
+                column: "email",
+                filters: [{ column: "email", value: "ada@example.com" }],
+                table: "user",
+            });
+
+            expect(facet.values).toEqual([{ count: 1, value: "ada@example.com" }]);
         });
 
         it("rejects an unknown column", async () => {

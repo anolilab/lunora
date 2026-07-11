@@ -1,5 +1,6 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
+import { LunoraError } from "@lunora/errors";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { onScopeDispose, ref, toValue, watch } from "vue";
 
@@ -49,7 +50,13 @@ const useSubscription = <F extends FunctionReference>(
                         error.value = undefined;
                     },
                     onError: (subscriptionError) => {
-                        error.value = new Error(subscriptionError.message);
+                        // Preserve the server-supplied `code` so consumers of the
+                        // `error` ref can branch on the error kind (UNAUTHORIZED
+                        // vs NOT_FOUND, …) instead of only seeing a flat message.
+                        error.value =
+                            subscriptionError.code === undefined
+                                ? new Error(subscriptionError.message)
+                                : new LunoraError(subscriptionError.code, subscriptionError.message);
                         data.value = undefined;
                     },
                     onReset: () => {

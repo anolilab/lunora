@@ -210,6 +210,7 @@ const runBackupRestore = async (options: BackupCommandOptions, directory: string
         prod: options.prod,
         token: options.token,
         url: options.url,
+        yes: options.yes,
     });
 
     // Plain snapshot import — the off-platform / portable restore. For in-place

@@ -5,13 +5,41 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { BRANCH_MARKER_KEY } from "./fan-out";
 import type { LunoraWorkflowsOptions, WorkflowBindingLike, WorkflowCreateOptions, WorkflowHandle, WorkflowInstanceLike, Workflows } from "./types";
+
+/**
+ * Reject any public create whose params carry the reserved branch-marker key.
+ * `__lunoraBranch` is an internal join-callback marker that `ctx.parallel`
+ * injects and a child trusts to address its parent's instance/binding/event; a
+ * caller-supplied marker (forwarding client-controlled args into a create) would
+ * let a forged marker reach a child's `event.payload` and spoof events into an
+ * arbitrary workflow instance. Closing it at the trust boundary keeps user params
+ * free of the reserved key while leaving `createParallel`'s own injection intact.
+ */
+const rejectReservedParams = (options?: WorkflowCreateOptions): void => {
+    const { params } = options ?? {};
+
+    if (params !== undefined && Object.hasOwn(params, BRANCH_MARKER_KEY)) {
+        throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params may not contain the reserved key "${BRANCH_MARKER_KEY}"`);
+    }
+};
 
 /** Wrap a single Cloudflare `Workflow` binding in the {@link WorkflowHandle} surface. */
 const handleFor = (binding: WorkflowBindingLike): WorkflowHandle => {
     return {
-        create: async (options?: WorkflowCreateOptions): Promise<WorkflowInstanceLike> => binding.create(options),
-        createBatch: async (batch: ReadonlyArray<WorkflowCreateOptions>): Promise<WorkflowInstanceLike[]> => binding.createBatch(batch),
+        create: async (options?: WorkflowCreateOptions): Promise<WorkflowInstanceLike> => {
+            rejectReservedParams(options);
+
+            return binding.create(options);
+        },
+        createBatch: async (batch: ReadonlyArray<WorkflowCreateOptions>): Promise<WorkflowInstanceLike[]> => {
+            for (const options of batch) {
+                rejectReservedParams(options);
+            }
+
+            return binding.createBatch(batch);
+        },
         get: async (id: string): Promise<WorkflowInstanceLike> => binding.get(id),
     };
 };

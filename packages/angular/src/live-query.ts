@@ -4,6 +4,7 @@ import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErr
 import { createQuerySubscription } from "@lunora/client/query";
 
 import { resolveLunoraClient } from "./client";
+import { shouldOpenSubscription } from "./platform";
 
 export interface LiveQueryOptions {
     /**
@@ -61,27 +62,33 @@ export const liveQuery = <F extends FunctionReference>(
     options: LiveQueryOptions = {},
 ): Signal<ReturnOf<F> | undefined> => {
     const client = resolveLunoraClient(options.client);
+    const fromInjectionContext = options.destroyRef === undefined;
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
 
     const value = signal<ReturnOf<F> | undefined>(undefined);
 
-    const unsubscribe = createQuerySubscription<F>(
-        client,
-        reference,
-        args,
-        {
-            onData: (next) => {
-                value.set(next);
+    // Skip the socket during SSR: on the Angular server platform the value stays
+    // at its `undefined` seed, matching the "opens its WebSocket lazily in the
+    // browser" contract. The browser render re-runs this and attaches.
+    if (shouldOpenSubscription(fromInjectionContext)) {
+        const unsubscribe = createQuerySubscription<F>(
+            client,
+            reference,
+            args,
+            {
+                onData: (next) => {
+                    value.set(next);
+                },
+                onError: options.onError,
+                onReset: () => {
+                    value.set(undefined);
+                },
             },
-            onError: options.onError,
-            onReset: () => {
-                value.set(undefined);
-            },
-        },
-        { shardKey: options.shardKey },
-    );
+            { shardKey: options.shardKey },
+        );
 
-    destroyRef.onDestroy(unsubscribe);
+        destroyRef.onDestroy(unsubscribe);
+    }
 
     return value.asReadonly();
 };

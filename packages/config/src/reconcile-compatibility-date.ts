@@ -11,10 +11,10 @@ import { writeFileSync } from "node:fs";
 
 import { applyEdits, modify } from "jsonc-parser";
 
+import { FORMATTING } from "./jsonc-edit";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 const WORKERS_CACHE_MIN_DATE = "2026-05-01";
-const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 4 } } as const;
 
 export interface ReconcileCompatibilityDateResult {
     /** `true` when `wrangler.jsonc` was rewritten. */

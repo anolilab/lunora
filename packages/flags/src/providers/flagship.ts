@@ -85,9 +85,26 @@ const flagshipProvider = (options: FlagshipProviderOptions): FlagsProviderFactor
         };
     }
 
-    // HTTP mode carries no env-resolved binding — the provider is constructed
-    // from static config, but we still defer construction to the factory so the
-    // isolate-level memo owns its lifetime.
+    // HTTP mode carries no env-resolved binding, so — unlike binding mode — the
+    // full config is known here. Validate it up front: a misconfiguration must
+    // surface as a directed error at `defineFlags` time, not get swallowed into
+    // silent fail-closed defaults by `createFlags` (which buries any provider
+    // construction/initialize failure in `EvaluationDetails.errorMessage`).
+    const { appId, endpoint } = options;
+
+    if (appId === undefined && endpoint === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            "flagshipProvider: HTTP mode requires either `appId` (the SDK builds the evaluation URL) or `endpoint` (a full evaluation URL). " +
+                'Pass exactly one, or use binding mode: `flagshipProvider({ binding: "FLAGS" })`.',
+        );
+    }
+
+    if (appId !== undefined && endpoint !== undefined) {
+        throw new LunoraError("INTERNAL", "flagshipProvider: `appId` and `endpoint` are mutually exclusive in HTTP mode — pass exactly one.");
+    }
+
+    // Defer construction to the factory so the isolate-level memo owns its lifetime.
     return (): FlagshipServerProvider => new FlagshipServerProvider(options);
 };
 

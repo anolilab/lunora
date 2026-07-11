@@ -19,17 +19,25 @@ interface Migration {
  * journal-based migrations can read the same table without a data migration.
  *
  * - `hash` is the SHA-256 of the migration SQL — content-addressed dedup.
+ * `UNIQUE` so two runners racing the same pending migration (parallel CI
+ * deploys / two isolates on the migrate path) can't both insert the tracking
+ * row: the loser's atomic batch rolls back and its body never double-applies.
  * - `created_at` is wall-clock millis at apply time (NUMERIC per drizzle).
  */
 const TRACKING_TABLE_NAME = "__drizzle_migrations";
-const TRACKING_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${TRACKING_TABLE_NAME} (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL, created_at NUMERIC)`;
+const TRACKING_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${TRACKING_TABLE_NAME} (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, created_at NUMERIC)`;
 
 /** Single whitespace char — used by the trailing-token scan. Hoisted to avoid per-call recompilation. */
 const WHITESPACE_RE = /\s/u;
-/** Trailing `;` (plus whitespace) trimmer applied before submitting SQL to D1. Hoisted to avoid per-call recompilation. */
-const TRAILING_SEMICOLON_RE = /;\s*$/u;
 /** Lowercase hex SHA-256 shape guard before inlining the hash into SQL. Hoisted to avoid per-call recompilation. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
+
+/**
+ * Matches D1/SQLite's `UNIQUE constraint failed: __drizzle_migrations.hash`
+ * error, raised when a concurrent runner inserted the tracking row first. Built
+ * from {@link TRACKING_TABLE_NAME} so it can't drift from the table it guards.
+ */
+const TRACKING_HASH_UNIQUE_RE = new RegExp(String.raw`UNIQUE constraint failed:\s*${TRACKING_TABLE_NAME}\.hash`, "iu");
 
 interface MigrationRunnerResult {
     applied: { name: string; version: number }[];
@@ -53,13 +61,13 @@ interface MigrationRunnerResult {
  * separate `Migration` entries — `batch()` runs them atomically anyway.
  */
 // eslint-disable-next-line sonarjs/cognitive-complexity -- hand-written single-pass SQL lexer; the mode branching is the grammar and inlines more clearly than split helpers sharing cursor state (see @lunora/do data-migration.ts)
-const assertSingleStatement = (migration: Migration): void => {
+const assertSingleStatement = (migration: Migration): number | undefined => {
     const text = migration.sql;
     let inSingle = false;
     let inDouble = false;
     let inLineComment = false;
     let inBlockComment = false;
-    let seenStatement = false;
+    let terminatorIndex: number | undefined;
 
     for (let index = 0; index < text.length; index += 1) {
         const character = text[index];
@@ -107,16 +115,8 @@ const assertSingleStatement = (migration: Migration): void => {
             continue;
         }
 
-        if (character === "'") {
-            inSingle = true;
-            continue;
-        }
-
-        if (character === '"') {
-            inDouble = true;
-            continue;
-        }
-
+        // Comment starts are allowed anywhere, including after the terminating
+        // `;` (a trailing comment), so detect them before the terminator guard.
         if (character === "-" && next === "-") {
             inLineComment = true;
             index += 1;
@@ -129,20 +129,42 @@ const assertSingleStatement = (migration: Migration): void => {
             continue;
         }
 
-        if (character === ";") {
-            // A `;` ends the (only) statement; anything executable after it is
-            // a second statement. Trailing whitespace/comments are allowed.
-            seenStatement = true;
+        // Once the (single) statement's terminating `;` is seen, the only
+        // executable content that may follow is whitespace and comments. Any
+        // other token — a stray second `;`, an opening quote, another statement
+        // — is a second statement. Guarding here (ahead of the string-open and
+        // `;` branches below) closes the holes where `SELECT 1;;` and
+        // `SELECT 1; 'stray'` previously slipped past as "valid".
+        if (terminatorIndex !== undefined) {
+            if (character !== undefined && !WHITESPACE_RE.test(character)) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `Migration "${migration.name}" (v${String(migration.version)}) contains more than one SQL statement. Split it into separate migrations — batch() runs them atomically.`,
+                );
+            }
+
             continue;
         }
 
-        if (seenStatement && character !== undefined && !WHITESPACE_RE.test(character)) {
-            throw new LunoraError(
-                "INTERNAL",
-                `Migration "${migration.name}" (v${String(migration.version)}) contains more than one SQL statement. Split it into separate migrations — batch() runs them atomically.`,
-            );
+        if (character === "'") {
+            inSingle = true;
+            continue;
+        }
+
+        if (character === '"') {
+            inDouble = true;
+            continue;
+        }
+
+        if (character === ";") {
+            // A `;` ends the (only) statement. Record its index so the caller can
+            // strip it plus any trailing comment/whitespace before submitting to
+            // D1, which rejects any content after the statement's terminator.
+            terminatorIndex = index;
         }
     }
+
+    return terminatorIndex;
 };
 
 /**
@@ -203,22 +225,34 @@ class MigrationRunner {
             }
 
             // eslint-disable-next-line no-await-in-loop -- migrations must apply strictly in version order; each applyOne writes the tracking row the next iteration relies on.
-            await this.applyOne(migration, hash);
-            applied.push({ name: migration.name, version: migration.version });
+            const didApply = await this.applyOne(migration, hash);
+
+            // `false` means a concurrent runner won the race and inserted the
+            // tracking row first (UNIQUE(hash) rejected ours, batch rolled back)
+            // — the migration is applied, just not by us, so record it as skipped.
+            if (didApply) {
+                applied.push({ name: migration.name, version: migration.version });
+            } else {
+                skipped.push({ name: migration.name, version: migration.version });
+            }
         }
 
         return { applied, skipped };
     }
 
-    private async applyOne(migration: Migration, hash: string): Promise<void> {
+    private async applyOne(migration: Migration, hash: string): Promise<boolean> {
         // D1 lacks user-level BEGIN/COMMIT, but `batch` runs statements
         // atomically. A migration is required to be a single statement (or
         // a whitespace-only trailing `;`) — a naive split-on-`;` mishandles
         // semicolons inside string literals and comments. Callers wanting
         // multiple statements per file should split them across migrations.
-        assertSingleStatement(migration);
+        const terminatorIndex = assertSingleStatement(migration);
 
-        const statementText = migration.sql.replace(TRAILING_SEMICOLON_RE, "").trim();
+        // Strip from the terminating `;` onward (the lexer's own index) rather
+        // than regex-trimming just the final `;`: a trailing comment after the
+        // `;` would otherwise survive and D1 rejects any content past the
+        // statement. When there's no terminator, submit the whole (trimmed) text.
+        const statementText = (terminatorIndex === undefined ? migration.sql : migration.sql.slice(0, terminatorIndex)).trim();
 
         // Apply the migration body AND write the tracking row in a single
         // atomic `client.batch(...)` so they commit (or roll back) together —
@@ -242,7 +276,22 @@ class MigrationRunner {
 
         const items = [this.client.drizzle.run(sql.raw(statementText)), this.client.drizzle.run(sql.raw(trackingInsertSql))];
 
-        await this.client.batch(items as unknown as Parameters<typeof this.client.batch>[0]);
+        try {
+            await this.client.batch(items as unknown as Parameters<typeof this.client.batch>[0]);
+        } catch (error: unknown) {
+            // A concurrent runner that raced us past the applied-hash read
+            // inserted this tracking hash first; UNIQUE(hash) rejects ours and
+            // D1's atomic batch rolls our migration body back too, so nothing
+            // double-applies. Report it as "applied by the winner" (skip) rather
+            // than surfacing the constraint error.
+            if (TRACKING_HASH_UNIQUE_RE.test(error instanceof Error ? error.message : String(error))) {
+                return false;
+            }
+
+            throw error;
+        }
+
+        return true;
     }
 
     private assertUniqueVersions(): void {

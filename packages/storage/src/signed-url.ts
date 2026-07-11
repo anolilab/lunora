@@ -17,71 +17,14 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { extractHost, fromBase64Url, MAX_SIGNED_URL_TTL_SECONDS, signCanonical, verifyCanonical } from "../../../shared/hmac-url";
+import { trimTrailingSlashes } from "./internal";
 import type { SignedUrlOptions } from "./types";
 
-const textEncoder = new TextEncoder();
-
-/** Upper bound on a signed-URL TTL — 7 days, matching common CDN/object-store ceilings. */
-const MAX_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
-
-// Hoisted to module scope so the literals aren't recompiled on every call.
-const SCHEME_PREFIX_RE = /^[a-z][a-z0-9+\-.]*:\/\//i;
+// Hoisted to module scope so the literal isn't recompiled on every call. The
+// base64url codec, bounded key cache, host extraction, and sign/verify live in
+// `shared/hmac-url.ts` (shared byte-for-byte with `@lunora/bindings` images).
 const LEADING_SLASH_RE = /^\//;
-
-const toBase64Url = (bytes: Uint8Array): string => {
-    // A SHA-256 HMAC is a fixed 32 bytes, well under the argument-spread limit,
-    // so building the binary string in one `fromCodePoint` call is safe and
-    // cheaper than a per-byte loop. Each byte is < 256, so code point and char
-    // code are identical here.
-    const binary = String.fromCodePoint(...bytes);
-
-    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-};
-
-const fromBase64Url = (input: string): Uint8Array => {
-    const padded = input.replaceAll("-", "+").replaceAll("_", "/") + "===".slice((input.length + 3) % 4);
-    const binary = atob(padded);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.codePointAt(index) ?? 0;
-    }
-
-    return bytes;
-};
-
-// The signing secret is effectively constant per process, so the imported
-// (non-extractable) CryptoKey is memoized by secret value: this removes one
-// `crypto.subtle.importKey` from the verify hot path on every request. Caching
-// the Promise (not the resolved key) also coalesces concurrent imports. The
-// cache is bounded (FIFO eviction) so a multi-tenant app cycling through many
-// per-tenant secrets can't accumulate unbounded memory — aligns with the image
-// signed-URL cache. 64 distinct secrets/isolate is well above any realistic use.
-const KEY_CACHE_MAX = 64;
-const keyCache = new Map<string, Promise<CryptoKey>>();
-
-const importHmacKey = async (secret: string): Promise<CryptoKey> => {
-    const cached = keyCache.get(secret);
-
-    if (cached) {
-        return cached;
-    }
-
-    // Evict the oldest entry when the cache is full (insertion-ordered Map keys → FIFO).
-    if (keyCache.size >= KEY_CACHE_MAX) {
-        const oldest = keyCache.keys().next().value;
-
-        if (oldest !== undefined) {
-            keyCache.delete(oldest);
-        }
-    }
-
-    const keyPromise = crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
-
-    keyCache.set(secret, keyPromise);
-
-    return keyPromise;
-};
 
 // Host is lowercased so a signature minted for `Example.com` verifies against
 // `example.com` — DNS is case-insensitive, but the URL parser preserves case.
@@ -94,18 +37,6 @@ const canonicalize = (method: "GET" | "PUT", host: string, key: string, exp: num
     const base = `${method}\n${host.toLowerCase()}\n${key}\n${String(exp)}`;
 
     return contentType === undefined ? base : `${base}\n${contentType}`;
-};
-
-const extractHost = (input: string): string => {
-    // Tolerate a bare host-or-base by trying URL first; fall back to splitting
-    // off the path. Either way, the canonical form is just `host[:port]`.
-    try {
-        return new URL(input).host;
-    } catch {
-        const noScheme = input.replace(SCHEME_PREFIX_RE, "");
-
-        return noScheme.split("/")[0] ?? "";
-    }
 };
 
 /**
@@ -135,11 +66,11 @@ export const buildSignedUrl = async (
     // already-expired URL that verify silently rejects) and enforce a ceiling
     // so a bogus value can't mint an effectively non-expiring URL.
     if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
-        throw new LunoraError("INTERNAL", "@lunora/storage: expiresInSeconds must be a positive finite number");
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: expiresInSeconds must be a positive finite number");
     }
 
-    if (expiresInSeconds > MAX_EXPIRES_IN_SECONDS) {
-        throw new LunoraError("INTERNAL", `@lunora/storage: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
+    if (expiresInSeconds > MAX_SIGNED_URL_TTL_SECONDS) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: expiresInSeconds must not exceed ${String(MAX_SIGNED_URL_TTL_SECONDS)} (7 days)`);
     }
 
     // contentType is a PUT-only pin: a GET URL has no request body to constrain,
@@ -148,11 +79,9 @@ export const buildSignedUrl = async (
 
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
     const host = extractHost(args.baseUrl);
-    const cryptoKey = await importHmacKey(args.secret);
-    const signature = await crypto.subtle.sign("HMAC", cryptoKey, textEncoder.encode(canonicalize(method, host, args.key, exp, contentType)));
-    const sig = toBase64Url(new Uint8Array(signature));
+    const sig = await signCanonical(args.secret, canonicalize(method, host, args.key, exp, contentType));
 
-    const base = args.baseUrl.endsWith("/") ? args.baseUrl.slice(0, -1) : args.baseUrl;
+    const base = trimTrailingSlashes(args.baseUrl);
     const safeKey = args.key
         .split("/")
         .map((segment) => encodeURIComponent(segment))
@@ -245,13 +174,7 @@ export const verifySignedUrl = async (input: string | URL, secret: string, optio
     // rewrite topologies); otherwise bind to the inbound host, which equals the
     // build-side host whenever the verified URL is the minted URL.
     const host = options?.expectedHost === undefined ? url.host : extractHost(options.expectedHost);
-    const cryptoKey = await importHmacKey(secret);
-    const valid = await crypto.subtle.verify(
-        "HMAC",
-        cryptoKey,
-        sigBytes as unknown as BufferSource,
-        textEncoder.encode(canonicalize(method, host, key, exp, contentType)),
-    );
+    const valid = await verifyCanonical(secret, canonicalize(method, host, key, exp, contentType), sigBytes);
 
     if (!valid) {
         return { reason: "bad_signature", valid: false };

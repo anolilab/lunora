@@ -122,6 +122,18 @@ describe("handleSchemaEditRequest", () => {
         expect(readFileSync(schemaPath, "utf8")).toBe(before);
     });
 
+    it("rejects a POST body of literal null with a 400 (not a 500 TypeError)", () => {
+        expect.assertions(2);
+
+        writeSchema(SCHEMA);
+
+        // `typeof null === "object"`, so a naive guard dereferences null and 500s.
+        const result = handleSchemaEditRequest({ body: null, method: "POST", projectRoot });
+
+        expect(result.status).toBe(400);
+        expect(result.body).toStrictEqual({ error: "invalid-edit", ok: false });
+    });
+
     it("rejects an unsupported HTTP method", () => {
         expect.assertions(1);
 

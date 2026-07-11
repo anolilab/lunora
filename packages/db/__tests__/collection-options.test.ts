@@ -19,7 +19,7 @@ interface ShapeSubscribeCall {
 const makeClient = () => {
     const shapeSubscribes: ShapeSubscribeCall[] = [];
     const client = {
-        confirmedMutationWatermark: vi.fn<() => number>(() => 0),
+        confirmedMutationWatermark: vi.fn<(shardKey?: string) => number>(() => 0),
         subscribe: vi.fn<(...arguments_: unknown[]) => () => void>(),
         subscribeShape: vi.fn<
             (
@@ -57,6 +57,33 @@ const flush = () =>
     new Promise((resolve) => {
         setTimeout(resolve, 0);
     });
+
+type WriterOp = { key: string; type: "delete" } | { type: "insert" | "update"; value: Record<string, unknown> };
+
+/**
+ * A fake TanStack sync writer that records the diff ops `makeDiffEmit` writes.
+ * Drives the `config.sync.sync(writer)` seam directly so a sync session's
+ * lifecycle (start → rows → cleanup → restart) is exercised deterministically,
+ * without waiting on TanStack's gc timers.
+ */
+const recordingWriter = (): { ops: WriterOp[]; writer: { begin: () => void; commit: () => void; markReady: () => void; write: (op: WriterOp) => void } } => {
+    const ops: WriterOp[] = [];
+
+    return {
+        ops,
+        writer: {
+            begin: () => {},
+            commit: () => {},
+            markReady: () => {},
+            write: (op) => {
+                ops.push(op);
+            },
+        },
+    };
+};
+
+/** Grab the `sync.sync` starter off a built config (returns the cleanup fn each call). */
+const syncStarterOf = (config: { sync?: unknown }): ((writer: never) => () => void) => (config.sync as { sync: (writer: never) => () => void }).sync;
 
 /**
  * Phase 6 — the checkpoint registry that drops a TanStack optimistic overlay
@@ -293,5 +320,122 @@ describe("lunoraCollectionOptions (list source)", () => {
         await pending;
 
         expect(order).toStrictEqual(["dropped"]);
+    });
+
+    it("routes the list subscription and its fallback watermark to the config shardKey", async () => {
+        expect.assertions(2);
+
+        const { client } = makeClient();
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const watermark = (client as unknown as { confirmedMutationWatermark: ReturnType<typeof vi.fn> }).confirmedMutationWatermark;
+
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list"), shardKey: "room-7" });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        // The subscription is opened against the shard.
+        expect(subscribeMock.mock.calls[0]?.[3]).toMatchObject({ shardKey: "room-7" });
+
+        // A data frame arrives → the list-path fallback advances the checkpoint
+        // gate from THIS shard's confirmed watermark, not the default ("") bucket
+        // (whose sequence line is unrelated to a per-shard mutator's).
+        const onRows = subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void;
+
+        onRows([{ _creationTime: 0, _id: "m1", channelId: "room-7", text: "hi" }]);
+
+        expect(watermark).toHaveBeenCalledWith("room-7");
+    });
+
+    it("re-inserts the full snapshot after a sync restart (gc cleanup clears the diff cache)", () => {
+        expect.assertions(2);
+
+        const { client } = makeClient();
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const runSync = syncStarterOf(options.config);
+
+        // Session 1: TanStack starts sync → the server's snapshot arrives.
+        const first = recordingWriter();
+        const cleanup1 = runSync(first.writer as never);
+
+        (subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void)([{ _id: "a", text: "hi" }]);
+
+        expect(first.ops).toStrictEqual([{ type: "insert", value: { _id: "a", text: "hi" } }]);
+
+        // gc cleanup: TanStack drops its synced store; the diff cache must reset.
+        cleanup1();
+
+        // Restart: the server re-delivers the identical snapshot. The row must be
+        // RE-INSERTED into the now-empty store — not diffed away to zero writes,
+        // which would leave the collection permanently empty.
+        const second = recordingWriter();
+
+        runSync(second.writer as never);
+        (subscribeMock.mock.calls[1]?.[2] as (data: unknown) => void)([{ _id: "a", text: "hi" }]);
+
+        expect(second.ops).toStrictEqual([{ type: "insert", value: { _id: "a", text: "hi" } }]);
+    });
+});
+
+/**
+ * The scope/sync lifecycle for a `scopeBy` collection: a sync restart (after gc
+ * cleanup) must re-open the last scope, and a `scope(...)` issued before sync
+ * first starts must still deliver the source's initial snapshot.
+ */
+describe("lunoraCollectionOptions (scoped lifecycle)", () => {
+    it("reopens the last scope after a sync restart so a gc'd scoped collection refills", () => {
+        expect.assertions(3);
+
+        const { client } = makeClient();
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list"), scopeBy: "channelId" });
+        const runSync = syncStarterOf(options.config);
+
+        // Session 1: sync starts (scoped → nothing subscribed), then scope points it.
+        const cleanup1 = runSync(recordingWriter().writer as never);
+
+        expect(subscribeMock).not.toHaveBeenCalled();
+
+        options.scope({ channelId: "c1" });
+
+        expect(subscribeMock).toHaveBeenCalledTimes(1);
+
+        // gc cleanup tears the session down; the scope target is remembered.
+        cleanup1();
+
+        // Restart: sync.sync must re-open the remembered scope (not remount empty).
+        runSync(recordingWriter().writer as never);
+
+        expect(subscribeMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("applies a scope set before sync starts and delivers its initial snapshot", () => {
+        expect.assertions(3);
+
+        const { client } = makeClient();
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list"), scopeBy: "channelId" });
+        const runSync = syncStarterOf(options.config);
+
+        // scope() BEFORE TanStack ever calls sync.sync (emit undefined): the
+        // subscription is deferred, not opened against a dead emit that would
+        // silently drop the first frame.
+        options.scope({ channelId: "c1" });
+
+        expect(subscribeMock).not.toHaveBeenCalled();
+
+        // Sync starts → the deferred scope opens with a live emit.
+        const writer = recordingWriter();
+
+        runSync(writer.writer as never);
+
+        expect(subscribeMock).toHaveBeenCalledTimes(1);
+
+        // The source's initial frame is emitted (previously dropped).
+        (subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void)([{ _creationTime: 0, _id: "m1", channelId: "c1", text: "hi" }]);
+
+        expect(writer.ops).toStrictEqual([{ type: "insert", value: { _creationTime: 0, _id: "m1", channelId: "c1", text: "hi" } }]);
     });
 });

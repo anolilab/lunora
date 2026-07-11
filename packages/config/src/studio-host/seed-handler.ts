@@ -116,7 +116,7 @@ const handleSeedRequest = (request: SeedRequest): SeedResponse => {
 
     const { body } = request;
 
-    if (body === undefined || typeof body !== "object") {
+    if (body === undefined || body === null || typeof body !== "object") {
         return { body: { error: "invalid-request", ok: false }, status: 400 };
     }
 

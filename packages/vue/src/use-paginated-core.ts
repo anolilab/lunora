@@ -4,9 +4,10 @@ import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "
 import type { MaybeRefOrGetter, ShallowRef } from "vue";
 import { onScopeDispose, shallowRef, toValue, watch } from "vue";
 
+import { stableStringify } from "../../../shared/stable-key";
 import { useLunora } from "./lunora-provider";
 
-const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${JSON.stringify(pageArgs)}`;
+const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${stableStringify(pageArgs)}`;
 
 const buildPageArgs = (page: Page, baseArgs: Record<string, unknown>): Record<string, unknown> => {
     return {
@@ -43,6 +44,16 @@ const usePaginatedCore = <T>(
 
     const pages = shallowRef<Page[]>(initialPages(initialNumItems));
     const pageResults = shallowRef<(PaginationResult<T> | undefined)[]>([]);
+
+    /**
+     * The cursor the most recent `loadMore` applied. `pageResults` is only
+     * rebuilt in a pre-flush watcher after `pages` changes, so two synchronous
+     * `loadMore` calls (a double-click before the next flush) would both read the
+     * same stale tail and re-apply the same `nextCursor` — pinning the just-added
+     * open tail into a degenerate empty range and appending a duplicate tail.
+     * Track the last-applied cursor and no-op a repeat within the same flush.
+     */
+    let lastLoadMoreCursor: null | string | undefined;
 
     /**
      * Each active subscription entry. `currentKey` is mutable so that when
@@ -123,6 +134,11 @@ const usePaginatedCore = <T>(
                 entry.unsub();
                 activeSubs.delete(originalKey);
                 resultsByKey.delete(entry.currentKey);
+                // Drop any pending marker for this key too — a page closed before
+                // its first result would otherwise orphan its key in
+                // `pendingPageKeys` forever, permanently disabling the
+                // `pendingPageKeys.size === 0` split/join rebalance gate below.
+                pendingPageKeys.delete(entry.currentKey);
             }
         }
 
@@ -191,15 +207,25 @@ const usePaginatedCore = <T>(
 
         activeSubs.clear();
         resultsByKey.clear();
+        // Clear pending markers so a fresh args cycle isn't wedged by keys left
+        // behind from subscriptions torn down before their first result.
+        pendingPageKeys.clear();
     };
 
-    // Re-subscribe whenever the base args (or skip) change.
+    // Re-subscribe whenever the base args (or skip) change. Key the watch on a
+    // stable string (not object identity) so an equal-but-new args object — e.g.
+    // a `computed(() => ({ ids: [...store.selected] }))` recomputed with equal
+    // content — never tears down and collapses a multi-page loaded feed back to
+    // page one. The live args are re-read inside the callback (matching use-flag).
     watch(
-        () => toValue(args),
-        (current) => {
+        () => stableStringify(toValue(args)),
+        () => {
+            const current = toValue(args);
+
             teardownAll();
             pages.value = initialPages(initialNumItems);
             pageResults.value = [];
+            lastLoadMoreCursor = undefined;
 
             if (current !== "skip") {
                 syncSubscriptions(pages.value, current);
@@ -247,11 +273,21 @@ const usePaginatedCore = <T>(
             return;
         }
 
+        // Re-entrancy guard: a second synchronous call sees the same not-yet-
+        // rebuilt tail result and the same `nextCursor` — skip it so we don't
+        // pin an empty range and append a duplicate tail (self-heals only via a
+        // JOIN pass, which finding-1's leak could otherwise disable forever).
+        if (nextCursor === lastLoadMoreCursor) {
+            return;
+        }
+
         const next = applyLoadMore(pages.value, nextCursor, numberItems);
 
         if (!next) {
             return;
         }
+
+        lastLoadMoreCursor = nextCursor;
 
         // `applyLoadMore` pins the open-ended tail: the last page's args shift
         // from `endCursor: null` to `endCursor: cursor`. Re-key the existing

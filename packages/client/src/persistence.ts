@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { createDatabaseOpener, createWithStore, promisifyRequest } from "./idb-utility";
 import type { PersistedMutation, PersistenceAdapter } from "./types";
 
 /**
@@ -61,17 +62,6 @@ const DEFAULT_STORE = "offline-mutations";
 /** Secondary index on the mutation id — the store's primary key is an autoincrement seq that preserves FIFO order. */
 const ID_INDEX = "by_id";
 
-/** Promisify an `IDBRequest`. */
-const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
-    new Promise<T>((resolve, reject) => {
-        request.addEventListener("success", () => {
-            resolve(request.result);
-        });
-        request.addEventListener("error", () => {
-            reject(request.error ?? new Error("IndexedDB request failed"));
-        });
-    });
-
 /**
  * IndexedDB-backed {@link PersistenceAdapter}. Each mutation is stored under an
  * autoincrementing key (so `load()` returns them in enqueue order regardless of
@@ -91,55 +81,16 @@ const createIndexedDbPersistence = (options: IndexedDbPersistenceOptions = {}): 
 
     const databaseName = options.databaseName ?? DEFAULT_DATABASE;
     const storeName = options.storeName ?? DEFAULT_STORE;
-    let databasePromise: Promise<IDBDatabase> | undefined;
 
-    const openDatabase = (): Promise<IDBDatabase> => {
-        if (databasePromise) {
-            return databasePromise;
+    const openDatabase = createDatabaseOpener(factory, databaseName, 1, (database) => {
+        if (!database.objectStoreNames.contains(storeName)) {
+            const store = database.createObjectStore(storeName, { autoIncrement: true });
+
+            store.createIndex(ID_INDEX, "id", { unique: true });
         }
+    });
 
-        databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
-            const request = factory.open(databaseName, 1);
-
-            request.addEventListener("upgradeneeded", () => {
-                const database = request.result;
-
-                if (!database.objectStoreNames.contains(storeName)) {
-                    const store = database.createObjectStore(storeName, { autoIncrement: true });
-
-                    store.createIndex(ID_INDEX, "id", { unique: true });
-                }
-            });
-            request.addEventListener("success", () => {
-                resolve(request.result);
-            });
-            request.addEventListener("error", () => {
-                reject(request.error ?? new Error("IndexedDB open failed"));
-            });
-        });
-
-        return databasePromise;
-    };
-
-    const withStore = async <T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => Promise<T> | T): Promise<T> => {
-        const database = await openDatabase();
-        const transaction = database.transaction(storeName, mode);
-        const result = await run(transaction.objectStore(storeName));
-
-        await new Promise<void>((resolve, reject) => {
-            transaction.addEventListener("complete", () => {
-                resolve();
-            });
-            transaction.addEventListener("error", () => {
-                reject(transaction.error ?? new Error("IndexedDB transaction failed"));
-            });
-            transaction.addEventListener("abort", () => {
-                reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
-            });
-        });
-
-        return result;
-    };
+    const withStore = createWithStore(openDatabase, storeName);
 
     return {
         append: async (mutation) => {

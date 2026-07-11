@@ -195,6 +195,73 @@ describe("createPaginatedQuery pending-page rebalance guard (BUG 2 regression)",
     });
 });
 
+describe("createPaginatedQuery rebalance migration (FINDING 1 regression)", () => {
+    it("a SPLIT preserves already-loaded results and does not regress to LoadingFirstPage", async () => {
+        const fake = createFakeClient();
+        let capturedLoadMore: ((n: number) => void) | undefined;
+        let capturedStatus: (() => string) | undefined;
+        let capturedResults: (() => unknown[]) | undefined;
+
+        render(
+            () => {
+                const { loadMore, results, status } = createPaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS });
+                capturedLoadMore = loadMore;
+                capturedStatus = status;
+                capturedResults = results;
+
+                return <pre>{status()}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        // First (open-ended) page resolves with a cursor → CanLoadMore.
+        const firstSub = fake.subscriptions.find(
+            (s) => JSON.stringify(s.args) === JSON.stringify({ paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } }),
+        );
+
+        firstSub?.push({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        await flushAsync();
+
+        expect(capturedStatus!()).toBe("CanLoadMore");
+
+        // loadMore pins page 0 as a bounded (null, cur-1] range and appends a tail.
+        capturedLoadMore!(NUM_ITEMS);
+        await flushAsync();
+
+        // Resolve the tail so `pendingPageKeys` empties (rebalance is then allowed).
+        const tailSub = fake.subscriptions.find(
+            (s) => JSON.stringify(s.args) === JSON.stringify({ paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } }),
+        );
+
+        tailSub?.push({ continueCursor: null, isDone: true, page: secondPageItems });
+        await flushAsync();
+
+        expect(capturedStatus!()).toBe("Exhausted");
+        expect(capturedResults!()).toHaveLength(firstPageItems.length + secondPageItems.length);
+
+        // The bounded page 0 now grows past the SPLIT threshold (> 2×5) and reports a
+        // `splitCursor`, so rebalance cuts it into (null, mid] and (mid, cur-1].
+        const grownFirstPage = Array.from({ length: 11 }, (_, index) => {
+            return { id: `g${String(index)}` };
+        });
+
+        const boundedFirstSub = fake.subscriptions.find(
+            (s) => JSON.stringify(s.args) === JSON.stringify({ paginationOpts: { cursor: null, endCursor: "cur-1", numItems: NUM_ITEMS } }),
+        );
+
+        boundedFirstSub?.push({ continueCursor: "cur-1", isDone: false, page: grownFirstPage, splitCursor: "mid" });
+        await flushAsync();
+
+        // Without the rebalance migration, the new (null, mid] page maps to no result:
+        // results collapse to just the tail page and status regresses to
+        // "LoadingFirstPage". With the migration, the grown page's items survive.
+        expect(capturedStatus!()).not.toBe("LoadingFirstPage");
+        expect(capturedStatus!()).toBe("Exhausted");
+        expect(capturedResults!()).toHaveLength(grownFirstPage.length + secondPageItems.length);
+        expect(capturedResults!()).toStrictEqual([...grownFirstPage, ...secondPageItems]);
+    });
+});
+
 describe("createInfiniteQuery (Solid)", () => {
     it("first page loads as first page array", async () => {
         const fake = createFakeClient();

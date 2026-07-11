@@ -75,6 +75,61 @@ describe("lunora env", () => {
             expect(listed).not.toContain("supersecret-value");
         });
 
+        it("set preserves comments, blank lines, and untouched entries verbatim", async () => {
+            expect.assertions(5);
+
+            const original = ["# Auth secrets", 'AUTH_SECRET="scaffolded"', "", "# provider key (from dashboard)", "RESEND_API_KEY=re_123", ""].join("\n");
+
+            writeFileSync(join(workdir, ".dev.vars"), original, "utf8");
+
+            const { logger } = recordingLogger();
+
+            await runEnvCommand({ cwd: workdir, key: "AUTH_SECRET", logger, subcommand: "set", value: "updated" });
+
+            const file = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+            // Comments and blank lines survive.
+            expect(file).toContain("# Auth secrets");
+            expect(file).toContain("# provider key (from dashboard)");
+            // The targeted key is updated in place.
+            expect(file).toContain('AUTH_SECRET="updated"');
+            // Untouched entries keep their exact original (unquoted) text.
+            expect(file).toContain("RESEND_API_KEY=re_123");
+            expect(file).not.toContain('AUTH_SECRET="scaffolded"');
+        });
+
+        it("set appends a new key without disturbing existing comments", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars"), "# heading\nEXISTING=1\n", "utf8");
+
+            const { logger } = recordingLogger();
+
+            await runEnvCommand({ cwd: workdir, key: "NEW_KEY", logger, subcommand: "set", value: "v" });
+
+            const file = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+            expect(file).toContain("# heading");
+            expect(file).toContain("EXISTING=1");
+            expect(file).toContain('NEW_KEY="v"');
+        });
+
+        it("unset removes only the target line, preserving comments and other entries", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars"), "# keep me\nA=1\nB=2\n", "utf8");
+
+            const { logger } = recordingLogger();
+
+            await runEnvCommand({ cwd: workdir, key: "A", logger, subcommand: "unset" });
+
+            const file = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+            expect(file).toContain("# keep me");
+            expect(file).not.toMatch(/^A=/mu);
+            expect(file).toContain("B=2");
+        });
+
         it("get prints the full value to stdout", async () => {
             expect.assertions(2);
 

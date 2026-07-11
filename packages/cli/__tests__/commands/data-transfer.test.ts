@@ -232,6 +232,77 @@ describe("lunora data-transfer", () => {
             expect(JSON.parse(firstLine!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
         });
 
+        it("refuses --prod without --yes (no request is made)", async () => {
+            expect.assertions(2);
+
+            const file = join(workDir, "in.ndjson");
+
+            writeFileSync(file, JSON.stringify({ doc: { _id: "u1" }, table: "users" }), "utf8");
+
+            const calls: string[] = [];
+            const fetchImpl: StreamingFetchLike = async (url) => {
+                calls.push(url);
+
+                return {
+                    body: null,
+                    json: async () => {
+                        return { inserted: {} };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            };
+
+            const result = await runImportCommand({
+                fetchImpl,
+                file,
+                logger: silentLogger(),
+                prod: true,
+                token: "t",
+                url: "https://app.example.com",
+            });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+        });
+
+        it("proceeds with --prod when --yes confirms", async () => {
+            expect.assertions(2);
+
+            const file = join(workDir, "in.ndjson");
+
+            writeFileSync(file, JSON.stringify({ doc: { _id: "u1" }, table: "users" }), "utf8");
+
+            const calls: string[] = [];
+            const fetchImpl: StreamingFetchLike = async (url) => {
+                calls.push(url);
+
+                return {
+                    body: null,
+                    json: async () => {
+                        return { inserted: { users: 1 } };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            };
+
+            const result = await runImportCommand({
+                fetchImpl,
+                file,
+                logger: silentLogger(),
+                prod: true,
+                token: "t",
+                url: "https://app.example.com",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(1);
+        });
+
         it("returns a non-zero exit code when the server reports errors", async () => {
             expect.assertions(1);
 

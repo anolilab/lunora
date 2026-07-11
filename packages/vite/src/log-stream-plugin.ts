@@ -1,6 +1,9 @@
 import { detectAiAgent, formatLunoraEvent, LUNORA_EVENT_SOURCE } from "@lunora/config";
 import type { Plugin } from "vite";
 
+import type { PendingCloseMap } from "./server-close";
+import { registerDevServerClose, runPendingClose } from "./server-close";
+
 /**
  * Dev-only plugin that pretty-prints the Lunora runtime's structured log events
  * in the Vite terminal.
@@ -95,13 +98,21 @@ const wrapWrite =
 /** Patch one stream's `write` in place; returns a function that restores the original. */
 const patchStream = (stream: WritableLike): (() => void) => {
     const original = stream.write.bind(stream);
+    const wrapper = wrapWrite(original, stream.isTTY === true);
 
     // eslint-disable-next-line no-param-reassign -- intentional, reversible monkey-patch of the live stream; restored on server close.
-    stream.write = wrapWrite(original, stream.isTTY === true);
+    stream.write = wrapper;
 
     return () => {
-        // eslint-disable-next-line no-param-reassign -- restore the original write captured above.
-        stream.write = original;
+        // Only unpatch if OUR wrapper is still installed. On `server.restart()`
+        // Vite configures + patches the NEW server before closing the OLD one, so
+        // a stale teardown would otherwise reinstate the true original and drop the
+        // new generation's patch — or, worse, clobber it. Guarding on identity lets
+        // the newest generation own the stream until it (and only it) tears down.
+        if (stream.write === wrapper) {
+            // eslint-disable-next-line no-param-reassign -- restore the original write captured above.
+            stream.write = original;
+        }
     };
 };
 
@@ -127,19 +138,30 @@ const wantRawJsonLogs = (): boolean => {
 
 /**
  * Vite plugin (serve-only) that formats Lunora worker logs in the terminal.
- * Patches `process.stdout`/`process.stderr` once the dev server is configured
- * and restores them when it closes.
+ * Patches `process.stdout`/`process.stderr` fresh for each dev-server generation
+ * and restores them when that server closes.
  */
 const logStreamPlugin = (): Plugin => {
-    let restore: (() => void) | undefined;
+    // Teardown callbacks pending a middleware-mode dev-server close (no httpServer
+    // to hang a "close" listener on) — see `server-close.ts`. Factory-scoped so it
+    // survives across `configureServer` generations (a `server.restart()`).
+    const pendingMiddlewareTeardowns: PendingCloseMap = new Map();
+
+    // The restore for the patch currently installed on the streams, if any. A new
+    // generation restores the previous one before installing its own, so a
+    // `server.restart()` (which configures the new server BEFORE closing the old)
+    // never double-wraps the streams over a stale wrapper.
+    let activeRestore: (() => void) | undefined;
 
     return {
         apply: "serve",
+        buildEnd() {
+            // Middleware-mode close fallback: no httpServer to listen on, so the
+            // patch is restored here instead. A no-op in classic dev mode (the map
+            // is only populated in middleware mode) — see `server-close.ts`.
+            runPendingClose(pendingMiddlewareTeardowns, this.environment);
+        },
         configureServer(server) {
-            if (restore) {
-                return;
-            }
-
             // JSON mode: leave the streams untouched — the runtime's structured
             // events are already single-line JSON, which is exactly what a
             // machine consumer wants on stdout.
@@ -147,20 +169,31 @@ const logStreamPlugin = (): Plugin => {
                 return;
             }
 
+            // A previous generation may still be patched (a restart configures the
+            // new server before closing the old). Restore it first so we wrap the
+            // TRUE originals, never a stale wrapper — otherwise a later teardown
+            // would leave a leftover wrapper installed past the process's last server.
+            activeRestore?.();
+
             const restoreStdout = patchStream(process.stdout as unknown as WritableLike);
             const restoreStderr = patchStream(process.stderr as unknown as WritableLike);
 
-            restore = () => {
+            const restore = (): void => {
                 restoreStdout();
                 restoreStderr();
-                restore = undefined;
+
+                if (activeRestore === restore) {
+                    activeRestore = undefined;
+                }
             };
 
-            // Unpatch on shutdown so the streams aren't left wrapped if the same
-            // process outlives the server (e.g. Vite's programmatic API).
-            server.httpServer?.once("close", () => {
-                restore?.();
-            });
+            activeRestore = restore;
+
+            // Classic mode: `httpServer.once("close")`. Middleware mode (null
+            // httpServer, e.g. Vite's programmatic API — the exact "process outlives
+            // the server" case): parked for the `buildEnd` hook. Either way the
+            // streams are unpatched on shutdown rather than left wrapped.
+            registerDevServerClose(server, pendingMiddlewareTeardowns, restore);
         },
         name: "lunora:log-stream",
     };

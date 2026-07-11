@@ -148,6 +148,44 @@ describe("d1Client", () => {
         expect(session.prepare).toHaveBeenCalledTimes(2);
     });
 
+    // Finding 5: the LRU eviction/MRU-bump machine is now shared by D1Session and
+    // D1Client via `prepareCached`; pin the eviction branch (previously untested)
+    // so a future refactor can't silently drop the bound.
+    it("evicts the least-recently-used statement once the cache capacity is exceeded", () => {
+        expect.assertions(2);
+
+        const prepareCounts = new Map<string, number>();
+        const databasePrepare = vi.fn<D1DatabaseLike["prepare"]>((sql: string) => {
+            prepareCounts.set(sql, (prepareCounts.get(sql) ?? 0) + 1);
+
+            return createStmt();
+        });
+        const database: D1DatabaseLike = {
+            prepare: databasePrepare,
+            withSession: vi.fn<D1DatabaseLike["withSession"]>(() => createSession(null)),
+        };
+
+        const client = new D1Client(database);
+        const capacity = 256; // mirrors STMT_CACHE_CAPACITY
+
+        // Fill the cache to capacity with distinct SQL text.
+        for (let index = 0; index < capacity; index += 1) {
+            client.prepare(`SELECT ${String(index)}`);
+        }
+
+        // Touch the newest entry so it stays warm (MRU), then overflow: the next
+        // prepare evicts the oldest cold entry (`SELECT 0`).
+        client.prepare(`SELECT ${String(capacity - 1)}`);
+        client.prepare(`SELECT ${String(capacity)}`);
+
+        // Re-preparing the evicted `SELECT 0` misses the cache -> a second
+        // underlying prepare; the warm newest entry was never evicted.
+        client.prepare("SELECT 0");
+
+        expect(prepareCounts.get("SELECT 0")).toBe(2);
+        expect(prepareCounts.get(`SELECT ${String(capacity - 1)}`)).toBe(1);
+    });
+
     it("d1Client.prepare (non-session escape hatch) also caches by SQL", () => {
         expect.assertions(2);
 

@@ -1,6 +1,7 @@
+import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadJsonArray, newId, saveJson } from "../../src/lib/browser-storage";
+import { loadJsonArray, newId, saveJson, usePersistedList } from "../../src/lib/browser-storage";
 
 const KEY = "lunora-studio-test";
 
@@ -53,6 +54,26 @@ describe("browserStorage", () => {
             expect(() => {
                 saveJson(KEY, [1, 2, 3]);
             }).not.toThrow();
+        });
+    });
+
+    describe("usePersistedList", () => {
+        it("reloads from the new key when `key` changes instead of clobbering it", () => {
+            expect.assertions(3);
+
+            localStorage.setItem("list-a", JSON.stringify([1, 2]));
+            localStorage.setItem("list-b", JSON.stringify([9]));
+
+            const { rerender, result } = renderHook(({ key }) => usePersistedList<number>(key), { initialProps: { key: "list-a" } });
+
+            expect(result.current[0]).toStrictEqual([1, 2]);
+
+            rerender({ key: "list-b" });
+
+            // The state reflects the new key's stored value…
+            expect(result.current[0]).toStrictEqual([9]);
+            // …and the new key wasn't overwritten with the previous key's value.
+            expect(localStorage.getItem("list-b")).toBe(JSON.stringify([9]));
         });
     });
 

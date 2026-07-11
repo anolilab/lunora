@@ -34,7 +34,7 @@ const buildProvider = (binding: AiBindingLike, gateway?: LunoraAiOptions["gatewa
  * ```
  */
 const createAi = (options: LunoraAiOptions): LunoraAi => {
-    const { binding, defaultModel, gateway, provider } = options;
+    const { binding, defaultEmbeddingModel, defaultModel, gateway, provider } = options;
 
     if (!provider && !binding) {
         throw new LunoraError("INTERNAL", "@lunora/ai: createAi requires a `binding` (env.AI) or a pre-built `provider`");
@@ -62,7 +62,8 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
         const factory = workersai.textEmbeddingModel;
 
         if (typeof factory !== "function") {
-            throw new TypeError(
+            throw new LunoraError(
+                "INTERNAL",
                 "@lunora/ai: the Workers AI provider does not expose `textEmbeddingModel`; pass an AI SDK EmbeddingModel (e.g. from @ai-sdk/openai) to embed()",
             );
         }
@@ -82,12 +83,12 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
             return input;
         }
 
-        const modelId = input ?? defaultModel;
+        const modelId = input ?? defaultEmbeddingModel;
 
         if (!modelId) {
             throw new LunoraError(
                 "INTERNAL",
-                "@lunora/ai: no embedding model supplied and no `defaultModel` configured — pass an embedding model id or an AI SDK EmbeddingModel",
+                "@lunora/ai: no embedding model supplied and no `defaultEmbeddingModel` configured — pass an embedding model id or an AI SDK EmbeddingModel",
             );
         }
 

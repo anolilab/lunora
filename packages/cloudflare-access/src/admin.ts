@@ -1,5 +1,5 @@
 import type { AccessClaims, RequestVerifyOptions } from "./types";
-import { verifyRequest } from "./verify";
+import { assertVerifyOptions, verifyRequest } from "./verify";
 
 /** Options for {@link accessAdminGate}; extends {@link RequestVerifyOptions}. */
 interface AccessAdminGateOptions extends RequestVerifyOptions {
@@ -34,13 +34,18 @@ interface AccessAdminGateOptions extends RequestVerifyOptions {
  * });
  * ```
  */
-const accessAdminGate =
-    (options: AccessAdminGateOptions): ((request: Request) => Promise<boolean>) =>
-    async (request: Request): Promise<boolean> => {
+const accessAdminGate = (options: AccessAdminGateOptions): ((request: Request) => Promise<boolean>) => {
+    // Validate the static config eagerly so a broken deployment (unset teamDomain
+    // or aud) fails fast here at wiring time instead of denying every admin
+    // request with no signal.
+    assertVerifyOptions(options);
+
+    return async (request: Request): Promise<boolean> => {
         const claims = await verifyRequest(request, options);
 
         return claims === undefined ? false : options.isAdmin(claims);
     };
+};
 
 export { accessAdminGate };
 export type { AccessAdminGateOptions };

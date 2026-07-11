@@ -80,10 +80,15 @@ const flushAsync = async (): Promise<void> => {
 describe("usePresence (Vue)", () => {
     beforeEach(() => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
+        // The composable gates its heartbeat/interval/subscription on a browser
+        // `window`; the vitest env is `node` (no `window`), so define one for the
+        // client-path tests. The SSR test below removes it to exercise the guard.
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
     });
 
     afterEach(() => {
         vi.useRealTimers();
+        Reflect.deleteProperty(globalThis, "window");
     });
 
     it("heartbeats on mount and again on each interval tick", async () => {
@@ -254,5 +259,42 @@ describe("usePresence (Vue)", () => {
         await flushAsync();
 
         expect(fake.contextFor()).toBeUndefined();
+    });
+
+    it("does not heartbeat, open an interval, or subscribe during SSR (no window)", async () => {
+        const fake = createPresenceFakeClient();
+
+        // Simulate the server render: no browser `window`.
+        Reflect.deleteProperty(globalThis, "window");
+
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        await flushAsync();
+
+        // No setup-time heartbeat write, no live subscription, no connection context.
+        expect(fake.mutationSpy).not.toHaveBeenCalled();
+        expect(fake.subscribeCalls).toHaveLength(0);
+        expect(fake.acquireConnectionContext).not.toHaveBeenCalled();
+
+        // No leaked interval: advancing time fires no further heartbeats.
+        await vi.advanceTimersByTimeAsync(2000);
+        await flushAsync();
+
+        expect(fake.mutationSpy).not.toHaveBeenCalled();
+
+        // The session id is still returned so the caller has a stable handle.
+        expect(result.sessionId).toBe("sess-fixed");
+
+        scope.stop();
     });
 });

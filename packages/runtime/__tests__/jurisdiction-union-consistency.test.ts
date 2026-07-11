@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 // The jurisdiction union ("eu" | "fedramp" | "us") is declared independently in
 // several packages on purpose — the mail, container, scheduler and server
 // packages stay structurally decoupled from runtime rather than taking a
-// dependency on it just for a three-member string union. The cost of that
+// dependency on it just for a three-member string union. (Within container the
+// union lives in a single shared `jurisdiction.ts` that client + report-lifecycle
+// both import, so only that one file is checked here.) The cost of that
 // decoupling is silent drift: if Cloudflare adds a jurisdiction and one copy is
 // updated but not the rest, the type would diverge with no compile error.
 //
@@ -20,8 +22,7 @@ const DECLARATIONS: { file: string; relative: string }[] = [
     { file: "scheduler", relative: "../../scheduler/src/types.ts" },
     { file: "server", relative: "../../server/src/types.ts" },
     { file: "mail", relative: "../../mail/src/inbound/shard.ts" },
-    { file: "container/client", relative: "../../container/src/client.ts" },
-    { file: "container/report-lifecycle", relative: "../../container/src/do/report-lifecycle.ts" },
+    { file: "container", relative: "../../container/src/jurisdiction.ts" },
 ];
 
 const extractUnion = (source: string): string | undefined => {

@@ -39,6 +39,14 @@ const normalizeBatchCall = (raw: unknown, index: number, defaultShard: string): 
         throw new LunoraError("reserved function path cannot be batched", { code: "FORBIDDEN", status: 403 });
     }
 
+    // `args` flows untrusted to the shard's `/rpc-batch` body. Reject a non-object
+    // (`args: "x"` / `args: 5` / `args: [...]`) at the boundary, exactly as the
+    // single-call `parseEnvelope` does, rather than forwarding a malformed envelope
+    // the shard then has to defend against. Absent → `{}` (handled below).
+    if (call.args !== undefined && (typeof call.args !== "object" || call.args === null || Array.isArray(call.args))) {
+        throw new LunoraError("each batch call `args` must be an object", { code: "BAD_REQUEST", status: 400 });
+    }
+
     return {
         entry: {
             args: call.args === undefined ? {} : (call.args as Record<string, unknown>),

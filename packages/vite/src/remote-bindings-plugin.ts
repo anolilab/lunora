@@ -16,6 +16,7 @@
 import { materializeRemoteWranglerConfig, readProjectRemotePreference, resolveRemoteEnabled } from "@lunora/config";
 import type { Plugin } from "vite";
 
+import { lunoraLine } from "./log";
 import type { CloudflarePluginOptions } from "./types";
 
 /** The cloudflare-plugin option Lunora sets to point the worker at our temp config. */
@@ -88,17 +89,15 @@ const planViteRemoteBindings = (options: PlanViteRemoteOptions): ViteRemotePlan 
 /**
  * Wrap the cloudflare-plugin options so the dev worker loads the materialized
  * remote temp config (via `configPath`) when — and only when — remote mode is
- * on AND it's a `vite` serve. A `configPath` the caller already set wins (their
- * explicit choice), and during a production build nothing is injected, so the
- * deployed worker is never affected.
+ * on and a temp config was materialized. A `configPath` the caller already set
+ * wins (their explicit choice).
  *
- * Returns the wrapped options plus the plan, so `index.ts` can register the
- * cleanup on a close hook. Materialization happens lazily inside the `configPath`
- * resolution path: it's only meaningful during serve, but computing it eagerly
- * is harmless (the materializer is a no-op when disabled) and keeps the wiring
- * simple — the plan is computed once here.
+ * Pure decision only — the serve-vs-build gate lives in
+ * {@link remoteBindingsConfigPlugin}'s `config` hook, because the resolved Vite
+ * `command` is unknown at plugin-factory time (when this runs). An eager serve
+ * check here would always read `command` as undefined and strip `configPath`.
  */
-const withRemoteBindings = (options: CloudflarePluginOptions, isServe: () => boolean, plan: ViteRemotePlan): CloudflarePluginOptions => {
+const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePlan): CloudflarePluginOptions => {
     if (!plan.enabled || plan.configPath === undefined) {
         return options;
     }
@@ -110,11 +109,47 @@ const withRemoteBindings = (options: CloudflarePluginOptions, isServe: () => boo
         return options;
     }
 
-    if (!isServe()) {
-        return options;
-    }
-
     return { ...options, configPath: plan.configPath };
+};
+
+/**
+ * A `enforce: "pre"` plugin whose `config` hook injects the materialized remote
+ * temp config into the cloudflare plugin's `configPath` — but only on a `vite`
+ * serve, never a production build (so the deployed worker is never affected).
+ *
+ * The deferral is the whole point: at plugin-factory time Vite has not yet told
+ * us `serve` vs `build`, so the check must run in a `config` hook (where
+ * `env.command` is known). It mutates the SAME options object handed to
+ * `cloudflare()` in place — the cloudflare plugin reads `pluginConfig.configPath`
+ * lazily inside its own `config` hook, which runs after this `enforce: "pre"`
+ * one, so the injection takes effect. An eager factory-time serve check (the old
+ * behaviour) always saw `command` undefined and silently dropped the path, so
+ * remote bindings never activated on `vite dev`.
+ *
+ * When remote mode was requested but nothing materialized (no eligible binding,
+ * no wrangler file, …), the plan's `reason` is logged so the degradation isn't
+ * silent.
+ */
+const remoteBindingsConfigPlugin = (options: CloudflarePluginOptions, plan: ViteRemotePlan): Plugin => {
+    return {
+        config(_userConfig, env) {
+            if (env.command !== "serve") {
+                return;
+            }
+
+            const merged = withRemoteBindings(options, plan) as RemoteCloudflareOptions;
+            const target = options as RemoteCloudflareOptions;
+
+            if (merged.configPath !== undefined && target.configPath === undefined) {
+                target.configPath = merged.configPath;
+            } else if (plan.enabled && plan.configPath === undefined && plan.reason !== undefined) {
+                // eslint-disable-next-line no-console -- surface the silent degradation; the dev server's logger isn't available in the `config` hook.
+                console.info(lunoraLine(`remote bindings requested but not applied: ${plan.reason}`));
+            }
+        },
+        enforce: "pre",
+        name: "lunora:remote-bindings-config",
+    };
 };
 
 /**
@@ -136,4 +171,4 @@ const remoteBindingsCleanupPlugin = (cleanup: () => void): Plugin => {
 };
 
 export type { PlanViteRemoteOptions, ViteRemotePlan };
-export { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings };
+export { planViteRemoteBindings, remoteBindingsCleanupPlugin, remoteBindingsConfigPlugin, withRemoteBindings };

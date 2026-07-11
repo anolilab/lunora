@@ -1,4 +1,5 @@
 import type { FilterClause } from "./admin";
+import { loadJsonArray, saveJson } from "./browser-storage";
 
 /**
  * A shareable data-browser view: the table, storage tier, shard, structured
@@ -32,21 +33,13 @@ interface SavedQuery {
  * Named data-browser views, persisted in `localStorage` so they survive a
  * restart (unlike `shard-history.ts`'s `sessionStorage` MRU). The studio can't
  * enumerate views server-side, so it remembers the ones the operator explicitly
- * saved. Guarded so a missing/throwing storage (SSR, privacy mode) degrades to
- * "no saved queries".
+ * saved. The guarded load/persist path is shared via {@link ./browser-storage} so a
+ * missing/throwing storage (SSR, privacy mode) degrades to "no saved queries".
  */
 const STORAGE_KEY = "lunora-studio-saved-queries";
 
 /** Cap the list so it stays a short, useful menu rather than an unbounded log. */
 const MAX_SAVED = 50;
-
-const store = (): Storage | undefined => {
-    try {
-        return (globalThis as { localStorage?: Storage }).localStorage;
-    } catch {
-        return undefined;
-    }
-};
 
 /** Narrow an unknown parsed entry to a {@link SavedQuery}, dropping anything malformed. */
 const isSavedQuery = (entry: unknown): entry is SavedQuery =>
@@ -57,32 +50,10 @@ const isSavedQuery = (entry: unknown): entry is SavedQuery =>
     (entry as { view: unknown }).view !== null;
 
 /** Saved queries, most-recently-saved first. Empty when storage is unavailable or empty. */
-const loadSavedQueries = (): SavedQuery[] => {
-    try {
-        const raw = store()?.getItem(STORAGE_KEY);
-
-        if (raw === null || raw === undefined) {
-            return [];
-        }
-
-        const parsed = JSON.parse(raw) as unknown;
-
-        return Array.isArray(parsed) ? parsed.filter(isSavedQuery) : [];
-    } catch {
-        return [];
-    }
-};
+const loadSavedQueries = (): SavedQuery[] => loadJsonArray<unknown>(STORAGE_KEY).filter(isSavedQuery);
 
 const persist = (queries: SavedQuery[]): void => {
-    const storage = store();
-
-    if (storage !== undefined) {
-        try {
-            storage.setItem(STORAGE_KEY, JSON.stringify(queries));
-        } catch {
-            /* quota / disabled storage — saved queries simply aren't persisted */
-        }
-    }
+    saveJson(STORAGE_KEY, queries);
 };
 
 /**

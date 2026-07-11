@@ -88,4 +88,37 @@ describe("createWorker — kv admin endpoints", () => {
 
         expect(response.status).toBe(400);
     });
+
+    it("accepts a KV value PUT above the shared 1 MiB body cap (KV path is exempt from the global Content-Length fast-path)", async () => {
+        expect.assertions(2);
+
+        // A ~2 MiB value — over the shared 1 MiB `MAX_BODY_BYTES`. The global
+        // Content-Length fast-path would 413 it before routing unless the KV value
+        // path uses its own 32 MiB budget (Cloudflare KV allows up to 25 MiB).
+        const putValue = vi.fn<KvIntrospector["putValue"]>(async () => undefined);
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, kvIntrospector: introspector({ putValue }), shardDO: noopNamespace });
+        const bigValue = "x".repeat(2 * 1_048_576);
+
+        const response = await worker.fetch(putRequest({ key: "k", namespace: "CACHE", value: bigValue }), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(putValue).toHaveBeenCalledWith(expect.objectContaining({ key: "k", namespace: "CACHE", value: bigValue }));
+    });
+
+    it("still rejects a >1 MiB body on a non-KV path with 413 (the exemption is scoped to the KV value path)", async () => {
+        expect.assertions(1);
+
+        // The global cap must remain enforced everywhere else: an oversized body
+        // on `/_lunora/rpc` still 413s (the KV exemption is path-scoped).
+        const worker = createWorker({ shardDO: noopNamespace });
+        const bigBody = JSON.stringify({ args: { blob: "x".repeat(2 * 1_048_576) }, functionPath: "messages:list" });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", { body: bigBody, headers: { "content-type": "application/json" }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(413);
+    });
 });

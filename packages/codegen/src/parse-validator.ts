@@ -121,6 +121,30 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
 const parseArgument = (argument: Node | undefined, fallback: ValidatorIR): ValidatorIR =>
     argument && Node.isExpression(argument) ? parseValidator(argument) : fallback;
 
+/**
+ * Render a `v.literal(...)` argument as the IR's `literalValue` source text.
+ *
+ * String and no-substitution template literals are normalized to canonical JSON
+ * (`JSON.stringify` of the runtime value) so escapes, backticks, and single
+ * quotes survive as a valid, safely-emittable double-quoted literal — splicing
+ * the raw source text instead would carry an unescaped backtick/quote or a stray
+ * backslash that fails `LITERAL_VALUE_RE` and aborts the whole codegen run with a
+ * spurious INTERNAL error. Numbers, `true`/`false`/`null`, and any non-literal
+ * expression keep their verbatim source text; the latter is intentionally
+ * rejected downstream by `LITERAL_VALUE_RE`.
+ */
+const renderLiteralSource = (node: Node | undefined): string => {
+    if (node === undefined) {
+        return "undefined";
+    }
+
+    if (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node)) {
+        return JSON.stringify(node.getLiteralValue());
+    }
+
+    return node.getText();
+};
+
 /** Parse a single `v.NAME(...)` builder call, dispatching on the member name. */
 const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): ValidatorIR => {
     if (SCALAR_KINDS.has(member)) {
@@ -148,9 +172,10 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): Validato
         case "literal": {
             return {
                 kind: "literal",
-                // Captures the source text — for string/number/boolean/null literals
-                // this matches the TS type representation directly.
-                literalValue: first ? first.getText() : "undefined",
+                // Canonical source text — strings/templates are re-encoded via
+                // JSON.stringify (see renderLiteralSource) so escapes/backticks
+                // survive; numbers/booleans/null keep their verbatim text.
+                literalValue: renderLiteralSource(first),
             };
         }
 

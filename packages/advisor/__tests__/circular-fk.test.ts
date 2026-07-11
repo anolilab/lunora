@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
+import type { AdvisorSchema } from "../src";
 import { circularFk, fromServerSchema } from "../src";
 
 const run = (schema: ReturnType<typeof defineSchema>) => circularFk.run({ schema: fromServerSchema(schema) });
@@ -186,5 +187,37 @@ describe("circular_fk", () => {
 
         // One cycle covers {a, b, d} and the other covers {a, c, d}.
         expect(cycles).toEqual(expect.arrayContaining([expect.arrayContaining(["a", "b", "d"]), expect.arrayContaining(["a", "c", "d"])]));
+    });
+
+    it("stays fast on a large acyclic reconverging FK graph (no exponential path blow-up)", () => {
+        expect.assertions(1);
+
+        // A forward-only diamond chain: t_i → t_{i+1} and t_i → t_{i+2}. Every
+        // edge points at a higher index, so the graph is strictly acyclic, but
+        // the number of distinct simple *paths* from t0 grows like Fibonacci(n).
+        // A naive enumerate-all-paths DFS walks every one of them and would take
+        // minutes here (and hang codegen); Johnson's algorithm blocks exhausted
+        // subtrees and returns immediately. This test would time out under the
+        // old implementation. Built as an AdvisorSchema directly to keep the graph
+        // construction (and the forward-only edges) explicit.
+        const n = 40;
+        const tables: AdvisorSchema["tables"][number][] = [];
+
+        for (let i = 0; i < n; i += 1) {
+            const relations: AdvisorSchema["tables"][number]["relations"][number][] = [];
+
+            if (i + 1 < n) {
+                relations.push({ field: "next1", kind: "one", name: "a", references: "_id", table: `t${(i + 1).toString()}` });
+            }
+
+            if (i + 2 < n) {
+                relations.push({ field: "next2", kind: "one", name: "b", references: "_id", table: `t${(i + 2).toString()}` });
+            }
+
+            tables.push({ fields: [], indexes: [], name: `t${i.toString()}`, relations });
+        }
+
+        // Acyclic ⇒ zero findings, and it must return well within the test timeout.
+        expect(circularFk.run({ schema: { tables } })).toHaveLength(0);
     });
 });

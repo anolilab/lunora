@@ -223,4 +223,30 @@ describe("emit (workflows)", () => {
 
         expect(emitShard({ schema: EMPTY_SCHEMA })).not.toContain("LUNORA_WORKFLOWS");
     });
+
+    it("rejects two workflows that deploy under the same name", () => {
+        expect.assertions(1);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+
+            export const first = defineWorkflow({ name: "shared", handler: async () => undefined });
+            export const second = defineWorkflow({ name: "shared", handler: async () => undefined });
+        `);
+
+        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/Duplicate workflow name "shared"/u);
+    });
+
+    it("rejects two workflow exports that collapse to the same binding name", () => {
+        expect.assertions(1);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+
+            export const myFlow = defineWorkflow({ name: "one", handler: async () => undefined });
+            export const myFLOW = defineWorkflow({ name: "two", handler: async () => undefined });
+        `);
+
+        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/Duplicate workflow binding "WORKFLOW_MY_FLOW"/u);
+    });
 });

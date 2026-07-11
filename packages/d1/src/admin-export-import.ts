@@ -9,7 +9,7 @@ import type { DatabaseWriterLike, SchemaLike } from "@lunora/do";
 import { toErrorBody } from "@lunora/errors";
 
 import type { D1Exec } from "./d1-ctx-db";
-import { decodeGlobalRow } from "./d1-ctx-db";
+import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
 import { quoteIdentifier } from "./dialect";
 
 /** One exported row: `doc` is reconstructed from the column tuple. */
@@ -72,30 +72,55 @@ interface ExportGlobalArgs {
 }
 
 /**
- * Yield rows from every requested `.global()` table in batches. Uses
- * `LIMIT ?/OFFSET ?` because D1 globals don't have a stable keyset abstraction
- * here (the writer's `findMany` does, but at the cost of routing through the
- * full validator pipeline; for a snapshot stream a plain offset scan is
- * sufficient and predictable).
+ * Yield rows from every requested `.global()` table in batches.
+ *
+ * Keyset-paginates on the physical primary key (`id` — every `.global()` table
+ * carries it, see `frameworkColumnDdl`): `WHERE "id" > ? ORDER BY "id" LIMIT ?`,
+ * carrying the last id forward. A plain `LIMIT/OFFSET` scan would be wrong here —
+ * SQLite gives no ordering guarantee for an unordered SELECT and each page is a
+ * separate query, so pages could overlap or skip rows (and any concurrent
+ * insert/delete would shift offsets and silently drop/duplicate rows in the
+ * snapshot). Keyset paging is deterministic under concurrent writes and avoids
+ * O(n^2) OFFSET scans on large tables.
+ *
+ * Tables are provisioned first (idempotent `CREATE … IF NOT EXISTS`): `.global()`
+ * tables are created lazily on first write, so a fresh deployment — or any table
+ * never written — would otherwise abort the stream with a raw `no such table`
+ * instead of exporting it as empty.
  */
 const exportGlobalRows = async function* (exec: D1Exec, schema: SchemaLike, args: ExportGlobalArgs): AsyncGenerator<ExportRow, void, undefined> {
     const tables = selectGlobalTables(schema, args.tables);
     const batchSize = args.batchSize ?? DEFAULT_BATCH_SIZE;
 
+    // Provision the schema's global tables so a never-written table exports as
+    // empty rather than throwing `no such table` mid-stream (mirrors the
+    // introspector's `ensureGlobalTables`).
+    await runD1GlobalTableMigrations(exec, schema);
+
     for (const table of tables) {
-        let offset = 0;
+        const quoted = quoteIdentifier(table);
+        let lastId: string | undefined;
         let hasMore = true;
 
         while (hasMore) {
-            // eslint-disable-next-line no-await-in-loop -- offset paging is inherently sequential: each page's OFFSET depends on the prior page count.
-            const rows = await exec.all(`SELECT * FROM ${quoteIdentifier(table)} LIMIT ? OFFSET ?`, [batchSize, offset]);
+            /* eslint-disable no-await-in-loop -- sequential keyset pagination: each page depends on the prior page's last id */
+            const rows =
+                lastId === undefined
+                    ? await exec.all(`SELECT * FROM ${quoted} ORDER BY "id" LIMIT ?`, [batchSize])
+                    : await exec.all(`SELECT * FROM ${quoted} WHERE "id" > ? ORDER BY "id" LIMIT ?`, [lastId, batchSize]);
+            /* eslint-enable no-await-in-loop */
 
             for (const row of rows) {
                 yield { doc: decodeRow(schema, table, row), table };
             }
 
+            const last = rows.at(-1);
+
+            if (last !== undefined) {
+                lastId = String(last["id"]);
+            }
+
             hasMore = rows.length === batchSize;
-            offset += rows.length;
         }
     }
 };

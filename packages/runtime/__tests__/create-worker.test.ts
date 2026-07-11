@@ -866,6 +866,82 @@ describe("createWorker — RPC batch forward failure (Plan 118 toErrorBody migra
     });
 });
 
+describe("createWorker — RPC batch cross-shard bookmark", () => {
+    // A namespace whose per-shard `/rpc-batch` reply echoes the demux-shaped
+    // `{ results }` and attaches an `x-d1-bookmark` only for the shard keys in
+    // `bookmarks`. Lets a test span shards where only some produce a bookmark.
+    const bookmarkingNamespace = (bookmarks: Record<string, string>): ShardNamespaceLike => {
+        return {
+            get: (id) => {
+                const shardKey = (id as { __name: string }).__name;
+
+                return {
+                    fetch: async (request: Request): Promise<Response> => {
+                        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- request.json() is Promise<unknown> under the build tsconfig; the assertion is required there
+                        const { calls } = (await request.json()) as { calls: { id: string }[] };
+                        const results = calls.map((call) => {
+                            return { body: { shardKey }, id: call.id, status: 200 };
+                        });
+                        const headers: Record<string, string> = { "content-type": "application/json" };
+                        const bookmark = bookmarks[shardKey];
+
+                        if (bookmark !== undefined) {
+                            headers["x-d1-bookmark"] = bookmark;
+                        }
+
+                        return Response.json({ results }, { headers, status: 200 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+    };
+
+    const batchRequest = (calls: unknown[]): Request =>
+        new Request("https://app.example/_lunora/rpc-batch", { body: JSON.stringify({ calls }), method: "POST" });
+
+    it("echoes the bookmark when exactly one shard in the batch produced one", async () => {
+        expect.assertions(1);
+
+        // Shard "a" (the mutation) emits a bookmark; shard "b" (a read) does not.
+        // The single producer's bookmark is safe to pin the client's next read to.
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: bookmarkingNamespace({ a: "bm-a" }) });
+
+        const res = await worker.fetch(
+            batchRequest([
+                { functionPath: "messages:send", id: 0, shardKey: "a" },
+                { functionPath: "messages:list", id: 1, shardKey: "b" },
+            ]),
+            {},
+            fakeContext,
+        );
+
+        expect(res.headers.get("x-d1-bookmark")).toBe("bm-a");
+    });
+
+    it("omits the bookmark when the batch spans shards that each produced one (not comparable across sources)", async () => {
+        expect.assertions(1);
+
+        // Two distinct shards each return a bookmark; their D1 bookmarks are from
+        // different sources and aren't comparable, so pinning the client to an
+        // arbitrary one would silently break read-your-writes — omit instead.
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: bookmarkingNamespace({ a: "bm-a", b: "bm-b" }) });
+
+        const res = await worker.fetch(
+            batchRequest([
+                { functionPath: "messages:send", id: 0, shardKey: "a" },
+                { functionPath: "messages:send", id: 1, shardKey: "b" },
+            ]),
+            {},
+            fakeContext,
+        );
+
+        expect(res.headers.get("x-d1-bookmark")).toBeNull();
+    });
+});
+
 describe("createWorker — x402 paid procedures", () => {
     let shard: ShardSpy;
 
@@ -1622,6 +1698,8 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
     interface Forward {
         binding: null | string;
         name: string;
+        system: null | string;
+        userId: null | string;
     }
 
     const routingNamespace = (relayCount: number, forwards: Forward[]): ShardNamespaceLike => {
@@ -1635,7 +1713,12 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
                             return Response.json({ relayCount }, { headers: { "content-type": "application/json" } });
                         }
 
-                        forwards.push({ binding: request.headers.get("x-lunora-shard-binding"), name });
+                        forwards.push({
+                            binding: request.headers.get("x-lunora-shard-binding"),
+                            name,
+                            system: request.headers.get("x-lunora-system"),
+                            userId: request.headers.get("x-lunora-userid"),
+                        });
 
                         return new Response(null, { status: 101 });
                     },
@@ -1688,5 +1771,33 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
 
         expect(forwards[0]?.name).toBe("cold-c");
         expect(forwards[0]?.binding).toBeNull();
+    });
+
+    it("strips forged x-lunora-* headers from the upgrade before forwarding to the DO", async () => {
+        expect.assertions(4);
+
+        const forwards: Forward[] = [];
+        const namespace = routingNamespace(2, forwards);
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });
+
+        // Attacker forges control headers on the WS upgrade. With `env` not exposing
+        // the namespace, `resolveShardBindingName` returns undefined, so the forged
+        // `x-lunora-shard-binding` is never overwritten — it must be *stripped*
+        // instead, along with the forged `x-lunora-system`/`x-lunora-userid`.
+        const forged = new Request("https://app.example/_lunora/ws?shard=forged-d", {
+            headers: {
+                Upgrade: "websocket",
+                "x-lunora-shard-binding": "EVIL",
+                "x-lunora-system": "1",
+                "x-lunora-userid": "attacker",
+            },
+        });
+
+        await worker.fetch(forged, {}, fakeContext);
+
+        expect(forwards).toHaveLength(1);
+        expect(forwards[0]?.binding).toBeNull(); // forged "EVIL" stripped, no binding resolved to re-set it
+        expect(forwards[0]?.system).toBeNull(); // forged x-lunora-system stripped
+        expect(forwards[0]?.userId).toBeNull(); // forged x-lunora-userid stripped (anonymous upgrade)
     });
 });

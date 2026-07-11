@@ -4,6 +4,7 @@ import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErr
 import { createQuerySubscription } from "@lunora/client/query";
 
 import { resolveLunoraClient } from "./client";
+import { shouldOpenSubscription } from "./platform";
 
 export interface SubscriptionOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
@@ -55,12 +56,16 @@ export const subscription = <F extends FunctionReference>(
     options: SubscriptionOptions = {},
 ): SubscriptionResult<ReturnOf<F>> => {
     const client = resolveLunoraClient(options.client);
+    const fromInjectionContext = options.destroyRef === undefined;
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
 
     const data = signal<ReturnOf<F> | undefined>(undefined);
     const error = signal<SubscriptionError | undefined>(undefined);
 
-    if (args !== "skip") {
+    // The `shouldOpenSubscription()` guard skips the socket on the Angular server
+    // platform (SSR): the signals stay at their initial `undefined`, and the
+    // browser render re-runs this and attaches.
+    if (args !== "skip" && shouldOpenSubscription(fromInjectionContext)) {
         const userOnError = options.onError;
 
         const unsubscribe = createQuerySubscription<F>(

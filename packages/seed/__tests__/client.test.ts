@@ -215,6 +215,29 @@ describe("createSeedClient", () => {
         expect(seed.$store.posts!.every((post) => userIds.has(post.authorId as string))).toBe(true);
     });
 
+    it("serializes overlapping calls through the persist await so deterministic ids never collide (regression: offset race)", async () => {
+        // Both calls auto-seed `users` then `posts`. Without serialization, both
+        // would read `createdCount.posts === 0` across the persist await and
+        // generate byte-identical `_id`s (hashes of the absolute index) — duplicate
+        // primary keys. Serialization gives the second call a fresh offset.
+        expect.hasAssertions();
+
+        const seed = createSeedClient<InsertModel>(schema, {
+            persist: async () => {
+                // Yield so an unserialized client would interleave here.
+                await Promise.resolve();
+            },
+            seed: 3,
+        });
+
+        const [a, b] = await Promise.all([seed.posts(5), seed.posts(5)]);
+        const postIds = [...a.posts, ...b.posts];
+
+        expect(postIds).toHaveLength(10);
+        expect(new Set(postIds).size).toBe(10);
+        expect(new Set(seed.$ids.posts).size).toBe(seed.$ids.posts?.length ?? 0);
+    });
+
     it("is deterministic for a given seed and varies across seeds", async () => {
         expect.hasAssertions();
 

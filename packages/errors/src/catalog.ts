@@ -129,6 +129,18 @@ export const ERROR_CATALOG = {
 export type LunoraErrorCode = keyof typeof ERROR_CATALOG;
 
 /**
+ * Look up a catalog entry by `code`, or `undefined` when the code isn't
+ * registered. The single guarded seam for reading `ERROR_CATALOG` by an
+ * arbitrary string: because the catalog is a plain object literal, a bracket
+ * read for an inherited key (e.g. `"constructor"`, `"toString"`) would resolve
+ * to `Object.prototype`'s member instead of `undefined`, so this uses
+ * `Object.hasOwn` to only ever return an own entry. Reused by the
+ * `LunoraError` constructor, {@link isInternalCode}, and {@link resolveHint}.
+ */
+export const getCatalogEntry = (code: string): ErrorCatalogEntry | undefined =>
+    Object.hasOwn(ERROR_CATALOG, code) ? (ERROR_CATALOG as Record<string, ErrorCatalogEntry>)[code] : undefined;
+
+/**
  * True when `code` is an internal/redacted code — an internal failure or
  * unhandled invariant whose `message` must NOT cross the wire (it may carry SQL
  * fragments, file paths, or internal identifiers). Derived from the catalog's
@@ -136,7 +148,7 @@ export type LunoraErrorCode = keyof typeof ERROR_CATALOG;
  * Throwing a `LunoraError` with any non-internal code is the author's vouch that
  * its message is client-safe; an unknown/unregistered code is treated as safe.
  */
-export const isInternalCode = (code: string): boolean => (ERROR_CATALOG as Record<string, ErrorCatalogEntry>)[code]?.internal === true;
+export const isInternalCode = (code: string): boolean => getCatalogEntry(code)?.internal === true;
 
 /**
  * A message-matched solution for errors that reach a consumer without a `code`
@@ -331,7 +343,7 @@ export const resolveHint = (input: { code?: string; hint?: ErrorHint; message?: 
     }
 
     if (input.code !== undefined) {
-        const entry: ErrorCatalogEntry | undefined = (ERROR_CATALOG as Record<string, ErrorCatalogEntry>)[input.code];
+        const entry: ErrorCatalogEntry | undefined = getCatalogEntry(input.code);
 
         if (entry?.hint !== undefined) {
             return entry.hint;

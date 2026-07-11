@@ -24,15 +24,89 @@ interface EvaluateResult {
 const capacityOf = (config: RateLimitConfig): number => config.capacity ?? config.rate;
 
 /**
+ * Project a token bucket's stored state forward to `now`: how many tokens have
+ * refilled (capped at `capacity`), with the derived `capacity`/`ratePerMs` the
+ * caller reuses. Shared by {@link evaluate} and {@link availableAt} so the
+ * refill math lives in one place.
+ */
+const projectTokenBucket = (
+    config: RateLimitConfig,
+    prior: RateLimitValue | undefined,
+    now: number,
+): { available: number; capacity: number; ratePerMs: number } => {
+    const capacity = capacityOf(config);
+    const ratePerMs = config.rate / config.period;
+    const base = prior ?? { ts: now, value: capacity };
+    const elapsed = Math.max(0, now - base.ts);
+
+    return { available: Math.min(capacity, base.value + elapsed * ratePerMs), capacity, ratePerMs };
+};
+
+/**
+ * Project a fixed window's stored state forward to `now`: the `{ ts, value }` of
+ * the (possibly rolled-over) current window before any consumption. A negative
+ * prior `value` is a reserved debt and is carried across the window boundary so
+ * the debt is genuinely repaid out of the next grant (matching the token
+ * bucket), rather than silently forgiven. Positive leftovers roll over only when
+ * an explicit `capacity` is set. Shared by {@link evaluate} and
+ * {@link availableAt}.
+ */
+const projectFixedWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined, now: number): { ts: number; value: number } => {
+    const start = config.start ?? 0;
+    const windowStart = start + Math.floor((now - start) / config.period) * config.period;
+
+    if (!prior || prior.ts < windowStart) {
+        let carry = 0;
+
+        // Carry the prior balance forward when it is reserved debt (a negative
+        // balance that must survive the boundary and be repaid, never forgiven)
+        // or a positive leftover under an explicit capacity (the default
+        // `capacity === rate` disables cross-window rollover).
+        if (prior && (prior.value < 0 || config.capacity !== undefined)) {
+            carry = prior.value;
+        }
+
+        return { ts: windowStart, value: Math.min(capacityOf(config), carry + config.rate) };
+    }
+
+    return { ts: prior.ts, value: prior.value };
+};
+
+/**
+ * Project a sliding window's stored state forward to `now`: the current window
+ * start, the previous/current window counts, and the decay `weight`/`elapsed`.
+ * Shared by {@link evaluate} and {@link availableAt}.
+ */
+const projectSlidingWindow = (
+    config: RateLimitConfig,
+    prior: RateLimitValue | undefined,
+    now: number,
+): { currentCount: number; elapsed: number; previousCount: number; weight: number; windowStart: number } => {
+    const start = config.start ?? 0;
+    const windowStart = start + Math.floor((now - start) / config.period) * config.period;
+    const elapsed = now - windowStart;
+    const weight = (config.period - elapsed) / config.period;
+
+    let previousCount = 0;
+    let currentCount = 0;
+
+    if (prior?.ts === windowStart) {
+        previousCount = prior.prev ?? 0;
+        currentCount = prior.value;
+    } else if (prior?.ts === windowStart - config.period) {
+        previousCount = prior.value;
+    }
+    // A gap of two or more windows leaves both counts at zero.
+
+    return { currentCount, elapsed, previousCount, weight, windowStart };
+};
+
+/**
  * Token bucket: tokens refill continuously at `rate / period` per millisecond
  * up to `capacity`. A fresh key starts full.
  */
 const tokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined, options: EvaluateOptions): EvaluateResult => {
-    const capacity = capacityOf(config);
-    const ratePerMs = config.rate / config.period;
-    const base = prior ?? { ts: options.now, value: capacity };
-    const elapsed = Math.max(0, options.now - base.ts);
-    const available = Math.min(capacity, base.value + elapsed * ratePerMs);
+    const { available, capacity, ratePerMs } = projectTokenBucket(config, prior, options.now);
 
     if (available >= options.count) {
         const value = { ts: options.now, value: available - options.count };
@@ -49,28 +123,25 @@ const tokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined,
         return { status: { ok: true, retryAfter }, value: { ts: options.now, value: available - options.count } };
     }
 
+    // A single request larger than the bucket can ever hold can never be
+    // admitted, so a finite `retryAfter` would be a lie the caller would chase
+    // forever. Mirror the windowed algorithms' guard and surface caller misuse.
+    if (options.count > capacity) {
+        throw new LunoraError("INTERNAL", `@lunora/ratelimit: requested count ${String(options.count)} exceeds the limiter capacity ${String(capacity)}`);
+    }
+
     return { status: { ok: false, reason: "rate", retryAfter }, value: undefined };
 };
 
 /**
  * Fixed window: `rate` tokens are granted at the start of each window aligned
  * to `start + n * period`. With an explicit `capacity > rate`, unused tokens
- * roll into the next window up to `capacity`.
+ * roll into the next window up to `capacity`. Reserved debt (a negative balance)
+ * is carried across the boundary and repaid out of the next grant.
  */
 const fixedWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined, options: EvaluateOptions): EvaluateResult => {
     const capacity = capacityOf(config);
-    const start = config.start ?? 0;
-    const windowStart = start + Math.floor((options.now - start) / config.period) * config.period;
-
-    let base: RateLimitValue;
-
-    if (!prior || prior.ts < windowStart) {
-        const carry = prior && config.capacity !== undefined ? Math.max(0, prior.value) : 0;
-
-        base = { ts: windowStart, value: Math.min(capacity, carry + config.rate) };
-    } else {
-        base = prior;
-    }
+    const base = projectFixedWindow(config, prior, options.now);
 
     if (base.value >= options.count) {
         const value = { ts: base.ts, value: base.value - options.count };
@@ -104,21 +175,7 @@ const fixedWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined,
 const slidingWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined, options: EvaluateOptions): EvaluateResult => {
     const limit = config.rate;
     const { period } = config;
-    const start = config.start ?? 0;
-    const windowStart = start + Math.floor((options.now - start) / period) * period;
-    const elapsed = options.now - windowStart;
-    const weight = (period - elapsed) / period;
-
-    let previousCount = 0;
-    let currentCount = 0;
-
-    if (prior?.ts === windowStart) {
-        previousCount = prior.prev ?? 0;
-        currentCount = prior.value;
-    } else if (prior?.ts === windowStart - period) {
-        previousCount = prior.value;
-    }
-    // A gap of two or more windows leaves both counts at zero.
+    const { currentCount, elapsed, previousCount, weight, windowStart } = projectSlidingWindow(config, prior, options.now);
 
     const estimated = previousCount * weight + currentCount;
     const admit = estimated + options.count <= limit;
@@ -159,46 +216,22 @@ const slidingWindow = (config: RateLimitConfig, prior: RateLimitValue | undefine
  * units could be admitted right now. Token bucket → the refilled token count;
  * fixed window → tokens left in the current (possibly rolled-over) window;
  * sliding window → `rate` minus the weighted estimate, floored at zero. Pure,
- * like {@link evaluate}. Backs `RateLimiter.getValue` so it reports a
- * live figure rather than the last value that happened to be persisted.
+ * like {@link evaluate}, and shares its per-algorithm projection helpers so the
+ * two never diverge. Backs `RateLimiter.getValue` so it reports a live figure
+ * rather than the last value that happened to be persisted.
  */
 const availableAt = (config: RateLimitConfig, prior: RateLimitValue | undefined, now: number): { ts: number; value: number } => {
     if (config.kind === "token bucket") {
-        const capacity = capacityOf(config);
-        const ratePerMs = config.rate / config.period;
-        const base = prior ?? { ts: now, value: capacity };
-        const elapsed = Math.max(0, now - base.ts);
-
-        return { ts: now, value: Math.min(capacity, base.value + elapsed * ratePerMs) };
+        return { ts: now, value: projectTokenBucket(config, prior, now).available };
     }
 
-    const start = config.start ?? 0;
-    const windowStart = start + Math.floor((now - start) / config.period) * config.period;
-
     if (config.kind === "sliding window") {
-        const elapsed = now - windowStart;
-        const weight = (config.period - elapsed) / config.period;
-
-        let previousCount = 0;
-        let currentCount = 0;
-
-        if (prior?.ts === windowStart) {
-            previousCount = prior.prev ?? 0;
-            currentCount = prior.value;
-        } else if (prior?.ts === windowStart - config.period) {
-            previousCount = prior.value;
-        }
+        const { currentCount, previousCount, weight, windowStart } = projectSlidingWindow(config, prior, now);
 
         return { ts: windowStart, value: Math.max(0, config.rate - (previousCount * weight + currentCount)) };
     }
 
-    if (!prior || prior.ts < windowStart) {
-        const carry = prior && config.capacity !== undefined ? Math.max(0, prior.value) : 0;
-
-        return { ts: windowStart, value: Math.min(capacityOf(config), carry + config.rate) };
-    }
-
-    return { ts: prior.ts, value: prior.value };
+    return projectFixedWindow(config, prior, now);
 };
 
 /**

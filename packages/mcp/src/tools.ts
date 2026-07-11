@@ -114,16 +114,55 @@ const readFunctionPath = (input: Record<string, unknown>): string => {
     return functionPath;
 };
 
+/** True for a JSON object (`{}`), excluding `null` and arrays (both are `typeof "object"`). */
+const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** A short human label for a rejected `args` value, for the error message. */
+const describeArgs = (value: unknown): string => (Array.isArray(value) ? "an array" : `a ${typeof value}`);
+
+/**
+ * Resolve the `args` bag for a run tool. Absent (`undefined`/`null`) → an empty
+ * bag so an all-optional function runs with its defaults. A JSON-stringified
+ * object (which LLMs very commonly emit, e.g. `args: "{\"limit\":5}"`) is parsed
+ * and accepted. Anything else — a number, boolean, array, or a string that isn't
+ * a JSON object — is REJECTED with a clear error rather than silently coerced to
+ * `{}`, so the model gets a signal naming the actual mistake (wrong `args` type)
+ * instead of a silent success with defaults, or a misdirecting "missing argument"
+ * from the server validator.
+ */
+const readArgumentsBag = (raw: unknown): Record<string, unknown> => {
+    if (raw === undefined || raw === null) {
+        return {};
+    }
+
+    if (typeof raw === "string") {
+        let parsed: unknown;
+
+        try {
+            parsed = JSON.parse(raw);
+        } catch {
+            throw new LunoraError("BAD_REQUEST", `"args" must be a JSON object; received a string that is not valid JSON`);
+        }
+
+        if (!isPlainObject(parsed)) {
+            throw new LunoraError("BAD_REQUEST", `"args" must be a JSON object; the provided string decoded to ${describeArgs(parsed)}`);
+        }
+
+        return parsed;
+    }
+
+    if (!isPlainObject(raw)) {
+        throw new LunoraError("BAD_REQUEST", `"args" must be a JSON object, got ${describeArgs(raw)}`);
+    }
+
+    return raw;
+};
+
 /** Coerce an MCP `arguments` bag into the `(fn, args, shardKey)` triple the run-tools share. */
 const readRunArguments = (input: Record<string, unknown>): { args: Record<string, unknown>; functionPath: string; shardKey: string | undefined } => {
     const functionPath = readFunctionPath(input);
 
-    // Per the tool's JSON Schema, `args` is an object; coerce anything else
-    // (including arrays — `typeof [] === "object"`) to an empty bag so a
-    // malformed payload can't be forwarded as the function's arguments.
-    const rawArguments = input.args;
-    const isPlainObject = typeof rawArguments === "object" && rawArguments !== null && !Array.isArray(rawArguments);
-    const args = isPlainObject ? (rawArguments as Record<string, unknown>) : {};
+    const args = readArgumentsBag(input.args);
     // Treat an empty/blank shardKey as absent: forwarding `shardKey: ""` would
     // resolve a different (empty-string) shard than the unsharded default the
     // caller intends, so coalesce it to `undefined`.
@@ -136,14 +175,100 @@ const reference = (functionPath: string): FunctionReference => {
     return { __lunoraRef: functionPath };
 };
 
+/**
+ * Base64-encode bytes for the model-visible JSON, chunking to stay under
+ * `String.fromCharCode`'s argument-count ceiling on large buffers (mirrors the
+ * wire codec's own encoder).
+ */
+const bytesToBase64 = (bytes: Uint8Array): string => {
+    let binary = "";
+    const chunk = 0x80_00;
+
+    for (let index = 0; index < bytes.length; index += chunk) {
+        // eslint-disable-next-line unicorn/prefer-code-point -- byte values 0-255 -> latin1; fromCharCode is correct and faster here
+        binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+    }
+
+    return btoa(binary);
+};
+
+/**
+ * `JSON.stringify` replacer for a decoded RPC result. `client.query`/`mutation`/
+ * `action` return `decodeWire(...)`, which revives `v.int64()` leaves as real
+ * `bigint` and `v.bytes()`/typed-array columns as `ArrayBuffer`/typed arrays.
+ * Raw `JSON.stringify` THROWS on a bigint (turning a successful call into a tool
+ * error) and serializes an `ArrayBuffer` to `{}` / a `Uint8Array` to an
+ * index-keyed object (silent corruption). Map every bigint → its decimal string
+ * and every bytes leaf → base64 so the model sees a faithful value instead.
+ */
+const jsonResultReplacer = (_key: string, value: unknown): unknown => {
+    if (typeof value === "bigint") {
+        return value.toString();
+    }
+
+    if (value instanceof ArrayBuffer) {
+        return bytesToBase64(new Uint8Array(value));
+    }
+
+    if (ArrayBuffer.isView(value)) {
+        const view = value;
+
+        return bytesToBase64(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+    }
+
+    return value;
+};
+
 const ok = (value: unknown): ToolResult => {
     // A void-returning mutation/action resolves to `undefined`, and
     // `JSON.stringify(undefined)` yields the JS value `undefined` (not a
     // string), which violates both `ToolResult.content[].text: string` and the
     // MCP `TextContent` contract. Emit the JSON `null` literal in that case.
-    const text = value === undefined ? "null" : JSON.stringify(value, undefined, 2);
+    const text = value === undefined ? "null" : JSON.stringify(value, jsonResultReplacer, 2);
 
     return { content: [{ text, type: "text" }] };
+};
+
+/**
+ * The deployment's public-function registry is static per deploy, but every run
+ * tool (via {@link assertRunnable}) and `lunora_get_function_schema` needs it —
+ * two sequential admin round trips per tool call without caching. Memoize
+ * `listFunctions()` per client for a short TTL (freshness only matters across
+ * redeploys) and cache the in-flight promise so a burst of concurrent tool calls
+ * shares one fetch. A rejected fetch is evicted so the next call retries rather
+ * than replaying the failure. Keyed by client via a `WeakMap` so a discarded
+ * client's entry is collectable and separate servers don't share a cache.
+ */
+const FUNCTIONS_CACHE_TTL_MS = 30_000;
+
+interface FunctionsCacheEntry {
+    expiresAt: number;
+    promise: Promise<FunctionDescriptor[]>;
+}
+
+const functionsCache = new WeakMap<LunoraClient, FunctionsCacheEntry>();
+
+const listFunctionsCached = (client: LunoraClient): Promise<FunctionDescriptor[]> => {
+    const now = Date.now();
+    const cached = functionsCache.get(client);
+
+    if (cached !== undefined && cached.expiresAt > now) {
+        return cached.promise;
+    }
+
+    const promise = client.listFunctions().catch((error: unknown) => {
+        // Don't leave a rejected fetch cached — evict this entry (unless a newer
+        // one already replaced it) so the next call retries.
+        if (functionsCache.get(client)?.promise === promise) {
+            functionsCache.delete(client);
+        }
+
+        throw error;
+    });
+
+    functionsCache.set(client, { expiresAt: now + FUNCTIONS_CACHE_TTL_MS, promise });
+
+    return promise;
 };
 
 /**
@@ -154,7 +279,7 @@ const ok = (value: unknown): ToolResult => {
  * mutation/action through the query tool (or vice-versa). Throws on any mismatch.
  */
 const assertRunnable = async (client: LunoraClient, functionPath: string, expectedKind: "action" | "mutation" | "query"): Promise<void> => {
-    const functions = await client.listFunctions();
+    const functions = await listFunctionsCached(client);
     const descriptor: FunctionDescriptor | undefined = functions.find((function_) => function_.path === functionPath);
 
     if (descriptor === undefined) {
@@ -190,7 +315,7 @@ const callTool = async (client: LunoraClient, name: string, input: Record<string
         switch (name) {
             case "lunora_get_function_schema": {
                 const functionPath = readFunctionPath(input);
-                const functions = await client.listFunctions();
+                const functions = await listFunctionsCached(client);
                 const descriptor: FunctionDescriptor | undefined = functions.find((function_) => function_.path === functionPath);
 
                 if (descriptor === undefined) {
@@ -200,7 +325,7 @@ const callTool = async (client: LunoraClient, name: string, input: Record<string
                 return ok({ args: descriptor.args ?? [], kind: descriptor.kind, path: descriptor.path });
             }
             case "lunora_list_functions": {
-                return ok(await client.listFunctions());
+                return ok(await listFunctionsCached(client));
             }
             case "lunora_list_tables": {
                 return ok(await client.listGlobalTables());

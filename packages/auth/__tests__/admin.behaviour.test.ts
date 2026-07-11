@@ -91,6 +91,30 @@ describe("createAuthAdmin", () => {
         expect(userRow(user.id)?.["banned"]).toBe(false);
     });
 
+    it("clears a stale banExpires when a temp ban is escalated to a permanent ban", async () => {
+        expect.assertions(2);
+
+        const user = await adminApi.createUser({ email: "escalate@example.com", name: "Esc" });
+
+        // Temp ban sets banExpires; escalating to a permanent ban (no expiresInSeconds)
+        // must null it out, else the "permanent" ban silently lapses after the first expiry.
+        await adminApi.banUser({ expiresInSeconds: 3600, reason: "temp", userId: user.id });
+
+        expect(userRow(user.id)?.["banExpires"] ?? null).not.toBeNull();
+
+        await adminApi.banUser({ reason: "permanent", userId: user.id });
+
+        expect(userRow(user.id)?.["banExpires"] ?? null).toBeNull();
+    });
+
+    it("rejects a non-positive expiresInSeconds instead of silently making the ban permanent", async () => {
+        expect.assertions(1);
+
+        const user = await adminApi.createUser({ email: "negban@example.com", name: "Neg" });
+
+        await expect(adminApi.banUser({ expiresInSeconds: -100, userId: user.id })).rejects.toThrow(/INVALID_BAN_SECONDS|positive/iu);
+    });
+
     it("sets a role", async () => {
         expect.assertions(1);
 

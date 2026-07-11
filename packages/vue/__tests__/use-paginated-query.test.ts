@@ -1,6 +1,6 @@
 import type { PaginationResult } from "@lunora/client/pagination";
 import { describe, expect, it, vi } from "vitest";
-import { effectScope, nextTick } from "vue";
+import { effectScope, nextTick, ref } from "vue";
 
 import { useInfiniteQuery, usePaginatedQuery } from "../src/use-paginated-query";
 import { createFakeClient } from "./fake-client";
@@ -102,6 +102,85 @@ describe("usePaginatedQuery (Vue)", () => {
 
         expect(result.status.value).toBe("LoadingFirstPage");
         expect(result.results.value).toStrictEqual([]);
+
+        scope.stop();
+    });
+
+    it("does not reset the feed when args is replaced with a deep-equal object", async () => {
+        const fake = createFakeClient();
+        const argsRef = ref<Record<string, unknown>>({ filter: "x" });
+
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => usePaginatedQuery(fn, () => argsRef.value, { initialNumItems: NUM_ITEMS })))!;
+
+        fake.push(
+            "messages:list",
+            { filter: "x", paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: "cur-1", isDone: false, page: firstPageItems },
+        );
+        await flushAsync();
+
+        result.loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        fake.push(
+            "messages:list",
+            { filter: "x", paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: null, isDone: true, page: secondPageItems },
+        );
+        await flushAsync();
+
+        expect(result.results.value).toStrictEqual([...firstPageItems, ...secondPageItems]);
+
+        const subscribeCountBefore = fake.subscribeCalls.length;
+
+        // Replace with a brand-new object of equal content — identity differs but
+        // the stable key does not, so the feed must NOT tear down to page one.
+        argsRef.value = { filter: "x" };
+        await flushAsync();
+
+        expect(result.results.value).toStrictEqual([...firstPageItems, ...secondPageItems]);
+        expect(result.status.value).toBe("Exhausted");
+        expect(fake.subscribeCalls).toHaveLength(subscribeCountBefore);
+
+        scope.stop();
+    });
+
+    it("loadMore is re-entrancy safe: two synchronous calls do not duplicate the tail", async () => {
+        const fake = createFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => usePaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS })))!;
+
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: "cur-1", isDone: false, page: firstPageItems },
+        );
+        await flushAsync();
+
+        // Two synchronous loadMore calls before the next flush — the second sees
+        // the same stale tail cursor and must be a no-op.
+        result.loadMore(NUM_ITEMS);
+        result.loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        // Exactly one new tail subscription for cursor "cur-1" — not two, and no
+        // degenerate empty (cur-1, cur-1] page.
+        const tailArgs = JSON.stringify({ paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } });
+        const tailSubs = fake.subscribeCalls.filter((call) => JSON.stringify(call.args) === tailArgs);
+
+        expect(tailSubs).toHaveLength(1);
+
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: null, isDone: true, page: secondPageItems },
+        );
+        await flushAsync();
+
+        expect(result.results.value).toStrictEqual([...firstPageItems, ...secondPageItems]);
+        expect(result.status.value).toBe("Exhausted");
 
         scope.stop();
     });

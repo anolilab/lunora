@@ -14,6 +14,7 @@
  * credentials (an R2 API token's Access Key ID / Secret Access Key).
  * @see https://developers.cloudflare.com/r2/api/s3/presigned-urls/
  */
+import { toHex } from "./internal";
 import type { R2S3Credentials } from "./types";
 
 /** R2's S3 region alias — always `auto`. */
@@ -35,18 +36,6 @@ const compareEntries = (a: [string, string], b: [string, string]): number => {
     }
 
     return a[0] > b[0] ? 1 : 0;
-};
-
-/** Lowercase hex-encode an `ArrayBuffer`. */
-const toHex = (buffer: ArrayBuffer): string => {
-    const bytes = new Uint8Array(buffer);
-    let out = "";
-
-    for (const byte of bytes) {
-        out += byte.toString(16).padStart(2, "0");
-    }
-
-    return out;
 };
 
 /**

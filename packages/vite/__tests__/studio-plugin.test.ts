@@ -318,6 +318,23 @@ describe("studioPlugin", () => {
         expect(response.statusCode).toBe(403);
     });
 
+    it("rejects a proxied request carrying a forwarding header on a loopback peer", () => {
+        expect.assertions(1);
+
+        // A local reverse proxy/tunnel connects from 127.0.0.1 and may rewrite
+        // Host to localhost, but it adds a forwarding header — its presence means
+        // a (possibly remote) client is being relayed, so the admin-token document
+        // must be refused rather than trusting the loopback peer + Host.
+        const { response } = callGated(undefined, {
+            headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" },
+            method: "GET",
+            socket: { remoteAddress: "127.0.0.1" },
+            url: STUDIO_PATH,
+        });
+
+        expect(response.statusCode).toBe(403);
+    });
+
     it("rejects a cross-origin POST to schema-edit (CSRF)", () => {
         expect.assertions(1);
 

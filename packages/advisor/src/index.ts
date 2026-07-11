@@ -7,6 +7,7 @@
  * any lint uniformly, but the rules run against Lunora's declared schema (and,
  * later, observed runtime signal) rather than Postgres catalog views.
  */
+import { dedupeCacheKeys } from "./dedupe-cache-keys";
 import constraintValidator from "./lints/runtime/constraint-validator";
 import hotShard from "./lints/runtime/hot-shard";
 import indexUtilization from "./lints/runtime/index-utilization";
@@ -32,6 +33,8 @@ import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-e
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
+import externalSourceOnGlobal from "./lints/static/external-source-on-global";
+import externalSourceUnscoped from "./lints/static/external-source-unscoped";
 import filterWithoutIndex from "./lints/static/filter-without-index";
 import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-security-with-unsafe-default";
 import hardcodedSecret from "./lints/static/hardcoded-secret";
@@ -104,6 +107,7 @@ export type { AdvisorConfigCall } from "./config-calls";
 export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainerOverride } from "./container-overrides";
 export type { AdvisorContainer } from "./containers";
+export { dedupeCacheKeys } from "./dedupe-cache-keys";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
 export type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
 export type { AdvisorHttpActionGuard } from "./http-action-guards";
@@ -242,6 +246,8 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     workflowUnknownTarget,
     workflowDuplicateStepName,
     shapeUnknownTable,
+    externalSourceOnGlobal,
+    externalSourceUnscoped,
     emptyIndex,
     circularFk,
     unindexedForeignKey,
@@ -354,5 +360,8 @@ export const runAdvisor = (context: LintContext, options: RunAdvisorOptions = {}
         findings.push(...lint.run(context));
     }
 
-    return findings;
+    // Any two findings that share a `cacheKey` (e.g. two file:line-keyed sinks on
+    // one physical source line) would collapse to one dismissible row in the
+    // studio, hiding the second. Suffix repeats so every finding survives.
+    return dedupeCacheKeys(findings);
 };

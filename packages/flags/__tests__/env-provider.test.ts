@@ -67,6 +67,19 @@ describe("envProvider", () => {
             expect(details.reason).toBe("ERROR");
             expect(details.errorCode).toBe("PARSE_ERROR");
         });
+
+        it("does not leak the raw env value in the boolean parse-error message", async () => {
+            expect.assertions(3);
+
+            const secret = "sk_live_super_secret_token";
+            const provider = envProvider()({ FLAG_X: secret });
+
+            const details = await provider.resolveBooleanEvaluation("x", false, {}, console);
+
+            expect(details.errorMessage).not.toContain(secret);
+            expect(details.errorMessage).toContain("x");
+            expect(details.errorMessage).toContain("FLAG_X");
+        });
     });
 
     describe("envProvider — number / string / object coercion", () => {
@@ -84,6 +97,19 @@ describe("envProvider", () => {
             const provider = envProvider()({ FLAG_PAGE_SIZE: "lots" });
 
             await expect(provider.resolveNumberEvaluation("page-size", 10, {}, console)).resolves.toMatchObject({ errorCode: "PARSE_ERROR", value: 10 });
+        });
+
+        it("does not leak the raw env value in the number parse-error message", async () => {
+            expect.assertions(3);
+
+            const secret = "sk_live_not_a_number_secret";
+            const provider = envProvider()({ FLAG_PAGE_SIZE: secret });
+
+            const details = await provider.resolveNumberEvaluation("page-size", 10, {}, console);
+
+            expect(details.errorMessage).not.toContain(secret);
+            expect(details.errorMessage).toContain("page-size");
+            expect(details.errorMessage).toContain("FLAG_PAGE_SIZE");
         });
 
         it("returns the raw string value", async () => {

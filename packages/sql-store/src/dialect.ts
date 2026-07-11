@@ -72,9 +72,21 @@ export interface SqlDialect {
         // that must never truncate). MySQL `LONGTEXT` vs the index-bounded `key`.
         text: string;
     };
-    /** Map a stored value back to its JS form, by effective validator `kind` (inverse of `encode`). */
+
+    /**
+     * Map a stored value back to its JS form, by effective validator `kind`
+     * (inverse of `encode`). NOTE: currently **unused** by the store core, which
+     * hard-codes `sqliteDecode` in `decodeGlobalRow` on every engine. Kept on the
+     * seam for a future engine-native codec; an override here does not run today.
+     */
     decode: (value: unknown, kind: string | undefined) => unknown;
-    /** Map a JS value to its bound storage form (boolean→1/0, bigint→string, object→JSON on SQLite; mostly native on PG). */
+
+    /**
+     * Map a JS value to its bound storage form (boolean→1/0, bigint→string,
+     * object→JSON on SQLite). NOTE: currently **unused** by the store core, which
+     * hard-codes `sqliteEncode` as `serializeColumnValue` on every engine. Kept on
+     * the seam for a future engine-native codec; an override here does not run today.
+     */
     encode: (value: unknown) => unknown;
     /** The framework columns every global table carries — the `id` primary key and `_creationTime` — as `{ name, type }` so the DDL builder can quote each name through the engine's dialect. */
     frameworkColumns: () => ReadonlyArray<{ name: string; type: string }>;

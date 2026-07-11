@@ -7,7 +7,7 @@
 import type { OrderTerm } from "./order";
 import { renderOrderTerm } from "./order";
 import type { Queryable, QueryExecutor } from "./query";
-import { lit } from "./sql";
+import { assertLimit, lit } from "./sql";
 import type { R2SqlResult } from "./types";
 
 /** One member of a {@link SetOperation}: the leading query has no operator; each subsequent one carries the operator that joins it. */
@@ -78,6 +78,7 @@ export default class SetOperation<Row = Record<string, unknown>> implements Quer
 
     /** `LIMIT` applied to the combined result. */
     public limit(n: number): this {
+        assertLimit(n);
         this.limitValue = n;
 
         return this;

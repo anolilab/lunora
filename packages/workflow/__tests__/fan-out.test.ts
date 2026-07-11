@@ -11,6 +11,7 @@ import {
     MAX_BRANCHES,
     okOutcome,
     signalBranchParent,
+    signalBranchParentSafe,
     stripBranchMarker,
 } from "../src/fan-out";
 import type { WorkflowInstanceLike, WorkflowStepLike } from "../src/types";
@@ -43,6 +44,32 @@ const makeStep = (outcomes: BranchOutcome[] = []): WorkflowStepLike => {
             return { payload, type: options.type };
         }),
     } as unknown as WorkflowStepLike;
+};
+
+/** A fake durable step whose `waitForEvent` either returns a payload or throws per its scripted `waits` (models a join timeout). */
+const makeStepWithWaits = (waits: ReadonlyArray<{ payload?: BranchOutcome; throw?: unknown }>): WorkflowStepLike => {
+    let waitIndex = 0;
+
+    return {
+        do: vi.fn<(name: string, callback: (context: unknown) => Promise<unknown>) => Promise<unknown>>(async (_name, callback) => callback({})),
+        sleep: vi.fn<() => Promise<void>>(),
+        sleepUntil: vi.fn<() => Promise<void>>(),
+        waitForEvent: vi.fn<(name: string, options: { type: string }) => Promise<{ payload: unknown; type: string }>>(async (_name, options) => {
+            const wait = waits[waitIndex];
+            waitIndex += 1;
+
+            if (wait && "throw" in wait) {
+                throw wait.throw;
+            }
+
+            return { payload: wait?.payload, type: options.type };
+        }),
+    } as unknown as WorkflowStepLike;
+};
+
+/** A no-op structured logger double whose channels are spies. */
+const makeLog = (): { debug: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn>; info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> } => {
+    return { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
 };
 
 /** Build fan-out deps over a single shared binding double, with a deterministic id counter. */
@@ -205,6 +232,90 @@ describe("createParallel", () => {
 
         expect(create.mock.calls[0]?.[0]?.id).toBe("my-id");
     });
+
+    it("group saga: rolls back completed siblings when a branch join times out (waitForEvent throws)", async () => {
+        expect.assertions(3);
+
+        // b0 completes (compensateWith), b1's join throws (its per-branch timeout
+        // elapsed because the child was terminated before it could signal) → b0
+        // must still be compensated before the group fails.
+        const step = makeStepWithWaits([{ payload: okOutcome({ a: 1 }) }, { throw: new Error("waitForEvent timed out") }]);
+        const { create, deps } = makeDeps(step);
+
+        const error = await createParallel(deps)([branch("first", { x: 1 }, { compensateWith: "undoFirst" }), branch("second")]).catch(
+            (error_: unknown) => error_,
+        );
+
+        expect((error as Error).name).toBe("NonRetryableError");
+        expect((error as Error).message).toContain("join failed");
+
+        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith(":compensate"));
+
+        expect(compensations.map((options) => options?.id)).toEqual(["parent-1-c0:compensate"]);
+    });
+
+    it("throws (non-retryable) on duplicate branch ids without spawning anything", async () => {
+        expect.assertions(3);
+
+        const { create, deps } = makeDeps(makeStep());
+
+        const error = await createParallel(deps)([branch("first", undefined, { id: "dup" }), branch("second", undefined, { id: "dup" })]).catch(
+            (error_: unknown) => error_,
+        );
+
+        expect((error as Error).name).toBe("NonRetryableError");
+        expect((error as Error).message).toContain("duplicate branch id");
+        // No branch is spawned — the collision is caught before any create.
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it("group saga: a failed compensation (unresolvable binding) does not strand the other siblings' rollbacks", async () => {
+        expect.assertions(2);
+
+        // b0 ok (compensateWith undoFirst), b1 ok (compensateWith undoSecond), b2 fails.
+        // Reverse order compensates undoSecond (c1) first — its binding is unresolvable;
+        // undoFirst (c0) must still be compensated, and the failure is logged.
+        const step = makeStep([okOutcome({ a: 1 }), okOutcome({ b: 2 }), errorOutcome(new Error("boom"))]);
+        const create = vi.fn<(options?: { id?: string }) => Promise<WorkflowInstanceLike>>(async (options) => makeInstance(options?.id ?? "auto"));
+        const get = vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async (id) => makeInstance(id));
+        const log = makeLog();
+        let counter = 0;
+        const deps: FanOutDeps = {
+            env: {},
+            instanceId: "parent-1",
+            log: log as unknown as FanOutDeps["log"],
+            nextChildId: (explicit?: string) => {
+                if (explicit !== undefined) {
+                    return explicit;
+                }
+
+                const id = `parent-1-c${String(counter)}`;
+                counter += 1;
+
+                return id;
+            },
+            parentBinding: "WORKFLOW_PARENT",
+            resolveBinding: (workflow: string) => {
+                if (workflow === "undoSecond") {
+                    throw new Error("no Workflow binding for undoSecond");
+                }
+
+                return { create, get };
+            },
+            step,
+        };
+
+        await createParallel(deps)([
+            branch("first", undefined, { compensateWith: "undoFirst" }),
+            branch("second", undefined, { compensateWith: "undoSecond" }),
+            branch("third"),
+        ]).catch(() => undefined);
+
+        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith(":compensate"));
+
+        expect(compensations.map((options) => options?.id)).toEqual(["parent-1-c0:compensate"]);
+        expect(log.error).toHaveBeenCalledTimes(1);
+    });
 });
 
 describe("createSpawn", () => {
@@ -220,6 +331,22 @@ describe("createSpawn", () => {
         expect(get).toHaveBeenCalledWith("parent-1-c0");
         expect(instance.id).toBe("parent-1-c0");
     });
+
+    it("rejects a caller-supplied reserved branch marker without touching the step API", async () => {
+        expect.assertions(4);
+
+        const step = makeStep();
+        const { create, deps } = makeDeps(step);
+
+        const forged = { eventType: "lunora:branch:victim", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "victim" };
+
+        const error = await createSpawn(deps)("child", { [BRANCH_MARKER_KEY]: forged }).catch((error_: unknown) => error_);
+
+        expect((error as Error).name).toBe("LunoraError");
+        expect((error as { code?: string }).code).toBe("BAD_REQUEST");
+        expect(step.do).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
+    });
 });
 
 describe("branch marker helpers", () => {
@@ -231,6 +358,24 @@ describe("branch marker helpers", () => {
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: marker, other: 1 })).toEqual(marker);
         expect(extractBranchMarker({ other: 1 })).toBeUndefined();
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: { eventType: "x" } })).toBeUndefined();
+    });
+
+    it("rejects a shape-valid marker whose parentBinding is not a WORKFLOW_ binding", () => {
+        expect.assertions(1);
+
+        // Attacker-chosen env key that is not a Workflow binding must not be dereferenced.
+        const forged = { eventType: "lunora:branch:x", index: 0, parentBinding: "SECRETS", parentId: "p1" };
+
+        expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: forged })).toBeUndefined();
+    });
+
+    it("rejects a shape-valid marker whose eventType is outside the branch namespace", () => {
+        expect.assertions(1);
+
+        // Attacker-chosen event type outside `lunora:branch:*` must not be sent.
+        const forged = { eventType: "attacker:event", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "p1" };
+
+        expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: forged })).toBeUndefined();
     });
 
     it("strips the marker from a child's params", () => {
@@ -264,6 +409,29 @@ describe("signalBranchParent", () => {
         await signalBranchParent({ env: {}, step }, marker, okOutcome(null));
 
         expect(step.do).not.toHaveBeenCalled();
+    });
+});
+
+describe("signalBranchParentSafe", () => {
+    const marker = { eventType: "lunora:branch:c0", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "parent-1" };
+
+    it("swallows a rejecting parent send (terminated parent) and logs it instead of throwing", async () => {
+        expect.assertions(2);
+
+        // Parent binding present but `sendEvent` rejects → `signalBranchParent` throws;
+        // the safe wrapper must resolve so it can never mask the handler's real error
+        // nor mark a completed child as errored.
+        const parent = makeInstance("parent-1");
+
+        (parent.sendEvent as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("parent terminated"));
+
+        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+        const log = makeLog();
+
+        await expect(
+            signalBranchParentSafe({ env, log: log as unknown as FanOutDeps["log"], step: makeStep() }, marker, okOutcome(null)),
+        ).resolves.toBeUndefined();
+        expect(log.error).toHaveBeenCalledTimes(1);
     });
 });
 

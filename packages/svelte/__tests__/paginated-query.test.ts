@@ -309,6 +309,63 @@ describe("paginatedQuery pending-page rebalance guard (BUG 2 regression)", () =>
     });
 });
 
+describe("paginatedQuery rebalance result migration (FINDING 1 & 2 regression)", () => {
+    it("a JOIN carries the surviving result to the merged page instead of dropping it or resurrecting stale data", async () => {
+        const subscribeCalls: { args: Record<string, unknown>; callback: (data: unknown) => void }[] = [];
+
+        const client = {
+            subscribe: (_fn: FunctionReference, args: Record<string, unknown>, callback: (data: unknown) => void) => {
+                subscribeCalls.push({ args, callback });
+
+                return () => undefined;
+            },
+        } as unknown as import("@lunora/client").LunoraClient;
+
+        // JOIN fires below 0.5 × numItems; SPLIT above 2 × numItems. With
+        // initialNumItems 4, JOIN triggers when a bounded page drops below 2.
+        const NUM = 4;
+        const pushTo = (args: Record<string, unknown>, value: unknown): void => {
+            const key = JSON.stringify(args);
+            const call = subscribeCalls.find((c) => JSON.stringify(c.args) === key);
+
+            call?.callback(value);
+        };
+
+        const { loadMore, results } = paginatedQuery(client, fn, {}, { initialNumItems: NUM });
+
+        const stopResults = results.subscribe(() => {});
+
+        // First (open-tail) page delivers a full 4-item page → CanLoadMore.
+        pushTo(
+            { paginationOpts: { cursor: null, endCursor: null, numItems: NUM } },
+            { continueCursor: "c1", isDone: false, page: [{ id: "1" }, { id: "2" }, { id: "3" }, { id: "4" }] },
+        );
+        await flushAsync();
+
+        // loadMore pins page-1 as `{null → c1}` and opens an open tail `{c1 → null}`.
+        loadMore(NUM);
+        await flushAsync();
+
+        // Page-2 resolves and is exhausted.
+        pushTo({ paginationOpts: { cursor: "c1", endCursor: null, numItems: NUM } }, { continueCursor: null, isDone: true, page: [{ id: "5" }, { id: "6" }] });
+        await flushAsync();
+
+        // Now the pinned page-1 shrinks to a single item (< JOIN threshold of 2).
+        // rebalance JOINs page-1 with the tail → the merged page's key is exactly
+        // the ORIGINAL open-tail key `{null → null}`.
+        pushTo({ paginationOpts: { cursor: null, endCursor: "c1", numItems: NUM } }, { continueCursor: "c1", isDone: false, page: [{ id: "x" }] });
+        await flushAsync();
+
+        // FINDING 1: the merged page must carry the surviving page-1 result — not
+        // emit `undefined` and blank the feed (`length` would be 0).
+        // FINDING 2: the merged key must NOT serve the stale pre-loadMore 4-item
+        // result (`length` would be 4) — the loadMore re-key pruned that entry.
+        expect(get(results)).toStrictEqual([{ id: "x" }]);
+
+        stopResults();
+    });
+});
+
 describe("infiniteQuery (Svelte)", () => {
     it("first page loads as first page array", async () => {
         const fake = createFakePaginatedClient();

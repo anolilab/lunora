@@ -331,8 +331,11 @@ const isPrivateTarget = (parsed: URL): boolean => {
  * open.
  */
 const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: ReadonlyArray<string>): string => {
+    // Caller-supplied URL faults are BAD_REQUEST, not INTERNAL: they carry
+    // actionable, client-safe text and must present as 4xx with the message
+    // intact — never as a redacted 500 (see @lunora/errors' toErrorBody).
     if (typeof url !== "string" || url.length === 0) {
-        throw new TypeError("@lunora/browser: url must be a non-empty string");
+        throw new LunoraError("BAD_REQUEST", "@lunora/browser: url must be a non-empty string");
     }
 
     let parsed: URL;
@@ -340,15 +343,15 @@ const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: R
     try {
         parsed = new URL(url);
     } catch {
-        throw new TypeError(`@lunora/browser: url must be an absolute http(s) URL (got "${url}")`);
+        throw new LunoraError("BAD_REQUEST", `@lunora/browser: url must be an absolute http(s) URL (got "${url}")`);
     }
 
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new TypeError(`@lunora/browser: url protocol must be http(s) (got "${parsed.protocol}")`);
+        throw new LunoraError("BAD_REQUEST", `@lunora/browser: url protocol must be http(s) (got "${parsed.protocol}")`);
     }
 
     if (parsed.username !== "" || parsed.password !== "") {
-        throw new LunoraError("INTERNAL", "@lunora/browser: url must not embed credentials (strip the `user:pass@` userinfo)"); // gitleaks:allow -- illustrative error text, not a credential
+        throw new LunoraError("BAD_REQUEST", "@lunora/browser: url must not embed credentials (strip the `user:pass@` userinfo)"); // gitleaks:allow -- illustrative error text, not a credential
     }
 
     if (allowedHosts && allowedHosts.length > 0) {
@@ -360,8 +363,11 @@ const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: R
     }
 
     if (!allowPrivateTargets && isPrivateTarget(parsed)) {
+        // FORBIDDEN (403), matching the sibling SSRF refusals (allowlist mismatch
+        // above, DNS-rebinding re-check) — the same class of refusal must present
+        // identically on the wire, message intact, not as a redacted 500.
         throw new LunoraError(
-            "INTERNAL",
+            "FORBIDDEN",
             `@lunora/browser: url host "${parsed.hostname}" is a private/internal address; pass createBrowser({ …, allowPrivateTargets: true }) to allow it`,
         );
     }
@@ -396,6 +402,40 @@ const resolveTimeout = (callTimeout: number | undefined, factoryTimeout: number 
     const safe = Number.isFinite(requested) ? requested : DEFAULT_TIMEOUT_MS;
 
     return Math.min(Math.max(1, Math.floor(safe)), MAX_TIMEOUT_MS);
+};
+
+/**
+ * Race `operation` against a hard `timeoutMs` deadline. `page.goto`'s own
+ * `timeout` bounds only the navigation phase — `page.evaluate` (scrape),
+ * `page.pdf`, `page.content`, and `page.screenshot` take no timeout, so a
+ * hostile page that traps the operation post-navigation would otherwise pin the
+ * worker until the platform limit kills it (holding the billed Browser Rendering
+ * session open). Racing the whole goto+operation sequence against the resolved
+ * budget honours the documented "navigation + operation" invariant; the browser
+ * is torn down by `withBrowser`'s `finally` when the deadline rejects. The
+ * timer is always cleared so a completed operation never keeps the runtime alive.
+ */
+const withDeadline = async <T>(operation: () => Promise<T>, timeoutMs: number): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+        return await Promise.race([
+            operation(),
+            new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => {
+                    reject(
+                        new LunoraError("BROWSER_TIMEOUT", `@lunora/browser: navigation + operation exceeded the ${String(timeoutMs)}ms timeout budget`, {
+                            status: 504,
+                        }),
+                    );
+                }, timeoutMs);
+            }),
+        ]);
+    } finally {
+        if (timer !== undefined) {
+            clearTimeout(timer);
+        }
+    }
 };
 
 // eslint-disable-next-line import/prefer-default-export -- named export: the package barrel re-exports by name, per the repo's no-default-mixing convention
@@ -473,9 +513,47 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         const assertNavigationAllowed = async (requestUrl: string): Promise<void> => {
             validateUrl(requestUrl, allowPrivateTargets, options.allowedHosts);
 
-            if (resolveDns) {
+            if (!allowPrivateTargets && resolveDns) {
                 await assertResolvedHostIsPublic(requestUrl, dohTimeout);
             }
+        };
+
+        /**
+         * Sub-resource SSRF guard. A rendered page autonomously issues img/fetch/
+         * link/xhr requests; each fires the route handler as a non-navigation
+         * request and must not be let through unchecked to a private/internal host.
+         *
+         * This is a deliberately narrower, string-only check than {@link validateUrl}:
+         * it must NOT throw on non-http(s) schemes (`data:`/`blob:`/`about:` inline
+         * assets are legitimate and network-unreachable, so they pass), and it must
+         * NOT do a per-request DNS lookup (a DoH query per sub-resource would be a
+         * DoS footgun). It mirrors validateUrl's allowlist + `isPrivateTarget` arms
+         * only. Returns `true` when the request should be aborted (fail-closed on an
+         * unparseable/private/off-allowlist http(s) host), `false` to continue.
+         */
+        const isBlockedSubresource = (rawUrl: string): boolean => {
+            let parsed: URL;
+
+            try {
+                parsed = new URL(rawUrl);
+            } catch {
+                return false;
+            }
+
+            // Non-http(s) schemes (data:/blob:/about:) can't reach a network host.
+            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                return false;
+            }
+
+            if (options.allowedHosts && options.allowedHosts.length > 0) {
+                const host = normalizeHost(parsed.hostname);
+
+                if (!options.allowedHosts.some((entry) => normalizeHost(entry) === host)) {
+                    return true;
+                }
+            }
+
+            return isPrivateTarget(parsed);
         };
 
         return withBrowser(async (browser) => {
@@ -486,15 +564,29 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             // public initial URL can bounce the browser to a private/metadata host.
             // Validate EVERY main-frame navigation request (the redirect targets)
             // with the same checks the initial URL passed, aborting fail-closed on
-            // a private/off-allowlist host. Sub-resources are let through (only the
-            // navigation vector is an SSRF concern here). If the injected page lacks
-            // `route` (an older/fake page), the initial-URL guard still stands.
-            if (!allowPrivateTargets && page.route) {
+            // a private/off-allowlist host. Sub-resources (img/fetch/link/xhr) are
+            // additionally checked against the private-target/allowlist guard so a
+            // hostile page can't probe internal hosts — but public sub-resources and
+            // non-http(s) schemes (data:/blob:) still pass so inline/CDN assets keep
+            // rendering. If the injected page lacks `route` (an older/fake page), the
+            // initial-URL guard still stands.
+            //
+            // Register whenever we default-deny private targets OR pin to an
+            // allowlist: `allowPrivateTargets: true` WITH `allowedHosts` (the
+            // documented pin-to-internal-host-via-Tunnel config) must still re-check
+            // every redirect hop against the allowlist, not only the initial URL.
+            if (page.route && (!allowPrivateTargets || (options.allowedHosts?.length ?? 0) > 0)) {
                 await page.route("**/*", async (route: RouteLike) => {
                     const request = route.request();
                     const isNavigation = request.isNavigationRequest?.() ?? true;
 
                     if (!isNavigation) {
+                        if (isBlockedSubresource(request.url())) {
+                            await route.abort("blockedbyclient");
+
+                            return;
+                        }
+
                         await route.continue();
 
                         return;
@@ -516,9 +608,14 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
                 await page.setViewportSize(clampViewport(viewport));
             }
 
-            await page.goto(target, { timeout, waitUntil: navigate.waitUntil ?? "load" });
+            // Bound the WHOLE navigation + operation against the resolved timeout
+            // budget, not just `page.goto` — see {@link withDeadline}. `page.goto`
+            // keeps its own `timeout` for a clean navigation-phase abort.
+            return withDeadline(async () => {
+                await page.goto(target, { timeout, waitUntil: navigate.waitUntil ?? "load" });
 
-            return use(page);
+                return use(page);
+            }, timeout);
         });
     };
 

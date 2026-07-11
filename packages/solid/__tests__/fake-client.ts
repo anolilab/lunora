@@ -9,6 +9,8 @@ import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/clien
  */
 export interface FakeSubscription {
     args: Record<string, unknown>;
+    /** Push a subscription-scoped error to the live `onError` sink (no-op if none registered). */
+    error: (error: { code?: string; message: string }) => void;
     functionPath: string;
     push: (value: unknown) => void;
     shardKey?: string;
@@ -47,10 +49,11 @@ export const createFakeClient = (): FakeClient => {
             function_: FunctionReference,
             args: Record<string, unknown>,
             callback: (data: unknown) => void,
-            options?: { shardKey?: string },
+            options?: { onError?: (error: { code?: string; message: string }) => void; shardKey?: string },
         ): Unsubscribe => {
             const sub: FakeSubscription = {
                 args,
+                error: (error) => options?.onError?.(error),
                 functionPath: function_.__lunoraRef,
                 push: callback,
                 shardKey: options?.shardKey,

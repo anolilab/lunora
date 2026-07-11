@@ -6,7 +6,7 @@
  * `renderError` renders it (and its actionable hint) directly at the CLI/overlay
  * edge, and adds the transport fields Lunora needs: a machine `code`, an HTTP/RPC
  * `status`, an optional `docsUrl`, and an optional wire-encodable `data` payload.
- * Constructing one looks its defaults up in the central {@link ERROR_CATALOG} by
+ * Constructing one looks its defaults up in the central `ERROR_CATALOG` by
  * `code`, so a bare `new LunoraError("NOT_FOUND")` already carries the right
  * status/title/hint.
  *
@@ -24,7 +24,7 @@
  * for the client, CLI, and Studio to render.
  */
 import type { ErrorCatalogEntry, ErrorHint, LunoraErrorCode } from "./catalog";
-import { ERROR_CATALOG } from "./catalog";
+import { getCatalogEntry } from "./catalog";
 
 /** Source location for an error (mirrors `@visulima/error`'s `ErrorLocation`). */
 export interface ErrorLocation {
@@ -76,7 +76,7 @@ export class LunoraError extends Error {
     /** Source location, when known (mirrors `VisulimaError.loc`). */
     public readonly loc: ErrorLocation | undefined;
 
-    /** Machine-readable reason, keyed into {@link ERROR_CATALOG}. */
+    /** Machine-readable reason, keyed into `ERROR_CATALOG`. */
     public readonly code: string;
 
     /** HTTP/RPC status for the transport mappers. */
@@ -89,11 +89,16 @@ export class LunoraError extends Error {
     public readonly data: unknown;
 
     public constructor(code: LunoraErrorCodeInput, message?: string, options: LunoraErrorOptions = {}) {
-        const entry: ErrorCatalogEntry | undefined = (ERROR_CATALOG as Record<string, ErrorCatalogEntry>)[code];
+        const entry: ErrorCatalogEntry | undefined = getCatalogEntry(code);
 
         // No message supplied → default to the code (a stable, predictable
         // identifier). The human-readable `title` stays separate metadata.
-        super(message ?? code, { cause: options.cause });
+        //
+        // Only forward an options object when a cause exists: passing `{ cause }`
+        // unconditionally installs an own `cause: undefined` property on every
+        // error (ES2022 InstallErrorCause keys off `HasProperty`, not the value),
+        // which makes presence checks (`"cause" in err`) spuriously true.
+        super(message ?? code, options.cause === undefined ? undefined : { cause: options.cause });
 
         this.name = options.name ?? "LunoraError";
         this.hint = options.hint ?? entry?.hint;

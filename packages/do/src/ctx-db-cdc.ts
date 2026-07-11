@@ -233,9 +233,10 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
         }
 
         // Row already exists — replace its fields. Drop only `_id` (replace
-        // takes the id as its first argument). KEEP `_creationTime`: replace
-        // reads it from the doc to preserve the row's original creation time,
-        // so stripping it would silently reset it to the replay-time clock.
+        // takes the id as its first argument). KEEP `_creationTime` and pass the
+        // trusted-replay `allowExplicitId` opt-in so `replace` preserves the
+        // row's original creation time instead of resetting it to the replay
+        // clock (the default mutation path mints a fresh `clock()`).
         const fields: Record<string, unknown> = {};
 
         for (const [key, value] of Object.entries(document)) {
@@ -244,7 +245,7 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
             }
         }
 
-        await writer.replace(change.id, fields);
+        await writer.replace(change.id, fields, undefined, { allowExplicitId: true });
     }
 };
 

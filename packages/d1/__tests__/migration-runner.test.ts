@@ -181,6 +181,98 @@ describe("migrationRunner", () => {
         expect(result.applied.map((m) => m.version)).toEqual([1]);
     });
 
+    // Finding 2: a trailing comment after the terminator used to survive the
+    // regex trim and reach D1 (which rejects content past the statement). The
+    // body submitted must be the bare statement — no `;`, no trailing comment.
+    it("strips the terminating `;` and any trailing comment from the submitted body", async () => {
+        expect.assertions(2);
+
+        const database = await createDatabase();
+        const runner = new MigrationRunner(database, [{ name: "trailing_comment", sql: "SELECT 1; -- trailing comment", version: 1 }]);
+
+        const result = await runner.run();
+
+        expect(result.applied.map((m) => m.version)).toEqual([1]);
+
+        const body = database.executed.find((e) => !e.sql.includes("__drizzle_migrations"));
+
+        expect(body?.sql).toBe("SELECT 1");
+    });
+
+    // Finding 2: `SELECT 1;;` used to pass the lexer (the second `;` hit the
+    // terminator branch before any guard) — now a stray second `;` is a second
+    // statement.
+    it("rejects a stray second `;` (`SELECT 1;;`) as multi-statement", async () => {
+        expect.assertions(1);
+
+        const database = await createDatabase();
+        const runner = new MigrationRunner(database, [{ name: "double_semi", sql: "SELECT 1;;", version: 1 }]);
+
+        await expect(runner.run()).rejects.toThrow(MULTI_STATEMENT_RE);
+    });
+
+    // Finding 2: an opening quote after the terminator used to enter string mode
+    // (the string-open branch preceded the guard) and slip past validation.
+    it("rejects executable content after the terminator (`SELECT 1; 'stray'`)", async () => {
+        expect.assertions(1);
+
+        const database = await createDatabase();
+        const runner = new MigrationRunner(database, [{ name: "stray_string", sql: "SELECT 1; 'stray string'", version: 1 }]);
+
+        await expect(runner.run()).rejects.toThrow(MULTI_STATEMENT_RE);
+    });
+
+    // Finding 3: two runners racing the same pending migration — the loser's
+    // tracking INSERT hits UNIQUE(hash), D1 rolls its atomic batch back (body
+    // included), and run() reports the migration as skipped rather than throwing
+    // or double-applying.
+    it("treats a concurrent UNIQUE(hash) violation on the tracking insert as already-applied", async () => {
+        expect.assertions(2);
+
+        const makeStmt = (sql: string): D1PreparedStatementLike => {
+            const stmt: D1PreparedStatementLike = {
+                all: async () => {
+                    return { results: [] as never[], success: true };
+                },
+                bind: () => stmt,
+                first: async () => null,
+                raw: async () => [],
+                run: async () => {
+                    if (sql.includes("INSERT INTO") && sql.includes("__drizzle_migrations")) {
+                        // A racing runner inserted this hash first.
+                        throw new Error("D1_ERROR: UNIQUE constraint failed: __drizzle_migrations.hash: SQLITE_CONSTRAINT");
+                    }
+
+                    return { success: true };
+                },
+            };
+
+            return stmt;
+        };
+
+        const database: D1DatabaseLike = {
+            batch: async (stmts) => {
+                for (const stmt of stmts) {
+                    // eslint-disable-next-line no-await-in-loop -- fake batch applies statements in order, mirroring D1's sequential batch semantics
+                    await stmt.run();
+                }
+
+                return [];
+            },
+            prepare: makeStmt,
+            withSession: () => {
+                return { getBookmark: () => null, prepare: makeStmt };
+            },
+        };
+
+        const runner = new MigrationRunner(database, [{ name: "seed", sql: "INSERT INTO items (id) VALUES (1);", version: 1 }]);
+
+        const result = await runner.run();
+
+        expect(result.applied).toEqual([]);
+        expect(result.skipped.map((m) => m.version)).toEqual([1]);
+    });
+
     it("permits semicolons inside comments", async () => {
         expect.assertions(1);
 

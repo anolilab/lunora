@@ -9,15 +9,21 @@
  */
 import type { SqlExec, SqlRunResult } from "@lunora/sql-store";
 
-/** Minimal row-returning client (e.g. `@lunora/hyperdrive`'s `fromPostgresJs`/`fromNodePg` result). */
-export interface RowClient {
-    query: <Row = Record<string, unknown>>(text: string, params?: ReadonlyArray<unknown>) => Promise<Row[]>;
-}
+import type { Mysql2Like, SqlClient } from "./types";
 
-/** Minimal `mysql2/promise` connection/pool surface — `execute` resolves to `[rows | ResultSetHeader, fields]`. */
-export interface Mysql2Execute {
-    execute: (text: string, params?: ReadonlyArray<unknown>) => Promise<[unknown, unknown]>;
-}
+/**
+ * Minimal row-returning client (e.g. `@lunora/hyperdrive`'s `fromPostgresJs`/`fromNodePg`
+ * result). Aliases {@link SqlClient} — the exec-facing name is kept so call sites read
+ * intent, but the shape is the single source of truth in `./types` (no drift).
+ */
+export type RowClient = SqlClient;
+
+/**
+ * Minimal `mysql2/promise` connection/pool surface — `execute` resolves to
+ * `[rows | ResultSetHeader, fields]`. Aliases {@link Mysql2Like} so the /global entry's
+ * driver surface can never drift from the main entry's.
+ */
+export type Mysql2Execute = Mysql2Like;
 
 /**
  * Wrap a Postgres row-client (from `@lunora/hyperdrive`'s `fromPostgresJs` /

@@ -59,12 +59,21 @@ export default defineNuxtConfig({
 });
 ```
 
-Add `exports.cloudflare.ts` to the project root so the `ShardDO` Durable Object
-class is exported from the emitted worker entry:
+Add a `worker.ts` wrapper at the project root and point `wrangler.jsonc`'s `main`
+at it, so the `ShardDO` Durable Object class is exported from the deployed worker.
+Nitro's `cloudflare_module` output exports only the SSR handler, so `main` must
+point at the wrapper — not the raw `.output/server/index.mjs` — or `wrangler deploy`
+fails on the missing DO class:
 
 ```ts
-// exports.cloudflare.ts
+// worker.ts
+export { default } from "./.output/server/index.mjs";
 export { ShardDO } from "./lunora/server";
+```
+
+```jsonc
+// wrangler.jsonc
+{ "main": "worker.ts" }
 ```
 
 `lunora/server.ts` is your built Lunora app (`defineApp().build()`) — its default
@@ -88,8 +97,8 @@ option, default `~/lunora/server`) and serves it at the `/_lunora/**` route
   and forwards to your app's `fetch`. A missing Cloudflare runtime answers a clear 500.
 - **`#lunora/app` alias**: points the route's worker import at your app entry,
   forwarded into the Nitro server bundle via `nuxt.options.alias`.
-- **`ShardDO`** rides to the worker entry through your root `exports.cloudflare.ts`
-  (the `cloudflare_module` preset appends its exports).
+- **`ShardDO`** rides to the deployed worker through your root `worker.ts` wrapper
+  (`wrangler.jsonc`'s `main`), which re-exports Nitro's SSR handler and `ShardDO`.
 
 ## Verify before deploy
 
@@ -102,11 +111,12 @@ Single-worker composition rides on two Nitro behaviours that vary across version
    subscriptions never connect while RPC does, Nitro is normalising the upgrade
    response and `/_lunora/ws` needs a deploy-boundary handoff instead of the H3
    route return.
-2. **`exports.cloudflare.ts` hook.** The `cloudflare_module` preset must append
-   this file's exports onto the worker entry. If `wrangler deploy` fails with
-   "ShardDO class not exported", your Nitro version may use a different hook
-   (`nitro.cloudflare.additionalModules`, or a `rollupConfig` output export). The
-   module `warn()`s when the file is missing but can't verify the hook fires.
+2. **`worker.ts` wrapper.** `wrangler.jsonc`'s `main` must point at a root
+   `worker.ts` that re-exports Nitro's SSR handler _and_ `ShardDO` — Nitro's
+   `cloudflare_module` output exports only the SSR handler. If `wrangler deploy`
+   fails with "ShardDO class not exported", check that `main` points at the
+   wrapper and that it re-exports `ShardDO`. The module `warn()`s when
+   `worker.ts` is missing but can't verify wrangler's `main` points at it.
 
 ## Server data-loading
 

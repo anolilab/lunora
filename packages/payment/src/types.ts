@@ -85,7 +85,12 @@ export interface CustomerRef {
 
 export interface CheckoutInput {
     readonly cancelUrl: string;
-    /** Existing provider customer id, if known. */
+
+    /**
+     * Ignored at runtime (kept for backward-compat). The provider customer is always derived from the store for the
+     * authorized `referenceId` (never caller-supplied) to prevent cross-tenant checkout attachment (IDOR).
+     * Retained on the type only for backward compatibility; setting it has no effect.
+     */
     readonly customerId?: string;
 
     /**
@@ -141,7 +146,13 @@ export interface TrackInput {
     readonly featureId: string;
     /** Caller-supplied dedupe key; a fresh one is generated when omitted (so each call records). */
     readonly idempotencyKey?: string;
-    /** `"add"` (default) increments usage by `quantity`; `"set"` reconciles the period total to `quantity`. */
+
+    /**
+     * `"add"` (default) increments usage by `quantity`; `"set"` reconciles the period total to `quantity`.
+     * `"set"` is a non-atomic read-modify-write (it reads the current total, then appends the delta), so
+     * concurrent `"set"` calls for the same reference can over- or under-count — call it only from a
+     * serialized context (a single Durable Object or per-reference lock). `"add"` is always safe.
+     */
     readonly mode?: "add" | "set";
     /** Usage amount to add, or the absolute period total when `mode` is `"set"` (defaults to `1`). */
     readonly quantity?: number;

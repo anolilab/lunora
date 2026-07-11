@@ -12,7 +12,7 @@ import type { PaymentAdapter } from "./adapter";
 import type { Entitlements, EntitlementsConfig } from "./entitlements";
 import { featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 import { LunoraPaymentError } from "./errors";
-import idempotencyKey from "./idempotency";
+import { derivedIdempotencyKey, idempotencyKey } from "./idempotency";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
@@ -118,27 +118,31 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         // authorized one. Strip it here so the invariant holds regardless of adapter spread order.
         const metadata = stripReferenceId(input.metadata);
 
-        let { customerId } = input;
+        // Never trust a caller-supplied `input.customerId` (cross-tenant checkout IDOR): the authorizer
+        // covers only `referenceId`, so honoring a client-set customer id would bind the authorized
+        // reference's checkout to an arbitrary provider customer. Always derive the customer from the
+        // store for the authorized reference — mirroring `createPortalSession` — minting one only the
+        // first time. `input.customerId` is intentionally ignored (kept on the type for back-compat).
+        let customerId: string;
+        const existing = await store.getCustomerByReference(adapter.identifier, input.referenceId);
 
-        if (!customerId) {
-            const existing = await store.getCustomerByReference(adapter.identifier, input.referenceId);
+        if (existing) {
+            customerId = existing.id;
+        } else {
+            const customer = await adapter.getOrCreateCustomer({ email: input.email, referenceId: input.referenceId });
 
-            if (existing) {
-                customerId = existing.id;
-            } else {
-                const customer = await adapter.getOrCreateCustomer({ email: input.email, referenceId: input.referenceId });
-
-                customerId = customer.id;
-                await store.upsertCustomer(customer);
-            }
+            customerId = customer.id;
+            await store.upsertCustomer(customer);
         }
 
         // Derive a key over every request-shaping field, not just (reference, price, mode): a second
         // checkout that changes quantity/URLs/metadata must not collide with the provider's idempotency
-        // window (which would error or return the stale earlier session).
+        // window (which would error or return the stale earlier session). Hash the parts so the key stays
+        // a fixed length (Stripe rejects keys >255 chars, and two full URLs + metadata routinely exceed
+        // that) and can't collide via unescaped `:` joining of the URLs/metadata.
         const key =
             input.idempotencyKey ??
-            idempotencyKey(
+            (await derivedIdempotencyKey(
                 "checkout",
                 adapter.identifier,
                 input.referenceId,
@@ -148,7 +152,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 input.successUrl,
                 input.cancelUrl,
                 metadata ? JSON.stringify(metadata) : "",
-            );
+            ));
 
         return adapter.createCheckout({ ...input, customerId, idempotencyKey: key, metadata });
     };
@@ -329,6 +333,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             // The ledger is append-only, so a "set" reconciles to the absolute total by recording the
             // delta from the current period usage; "add" records the increment directly.
+            //
+            // CONCURRENCY: `mode: "set"` is a non-atomic read-modify-write — the `sumUsage` read and the
+            // `recordUsage` append below are separate `ctx.db` calls with no transaction spanning them,
+            // so two `set` calls that interleave (e.g. two Worker isolates reconciling the same
+            // reference) both read the same current total and both append their delta, over- or
+            // under-counting the period. `mode: "add"` has no such hazard (its delta is independent of
+            // the current total). Only call `mode: "set"` from a serialized context (a single DO, or a
+            // per-reference lock); prefer `mode: "add"` for concurrent writers.
             let delta = target;
 
             if (input.mode === "set") {

@@ -1,12 +1,14 @@
 /**
  * Shared value encode/decode building blocks for SQL dialects.
  *
- * The SQLite forms here are the **baseline** the store core was written
- * against (`d1-ctx-db.ts`): SQLite has no boolean (1/0), no native JSON (TEXT),
- * and no `bigint` wider than 64-bit signed (decimal string). Postgres and
- * MySQL dialects reuse {@link effectiveColumnKind} and the parsing helpers, but
- * override `encode`/`decode` where the driver returns native values
- * (PG `jsonb`/`boolean`/`bytea`; MySQL `JSON`/`TINYINT`).
+ * The SQLite forms here are what the store core actually runs on **every**
+ * engine: `serializeColumnValue`/`decodeGlobalRow` hard-code {@link sqliteEncode}
+ * /{@link sqliteDecode}, so global-table storage is SQLite-shaped on D1,
+ * Postgres, and MySQL alike (booleans as 1/0, JSON as TEXT, `bigint` as a decimal
+ * string). The `SqlDialect.encode`/`decode` members are **not** consulted by the
+ * core today — a concrete dialect that "overrides" them (PG `jsonb`/`bytea`,
+ * MySQL `JSON`/`TINYINT`) would find them silently unused. Do not rely on that
+ * seam without first routing the core through it.
  */
 import type { ValidatorLike } from "@lunora/do";
 
@@ -87,6 +89,12 @@ export const effectiveColumnKind = (validator: ValidatorLike): string | undefine
  * - `object`/`array`/`record`: JSON string → parsed value.
  * - `union`/`any`: parsed back only when the stored string is a JSON non-scalar
  *   (a scalar union member round-trips through SQLite's native column type).
+ *   CAVEAT: a union/any member is stored verbatim by {@link sqliteEncode}, so a
+ *   legitimate *string* value that itself looks like JSON (`'{"a":1}'`, `'[1,2]'`)
+ *   is ambiguous on read and decodes back to the parsed object/array, not the
+ *   original string. This is inherent to sharing one TEXT column between a string
+ *   and an object member; disambiguating would require a breaking storage-format
+ *   change (tagging encoded non-scalars), so it is documented rather than fixed.
  * - everything else (string/number/date/timestamp/id/literal): verbatim.
  */
 export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown => {

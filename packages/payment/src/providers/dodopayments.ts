@@ -16,7 +16,7 @@ import type DodoPayments from "dodopayments";
 
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
-import idempotencyKey from "../idempotency";
+import { idempotencyKey } from "../idempotency";
 import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, zeroMoney } from "../money";
 import type {

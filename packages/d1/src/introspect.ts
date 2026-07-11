@@ -23,6 +23,11 @@ import { LunoraError } from "@lunora/errors";
 
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
+// The one canonical SQL identifier quoter (bundler-inlined via `./dialect` from
+// `shared/quote-identifier.ts`). Reused here rather than re-declared: the shared
+// helper is a security-relevant injection-defense primitive that must have a
+// single definition, not byte-identical copies that can drift.
+import { quoteIdentifier } from "./dialect";
 
 /**
  * Provision the schema's `.global()` tables before the browser reads them, so a
@@ -117,8 +122,6 @@ const DEFAULT_FACET_LIMIT = 30;
 /** Hard cap on facet values, so a wide column can't return an unbounded group set. */
 const MAX_FACET_LIMIT = 200;
 
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
-
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
 /**
@@ -182,6 +185,15 @@ const buildEqPredicate = (
     for (const filter of filters) {
         if (!displayColumns.includes(filter.column)) {
             throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${filter.column}`, { status: 404 });
+        }
+
+        // An eq filter on a redacted column of an external (non-schema) table
+        // would leak an equality oracle: `total`/count reveals whether a guessed
+        // value matched, bypassing the '•••' redaction. Reject it, mirroring the
+        // facet path's masked-bucket collapse. Declared `.global()` tables (whose
+        // values are not redacted) intentionally bypass this guard.
+        if (schema.tables[table] === undefined && SENSITIVE_COLUMN.test(filter.column)) {
+            throw new LunoraError("FORBIDDEN", `cannot filter on a redacted column: ${filter.column}`, { status: 403 });
         }
 
         const quoted = quoteIdentifier(physicalColumnName(schema, table, filter.column));

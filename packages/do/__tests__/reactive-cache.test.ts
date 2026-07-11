@@ -91,6 +91,24 @@ describe("reactiveCacheKey", () => {
         expect(a).not.toBe(anon);
         expect(b).not.toBe(anon);
     });
+
+    it("folds identity claims into the discriminator so the same userId with different claims never collides", () => {
+        // Guards the encoder step that `runCachedQuery` performs before it
+        // reaches `reactiveCacheKey`: it folds the FULL identity (userId AND
+        // the `getIdentity()` claims RLS can key on) through `stableStringify`,
+        // not the userId alone. A stable userId whose active-org claim varies
+        // request-to-request must therefore produce distinct discriminators,
+        // which in turn keys distinct cache entries.
+        expect.assertions(2);
+
+        const orgA = stableStringify({ claims: { activeOrgId: "A" }, userId: "u1" });
+        const orgB = stableStringify({ claims: { activeOrgId: "B" }, userId: "u1" });
+
+        expect(orgA).not.toBe(orgB);
+        // The claim-bearing discriminator must also differ from the bare-userId
+        // one, so widening the key can never alias onto a legacy userId-only slot.
+        expect(orgA).not.toBe(stableStringify({ claims: null, userId: "u1" }));
+    });
 });
 
 /**

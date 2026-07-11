@@ -13,7 +13,7 @@ import type { Stripe } from "stripe";
 
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
-import idempotencyKey from "../idempotency";
+import { idempotencyKey } from "../idempotency";
 import { asRecord, readBoolean, readNumber, readString } from "../json";
 import { compareMoney, money, zeroMoney } from "../money";
 import type {

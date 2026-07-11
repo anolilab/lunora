@@ -286,7 +286,15 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             }
 
             this.envVars = { ...this.envVars, ...resolved };
-        })();
+        })().catch((error: unknown) => {
+            // A transient Secrets Store failure (`store.get()` is a remote call)
+            // must fail only *this* start — not poison the instance forever.
+            // Clear the memo so the next start retries resolution instead of
+            // replaying the cached rejection.
+            this.lunoraSecretsStoreResolved = undefined;
+
+            throw error;
+        });
 
         await this.lunoraSecretsStoreResolved;
     }

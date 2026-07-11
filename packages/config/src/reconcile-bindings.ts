@@ -17,12 +17,10 @@
 import { writeFileSync } from "node:fs";
 
 import { containerBuildTag } from "@lunora/container";
-import { applyEdits, modify } from "jsonc-parser";
 
 import type { DurableObjectSpec, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow } from "./infer-bindings";
+import { applyModify } from "./jsonc-edit";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
-
-const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 4 } } as const;
 
 /**
  * Placeholder `database_id` written for an auto-provisioned `DB` binding. It is
@@ -295,13 +293,6 @@ const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): st
     warnings.push(...collectX402Warnings(inferred), ...collectHintBindingWarnings(inferred, parsed));
 
     return warnings;
-};
-
-/** Apply one structural edit and return the rewritten text. */
-const applyModify = (text: string, path: ReadonlyArray<number | string>, value: unknown): string => {
-    const edits = modify(text, [...path], value, FORMATTING);
-
-    return edits.length > 0 ? applyEdits(text, edits) : text;
 };
 
 /** Compute the lowest free `vN` `migrations` tag (`v1`, `v2`, …). */

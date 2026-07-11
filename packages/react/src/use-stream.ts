@@ -85,6 +85,13 @@ const useStream = <F extends FunctionReference<"stream">>(
 
     useEffect(() => {
         if (skipped) {
+            // Args transitioned to "skip" — the previous effect's cleanup already
+            // cancelled the iterator, so no `complete`/`error` will ever fire.
+            // Reset to idle with empty chunks so the hook doesn't stay stuck in
+            // its last status over stale chunks, mirroring useSubscription's skip
+            // teardown.
+            dispatch({ type: "reset" });
+
             return () => {};
         }
 

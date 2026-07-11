@@ -3,6 +3,7 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 
 /**
@@ -73,22 +74,7 @@ interface UsePresenceResult<L extends ListPresentReference> {
     setData: (data: Record<string, unknown> | undefined) => void;
 }
 
-/** A best-effort unique id for a presence session — `crypto.randomUUID` when available, else a random fallback. */
-const makeSessionId = (): string => {
-    // Guard the whole `crypto` reference, not just `randomUUID`: some SSR /
-    // older runtimes leave `crypto` undefined, where reading `.randomUUID` off
-    // it throws a TypeError instead of falling through. `typeof crypto` (rather
-    // than `globalThis.crypto !== undefined`) is the form the lib's
-    // non-nullable `Crypto` typing leaves intact — mirrors `offline-queue.ts`.
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        return crypto.randomUUID();
-    }
-
-    // Non-security id — just needs to be unique per tab for a presence row.
-    // eslint-disable-next-line sonarjs/pseudo-random -- presence session id, not a credential
-    return `sess-${Math.random().toString(36).slice(2)}-${String(Date.now())}`;
-};
-
+/** A best-effort unique id for a presence session — `crypto.randomUUID` when available, else a `crypto.getRandomValues` fallback. */
 const DEFAULT_INTERVAL_MS = 10_000;
 
 export const usePresence = <H extends HeartbeatReference, L extends ListPresentReference>(
@@ -100,8 +86,8 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
     // One session id per mount unless the caller pins one.
-    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `makeSessionId()` mints a fresh random id; it must run once per mount (keyed on `options.sessionId`), never per render, or every render would generate a new presence-row id. Keep the explicit `useMemo` so the identity is stable even if the compiler bails this function.
-    const generatedSessionId = useMemo(() => options.sessionId ?? makeSessionId(), [options.sessionId]);
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `randomSessionId()` mints a fresh random id; it must run once per mount (keyed on `options.sessionId`), never per render, or every render would generate a new presence-row id. Keep the explicit `useMemo` so the identity is stable even if the compiler bails this function.
+    const generatedSessionId = useMemo(() => options.sessionId ?? randomSessionId(), [options.sessionId]);
 
     const [present, setPresent] = useState<ReturnOf<L> | undefined>(undefined);
 

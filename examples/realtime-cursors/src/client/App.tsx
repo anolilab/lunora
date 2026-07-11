@@ -8,7 +8,11 @@ import type { Doc } from "../../lunora/_generated/dataModel.js";
 const COLORS = ["#e63946", "#1d3557", "#2a9d8f", "#f4a261", "#9d4edd", "#0096c7"] as const;
 const FRAME_INTERVAL_MS = 1000 / 30; // throttle pointer events to ~30fps
 
-const randomId = (): string => Math.random().toString(36).slice(2, 10);
+// Presence session id — a non-secret correlation handle. Minted from Web Crypto
+// (never Math.random) so it isn't treated as insecure randomness in a security
+// context; this demo only ever runs in the browser, where crypto is present.
+const randomId = (): string => Array.from(crypto.getRandomValues(new Uint8Array(4)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+// Cosmetic cursor color — not a security context, so plain Math.random is fine.
 const pickColor = (): string => COLORS[Math.floor(Math.random() * COLORS.length)] ?? "#1d3557";
 
 /**

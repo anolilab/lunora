@@ -33,6 +33,8 @@ import { dirname, join, resolve } from "node:path";
 
 import { addServerHandler, createResolver, defineNuxtModule, useLogger } from "@nuxt/kit";
 
+import resolveTildePath from "./resolve-tilde-path";
+
 /** Matches a trailing `.js` extension so it can be swapped for `.ts` (module-scope: compiled once). */
 const JS_EXTENSION_SUFFIX = /\.js$/;
 
@@ -54,26 +56,6 @@ interface TsSourceResolverPlugin {
 interface NitroConfigLike {
     rollupConfig?: { plugins?: unknown[] };
 }
-
-/**
- * Expand a Nuxt `~`/`~~` tilde specifier to an absolute path. `~/` is the project
- * srcDir, `~~/` the rootDir; a bare or already-absolute specifier is returned
- * untouched. Used for the `#lunora/app` alias, which the Nitro server bundle
- * consumes: Nitro re-resolves a tilde against its OWN srcDir (the `server/` dir),
- * so `~/lunora/server` would wrongly land at `server/lunora/server` and abort the
- * build. An absolute path resolves identically in the Nuxt and Nitro graphs.
- */
-const resolveTildePath = (specifier: string, rootDirectory: string, sourceDirectory: string): string => {
-    if (specifier.startsWith("~~/")) {
-        return join(rootDirectory, specifier.slice(3));
-    }
-
-    if (specifier.startsWith("~/")) {
-        return join(sourceDirectory, specifier.slice(2));
-    }
-
-    return specifier;
-};
 
 /**
  * Rollup plugin (injected into the Nitro server build) that rewrites codegen's

@@ -155,8 +155,13 @@ const orderTables = (specs: ReadonlyArray<TableSpec>, selected: ReadonlySet<stri
  * exists in `specs`. Self-references add no new table, and edges into tables not
  * present in `specs` are ignored. Used so seeding a child (`only`/`--table`)
  * automatically seeds the parents its `v.id(...)` columns point at.
+ *
+ * `stopAt` names tables the traversal must not descend through — a parent already
+ * covered by `existingIds` (and not requested) won't be seeded, so pulling in its
+ * own parents would seed unrelated grandparent tables. Such a table may still be
+ * added as a parent of a requested table, but its FK edges are not followed.
  */
-const fkParentClosure = (specs: ReadonlyArray<TableSpec>, roots: Iterable<string>): Set<string> => {
+const fkParentClosure = (specs: ReadonlyArray<TableSpec>, roots: Iterable<string>, stopAt: ReadonlySet<string> = new Set()): Set<string> => {
     const byName = new Map(specs.map((spec) => [spec.name, spec]));
     const result = new Set(roots);
     const stack = [...result];
@@ -171,6 +176,12 @@ const fkParentClosure = (specs: ReadonlyArray<TableSpec>, roots: Iterable<string
         const spec = byName.get(name);
 
         if (spec === undefined) {
+            continue;
+        }
+
+        // A covered parent is a leaf for closure purposes: it is added to the
+        // result (as some requested table's parent) but its own parents are not.
+        if (stopAt.has(name)) {
             continue;
         }
 

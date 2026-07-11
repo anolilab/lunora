@@ -39,6 +39,52 @@ describe("createDispatchRunner", () => {
         await expect(run(REF)).rejects.toThrow(/@lunora\/workflow: function dispatch failed \(500\): boom/);
     });
 
+    it("preserves the dispatch endpoint's structured code/status/data on a non-ok response", async () => {
+        expect.assertions(4);
+
+        const fetchImpl = (async () =>
+            Response.json({ error: { code: "BAD_REQUEST", data: { field: "to" }, message: "missing `to`" } }, { status: 400 })) as unknown as typeof fetch;
+        const run = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" });
+
+        const error = (await run(REF).then(
+            () => undefined,
+            (error_: unknown) => error_,
+        )) as { code?: unknown; data?: unknown; message?: unknown; status?: unknown };
+
+        expect(error.code).toBe("BAD_REQUEST");
+        expect(error.status).toBe(400);
+        expect(error.data).toEqual({ field: "to" });
+        expect(error.message).toBe("missing `to`");
+    });
+
+    it("falls back to INTERNAL when a non-ok error body is unparseable", async () => {
+        expect.assertions(2);
+
+        const run = createDispatchRunner({ env: ENV, fetchImpl: async () => new Response("<html>502</html>", { status: 502 }), label: "@lunora/queue" });
+
+        const error = (await run(REF).then(
+            () => undefined,
+            (error_: unknown) => error_,
+        )) as { code?: unknown; status?: unknown };
+
+        expect(error.code).toBe("INTERNAL");
+        expect(error.status).toBe(502);
+    });
+
+    it("throws INTERNAL for a non-JSON 200 body instead of resolving the raw text", async () => {
+        expect.assertions(2);
+
+        const run = createDispatchRunner({ env: ENV, fetchImpl: async () => new Response("<html>oops</html>", { status: 200 }), label: "@lunora/workflow" });
+
+        const error = (await run(REF).then(
+            () => undefined,
+            (error_: unknown) => error_,
+        )) as { code?: unknown; message?: unknown };
+
+        expect(error.code).toBe("INTERNAL");
+        expect(error.message).toMatch(/@lunora\/workflow: function dispatch returned a non-JSON body \(200\):/);
+    });
+
     it("requires LUNORA_ORIGIN_URL and LUNORA_ADMIN_TOKEN", async () => {
         expect.assertions(2);
 

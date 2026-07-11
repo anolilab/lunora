@@ -1,7 +1,9 @@
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/client";
+import { onDestroy } from "svelte";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
+import { randomSessionId } from "../../../shared/random-session-id";
 import { getLunoraClient } from "./context";
 
 /**
@@ -57,17 +59,6 @@ interface PresenceHandle<L extends ListPresentReference> {
 }
 
 /** Best-effort unique id for a presence session. */
-const makeSessionId = (): string => {
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- crypto is a browser global, not just a Node built-in; guarded for SSR environments
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- same guard as above
-        return crypto.randomUUID();
-    }
-
-    // eslint-disable-next-line sonarjs/pseudo-random -- presence session id, not a credential
-    return `sess-${Math.random().toString(36).slice(2)}-${String(Date.now())}`;
-};
-
 const DEFAULT_INTERVAL_MS = 10_000;
 
 const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresentReference>(
@@ -76,7 +67,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     options: PresenceOptions<H, L>,
 ): PresenceHandle<L> => {
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
-    const sessionId = options.sessionId ?? makeSessionId();
+    const sessionId = options.sessionId ?? randomSessionId();
 
     let latestData: Record<string, unknown> | undefined = options.data;
 
@@ -128,7 +119,18 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
         return unsubscribe;
     });
 
+    let torndown = false;
+
     const teardown = (): void => {
+        // Idempotent: the auto-wired `onDestroy` below and a manual
+        // `onDestroy(handle.teardown)` (or a `setData`-after-teardown) may both
+        // fire, and `releaseConnectionContext` must run at most once.
+        if (torndown) {
+            return;
+        }
+
+        torndown = true;
+
         clearInterval(intervalHandle);
 
         if (typeof document !== "undefined") {
@@ -137,6 +139,17 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
 
         releaseConnectionContext();
     };
+
+    // Auto-teardown on component destruction so a consumer who forgets
+    // `onDestroy(handle.teardown)` does not leak the heartbeat interval and
+    // connection context. When called outside a component (tests, or an
+    // explicit-client helper), `onDestroy` throws — fall back to the manual
+    // `handle.teardown()` contract.
+    try {
+        onDestroy(teardown);
+    } catch {
+        // Not inside a component's init: the caller owns teardown.
+    }
 
     return { present, sessionId, setData, teardown };
 };
@@ -148,8 +161,11 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
  * Svelte context (requires calling inside a component's `&lt;script>` block or
  * inside a function called during component initialisation).
  *
- * Call `teardown()` when the component is destroyed to stop heartbeats and
- * remove the visibility listener (`onDestroy(handle.teardown)`).
+ * Teardown (stop heartbeats, remove the visibility listener, release the
+ * connection context) is wired automatically to the component's `onDestroy`
+ * when called during component initialisation. Outside a component call
+ * `handle.teardown()` yourself. `teardown()` is idempotent, so an explicit
+ * `onDestroy(handle.teardown)` on top of the auto-wiring is safe.
  */
 export function presence<H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: PresenceOptions<H, L>): PresenceHandle<L>;
 export function presence<H extends HeartbeatReference, L extends ListPresentReference>(

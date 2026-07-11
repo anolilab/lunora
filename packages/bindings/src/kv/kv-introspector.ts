@@ -78,9 +78,14 @@ const createKvIntrospector = (options: CreateKvIntrospectorOptions): KvIntrospec
 
     /** Resolve a namespace by binding name, throwing a descriptive error when absent. */
     const resolveNamespace = (binding: string): KVNamespaceLike => {
+        // Own-property check, not `=== undefined`: a prototype key
+        // ("__proto__", "constructor", …) resolves to an inherited
+        // Object.prototype member on this plain object and would bypass the
+        // not-found guard. Object.hasOwn routes such names to the controlled
+        // LunoraError instead of returning a non-namespace value.
         const ns = namespaces[binding];
 
-        if (ns === undefined) {
+        if (!Object.hasOwn(namespaces, binding) || ns === undefined) {
             throw new LunoraError("BAD_REQUEST", `@lunora/bindings/kv: no namespace registered under binding "${binding}"`);
         }
 

@@ -1,3 +1,4 @@
+import { isLunoraError } from "@lunora/errors";
 import type { EmbeddingModel, LanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 
@@ -107,26 +108,49 @@ describe("createAi", () => {
             expect(provider.embedCalls).toStrictEqual([]);
         });
 
-        it("throws a clear error when the provider has no textEmbeddingModel", () => {
+        it("throws a clear LunoraError when the provider has no textEmbeddingModel", () => {
             const provider = ((modelId: string) => ({ __model: modelId }) as unknown as LanguageModel) as WorkersAiProviderLike;
             const ai = createAi({ provider });
 
+            // A LunoraError (not a raw TypeError) so the runtime's toErrorBody and the
+            // CLI's renderLunoraError surface the curated catalog title/hint.
             expect(() => ai.embeddingModel("@cf/baai/bge-base-en-v1.5")).toThrow(/does not expose `textEmbeddingModel`/);
+
+            let caught: unknown;
+
+            try {
+                ai.embeddingModel("@cf/baai/bge-base-en-v1.5");
+            } catch (error) {
+                caught = error;
+            }
+
+            expect(isLunoraError(caught)).toBe(true);
         });
 
-        it("falls back to defaultModel when no embedding model is passed", () => {
+        it("falls back to defaultEmbeddingModel when no embedding model is passed", () => {
             const provider = fakeProvider();
-            const ai = createAi({ defaultModel: "@cf/baai/bge-base-en-v1.5", provider });
+            const ai = createAi({ defaultEmbeddingModel: "@cf/baai/bge-base-en-v1.5", provider });
 
             ai.embeddingModel();
 
             expect(provider.embedCalls).toStrictEqual(["@cf/baai/bge-base-en-v1.5"]);
         });
 
-        it("throws when no embedding model and no defaultModel are available", () => {
+        it("does not reuse the language-model defaultModel as an embedding fallback", () => {
+            // A language-model default must never leak into embeddingModel(): the ids
+            // belong to different Workers AI families, so reusing it would defer a
+            // wrong-family error to inference time instead of failing locally.
+            const provider = fakeProvider();
+            const ai = createAi({ defaultModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", provider });
+
+            expect(() => ai.embeddingModel()).toThrow(/no embedding model supplied and no `defaultEmbeddingModel`/);
+            expect(provider.embedCalls).toStrictEqual([]);
+        });
+
+        it("throws when no embedding model and no defaultEmbeddingModel are available", () => {
             const ai = createAi({ provider: fakeProvider() });
 
-            expect(() => ai.embeddingModel()).toThrow(/no embedding model supplied and no `defaultModel`/);
+            expect(() => ai.embeddingModel()).toThrow(/no embedding model supplied and no `defaultEmbeddingModel`/);
         });
     });
 

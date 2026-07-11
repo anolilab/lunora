@@ -2,14 +2,13 @@ import type { Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/client";
 
+import { randomSessionId } from "../../../shared/random-session-id";
 import { resolveLunoraClient } from "./client";
+import { runOutsideAngular, shouldOpenSubscription } from "./platform";
 
 type HeartbeatReference = FunctionReference<"mutation", { data?: Record<string, unknown>; roomId: string; sessionId: string }>;
 
 type ListPresentReference = FunctionReference<"query", { roomId: string }>;
-
-/* eslint-disable-next-line n/no-unsupported-features/node-builtins -- crypto.randomUUID is available in all target browsers, workerd, and Node 22+. */
-const makeSessionId = (): string => crypto.randomUUID();
 
 const DEFAULT_INTERVAL_MS = 10_000;
 
@@ -70,11 +69,12 @@ export interface PresenceResult<L extends ListPresentReference> {
  */
 export const presence = <H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: PresenceOptions<H, L>): PresenceResult<L> => {
     const client = resolveLunoraClient(options.client);
+    const fromInjectionContext = options.destroyRef === undefined;
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
     const { heartbeat, listPresent, shardKey } = options;
     const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
 
-    const sessionId = options.sessionId ?? makeSessionId();
+    const sessionId = options.sessionId ?? randomSessionId();
     const present = signal<ReturnOf<L> | undefined>(undefined);
 
     // Latest awareness data — updated by `setData`; read at heartbeat time so
@@ -84,11 +84,6 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     }
 
     let latestData: Record<string, unknown> | undefined = options.data;
-
-    // Register this room/session as the socket's connection context BEFORE the
-    // first heartbeat so the server's presence `onDisconnect` hook can delete
-    // the row instantly on socket drop.
-    const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
 
     const sendHeartbeat = (): void => {
         const args: ArgsOf<H> = { roomId, sessionId } as ArgsOf<H>;
@@ -106,43 +101,61 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
         sendHeartbeat();
     };
 
-    // Heartbeat: immediately on mount, on interval, and on tab re-focus.
-    sendHeartbeat();
-    const intervalHandle = setInterval(sendHeartbeat, intervalMs);
+    // Skip every network side effect on the Angular server platform (SSR): Node
+    // 22+ ships a global `WebSocket`, so a field-initializer heartbeat/subscribe
+    // would open a real connection during the server render. `present` stays
+    // `undefined`; the browser render re-runs this and connects.
+    if (shouldOpenSubscription(fromInjectionContext)) {
+        // Register this room/session as the socket's connection context BEFORE the
+        // first heartbeat so the server's presence `onDisconnect` hook can delete
+        // the row instantly on socket drop.
+        const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
 
-    const onVisible = (): void => {
-        if (typeof document !== "undefined" && document.visibilityState === "visible") {
-            sendHeartbeat();
-        }
-    };
+        // Heartbeat immediately on mount.
+        sendHeartbeat();
 
-    if (typeof document !== "undefined") {
-        document.addEventListener("visibilitychange", onVisible);
+        const onVisible = (): void => {
+            if (typeof document !== "undefined" && document.visibilityState === "visible") {
+                sendHeartbeat();
+            }
+        };
+
+        // Register the interval + visibilitychange listener OUTSIDE Angular's zone:
+        // a heartbeat tick is a pure network side effect that writes no signal, so
+        // it must not schedule an app-wide change-detection pass every `intervalMs`
+        // (nor on every tab re-focus).
+        const intervalHandle = runOutsideAngular(fromInjectionContext, () => {
+            if (typeof document !== "undefined") {
+                document.addEventListener("visibilitychange", onVisible);
+            }
+
+            return setInterval(sendHeartbeat, intervalMs);
+        });
+
+        // Subscribe to the live present-list for the room.
+        const listArgs: ArgsOf<L> = { roomId } as ArgsOf<L>;
+
+        const unsubscribe = client.subscribe(
+            listPresent,
+            listArgs,
+            (value) => {
+                present.set(value);
+            },
+            { shardKey },
+        );
+
+        // Teardown: clear interval, remove listener, release connection context, unsubscribe.
+        destroyRef.onDestroy(() => {
+            clearInterval(intervalHandle);
+
+            if (typeof document !== "undefined") {
+                document.removeEventListener("visibilitychange", onVisible);
+            }
+
+            releaseConnectionContext();
+            unsubscribe();
+        });
     }
-
-    // Subscribe to the live present-list for the room.
-    const listArgs: ArgsOf<L> = { roomId } as ArgsOf<L>;
-
-    const unsubscribe = client.subscribe(
-        listPresent,
-        listArgs,
-        (value) => {
-            present.set(value);
-        },
-        { shardKey },
-    );
-
-    // Teardown: clear interval, remove listener, release connection context, unsubscribe.
-    destroyRef.onDestroy(() => {
-        clearInterval(intervalHandle);
-
-        if (typeof document !== "undefined") {
-            document.removeEventListener("visibilitychange", onVisible);
-        }
-
-        releaseConnectionContext();
-        unsubscribe();
-    });
 
     return { present: present.asReadonly(), sessionId, setData };
 };

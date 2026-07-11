@@ -92,9 +92,22 @@ class LunoraSubscriptionRegistry {
 
         entry.refCount += 1;
 
+        // Single-shot guard: a second call of THIS detach must be a genuine
+        // no-op. Without it, a stale second call re-reads `entries.get(key)` and
+        // would decrement whatever entry now lives under the hash — possibly a
+        // DIFFERENT consumer's fresh entry (same key re-attached after this one
+        // fully detached) — closing a live subscription that is still in use.
+        let detached = false;
+
         return () => {
+            if (detached) {
+                return;
+            }
+
+            detached = true;
+
             // `entries.get(key)` is read again because a sibling detach may have
-            // already torn the entry down. Calling detach twice is a no-op.
+            // already torn the entry down.
             const current = this.entries.get(key);
 
             if (!current) {

@@ -316,3 +316,73 @@ describe("usePaginatedQuery — reactive ranges", () => {
         });
     });
 });
+
+// Identical content, different property insertion order — the reset-key stability probe.
+const ORDER_A: Record<string, unknown> = { x: 1, y: 2 };
+const ORDER_B: Record<string, unknown> = { y: 2, x: 1 };
+
+interface ArgsHarnessProps {
+    args: Record<string, unknown>;
+    onLoadMore?: (loadMore: (numberItems: number) => void) => void;
+}
+
+/** Like {@link Harness} but with caller-supplied base args, so a test can re-render with a reordered-but-equal args object. */
+const ArgsHarness = ({ args, onLoadMore }: ArgsHarnessProps): ReactElement => {
+    const { loadMore, results, status } = usePaginatedQuery(makeRef("items:list"), args, { initialNumItems: 2 });
+
+    onLoadMore?.(loadMore);
+
+    return (
+        <div>
+            <span data-testid="status">{status}</span>
+            <span data-testid="results">{(results as string[]).join(",")}</span>
+        </div>
+    );
+};
+
+describe("usePaginatedCore — reset key stability", () => {
+    it("re-rendering with base args of identical content but different key order keeps loaded pages", async () => {
+        expect.hasAssertions();
+
+        const backend = createReactiveBackend(["a", "b", "c", "d", "e", "f"]);
+
+        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
+        // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test-harness callback passed as a prop
+        const capture = (next: (numberItems: number) => void): void => {
+            loadMore = next;
+        };
+
+        const view = render(
+            <LunoraProvider client={backend.asClient}>
+                <ArgsHarness args={ORDER_A} onLoadMore={capture} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("status").textContent).toBe("CanLoadMore");
+        });
+
+        act(() => {
+            loadMore(2);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b,c,d");
+        });
+
+        // Re-render with the SAME base args by content but a different property
+        // insertion order. The reset key is built from the stable query-key
+        // encoding (order-insensitive), so this is a no-op — the two loaded pages
+        // survive. A raw `JSON.stringify(baseArgs)` reset key would differ here
+        // and collapse the feed back to page one ("a,b").
+        view.rerender(
+            <LunoraProvider client={backend.asClient}>
+                <ArgsHarness args={ORDER_B} onLoadMore={capture} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b,c,d");
+        });
+    });
+});

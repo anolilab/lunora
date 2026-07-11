@@ -459,6 +459,19 @@ describe("createKv", () => {
 
             await expect(kv.get("x".repeat(513))).rejects.toThrow(/512-byte limit/);
         });
+
+        it("measures the key ceiling in UTF-8 bytes, not UTF-16 code units", async () => {
+            // 200 CJK chars = 200 UTF-16 code units (well under 512) but 600
+            // UTF-8 bytes (over the 512-byte ceiling). String.length would wave
+            // it through only for KV to reject it remotely; byte-length rejects.
+            expect.assertions(2);
+
+            const kv = createKv({ namespace: fakeNamespace() });
+            const multibyteKey = "你".repeat(200);
+
+            expect(multibyteKey.length).toBeLessThan(512);
+            await expect(kv.get(multibyteKey)).rejects.toThrow(/512-byte limit/);
+        });
     });
 });
 

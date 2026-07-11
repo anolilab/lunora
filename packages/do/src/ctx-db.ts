@@ -733,7 +733,7 @@ interface DatabaseWriterLike {
      * since a global table has no shard boundaries to merge across.
      */
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: { allowExplicitId?: boolean }) => Promise<void>;
 
     /**
      * Un-soft-delete a row: clears the `.softDelete()` marker column (a by-id
@@ -2806,7 +2806,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             } else {
                 id = generateId();
             }
-            const creationTime = typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
+            // Like `_id` above, a document-supplied `_creationTime` is only honored
+            // under the trusted-import `allowExplicitId` opt-in. The default mutation
+            // path (and the optimistic `clientId` path) mints from `clock()` so a
+            // raw-forwarded client payload can't backdate/forward-date the row.
+            const creationTime = insertOptions?.allowExplicitId && typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
             const documentWithMeta: Record<string, unknown> = { ...withDefaults, _creationTime: creationTime, _id: id };
 
@@ -2888,7 +2892,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const rows = documents.map((document) => {
                 const withDefaults = applyInsertDefaults(definition, document, auth);
                 const id = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : generateId();
-                const creationTime = typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
+                // Gate `_creationTime` behind the same `allowExplicitId` opt-in as
+                // `_id` above — the default path mints from `clock()`.
+                const creationTime =
+                    batchOptions?.allowExplicitId === true && typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
                 return { creationTime, document: { ...withDefaults, _creationTime: creationTime, _id: id }, id };
             });
@@ -3348,7 +3355,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
         },
 
-        async replace(id, document, expectedTable) {
+        async replace(id, document, expectedTable, replaceOptions) {
             // Single probe that also captures the read-time `__doc__` blob.
             // The before-update trigger below spans an `await`, so the write
             // must compare-and-swap on this snapshot (see `runGuardedWrite`)
@@ -3364,7 +3371,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = expectedTable === undefined ? globalFallback() : undefined;
 
                 if (global) {
-                    await global.replace(id, document);
+                    await global.replace(id, document, undefined, replaceOptions);
                     return;
                 }
 
@@ -3382,7 +3389,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // would silently strip them, deleting the field instead of writing it.
             assertNoExplicitUndefined("replace", document);
 
-            const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
+            // A client-supplied `_creationTime` is honored only under the
+            // trusted-replay `allowExplicitId` opt-in (CDC replay, data-migration
+            // rewrite — both replay a row's original creation time). The default
+            // mutation path mints from `clock()` so a forged document
+            // `_creationTime` can't overwrite the persisted timestamp.
+            const creationTime = replaceOptions?.allowExplicitId && typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
             applyOnUpdate(tableDefinition, document, replaced, auth);

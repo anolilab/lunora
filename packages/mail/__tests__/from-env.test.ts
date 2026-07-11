@@ -25,6 +25,20 @@ describe("shouldCaptureMail", () => {
         // No env hints at all ⇒ treat as production (deliver), never silently capture.
         expect(shouldCaptureMail({})).toBe(false);
     });
+
+    it("treats an unrecognized LUNORA_MAIL_CAPTURE value as unset (falls through to env detection)", () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        // "yes" is not a recognized override, so a dev env still captures…
+        expect(shouldCaptureMail({ LUNORA_MAIL_CAPTURE: "yes", WORKER_ENV: "development" })).toBe(true);
+        // …and a prod env still delivers, rather than the value forcing capture off.
+        expect(shouldCaptureMail({ LUNORA_MAIL_CAPTURE: "on", WORKER_ENV: "production" })).toBe(false);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("unrecognized LUNORA_MAIL_CAPTURE"));
+
+        warn.mockRestore();
+    });
 });
 
 describe("createCaptureSink", () => {
@@ -71,6 +85,40 @@ describe("createCaptureSink", () => {
         });
 
         await expect(sink.record({ subject: "x", to: "a@b.test" })).resolves.toStrictEqual({ id: "uncaptured" });
+    });
+
+    it("does NOT report success when the shard RPC fails — logs and returns the sentinel instead", async () => {
+        expect.assertions(2);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        // 401 (wrong admin token) with a non-JSON body: previously `.json()` threw
+        // or a success id was returned even though nothing was recorded.
+        const fetch = vi.fn<() => Promise<{ json: () => Promise<unknown>; ok: boolean; status: number }>>(async () => {
+            return {
+                json: async () => {
+                    throw new Error("not JSON");
+                },
+                ok: false,
+                status: 401,
+            };
+        });
+        const env = {
+            LUNORA_ADMIN_TOKEN: "wrong",
+            SHARD: {
+                get: () => {
+                    return { fetch };
+                },
+                idFromName: () => 0,
+            },
+        };
+
+        const result = await createCaptureSink(env).record({ subject: "Hi", to: "a@b.test" });
+
+        // Best-effort: the send still succeeds, but never with a bogus recorded id.
+        expect(result).toStrictEqual({ id: "uncaptured" });
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("failed to record captured mail"), expect.anything());
+
+        consoleError.mockRestore();
     });
 });
 

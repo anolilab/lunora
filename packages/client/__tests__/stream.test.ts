@@ -339,6 +339,28 @@ describe("stream", () => {
             await expect(consumer).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
         });
 
+        it("fails an in-flight stream when the socket disconnects instead of hanging forever", async () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const iterable = client.stream(fnRef<number>("metrics:tick"), {});
+
+            // Open so the start frame is sent — the server now holds the iterator.
+            latestSocket().open();
+
+            const consumer = iterable[Symbol.asyncIterator]().next();
+
+            // Socket bounces (flaky Wi-Fi): the server-side iterator is gone and
+            // nothing will resume it. The consumer must see a deterministic
+            // rejection rather than an unresolved next().
+            latestSocket().close();
+
+            await expect(consumer).rejects.toMatchObject({ code: "STREAM_DISCONNECTED" });
+
+            client.close();
+        });
+
         it("buffers the start frame while the socket is connecting and flushes it on open", async () => {
             expect.assertions(2);
 

@@ -1,7 +1,8 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import type { ShallowRef } from "vue";
-import { onScopeDispose, shallowRef } from "vue";
+import { getCurrentScope, onScopeDispose, shallowRef } from "vue";
 
+import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 
 /**
@@ -53,18 +54,6 @@ interface UsePresenceResult<L extends ListPresentReference> {
     setData: (data: Record<string, unknown> | undefined) => void;
 }
 
-/** Best-effort unique id for a presence session. */
-const makeSessionId = (): string => {
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- crypto is a browser global, not just a Node built-in; guarded for SSR environments
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- same guard as above
-        return crypto.randomUUID();
-    }
-
-    // eslint-disable-next-line sonarjs/pseudo-random -- presence session id, not a credential
-    return `sess-${Math.random().toString(36).slice(2)}-${String(Date.now())}`;
-};
-
 const DEFAULT_INTERVAL_MS = 10_000;
 
 const usePresence = <H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: UsePresenceOptions<H, L>): UsePresenceResult<L> => {
@@ -72,7 +61,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
     // One session id per composable call unless the caller pins one.
-    const sessionId = options.sessionId ?? makeSessionId();
+    const sessionId = options.sessionId ?? randomSessionId();
 
     const present = shallowRef<ReturnOf<L> | undefined>(undefined) as ShallowRef<ReturnOf<L> | undefined>;
 
@@ -96,47 +85,65 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
         sendHeartbeat();
     };
 
-    // Heartbeat: immediately on mount, on interval, and on tab re-focus.
-    sendHeartbeat();
-    const intervalHandle = setInterval(sendHeartbeat, intervalMs);
+    // The heartbeat, interval, and live subscription are client-only. During SSR
+    // (this package ships a `/server` entry and pairs with `@lunora/nuxt`) a
+    // component's `setup()` runs inside `renderToString` with no `window`: firing
+    // a heartbeat there writes a ghost presence row under a throwaway session id,
+    // and the render scope never stops — so `onScopeDispose` never fires and each
+    // request would leak a live `setInterval` handle. Skip the whole client wiring
+    // server-side; the returned refs stay inert until the component hydrates.
+    if ((globalThis as { window?: unknown }).window !== undefined) {
+        // Heartbeat: immediately on mount, on interval, and on tab re-focus.
+        sendHeartbeat();
+        const intervalHandle = setInterval(sendHeartbeat, intervalMs);
 
-    const onVisible = (): void => {
-        if (typeof document !== "undefined" && document.visibilityState === "visible") {
-            sendHeartbeat();
-        }
-    };
-
-    if (typeof document !== "undefined") {
-        document.addEventListener("visibilitychange", onVisible);
-    }
-
-    // Register this room/session as the socket's connection context so the server's
-    // presence `onDisconnect` hook can delete the row instantly on socket drop.
-    // Use the refcounted acquire so a second presence hook on the same client/shard
-    // doesn't clobber this one's context when either unmounts.
-    const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
-
-    // Subscribe to the live present-list for the room.
-    const unsubscribe = client.subscribe(
-        listPresent,
-        { roomId } as ArgsOf<L>,
-        (value) => {
-            present.value = value;
-        },
-        { shardKey },
-    );
-
-    // Teardown: clear interval, remove listener, clear connection context, unsubscribe.
-    onScopeDispose(() => {
-        clearInterval(intervalHandle);
+        const onVisible = (): void => {
+            if (typeof document !== "undefined" && document.visibilityState === "visible") {
+                sendHeartbeat();
+            }
+        };
 
         if (typeof document !== "undefined") {
-            document.removeEventListener("visibilitychange", onVisible);
+            document.addEventListener("visibilitychange", onVisible);
         }
 
-        releaseConnectionContext();
-        unsubscribe();
-    });
+        // Register this room/session as the socket's connection context so the server's
+        // presence `onDisconnect` hook can delete the row instantly on socket drop.
+        // Use the refcounted acquire so a second presence hook on the same client/shard
+        // doesn't clobber this one's context when either unmounts.
+        const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
+
+        // Subscribe to the live present-list for the room.
+        const unsubscribe = client.subscribe(
+            listPresent,
+            { roomId } as ArgsOf<L>,
+            (value) => {
+                present.value = value;
+            },
+            { shardKey },
+        );
+
+        // Teardown: clear interval, remove listener, clear connection context, unsubscribe.
+        const teardown = (): void => {
+            clearInterval(intervalHandle);
+
+            if (typeof document !== "undefined") {
+                document.removeEventListener("visibilitychange", onVisible);
+            }
+
+            releaseConnectionContext();
+            unsubscribe();
+        };
+
+        if (getCurrentScope()) {
+            onScopeDispose(teardown);
+        } else if (process.env.NODE_ENV !== "production") {
+            console.warn(
+                "[@lunora/vue] usePresence called with no active effect scope — its heartbeat interval and live subscription will not be cleaned up automatically. " +
+                    "Call it inside setup()/an effect scope.",
+            );
+        }
+    }
 
     return { present, sessionId, setData };
 };

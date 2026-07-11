@@ -73,4 +73,30 @@ describe("discover-queues", () => {
 
         expect(() => discoverQueues(newProject(), workdir)).toThrow(/`name` must be a non-empty string/u);
     });
+
+    it("rejects two queues that deploy under the same name", () => {
+        expect.assertions(1);
+
+        writeQueues(`
+            import { defineQueue } from "@lunora/queue";
+
+            export const first = defineQueue({ name: "shared", handler: async () => {} });
+            export const second = defineQueue({ name: "shared", mode: "pull" });
+        `);
+
+        expect(() => discoverQueues(newProject(), workdir)).toThrow(/Duplicate queue name "shared"/u);
+    });
+
+    it("rejects two queue exports that collapse to the same binding name", () => {
+        expect.assertions(1);
+
+        writeQueues(`
+            import { defineQueue } from "@lunora/queue";
+
+            export const myQueue = defineQueue({ name: "one", handler: async () => {} });
+            export const myQUEUE = defineQueue({ name: "two", handler: async () => {} });
+        `);
+
+        expect(() => discoverQueues(newProject(), workdir)).toThrow(/Duplicate queue binding "QUEUE_MY_QUEUE"/u);
+    });
 });

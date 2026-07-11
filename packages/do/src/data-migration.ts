@@ -462,8 +462,13 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
                     changed += 1;
 
                     if (!dryRun) {
+                        // Trusted rewrite: preserve the row's original `_creationTime`
+                        // via the `allowExplicitId` opt-in (default replace mints a
+                        // fresh clock()).
                         // eslint-disable-next-line no-await-in-loop -- writes share one SQLite handle; parallelizing would interleave statements on a single connection.
-                        await writer.replace(String(document["_id"]), { ...next, _creationTime: document["_creationTime"], _id: document["_id"] });
+                        await writer.replace(String(document["_id"]), { ...next, _creationTime: document["_creationTime"], _id: document["_id"] }, undefined, {
+                            allowExplicitId: true,
+                        });
                     }
                 }
 

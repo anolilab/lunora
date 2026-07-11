@@ -107,4 +107,20 @@ describe("rateLimit middleware", () => {
 
         expect(error.message).toBe("slow down");
     });
+
+    it("rethrows deterministic misuse (INTERNAL) instead of masking it, even with failOpen", async () => {
+        expect.assertions(3);
+
+        // count 20 against a capacity-5 fixed window is never admittable — an
+        // INTERNAL config bug, not a store outage. failOpen must NOT swallow it
+        // into a silent no-op; it must surface as INTERNAL.
+        const limiter = new RateLimiter({ config: { api: { kind: "fixed window", period: 1000, rate: 5 } }, now: () => 0 });
+        const middleware = rateLimit<Context>(limiter, "api", { count: 20, failOpen: true });
+
+        const error = await catchError(() => invoke(middleware, {}));
+
+        expect(error.name).toBe("LunoraError");
+        expect(error.code).toBe("INTERNAL");
+        expect(error.status).not.toBe(503);
+    });
 });

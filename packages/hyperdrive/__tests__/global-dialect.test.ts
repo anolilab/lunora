@@ -43,12 +43,25 @@ describe("mysqlDialect", () => {
     it("requires a key prefix only for TEXT/BLOB columns (InnoDB key limit)", () => {
         expect.assertions(3);
 
-        // a LONGTEXT string column needs a 768-char key prefix to be indexable on InnoDB…
-        expect(mysqlDialect.indexKeyPrefix?.("string")).toBe(768);
+        // a LONGTEXT string column needs a 191-char key prefix to be indexable on InnoDB.
+        // 191 (not 768): a flat 768-char prefix is 3072 bytes under utf8mb4 — exactly
+        // InnoDB's whole-index key limit — so any composite index that also contains a
+        // string field would exceed 3072 and fail CREATE INDEX with ER_TOO_LONG_KEY.
+        expect(mysqlDialect.indexKeyPrefix?.("string")).toBe(191);
         // …but fixed-width columns index as-is (no prefix).
         expect(mysqlDialect.indexKeyPrefix?.("number")).toBeUndefined();
         // SQLite/Postgres index TEXT directly, so they omit the hook entirely.
         expect(postgresDialect.indexKeyPrefix).toBeUndefined();
+    });
+
+    it("keeps a composite [string, string] index within InnoDB's 3072-byte key limit", () => {
+        expect.assertions(1);
+
+        // Two prefixed string columns = 2 × (191 × 4) = 1528 bytes, well under 3072. At
+        // the old 768 prefix this would have been 6144 bytes → ER_TOO_LONG_KEY at migrate.
+        const perColumnBytes = (mysqlDialect.indexKeyPrefix?.("string") ?? 0) * 4;
+
+        expect(perColumnBytes * 2).toBeLessThanOrEqual(3072);
     });
 
     it("has no RETURNING (OCC falls back to affected-rows)", () => {

@@ -21,7 +21,24 @@ const send = mutation
 
 const addTag = mutation.input({ name: v.string() }).mutation(async ({ args, ctx }) => ctx.db.insert("tags", { name: args.name }));
 
+const deleteAllMessages = mutation.mutation(async ({ ctx }) => {
+    const rows = await ctx.db.query("messages").collect();
+
+    await ctx.db.deleteMany((rows as { _id: string }[]).map((r) => r._id) as unknown as Parameters<typeof ctx.db.deleteMany>[0]);
+});
+
 const list = query.query(async ({ ctx }) => ctx.db.query("messages").collect());
+
+/** Query that throws when the table is empty — used to prove a re-eval failure surfaces (never hangs next()). */
+const firstOrThrow = query.query(async ({ ctx }) => {
+    const rows = await ctx.db.query("messages").collect();
+
+    if (rows.length === 0) {
+        throw new Error("no messages");
+    }
+
+    return rows[0];
+});
 
 const countMessages = query.query(async ({ ctx }) => {
     const rows = await ctx.db.query("messages").collect();
@@ -246,6 +263,80 @@ describe("harness.subscribe", () => {
         await sub.return();
 
         expect(latest.value).toBe(3);
+    });
+
+    it("surfaces a re-evaluation error via next() instead of hanging forever", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        await t.mutation(send, { author: "ada", body: "hi" });
+
+        const sub = t.subscribe(firstOrThrow, {});
+
+        // Initial snapshot — the row exists.
+        const initial = await sub.next();
+
+        expect(initial.value).toMatchObject({ author: "ada" });
+
+        // Delete the row the query reads; the post-mutation re-evaluation now throws.
+        // Before the fix, the listener's swallowed rejection left appliedSeq stuck
+        // below latestSeq, so this next() parked forever. It must now reject.
+        await t.mutation(deleteAllMessages, {});
+
+        await expect(sub.next()).rejects.toThrow("no messages");
+
+        await sub.return();
+    });
+
+    it("settles every concurrent next() caller parked on the same emit", async () => {
+        expect.assertions(3);
+
+        const t = start();
+
+        // Gate re-evaluations so we can park two next() calls before the emit lands.
+        let gateActive = false;
+        let releaseGate: (() => void) | undefined;
+
+        const sub = t.subscribe(async (ctx) => {
+            if (gateActive) {
+                await new Promise<void>((resolve) => {
+                    releaseGate = resolve;
+                });
+            }
+
+            const rows = await ctx.db.query("messages").collect();
+
+            return rows.length;
+        });
+
+        // Consume the initial snapshot (ungated).
+        const s0 = await sub.next();
+
+        expect(s0.value).toBe(0);
+
+        // From here, re-evaluations block on the gate.
+        gateActive = true;
+
+        // A mutation fires the listener re-eval, which parks on the gate. latestSeq
+        // is now ahead of appliedSeq, so both next() calls below park as waiters.
+        await t.mutation(send, { author: "x", body: "y" });
+
+        const a = sub.next();
+        const b = sub.next();
+
+        // Release the gated re-eval; a single emit must settle BOTH parked callers.
+        // Before the fix, the second next() overwrote the first's resolver, so the
+        // first promise never settled.
+        gateActive = false;
+        releaseGate?.();
+
+        const [ra, rb] = await Promise.all([a, b]);
+
+        await sub.return();
+
+        expect(ra.value).toBe(1);
+        expect(rb.value).toBe(1);
     });
 
     it("returning one subscription does not affect other active subscriptions", async () => {

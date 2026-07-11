@@ -1,3 +1,4 @@
+/* eslint-disable no-secrets/no-secrets -- camelCase identifiers in prose, not secrets */
 import type { EnvironmentProviders } from "@angular/core";
 import { inject, InjectionToken, makeEnvironmentProviders } from "@angular/core";
 import type { LunoraClientOptions } from "@lunora/client";
@@ -10,10 +11,12 @@ import { LunoraClient } from "@lunora/client";
  * `location` genuinely optional — the DOM lib types it as always present, but it
  * is absent on the server.
  *
- * The `""` server fallback is safe for the common flow, because the reactive
- * primitives (`liveQuery` / `connectionStatus`) open their WebSocket lazily in the
- * browser — an SSR render never issues a request. But **server-side data-loading**
- * (a `query`/`mutation` run during SSR) with `""` builds a relative URL that native
+ * The `""` server fallback is safe for the common flow: the reactive primitives
+ * (`liveQuery`, `subscription`, `paginatedQuery`, `presence`, `hydratePreloaded`)
+ * gate their `client.subscribe(...)` on the Angular browser platform, so an SSR
+ * render opens no socket even though Node 22+ exposes a global `WebSocket` (see
+ * `shouldOpenSubscription` in `./platform`). But **server-side data-loading** (a
+ * `query`/`mutation` run during SSR) with `""` builds a relative URL that native
  * `fetch` rejects (`TypeError: Failed to parse URL`); for that, pass an explicit
  * `url` to {@link provideLunora}.
  */

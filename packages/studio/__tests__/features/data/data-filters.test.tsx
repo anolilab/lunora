@@ -37,6 +37,36 @@ describe("toFilterClauses", () => {
             { column: "code", operator: "contains", value: "100" },
         ]);
     });
+
+    it("coerces a canonical numeric string to a number for `eq`, so numeric columns match", () => {
+        expect.assertions(1);
+
+        expect(toFilterClauses([{ column: "age", operator: "eq", value: "42" }])).toStrictEqual([{ column: "age", operator: "eq", value: 42 }]);
+    });
+
+    it("keeps a leading-zero code (e.g. a zip) a string for `eq`, so a TEXT column still matches", () => {
+        expect.assertions(1);
+
+        // `Number("00123")` is 123, which would never match the stored TEXT "00123"
+        // once bound against the affinity-less `json_extract` expression server-side.
+        expect(toFilterClauses([{ column: "zip", operator: "eq", value: "00123" }])).toStrictEqual([{ column: "zip", operator: "eq", value: "00123" }]);
+    });
+
+    it("does not coerce surprising numeric forms (hex, exponent shorthand, Infinity) for `ne`", () => {
+        expect.assertions(1);
+
+        expect(
+            toFilterClauses([
+                { column: "a", operator: "ne", value: "0x10" },
+                { column: "b", operator: "ne", value: "1e3" },
+                { column: "c", operator: "ne", value: "Infinity" },
+            ]),
+        ).toStrictEqual([
+            { column: "a", operator: "ne", value: "0x10" },
+            { column: "b", operator: "ne", value: "1e3" },
+            { column: "c", operator: "ne", value: "Infinity" },
+        ]);
+    });
 });
 
 describe("dataFilters", () => {

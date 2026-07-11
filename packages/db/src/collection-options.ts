@@ -129,8 +129,20 @@ export interface LunoraCollectionConfig<TRow extends Row> {
     onError?: (error: SubscriptionError) => void;
     /** When set, the collection stays empty until {@link LunoraCollectionOptions.scope} points it at args (sharded). */
     scopeBy?: string;
+
     /** A replication shape as the sync source (partial replication). Mutually exclusive with {@link LunoraCollectionConfig.list}. */
     shape?: ShapeSource;
+
+    /**
+     * Routes the `list` subscription — and the confirmed-mutation watermark its
+     * data/`settled` frames advance the checkpoint gate from — to a specific
+     * shard's DO. Applies to the `list` source; a `shape` carries its own
+     * {@link ShapeSource.shardKey}. Without it the list path falls back to the
+     * default ("") watermark bucket, which must not be compared against a
+     * per-shard mutator's sequence line (it would drop a sharded overlay early or
+     * hang it forever).
+     */
+    shardKey?: string;
 }
 
 /** The result of {@link lunoraCollectionOptions}: a TanStack collection config plus its sync controls. */
@@ -161,10 +173,13 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
 
     const getKey = options.getKey ?? ((row: TRow) => row._id);
     const checkpoints = createCheckpointRegistry();
-    // JSON-serialized form of each last-synced row, keyed by row id.
-    // Owned here (outside sync.sync) so it persists correctly across sync
-    // restarts — a new makeDiffEmit closure on restart receives the same
-    // reference and starts from the committed synced state.
+    // JSON-serialized form of each last-synced row, keyed by row id — the
+    // `makeDiffEmit` base for one sync session. Owned outside `sync.sync` only so
+    // `scope(...)` can reach the live `emit`; it is CLEARED in the sync cleanup
+    // (below), because TanStack drops its own synced store on gc cleanup, so a
+    // sync restart begins from an empty store and must re-insert the full
+    // snapshot. A stale cache here would diff the re-delivered snapshot down to
+    // zero writes and leave the collection permanently empty.
     const syncedJson = new Map<string, string>();
 
     // Mutable sync handles, populated when TanStack calls the `sync` closure and
@@ -172,6 +187,11 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     let emit: ((next: Map<string, TRow>) => void) | undefined;
     let unsubscribe: (() => void) | undefined;
     let onErrorHandler: ((error: SubscriptionError) => void) | undefined;
+    // The last scope args a `scopeBy` collection was pointed at. Remembered here
+    // (outside `sync.sync`) so a sync restart after gc cleanup re-opens the same
+    // scope instead of remounting empty, and so a `scope(...)` issued before sync
+    // starts (while `emit` is undefined) is applied once sync begins.
+    let scopedArgs: Record<string, unknown> | undefined;
 
     // Open the underlying sync source — a full-table `list` query subscription or
     // a replication-`shape` poke subscription — with one uniform callback shape.
@@ -192,7 +212,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             // exactly when the server rows arrive instead of `awaitMutationId`
             // hanging forever after the write is accepted.
             if (options.shape === undefined) {
-                checkpoints.resolve({ mutationId: options.client.confirmedMutationWatermark() });
+                checkpoints.resolve({ mutationId: options.client.confirmedMutationWatermark(options.shardKey) });
             }
         };
         const onError = (error: SubscriptionError): void => onErrorHandler?.(error);
@@ -213,7 +233,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             });
         }
 
-        return options.client.subscribe(options.list as FunctionReference, args, onRows, { onCheckpoint, onError });
+        return options.client.subscribe(options.list as FunctionReference, args, onRows, { onCheckpoint, onError, shardKey: options.shardKey });
     };
 
     const config: CollectionConfig<TRow, string> = {
@@ -248,6 +268,16 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
                 } else {
                     // Scoped collection: empty until `scope(args)` points it.
                     writer.markReady();
+
+                    // Re-open the last scope on a sync (re)start — e.g. after gc
+                    // cleanup tore the previous session down, or when `scope(...)`
+                    // ran before sync first started. `emit` was assigned just
+                    // above, so the source's initial frame syncs in instead of
+                    // being dropped; without this a gc'd scoped collection would
+                    // remount permanently empty.
+                    if (scopedArgs !== undefined) {
+                        unsubscribe = openSubscription(scopedArgs, undefined);
+                    }
                 }
 
                 return () => {
@@ -255,6 +285,11 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
                     onErrorHandler = undefined;
                     unsubscribe?.();
                     unsubscribe = undefined;
+                    // Reset the diff base: TanStack drops its synced store on gc
+                    // cleanup, so the next sync restart must re-insert the full
+                    // snapshot rather than diff it against a stale cache (which
+                    // would leave the restarted collection empty).
+                    syncedJson.clear();
                 };
             },
         },
@@ -265,6 +300,9 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             return;
         }
 
+        // Remember the target so a later sync (re)start re-opens it.
+        scopedArgs = args;
+
         unsubscribe?.();
         unsubscribe = undefined;
         // Clear the previous scope's rows from the synced view.
@@ -274,7 +312,13 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             return;
         }
 
-        unsubscribe = openSubscription(args, undefined);
+        // Only open now if sync is live (`emit` assigned). When `scope(...)` runs
+        // before TanStack first invokes `sync.sync` — or after a gc cleanup — the
+        // subscription is deferred to the sync (re)start, where `emit` exists, so
+        // the source's initial frame is emitted instead of dropped by `emit?.()`.
+        if (emit !== undefined) {
+            unsubscribe = openSubscription(args, undefined);
+        }
     };
 
     return { checkpoints, config, scope };

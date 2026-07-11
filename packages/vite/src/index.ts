@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+
 import { cloudflare } from "@cloudflare/vite-plugin";
 import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
@@ -11,7 +13,7 @@ import { createCommandProbe, withDevWorkerEnv } from "./dev-worker-env";
 import { frameworkComposePlugin } from "./framework-compose-plugin";
 import { createPluginContext, frameworkDetectPlugin } from "./framework-detect-plugin";
 import logStreamPlugin from "./log-stream-plugin";
-import { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "./remote-bindings-plugin";
+import { planViteRemoteBindings, remoteBindingsCleanupPlugin, remoteBindingsConfigPlugin } from "./remote-bindings-plugin";
 import { lunoraSolutionFinders } from "./solution-finders";
 import { studioPlugin } from "./studio-plugin";
 import type { CloudflarePluginOptions, LunoraPluginOptions, LunoraPlugins, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
@@ -142,12 +144,22 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // point the cloudflare plugin's `configPath` at it. DO shards stay local.
         const remotePlan = planViteRemoteBindings({ projectRoot: resolved.projectRoot });
 
-        if (remotePlan.enabled && remotePlan.configPath !== undefined) {
-            // Register a cleanup that unlinks the temp config when the dev server closes.
-            plugins.push(remoteBindingsCleanupPlugin(remotePlan.cleanup));
-        }
+        // The dev worker env var (`WORKER_ENV=development`) is deferred correctly
+        // inside its own `config` customizer; the remote `configPath` injection is
+        // deferred to `remoteBindingsConfigPlugin`'s `config` hook below (the
+        // resolved `serve`/`build` command is unknown at this factory-time call).
+        const cloudflareOptions = withDevWorkerEnv(resolved.cloudflare, isServe);
 
-        const cloudflareOptions = withRemoteBindings(withDevWorkerEnv(resolved.cloudflare, isServe), isServe, remotePlan);
+        if (remotePlan.enabled) {
+            if (remotePlan.configPath !== undefined) {
+                // Register a cleanup that unlinks the temp config when the dev server closes.
+                plugins.push(remoteBindingsCleanupPlugin(remotePlan.cleanup));
+            }
+
+            // Injects `configPath` at hook time (serve only) by mutating
+            // `cloudflareOptions` in place before the cloudflare plugin reads it.
+            plugins.push(remoteBindingsConfigPlugin(cloudflareOptions, remotePlan));
+        }
 
         // Wrap the Cloudflare plugins' startup hooks so a Worker-entry evaluation
         // failure (e.g. a circular import in `lunora/`) surfaces an actionable
@@ -158,7 +170,11 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     return plugins;
 };
 
-const VERSION = "0.0.0";
+// Read the real published version from the package manifest at load time rather
+// than a hardcoded `"0.0.0"` (which lied to anyone introspecting the plugin for
+// support diagnostics). `../package.json` resolves to this package's manifest
+// from both `src/index.ts` (tsc/vitest) and the bundled `dist/index.mjs`.
+const VERSION: string = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 export { default as codegenPlugin } from "./codegen-plugin";
 export { default as containerLogsPlugin } from "./container-logs-plugin";
@@ -185,7 +201,7 @@ export { default as LUNORA_API_UPDATED_EVENT } from "./hmr-events";
 // composition) justifies a public surface. Only `detectFramework` (above) is public.
 export { default as logStreamPlugin } from "./log-stream-plugin";
 export type { PlanViteRemoteOptions, ViteRemotePlan } from "./remote-bindings-plugin";
-export { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "./remote-bindings-plugin";
+export { planViteRemoteBindings, remoteBindingsCleanupPlugin, remoteBindingsConfigPlugin, withRemoteBindings } from "./remote-bindings-plugin";
 // The error→solution rule table itself lives in `@lunora/codegen` (shared with
 // the standalone `lunora dev` CLI); `@lunora/vite` only wraps it as an overlay
 // finder. Import `findLunoraSolution` / `LUNORA_SOLUTION_RULES` from `@lunora/codegen`.

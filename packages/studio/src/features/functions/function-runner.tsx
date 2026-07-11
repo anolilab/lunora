@@ -11,7 +11,7 @@ import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
 import { useT } from "../../i18n/i18n-context";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { adminRef, dispatchByKind, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import type { FunctionDescriptor, FunctionKind, RunStatus } from "../../lib/types";
 import { argumentsTemplate, formatSignature } from "./function-signature";
@@ -189,34 +189,14 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
         setError(null);
 
         try {
-            let value: unknown;
-
-            if (forgedUserId === "") {
-                switch (selected.kind) {
-                    case "action": {
-                        value = await client.action(reference, parsedArgs, options);
-
-                        break;
-                    }
-                    case "mutation": {
-                        value = await client.mutation(reference, parsedArgs, options);
-
-                        break;
-                    }
-                    default: {
-                        value = await client.query(reference, parsedArgs, options);
-                    }
-                }
-            } else {
-                // The admin `runAs` RPC dispatches the target on the DO under the
-                // forged identity and returns its result — kind-agnostic by design:
-                // it routes every kind (query/mutation/action) through the DO's
-                // `handleRpc`, so a forged *action* runs inline rather than via the
-                // `client.action` path (no separate waitUntil/scheduling). That's the
-                // intended trade-off for this dev-only auth/RLS probe. Sent over
-                // `client.query` like every admin RPC.
-                value = await client.query(RUN_AS, { args: parsedArgs as Record<string, unknown>, functionPath: selected.path, userId: forgedUserId }, options);
-            }
+            // For a real identity, the admin `runAs` RPC dispatches the target on
+            // the DO under the forged identity (kind-agnostic: every kind routes
+            // through the DO's `handleRpc`, so a forged *action* runs inline), sent
+            // over `client.query` like every admin RPC. An empty id runs normally.
+            const value: unknown =
+                forgedUserId === ""
+                    ? await dispatchByKind(client, selected.kind, reference, parsedArgs, options)
+                    : await client.query(RUN_AS, { args: parsedArgs as Record<string, unknown>, functionPath: selected.path, userId: forgedUserId }, options);
 
             recordShard(shardKey);
             setResult(value);

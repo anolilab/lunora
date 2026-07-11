@@ -28,12 +28,9 @@
  */
 import { rmSync, writeFileSync } from "node:fs";
 
-import { applyEdits, modify } from "jsonc-parser";
-
+import { applyModify } from "./jsonc-edit";
 import join from "./path";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
-
-const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 4 } } as const;
 
 /**
  * The wrangler config sections Lunora can safely flip to remote mode in dev,
@@ -156,13 +153,6 @@ const planSection = (section: RemoteEligibleKey, parsed: RemoteWranglerShape): R
  * complete) but the materializer's edit is a harmless no-op for it.
  */
 const planRemoteBindings = (parsed: RemoteWranglerShape): RemoteBindingPlan[] => REMOTE_ELIGIBLE_KEY_LIST.flatMap((section) => planSection(section, parsed));
-
-/** Apply one structural edit and return the rewritten text (mirrors reconcile-bindings). */
-const applyModify = (text: string, path: ReadonlyArray<number | string>, value: unknown): string => {
-    const edits = modify(text, [...path], value, FORMATTING);
-
-    return edits.length > 0 ? applyEdits(text, edits) : text;
-};
 
 /**
  * Inject `"remote": true` onto each planned binding in the config `text`,

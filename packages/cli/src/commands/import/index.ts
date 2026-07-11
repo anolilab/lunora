@@ -14,6 +14,7 @@ const importCommand: Command = {
         { description: "Wrap each bare doc as `{table:<name>,doc:...}`", name: "table", type: String },
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
+        { description: "Confirm bulk-writing production (required with --prod)", name: "yes", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
         {
             description: "Admin bearer token (prefer LUNORA_ADMIN_TOKEN; --token is visible to other local processes via the process table)",
@@ -31,4 +32,5 @@ export type ImportOptions = CreateOptions<{
     table: string | undefined;
     token: string | undefined;
     url: string | undefined;
+    yes: boolean | undefined;
 }>;

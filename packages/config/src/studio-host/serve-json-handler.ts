@@ -159,8 +159,18 @@ const csrfRejectionReason = (request: IncomingMessage): string | undefined => {
  * schema); every other method has its body read + JSON-parsed first. The
  * handler's `{ status, body }` is serialised back as JSON. A malformed body is a
  * `400`; an unexpected throw (e.g. the body-size guard) is a `500`.
+ *
+ * `schemaDirectory` (when the host configures a custom `schemaDir`) is forwarded
+ * to the handler so the schema/seed/policy endpoints target the right directory
+ * instead of always defaulting to `"lunora"`.
  */
-const serveJsonHandler = (request: IncomingMessage, response: ServerResponse, handle: LocalEndpointHandler, projectRoot: string): void => {
+const serveJsonHandler = (
+    request: IncomingMessage,
+    response: ServerResponse,
+    handle: LocalEndpointHandler,
+    projectRoot: string,
+    schemaDirectory?: string,
+): void => {
     const run = async (): Promise<void> => {
         try {
             // CSRF / cross-origin defense BEFORE the body is read or the handler
@@ -184,7 +194,7 @@ const serveJsonHandler = (request: IncomingMessage, response: ServerResponse, ha
                 return;
             }
 
-            const result = handle({ body: parsed, method: request.method ?? "POST", projectRoot });
+            const result = handle({ body: parsed, method: request.method ?? "POST", projectRoot, schemaDirectory });
 
             respondJson(response, result.status, result.body);
         } catch (error: unknown) {

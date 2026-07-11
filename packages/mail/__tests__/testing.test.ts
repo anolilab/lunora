@@ -69,6 +69,21 @@ describe("@lunora/mail/testing", () => {
         expect(extractLink(textOnly, { match: "/verify" })).toBe("https://x.test/verify?token=zzz");
     });
 
+    it("extractLink decodes the &amp; entity that HTML renderers escape into hrefs", () => {
+        expect.assertions(2);
+
+        // @react-email/render escapes `&` as `&amp;` inside href attributes, so a
+        // multi-query-param reset link must be decoded before it can be followed.
+        const escaped = mail({ html: '<a href="https://x.test/reset?uid=1&amp;token=abc">reset</a>' });
+
+        expect(extractLink(escaped, { match: "/reset" })).toBe("https://x.test/reset?uid=1&token=abc");
+
+        // Numeric hex form (&#x26;) decodes too.
+        const numeric = mail({ html: '<a href="https://x.test/verify?a=1&#x26;b=2">v</a>' });
+
+        expect(extractLink(numeric, { match: "/verify" })).toBe("https://x.test/verify?a=1&b=2");
+    });
+
     it("extractLink throws when no matching link exists", () => {
         expect.assertions(1);
 

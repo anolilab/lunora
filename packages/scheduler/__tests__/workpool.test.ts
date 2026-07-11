@@ -41,6 +41,46 @@ class FailingScheduler extends SchedulerDO {
     }
 }
 
+/**
+ * On the FIRST dispatch it re-enters the DO with a `/complete` for a DIFFERENT
+ * in-flight job before returning — simulating an at-least-once completion
+ * callback that lands mid-dispatch (the DO input gate is open across the fetch
+ * await). Used to prove reservePoolSlot() re-reads the pool row fresh and does
+ * not clobber that concurrent release.
+ */
+class CompletingScheduler extends SchedulerDO {
+    public dispatched: string[] = [];
+
+    private completedOnce = false;
+
+    public constructor(
+        state: ConstructorParameters<typeof SchedulerDO>[0],
+        env: ConstructorParameters<typeof SchedulerDO>[1],
+        private readonly completeId: string,
+        private readonly pool: string,
+    ) {
+        super(state, env);
+    }
+
+    protected override async dispatch(record: ScheduleRecord): Promise<boolean> {
+        this.dispatched.push(record.id);
+
+        if (!this.completedOnce) {
+            this.completedOnce = true;
+
+            await this.fetch(
+                new Request("https://scheduler.internal/complete", {
+                    body: JSON.stringify({ id: this.completeId, pool: this.pool }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+        }
+
+        return true;
+    }
+}
+
 const scheduledId = async (response: Response): Promise<string> => {
     const body = await response.json<ScheduleResponseBody>();
 
@@ -158,6 +198,36 @@ describe("schedulerDO — workpool concurrency", () => {
         // Without id-based dedup this would be 0, oversubscribing the pool.
         expect(after.inFlight).toBe(1);
         expect(after.inFlightIds).not.toContain(completedId);
+    });
+
+    it("does not resurrect a completed job's slot when /complete lands during a dispatch await", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        // Pool "p", cap 3, with one job (job-A) already in flight.
+        state.storageMap.set("pool:p", { inFlight: 1, inFlightIds: ["job-A"], maxConcurrency: 3 });
+
+        const now = Date.now();
+        const scheduler = new CompletingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, "job-A", "p");
+
+        // Two due pooled jobs, B then C (B sorts earlier so it dispatches first).
+        const bId = await scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", maxConcurrency: 3, pool: "p", scheduledFor: now - 2000 })),
+        );
+        const cId = await scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "c", maxConcurrency: 3, pool: "p", scheduledFor: now - 1000 })),
+        );
+
+        // During B's dispatch, a /complete for job-A lands (storage -> [B]).
+        // Reserving C must read that fresh state, not a stale cached [job-A, B].
+        await scheduler.alarm();
+
+        const poolRow = state.storageMap.get("pool:p") as { inFlight: number; inFlightIds: string[] };
+
+        // job-A completed and must NOT be resurrected; only B and C hold slots.
+        expect(poolRow.inFlightIds).not.toContain("job-A");
+        expect(poolRow.inFlightIds.toSorted((a, b) => a.localeCompare(b))).toEqual([bId, cId].toSorted((a, b) => a.localeCompare(b)));
+        expect(poolRow.inFlight).toBe(2);
     });
 
     it("cancelling a still-queued pooled job leaves the in-flight count intact", async () => {

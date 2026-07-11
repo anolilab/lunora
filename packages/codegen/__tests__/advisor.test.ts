@@ -45,7 +45,7 @@ describe("lintSchema (codegen → advisor)", () => {
     it("flags an unindexed `one`-relation FK from the discovered IR", () => {
         expect.assertions(3);
 
-        const findings = lintSchema(irFrom(UNINDEXED));
+        const findings = lintSchema({ schema: irFrom(UNINDEXED) });
 
         expect(findings).toHaveLength(1);
         expect(findings[0]?.name).toBe("unindexed_foreign_key");
@@ -55,7 +55,7 @@ describe("lintSchema (codegen → advisor)", () => {
     it("passes once the FK column leads an index", () => {
         expect.assertions(1);
 
-        expect(lintSchema(irFrom(INDEXED))).toHaveLength(0);
+        expect(lintSchema({ schema: irFrom(INDEXED) })).toHaveLength(0);
     });
 });
 
@@ -69,7 +69,7 @@ describe("formatAdvisories", () => {
     it("renders a summary header plus one line per finding", () => {
         expect.assertions(2);
 
-        const out = formatAdvisories(lintSchema(irFrom(UNINDEXED)));
+        const out = formatAdvisories(lintSchema({ schema: irFrom(UNINDEXED) }));
 
         expect(out).toContain("@lunora/codegen: 1 schema advisor finding");
         expect(out).toContain("[INFO] unindexed_foreign_key:");

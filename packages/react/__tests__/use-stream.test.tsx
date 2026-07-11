@@ -114,6 +114,46 @@ describe("useStream", () => {
         expect(screen.getByTestId("status").textContent).toBe("idle");
     });
 
+    it('transitioning args to "skip" mid-stream resets to idle with empty chunks', async () => {
+        expect.hasAssertions();
+
+        const { client, openStream } = buildClientWithStream();
+
+        const view = render(
+            <LunoraProvider client={client}>
+                <Display />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("status").textContent).toBe("streaming");
+        });
+
+        await act(async () => {
+            openStream().handle.push({ tick: 1 });
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("chunks").textContent).toBe(JSON.stringify([{ tick: 1 }]));
+        });
+
+        // Flip to "skip" mid-stream: the iterator is cancelled by the previous
+        // effect's cleanup, so no `complete`/`error` will ever land. The hook
+        // must not stay stuck reporting "streaming" over the stale chunk — it
+        // resets to idle with empty chunks (mirroring useSubscription's skip).
+        view.rerender(
+            <LunoraProvider client={client}>
+                <Display args="skip" />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("status").textContent).toBe("idle");
+        });
+
+        expect(screen.getByTestId("chunks").textContent).toBe(JSON.stringify([]));
+    });
+
     it("unmount cancels the in-flight stream", async () => {
         expect.hasAssertions();
 

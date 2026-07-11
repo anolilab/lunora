@@ -135,6 +135,28 @@ describe("createQueueCaptureSink", () => {
         }
     });
 
+    it("throws a diagnostic when the root shard rejects the capture write (non-2xx)", async () => {
+        expect.assertions(2);
+
+        const fetch = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+            Promise.resolve(new Response("unauthorized", { status: 401, statusText: "Unauthorized" })),
+        );
+        const idFromName = vi.fn<(name: string) => string>((name) => `id:${name}`);
+        const get = vi.fn<(id: unknown) => { fetch: typeof fetch }>(() => {
+            return { fetch };
+        });
+
+        // A 401 from a stale/rotated LUNORA_ADMIN_TOKEN (or a shard-side 500) used to
+        // be indistinguishable from success — the response was never inspected. It must
+        // now surface so `dispatchQueueBatch` can log it; the sink reads the body first
+        // so it's consumed (unread bodies warn in workerd) and feeds the diagnostic.
+        await expect(createQueueCaptureSink({ LUNORA_ADMIN_TOKEN: "tok", SHARD: { get, idFromName } })([record()])).rejects.toThrow(
+            /capture write to the root shard failed \(401/u,
+        );
+
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
     it("routes through a jurisdiction-scoped namespace when configured", async () => {
         expect.assertions(2);
 

@@ -1,4 +1,33 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, LunoraClient } from "@lunora/client";
+
+/**
+ * Dispatch a Lunora RPC through the client method that matches the function's
+ * `kind`: an `action` runs via `client.action`, a `mutation` via `client.mutation`,
+ * and everything else (a `query`) via `client.query`. The single home for that
+ * kind→method fan-out, shared by the API "try it" console and the function runner so
+ * a future kind — or a change in how admin surfaces should dispatch a kind — is
+ * fixed in one place. `options` carries the (optional) shard key; `args`/return are
+ * `unknown` because the caller supplies runtime-parsed JSON.
+ */
+export const dispatchByKind = (
+    client: Pick<LunoraClient, "action" | "mutation" | "query">,
+    kind: string | undefined,
+    reference: FunctionReference,
+    args: unknown,
+    options: { shardKey?: string },
+): Promise<unknown> => {
+    switch (kind) {
+        case "action": {
+            return client.action(reference, args, options);
+        }
+        case "mutation": {
+            return client.mutation(reference, args, options);
+        }
+        default: {
+            return client.query(reference, args, options);
+        }
+    }
+};
 
 /**
  * Build a {@link FunctionReference} for a reserved admin RPC path. All admin

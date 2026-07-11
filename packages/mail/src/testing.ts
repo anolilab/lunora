@@ -113,6 +113,18 @@ const waitForMail = async (options: WaitForMailOptions): Promise<CapturedMail> =
 // http(s) URL up to the first whitespace, quote, or angle bracket.
 const URL_PATTERN = /https?:\/\/[^\s"'<>)]+/g;
 
+/** Ampersand entity (named + numeric decimal/hex forms) an HTML renderer escapes `&amp;` to. */
+const AMPERSAND_ENTITY = /&(?:amp|#0*38|#x0*26);/giu;
+
+/**
+ * Decode the ampersand entity in an extracted URL. `@react-email/render` (the
+ * package's own render path) escapes `&amp;` as `&amp;` inside `href` attributes, so
+ * a multi-query-param link (`?uid=1&amp;token=abc`) is captured as
+ * `?uid=1&amp;token=abc` — following it would send a param literally named
+ * `amp;token`. Text bodies are not entity-escaped, so this only affects html.
+ */
+const decodeUrlEntities = (url: string): string => url.replaceAll(AMPERSAND_ENTITY, "&");
+
 /**
  * Pull the first link out of a captured message — html first, then text. Pass
  * `match` to require the URL contain a substring (e.g. `"/reset-password"`),
@@ -128,7 +140,7 @@ const extractLink = (mail: CapturedMail, options: { match?: string } = {}): stri
         const link = matches.find((candidate) => options.match === undefined || candidate.includes(options.match));
 
         if (link !== undefined) {
-            return link;
+            return decodeUrlEntities(link);
         }
     }
 

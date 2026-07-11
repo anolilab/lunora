@@ -28,11 +28,25 @@ const literalValueOf = (node: TsNode): string | undefined => {
     return undefined;
 };
 
-/** True when `node` is an operand of an enclosing `+` string-concatenation — folded by its root, so skip here. */
-const isConcatenationOperand = (node: TsNode): boolean => {
-    const parent = node.getParent();
+/**
+ * True when `node` is an operand of an enclosing `+` concatenation whose topmost
+ * `+` root folds to a defined value — i.e. the whole concatenation is static and
+ * already reported at that root, so the operand is safely skipped here. When the
+ * top-level `+` root mixes in a dynamic operand it folds to `undefined` (see
+ * `literalValueOf`) and is dropped, so this returns `false` and the fully-formed
+ * literal operand (e.g. a complete `"sk_live_…"` prefix in `SECRET + suffix`) is
+ * scanned individually instead of being silently lost.
+ */
+const isFoldedConcatenationOperand = (node: TsNode): boolean => {
+    let root = node;
+    let parent = root.getParent();
 
-    return parent !== undefined && Node.isBinaryExpression(parent) && parent.getOperatorToken().getKind() === SyntaxKind.PlusToken;
+    while (parent !== undefined && Node.isBinaryExpression(parent) && parent.getOperatorToken().getKind() === SyntaxKind.PlusToken) {
+        root = parent;
+        parent = root.getParent();
+    }
+
+    return root !== node && literalValueOf(root) !== undefined;
 };
 
 /** Secret-shaped string literals (and `+`-folded concatenations) in one source file. */
@@ -47,8 +61,14 @@ const secretsInSourceFile = (sourceFile: SourceFile, relativePath: string): Secr
         ...sourceFile.getDescendantsOfKind(SyntaxKind.NoSubstitutionTemplateLiteral),
     ];
 
+    // Dedupe by (line, kind): a secret split across literals AND carrying a
+    // dynamic tail (`"sk_live_…" + "tail" + x`) can now be matched both by an
+    // inner static sub-binary that folds and by the individually-scanned leaf,
+    // which would otherwise emit two rows for the same finding.
+    const seen = new Set<string>();
+
     for (const node of nodes) {
-        if (isConcatenationOperand(node)) {
+        if (isFoldedConcatenationOperand(node)) {
             continue;
         }
 
@@ -60,9 +80,19 @@ const secretsInSourceFile = (sourceFile: SourceFile, relativePath: string): Secr
 
         const kind = secretKindOf(value);
 
-        if (kind !== undefined) {
-            found.push({ file: relativePath, kind, line: node.getStartLineNumber(), preview: redact(value) });
+        if (kind === undefined) {
+            continue;
         }
+
+        const line = node.getStartLineNumber();
+        const dedupeKey = `${String(line)}:${kind}`;
+
+        if (seen.has(dedupeKey)) {
+            continue;
+        }
+
+        seen.add(dedupeKey);
+        found.push({ file: relativePath, kind, line, preview: redact(value) });
     }
 
     return found;

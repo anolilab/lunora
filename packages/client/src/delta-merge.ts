@@ -52,11 +52,48 @@ const rowId = (row: unknown): string | undefined => {
 };
 
 /**
+ * Detect the ordering direction of a cached list from its existing rows'
+ * `_creationTime` run. Returns `true` when the list is sorted descending
+ * (newest-first — the common chat/feed shape), `false` for ascending or when the
+ * direction is indeterminate (0/1 numeric rows, or an all-equal run). We read the
+ * FIRST strictly-ordered adjacent numeric pair, so a single out-of-order row
+ * doesn't flip the verdict.
+ */
+const isDescending = (list: Record<string, unknown>[]): boolean => {
+    let previous: number | undefined;
+
+    for (const existingRow of list) {
+        const existing = existingRow[CREATION_FIELD];
+
+        if (typeof existing !== "number") {
+            continue;
+        }
+
+        if (previous !== undefined) {
+            if (existing < previous) {
+                return true;
+            }
+
+            if (existing > previous) {
+                return false;
+            }
+        }
+
+        previous = existing;
+    }
+
+    return false;
+};
+
+/**
  * Decide where to insert a new row into an already-ordered list so the merge
- * preserves the cached ordering. We mirror the server's default sort
- * (`_creationTime` ascending) when both the new row and the neighbours carry a
- * numeric `_creationTime`; otherwise we append, which keeps insertion order for
- * the common "newest at the end" feed and never reorders existing rows.
+ * preserves the cached ordering. When both the new row and the neighbours carry a
+ * numeric `_creationTime` we honour the list's OWN direction — ascending (the
+ * server's default sort) inserts before the first larger neighbour; descending
+ * (a newest-first feed) inserts before the first smaller one, so a freshly
+ * inserted newest row lands at the front instead of being appended to the end.
+ * With no usable ordering we append, keeping insertion order and never reordering
+ * existing rows.
  */
 const insertionIndex = (list: Record<string, unknown>[], row: Record<string, unknown>): number => {
     const creation = row[CREATION_FIELD];
@@ -65,10 +102,12 @@ const insertionIndex = (list: Record<string, unknown>[], row: Record<string, unk
         return list.length;
     }
 
+    const descending = isDescending(list);
+
     for (const [index, existingRow] of list.entries()) {
         const existing = existingRow[CREATION_FIELD];
 
-        if (typeof existing === "number" && existing > creation) {
+        if (typeof existing === "number" && (descending ? existing < creation : existing > creation)) {
             return index;
         }
     }

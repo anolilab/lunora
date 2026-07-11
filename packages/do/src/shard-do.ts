@@ -5,6 +5,7 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { jsonResponse } from "../../../shared/json-response";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
@@ -98,7 +99,7 @@ import type { QueueMessageOutcome, RecordQueueMessageInput } from "./queue-catch
 import { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
 import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
-import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
+import { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
 import type { OwnerRelay, RelayHost, RelayMember } from "./relay-hub";
 import { createRelayLink, DEFAULT_MAX_RELAYS } from "./relay-hub";
 import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
@@ -1477,35 +1478,6 @@ const extractBearerToken = (authorization: string | null): string | undefined =>
     const value = rest.join(" ").trim();
 
     return value.length > 0 ? value : undefined;
-};
-
-/**
- * Constant-time string equality. Compares full length (capped at the longer
- * input) so a shorter candidate can't short-circuit the loop. The
- * `lengthDiff` term folds a length mismatch into the result so unequal-length
- * strings still take the same number of XOR ops as equal-length ones.
- *
- * Keep in sync with `packages/runtime/src/create-worker.ts` constantTimeEqual —
- * the two packages don't import from each other to avoid a circular dep.
- */
-const constantTimeEqual = (a: string, b: string): boolean => {
-    const max = Math.max(a.length, b.length);
-    // eslint-disable-next-line no-bitwise -- constant-time compare folds length + every code-unit delta into one accumulator
-    let diff = a.length ^ b.length;
-
-    for (let index = 0; index < max; index += 1) {
-        // charCodeAt returns NaN past the end of the string; coerce to 0
-        // so the XOR still folds into `diff` without poisoning it.
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
-        const charA = index < a.length ? a.charCodeAt(index) : 0;
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
-        const charB = index < b.length ? b.charCodeAt(index) : 0;
-
-        // eslint-disable-next-line no-bitwise -- accumulate per-code-unit difference without branching to keep the compare constant-time
-        diff |= charA ^ charB;
-    }
-
-    return diff === 0;
 };
 
 /**
@@ -4118,11 +4090,24 @@ abstract class ShardDO {
         // whether the cache is even enabled.
         const hitsBefore = this.reactiveCache.stats().hits;
 
+        // Scope the cache entry to the caller's FULL identity — userId AND the
+        // identity claims (active-org/role/tenant) that RLS can key on — so a
+        // per-request claim that varies while userId stays constant never
+        // memoizes one context's rows for another caller sharing the same DO.
+        // An anonymous request (no userId, no claims) collapses to the `null`
+        // bucket. `stableStringify` canonicalizes key order, so equal identities
+        // yield equal discriminators (same guarantee the args encoding relies on).
+        const userId = this.getCurrentUserId();
+        const claims = this.getCurrentIdentity();
+        const identity =
+            userId === undefined && claims === undefined
+                ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null is the documented "anonymous caller" discriminator
+                  null
+                : // eslint-disable-next-line unicorn/no-null -- fold userId/claims into the discriminator; missing fields serialize as null so the shape stays canonical
+                  stableStringify({ claims: claims ?? null, userId: userId ?? null });
+
         try {
-            // Scope the cache entry to the caller's identity so a per-user /
-            // RLS-filtered result is never served across users on a shared DO.
-            // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null is the documented "anonymous caller" discriminator
-            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, this.getCurrentUserId() ?? null), tracker.collect(), run);
+            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, identity), tracker.collect(), run);
 
             this.currentRequestCacheHit = this.reactiveCache.stats().hits > hitsBefore;
             this.currentRequestReadTables = tablesFromDeps(tracker.collect());

@@ -147,106 +147,118 @@ const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
  * pass straight through without conversion. Returns the findings; surfacing them
  * (console, error overlay, studio Advisors table) is the caller's choice.
  */
-export const lintSchema = (
-    schema: SchemaIR,
-    queries: ReadonlyArray<QueryReadIR> = [],
-    inserts?: ReadonlyArray<InsertWriteIR>,
-    authApiCalls?: ReadonlyArray<AuthApiCallIR>,
-    rlsProcedures?: ReadonlyArray<RlsProcedureIR>,
-    containers?: ReadonlyArray<ContainerIR>,
-    workflows?: ReadonlyArray<WorkflowIR>,
-    workflowCalls?: ReadonlyArray<WorkflowCallIR>,
-    maskProcedures?: ReadonlyArray<MaskProcedureIR>,
-    nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>,
-    procedureProtections?: ReadonlyArray<ProcedureMiddlewareIR>,
-    argumentValidators?: ReadonlyArray<ArgumentValidatorIR>,
-    secretLiterals?: ReadonlyArray<SecretLiteralIR>,
-    sqlInterpolations?: ReadonlyArray<SqlInterpolationIR>,
-    adminRoutes?: ReadonlyArray<AdminRouteIR>,
-    r2sqlCalls?: ReadonlyArray<R2sqlCallIR>,
-    shapes?: ReadonlyArray<ShapeIR>,
-    mutatorWrites?: ReadonlyArray<MutatorWriteIR>,
-    configCalls?: ReadonlyArray<ConfigCallIR>,
-    argumentDerivedFetches?: ReadonlyArray<ArgumentDerivedFetchIR>,
-    kvKeyAccesses?: ReadonlyArray<KvKeyAccessIR>,
-    ownerFieldWrites?: ReadonlyArray<OwnerFieldWriteIR>,
-    storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>,
-    aiRawRuns?: ReadonlyArray<AiRawRunIR>,
-    containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>,
-    mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>,
-    vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>,
-    browserUrlAccesses?: ReadonlyArray<BrowserUrlAccessIR>,
-    privilegedDispatches?: ReadonlyArray<PrivilegedDispatchIR>,
-    containerOverrides?: ReadonlyArray<ContainerOverrideIR>,
-    authConfigs?: ReadonlyArray<AuthConfigIR>,
-    maskStrategies?: ReadonlyArray<MaskStrategyIR>,
-    imageDeliveryUrlAccesses?: ReadonlyArray<ImageDeliveryUrlAccessIR>,
-    ratelimitKeySelectors?: ReadonlyArray<RatelimitKeySelectorIR>,
-    storageUploads?: ReadonlyArray<StorageUploadIR>,
-    httpActionGuards?: ReadonlyArray<HttpActionGuardIR>,
-    httpHeaderWrites?: ReadonlyArray<HttpHeaderWriteIR>,
-    failOpenGuards?: ReadonlyArray<FailOpenGuardIR>,
-    flagSecurityDefaults?: ReadonlyArray<FlagSecurityDefaultIR>,
-    aiToolSideEffects?: ReadonlyArray<AiToolSideEffectIR>,
-    identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>,
-    paymentWebhooks?: ReadonlyArray<PaymentWebhookIR>,
-    softDeleteReads?: ReadonlyArray<SoftDeleteReadIR>,
-    relationLoads?: ReadonlyArray<RelationLoadIR>,
-    rawRowReturns?: ReadonlyArray<RawRowReturnIR>,
-    normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>,
-    wranglerVariables?: ReadonlyArray<WranglerVariableIR>,
-    queues?: ReadonlyArray<QueueIR>,
-): Finding[] =>
+
+/**
+ * Named inputs for {@link lintSchema}. Every feeder is a discrete key rather than
+ * a positional argument: the feeder list grows every few releases and many IR
+ * types are structurally similar (`{file, exportName, line}`-shaped evidence),
+ * so a positional call was a silent-transposition hazard — swapping two adjacent
+ * arguments could typecheck yet feed the wrong evidence to the wrong lint and
+ * corrupt a security advisory. `schema` is the only required field; every other
+ * feeder defaults to "not analyzed" when omitted.
+ */
+export interface LintSchemaOptions {
+    adminRoutes?: ReadonlyArray<AdminRouteIR>;
+    aiRawRuns?: ReadonlyArray<AiRawRunIR>;
+    aiToolSideEffects?: ReadonlyArray<AiToolSideEffectIR>;
+    argumentDerivedFetches?: ReadonlyArray<ArgumentDerivedFetchIR>;
+    argumentValidators?: ReadonlyArray<ArgumentValidatorIR>;
+    authApiCalls?: ReadonlyArray<AuthApiCallIR>;
+    authConfigs?: ReadonlyArray<AuthConfigIR>;
+    browserUrlAccesses?: ReadonlyArray<BrowserUrlAccessIR>;
+    configCalls?: ReadonlyArray<ConfigCallIR>;
+    containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
+    containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
+    containers?: ReadonlyArray<ContainerIR>;
+    failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
+    flagSecurityDefaults?: ReadonlyArray<FlagSecurityDefaultIR>;
+    httpActionGuards?: ReadonlyArray<HttpActionGuardIR>;
+    httpHeaderWrites?: ReadonlyArray<HttpHeaderWriteIR>;
+    identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>;
+    imageDeliveryUrlAccesses?: ReadonlyArray<ImageDeliveryUrlAccessIR>;
+    inserts?: ReadonlyArray<InsertWriteIR>;
+    kvKeyAccesses?: ReadonlyArray<KvKeyAccessIR>;
+    mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>;
+    maskProcedures?: ReadonlyArray<MaskProcedureIR>;
+    maskStrategies?: ReadonlyArray<MaskStrategyIR>;
+    mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
+    nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
+    normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>;
+    ownerFieldWrites?: ReadonlyArray<OwnerFieldWriteIR>;
+    paymentWebhooks?: ReadonlyArray<PaymentWebhookIR>;
+    privilegedDispatches?: ReadonlyArray<PrivilegedDispatchIR>;
+    procedureProtections?: ReadonlyArray<ProcedureMiddlewareIR>;
+    queries?: ReadonlyArray<QueryReadIR>;
+    queues?: ReadonlyArray<QueueIR>;
+    r2sqlCalls?: ReadonlyArray<R2sqlCallIR>;
+    ratelimitKeySelectors?: ReadonlyArray<RatelimitKeySelectorIR>;
+    rawRowReturns?: ReadonlyArray<RawRowReturnIR>;
+    relationLoads?: ReadonlyArray<RelationLoadIR>;
+    rlsProcedures?: ReadonlyArray<RlsProcedureIR>;
+    schema: SchemaIR;
+    secretLiterals?: ReadonlyArray<SecretLiteralIR>;
+    shapes?: ReadonlyArray<ShapeIR>;
+    softDeleteReads?: ReadonlyArray<SoftDeleteReadIR>;
+    sqlInterpolations?: ReadonlyArray<SqlInterpolationIR>;
+    storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
+    storageUploads?: ReadonlyArray<StorageUploadIR>;
+    vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
+    workflowCalls?: ReadonlyArray<WorkflowCallIR>;
+    workflows?: ReadonlyArray<WorkflowIR>;
+    wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
+}
+
+export const lintSchema = (options: LintSchemaOptions): Finding[] =>
     runAdvisor(
         {
-            adminRoutes,
-            aiRawRuns,
-            aiToolSideEffects,
-            argumentDerivedFetches,
-            argValidators: argumentValidators,
-            authApiCalls,
-            authConfigs,
-            browserUrlAccesses,
-            configCalls,
-            containerKeyAccesses,
-            containerOverrides,
-            containers,
-            failOpenGuards,
-            flagSecurityDefaults,
-            httpActionGuards,
-            httpHeaderWrites,
-            identityClaimReads,
-            imageDeliveryUrlAccesses,
-            inserts,
-            kvKeyAccesses,
-            mailRecipientAccesses,
-            maskProcedures,
-            maskStrategies,
-            mutatorWrites,
-            nondeterministicCalls,
-            normalizeIdAuthorizations,
-            ownerFieldWrites,
-            paymentWebhooks,
-            privilegedDispatches,
-            procedureProtections,
-            queries,
-            queues,
-            r2sqlCalls,
-            ratelimitKeySelectors,
-            rawRowReturns,
-            relationLoads,
-            rlsProcedures,
-            schema: toAdvisorSchema(schema),
-            secretLiterals,
-            shapes: shapes === undefined ? undefined : toAdvisorShapes(shapes),
-            softDeleteReads,
-            sqlInterpolations,
-            storageKeyAccesses,
-            storageUploads,
-            vectorNamespaceAccesses,
-            workflowCalls,
-            workflows,
-            wranglerVariables,
+            adminRoutes: options.adminRoutes,
+            aiRawRuns: options.aiRawRuns,
+            aiToolSideEffects: options.aiToolSideEffects,
+            argumentDerivedFetches: options.argumentDerivedFetches,
+            argValidators: options.argumentValidators,
+            authApiCalls: options.authApiCalls,
+            authConfigs: options.authConfigs,
+            browserUrlAccesses: options.browserUrlAccesses,
+            configCalls: options.configCalls,
+            containerKeyAccesses: options.containerKeyAccesses,
+            containerOverrides: options.containerOverrides,
+            containers: options.containers,
+            failOpenGuards: options.failOpenGuards,
+            flagSecurityDefaults: options.flagSecurityDefaults,
+            httpActionGuards: options.httpActionGuards,
+            httpHeaderWrites: options.httpHeaderWrites,
+            identityClaimReads: options.identityClaimReads,
+            imageDeliveryUrlAccesses: options.imageDeliveryUrlAccesses,
+            inserts: options.inserts,
+            kvKeyAccesses: options.kvKeyAccesses,
+            mailRecipientAccesses: options.mailRecipientAccesses,
+            maskProcedures: options.maskProcedures,
+            maskStrategies: options.maskStrategies,
+            mutatorWrites: options.mutatorWrites,
+            nondeterministicCalls: options.nondeterministicCalls,
+            normalizeIdAuthorizations: options.normalizeIdAuthorizations,
+            ownerFieldWrites: options.ownerFieldWrites,
+            paymentWebhooks: options.paymentWebhooks,
+            privilegedDispatches: options.privilegedDispatches,
+            procedureProtections: options.procedureProtections,
+            queries: options.queries ?? [],
+            queues: options.queues,
+            r2sqlCalls: options.r2sqlCalls,
+            ratelimitKeySelectors: options.ratelimitKeySelectors,
+            rawRowReturns: options.rawRowReturns,
+            relationLoads: options.relationLoads,
+            rlsProcedures: options.rlsProcedures,
+            schema: toAdvisorSchema(options.schema),
+            secretLiterals: options.secretLiterals,
+            shapes: options.shapes === undefined ? undefined : toAdvisorShapes(options.shapes),
+            softDeleteReads: options.softDeleteReads,
+            sqlInterpolations: options.sqlInterpolations,
+            storageKeyAccesses: options.storageKeyAccesses,
+            storageUploads: options.storageUploads,
+            vectorNamespaceAccesses: options.vectorNamespaceAccesses,
+            workflowCalls: options.workflowCalls,
+            workflows: options.workflows,
+            wranglerVariables: options.wranglerVariables,
         },
         { source: "static" },
     );

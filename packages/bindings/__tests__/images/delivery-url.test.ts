@@ -86,16 +86,48 @@ describe("buildImageDeliveryUrl", () => {
         ).toThrow("@lunora/bindings/images:");
     });
 
-    it("accepts a hex background color (no comma) and builds the option string", () => {
+    it("rejects a raw `#` hex color (it would start the URL fragment and swallow the source path)", () => {
+        expect.assertions(2);
+
+        const build = () =>
+            buildImageDeliveryUrl({
+                baseUrl: "https://cdn.acme.test",
+                key: "a.png",
+                transform: { background: "#ff0000", width: 128 },
+            });
+
+        // The raw `#` form the old error text endorsed silently truncated the
+        // URL; it must now fail loud and steer the caller to `%23RRGGBB`.
+        expect(build).toThrow("@lunora/bindings/images:");
+        expect(build).toThrow(/%23RRGGBB/);
+    });
+
+    it("accepts a percent-encoded hex background color and builds the option string", () => {
         expect.assertions(1);
 
         const url = buildImageDeliveryUrl({
             baseUrl: "https://cdn.acme.test",
             key: "a.png",
-            transform: { background: "#ff0000", width: 128 },
+            transform: { background: "%23ff0000", width: 128 },
         });
 
-        expect(url).toBe("https://cdn.acme.test/cdn-cgi/image/background=#ff0000,width=128/a.png");
+        expect(url).toBe("https://cdn.acme.test/cdn-cgi/image/background=%23ff0000,width=128/a.png");
+    });
+
+    it("rejects a `?` in an option value (it would start the URL query string)", () => {
+        expect.assertions(1);
+
+        expect(() => buildImageDeliveryUrl({ baseUrl: "https://cdn.acme.test", key: "a.png", transform: { background: "a?b" } })).toThrow(
+            "@lunora/bindings/images:",
+        );
+    });
+
+    it("rejects a `/` in an option value (it would split the options segment)", () => {
+        expect.assertions(1);
+
+        expect(() => buildImageDeliveryUrl({ baseUrl: "https://cdn.acme.test", key: "a.png", transform: { background: "a/b" } })).toThrow(
+            "@lunora/bindings/images:",
+        );
     });
 
     it("drops draw overlays — the /cdn-cgi/image URL form can't express them (Workers-only)", () => {

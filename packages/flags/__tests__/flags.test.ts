@@ -191,6 +191,43 @@ describe("createFlags", () => {
         expect(provider.counts["beta-mode"]).toBe(1);
     });
 
+    it("shares the memo across nested context objects that differ only in key order (recursive stable key)", async () => {
+        expect.assertions(1);
+
+        const provider = makeProvider({ "dark-mode": true });
+        const flags = createFlags({ provider: () => provider });
+
+        // Logically identical contexts, nested keys in different orders. The
+        // canonical stable-key encoder sorts at every depth, so both collapse to
+        // one memo key and the provider is hit exactly once.
+        await Promise.all([
+            flags.boolean("dark-mode", false, { org: { id: "o1", plan: "pro" } }),
+            flags.boolean("dark-mode", false, { org: { plan: "pro", id: "o1" } }),
+        ]);
+
+        expect(provider.counts["dark-mode"]).toBe(1);
+    });
+
+    it("never throws on an unserializable context (circular reference) — evaluates without memoization", async () => {
+        expect.assertions(2);
+
+        const provider = makeProvider({ "dark-mode": true });
+        const flags = createFlags({ provider: () => provider });
+
+        // A circular context makes the memo-key serialization throw synchronously.
+        // The read must still resolve (never-throws contract) by skipping the memo.
+        const circular: Record<string, unknown> = { plan: "premium" };
+        circular.self = circular;
+
+        await expect(flags.boolean("dark-mode", false, circular as EvaluationContext)).resolves.toBe(true);
+
+        // A second call with the same unkeyable context also skips the memo, so the
+        // provider is hit again rather than a stale/errored value being returned.
+        await flags.boolean("dark-mode", false, circular as EvaluationContext);
+
+        expect(provider.counts["dark-mode"]).toBe(2);
+    });
+
     it("does not share memo across different default values for the same flag key", async () => {
         expect.assertions(1);
 

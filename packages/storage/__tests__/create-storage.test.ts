@@ -126,6 +126,31 @@ describe("createStorage", () => {
         await expect(new Response(wrapped).arrayBuffer()).rejects.toThrow(/exceeds maxSize/);
     });
 
+    it("upload() aborts a non-byte-chunk ReadableStream so maxSize can't be silently defeated", async () => {
+        expect.assertions(3);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        // A ReadableStream is untyped, so a stream of string chunks reaches the
+        // counter. Its length can't be measured as bytes, so counting it as 0
+        // would let it flow through uncounted and defeat maxSize entirely. The
+        // wrapper now errors the stream when drained instead.
+        const stream = new ReadableStream({
+            start(controller) {
+                controller.enqueue("x".repeat(100));
+                controller.close();
+            },
+        });
+
+        await expect(storage.upload("s.bin", stream, { maxSize: 4 })).resolves.toMatchObject({ key: "s.bin" });
+        expect(bucket.puts).toHaveLength(1);
+
+        const wrapped = bucket.puts[0]?.body as ReadableStream;
+
+        await expect(new Response(wrapped).arrayBuffer()).rejects.toThrow(/not a byte chunk|cannot enforce maxSize/);
+    });
+
     it("upload() rejects a matching-but-absent contentType when allowedContentTypes is set", async () => {
         expect.assertions(2);
 
@@ -599,6 +624,67 @@ describe("createStorage", () => {
         await expect(object?.arrayBuffer()).resolves.toBeInstanceOf(ArrayBuffer);
         // The original host object was never mutated (no `sha256` own property).
         expect(Object.hasOwn(host, "sha256")).toBe(false);
+    });
+
+    it("list() sha256/sha256Base64 survive JSON serialization + spread (wire path)", async () => {
+        expect.assertions(4);
+
+        // 0x01,0x02,0x03,0xff -> hex "010203ff", base64 "AQID/w=="
+        const checksum = new Uint8Array([1, 2, 3, 255]).buffer;
+        const bucket = fakeBucket();
+
+        vi.spyOn(bucket, "list").mockImplementation(async () => {
+            return { objects: [{ checksums: { sha256: checksum }, etag: "e", key: "a", size: 4 }] };
+        });
+
+        const storage = createStorage({ bucket });
+        const listed = await storage.list();
+        const first = listed.objects[0];
+
+        // Regression: a Proxy over R2's non-extensible host object cannot report
+        // `sha256`/`sha256Base64` via `ownKeys`, so JSON.stringify/spread/keys
+        // dropped them — yet list() results are routinely returned from a query
+        // and serialized to the client. The plain projection must round-trip.
+        const roundTripped = structuredClone(first) as unknown as Record<string, unknown>;
+
+        expect(roundTripped.sha256).toBe("010203ff");
+        expect(roundTripped.sha256Base64).toBe("AQID/w==");
+        expect(Object.keys(first ?? {})).toEqual(expect.arrayContaining(["sha256", "sha256Base64"]));
+        expect({ ...first }.sha256).toBe("010203ff");
+    });
+
+    it("classifies caller input as 4xx and reserves 500 for config invariants", async () => {
+        expect.assertions(5);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        // A path-traversal key is a client error → VALIDATION_ERROR / 400, not a
+        // redacted INTERNAL / 500 (which would strip the helpful message and
+        // pollute alerting/retry logic).
+        await expect(storage.upload("../escape", new ArrayBuffer(4))).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+
+        // An oversized body → 413 PAYLOAD_TOO_LARGE.
+        await expect(storage.upload("big.bin", new ArrayBuffer(16), { maxSize: 8 })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE", status: 413 });
+
+        // A disallowed content-type → 400.
+        await expect(storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: ["image/png"], contentType: "text/html" })).rejects.toMatchObject({
+            status: 400,
+        });
+
+        // A NUL-byte list prefix → 400.
+        await expect(storage.list("bad\0prefix")).rejects.toMatchObject({ status: 400 });
+
+        // A genuine server misconfiguration stays INTERNAL / 500 (redacted).
+        let thrown: unknown;
+
+        try {
+            storage.getUrl("x");
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown).toMatchObject({ code: "INTERNAL", status: 500 });
     });
 
     describe("getPresignedUrl", () => {

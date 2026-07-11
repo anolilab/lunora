@@ -124,6 +124,21 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: "./app", sleepAfter: "5 minutes" })).toThrow("`sleepAfter`");
     });
 
+    it("rejects a non-positive, fractional, or NaN numeric sleepAfter", () => {
+        expect.assertions(4);
+
+        expect(() => defineContainer({ image: "./app", sleepAfter: 0 })).toThrow("`sleepAfter` must be a positive integer");
+        expect(() => defineContainer({ image: "./app", sleepAfter: -30 })).toThrow("`sleepAfter` must be a positive integer");
+        expect(() => defineContainer({ image: "./app", sleepAfter: 1.5 })).toThrow("`sleepAfter` must be a positive integer");
+        expect(() => defineContainer({ image: "./app", sleepAfter: Number.NaN })).toThrow("`sleepAfter` must be a positive integer");
+    });
+
+    it("accepts a positive integer sleepAfter", () => {
+        expect.assertions(1);
+
+        expect(defineContainer({ image: "./app", sleepAfter: 30 }).sleepAfter).toBe(30);
+    });
+
     it("accepts a Railpack { build } image source", () => {
         expect.assertions(1);
 

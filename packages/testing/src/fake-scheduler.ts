@@ -121,8 +121,13 @@ const createFakeScheduler = (
     getDispatch: () => ScheduledDispatch,
     getMutationContext: () => unknown,
     getFunctionRegistry: () => Map<string, { handler: unknown; kind: string }>,
+    now: number,
 ): { controls: FakeSchedulerControls; scheduler: Scheduler } => {
-    let nowMs = Date.now();
+    // Seed the virtual clock from the harness's `now` (which honours
+    // `options.now`) so `ctx.scheduler.runAt(ctx.now + delay, …)` schedules
+    // relative to the same instant `ctx.now` reports. Seeding from `Date.now()`
+    // here would desync the two and fire (or strand) delayed jobs.
+    let nowMs = now;
     let nextId = 1;
 
     /** All pending (not yet executed or cancelled) jobs, in enqueue order. */
@@ -225,9 +230,20 @@ const createFakeScheduler = (
         const due = [...pending.values()].filter((j) => j.scheduledFor <= cutoff).toSorted((a, b) => a.scheduledFor - b.scheduledFor);
 
         const failed: ScheduledJobFailure[] = [];
+        let executed = 0;
 
         // Sequential dispatch: jobs must run in order as each may mutate shared state.
         for (const job of due) {
+            // A job earlier in this same sweep may have cancelled this one
+            // (`ctx.scheduler.cancel(id)`). Honour that: `cancel` reported
+            // `{ cancelled: true }`, so the handler must not still run — and a
+            // skipped job is not counted as executed.
+            if (!pending.has(job.id)) {
+                continue;
+            }
+
+            executed += 1;
+
             try {
                 // eslint-disable-next-line no-await-in-loop -- intentional sequential dispatch; jobs must run in order and may mutate shared state
                 await dispatchJob(job);
@@ -241,7 +257,7 @@ const createFakeScheduler = (
             }
         }
 
-        return { executed: due.length, failed };
+        return { executed, failed };
     };
 
     /**

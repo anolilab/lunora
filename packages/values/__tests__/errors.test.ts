@@ -25,6 +25,17 @@ describe("describeValue", () => {
         expect(describeValue("hi")).toBe('string "hi"');
     });
 
+    it("suppresses the primitive literal to a bare type tag when literal:false", () => {
+        expect.assertions(4);
+
+        // The refinement-failure redaction path: only the type tag survives so a
+        // secret-bearing field never surfaces its value. Default is unchanged.
+        expect(describeValue("secret", { literal: false })).toBe("string");
+        expect(describeValue("secret")).toBe('string "secret"');
+        expect(describeValue(7, { literal: false })).toBe("number");
+        expect(describeValue(42n, { literal: false })).toBe("bigint");
+    });
+
     it("truncates an over-long string literal with an ellipsis", () => {
         expect.assertions(2);
 

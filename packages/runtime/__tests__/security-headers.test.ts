@@ -267,6 +267,29 @@ describe("handleCorsPreflight", () => {
         expect(response).toBeUndefined();
     });
 
+    it("enforces the configured allowedHeaders instead of echoing the requested list", () => {
+        expect.hasAssertions();
+
+        const restricted = resolveSecurity({ cors: { allowedOrigins: ["https://app.example.com"], allowedHeaders: ["Content-Type"] } });
+
+        const response = handleCorsPreflight(
+            httpsRequest({
+                method: "OPTIONS",
+                headers: {
+                    origin: "https://app.example.com",
+                    "access-control-request-method": "POST",
+                    "access-control-request-headers": "content-type, x-evil",
+                },
+            }),
+            restricted,
+        );
+
+        const allowHeaders = response?.headers.get("access-control-allow-headers") ?? "";
+
+        expect(allowHeaders.toLowerCase()).toContain("content-type");
+        expect(allowHeaders.toLowerCase()).not.toContain("x-evil");
+    });
+
     it("ignores non-preflight OPTIONS and disabled CORS", () => {
         expect.hasAssertions();
 

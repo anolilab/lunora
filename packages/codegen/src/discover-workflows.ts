@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { LunoraError } from "@lunora/errors";
 import { workflowBindingName, workflowClassName, workflowDefaultName } from "@lunora/workflow";
 import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
@@ -182,6 +183,46 @@ const workflowsFromSource = (source: SourceFile): WorkflowIR[] => {
 };
 
 /**
+ * Reject workflows whose deployed `name` or `bindingName` collide across exports
+ * — both flow into wrangler (`workflows[].name` / the `Workflow` binding), so a
+ * `name` collision emits conflicting `workflows[]` entries and a `bindingName`
+ * collision (e.g. `myFlow`/`myFLOW` both → `WORKFLOW_MY_FLOW`) clobbers a
+ * binding. Mirrors the cron/migration uniqueness guards.
+ */
+const assertUniqueNames = (workflows: ReadonlyArray<WorkflowIR>): void => {
+    const seenNames = new Map<string, string>();
+    const seenBindings = new Map<string, string>();
+
+    for (const workflow of workflows) {
+        const priorName = seenNames.get(workflow.name);
+
+        if (priorName !== undefined) {
+            throw new LunoraError(
+                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
+                "DUPLICATE_WORKFLOW_NAME",
+                `Duplicate workflow name "${workflow.name}": produced by both "${priorName}" and "${workflow.exportName}". Deployed workflow names must be unique across the project.`,
+                { status: 500 },
+            );
+        }
+
+        seenNames.set(workflow.name, workflow.exportName);
+
+        const priorBinding = seenBindings.get(workflow.bindingName);
+
+        if (priorBinding !== undefined) {
+            throw new LunoraError(
+                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
+                "DUPLICATE_WORKFLOW_BINDING",
+                `Duplicate workflow binding "${workflow.bindingName}": produced by both "${priorBinding}" and "${workflow.exportName}". Workflow export names must yield unique binding names.`,
+                { status: 500 },
+            );
+        }
+
+        seenBindings.set(workflow.bindingName, workflow.exportName);
+    }
+};
+
+/**
  * Discover every workflow the project declares: exported `defineWorkflow()`
  * calls in `lunora/workflows.ts`. Returns `[]` when the file doesn't exist. The
  * only wrangler-relevant literal is the optional `name` override; the workflow
@@ -198,6 +239,7 @@ const discoverWorkflows = (project: Project, lunoraDirectory: string): WorkflowI
     const workflows = workflowsFromSource(source);
 
     workflows.sort((a, b) => a.exportName.localeCompare(b.exportName));
+    assertUniqueNames(workflows);
 
     return workflows;
 };

@@ -1088,6 +1088,25 @@ export default crons;
             expect(existsSync(join(generatedDirectory, "openrpc.ts"))).toBe(false);
         });
 
+        it("removes a now-stale spec file when apiSpec switches away from a format", () => {
+            expect.assertions(4);
+
+            const generatedDirectory = join(workdir, "lunora", "_generated");
+
+            // First run writes the default openapi.* artifacts…
+            runCodegen({ projectRoot: workdir });
+
+            expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(true);
+            expect(existsSync(join(generatedDirectory, "openapi.ts"))).toBe(true);
+
+            // …switching to openrpc must delete the stale openapi.* files rather
+            // than leave a portable artifact documenting the old API forever.
+            runCodegen({ apiSpec: "openrpc", projectRoot: workdir });
+
+            expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(false);
+            expect(existsSync(join(generatedDirectory, "openapi.ts"))).toBe(false);
+        });
+
         it("emits openrpc.json modelling RPC functions as methods, excluding internal/stream", () => {
             expect.assertions(5);
 

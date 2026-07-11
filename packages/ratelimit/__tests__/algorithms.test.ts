@@ -67,13 +67,23 @@ describe("token bucket", () => {
         expect(value).toEqual({ ts: 0, value: -2 });
     });
 
-    it("reserve still rejects a request larger than capacity", () => {
-        expect.assertions(2);
+    it("throws when a non-reserve request exceeds capacity (never admittable)", () => {
+        expect.assertions(1);
 
-        const { status, value } = evaluate(tokenBucket, { ts: 0, value: 0 }, consumeOptions(11, 0, true));
+        // rate 10, no explicit capacity → capacity 10. A count of 11 can never
+        // fit in the bucket, so it must surface caller misuse rather than a
+        // finite retryAfter the caller would chase forever.
+        expect(() => evaluate(tokenBucket, undefined, consumeOptions(11, 0))).toThrow("@lunora/ratelimit: requested count 11 exceeds the limiter capacity 10");
+    });
 
-        expect(status.ok).toBe(false);
-        expect(value).toBeUndefined();
+    it("throws when a reserve request exceeds capacity (never admittable)", () => {
+        expect.assertions(1);
+
+        // Reserve can borrow ahead, but never beyond what the bucket can ever
+        // hold — count 11 > capacity 10 is misuse, matching the windowed algos.
+        expect(() => evaluate(tokenBucket, { ts: 0, value: 0 }, consumeOptions(11, 0, true))).toThrow(
+            "@lunora/ratelimit: requested count 11 exceeds the limiter capacity 10",
+        );
     });
 });
 
@@ -155,7 +165,7 @@ describe("fixed window", () => {
         expect(value).toEqual({ ts: 0, value: 0 });
     });
 
-    it("reserve borrows against the current window, and the debt is forgiven at the boundary", () => {
+    it("reserve borrows against the current window, and the debt is repaid at the boundary", () => {
         expect.assertions(4);
 
         const exhausted = { ts: 0, value: 0 };
@@ -166,10 +176,12 @@ describe("fixed window", () => {
         expect(reserved.status.retryAfter).toBe(1000);
         expect(reserved.value).toEqual({ ts: 0, value: -2 });
 
-        // The next window grants a fresh `rate` rather than carrying the debt forward.
+        // The next window carries the -2 debt forward and repays it out of the
+        // fresh `rate` grant (5 - 2 = 3) rather than forgiving it — the reserved
+        // capacity is genuinely accounted for, matching the token bucket.
         const next = evaluate(fixedWindow, reserved.value ?? undefined, consumeOptions(0, 1000));
 
-        expect(next.value).toEqual({ ts: 1000, value: 5 });
+        expect(next.value).toEqual({ ts: 1000, value: 3 });
     });
 });
 
@@ -286,6 +298,14 @@ describe("availableAt", () => {
         expect(availableAt(fixedWindow, { ts: 0, value: 2 }, 400)).toEqual({ ts: 0, value: 2 });
         // Next window: a fresh `rate`.
         expect(availableAt(fixedWindow, { ts: 0, value: 0 }, 1000)).toEqual({ ts: 1000, value: 5 });
+    });
+
+    it("fixed window carries a reserved debt across the boundary, matching evaluate", () => {
+        expect.assertions(1);
+
+        // A -2 reserved debt is repaid out of the next window's grant (5 - 2 = 3),
+        // so a peek must not report the full 5 that a forgiven debt would show.
+        expect(availableAt(fixedWindow, { ts: 0, value: -2 }, 1000)).toEqual({ ts: 1000, value: 3 });
     });
 
     it("sliding window reports the remaining allowance under the weighted estimate", () => {

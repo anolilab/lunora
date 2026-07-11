@@ -119,6 +119,34 @@ describe("parseInboundEmail", () => {
         expect(parsed.authentication.dmarc).toBe("fail");
     });
 
+    it("reads verdicts from the topmost Authentication-Results, ignoring lower spoofed ones", async () => {
+        expect.assertions(4);
+
+        // The genuine receiving-MX header is prepended (topmost) per RFC 8601.
+        // A lower Authentication-Results is attacker-injectable in the raw message
+        // and MUST NOT override the topmost verdicts (which here are all failures).
+        const spoofed = crlf([
+            "Authentication-Results: mx.cloudflare.net; dkim=fail header.d=evil.example; spf=fail; dmarc=fail",
+            "Authentication-Results: forged.invalid; dkim=pass header.d=example.com; spf=pass; dmarc=pass",
+            "From: Mallory <mallory@evil.example>",
+            "To: rcpt@example.test",
+            "Subject: Spoofed",
+            "Message-ID: <spoof-1@evil.example>",
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            "body",
+            "",
+        ]);
+
+        const parsed = await parseInboundEmail(spoofed);
+
+        expect(parsed.authentication.dkim).toBe("fail");
+        expect(parsed.authentication.spf).toBe("fail");
+        expect(parsed.authentication.dmarc).toBe("fail");
+        // The raw flattened map keeps its documented last-wins behavior.
+        expect(parsed.headers["authentication-results"]).toContain("forged.invalid");
+    });
+
     it("reports all-null verdicts when Authentication-Results is absent", async () => {
         expect.assertions(1);
 

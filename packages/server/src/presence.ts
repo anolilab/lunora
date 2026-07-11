@@ -224,7 +224,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
 
             // Bound the arbitrary awareness blob so a client can't grow the
             // presence table (and the subscriber delta) without limit.
-            if (args.data !== undefined && JSON.stringify(args.data).length > MAX_DATA_BYTES) {
+            if (args.data !== undefined && new TextEncoder().encode(JSON.stringify(args.data)).length > MAX_DATA_BYTES) {
                 throw new LunoraError("BAD_REQUEST", `presence data exceeds the ${String(MAX_DATA_BYTES)}-byte limit`);
             }
 

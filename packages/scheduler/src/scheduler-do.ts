@@ -63,11 +63,18 @@ const RETRY_BASE_DELAY_MS = 30_000;
 // re-armed this far in the future so a later alarm drains it as slots free.
 // Small enough to feel responsive, large enough to avoid a busy alarm loop.
 const POOL_BACKPRESSURE_DELAY_MS = 1000;
-// Maximum valid `Date` in epoch milliseconds (per ECMAScript). Past this,
-// `String(scheduledFor)` would switch to exponential notation and corrupt the
-// zero-padded time index — see indexKey() and handleSchedule().
-const MAX_SCHEDULED_FOR_MS = 8_640_000_000_000_000;
-// Zero-padded to 15 digits so lexical order matches numeric order — see indexKey().
+// Largest accepted `scheduledFor`, in epoch milliseconds: the biggest value
+// that still fits in TIME_PAD digits (999_999_999_999_999 = 1e15 - 1). Capping
+// here — rather than at the 8.64e15 ECMAScript `Date` max — guarantees EVERY
+// accepted value zero-pads to a uniform TIME_PAD width, so the time index's
+// lexical order always matches numeric order. A larger (16-digit) cap would let
+// a value like 1.5e15 sort BEFORE 2e14 and fire jobs wildly out of order;
+// anything >= 1e21 would additionally switch `String()` to exponential notation
+// and corrupt the index outright. ~year 33658, so no practical range is lost.
+const MAX_SCHEDULED_FOR_MS = 999_999_999_999_999;
+// Zero-padded to 15 digits so lexical order matches numeric order — see
+// indexKey(). MAX_SCHEDULED_FOR_MS is capped to the largest 15-digit value so
+// every accepted timestamp pads to exactly this width (never wider).
 const TIME_PAD = 15;
 const padTime = (n: number): string => String(n).padStart(TIME_PAD, "0");
 
@@ -364,24 +371,33 @@ class SchedulerDO {
 
                 if (record) {
                     due.push(record);
+                } else {
+                    // Dangling index entry: this `t:` row points at an `id:`
+                    // header that no longer exists (e.g. a partial-failure path
+                    // left the index at a stale time while the header moved on,
+                    // then the job later dispatched and cleared its header).
+                    // Delete the orphan now — otherwise rescheduleAlarm() keeps
+                    // arming the alarm to this past time, which fires, finds no
+                    // record, re-arms to the same past time, and busy-loops
+                    // forever, burning DO duty cycles.
+                    await this.state.storage.delete(indexKey);
                 }
             }
         }
 
-        // Per-pool budget for THIS drain pass. The durable `pool:<name>` row
-        // tracks how many of the pool's jobs are already in flight; the budget
-        // is the remaining slots. We dispatch up to that many pooled jobs and
-        // re-arm the rest for a near-future alarm so they drain as slots free —
-        // bounded concurrency without busy-looping. Cached in `pools` so the
-        // budget is decremented across the loop without re-reading storage.
-        const pools = new Map<string, PoolState>();
-
+        // Per-pool concurrency is gated by the durable `pool:<name>` row, which
+        // reservePoolSlot() reads FRESH from storage for every record. We
+        // deliberately do NOT cache pool state across the drain: dispatch()
+        // awaits an outbound fetch, during which the DO input gate is open and a
+        // concurrent /complete can decrement the pool row. A stale cached copy
+        // written back afterwards would resurrect the completed job's slot and
+        // leak pool capacity forever (there is no lease timeout to reclaim it).
         try {
             for (const record of due) {
                 // Per-record isolation: a storage throw for one record must NOT
                 // abort the whole pass (it would skip the other due records AND
                 // the rescheduleAlarm() in the finally, losing the clock).
-                await this.drainRecordGuarded(record, pools);
+                await this.drainRecordGuarded(record);
             }
         } finally {
             // Always re-arm the clock, even if a record threw above — otherwise a
@@ -494,32 +510,30 @@ class SchedulerDO {
      *
      * Claims the job by deleting its time-index entry BEFORE dispatch (an alarm
      * re-fire then won't pick it up again), runs {@link drainRecord}, and on a
-     * thrown storage op decides whether the job stays re-fireable.
+     * thrown storage op re-asserts the claim so the job stays re-fireable.
      *
-     * When the record was NOT successfully dispatched, re-assert the time-index
-     * claim so a later alarm re-attempts it (at-least-once): the claim delete may
-     * have removed it and recordRetry()/requeuePooled() may not have re-armed it
-     * before throwing, and re-inserting the same key is idempotent, so a
-     * surviving claim is simply rewritten to its prior value. When the record WAS
-     * dispatched (the throw came from post-dispatch cleanup), leave the index
-     * deleted so the already-kicked, idempotent job is not re-fired.
+     * A throw reaching here always means the job was NOT dispatched:
+     * {@link drainRecord} swallows its own post-dispatch cleanup errors and
+     * returns instead of throwing once a kick succeeds, so every escaping throw
+     * comes from the pre-dispatch or failed-dispatch paths. We therefore always
+     * re-assert the time-index claim so a later alarm re-attempts it
+     * (at-least-once): the claim delete may have removed it and
+     * recordRetry()/requeuePooled() may not have re-armed it before throwing, and
+     * re-inserting the same key is idempotent, so a surviving claim is simply
+     * rewritten to its prior value.
      */
-    private async drainRecordGuarded(record: ScheduleRecord, pools: Map<string, PoolState>): Promise<void> {
-        let dispatched = false;
-
+    private async drainRecordGuarded(record: ScheduleRecord): Promise<void> {
         try {
             await this.state.storage.delete(SchedulerDO.indexKey(record.scheduledFor, record.id));
-            dispatched = await this.drainRecord(record, pools);
+            await this.drainRecord(record);
         } catch {
-            if (!dispatched) {
-                try {
-                    await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, record.id), record.id);
-                } catch {
-                    // The infra is failing hard enough that even the re-claim put
-                    // throws. Swallow so the remaining due records still drain and
-                    // rescheduleAlarm() still runs; the surviving `id:`/`retry:`
-                    // rows keep the job recoverable on a later pass.
-                }
+            try {
+                await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, record.id), record.id);
+            } catch {
+                // The infra is failing hard enough that even the re-claim put
+                // throws. Swallow so the remaining due records still drain and
+                // rescheduleAlarm() still runs; the surviving `id:`/`retry:`
+                // rows keep the job recoverable on a later pass.
             }
         }
     }
@@ -531,19 +545,21 @@ class SchedulerDO {
      * free slot is reserved durably before dispatch and released immediately if
      * the kick fails (success holds it until the runtime reports completion).
      * Success clears the `id:`/`retry:` rows; failure routes to
-     * {@link recordRetry}. `pools` caches each pool's {@link PoolState} for the
-     * lifetime of the drain so the budget decrements without re-reading storage.
+     * {@link recordRetry}. Pool state is read FRESH from storage per record (see
+     * {@link reservePoolSlot}) and never held across the dispatch() await, so a
+     * concurrent /complete landing mid-dispatch can't be clobbered.
+     * Once a kick succeeds, post-dispatch cleanup (clearing the `id:`/`retry:`
+     * rows) is swallowed rather than allowed to throw, so a successful dispatch
+     * NEVER propagates an error to {@link drainRecordGuarded}: every throw that
+     * escapes comes from the pre-dispatch or failed-dispatch paths, where the job
+     * is still re-fireable and the guard safely re-claims the time index.
      * @returns `true` only when the record was successfully dispatched (a 2xx
-     * kick). The caller ({@link drainRecordGuarded}) uses this in its per-record
-     * error guard: a record that returns `true` (or whose post-dispatch cleanup
-     * later throws) must NOT have its time-index claim restored, since re-firing
-     * an already-kicked job would break idempotency. A `false` return (pool
-     * backpressure or a failed dispatch) means the job is still re-fireable —
-     * either already re-armed here, or, if a throw escapes, re-claimed by the
-     * guard's catch.
+     * kick); `false` on pool backpressure or a failed dispatch (the job is still
+     * re-fireable — already re-armed here). The value is informational (the guard
+     * branches on throw/no-throw, not on this boolean).
      */
-    private async drainRecord(record: ScheduleRecord, pools: Map<string, PoolState>): Promise<boolean> {
-        const reserved = await this.reservePoolSlot(record, pools);
+    private async drainRecord(record: ScheduleRecord): Promise<boolean> {
+        const reserved = await this.reservePoolSlot(record);
 
         if (!reserved) {
             // Pool at capacity — re-armed by reservePoolSlot(); skip dispatch.
@@ -555,16 +571,16 @@ class SchedulerDO {
         if (!ok && record.pool !== undefined) {
             // The kick itself failed: no completion callback is coming, so free
             // the reserved slot immediately. recordRetry() then re-arms the job.
-            // Release by id so a later (spurious) /complete for the same job
-            // can't double-free and oversubscribe the pool.
-            const pool = pools.get(record.pool);
+            // Re-load the pool row FRESH from storage rather than reusing a copy
+            // held from before the dispatch() fetch await: a concurrent
+            // /complete may have decremented the row during that await, and
+            // releasing against a stale copy would clobber that decrement and
+            // oversubscribe the pool. Release by id so a later (spurious)
+            // /complete for the same job can't double-free either.
+            const pool = await this.loadPool(record.pool);
+            const released = SchedulerDO.releaseSlot(pool, record.id);
 
-            if (pool !== undefined) {
-                const released = SchedulerDO.releaseSlot(pool, record.id);
-
-                pools.set(record.pool, released);
-                await this.savePool(record.pool, released);
-            }
+            await this.savePool(record.pool, released);
         }
 
         if (ok) {
@@ -597,15 +613,21 @@ class SchedulerDO {
      * job via {@link requeuePooled}) when the pool is at `maxConcurrency`;
      * otherwise reserves a slot durably and returns `true`. Non-pooled records
      * always return `true` without touching any pool state.
+     *
+     * The pool row is read FRESH from storage on every call — never cached
+     * across the drain. Each reservation durably `savePool()`s before the next
+     * record runs, so a same-pass reservation is still visible to the next
+     * record's fresh read (the budget carries forward); and because dispatch()
+     * awaits an outbound fetch between records, a concurrent /complete that
+     * decrements the row mid-drain IS reflected here instead of being clobbered
+     * by a stale in-memory copy (which would leak a slot permanently).
      */
-    private async reservePoolSlot(record: ScheduleRecord, pools: Map<string, PoolState>): Promise<boolean> {
+    private async reservePoolSlot(record: ScheduleRecord): Promise<boolean> {
         if (record.pool === undefined) {
             return true;
         }
 
-        const pool = pools.get(record.pool) ?? (await this.loadPool(record.pool));
-
-        pools.set(record.pool, pool);
+        const pool = await this.loadPool(record.pool);
 
         if (pool.inFlight >= pool.maxConcurrency) {
             await this.requeuePooled(record);
@@ -903,18 +925,19 @@ class SchedulerDO {
         // positive number is a precondition for the time-index padding to
         // sort correctly.
         //
-        // Cap at the maximum valid `Date` (8.64e15 ms) and require an integer:
-        // for values >= 1e21 `String()` switches to exponential notation
-        // ('1e+21'), which breaks `indexKey()`'s zero-padding and the
-        // `Number.parseInt()` recovery in alarm()/rescheduleAlarm() (it stops
-        // at the 'e'), corrupting the sort order so jobs fire immediately.
+        // Cap at MAX_SCHEDULED_FOR_MS (the largest value that still pads to
+        // TIME_PAD digits) and require an integer: a value wider than the pad
+        // would zero-pad to a longer key that mis-sorts against shorter ones,
+        // and for values >= 1e21 `String()` switches to exponential notation
+        // ('1e+21'), which additionally breaks the `Number.parseInt()` recovery
+        // in alarm()/rescheduleAlarm() (it stops at the 'e').
         if (
             typeof body.scheduledFor !== "number" ||
             !Number.isInteger(body.scheduledFor) ||
             body.scheduledFor <= 0 ||
             body.scheduledFor > MAX_SCHEDULED_FOR_MS
         ) {
-            return SchedulerDO.error(400, "INVALID_INPUT", "scheduledFor must be a positive integer epoch-millisecond number no greater than 8640000000000000");
+            return SchedulerDO.error(400, "INVALID_INPUT", "scheduledFor must be a positive integer epoch-millisecond number no greater than 999999999999999");
         }
 
         // Dispatch target lives only in env — never trust an `originUrl` from

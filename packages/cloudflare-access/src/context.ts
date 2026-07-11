@@ -1,5 +1,6 @@
 import type { Middleware } from "@lunora/server";
 
+import readIdentityGroups from "./identity-groups";
 import type { AccessClaims } from "./types";
 
 /**
@@ -44,9 +45,6 @@ interface AccessContextOutput extends AccessContextInput {
     access: AccessFacade;
 }
 
-/** Keep only the string entries of a claim that should be a `string[]` (e.g. `groups`). */
-const stringList = (value: unknown): ReadonlyArray<string> => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : []);
-
 /** Read a string claim, narrowing non-strings (and `undefined`) away. */
 const stringClaim = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
@@ -77,8 +75,10 @@ const facadeFor = (identity: Record<string, unknown>, userId: string | undefined
 
     const claims = raw as AccessClaims;
     // Promoted fields may be overridden at the envelope top by a custom `mapClaims`;
-    // prefer those, falling back to the verified claim set.
-    const groups = stringList(identity["groups"] ?? claims.groups);
+    // prefer those, falling back to the verified claim set. `readIdentityGroups`
+    // (shared with `accessRoles`) applies the same promoted-then-nested fallback
+    // and string filtering; `?? []` keeps the facade's non-nullable `groups`.
+    const groups = readIdentityGroups(identity) ?? [];
 
     return {
         authenticated: true,

@@ -1,13 +1,16 @@
 import { ValidationError } from "./errors";
-import type { Infer, Validator } from "./v";
+import type { Infer, OptionalizeShape, Validator } from "./v";
 
 /** Map of validators describing a record of named fields (a function's args, a step's args, an HTTP query/body/params). */
 type ValidatorMap = Record<string, Validator>;
 
-/** Infer the object type from a {@link ValidatorMap} — optional validators (`v.optional`) become optional keys. */
-type InferValidatorMap<A extends ValidatorMap> = {
-    [K in keyof A as undefined extends Infer<A[K]> ? K : never]?: Infer<A[K]>;
-} & { [K in keyof A as undefined extends Infer<A[K]> ? never : K]: Infer<A[K]> };
+/**
+ * Infer the object type from a {@link ValidatorMap} — optional validators
+ * (`v.optional`) become optional keys. Shares the single optionality rule with
+ * `ObjectShapeType` via {@link OptionalizeShape}, so args-map and object-shape
+ * inference can never drift.
+ */
+type InferValidatorMap<A extends ValidatorMap> = OptionalizeShape<{ [K in keyof A]: Infer<A[K]> }>;
 
 /**
  * A precompiled fast-path parser for one {@link ValidatorMap}. Returns the fully
@@ -86,6 +89,7 @@ const installCompiledValidatorMap = (validators: object, compiled: CompiledValid
  * record (a confident success — the common case) or {@link DEFER_VALIDATION}, in
  * which case the interpreted loop below runs and owns the result (and any error).
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- validator-map parser; the branch set is inherent to the validator kinds
 const parseValidatorMap = (validators: ValidatorMap, source: Record<string, unknown>, label: string): Record<string, unknown> => {
     const compiled = COMPILED_PARSERS.get(validators);
 
@@ -106,7 +110,14 @@ const parseValidatorMap = (validators: ValidatorMap, source: Record<string, unkn
             continue;
         }
 
-        const candidate = source[key];
+        // Read via Object.hasOwn so a declared arg whose name collides with an
+        // Object.prototype member (`toString`, `constructor`, …) reads as absent
+        // (`undefined`) rather than the inherited function — otherwise the
+        // optional-skip below never fires and a real HTTP body missing such a
+        // field would reject on the inherited function. Note: an absent optional
+        // arg is skipped wholesale, so a `.check()` refinement on a
+        // `v.optional(...)` arg never runs for an absent arg (it does standalone).
+        const candidate = Object.hasOwn(source, key) ? source[key] : undefined;
 
         if (candidate === undefined && validator.kind === "optional") {
             continue;

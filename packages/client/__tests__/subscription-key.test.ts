@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import type { SubscriptionState } from "../src/subscription";
 import { SubscriptionRegistry } from "../src/subscription";
+
+/** Minimal {@link SubscriptionState} carrying only the fields the registry keys on. */
+const makeState = (id: string, fn: string, args: Record<string, unknown>, shardKey?: string): SubscriptionState =>
+    ({ args, fn: { __lunoraRef: fn }, id, shardKey }) as unknown as SubscriptionState;
 
 /**
  * `SubscriptionRegistry.key` routes `args` through the shared `stableStringify`
@@ -44,5 +49,40 @@ describe("subscriptionRegistry.key", () => {
 
         expect(SubscriptionRegistry.key("other", { limit: 10 })).not.toBe(base);
         expect(SubscriptionRegistry.key("q", { limit: 10 }, "shard-1")).not.toBe(base);
+    });
+});
+
+describe("subscriptionRegistry.remove", () => {
+    it("removing an old state does not evict a newer state that re-claimed the same key", () => {
+        expect.assertions(3);
+
+        const registry = new SubscriptionRegistry();
+        const s1 = makeState("sub_1", "q", { limit: 10 });
+        const s2 = makeState("sub_2", "q", { limit: 10 });
+
+        registry.add(s1);
+        // A fresh subscription under the same (fn, args, shardKey) re-claims the
+        // byKey slot (S1 already completed server-side); both live under byId.
+        registry.add(s2);
+
+        // A late unsubscribe of S1 must not delete S2's byKey slot.
+        registry.remove(s1);
+
+        expect(registry.get(SubscriptionRegistry.key("q", { limit: 10 }))).toBe(s2);
+        expect(registry.getById("sub_2")).toBe(s2);
+        expect(registry.getById("sub_1")).toBeUndefined();
+    });
+
+    it("removing the current state evicts its byKey slot", () => {
+        expect.assertions(2);
+
+        const registry = new SubscriptionRegistry();
+        const state = makeState("sub_1", "q", { limit: 10 });
+
+        registry.add(state);
+        registry.remove(state);
+
+        expect(registry.get(SubscriptionRegistry.key("q", { limit: 10 }))).toBeUndefined();
+        expect(registry.getById("sub_1")).toBeUndefined();
     });
 });

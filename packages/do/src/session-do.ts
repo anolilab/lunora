@@ -35,6 +35,7 @@
  * a concrete `DurableObject` class today; the structural state shape used by
  * the unit tests is preserved so plain-object doubles still work.
  */
+import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { jsonResponse } from "../../../shared/json-response";
 
 /** Default TTL for new sessions (7 days), matching `@lunora/auth`. */
@@ -103,30 +104,6 @@ interface SessionDOState {
 interface SessionDOEnv {
     SESSION_DO_SECRET?: string;
 }
-
-/**
- * Length-independent constant-time string compare. Mirrors the helper in
- * `packages/do/src/shard-do.ts` and `packages/runtime/src/create-worker.ts` —
- * duplicated rather than imported to keep SessionDO's surface free of
- * package-internal couplings.
- */
-const constantTimeEqual = (a: string, b: string): boolean => {
-    const max = Math.max(a.length, b.length);
-    // eslint-disable-next-line no-bitwise -- constant-time compare folds length + every code-unit delta into one accumulator
-    let diff = a.length ^ b.length;
-
-    for (let index = 0; index < max; index += 1) {
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
-        const charA = index < a.length ? a.charCodeAt(index) : 0;
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
-        const charB = index < b.length ? b.charCodeAt(index) : 0;
-
-        // eslint-disable-next-line no-bitwise -- accumulate per-code-unit difference without branching to keep the compare constant-time
-        diff |= charA ^ charB;
-    }
-
-    return diff === 0;
-};
 
 const isAuthorized = (request: Request, env: SessionDOEnv): boolean => {
     const expected = env.SESSION_DO_SECRET;

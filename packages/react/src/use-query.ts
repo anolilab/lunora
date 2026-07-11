@@ -56,7 +56,12 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash), the client, or the skip flag changes — not on every fresh `function_`/`argsRecord`/`shardKey` object identity. `client` is provider-stable (swapping it remounts the provider subtree).
     }, [client, queryClient, serializeQueryKey(queryKey), skipped]);
 
-    return data;
+    // When skipped, the queryKey collapses to `["lunora", ref, {}, null]` — the
+    // same key a real `useQuery(fn, {})` uses — and TanStack still hands back
+    // that key's cached `data` for a disabled query. Return `undefined`
+    // explicitly so a skipped read never surfaces another consumer's data,
+    // matching the documented "no network call, no subscription" contract.
+    return skipped ? undefined : data;
 };
 
 export default useQuery;

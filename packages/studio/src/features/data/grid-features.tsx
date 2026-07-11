@@ -29,6 +29,9 @@ const CONTROL_BTN =
 /** Characters that force a CSV field to be quoted (comma, quote, newline), per RFC 4180. */
 const CSV_QUOTE_RE = /["\n,]/u;
 
+/** Leading characters a spreadsheet treats as a formula trigger (OWASP CSV-injection / CWE-1236). */
+const CSV_FORMULA_RE = /^[=+\-@\t\r]/u;
+
 /**
  * Render one value for a CSV cell: empty for null/undefined, the raw text for
  * strings/numbers/booleans, JSON for anything structured. The field is quoted
@@ -43,7 +46,10 @@ const csvCell = (value: unknown): string => {
     let text: string;
 
     if (typeof value === "string") {
-        text = value;
+        // Neutralize spreadsheet formula injection (OWASP CSV-injection / CWE-1236):
+        // a field starting with = + - @ TAB or CR is prefixed with a tab so
+        // Excel/Sheets/LibreOffice treat it as text, not a formula.
+        text = CSV_FORMULA_RE.test(value) ? `\t${value}` : value;
     } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
         text = String(value);
     } else {

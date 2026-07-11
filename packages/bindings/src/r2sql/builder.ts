@@ -15,7 +15,7 @@ import { renderOrderTerm } from "./order";
 import type { Condition, Queryable, QueryExecutor } from "./query";
 import SetOperation from "./set-operation";
 import type { Sql } from "./sql";
-import { lit, tableRef, toText } from "./sql";
+import { assertLimit, lit, tableRef, toText } from "./sql";
 import type { R2SqlResult } from "./types";
 
 const JOIN_KEYWORDS = {
@@ -157,6 +157,7 @@ export default class SelectBuilder<Row = Record<string, unknown>> implements Que
 
     /** `LIMIT n` (R2 SQL: 1–10,000, default 500). */
     public limit(n: number): this {
+        assertLimit(n);
         this.limitValue = n;
 
         return this;

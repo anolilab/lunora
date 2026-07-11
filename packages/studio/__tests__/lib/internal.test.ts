@@ -1,6 +1,47 @@
+import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { fireAndForget } from "../../src/lib/internal";
+import { dispatchByKind, fireAndForget } from "../../src/lib/internal";
+
+const REF: FunctionReference = { __lunoraRef: "messages:list" };
+
+/** A minimal client whose three RPC methods echo which one was invoked. */
+const makeClient = (): Pick<LunoraClient, "action" | "mutation" | "query"> =>
+    ({
+        action: vi.fn(async () => "action-result"),
+        mutation: vi.fn(async () => "mutation-result"),
+        query: vi.fn(async () => "query-result"),
+    }) as unknown as Pick<LunoraClient, "action" | "mutation" | "query">;
+
+describe("dispatchByKind", () => {
+    it("routes an action to client.action", async () => {
+        expect.assertions(2);
+
+        const client = makeClient();
+
+        await expect(dispatchByKind(client, "action", REF, { a: 1 }, { shardKey: "room-1" })).resolves.toBe("action-result");
+        expect(client.action).toHaveBeenCalledWith(REF, { a: 1 }, { shardKey: "room-1" });
+    });
+
+    it("routes a mutation to client.mutation", async () => {
+        expect.assertions(2);
+
+        const client = makeClient();
+
+        await expect(dispatchByKind(client, "mutation", REF, {}, {})).resolves.toBe("mutation-result");
+        expect(client.mutation).toHaveBeenCalledTimes(1);
+    });
+
+    it("routes a query — and any unknown/undefined kind — to client.query", async () => {
+        expect.assertions(3);
+
+        const client = makeClient();
+
+        await expect(dispatchByKind(client, "query", REF, {}, {})).resolves.toBe("query-result");
+        await expect(dispatchByKind(client, undefined, REF, {}, {})).resolves.toBe("query-result");
+        expect(client.query).toHaveBeenCalledTimes(2);
+    });
+});
 
 describe("fireAndForget", () => {
     it("invokes onError with the rejection reason", async () => {

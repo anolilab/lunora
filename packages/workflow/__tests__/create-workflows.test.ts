@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import createWorkflows from "../src/create-workflows";
+import { BRANCH_MARKER_KEY } from "../src/fan-out";
 import type { WorkflowBindingLike, WorkflowCreateOptions, WorkflowInstanceLike } from "../src/types";
 
 const fakeInstance = (id: string): WorkflowInstanceLike => {
@@ -66,5 +67,39 @@ describe("createWorkflows", () => {
         const workflows = createWorkflows({ bindings: {} });
 
         expect(() => workflows.get("anything")).toThrow(/no workflows are declared/);
+    });
+
+    it("rejects create() params carrying the reserved branch marker without touching the binding", async () => {
+        expect.assertions(3);
+
+        const binding = fakeBinding();
+        const workflows = createWorkflows({ bindings: { orderPipeline: binding } });
+        const forged = { eventType: "lunora:branch:victim", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "victim" };
+
+        const error = await workflows
+            .get("orderPipeline")
+            .create({ params: { [BRANCH_MARKER_KEY]: forged } })
+            .catch((error_: unknown) => error_);
+
+        expect((error as Error).name).toBe("LunoraError");
+        expect((error as { code?: string }).code).toBe("BAD_REQUEST");
+        expect(binding.create).not.toHaveBeenCalled();
+    });
+
+    it("rejects createBatch() when any entry carries the reserved branch marker without touching the binding", async () => {
+        expect.assertions(3);
+
+        const binding = fakeBinding();
+        const workflows = createWorkflows({ bindings: { orderPipeline: binding } });
+        const forged = { eventType: "lunora:branch:victim", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "victim" };
+
+        const error = await workflows
+            .get("orderPipeline")
+            .createBatch([{ params: { ok: true } }, { params: { [BRANCH_MARKER_KEY]: forged } }])
+            .catch((error_: unknown) => error_);
+
+        expect((error as Error).name).toBe("LunoraError");
+        expect((error as { code?: string }).code).toBe("BAD_REQUEST");
+        expect(binding.createBatch).not.toHaveBeenCalled();
     });
 });

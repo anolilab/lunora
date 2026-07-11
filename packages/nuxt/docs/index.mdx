@@ -37,11 +37,19 @@ export default defineNuxtConfig({
 </Step>
 <Step>
 
-Add `exports.cloudflare.ts` to the project root so the `ShardDO` Durable
-Object class is exported from the emitted worker entry:
+Add a `worker.ts` wrapper at the project root and point `wrangler.jsonc`'s
+`main` at it, so the `ShardDO` Durable Object class is exported from the
+deployed worker. Nitro's `cloudflare_module` output exports only the SSR
+handler, so `main` must point at the wrapper — not the raw
+`.output/server/index.mjs` — or `wrangler deploy` fails on the missing DO:
 
-```ts title="exports.cloudflare.ts"
+```ts title="worker.ts"
+export { default } from "./.output/server/index.mjs";
 export { ShardDO } from "./lunora/server";
+```
+
+```jsonc title="wrangler.jsonc"
+{ "main": "worker.ts" }
 ```
 
 `lunora/server.ts` is your built Lunora app (`defineApp().build()`) — its
@@ -70,9 +78,9 @@ Configurable under the `lunora` key in `nuxt.config.ts`.
 - **The `#lunora/app` alias**: points the route's worker import at your app
   entry (`options.appEntry`), forwarded into the Nitro server bundle via
   `nuxt.options.alias`.
-- **`ShardDO`** rides to the worker entry through your root
-  `exports.cloudflare.ts` — the `cloudflare_module` preset appends its exports
-  onto the generated worker.
+- **`ShardDO`** rides to the deployed worker through your root `worker.ts`
+  wrapper (`wrangler.jsonc`'s `main`), which re-exports Nitro's SSR handler and
+  `ShardDO` — Nitro's `cloudflare_module` output exports only the SSR handler.
 
 ## Server data-loading — `@lunora/nuxt/server`
 
@@ -128,9 +136,9 @@ const newHero = useFlag("homepage-hero", false);
     **Verify before deploy.** Single-worker composition rides on two Nitro behaviours that vary across versions — verify them on your pinned toolchain: (1)
     **WebSocket upgrade pass-through** — the live feed needs Nitro to return your Lunora app's `101 Switching Protocols` response (carrying its Cloudflare
     `webSocket`) untouched; RPC (plain JSON) works regardless, so if live subscriptions never connect while RPC does, Nitro is normalising the upgrade response.
-    (2) **The `exports.cloudflare.ts` hook** — the `cloudflare_module` preset must append this file's exports onto the worker entry; if `wrangler deploy` fails
-    with "ShardDO class not exported", your Nitro version may use a different hook (`nitro.cloudflare.additionalModules`, or a `rollupConfig` output export).
-    The module warns when the file is missing but can't verify the hook fires.
+    (2) **The `worker.ts` wrapper** — `wrangler.jsonc`'s `main` must point at a root `worker.ts` that re-exports Nitro's SSR handler _and_ `ShardDO` (Nitro's
+    `cloudflare_module` output exports only the SSR handler); if `wrangler deploy` fails with "ShardDO class not exported", check that `main` points at the
+    wrapper and that it re-exports `ShardDO`. The module warns when `worker.ts` is missing but can't verify wrangler's `main` points at it.
 </Callout>
 
 <Callout type="info">

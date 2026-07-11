@@ -476,6 +476,61 @@ describe("shardDO + reactiveCache: dispatch path", () => {
         // 2 slots: unrestricted (hit twice) and restricted (hit once).
         expect(shard.execCount.get("users:count")).toBe(2);
     });
+
+    // Regression for finding #8: the reactive-cache discriminator folds the
+    // FULL resolved identity (userId AND the `getIdentity()` claims RLS can key
+    // on), not the userId alone. We drive the real dispatch path via `fetch` so
+    // the identity is forwarded through the same `x-lunora-userid` /
+    // `x-lunora-identity` headers the runtime sends, then parsed into the
+    // `getCurrentUserId` / `getCurrentIdentity` getters `runCachedQuery` reads.
+    const dispatchAs = (userId: string, claims: Record<string, unknown>, functionPath: string, args: Record<string, unknown>): Promise<Response> =>
+        shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args, functionPath }),
+                headers: {
+                    "content-type": "application/json",
+                    "x-lunora-identity": JSON.stringify(claims),
+                    "x-lunora-userid": userId,
+                },
+                method: "POST",
+            }),
+        );
+
+    it("identity isolation: same userId with DIFFERENT claims never shares a cache slot", async () => {
+        expect.assertions(1);
+
+        shard.handlers.set("org:list", async () => {
+            shard.stampRead("users", "*scan");
+
+            return [{ ok: true }];
+        });
+
+        // Same human (userId), same query+args, but a different active-org claim
+        // per request (e.g. two tabs / sessions). Each MUST re-run its handler —
+        // request A's org-A rows must never memoize for request B's org-B read.
+        await dispatchAs("u1", { activeOrgId: "A" }, "org:list", {});
+        await dispatchAs("u1", { activeOrgId: "B" }, "org:list", {});
+
+        expect(shard.execCount.get("org:list")).toBe(2);
+    });
+
+    it("cache hit preserved: same userId AND identical claims collapse to one run (key order agnostic)", async () => {
+        expect.assertions(1);
+
+        shard.handlers.set("org:list", async () => {
+            shard.stampRead("users", "*scan");
+
+            return [{ ok: true }];
+        });
+
+        // Identical identity across the two requests — the claim object's key
+        // order differs textually, but `stableStringify` canonicalizes it, so
+        // both fold to the same discriminator and the second call is a cache hit.
+        await dispatchAs("u1", { activeOrgId: "A", role: "admin" }, "org:list", {});
+        await dispatchAs("u1", { role: "admin", activeOrgId: "A" }, "org:list", {});
+
+        expect(shard.execCount.get("org:list")).toBe(1);
+    });
 });
 
 describe("shardDO + reactiveCache: subscription bridge", () => {

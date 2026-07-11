@@ -1,11 +1,11 @@
 import type { StorageObject } from "@lunora/client";
 import { useLunora } from "@lunora/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAutoRefresh } from "../../../hooks/use-auto-refresh";
 import type { DanglingReference, DanglingReferenceResult, StorageReference, StorageReferenceResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../../lib/internal";
+import { adminRef, callOptions, copyToClipboard, errorMessage, fireAndForget } from "../../../lib/internal";
 import type { KeySelection } from "../../data/hooks/use-key-selection";
 import { useKeySelection } from "../../data/hooks/use-key-selection";
 import { DEFAULT_SHARE_LIFETIME, deriveEntries, sortFiles } from "../storage-entries";
@@ -136,17 +136,6 @@ const triggerDownload = (url: string, filename: string): void => {
     anchor.remove();
 };
 
-/** Write text to the clipboard, guarded for the non-browser (test/SSR) path. */
-const copyToClipboard = async (text: string): Promise<void> => {
-    // The repo's browser-global pattern: reach globals via `globalThis` behind a
-    // capability check so the module stays import-safe under Node/SSR.
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only, guarded
-    if ("navigator" in globalThis && "clipboard" in globalThis.navigator) {
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only, guarded
-        await globalThis.navigator.clipboard.writeText(text);
-    }
-};
-
 /**
  * The file browser's controller: owns all listing/pagination, prefix +
  * folder-navigation, sort, view + thumbnail-size, share-link expiry, selection +
@@ -191,6 +180,15 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     // (single-bucket / older worker) hides the picker entirely.
     const [buckets, setBuckets] = useState<string[]>([]);
     const [bucket, setBucket] = useState<string>("");
+
+    // Monotonic request ids so an out-of-order response can't overwrite a newer
+    // scope. `list()` fires from many triggers (mount, prefix List, folder-nav,
+    // Load-more, poll tick, post-write reload, bucket switch); the orphan check
+    // walks the whole bucket against `referenceShard`. In both, a slow response for
+    // a superseded prefix/bucket/shard used to win by resolving last — the guards
+    // below discard any result whose id is no longer the latest.
+    const listSeq = useRef(0);
+    const orphanSeq = useRef(0);
 
     useEffect(() => {
         const token = { cancelled: false };
@@ -238,22 +236,39 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
 
     const list = useCallback(
         async (searchPrefix: string, cursor: string | undefined, append: boolean): Promise<void> => {
+            listSeq.current += 1;
+            const seq = listSeq.current;
+
             setError(undefined);
             setBusy(true);
 
             try {
                 const page = await storageApi.list({ cursor, limit: pageSize, prefix: searchPrefix });
 
+                // A newer list() (fast folder-nav, bucket switch, poll tick) has
+                // superseded this one — drop the stale page so an out-of-order
+                // response can't render a prior prefix/bucket's rows under the new scope.
+                if (seq !== listSeq.current) {
+                    return;
+                }
+
                 setObjects((previous) => (append && previous !== undefined ? [...previous, ...page.objects] : page.objects));
                 setNextCursor(page.cursor);
             } catch (error_) {
+                if (seq !== listSeq.current) {
+                    return;
+                }
+
                 if (!append) {
                     setObjects(undefined);
                 }
 
                 setError(errorMessage(error_));
             } finally {
-                setBusy(false);
+                // Leave `busy` for the superseding request to clear (it set it too).
+                if (seq === listSeq.current) {
+                    setBusy(false);
+                }
             }
         },
         [pageSize, storageApi],
@@ -434,8 +449,11 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 try {
                     const url = await storageApi.signedUrl(key, { expiresInSeconds: expiry });
 
-                    await copyToClipboard(url);
-                    setCopiedKey(key);
+                    // The shared helper returns whether a clipboard was available, so skip
+                    // the transient "Copied" acknowledgement when there was none to write to.
+                    if (copyToClipboard(url)) {
+                        setCopiedKey(key);
+                    }
                 } catch (error_) {
                     setError(errorMessage(error_));
                 }
@@ -524,6 +542,8 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     // so a prior result goes stale the moment that shard changes — drop it so the
     // operator re-runs the check rather than reading a result for the old shard.
     useEffect(() => {
+        // Invalidate any in-flight orphan check so its (old-shard) result can't land.
+        orphanSeq.current += 1;
         setDanglingReferences(undefined);
         setDanglingTruncated(false);
     }, [referenceShard]);
@@ -533,6 +553,9 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     // a dangling reference. Best-effort: a worker that predates the feature (or a
     // closed admin gate) throws, surfaced as the error banner with an empty result.
     const checkOrphans = (): void => {
+        orphanSeq.current += 1;
+        const seq = orphanSeq.current;
+
         setError(undefined);
         setDanglingBusy(true);
 
@@ -560,20 +583,30 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                         // partial key set would flag in-bucket objects as dangling simply
                         // because they weren't reached during enumeration. Surface the
                         // truncation without producing unreliable dangling rows.
-                        setDanglingReferences([]);
-                        setDanglingTruncated(true);
+                        if (seq === orphanSeq.current) {
+                            setDanglingReferences([]);
+                            setDanglingTruncated(true);
+                        }
                     } else {
                         const result = (await client.query(STORAGE_ORPHANS, { liveKeys }, callOptions(referenceShard))) as Partial<DanglingReferenceResult>;
 
-                        setDanglingReferences(result.references ?? []);
-                        setDanglingTruncated(result.truncated === true);
+                        // A bucket/shard switch since this check began invalidated it —
+                        // don't paint a result computed against the previous scope.
+                        if (seq === orphanSeq.current) {
+                            setDanglingReferences(result.references ?? []);
+                            setDanglingTruncated(result.truncated === true);
+                        }
                     }
                 } catch (error_) {
-                    setDanglingReferences([]);
-                    setDanglingTruncated(false);
-                    setError(errorMessage(error_));
+                    if (seq === orphanSeq.current) {
+                        setDanglingReferences([]);
+                        setDanglingTruncated(false);
+                        setError(errorMessage(error_));
+                    }
                 } finally {
-                    setDanglingBusy(false);
+                    if (seq === orphanSeq.current) {
+                        setDanglingBusy(false);
+                    }
                 }
             })(),
         );
@@ -584,10 +617,18 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     // Clear selection so keys from the previous bucket are never bulk-deleted against
     // the newly-active bucket — the primary stale-selection bug vector.
     const selectBucket = (name: string): void => {
+        // Invalidate any in-flight list / orphan check for the previous bucket so a
+        // late response can't paint its rows or dangling report under the new bucket.
+        listSeq.current += 1;
+        orphanSeq.current += 1;
         setBucket(name);
         setPrefix(initialPrefix ?? "");
         setDraftPrefix(initialPrefix ?? "");
         setObjects(undefined);
+        // The dangling report was computed for the previous bucket's keys — drop it
+        // (the shard-change effect only clears it on `referenceShard`, not bucket).
+        setDanglingReferences(undefined);
+        setDanglingTruncated(false);
         clearSelection();
     };
 

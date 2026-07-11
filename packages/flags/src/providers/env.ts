@@ -101,7 +101,7 @@ const envProvider = (options: EnvProviderOptions = {}): FlagsProviderFactory => 
                     return staticDetails(false);
                 }
 
-                return parseError(defaultValue, `env flag "${flagKey}" (${nameOf(flagKey)}) is not a boolean: "${value}"`);
+                return parseError(defaultValue, `env flag "${flagKey}" (${nameOf(flagKey)}) value is not a recognized boolean`);
             },
             resolveNumberEvaluation: (flagKey, defaultValue): Promise<ResolutionDetails<number>> => {
                 const value = raw(flagKey);
@@ -113,7 +113,7 @@ const envProvider = (options: EnvProviderOptions = {}): FlagsProviderFactory => 
                 const parsed = Number(value);
 
                 if (value.trim() === "" || Number.isNaN(parsed)) {
-                    return parseError(defaultValue, `env flag "${flagKey}" (${nameOf(flagKey)}) is not a number: "${value}"`);
+                    return parseError(defaultValue, `env flag "${flagKey}" (${nameOf(flagKey)}) value is not a number`);
                 }
 
                 return staticDetails(parsed);

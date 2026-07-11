@@ -1,5 +1,5 @@
 import type { AccessClaims, CreateAccessResolverOptions, ResolvedAccessIdentity, ResolvedIdentityLike, ResolveIdentityFunction } from "./types";
-import { verifyRequest } from "./verify";
+import { assertVerifyOptions, verifyRequest } from "./verify";
 
 /**
  * The "anonymous" identity. `null` is the runtime's `resolveIdentity` contract
@@ -11,16 +11,21 @@ import { verifyRequest } from "./verify";
 const ANONYMOUS = null;
 
 /**
+ * Narrow a claim to a non-empty string. `""` (and any non-string / nullish value)
+ * is treated as absent, so an empty `email` / `common_name` / `mapClaims.userId`
+ * never mints an identity whose `userId` is the empty string — every such caller
+ * would otherwise collide on one shared id and RLS ownership defaults would stamp
+ * rows with `""`.
+ */
+const nonEmpty = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
+
+/**
  * Derive the stable caller id from verified claims: the IdP `sub` for SSO users,
  * falling back to `email`, then `common_name` for service tokens (whose `sub` is
  * empty). Returns `undefined` when none is present — the resolver treats that as
  * anonymous rather than minting an identity with no id.
  */
-const deriveUserId = (claims: AccessClaims): string | undefined => {
-    const sub = typeof claims.sub === "string" && claims.sub.length > 0 ? claims.sub : undefined;
-
-    return sub ?? claims.email ?? claims.common_name;
-};
+const deriveUserId = (claims: AccessClaims): string | undefined => nonEmpty(claims.sub) ?? nonEmpty(claims.email) ?? nonEmpty(claims.common_name);
 
 /**
  * Build the resolved identity from verified claims. Promotes the common Access
@@ -29,7 +34,7 @@ const deriveUserId = (claims: AccessClaims): string | undefined => {
  */
 const toIdentity = (claims: AccessClaims, mapClaims?: CreateAccessResolverOptions["mapClaims"]): ResolvedAccessIdentity | null => {
     const overrides = mapClaims?.(claims) ?? {};
-    const userId = typeof overrides.userId === "string" ? overrides.userId : deriveUserId(claims);
+    const userId = nonEmpty(overrides.userId) ?? deriveUserId(claims);
 
     if (userId === undefined) {
         return ANONYMOUS;
@@ -67,13 +72,18 @@ const toIdentity = (claims: AccessClaims, mapClaims?: CreateAccessResolverOption
  * });
  * ```
  */
-export const createAccessResolver =
-    (options: CreateAccessResolverOptions): ResolveIdentityFunction =>
-    async (request: Request): Promise<ResolvedAccessIdentity | null> => {
+export const createAccessResolver = (options: CreateAccessResolverOptions): ResolveIdentityFunction => {
+    // Validate the static config eagerly so a broken deployment (unset teamDomain
+    // or aud) fails fast here at wiring time instead of degrading to
+    // silent-anonymous — and thus RLS-denied — on every request with no signal.
+    assertVerifyOptions(options);
+
+    return async (request: Request): Promise<ResolvedAccessIdentity | null> => {
         const claims = await verifyRequest(request, options);
 
         return claims === undefined ? ANONYMOUS : toIdentity(claims, options.mapClaims);
     };
+};
 
 /**
  * Compose several `resolveIdentity` adapters into one: each is tried in order

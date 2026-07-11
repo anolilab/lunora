@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { Schema } from "@lunora/server";
 
 import { copycat, setHashKey } from "./copycat";
@@ -165,14 +166,33 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
     setHashKey(seed);
 
     const specs = introspectSchema(schema);
+
+    // Surface an explicit error for a typo'd table rather than silently seeding
+    // nothing. The CLI guards `--table` upstream, but the testing adapter and any
+    // direct `seedPlan` caller would otherwise get a confusing empty plan.
+    if (only !== undefined) {
+        const known = new Set(specs.map((spec) => spec.name));
+
+        for (const name of only) {
+            if (!known.has(name)) {
+                const available = specs.map((spec) => spec.name).join(", ");
+
+                throw new LunoraError("BAD_REQUEST", `unknown table "${name}" in seed \`only\` — schema defines: ${available || "(no tables)"}`);
+            }
+        }
+    }
+
     const requested = new Set(only ?? specs.map((spec) => spec.name));
-    // Pull in transitive FK parents so child foreign keys resolve, but skip any
-    // parent fully covered by `existingIds` unless it was requested outright.
-    // A parent table is considered "covered" by existingIds only when it supplies
-    // at least one id. An empty array means the caller sampled the table but found
-    // no rows — treating that as covered would leave required FKs with no pool to
-    // draw from, producing dangling placeholder ids.
-    const selected = new Set([...fkParentClosure(specs, requested)].filter((table) => requested.has(table) || (existingIds[table] ?? []).length === 0));
+    // Parents fully covered by `existingIds` (and not requested outright) are not
+    // seeded, so the FK closure must also stop traversing *through* them — pulling
+    // in a covered parent's own parents would seed grandparent tables nobody
+    // requested and nothing references. A table counts as covered only when it
+    // supplies at least one id; an empty array means the caller sampled the table
+    // but found no rows, so its FKs still need a freshly-seeded pool.
+    const covered = new Set(Object.keys(existingIds).filter((table) => !requested.has(table) && (existingIds[table] ?? []).length > 0));
+    const selected = new Set(
+        [...fkParentClosure(specs, requested, covered)].filter((table) => requested.has(table) || (existingIds[table] ?? []).length === 0),
+    );
     const order = orderTables(specs, selected);
     const specByName = new Map(specs.map((spec) => [spec.name, spec]));
 

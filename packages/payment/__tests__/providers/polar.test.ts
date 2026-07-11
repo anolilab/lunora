@@ -95,6 +95,49 @@ describe("polar adapter", () => {
         expect(created[0]?.products).toEqual(["prod_1"]);
     });
 
+    it("binds the checkout to the reference's customer instead of orphaning it", async () => {
+        expect.assertions(4);
+
+        const created: Record<string, unknown>[] = [];
+        const adapter = createPolarAdapter({ client: makeClient(created), webhookSecret: SECRET });
+
+        // The facade passes the stored/minted customer id; the adapter must attach it (else Polar mints a
+        // second orphan customer at completion, leaving the stored customer with no subscription).
+        await adapter.createCheckout({
+            cancelUrl: "https://x/cancel",
+            customerId: "pcus_1",
+            email: "a@b.test",
+            mode: "subscription",
+            priceId: "prod_1",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        });
+
+        expect(created[0]?.customerId).toBe("pcus_1");
+        expect(created[0]?.externalCustomerId).toBe("user_1");
+        // The cancel URL is wired onto Polar's return (back-button) URL rather than dropped.
+        expect(created[0]?.returnUrl).toBe("https://x/cancel");
+        // With a customer already bound, email is not re-sent as a pre-fill.
+        expect(created[0]?.customerEmail).toBeUndefined();
+    });
+
+    it("recovers the referenceId from order metadata in getPaymentStatus (reconcile must not orphan the row)", async () => {
+        expect.assertions(1);
+
+        const client = makeClient();
+        // Polar copies checkout metadata onto the order; the status read must surface it, not blank it.
+        (client as { orders: { get: unknown } }).orders = {
+            get: async () => {
+                return { currency: "usd", id: "ord_1", metadata: { referenceId: "user_1" }, status: "paid", totalAmount: 2500 };
+            },
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+
+        const session = await adapter.getPaymentStatus("ord_1");
+
+        expect(session.referenceId).toBe("user_1");
+    });
+
     it("normalizes a verified order.paid webhook (Standard Webhooks scheme)", async () => {
         expect.assertions(6);
 

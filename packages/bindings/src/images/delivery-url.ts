@@ -18,6 +18,14 @@ import type { TransformOptions } from "./types";
 
 const ABSOLUTE_URL_RE = /^[a-z][a-z\d+\-.]*:\/\//i;
 
+/**
+ * Characters a transform value may not contain: `,`/`=` are the option and
+ * key-value separators of the `/cdn-cgi/image/&lt;opts>/` form, and `#`/`?`/`/`
+ * are URL-structural (fragment / query / path-segment delimiters) that would
+ * silently corrupt the delivery URL if spliced in raw.
+ */
+const FORBIDDEN_VALUE_CHARS = [",", "=", "#", "?", "/"];
+
 const stripTrailingSlash = (value: string): string => (value.endsWith("/") ? value.slice(0, -1) : value);
 
 const stripLeadingSlash = (value: string): string => (value.startsWith("/") ? value.slice(1) : value);
@@ -37,17 +45,22 @@ const serializeTransform = (transform: TransformOptions): string =>
         .map(([key, value]) => {
             const serialized = String(value);
 
-            // The `/cdn-cgi/image/<opts>/` form delimits options with `,` and
-            // separates key from value with `=`. A value carrying either char
-            // would break out of its option and silently corrupt the URL (the
-            // CDN can't represent a raw `,`/`=` inside a value), so fail loud
-            // instead of emitting a wrong transform. Colors must use the hex
-            // form (e.g. `%23RRGGBB`), not `rgb(r,g,b)`.
-            if (serialized.includes(",") || serialized.includes("=")) {
+            // The `/cdn-cgi/image/<opts>/<source>` form splices option values
+            // verbatim into the URL path. `,` and `=` are the option / key-value
+            // separators; `#`, `?`, and `/` are URL-structural — a raw `#` starts
+            // the fragment (swallowing the source path), `?` starts the query,
+            // and `/` splits the options segment. Any of them silently corrupts
+            // the URL (wrong image / 404), so fail loud instead of emitting a
+            // broken transform. Values carrying these chars must be percent-
+            // encoded by the caller — for colors use `%23RRGGBB`, never the raw
+            // `#RRGGBB` or `rgb(r,g,b)`.
+            const offendingChar = FORBIDDEN_VALUE_CHARS.find((char) => serialized.includes(char));
+
+            if (offendingChar !== undefined) {
                 throw new LunoraError(
                     "INTERNAL",
-                    `@lunora/bindings/images: transform option \`${key}\` value \`${serialized}\` contains a \`,\` or \`=\`, which the /cdn-cgi/image/ option list cannot represent` +
-                        " (these are the option/key-value separators). For colors, use the hex form (e.g. `#RRGGBB`/`%23RRGGBB`) instead of `rgb(r,g,b)`.",
+                    `@lunora/bindings/images: transform option \`${key}\` value \`${serialized}\` contains a \`${offendingChar}\`, which the /cdn-cgi/image/ option path cannot represent` +
+                        " (`,`/`=` are the option/key-value separators; `#`/`?`/`/` are URL-structural). Percent-encode the value — for colors use `%23RRGGBB`, not `#RRGGBB` or `rgb(r,g,b)`.",
                 );
             }
 

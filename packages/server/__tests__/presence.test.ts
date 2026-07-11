@@ -384,6 +384,30 @@ describe("definePresence", () => {
         ).rejects.toThrow(/limit/u);
     });
 
+    it("heartbeat measures the data cap in UTF-8 bytes, not UTF-16 code units", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+
+        // 2000 CJK chars: 2000 UTF-16 code units (well under the 4096 cap by the
+        // old `.length` check) but ~6000 UTF-8 bytes (over it). The byte-based
+        // cap must reject this; a code-unit cap would have let it through.
+        const multibyte = "中".repeat(2000);
+
+        expect(new TextEncoder().encode(multibyte).length).toBeGreaterThan(4096);
+
+        await expect(
+            presence.functions.heartbeat.handler(makeMutationContext(db, "user-1"), {
+                data: { blob: multibyte },
+                roomId: "room-1",
+                sessionId: "sess-1",
+            }),
+        ).rejects.toThrow(/limit/u);
+    });
+
     it("disconnect does not evict a row owned by a different identity", async () => {
         expect.assertions(1);
 

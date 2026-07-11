@@ -1,5 +1,6 @@
 import { applyOptimisticLayer } from "./optimistic-layers";
-import type { SubscriptionRegistry, SubscriptionState } from "./subscription";
+import type { SubscriptionState } from "./subscription";
+import { SubscriptionRegistry } from "./subscription";
 import type { ArgsOf, FunctionReference, ReturnOf } from "./types";
 
 /**
@@ -54,30 +55,27 @@ export type OptimisticUpdate<Args> = (localStore: OptimisticLocalStore, args: Ar
 export const createLocalStore = (
     subscriptions: SubscriptionRegistry,
     shardKey: string | undefined,
-    stableStringify: (value: unknown) => string,
 ): { confirms: ((commitCursor: number | undefined) => void)[]; rollbacks: (() => void)[]; store: OptimisticLocalStore } => {
     const confirms: ((commitCursor: number | undefined) => void)[] = [];
     const rollbacks: (() => void)[] = [];
 
     // Resolve the live subscription for one (fn, args) pair on the mutation's
-    // shard. Subscriptions are keyed by stable-stringified args, so an
-    // optimistic patch only lands on the exact query variant it names.
-    const findState = (functionRef: string, argsKey: string): SubscriptionState | undefined => {
-        for (const state of subscriptions.all()) {
-            if (state.fn.__lunoraRef === functionRef && state.shardKey === shardKey && state.argsKey === argsKey) {
-                return state;
-            }
-        }
-
-        return undefined;
-    };
+    // shard via the registry's own composite key — an O(1) lookup that also
+    // shares the registry's `shardKey ?? ""` normalization, so a mutation fired
+    // with `undefined` matches a subscription registered with `""` (and vice
+    // versa). Mirrors the single-query `applyOptimisticUpdates` path, which was
+    // likewise converted off an O(N) scan with a strict-`===` shardKey compare.
+    const findState = (functionRef: string, args: Record<string, unknown>): SubscriptionState | undefined =>
+        subscriptions.get(SubscriptionRegistry.key(functionRef, args, shardKey));
 
     const store: OptimisticLocalStore = {
         getAllQueries: <F extends FunctionReference>(function_: F): { args: ArgsOf<F>; value: ReturnOf<F> | undefined }[] => {
             const matches: { args: ArgsOf<F>; value: ReturnOf<F> | undefined }[] = [];
 
             for (const state of subscriptions.all()) {
-                if (state.fn.__lunoraRef === function_.__lunoraRef && state.shardKey === shardKey) {
+                // Normalize both sides (`?? ""`) so the shard filter matches the
+                // registry key semantics `findState` relies on above.
+                if (state.fn.__lunoraRef === function_.__lunoraRef && (state.shardKey ?? "") === (shardKey ?? "")) {
                     matches.push({ args: state.args as ArgsOf<F>, value: state.lastValue as ReturnOf<F> | undefined });
                 }
             }
@@ -85,12 +83,12 @@ export const createLocalStore = (
             return matches;
         },
         getQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>): ReturnOf<F> | undefined => {
-            const state = findState(function_.__lunoraRef, stableStringify(args ?? {}));
+            const state = findState(function_.__lunoraRef, args ?? {});
 
             return state?.lastValue as ReturnOf<F> | undefined;
         },
         setQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, value: ReturnOf<F> | undefined): void => {
-            const state = findState(function_.__lunoraRef, stableStringify(args ?? {}));
+            const state = findState(function_.__lunoraRef, args ?? {});
 
             if (!state) {
                 return;

@@ -119,7 +119,9 @@ const orderToSession = (input: unknown): PaymentSession => {
         createdAt: now,
         id: readString(order, "id") ?? "",
         provider: "polar",
-        referenceId: "",
+        // Polar copies checkout metadata onto the order, so recover the framework-pinned `referenceId`
+        // rather than blanking it — a reconcile sweep would otherwise orphan the row from `by_reference`.
+        referenceId: referenceFromMetadata(order) ?? "",
         refundedAmount: state === "refunded" ? amount : zeroMoney(currency),
         state,
         updatedAt: now,
@@ -214,10 +216,18 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
             const checkout = await client.checkouts.create({
-                customerEmail: undefined,
+                // Bind the checkout to the customer the facade already reused/minted for this reference,
+                // else Polar mints a SECOND orphan customer at completion (leaving the stored customer
+                // with no subscription — its portal empty, its metered usage misrouted). `externalCustomerId`
+                // carries our reference for the direct-adapter path; `customerEmail` pre-fills when neither is known.
+                customerEmail: input.customerId ? undefined : input.email,
+                customerId: input.customerId,
+                externalCustomerId: input.referenceId,
                 // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
                 metadata: { ...input.metadata, referenceId: input.referenceId },
                 products: [input.priceId],
+                // Polar shows a back button to this URL; map the caller's cancel URL onto it.
+                returnUrl: input.cancelUrl,
                 successUrl: input.successUrl,
             });
 

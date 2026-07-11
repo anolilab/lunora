@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { stableStringify } from "../../../shared/stable-key";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import createInMemoryBookmarkStorage from "./bookmark";
@@ -3198,7 +3199,7 @@ class LunoraClient {
         optimisticRollbacks: (() => void)[],
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
     ): void {
-        const { confirms, rollbacks, store } = createLocalStore(this.subscriptions, shardKey, stableStringify);
+        const { confirms, rollbacks, store } = createLocalStore(this.subscriptions, shardKey);
 
         try {
             optimisticUpdate(store, args);
@@ -3706,6 +3707,22 @@ class LunoraClient {
         this.emitConnectionStatus();
         this.markShardPendingAck(conn.shardKey);
 
+        // Fail every in-flight stream bound to this shard. A stream whose start
+        // frame was already sent lost its server-side iterator when the socket
+        // dropped and can't resume, so a consumer's `for await` would otherwise
+        // hang forever on a next() that never settles (streams are failed on
+        // close()/error/overflow but a socket bounce is the common termination).
+        // Stream-start frames still queued in `pendingStreams` were never sent,
+        // so they legitimately ride the next reconnect — exclude those ids.
+        const pendingStreamIds = new Set((conn.pendingStreams ?? []).map((message) => (message as { id?: string }).id));
+
+        for (const [id, stream] of this.streams) {
+            if (connectionKey(stream.shardKey) === connectionKey(conn.shardKey) && !pendingStreamIds.has(id)) {
+                stream.handle.fail(new LunoraError("STREAM_DISCONNECTED", "stream terminated: WebSocket disconnected"));
+                this.streams.delete(id);
+            }
+        }
+
         if (this.WebSocketImpl === undefined) {
             return;
         }
@@ -3952,16 +3969,10 @@ class LunoraClient {
         // A buffer is dropped at its `pokeEnd`; one whose socket drops mid-poke
         // (no `pokeEnd`) is abandoned and the server re-seeds on resume, so it
         // would otherwise linger forever. Bound the map by evicting the oldest
-        // entry (insertion order) once it exceeds the cap — abandoned buffers are
-        // always the oldest, and live pokes resolve within a few frames, so this
-        // only ever reclaims dead buffers in practice.
-        if (this.pokeBuffers.size >= LunoraClient.MAX_POKE_BUFFERS) {
-            const oldest = this.pokeBuffers.keys().next().value;
-
-            if (oldest !== undefined) {
-                this.pokeBuffers.delete(oldest);
-            }
-        }
+        // entry once it exceeds the cap — abandoned buffers are always the oldest,
+        // and live pokes resolve within a few frames, so this only ever reclaims
+        // dead buffers in practice.
+        evictOldestEntry(this.pokeBuffers, LunoraClient.MAX_POKE_BUFFERS);
 
         // Open a buffer for this poke. Parts accumulate per shape and apply
         // atomically at `pokeEnd`, so a socket dropping mid-poke leaves the view
@@ -4310,13 +4321,25 @@ class LunoraClient {
             return null;
         }
 
-        // Two independent 32-bit passes (FNV-1a + djb2) give a ~64-bit digest, so
-        // two distinct equal-length tokens are astronomically unlikely to share a
-        // fingerprint. A single 32-bit hash collides ~1-in-4e9 per equal-length
-        // pair — enough that, on a shared device, user B could hydrate A's cached
-        // reads. Different algorithms (not the same FNV with a different seed, which
-        // would be affine-related) keep the two passes genuinely independent.
-        // Still synchronous (no crypto) and stable across surrogate pairs.
+        return this.hashToken(token);
+    }
+
+    /**
+     * Stable token-hash fingerprint of a bearer token (the `&lt;len>:&lt;fnv>:&lt;djb2>`
+     * format a token-stamped queued write carries). Extracted so the replay gate
+     * can recompute the hash of the current credential and recognise a write
+     * stamped under it — even after the fingerprint was relabelled to a subject.
+     *
+     * Two independent 32-bit passes (FNV-1a + djb2) give a ~64-bit digest, so
+     * two distinct equal-length tokens are astronomically unlikely to share a
+     * fingerprint. A single 32-bit hash collides ~1-in-4e9 per equal-length
+     * pair — enough that, on a shared device, user B could hydrate A's cached
+     * reads. Different algorithms (not the same FNV with a different seed, which
+     * would be affine-related) keep the two passes genuinely independent.
+     * Still synchronous (no crypto) and stable across surrogate pairs.
+     */
+    // eslint-disable-next-line class-methods-use-this -- pure helper; a method for locality with identityFingerprint, reads no shared state
+    private hashToken(token: string): string {
         let fnv = 0x81_1c_9d_c5;
         let djb2 = 5381;
 
@@ -4334,6 +4357,30 @@ class LunoraClient {
         // encode to the same string via variable-width concatenation.
         // eslint-disable-next-line no-bitwise -- coerce both accumulators to unsigned 32-bit integers
         return `${token.length.toString(36)}:${(fnv >>> 0).toString(36)}:${(djb2 >>> 0).toString(36)}`;
+    }
+
+    /**
+     * True when `stamped` is a token-hash of the SAME credential still held now,
+     * even though the live identity has since been relabelled to a subject. Covers
+     * `setAuthToken(token, userId)` where the subject resolved a tick after the
+     * token was set: a write persisted (or requeued) under the token hash must
+     * still replay — the credential never changed, only its label — instead of
+     * being dropped as an identity mismatch. This is the durable counterpart to
+     * {@link restampQueuedIdentity}, which only relabels the in-memory live stamp
+     * (consumed on the first flush) and never touches `item.identity` or the
+     * persisted record, so a reload or a transient-failure requeue would otherwise
+     * fall back to the stale token-hash and wrongly reject the same user's write.
+     */
+    private isSameCredentialUnderTokenHash(stamped: string | null): boolean {
+        // Only a token-hash stamp qualifies — never a `subj:` label or the
+        // signed-out `null` sentinel (a token can't alias either namespace).
+        if (stamped === null || stamped.startsWith("subj:")) {
+            return false;
+        }
+
+        const token = this.authToken;
+
+        return token === null ? false : this.hashToken(token) === stamped;
     }
 
     /**
@@ -4509,7 +4556,13 @@ class LunoraClient {
         const liveStamp = item.id === undefined ? undefined : this.queuedIdentities.get(item.id);
         const stamped = liveStamp === undefined ? item.identity : liveStamp;
 
-        if (stamped !== undefined && stamped !== currentIdentity) {
+        // A stamp that mismatches the current identity is still replayable when it
+        // is a token-hash of the credential still held now — the subject label
+        // resolved after the write was stamped/persisted, but the credential never
+        // changed (setAuthToken's documented re-stamp promise). Without this, a
+        // reload or a transient-failure requeue falls back to the stale token-hash
+        // and wrongly rejects the same user's durable write.
+        if (stamped !== undefined && stamped !== currentIdentity && !this.isSameCredentialUnderTokenHash(stamped)) {
             this.queuedIdentities.delete(item.id ?? "");
             this.unpersist(item.id);
 

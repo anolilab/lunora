@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { LunoraError } from "@lunora/errors";
 import { queueBindingName, queueDefaultName } from "@lunora/queue";
 import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
@@ -165,6 +166,45 @@ const queuesFromSource = (source: SourceFile): QueueIR[] => {
 };
 
 /**
+ * Reject queues whose deployed `name` or `bindingName` collide across exports —
+ * both flow into wrangler (`queues.producers[]`/`consumers[]`) and the
+ * `LUNORA_QUEUE_REGISTRY` object literal, so a `name` collision emits conflicting
+ * wrangler entries (push+pull) or a duplicate registry key (TS1117), and a
+ * `bindingName` collision (e.g. `myQueue`/`myQUEUE` both → `QUEUE_MY_QUEUE`)
+ * clobbers a producer binding. Mirrors the cron/migration uniqueness guards.
+ */
+const assertUniqueNames = (queues: ReadonlyArray<QueueIR>): void => {
+    const seenNames = new Map<string, string>();
+    const seenBindings = new Map<string, string>();
+
+    for (const queue of queues) {
+        const priorName = seenNames.get(queue.name);
+
+        if (priorName !== undefined) {
+            throw new LunoraError(
+                "DUPLICATE_QUEUE_NAME",
+                `Duplicate queue name "${queue.name}": produced by both "${priorName}" and "${queue.exportName}". Deployed queue names must be unique across the project.`,
+                { status: 500 },
+            );
+        }
+
+        seenNames.set(queue.name, queue.exportName);
+
+        const priorBinding = seenBindings.get(queue.bindingName);
+
+        if (priorBinding !== undefined) {
+            throw new LunoraError(
+                "DUPLICATE_QUEUE_BINDING",
+                `Duplicate queue binding "${queue.bindingName}": produced by both "${priorBinding}" and "${queue.exportName}". Queue export names must yield unique binding names.`,
+                { status: 500 },
+            );
+        }
+
+        seenBindings.set(queue.bindingName, queue.exportName);
+    }
+};
+
+/**
  * Discover every queue the project declares: exported `defineQueue()` calls in
  * `lunora/queues.ts`. Returns `[]` when the file doesn't exist. Only the
  * wrangler-relevant literals (`name`/`mode`/batch tuning) are read; the handler
@@ -181,6 +221,7 @@ const discoverQueues = (project: Project, lunoraDirectory: string): QueueIR[] =>
     const queues = queuesFromSource(source);
 
     queues.sort((a, b) => a.exportName.localeCompare(b.exportName));
+    assertUniqueNames(queues);
 
     return queues;
 };
