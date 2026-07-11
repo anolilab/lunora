@@ -13,7 +13,7 @@ Legend: ✅ shipped here · 🔨 code-tractable now (no live infra needed) ·
 
 ## A. Deploy pipeline
 
-### A1. Blue/green deploys + rollback (🔨 — highest leverage)
+### A1. Blue/green deploys + rollback (✅ shipped)
 
 **Today:** `POST /v1/deploy` uploads the bundle over the _same_ script name; a
 bad deploy replaces the good one instantly and there is nothing to roll back to.
@@ -34,7 +34,7 @@ bad deploy replaces the good one instantly and there is nothing to roll back to.
   scripts per project; the preview-cleanup cron also prunes superseded scripts
   beyond the retention window.
 
-### A2. Deployment timing state machine (🔨)
+### A2. Deployment timing state machine (✅ shipped)
 
 **Today:** a single `status` column; no history of _when_ transitions happened.
 
@@ -43,7 +43,7 @@ bad deploy replaces the good one instantly and there is nothing to roll back to.
 `updateStatus`. Queue time, provision time, and time-to-live become dashboard
 columns for free.
 
-### A3. Server-side builds + build logs (🔨 core, 🌐 execution)
+### A3. Server-side builds + build logs (✅ core shipped, 🌐 execution)
 
 **Today:** builds happen on the developer's machine; the platform never builds.
 GitHub webhook only parses PR events into preview _intents_.
@@ -66,7 +66,7 @@ GitHub webhook only parses PR events into preview _intents_.
   logs, emit the bundle. The runner's container execution is 🌐; everything
   around it (tables, lease claim, log streaming, dedup, status flow) is 🔨.
 
-### A4. Push-to-deploy via GitHub App (🔨 model + webhook, 🌐 App registration)
+### A4. Push-to-deploy via GitHub App (✅ model + webhook shipped, 🌐 App registration)
 
 **Today:** HMAC-verified webhook parses `pull_request` events only; no
 installation model; no push handling.
@@ -78,7 +78,7 @@ deploy. PR events keep creating TTL'd previews, now built server-side too.
 
 ## B. Traffic layer
 
-### B1. Custom domains (🔨 model/flow, 🌐 cert issuance)
+### B1. Custom domains (✅ model/flow shipped, 🌐 cert issuance)
 
 **Today:** `customDomains` is a plan _feature flag_ that nothing implements.
 
@@ -97,7 +97,7 @@ deploy. PR events keep creating TTL'd previews, now built server-side too.
 - Dispatcher: hostname → `domains` → project → active deployment (A1 pointer),
   with the same cached lookup pattern as the plan resolver.
 
-### B2. Tenant runtime logs (🔨 ingest/query, 🌐 tail-worker attach)
+### B2. Tenant runtime logs (✅ ingest/query shipped, 🌐 tail-worker attach)
 
 **Today:** nothing observes a deployed tenant worker.
 
@@ -108,7 +108,7 @@ gated). `tenantLogs` table with a retention cap + cleanup cron; cursor-paginated
 D1 is fine at launch volume; the ingest seam lets us re-point to Analytics
 Engine later without touching consumers.
 
-### B3. Debug header (🔨, trivial)
+### B3. Debug header (✅ shipped)
 
 `X-Lunora-Id: {cell}:{script}` stamped by the dispatcher on every response
 (Zeitwork's `X-Zeitwork-Id`) — turns "which deployment served this?" support
@@ -116,7 +116,7 @@ tickets into a copy-paste.
 
 ## C. Money & abuse
 
-### C1. Spend caps + suspension (🔨)
+### C1. Spend caps + suspension (✅ shipped)
 
 **Today:** per-invocation CPU/subrequest limits only; nothing caps aggregate
 monthly spend; a compromised free account can rack up unbounded usage.
@@ -152,7 +152,7 @@ Data-plane export/import RPCs already exist in the framework; the missing part
 is the one-command CLI packaging (export all shards + D1 + R2 + scaffold a BYO
 `wrangler.jsonc`). Portability is the trust feature that eases adoption.
 
-### D3. Right-to-erasure / org offboarding (🔨)
+### D3. Right-to-erasure / org offboarding (✅ shipped)
 
 Delete-org must purge deployments (scripts, D1, R2), secrets, logs, backups
 after a retention window, with an audit trail. GDPR obligation.
