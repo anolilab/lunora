@@ -4,8 +4,8 @@ import { admin, passkey, twoFactor } from "@lunora/auth/plugins";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
 import { createMailerFromEnv } from "@lunora/mail";
-import type { PaymentsFromContextOptions, StripeClientLike } from "@lunora/payment";
-import { createStripeAdapter } from "@lunora/payment";
+import type { PaymentsFromContextOptions } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment/stripe";
 import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@lunora/runtime";
 import { createWorker } from "@lunora/runtime";
 // eslint-disable-next-line import/no-named-as-default -- `stripe`'s default export is the `Stripe` class; this is its documented import form
@@ -88,13 +88,14 @@ const paymentConfig = (env: ShardEnv): PaymentsFromContextOptions => {
         cachedPayment = {
             config: {
                 adapter: createStripeAdapter({
-                    // A real `Stripe` instance satisfies the structural client; the cast
-                    // keeps the package free of a hard `stripe` type dependency. A
-                    // placeholder key keeps construction from throwing when billing isn't
-                    // configured — live calls then fail with a clear Stripe auth error.
+                    // A real `Stripe` instance structurally satisfies the adapter's
+                    // `StripeClientLike` port (its members are `unknown`, so the payment
+                    // package needs no hard `stripe` type dependency). A placeholder key
+                    // keeps construction from throwing when billing isn't configured —
+                    // live calls then fail with a clear Stripe auth error.
                     client: new Stripe(env.STRIPE_SECRET_KEY ?? "sk_unconfigured", {
                         httpClient: Stripe.createFetchHttpClient(),
-                    }) as unknown as StripeClientLike,
+                    }),
                     webhookSecret: env.STRIPE_WEBHOOK_SECRET ?? "",
                 }),
                 authorize: () => true,
