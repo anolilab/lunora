@@ -81,6 +81,10 @@ With no endpoint resolvable the exporter is a **silent no-op** (`telemetry.enabl
 === false`) — `trace` still runs your work, it just records nothing. The same code
 runs unchanged locally and in the cloud.
 
+Each POST is bounded by `timeoutMs` (default 10s), so a hung collector aborts
+instead of pinning a send in flight and stalling `flush()`; failures are handed to
+the optional `onError` callback and never break the container.
+
 Thread the endpoint/token into the container the same way any other config
 reaches it — declare them on `defineContainer`:
 

@@ -18,7 +18,8 @@
  * third party. Scrub or redact before enabling it against an external service
  * if that is a concern.
  */
-import type { LogEvent, LogLevel, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
+import { encodeAttribute, mergeHeaders, OTLP_SEVERITY, otlpRandomHex, otlpUnixNano, wrapResourceLogs, wrapResourceSpans } from "../../../shared/otlp";
+import type { LogEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 
 /** Shared shape for sinks that can be limited to error events only. */
 interface OnlyErrorsOption {
@@ -29,128 +30,25 @@ interface OnlyErrorsOption {
 /** Returns true when the event should be skipped under an `onlyErrors` filter. */
 const shouldSkip = (event: ObservabilityEvent, onlyErrors: boolean | undefined): boolean => onlyErrors === true && event.ok;
 
-/**
- * Case-insensitively merge `overrides` onto `defaults`, with `overrides`
- * winning. HTTP header names are case-insensitive, so a naive object spread of
- * `{ "content-type": ..., ...overrides }` would keep BOTH `content-type` and a
- * user-supplied `Content-Type` as distinct object keys; the `fetch`/`Headers`
- * constructor then *combines* them ("application/json, text/plain") instead of
- * letting the caller override. Normalising the key first guarantees a single,
- * caller-controlled value per header.
- */
-const mergeHeaders = (defaults: Record<string, string>, overrides: Record<string, string> | undefined): Record<string, string> => {
-    if (!overrides) {
-        return { ...defaults };
-    }
-
-    const merged: Record<string, string> = {};
-    const seen = new Map<string, string>();
-
-    for (const [name, value] of Object.entries(defaults)) {
-        const lower = name.toLowerCase();
-
-        seen.set(lower, name);
-        merged[name] = value;
-    }
-
-    for (const [name, value] of Object.entries(overrides)) {
-        const lower = name.toLowerCase();
-        const existing = seen.get(lower);
-
-        if (existing === undefined) {
-            seen.set(lower, name);
-            merged[name] = value;
-        } else {
-            // Replace the existing key's value in place so the override wins
-            // without introducing a second, differently-cased duplicate.
-            merged[existing] = value;
-        }
-    }
-
-    return merged;
-};
-
-/**
- * OTLP log severity numbers (`SeverityNumber` in the spec) keyed by Lunora
- * {@link LogLevel}. `log` has no distinct OTLP level, so it maps to INFO like a
- * plain `console.log`.
- */
-const OTLP_SEVERITY: Record<LogLevel, number> = {
-    debug: 5, // DEBUG
-    error: 17, // ERROR
-    info: 9, // INFO
-    log: 9, // INFO
-    warn: 13, // WARN
-};
-
-/** One OTLP `AnyValue` — the JSON encoding of a typed attribute value. */
-type OtlpAnyValue = { boolValue: boolean } | { doubleValue: number } | { intValue: string } | { stringValue: string };
-
-/** One OTLP `KeyValue` attribute. */
-interface OtlpAttribute {
-    key: string;
-    value: OtlpAnyValue;
-}
-
-const stringAttribute = (key: string, value: string): OtlpAttribute => {
-    return { key, value: { stringValue: value } };
-};
-
-const boolAttribute = (key: string, value: boolean): OtlpAttribute => {
-    return { key, value: { boolValue: value } };
-};
-
-/** OTLP int64 values are decimal strings in proto3 JSON. */
-const intAttribute = (key: string, value: number): OtlpAttribute => {
-    return { key, value: { intValue: String(Math.trunc(value)) } };
-};
-
-/**
- * Encode wall-clock milliseconds as an OTLP `*UnixNano` string. proto3 JSON
- * represents uint64 as a decimal string, and ms→ns is ×10^6, so the six
- * trailing zeros are exact — no `BigInt`, no float rounding.
- */
-const otlpUnixNano = (ms: number): string => `${String(Math.round(ms))}000000`;
-
-/**
- * A random 16-char-per-8-byte lowercase hex id. OTLP/JSON is explicit that
- * `trace_id`/`span_id` are hex strings (the one documented exception to proto3
- * JSON's base64 `bytes` encoding), so this is the correct on-wire form. Uses
- * the Web Crypto global (present in workerd and Node ≥18) — no Node built-in.
- */
-const otlpRandomHex = (bytes: number): string => {
-    const buffer = new Uint8Array(bytes);
-
-    crypto.getRandomValues(buffer);
-
-    let hex = "";
-
-    for (const byte of buffer) {
-        hex += byte.toString(16).padStart(2, "0");
-    }
-
-    return hex;
-};
-
 /** Build the OTLP trace-export body for one RPC dispatch event. */
 const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: number): unknown => {
-    const attributes: OtlpAttribute[] = [stringAttribute("lunora.function_path", event.functionPath), boolAttribute("lunora.ok", event.ok)];
+    const attributes = [encodeAttribute("lunora.function_path", event.functionPath), encodeAttribute("lunora.ok", event.ok)];
 
     if (event.shardKey !== undefined) {
-        attributes.push(stringAttribute("lunora.shard_key", event.shardKey));
+        attributes.push(encodeAttribute("lunora.shard_key", event.shardKey));
     }
 
     if (event.error) {
         // `error.type` is the OTel semantic-convention key; keep the numeric
         // HTTP-ish status under the lunora namespace.
-        attributes.push(stringAttribute("error.type", event.error.code), intAttribute("lunora.error_status", event.error.status));
+        attributes.push(encodeAttribute("error.type", event.error.code), encodeAttribute("lunora.error_status", event.error.status));
     }
 
     if (event.fanOut) {
         attributes.push(
-            stringAttribute("lunora.fanout.table", event.fanOut.table),
-            intAttribute("lunora.fanout.shards", event.fanOut.shards),
-            intAttribute("lunora.fanout.failed", event.fanOut.failed),
+            encodeAttribute("lunora.fanout.table", event.fanOut.table),
+            encodeAttribute("lunora.fanout.shards", event.fanOut.shards),
+            encodeAttribute("lunora.fanout.failed", event.fanOut.failed),
         );
     }
 
@@ -167,26 +65,19 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
         traceId: otlpRandomHex(16),
     };
 
-    return {
-        resourceSpans: [
-            {
-                resource: { attributes: [stringAttribute("service.name", serviceName)] },
-                scopeSpans: [{ scope: { name: "@lunora/runtime" }, spans: [span] }],
-            },
-        ],
-    };
+    return wrapResourceSpans(span, "@lunora/runtime", serviceName);
 };
 
 /** Build the OTLP log-export body for one application log line. */
 const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
-    const attributes: OtlpAttribute[] = [stringAttribute("lunora.function_path", event.functionPath)];
+    const attributes = [encodeAttribute("lunora.function_path", event.functionPath)];
 
     if (event.shardKey !== undefined) {
-        attributes.push(stringAttribute("lunora.shard_key", event.shardKey));
+        attributes.push(encodeAttribute("lunora.shard_key", event.shardKey));
     }
 
     if (event.userId !== undefined) {
-        attributes.push(stringAttribute("lunora.user_id", event.userId));
+        attributes.push(encodeAttribute("lunora.user_id", event.userId));
     }
 
     const logRecord = {
@@ -197,14 +88,7 @@ const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
         timeUnixNano: otlpUnixNano(event.ts),
     };
 
-    return {
-        resourceLogs: [
-            {
-                resource: { attributes: [stringAttribute("service.name", serviceName)] },
-                scopeLogs: [{ logRecords: [logRecord], scope: { name: "@lunora/runtime" } }],
-            },
-        ],
-    };
+    return wrapResourceLogs(logRecord, "@lunora/runtime", serviceName);
 };
 
 /** POST an OTLP payload fire-and-forget, keeping it alive past the response when a request context is present. */
@@ -538,13 +422,9 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
 
     const tracesUrl = `${base}/v1/traces`;
     const logsUrl = `${base}/v1/logs`;
-    let mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers);
-
-    // Apply the `token` convenience last so it wins over any authorization in
-    // `headers`, matching the container exporter's precedence.
-    if (token !== undefined && token.length > 0) {
-        mergedHeaders = mergeHeaders(mergedHeaders, { authorization: `Bearer ${token}` });
-    }
+    // `token` is applied last (inside `mergeHeaders`) so it wins over any
+    // authorization in `headers`, matching the container exporter's precedence.
+    const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers, token);
 
     return {
         onLog: (event, context) => {

@@ -10,20 +10,41 @@
  *
  * Pure `fetch` over OTLP-over-HTTP (JSON) — no `@opentelemetry/*` dependency and
  * no Cloudflare imports — so it runs in any container and is unit-testable with
- * an injected `fetch`. Each span/log is one fire-and-forget POST; `flush()`
- * awaits in-flight sends before the process exits. Reaching the collector still
- * requires the container's egress allow-list to include its host (declare it on
- * `defineContainer({ allowedHosts })` or via `handle.egress.allow(host)`).
+ * an injected `fetch`. Each span/log is one fire-and-forget POST, bounded by a
+ * per-request timeout (`timeoutMs`) so a hung collector can never pin a send in
+ * flight; `flush()` awaits the in-flight sends before the process exits.
+ * Reaching the collector still requires the container's egress allow-list to
+ * include its host (declare it on `defineContainer({ allowedHosts })` or via
+ * `handle.egress.allow(host)`).
+ *
+ * The OTLP/JSON wire encoding is shared with the worker `otlpSink` via
+ * `shared/otlp.ts` — one contract, bundler-inlined into both packages.
  */
+import {
+    encodeAttribute,
+    encodeAttributes,
+    mergeHeaders,
+    OTLP_SEVERITY,
+    otlpRandomHex,
+    otlpUnixNano,
+    wrapResourceLogs,
+    wrapResourceSpans,
+} from "../../../shared/otlp";
 
 /** An attribute value carried on a span or log. */
 type ContainerAttributeValue = boolean | number | string;
 
 /**
- * A `fetch` implementation — defaults to the runtime global. Only the promise's
- * settlement matters to the exporter; the response body is never read.
+ * A `fetch` implementation — defaults to the runtime global. The exporter passes
+ * an abort `signal` (for the per-request timeout) and, once the promise settles,
+ * cancels the response `body` so Node/undici can release the socket for
+ * keep-alive reuse instead of leaving it occupied by an unread stream. It reads
+ * `ok`/`status` to detect a rejected export and nothing else from the response.
  */
-type OtelFetchLike = (input: string, init: { body: string; headers: Record<string, string>; method: string }) => Promise<{ ok: boolean; status: number }>;
+type OtelFetchLike = (
+    input: string,
+    init: { body: string; headers: Record<string, string>; method: string; signal?: AbortSignal },
+) => Promise<{ body?: { cancel: () => Promise<void> } | null; ok: boolean; status: number }>;
 
 /** A single span the container process asks the exporter to record. */
 interface ContainerSpanInput {
@@ -63,9 +84,14 @@ interface ContainerTelemetryOptions {
     onError?: (error: unknown) => void;
     /** `service.name` resource attribute; defaults to the `LUNORA_SERVICE_NAME` env var then `"lunora-container"`. */
     serviceName?: string;
+    /** Per-POST timeout in ms; a collector that never responds aborts after this so a stuck send can't stall `flush()`. Defaults to {@link DEFAULT_TIMEOUT_MS} (10s). */
+    timeoutMs?: number;
     /** Bearer token sent as an `Authorization: Bearer` header; defaults to the `LUNORA_OTLP_TOKEN` env var. */
     token?: string;
 }
+
+/** Default {@link ContainerTelemetryOptions.timeoutMs} — the OTLP-exporter-conventional 10s. */
+const DEFAULT_TIMEOUT_MS = 10_000;
 
 /** The exporter handle {@link createContainerTelemetry} returns. */
 interface ContainerTelemetry {
@@ -79,23 +105,6 @@ interface ContainerTelemetry {
     flush: () => Promise<void>;
     /** Time `run()`, recording a span named `name` (ok, or errored if it throws). Always runs `run()`, even when disabled. */
     trace: <T>(name: string, run: () => Promise<T>, attributes?: Record<string, ContainerAttributeValue>) => Promise<T>;
-}
-
-/** OTLP log severity numbers keyed by {@link ContainerLogInput.level}. */
-const SEVERITY: Record<NonNullable<ContainerLogInput["level"]>, number> = {
-    debug: 5, // DEBUG
-    error: 17, // ERROR
-    info: 9, // INFO
-    warn: 13, // WARN
-};
-
-/** One OTLP `AnyValue` — the JSON encoding of a typed attribute value. */
-type OtlpValue = { boolValue: boolean } | { doubleValue: number } | { intValue: string } | { stringValue: string };
-
-/** One OTLP `KeyValue` attribute. */
-interface OtlpAttribute {
-    key: string;
-    value: OtlpValue;
 }
 
 /**
@@ -123,85 +132,28 @@ const resolveFetch = (injected: OtelFetchLike | undefined): OtelFetchLike | unde
     return undefined;
 };
 
-/**
- * Encode ms as an OTLP `*UnixNano` string. proto3 JSON represents uint64 as a
- * decimal string, and ms→ns is ×10^6, so the six trailing zeros are exact.
- */
-const unixNano = (ms: number): string => `${String(Math.round(ms))}000000`;
-
-/**
- * A random lowercase hex id of `bytes` length. OTLP/JSON encodes `trace_id`/
- * `span_id` as hex strings (the one documented exception to proto3 JSON's
- * base64 `bytes` encoding). Uses the Web Crypto global (present in Node ≥19,
- * Bun, Deno) — no Node built-in import.
- */
-const randomHex = (bytes: number): string => {
-    const buffer = new Uint8Array(bytes);
-
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- the WebCrypto `crypto` global is stable in Node ≥19, Bun, Deno, and workerd; engines guarantee Node ≥22.15
-    crypto.getRandomValues(buffer);
-
-    let hex = "";
-
-    for (const byte of buffer) {
-        hex += byte.toString(16).padStart(2, "0");
-    }
-
-    return hex;
-};
-
-/** Encode one attribute, picking the OTLP value kind from the JS type. */
-const encodeAttribute = (key: string, value: ContainerAttributeValue): OtlpAttribute => {
-    if (typeof value === "boolean") {
-        return { key, value: { boolValue: value } };
-    }
-
-    if (typeof value === "number") {
-        // int64s are decimal strings in proto3 JSON; non-integers use doubleValue.
-        return Number.isInteger(value) ? { key, value: { intValue: String(value) } } : { key, value: { doubleValue: value } };
-    }
-
-    return { key, value: { stringValue: value } };
-};
-
-/** Encode an attribute bag into the OTLP `KeyValue` list. */
-const encodeAttributes = (attributes: Record<string, ContainerAttributeValue> | undefined): OtlpAttribute[] => {
-    if (attributes === undefined) {
-        return [];
-    }
-
-    return Object.entries(attributes).map(([key, value]) => encodeAttribute(key, value));
-};
-
 /** Build the OTLP trace-export body for one container span. */
 const traceBody = (span: ContainerSpanInput, serviceName: string): unknown => {
     const attributes = encodeAttributes(span.attributes);
 
     if (span.error?.type !== undefined) {
-        attributes.push({ key: "error.type", value: { stringValue: span.error.type } });
+        attributes.push(encodeAttribute("error.type", span.error.type));
     }
 
     const otlpSpan = {
         attributes,
-        endTimeUnixNano: unixNano(span.endMs),
+        endTimeUnixNano: otlpUnixNano(span.endMs),
         // SPAN_KIND_INTERNAL — the container's own work, not a server/client edge.
         kind: 1,
         name: span.name,
-        spanId: randomHex(8),
-        startTimeUnixNano: unixNano(span.startMs),
+        spanId: otlpRandomHex(8),
+        startTimeUnixNano: otlpUnixNano(span.startMs),
         // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
         status: span.error === undefined ? { code: 1 } : { code: 2, message: span.error.message },
-        traceId: randomHex(16),
+        traceId: otlpRandomHex(16),
     };
 
-    return {
-        resourceSpans: [
-            {
-                resource: { attributes: [{ key: "service.name", value: { stringValue: serviceName } }] },
-                scopeSpans: [{ scope: { name: "@lunora/container" }, spans: [otlpSpan] }],
-            },
-        ],
-    };
+    return wrapResourceSpans(otlpSpan, "@lunora/container", serviceName);
 };
 
 /** Build the OTLP log-export body for one container log line. */
@@ -211,48 +163,12 @@ const logBody = (log: ContainerLogInput, serviceName: string, nowMs: number): un
     const record = {
         attributes: encodeAttributes(log.attributes),
         body: { stringValue: log.message },
-        severityNumber: SEVERITY[level],
+        severityNumber: OTLP_SEVERITY[level],
         severityText: level.toUpperCase(),
-        timeUnixNano: unixNano(log.ts ?? nowMs),
+        timeUnixNano: otlpUnixNano(log.ts ?? nowMs),
     };
 
-    return {
-        resourceLogs: [
-            {
-                resource: { attributes: [{ key: "service.name", value: { stringValue: serviceName } }] },
-                scopeLogs: [{ logRecords: [record], scope: { name: "@lunora/container" } }],
-            },
-        ],
-    };
-};
-
-/**
- * Case-insensitively build the POST headers: a default `content-type`, the
- * caller's `overrides` (deduped by lowercased name so a `Content-Type` override
- * replaces rather than duplicates the default), and a bearer `authorization`
- * from `token` (which wins over any caller-supplied authorization).
- */
-const buildHeaders = (overrides: Record<string, string> | undefined, token: string | undefined): Record<string, string> => {
-    const headers: Record<string, string> = { "content-type": "application/json" };
-    const seen = new Map<string, string>([["content-type", "content-type"]]);
-
-    for (const [name, value] of Object.entries(overrides ?? {})) {
-        const lower = name.toLowerCase();
-        const existing = seen.get(lower);
-
-        if (existing === undefined) {
-            seen.set(lower, name);
-            headers[name] = value;
-        } else {
-            headers[existing] = value;
-        }
-    }
-
-    if (token !== undefined && token.length > 0) {
-        headers[seen.get("authorization") ?? "authorization"] = `Bearer ${token}`;
-    }
-
-    return headers;
+    return wrapResourceLogs(record, "@lunora/container", serviceName);
 };
 
 /**
@@ -275,8 +191,9 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     const enabled = endpoint !== undefined && endpoint.length > 0;
     const token = options.token ?? readEnv("LUNORA_OTLP_TOKEN");
     const serviceName = options.serviceName ?? readEnv("LUNORA_SERVICE_NAME") ?? "lunora-container";
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fetchImpl = resolveFetch(options.fetch);
-    const headers = buildHeaders(options.headers, token);
+    const headers = mergeHeaders({ "content-type": "application/json" }, options.headers, token);
 
     // Strip trailing slashes without a regex (ReDoS-linter friendly).
     let base = endpoint ?? "";
@@ -289,14 +206,10 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     const logsUrl = `${base}/v1/logs`;
     const inflight = new Set<Promise<void>>();
 
+    // Only reached from `emitSpan`/`emitLog`, which already gate on `enabled`, so
+    // the disabled path never builds a body or touches `fetch`.
     const send = (url: string, body: unknown): void => {
-        if (!enabled) {
-            return;
-        }
-
-        const post = fetchImpl;
-
-        if (post === undefined) {
+        if (fetchImpl === undefined) {
             options.onError?.(new TypeError("createContainerTelemetry: no `fetch` available — pass `fetch` in options for this runtime."));
 
             return;
@@ -307,7 +220,28 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
         // breaks the container.
         const dispatch = async (): Promise<void> => {
             try {
-                await post(url, { body: JSON.stringify(body), headers, method: "POST" });
+                // `AbortSignal.timeout` bounds the POST: a hung collector aborts
+                // after `timeoutMs` instead of pinning this send in `inflight` and
+                // stalling `flush()`. Its internal timer is unref'd, so it never
+                // keeps the container process alive on its own.
+                const response = await fetchImpl(url, { body: JSON.stringify(body), headers, method: "POST", signal: AbortSignal.timeout(timeoutMs) });
+
+                // A non-2xx collector response (bad token, wrong base path, payload
+                // too large, 5xx) is a real send failure the caller must be able to
+                // see — `onError` is the container's only telemetry feedback channel.
+                if (!response.ok) {
+                    options.onError?.(new Error(`createContainerTelemetry: OTLP export to ${url} failed with status ${String(response.status)}.`));
+                }
+
+                // Cancel the response body so Node/undici can return the socket to
+                // the keep-alive pool rather than leaving it occupied by an unread
+                // stream over a long-lived container run. A rejecting `cancel()` is
+                // not a send failure, so it is swallowed here rather than reported.
+                try {
+                    await response.body?.cancel();
+                } catch {
+                    // Best-effort socket release; ignore.
+                }
             } catch (error) {
                 options.onError?.(error);
             }
@@ -322,10 +256,18 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     };
 
     const emitSpan = (span: ContainerSpanInput): void => {
+        if (!enabled) {
+            return;
+        }
+
         send(tracesUrl, traceBody(span, serviceName));
     };
 
     const emitLog = (log: ContainerLogInput): void => {
+        if (!enabled) {
+            return;
+        }
+
         send(logsUrl, logBody(log, serviceName, Date.now()));
     };
 

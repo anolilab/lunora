@@ -350,4 +350,103 @@ describe(createContainerTelemetry, () => {
         }).not.toThrow();
         expect(onError).toHaveBeenCalledWith(expect.any(TypeError));
     });
+
+    it("cancels the response body so the socket can be released", async () => {
+        expect.assertions(2);
+
+        const cancel = vi.fn<() => Promise<void>>().mockResolvedValue();
+        const fetch: OtelFetchLike = async () => {
+            return { body: { cancel }, ok: true, status: 200 };
+        };
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        telemetry.emitLog({ message: "hi" });
+        await telemetry.flush();
+
+        expect(cancel).toHaveBeenCalledTimes(2);
+        // A response without a body (e.g. 204) must not throw.
+        expect(cancel).toHaveBeenCalledWith();
+    });
+
+    it("passes an abort signal on every POST", async () => {
+        expect.assertions(1);
+
+        let signal: AbortSignal | undefined;
+        const fetch: OtelFetchLike = async (_url, init) => {
+            signal = init.signal;
+
+            return { ok: true, status: 200 };
+        };
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        await telemetry.flush();
+
+        expect(signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it("aborts a hung POST after timeoutMs so flush can complete", async () => {
+        expect.assertions(3);
+
+        const onError = vi.fn<(error: unknown) => void>();
+        let signal: AbortSignal | undefined;
+        // Only settles when its abort signal fires — without the timeout, flush would hang forever.
+        const hanging: OtelFetchLike = (_url, init) => {
+            signal = init.signal;
+
+            return new Promise((_resolve, reject) => {
+                init.signal?.addEventListener("abort", () => {
+                    reject(new Error("aborted"));
+                });
+            });
+        };
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch: hanging, onError, timeoutMs: 5 });
+
+        telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        await telemetry.flush();
+
+        expect(onError).toHaveBeenCalledTimes(1);
+        // The bound came from the per-request timeout, not a manual abort.
+        expect(signal?.aborted).toBe(true);
+        expect((signal?.reason as Error).name).toBe("TimeoutError");
+    });
+
+    it("reports a non-2xx collector response to onError and still releases the socket", async () => {
+        expect.assertions(2);
+
+        const onError = vi.fn<(error: unknown) => void>();
+        const cancel = vi.fn<() => Promise<void>>().mockResolvedValue();
+        // A rejected export (bad token / wrong path / 5xx) resolves, but not ok.
+        const rejecting: OtelFetchLike = async () => {
+            return { body: { cancel }, ok: false, status: 401 };
+        };
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch: rejecting, onError });
+
+        telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        await telemetry.flush();
+
+        expect(onError).toHaveBeenCalledWith(expect.any(Error));
+        // The socket is released for keep-alive reuse even on a rejected export.
+        expect(cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("encodes non-finite and unsafe-integer attributes as valid OTLP", async () => {
+        expect.assertions(3);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        telemetry.emitSpan({ attributes: { big: 1e21, count: 3, ratio: Number.NaN }, endMs: 10, name: "op", startMs: 0 });
+        await telemetry.flush();
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        // NaN has no valid AnyValue → falls back to a string, not JSON `null`.
+        expect(attrValue(span.attributes, "ratio")).toStrictEqual({ stringValue: "NaN" });
+        // A value beyond 2^53 can't be a proto3 int64 decimal string → doubleValue.
+        expect(attrValue(span.attributes, "big")).toStrictEqual({ doubleValue: 1e21 });
+        // A safe integer stays an `intValue` decimal string.
+        expect(attrValue(span.attributes, "count")).toStrictEqual({ intValue: "3" });
+    });
 });
