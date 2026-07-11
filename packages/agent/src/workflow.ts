@@ -2,7 +2,7 @@ import type { WorkflowDefinition } from "@lunora/workflow";
 import { defineWorkflow } from "@lunora/workflow";
 
 import { runAgentLoop } from "./agent-loop";
-import { createAgentGenerate, createStreamGenerate } from "./generate";
+import { createAgentGenerate, createGraphExtract, createStreamGenerate } from "./generate";
 import { agentDefaultName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "./paths";
 import resolveAgentRun from "./resolve-run";
@@ -38,6 +38,11 @@ const compileAgentWorkflow = (
                 agent,
                 env: context.env,
                 exportName,
+                // Run-end graph extraction. Dormant unless the agent declares a
+                // `kind: "graph"` memory source AND the run carries an owner — the
+                // loop gates on both, so a semantic-only agent takes the
+                // byte-identical no-extraction path.
+                extractGraph: createGraphExtract(),
                 generate: createAgentGenerate(agent, context.env),
                 instanceId: context.event.instanceId,
                 params: context.params,

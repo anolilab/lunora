@@ -2,9 +2,19 @@ import type { AiBindingLike } from "@lunora/ai";
 import { createAi } from "@lunora/ai";
 import { LunoraError } from "@lunora/errors";
 import type { LanguageModel, LanguageModelUsage, ModelMessage, Tool } from "ai";
-import { generateText, Output, streamText, tool as aiTool } from "ai";
+import { generateText, jsonSchema, Output, streamText, tool as aiTool } from "ai";
 
-import type { AgentDefinition, AgentGenerate, AgentGenerateOptions, AgentModelInput, AgentStreamGenerate, AgentToolCall, AgentUsage } from "./types";
+import type {
+    AgentDefinition,
+    AgentGenerate,
+    AgentGenerateOptions,
+    AgentGraphExtract,
+    AgentGraphExtraction,
+    AgentModelInput,
+    AgentStreamGenerate,
+    AgentToolCall,
+    AgentUsage,
+} from "./types";
 
 /** Project AI SDK's `LanguageModelUsage` onto the loop's `AgentUsage` (defined fields only). */
 const toAgentUsage = (usage: LanguageModelUsage | undefined): AgentUsage | undefined => {
@@ -202,4 +212,74 @@ const createStreamGenerate = (agent: AgentDefinition, env: Record<string, unknow
     };
 };
 
-export { createAgentGenerate, createStreamGenerate, resolveAgentModel };
+/** JSON schema the extraction model fills — a compact entity/relation graph of the exchange. */
+const GRAPH_EXTRACTION_SCHEMA = jsonSchema<AgentGraphExtraction>({
+    additionalProperties: false,
+    properties: {
+        entities: {
+            description: "The distinct entities (people, orgs, places, things, concepts) named in the exchange.",
+            items: {
+                additionalProperties: false,
+                properties: {
+                    name: { description: "The entity's canonical name.", type: "string" },
+                    type: { description: "An optional coarse type, e.g. person, org, place, product.", type: "string" },
+                },
+                required: ["name"],
+                type: "object",
+            },
+            type: "array",
+        },
+        relations: {
+            description: "The directed relationships between the entities, as (src)-[label]->(dst) triples.",
+            items: {
+                additionalProperties: false,
+                properties: {
+                    confidence: { description: "Confidence in the relation, 0..1.", type: "number" },
+                    dst: { description: "The destination entity name (must appear in `entities`).", type: "string" },
+                    label: { description: "The relationship, a short snake_case verb phrase, e.g. works_at.", type: "string" },
+                    src: { description: "The source entity name (must appear in `entities`).", type: "string" },
+                },
+                required: ["src", "dst", "label"],
+                type: "object",
+            },
+            type: "array",
+        },
+    },
+    required: ["entities", "relations"],
+    type: "object",
+});
+
+/** Build the extraction prompt from the run's exchange (user input + final answer). */
+const buildExtractionPrompt = (userInput: string, assistantText: string): string =>
+    [
+        "Extract a knowledge graph of the durable facts stated in the following exchange.",
+        "Return the distinct entities and the directed relationships between them.",
+        "Only include facts actually stated — do not invent entities or relations. Prefer few, high-signal triples.",
+        "",
+        `User: ${userInput}`,
+        "",
+        `Assistant: ${assistantText}`,
+    ].join("\n");
+
+/**
+ * Build the production run-end graph-extraction seam over AI SDK `generateText`
+ * with an `Output.object` setting (the non-deprecated replacement for
+ * `generateObject`, and the same structured-output path the turn seams use). It
+ * resolves the (optionally cheaper) extraction model against the env, runs the
+ * model over {@link GRAPH_EXTRACTION_SCHEMA}, and returns the parsed
+ * `{ entities, relations }`. Wired by `compileAgentWorkflow` and called inside
+ * the loop's memoized `memory:extract` step.
+ */
+const createGraphExtract =
+    (): AgentGraphExtract =>
+    async ({ assistantText, env, model, userInput }) => {
+        const { output } = await generateText({
+            model: resolveAgentModel(model, env),
+            output: Output.object({ schema: GRAPH_EXTRACTION_SCHEMA }),
+            prompt: buildExtractionPrompt(userInput, assistantText),
+        });
+
+        return output;
+    };
+
+export { createAgentGenerate, createGraphExtract, createStreamGenerate, resolveAgentModel };

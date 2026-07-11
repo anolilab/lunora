@@ -577,6 +577,92 @@ Dispatching to a real action keeps retrieval inside a fully wired ctx —
 codegen-resolved vector bindings, RLS, observability — instead of
 re-plumbing vectors into the workflow runtime.
 
+### Agentic retrieval (`mode: "agentic"`)
+
+The default (`mode: "inject"`) fetches top-k context **once** per run. Set
+`mode: "agentic"` and the loop instead mints a **`searchMemory` tool** the model
+calls _mid-reasoning_ — deciding for itself what to look up, and searching again
+with a refined query if the first hits fall short (multi-hop "read what you
+need", à la Recursive-LM). No context is auto-injected; nothing reaches the
+prompt until the model asks for it.
+
+```ts
+export const support = defineAgent({
+    // The model calls `searchMemory({ query, topK? })` when it needs context.
+    memory: { mode: "agentic", source: "rag:searchDocs", topK: 5 },
+    model: "...",
+});
+```
+
+`searchMemory` returns a **compact** projection — ranked `{ id, sourceId, score,
+snippet }` hits plus deduped `sources`, with the giant joined `.context` string
+dropped (each `snippet` is truncated to `snippetChars`, default 240). The model
+reads the snippets and decides what, if anything, to pull in full.
+
+Set `read` to an opt-in fetch-by-id **action** (`{ id } -> string`) and a
+companion **`readMemory`** tool is minted so the model can pull a hit's full
+document:
+
+```ts
+export const support = defineAgent({
+    memory: { mode: "agentic", read: "rag:getDoc", source: "rag:searchDocs" },
+    model: "...",
+});
+```
+
+Because every tool call is already a memoized durable step
+(`tool:searchMemory:<id>`), multi-hop retrieval is **crash-safe for free** — a
+resume replays completed searches from the journal rather than re-querying. A
+skill's agentic `knowledge` mints the same tools namespaced by skill name
+(`search_<skill>` / `read_<skill>`).
+
+> **`activeTools` foot-gun.** The memory tools are ordinary tools — subject to
+> `activeTools`, `toolChoice`, `stopWhen`, and bounded by `maxTurns`. If you set
+> `activeTools`, you **must** include the memory tool name (e.g. `searchMemory`)
+> or the model can never retrieve.
+
+### Graph memory (`kind: "graph"`)
+
+Semantic memory (the default `kind: "semantic"`) retrieves _passages_. A
+**graph** memory instead builds structured, persistent knowledge: it extracts
+the **entities** and **relations** stated in each run and traverses them on the
+next one. Set `kind: "graph"` — no `source` action is needed, and none of your
+own infrastructure either:
+
+```ts
+export const support = defineAgent({
+    memory: { graph: { depth: 2, maxSeeds: 4 }, kind: "graph" },
+    model: "...",
+});
+```
+
+- **Owner-scoped, persists across threads.** The graph is keyed by the run's
+  `owner` (the verified identity), so a fact learned in one conversation is
+  available in _every_ later conversation that same user has. An **anonymous run
+  (no `owner`) no-ops** the graph tier for that run — it is owner-scoped by
+  design.
+- **No external graph DB.** Entities and relations live in the agent's own
+  DO-SQLite as the `agent_entities` / `agent_edges` tables (shipped with the
+  `agent` schema extension). Nothing to provision.
+- **Auto-extraction on write.** After a run answers, a memoized `memory:extract`
+  step runs one LLM call over the exchange (user input + final answer) to pull
+  `{ entities, relations }`, then idempotently upserts them. Because the step is
+  memoized and the upsert is an absolute set (never an increment), a crash +
+  resume **never re-extracts or double-counts**. A cheaper `graph.extractionModel`
+  can be set for this step. Extraction is best-effort — a failure never fails a
+  run whose answer is already persisted.
+- **Bounded traversal on read.** A `memory:traverse` step tokenizes the input,
+  matches seed entities, then walks the graph with a **bounded JS breadth-first
+  search** (`depth`, `maxSeeds`, `fanOut`, `maxNodes` — defaults 2 / 4 / 8 / 32),
+  rendering deterministic `- alice —[works_at]→ acme` triples that are injected
+  like any other memory context.
+
+> **Why JS-BFS, not `WITH RECURSIVE`.** The loop runs inside a Workflow with no
+> DB handle — it reaches SQLite only by dispatching a registered function whose
+> typed `ctx.db` exposes indexed reads, not raw SQL. Traversal is therefore one
+> dispatch doing bounded, indexed local reads (replay-stable: no `Date.now()` or
+> randomness), which keeps the whole graph on one owner-stable shard.
+
 ## Testing
 
 `@lunora/testing` ships `agentHarness` — an in-memory double over the same

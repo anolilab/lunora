@@ -11,6 +11,9 @@ import type {
     AgentGenerate,
     AgentGenerateOptions,
     AgentGenerateResult,
+    AgentGraphExtract,
+    AgentMemoryOptions,
+    AgentMemorySource,
     AgentMessageRow,
     AgentRunFunction,
     AgentRunInput,
@@ -32,6 +35,14 @@ interface AgentLoopOptions {
     env: Record<string, unknown>;
     /** The agent's `lunora/agents.ts` export name (thread attribution). */
     exportName: string;
+
+    /**
+     * The run-end graph-extraction seam — production wires AI SDK `generateText`
+     * with a structured `Output.object`. Absent (the default) disables
+     * extraction, so an agent with no graph memory, and every unit test that
+     * doesn't opt in, is byte-identical.
+     */
+    extractGraph?: AgentGraphExtract;
     /** The LLM-turn seam — production wires AI SDK `generateText`. */
     generate: AgentGenerate;
     /** The workflow instance id — the deterministic per-run message-key prefix. */
@@ -382,39 +393,181 @@ const toStepInfo = (decision: AgentGenerateResult): AgentStepInfo => {
     };
 };
 
+/** Read a dispatched retrieval's `{ context }` field, treating empty/missing as no hit. */
+const readRetrievedContext = (retrieved: unknown): string | undefined => {
+    const context = (retrieved as { context?: unknown } | undefined)?.context;
+
+    return typeof context === "string" && context.length > 0 ? context : undefined;
+};
+
+/** The traversal bounds forwarded to `agentGraphTraverse` — the `graph` config minus `extractionModel` (a write-path concern). */
+const graphTraverseBounds = (graph: AgentMemoryOptions["graph"]): Record<string, number> => {
+    const bounds: Record<string, number> = {};
+
+    if (graph?.depth !== undefined) {
+        bounds.depth = graph.depth;
+    }
+
+    if (graph?.fanOut !== undefined) {
+        bounds.fanOut = graph.fanOut;
+    }
+
+    if (graph?.maxNodes !== undefined) {
+        bounds.maxNodes = graph.maxNodes;
+    }
+
+    if (graph?.maxSeeds !== undefined) {
+        bounds.maxSeeds = graph.maxSeeds;
+    }
+
+    return bounds;
+};
+
+/** Dispatch a `"semantic"` source's RAG action as a `memory:retrieve[:&lt;key>]` step and read its context. */
+const dispatchSemanticMemory = async (source: AgentMemorySource, input: string, step: AgentStepLike, run: AgentRunFunction): Promise<string | undefined> => {
+    // A semantic source without a `source` is rejected at `defineAgent`; guard
+    // defensively for a hand-built definition that bypassed it.
+    if (source.source === undefined) {
+        return undefined;
+    }
+
+    const memorySource = toFunctionReference(source.source);
+    const { topK } = source;
+    const stepName = source.key === "default" ? "memory:retrieve" : `memory:retrieve:${source.key}`;
+    const retrieved = await step.do(stepName, async () => run(memorySource, { query: input, ...(topK === undefined ? {} : { topK }) }));
+
+    return readRetrievedContext(retrieved);
+};
+
+/**
+ * Dispatch a `"graph"` source's owner-scoped traversal as a `memory:traverse[:&lt;key>]`
+ * step and read its context. Owner-scoped by design: an anonymous run (no `owner`)
+ * has no graph to read, so the source no-ops for that run.
+ */
+const dispatchGraphMemory = async (
+    source: AgentMemorySource,
+    input: string,
+    owner: string | undefined,
+    graphTraverse: ReturnType<typeof toFunctionReference>,
+    step: AgentStepLike,
+    run: AgentRunFunction,
+): Promise<string | undefined> => {
+    if (owner === undefined) {
+        return undefined;
+    }
+
+    const stepName = source.key === "default" ? "memory:traverse" : `memory:traverse:${source.key}`;
+    const retrieved = await step.do(stepName, async () => run(graphTraverse, { owner, query: input, ...graphTraverseBounds(source.graph) }));
+
+    return readRetrievedContext(retrieved);
+};
+
 /**
  * Dispatch every configured memory source once per run and return the joined
  * context. Sources run in a STABLE order — the default source (from `memory`)
  * first, then skill `knowledge` in declaration order — each inside its own
- * deterministic durable step. The default source keeps the historic
- * `"memory:retrieve"` name so in-flight runs replay identically; a skill source
- * uses `"memory:retrieve:&lt;key>"`. Sourced from `agent.memorySources` (folded by
- * `defineAgent`), falling back to `agent.memory` alone for a directly-authored
- * definition.
+ * deterministic durable step. A `"semantic"` source keeps the historic
+ * `"memory:retrieve[:&lt;key>]"` name so in-flight runs replay identically; a
+ * `"graph"` source uses the `"memory:traverse[:&lt;key>]"` namespace (which can't
+ * collide). Sourced from `agent.memorySources` (folded by `defineAgent`), falling
+ * back to `agent.memory` alone for a directly-authored definition.
  */
-const retrieveMemoryContext = async (agent: AgentDefinition, input: string, step: AgentStepLike, run: AgentRunFunction): Promise<string | undefined> => {
-    const sources = agent.memorySources ?? (agent.memory ? [{ key: "default", ...agent.memory }] : []);
+const retrieveMemoryContext = async (
+    agent: AgentDefinition,
+    input: string,
+    owner: string | undefined,
+    paths: AgentFunctionPaths,
+    step: AgentStepLike,
+    run: AgentRunFunction,
+): Promise<string | undefined> => {
+    // Fallback for a directly-authored definition (no folded `memorySources`): a
+    // `"graph"` source is always injected; an `"agentic"`-mode semantic `memory`
+    // is NOT — it mints a `searchMemory` tool the model drives itself.
+    const sources =
+        agent.memorySources ??
+        (agent.memory && (agent.memory.kind === "graph" || agent.memory.mode !== "agentic") ? [{ key: "default", ...agent.memory }] : []);
 
     if (sources.length === 0) {
         return undefined;
     }
 
+    const graphTraverse = toFunctionReference(paths.graphTraverse);
     const contexts: string[] = [];
 
     for (const source of sources) {
-        const memorySource = toFunctionReference(source.source);
-        const { topK } = source;
-        const stepName = source.key === "default" ? "memory:retrieve" : `memory:retrieve:${source.key}`;
-        // eslint-disable-next-line no-await-in-loop -- sequential durable steps in a stable order ARE the replay-safe execution model
-        const retrieved = await step.do(stepName, async () => run(memorySource, { query: input, ...(topK === undefined ? {} : { topK }) }));
-        const context = (retrieved as { context?: unknown } | undefined)?.context;
+        const context =
+            source.kind === "graph"
+                ? // eslint-disable-next-line no-await-in-loop -- sequential durable steps in a stable order ARE the replay-safe execution model
+                  await dispatchGraphMemory(source, input, owner, graphTraverse, step, run)
+                : // eslint-disable-next-line no-await-in-loop -- see above
+                  await dispatchSemanticMemory(source, input, step, run);
 
-        if (typeof context === "string" && context.length > 0) {
+        if (context !== undefined) {
             contexts.push(context);
         }
     }
 
     return contexts.length > 0 ? contexts.join("\n\n") : undefined;
+};
+
+/**
+ * The first `"graph"`-kind memory source, if any — the write target for run-end
+ * extraction. Mirrors {@link retrieveMemoryContext}'s source resolution (folded
+ * `memorySources`, else the directly-authored `memory`).
+ */
+const firstGraphSource = (agent: AgentDefinition): AgentMemorySource | undefined => {
+    const sources = agent.memorySources ?? (agent.memory ? [{ key: "default", ...agent.memory }] : []);
+
+    return sources.find((source) => source.kind === "graph");
+};
+
+/**
+ * Run-end owner-scoped graph extraction. When a graph memory source is configured
+ * and the run has an `owner` + a final answer, extract entities/relations from the
+ * exchange in a MEMOIZED `memory:extract[:&lt;key>]` step (the model never re-runs on
+ * replay), then upsert them via an IDEMPOTENT dispatch keyed by the instance (the
+ * `byTriple` dedup + absolute-max weight converge on replay). No-ops otherwise —
+ * an anonymous run has no graph scope, and a run with no graph source or no
+ * `extractGraph` seam skips extraction entirely (byte-identical to before).
+ *
+ * Best-effort: a knowledge-extraction failure must not fail a run whose answer is
+ * already persisted, so a throw here is swallowed (the memoized step still
+ * guarantees a SUCCESSFUL extraction never re-runs).
+ */
+const extractGraphMemoryAtRunEnd = async (options: {
+    agent: AgentDefinition;
+    env: Record<string, unknown>;
+    extractGraph: AgentGraphExtract | undefined;
+    finalText: string | undefined;
+    input: string;
+    instanceId: string;
+    owner: string | undefined;
+    paths: AgentFunctionPaths;
+    run: AgentRunFunction;
+    step: AgentStepLike;
+}): Promise<void> => {
+    const { agent, env, extractGraph, finalText, input, instanceId, owner, paths, run, step } = options;
+
+    if (extractGraph === undefined || owner === undefined || finalText === undefined || finalText.length === 0) {
+        return;
+    }
+
+    const source = firstGraphSource(agent);
+
+    if (source === undefined) {
+        return;
+    }
+
+    const suffix = source.key === "default" ? "" : `:${source.key}`;
+
+    try {
+        const extracted = await step.do(`memory:extract${suffix}`, async () =>
+            extractGraph({ assistantText: finalText, env, model: source.graph?.extractionModel ?? agent.model, userInput: input }), );
+
+        await run(toFunctionReference(paths.graphUpsert), { ...extracted, messageKey: `${instanceId}:extract${suffix}`, owner });
+    } catch {
+        // A failed extraction is non-fatal — the answer is already persisted.
+    }
 };
 
 /**
@@ -579,7 +732,7 @@ const runTurns = async (
  * step-name sequence.
  */
 const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> => {
-    const { agent, env, exportName, generate, instanceId, onTokenDelta, params, paths, run, step, streamGenerate } = options;
+    const { agent, env, exportName, extractGraph, generate, instanceId, onTokenDelta, params, paths, run, step, streamGenerate } = options;
     const maxTurns = agent.maxTurns ?? DEFAULT_MAX_TURNS;
     const stopConditions = normalizeStopWhen(agent.stopWhen);
 
@@ -637,7 +790,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     // Memory step: dispatch the configured retrieval action once per run and
     // inject the assembled context into every turn's prompt.
-    const memoryContext = await retrieveMemoryContext(agent, params.input, step, run);
+    const memoryContext = await retrieveMemoryContext(agent, params.input, params.owner, paths, step, run);
 
     // Resolve the system prompt once per run. A dynamic `instructions` thunk is
     // pure (env + run params in, string out), so calling it at the top level is
@@ -672,6 +825,22 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     try {
         const { final, stoppedByCondition, turnsRun } = await runTurns(turnContext, maxTurns, stopConditions, usageBox);
         const usagePatch = usageBox.value === undefined ? {} : { usage: usageBox.value };
+
+        // Run-end graph extraction (owner-scoped, best-effort). No-ops unless a
+        // graph memory source, an `owner`, a final answer, and the seam are all
+        // present — so a semantic-only or anonymous run is byte-identical.
+        await extractGraphMemoryAtRunEnd({
+            agent,
+            env,
+            extractGraph,
+            finalText: final?.text,
+            input: params.input,
+            instanceId,
+            owner: params.owner,
+            paths,
+            run,
+            step,
+        });
 
         if (final) {
             await run(patchThread, { key: params.threadKey, status: "idle", ...usagePatch });

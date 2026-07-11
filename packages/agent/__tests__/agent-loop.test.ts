@@ -9,6 +9,7 @@ import type {
     AgentFunctionReference,
     AgentGenerate,
     AgentGenerateResult,
+    AgentGraphExtract,
     AgentLiveEvent,
     AgentRunFunction,
     AgentStepFinishInfo,
@@ -139,7 +140,10 @@ interface StoredThread {
  * (keyed appends, get-or-create threads, counter-allocated seq).
  */
 const memoryRuntime = (options?: {
-    memory?: { path: string; result: unknown };
+    /** Extra `path → handler` dispatch entries (e.g. an agentic `read` action). */
+    handlers?: Record<string, (args?: Record<string, unknown>) => unknown>;
+    /** The memory action's `result` — a fixed value, or a fn of the dispatch args (per-query results). */
+    memory?: { path: string; result: Record<string, unknown> | ((args?: Record<string, unknown>) => unknown) };
 }): {
     dispatches: { args: Record<string, unknown> | undefined; path: string }[];
     messages: Map<string, StoredMessage>;
@@ -248,12 +252,19 @@ const memoryRuntime = (options?: {
         return undefined;
     };
 
+    const memoryHandler = (args?: Record<string, unknown>): unknown => {
+        const result = options?.memory?.result;
+
+        return typeof result === "function" ? result(args) : result;
+    };
+
     const handlers = new Map<string, (args?: Record<string, unknown>) => unknown>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],
-        ...(options?.memory ? ([[options.memory.path, (): unknown => options.memory?.result]] as const) : []),
+        ...(options?.memory ? ([[options.memory.path, memoryHandler]] as const) : []),
+        ...Object.entries(options?.handlers ?? {}),
     ]);
 
     const run: AgentRunFunction = async (reference: AgentFunctionReference, args?: Record<string, unknown>) => {
@@ -483,6 +494,320 @@ describe(runAgentLoop, () => {
         const shown = generate.seen[0] as { content: unknown; role: string }[];
 
         expect(shown.some((message) => message.role === "system" && String(message.content).includes("Lunora runs on Durable Objects."))).toBe(true);
+    });
+
+    it("agentic memory mints a searchMemory tool instead of injecting context", async () => {
+        const searchResult = {
+            chunks: [
+                { chunkIndex: 0, id: "doc-1#0", importance: 1, score: 0.9, sourceId: "doc-1", text: "Lunora runs on Durable Objects." },
+                { chunkIndex: 1, id: "doc-2#0", importance: 1, score: 0.7, sourceId: "doc-2", text: "Agents compile onto Workflows." },
+            ],
+            context: "[source:doc-1#0]\nLunora runs on Durable Objects.\n\n[source:doc-2#0]\nAgents compile onto Workflows.",
+            sources: [{ id: "doc-1" }, { id: "doc-2" }],
+        };
+        const runtime = memoryRuntime({ memory: { path: "rag:searchDocs", result: searchResult } });
+        const generate = scriptedGenerate([toolTurn("s1", "searchMemory", { query: "durable objects" }, "searching…"), finalTurn("answered")]);
+
+        const agent = defineAgent({
+            memory: { mode: "agentic", source: "rag:searchDocs", topK: 3 },
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        });
+
+        const journal = new DurableStepJournal();
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        // No one-shot injection: no `memory:retrieve` step ran; the search tool step did.
+        expect(journal.invoked).not.toContain("memory:retrieve");
+        expect(journal.invoked).toContain("tool:searchMemory:s1");
+
+        // The tool dispatched the source with the query + the source's configured topK.
+        const memoryDispatch = runtime.dispatches.find((dispatch) => dispatch.path === "rag:searchDocs");
+
+        expect(memoryDispatch?.args).toStrictEqual({ query: "durable objects", topK: 3 });
+
+        // No "Relevant context" system message was injected on turn 0.
+        const shown = generate.seen[0] as { content: unknown; role: string }[];
+
+        expect(shown.some((message) => message.role === "system" && String(message.content).includes("Relevant context"))).toBe(false);
+
+        // The persisted tool message is the COMPACT projection — ranked hits + sources,
+        // with the giant joined `.context` DROPPED.
+        const toolMessage = [...runtime.messages.values()].find((message) => message.role === "tool" && message.toolName === "searchMemory");
+        const parsed = JSON.parse(toolMessage?.content ?? "{}") as { results: unknown; sources: unknown };
+
+        expect(parsed.results).toStrictEqual([
+            { id: "doc-1#0", score: 0.9, snippet: "Lunora runs on Durable Objects.", sourceId: "doc-1" },
+            { id: "doc-2#0", score: 0.7, snippet: "Agents compile onto Workflows.", sourceId: "doc-2" },
+        ]);
+        expect(parsed.sources).toStrictEqual([{ id: "doc-1" }, { id: "doc-2" }]);
+        expect(toolMessage?.content.includes("[source:doc-1#0]")).toBe(false);
+    });
+
+    it("lets the model override topK per searchMemory call", async () => {
+        const runtime = memoryRuntime({ memory: { path: "rag:searchDocs", result: { chunks: [], context: "", sources: [] } } });
+        const generate = scriptedGenerate([toolTurn("s1", "searchMemory", { query: "x", topK: 10 }), finalTurn("done")]);
+
+        const agent = defineAgent({
+            memory: { mode: "agentic", source: "rag:searchDocs", topK: 3 },
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        });
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run }));
+
+        const dispatch = runtime.dispatches.find((entry) => entry.path === "rag:searchDocs");
+
+        expect(dispatch?.args).toStrictEqual({ query: "x", topK: 10 });
+    });
+
+    it("multi-hop: the model searches memory twice with distinct queries", async () => {
+        const perQuery = (args?: Record<string, unknown>): unknown => {
+            const query = args?.["query"] as string;
+
+            return { chunks: [{ id: `hit:${query}`, score: 1, sourceId: "s", text: `about ${query}` }], context: "ignored", sources: [] };
+        };
+        const runtime = memoryRuntime({ memory: { path: "rag:searchDocs", result: perQuery } });
+        const generate = scriptedGenerate([
+            toolTurn("s1", "searchMemory", { query: "first" }),
+            toolTurn("s2", "searchMemory", { query: "second" }),
+            finalTurn("done"),
+        ]);
+
+        const agent = defineAgent({ memory: { mode: "agentic", source: "rag:searchDocs" }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const journal = new DurableStepJournal();
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        // Two distinct memoized search steps (no topK configured or passed → query only).
+        expect(journal.invoked.filter((name) => name.startsWith("tool:searchMemory:"))).toStrictEqual(["tool:searchMemory:s1", "tool:searchMemory:s2"]);
+
+        const searchDispatches = runtime.dispatches.filter((dispatch) => dispatch.path === "rag:searchDocs");
+
+        expect(searchDispatches.map((dispatch) => dispatch.args)).toStrictEqual([{ query: "first" }, { query: "second" }]);
+    });
+
+    it("serves a completed searchMemory step from the journal across a crash + resume", async () => {
+        let searchCalls = 0;
+        const runtime = memoryRuntime({
+            memory: {
+                path: "rag:searchDocs",
+                result: (): unknown => {
+                    searchCalls += 1;
+
+                    return { chunks: [{ id: "doc-1#0", score: 1, sourceId: "doc-1", text: "hit" }], context: "ignored", sources: [] };
+                },
+            },
+        });
+        const journal = new DurableStepJournal();
+        const agent = defineAgent({ memory: { mode: "agentic", source: "rag:searchDocs" }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+
+        // First attempt: the search tool completes, then the process dies before the next turn.
+        const crashing = scriptedGenerate([toolTurn("s1", "searchMemory", { query: "x" })]);
+
+        await expect(runAgentLoop(loopDefaults(agent, { generate: crashing, run: runtime.run, step: journal }))).rejects.toThrow("scripted generate exhausted");
+        expect(searchCalls).toBe(1);
+
+        // Resume on the same journal: the completed search step is served from the memo — NOT re-run.
+        const resumed = scriptedGenerate([finalTurn("done")]);
+
+        await runAgentLoop(loopDefaults(agent, { generate: resumed, run: runtime.run, step: journal }));
+
+        expect(searchCalls).toBe(1);
+        expect(journal.invoked.filter((name) => name === "tool:searchMemory:s1")).toHaveLength(1);
+    });
+
+    it("mints a readMemory tool when the agentic source sets `read`", async () => {
+        const runtime = memoryRuntime({
+            handlers: { "rag:getDoc": (args): unknown => `full text for ${args?.["id"] as string}` },
+            memory: { path: "rag:searchDocs", result: { chunks: [], context: "", sources: [] } },
+        });
+        const generate = scriptedGenerate([toolTurn("r1", "readMemory", { id: "doc-1#0" }), finalTurn("done")]);
+
+        const agent = defineAgent({
+            memory: { mode: "agentic", read: "rag:getDoc", source: "rag:searchDocs" },
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        });
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run }));
+
+        const readDispatch = runtime.dispatches.find((dispatch) => dispatch.path === "rag:getDoc");
+
+        expect(readDispatch?.args).toStrictEqual({ id: "doc-1#0" });
+
+        const toolMessage = [...runtime.messages.values()].find((message) => message.role === "tool" && message.toolName === "readMemory");
+
+        expect(toolMessage?.content).toBe("full text for doc-1#0");
+    });
+
+    it("graph memory traverses the owner graph and injects the triples as context", async () => {
+        const triples = "- alice —[works_at]→ acme";
+        const runtime = memoryRuntime({
+            handlers: {
+                [DEFAULT_AGENT_FUNCTION_PATHS.graphTraverse]: (): unknown => {
+                    return { context: triples };
+                },
+            },
+        });
+        const generate = scriptedGenerate([finalTurn("answered")]);
+
+        const agent = defineAgent({
+            memory: { graph: { depth: 3, maxSeeds: 2 }, kind: "graph" },
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        });
+
+        const journal = new DurableStepJournal();
+
+        await runAgentLoop(
+            loopDefaults(agent, { generate, params: { input: "who works at acme?", owner: "user-a", threadKey: "thread-1" }, run: runtime.run, step: journal }),
+        );
+
+        // The graph read is a `memory:traverse` step (its own namespace), not `memory:retrieve`.
+        expect(journal.invoked).toContain("memory:traverse");
+        expect(journal.invoked).not.toContain("memory:retrieve");
+
+        // It dispatched the built-in traverse function with the owner, query, and configured bounds only.
+        const traverse = runtime.dispatches.find((dispatch) => dispatch.path === DEFAULT_AGENT_FUNCTION_PATHS.graphTraverse);
+
+        expect(traverse?.args).toStrictEqual({ depth: 3, maxSeeds: 2, owner: "user-a", query: "who works at acme?" });
+
+        // The triples reached the model as a system message.
+        const shown = generate.seen[0] as { content: unknown; role: string }[];
+
+        expect(shown.some((message) => message.role === "system" && String(message.content).includes(triples))).toBe(true);
+    });
+
+    it("graph memory no-ops for an anonymous run (no owner)", async () => {
+        const runtime = memoryRuntime({
+            handlers: {
+                [DEFAULT_AGENT_FUNCTION_PATHS.graphTraverse]: (): unknown => {
+                    return { context: "should not run" };
+                },
+            },
+        });
+        const generate = scriptedGenerate([finalTurn("answered")]);
+
+        const agent = defineAgent({ memory: { kind: "graph" }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const journal = new DurableStepJournal();
+
+        // No `owner` on params → the owner-scoped graph has nothing to read.
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(journal.invoked).not.toContain("memory:traverse");
+        expect(runtime.dispatches.some((dispatch) => dispatch.path === DEFAULT_AGENT_FUNCTION_PATHS.graphTraverse)).toBe(false);
+    });
+
+    it("extracts a graph at run end and upserts it, keyed by owner + instance", async () => {
+        const extraction = { entities: [{ name: "Alice", type: "person" }], relations: [{ dst: "Acme", label: "works_at", src: "Alice" }] };
+        let extractCalls = 0;
+        const extractGraph: AgentGraphExtract = async ({ assistantText, userInput }) => {
+            extractCalls += 1;
+
+            // The seam sees the run's exchange (user input + final answer).
+            expect(userInput).toBe("tell me about alice");
+            expect(assistantText).toBe("Alice works at Acme.");
+
+            return extraction;
+        };
+        const runtime = memoryRuntime({
+            handlers: {
+                [DEFAULT_AGENT_FUNCTION_PATHS.graphTraverse]: (): unknown => {
+                    return { context: "" };
+                },
+                [DEFAULT_AGENT_FUNCTION_PATHS.graphUpsert]: (): unknown => {
+                    return { entities: 1, relations: 1 };
+                },
+            },
+        });
+        const generate = scriptedGenerate([finalTurn("Alice works at Acme.")]);
+
+        const agent = defineAgent({ memory: { kind: "graph" }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const journal = new DurableStepJournal();
+
+        await runAgentLoop(
+            loopDefaults(agent, {
+                extractGraph,
+                generate,
+                params: { input: "tell me about alice", owner: "user-a", threadKey: "thread-1" },
+                run: runtime.run,
+                step: journal,
+            }),
+        );
+
+        expect(extractCalls).toBe(1);
+        expect(journal.invoked).toContain("memory:extract");
+
+        const upsert = runtime.dispatches.find((dispatch) => dispatch.path === DEFAULT_AGENT_FUNCTION_PATHS.graphUpsert);
+
+        expect(upsert?.args).toStrictEqual({ ...extraction, messageKey: "wf-1:extract", owner: "user-a" });
+    });
+
+    it("never re-extracts the graph across a crash + resume", async () => {
+        let extractCalls = 0;
+        const extractGraph: AgentGraphExtract = async () => {
+            extractCalls += 1;
+
+            return { entities: [{ name: "Alice" }], relations: [] };
+        };
+        const runtime = memoryRuntime({
+            handlers: {
+                [DEFAULT_AGENT_FUNCTION_PATHS.graphTraverse]: (): unknown => {
+                    return { context: "" };
+                },
+                [DEFAULT_AGENT_FUNCTION_PATHS.graphUpsert]: (): unknown => {
+                    return { entities: 1, relations: 0 };
+                },
+            },
+        });
+        const agent = defineAgent({ memory: { kind: "graph" }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const journal = new DurableStepJournal();
+        const params = { input: "hi", owner: "user-a", threadKey: "thread-1" };
+
+        // First attempt crashes AFTER the final turn + extraction, on the terminal patch dispatch.
+        let failPatch = true;
+        const crashingRun: AgentRunFunction = async (reference, args) => {
+            if (failPatch && reference["__lunoraRef"] === DEFAULT_AGENT_FUNCTION_PATHS.patchThread && args?.["status"] === "idle") {
+                failPatch = false;
+                throw new Error("crash after extract");
+            }
+
+            return runtime.run(reference, args);
+        };
+
+        await expect(
+            runAgentLoop(loopDefaults(agent, { extractGraph, generate: scriptedGenerate([finalTurn("done")]), params, run: crashingRun, step: journal })),
+        ).rejects.toThrow("crash after extract");
+        expect(extractCalls).toBe(1);
+
+        // Resume on the same journal: the completed `memory:extract` step is served from the memo — NOT re-run.
+        await runAgentLoop(loopDefaults(agent, { extractGraph, generate: scriptedGenerate([finalTurn("done")]), params, run: runtime.run, step: journal }));
+
+        expect(extractCalls).toBe(1);
+        expect(journal.invoked.filter((name) => name === "memory:extract")).toHaveLength(1);
+    });
+
+    it("does not extract for a semantic-only agent even when the seam is wired", async () => {
+        let extractCalls = 0;
+        const extractGraph: AgentGraphExtract = async () => {
+            extractCalls += 1;
+
+            return { entities: [], relations: [] };
+        };
+        const runtime = memoryRuntime({ memory: { path: "rag:searchDocs", result: { chunks: [], context: "ctx", sources: [] } } });
+        const agent = defineAgent({ memory: { source: "rag:searchDocs" }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const journal = new DurableStepJournal();
+
+        await runAgentLoop(
+            loopDefaults(agent, {
+                extractGraph,
+                generate: scriptedGenerate([finalTurn("done")]),
+                params: { input: "hi", owner: "user-a", threadKey: "thread-1" },
+                run: runtime.run,
+                step: journal,
+            }),
+        );
+
+        expect(extractCalls).toBe(0);
+        expect(journal.invoked).not.toContain("memory:extract");
     });
 
     it("forwards the run owner to the thread bootstrap", async () => {

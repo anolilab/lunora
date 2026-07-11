@@ -124,7 +124,7 @@ const callMutation = async <R>(
 describe(agentComponent, () => {
     it("ships the auto-prefixed thread tables as a schema extension", () => {
         expect(agentExtension.key).toBe("agent");
-        expect(Object.keys(agentExtension.tables).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["messages", "threads"]);
+        expect(Object.keys(agentExtension.tables).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["edges", "entities", "messages", "threads"]);
     });
 
     it("marks the mutations internal and the queries public", () => {
@@ -135,6 +135,10 @@ describe(agentComponent, () => {
         expect(functions.agentPatchThread.visibility).toBe("internal");
         // Loop-dispatched over the admin channel — never a client reference.
         expect(functions.agentSetState.visibility).toBe("internal");
+        // Graph memory: written by the run-end extract step, read by the
+        // traverse step — both loop-dispatched, never client references.
+        expect(functions.agentGraphUpsert.visibility).toBe("internal");
+        expect(functions.agentGraphTraverse.visibility).toBe("internal");
         expect(functions.agentMessages.visibility).toBeUndefined();
         expect(functions.agentThread.visibility).toBeUndefined();
         // Public: a client subscribes to the synced state (owner-gated internally).
@@ -261,7 +265,7 @@ describe("thread ownership", () => {
         await expect(callMutation(functions.agentThread, ctx, { key: "t-open" })).resolves.toMatchObject({ key: "t-open" });
     });
 
-    it("marks both tables RLS-exempt so secure-by-default apps keep working", () => {
+    it("marks every agent table RLS-exempt so secure-by-default apps keep working", () => {
         // Under .rls("required") the auto-registered functions can never engage
         // app RLS policies — access control lives in the functions (owner gate,
         // internal-only mutations), so the tables opt out of table-level RLS.
@@ -341,6 +345,163 @@ describe("synced state", () => {
         await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" });
 
         await expect(callMutation(functions.agentState, ctx, { key: "t-1" })).resolves.toBeUndefined();
+    });
+});
+
+describe("graph memory", () => {
+    it("upserts entities/relations, auto-creates endpoints, normalizes, and is idempotent on replay", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        const upsert = {
+            entities: [{ name: "Alice", type: "person" }],
+            messageKey: "wf-1:extract",
+            owner: "u1",
+            relations: [{ dst: "Acme", label: "works_at", src: "Alice" }],
+        };
+
+        const first = await callMutation(functions.agentGraphUpsert, ctx, upsert);
+
+        // Alice (given) + Acme (auto-created as an edge endpoint) = 2 nodes.
+        expect(first).toStrictEqual({ entities: 1, relations: 1 });
+        expect(rows.get("agent_entities")).toHaveLength(2);
+        expect(rows.get("agent_edges")).toHaveLength(1);
+
+        // Names are normalized (trim/collapse/lowercase) into the dedup key.
+        const names = (rows.get("agent_entities") ?? []).map((row) => row["name"]).toSorted((a, b) => String(a).localeCompare(String(b)));
+
+        expect(names).toStrictEqual(["acme", "alice"]);
+
+        // A replay (same values) is idempotent — no duplicate rows.
+        await callMutation(functions.agentGraphUpsert, ctx, upsert);
+
+        expect(rows.get("agent_entities")).toHaveLength(2);
+        expect(rows.get("agent_edges")).toHaveLength(1);
+    });
+
+    it("skips self-loops and empty names/labels", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        const result = await callMutation(functions.agentGraphUpsert, ctx, {
+            entities: [{ name: "  " }, { name: "Bob" }],
+            messageKey: "k",
+            owner: "u1",
+            relations: [
+                { dst: "Bob", label: "knows", src: "Bob" }, // self-loop
+                { dst: "", label: "knows", src: "Bob" }, // empty endpoint
+                { dst: "Carol", label: "  ", src: "Bob" }, // empty label
+            ],
+        });
+
+        // Only "Bob" survives; every relation is dropped, so no endpoint (Carol)
+        // is auto-created either.
+        expect(result).toStrictEqual({ entities: 1, relations: 0 });
+        expect(rows.get("agent_entities")).toHaveLength(1);
+        expect(rows.get("agent_edges") ?? []).toStrictEqual([]);
+    });
+
+    it("hard-caps entities per upsert so a runaway extraction can't blow up the graph", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        const entities: { name: string }[] = [];
+
+        for (let index = 0; index < 100; index += 1) {
+            entities.push({ name: `e${String(index)}` });
+        }
+
+        const result = (await callMutation(functions.agentGraphUpsert, ctx, { entities, messageKey: "k", owner: "u1", relations: [] })) as {
+            entities: number;
+            relations: number;
+        };
+
+        expect(result.entities).toBe(64);
+        expect(rows.get("agent_entities")).toHaveLength(64);
+    });
+
+    it("bumps edge weight by absolute max, never lowering it (replay-safe)", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        const relation = { dst: "Acme", label: "works_at", src: "Alice" };
+
+        await callMutation(functions.agentGraphUpsert, ctx, { entities: [], messageKey: "k1", owner: "u1", relations: [{ ...relation, confidence: 0.5 }] });
+        await callMutation(functions.agentGraphUpsert, ctx, { entities: [], messageKey: "k2", owner: "u1", relations: [{ ...relation, confidence: 0.9 }] });
+        // A later, lower-confidence re-extraction must NOT lower the weight.
+        await callMutation(functions.agentGraphUpsert, ctx, { entities: [], messageKey: "k3", owner: "u1", relations: [{ ...relation, confidence: 0.2 }] });
+
+        const edges = rows.get("agent_edges") ?? [];
+
+        expect(edges).toHaveLength(1);
+        expect(edges[0]?.["weight"]).toBe(0.9);
+    });
+
+    it("traverses bidirectionally from a matched seed and renders deterministic triples", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentGraphUpsert, ctx, {
+            entities: [],
+            messageKey: "k",
+            owner: "u1",
+            relations: [
+                { dst: "Acme", label: "works_at", src: "Alice" }, // outgoing from Alice
+                { dst: "Alice", label: "manages", src: "Carol" }, // incoming to Alice
+            ],
+        });
+
+        // Seed "alice" reaches Acme (outgoing) AND Carol (incoming); the lines
+        // are sorted for replay stability.
+        const result = (await callMutation(functions.agentGraphTraverse, ctx, { owner: "u1", query: "Alice" })) as { context: string };
+
+        expect(result.context).toBe("- alice —[works_at]→ acme\n- carol —[manages]→ alice");
+    });
+
+    it("returns empty context for no seed match and for token-less queries", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentGraphUpsert, ctx, { entities: [{ name: "Alice" }], messageKey: "k", owner: "u1", relations: [] });
+
+        await expect(callMutation(functions.agentGraphTraverse, ctx, { owner: "u1", query: "zzz nonexistent" })).resolves.toStrictEqual({ context: "" });
+        await expect(callMutation(functions.agentGraphTraverse, ctx, { owner: "u1", query: "!" })).resolves.toStrictEqual({ context: "" });
+    });
+
+    it("is owner-scoped: another owner's graph is invisible", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentGraphUpsert, ctx, {
+            entities: [],
+            messageKey: "k",
+            owner: "u1",
+            relations: [{ dst: "Acme", label: "works_at", src: "Alice" }],
+        });
+
+        await expect(callMutation(functions.agentGraphTraverse, ctx, { owner: "u2", query: "Alice" })).resolves.toStrictEqual({ context: "" });
+    });
+
+    it("honors the fanOut bound per node", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        // Hub with three outgoing edges; fanOut:1 keeps only the heaviest.
+        await callMutation(functions.agentGraphUpsert, ctx, {
+            entities: [],
+            messageKey: "k",
+            owner: "u1",
+            relations: [
+                { confidence: 0.1, dst: "Acme", label: "works_at", src: "Hub" },
+                { confidence: 0.9, dst: "Beta", label: "works_at", src: "Hub" },
+                { confidence: 0.5, dst: "Gamma", label: "works_at", src: "Hub" },
+            ],
+        });
+
+        const result = (await callMutation(functions.agentGraphTraverse, ctx, { depth: 1, fanOut: 1, owner: "u1", query: "Hub" })) as { context: string };
+
+        // Only the heaviest (Beta, weight 0.9) edge is kept.
+        expect(result.context).toBe("- hub —[works_at]→ beta");
     });
 });
 

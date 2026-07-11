@@ -1,11 +1,13 @@
 import { LunoraError } from "@lunora/errors";
 
+import { collectAgenticMemoryTools } from "./agentic-memory";
 import { agentAsTool } from "./as-tool";
 import { RESERVED_SKILL_NAME, SKILL_NAME_PATTERN } from "./skill";
 import type {
     AgentConfig,
     AgentDefinition,
     AgentInstructionsContext,
+    AgentMemoryOptions,
     AgentMemorySource,
     AgentToolConfig,
     AgentToolDefinition,
@@ -70,19 +72,29 @@ const composeInstructions = (config: AgentConfig, skills: ReadonlyArray<SkillDef
 };
 
 /**
- * Collect the keyed memory sources the loop dispatches per run: the config's
- * `memory` as the default source (its step name stays `"memory:retrieve"`),
- * then each skill's `knowledge` keyed by the skill name.
+ * Whether a memory source is AUTO-INJECTED at run start (vs. driven by a minted
+ * tool). Every `"graph"`-kind source is injected — it traverses the owner graph
+ * per run and `mode` doesn't apply. A `"semantic"` source is injected only in
+ * `"inject"` mode; its `"agentic"` mode mints a `searchMemory` tool instead
+ * (see {@link collectAgenticMemoryTools}), so it is never one-shot injected.
+ */
+const isInjectedMemorySource = (memory: AgentMemoryOptions): boolean => memory.kind === "graph" || memory.mode !== "agentic";
+
+/**
+ * Collect the keyed memory sources the loop AUTO-INJECTS per run: the config's
+ * `memory` as the default source (its step name stays `"memory:retrieve"` /
+ * `"memory:traverse"` for graph), then each skill's `knowledge` keyed by the
+ * skill name. See {@link isInjectedMemorySource} for what is and isn't collected.
  */
 const collectMemorySources = (config: AgentConfig, skills: ReadonlyArray<SkillDefinition>): AgentMemorySource[] => {
     const sources: AgentMemorySource[] = [];
 
-    if (config.memory) {
+    if (config.memory && isInjectedMemorySource(config.memory)) {
         sources.push({ key: "default", ...config.memory });
     }
 
     for (const skill of skills) {
-        if (skill.knowledge) {
+        if (skill.knowledge && isInjectedMemorySource(skill.knowledge)) {
             sources.push({ key: skill.name, ...skill.knowledge });
         }
     }
@@ -127,6 +139,27 @@ const assertValidSkillNames = (skills: ReadonlyArray<SkillDefinition>): void => 
         }
 
         seen.add(skill.name);
+    }
+};
+
+/**
+ * A `"semantic"` memory source (the default kind) MUST carry a `source` action —
+ * the RAG endpoint the loop dispatches. A `"graph"` source ignores `source` (it
+ * dispatches the built-in `agentGraphTraverse` function), so it may omit it.
+ * Validate the agent's own `memory` and every skill's `knowledge` at declaration
+ * time, before a run reaches the would-be missing-source dispatch.
+ */
+const assertMemorySourcesConfigured = (config: AgentConfig, skills: ReadonlyArray<SkillDefinition>): void => {
+    const requireSource = (memory: AgentMemoryOptions | undefined, label: string): void => {
+        if (memory && memory.kind !== "graph" && memory.source === undefined) {
+            throw new LunoraError("INTERNAL", `@lunora/agent: ${label} requires a \`source\` action unless \`kind: "graph"\``);
+        }
+    };
+
+    requireSource(config.memory, "`memory`");
+
+    for (const skill of skills) {
+        requireSource(skill.knowledge, `skill "${skill.name}" \`knowledge\``);
     }
 };
 
@@ -180,7 +213,28 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
     // `"default"` key, and uniqueness before they are used (see the helper).
     assertValidSkillNames(skills);
 
+    // A semantic source needs its RAG `source`; a graph source may omit it.
+    assertMemorySourcesConfigured(config, skills);
+
     const tools = mergeSkillTools(config, skills);
+
+    // Fold the tools minted for `mode: "agentic"` memory sources into the same
+    // flat namespace, with the same collision-throw policy — an author naming a
+    // real tool `searchMemory` (or a skill tool `search_<name>`) is an error.
+    const agenticMemoryTools = collectAgenticMemoryTools(config, skills);
+
+    for (const [toolName, tool] of Object.entries(agenticMemoryTools)) {
+        if (Object.hasOwn(tools, toolName)) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/agent: agentic-memory tool "${toolName}" collides with an existing tool — rename one (the agent's tool namespace is flat)`,
+            );
+        }
+
+        tools[toolName] = tool;
+    }
+
+    const hasAgenticTools = Object.keys(agenticMemoryTools).length > 0;
 
     // Validate the MERGED namespace so a skill-contributed name is checked too.
     for (const name of Object.keys(tools)) {
@@ -204,7 +258,7 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
         isLunoraAgent: true,
         ...(skills.some((skill) => Boolean(skill.instructions)) ? { instructions: composedInstructions } : {}),
         ...(memorySources.length > 0 ? { memorySources } : {}),
-        ...(skills.length > 0 ? { tools } : {}),
+        ...(skills.length > 0 || hasAgenticTools ? { tools } : {}),
     };
 };
 

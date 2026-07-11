@@ -158,14 +158,75 @@ export type AgentModelInput = LanguageModel | ((env: Record<string, unknown>) =>
  * Memory wiring: the path (or reference) of an app **action** taking
  * `{ query: string }` and returning `@lunora/ai/rag`'s `RetrieveResult`
  * (`{ context, chunks, sources }`) — typically three lines over
- * `defineRag(...)(ctx).retrieve`. The loop runs it as a durable step at turn
- * start and injects `.context` as a system message. Dispatching to a real
- * action (instead of embedding vector plumbing here) keeps retrieval inside a
- * fully wired ctx: codegen-resolved vector bindings, RLS, observability.
+ * `defineRag(...)(ctx).retrieve`. Dispatching to a real action (instead of
+ * embedding vector plumbing here) keeps retrieval inside a fully wired ctx:
+ * codegen-resolved vector bindings, RLS, observability.
+ *
+ * Two retrieval MODES. `"inject"` (default) runs the action as a durable step at
+ * turn start and injects `.context` as one system message (one-shot top-k).
+ * `"agentic"` skips auto-injection; the source instead mints a `searchMemory`
+ * tool the MODEL calls mid-reasoning (Recursive-LM / "read what you need") — each
+ * call a memoized durable step, so multi-hop retrieval is crash-safe for free.
  */
 export interface AgentMemoryOptions {
-    /** The memory action: a function path (`"rag:searchDocs"`) or reference. */
-    source: AgentFunctionReference | string;
+    /**
+     * Graph-tier bounds and extraction model — read only when
+     * {@link AgentMemoryOptions.kind} is `"graph"`. `depth`/`maxSeeds`/`fanOut`/
+     * `maxNodes` bound the run-time BFS traversal; `extractionModel` overrides the
+     * (optionally cheaper) model used for the run-end entity/relation extraction
+     * step (defaults to the agent's own model).
+     */
+    graph?: {
+        /** Max BFS hops from a seed entity (default 2). */
+        depth?: number;
+        /** Model for the run-end extraction step (defaults to the agent's model). */
+        extractionModel?: AgentModelInput;
+        /** Max edges expanded per visited node (default 8). */
+        fanOut?: number;
+        /** Max entities visited across the whole traversal (default 32). */
+        maxNodes?: number;
+        /** Max seed entities matched from the query (default 4). */
+        maxSeeds?: number;
+    };
+
+    /**
+     * `"semantic"` (default) is vector RAG over {@link AgentMemoryOptions.source}.
+     * `"graph"` traverses the owner-scoped entity/relation graph (auto-extracted
+     * on write, keyed by the thread's `owner`) via the built-in traverse function
+     * and ignores `source`. See {@link AgentMemoryOptions}.
+     */
+    kind?: "graph" | "semantic";
+
+    /**
+     * `"inject"` (default) auto-injects one top-k context system message per
+     * run; `"agentic"` skips injection and mints a `searchMemory` tool the model
+     * drives itself. Applies to `"semantic"` kind only. See
+     * {@link AgentMemoryOptions}.
+     */
+    mode?: "agentic" | "inject";
+
+    /**
+     * Agentic-only. An optional fetch-by-id **action** `{ id: string } -> string`
+     * that mints a companion `readMemory` tool so the model can pull a full
+     * document after `searchMemory` surfaces its id (typically a ~3-line action
+     * mapping `${sourceId}#${n}` → text). Ignored in `"inject"` mode.
+     */
+    read?: AgentFunctionReference | string;
+
+    /**
+     * Agentic-only. Per-result snippet truncation (chars) applied to each
+     * `searchMemory` hit for token economy. Default 240. Ignored in `"inject"`
+     * mode.
+     */
+    snippetChars?: number;
+
+    /**
+     * The memory action: a function path (`"rag:searchDocs"`) or reference.
+     * Required for `"semantic"` kind (enforced at `defineAgent`); ignored — and
+     * therefore optional — for `"graph"` kind, which dispatches the built-in
+     * traverse function instead.
+     */
+    source?: AgentFunctionReference | string;
     /** Retrieval depth forwarded to the action as `topK`. */
     topK?: number;
 }
@@ -615,6 +676,10 @@ export interface AgentRunResult {
 export interface AgentFunctionPaths {
     appendMessage: string;
     ensureThread: string;
+    /** The internal `agents:agentGraphTraverse` query the loop dispatches for a graph-kind read. */
+    graphTraverse: string;
+    /** The internal `agents:agentGraphUpsert` mutation the loop dispatches on run-end graph extraction. */
+    graphUpsert: string;
     listMessages: string;
     patchThread: string;
 
@@ -692,6 +757,36 @@ export interface AgentGenerateOptions {
  * decision. Production wires AI SDK `generateText`; tests inject a script.
  */
 export type AgentGenerate = (options: AgentGenerateOptions) => Promise<AgentGenerateResult>;
+
+/**
+ * The entities and relations extracted from one run's exchange, upserted into
+ * the owner-scoped graph. Endpoint names in `relations` reference entities by
+ * name (normalized on write); `confidence` (0..1) seeds an edge's weight.
+ */
+export interface AgentGraphExtraction {
+    entities: ReadonlyArray<{ name: string; type?: string }>;
+    relations: ReadonlyArray<{ confidence?: number; dst: string; label: string; src: string }>;
+}
+
+/**
+ * The run-end graph-extraction seam: given the run's exchange (user input +
+ * final answer) and the model to run it on, return the extracted entities and
+ * relations. Production wires AI SDK `generateObject` over a fixed schema
+ * (`createGraphExtract`); the durable loop calls it inside a memoized
+ * `memory:extract` step so the model never re-runs on replay. Absent (the
+ * default) disables extraction, so an agent with no graph memory — and every
+ * unit test that doesn't opt in — is byte-identical.
+ */
+export type AgentGraphExtract = (input: {
+    /** The run's final assistant answer. */
+    assistantText: string;
+    /** The Worker env, for resolving a Workers AI model id. */
+    env: Record<string, unknown>;
+    /** The extraction model (the source's `extractionModel`, else the agent's). */
+    model: AgentModelInput;
+    /** The user message that started the run. */
+    userInput: string;
+}) => Promise<AgentGraphExtraction>;
 
 /**
  * A live token delta produced while a turn streams. Ephemeral — deltas are
