@@ -6,6 +6,7 @@ import { buildModelMessages } from "./model-messages";
 import { agentBindingName } from "./naming";
 import { toFunctionReference } from "./paths";
 import type {
+    AgentCompact,
     AgentConfig,
     AgentDefinition,
     AgentEpisodeExtract,
@@ -34,6 +35,13 @@ import type {
 
 interface AgentLoopOptions {
     agent: AgentDefinition;
+
+    /**
+     * The history-compaction seam — production wires AI SDK `generateText`.
+     * Absent (the default) disables compaction, so an agent with no `compaction`
+     * config, and every unit test that doesn't opt in, is byte-identical.
+     */
+    compact?: AgentCompact;
     env: Record<string, unknown>;
     /** The agent's `lunora/agents.ts` export name (thread attribution). */
     exportName: string;
@@ -84,6 +92,8 @@ const DEFAULT_MAX_TURNS = 8;
 /** Everything one turn (and its tool calls) needs, prepared once per run. */
 interface TurnContext {
     agent: AgentDefinition;
+    /** History-compaction seam, when the runtime provided one (else `undefined`). */
+    compact: AgentCompact | undefined;
     env: Record<string, unknown>;
     generate: AgentGenerate;
     /** Read the thread's synced state (dispatches `agents:agentState`) — the tool ctx's `getState`. */
@@ -327,21 +337,75 @@ const applyPrepareStepResult = (
 };
 
 /**
+ * Decide the compaction split for a turn: when `compaction` is configured and the
+ * history exceeds `maxMessages`, return the `older` messages to summarize and the
+ * `recent` tail to keep verbatim (the most recent `keepRecent`, default
+ * `ceil(maxMessages / 2)`). Returns `undefined` when compaction is unset, the
+ * history is short enough, or the tail would be the whole history — a PURE
+ * decision (no I/O), unit-testable in isolation.
+ */
+const splitForCompaction = (
+    history: ReadonlyArray<AgentMessageRow>,
+    compaction: AgentConfig["compaction"],
+): { older: AgentMessageRow[]; recent: AgentMessageRow[] } | undefined => {
+    if (compaction === undefined || history.length <= compaction.maxMessages) {
+        return undefined;
+    }
+
+    const keepRecent = Math.max(1, compaction.keepRecent ?? Math.ceil(compaction.maxMessages / 2));
+
+    if (history.length <= keepRecent) {
+        return undefined;
+    }
+
+    const cut = history.length - keepRecent;
+
+    return { older: history.slice(0, cut), recent: history.slice(cut) };
+};
+
+/**
+ * Apply automatic history compaction for a turn. When {@link splitForCompaction}
+ * decides to compact and a `compact` seam is present, summarize the older
+ * messages and return the recent tail plus the summary; otherwise return the
+ * history unchanged. Called INSIDE the turn's memoized step, so the LLM
+ * summarization is replay-safe. Best-effort: a summarization throw falls back to
+ * the full, uncompacted history rather than failing the turn.
+ */
+const compactHistory = async (turnContext: TurnContext, history: AgentMessageRow[]): Promise<{ history: AgentMessageRow[]; summary: string | undefined }> => {
+    const { agent, compact, env } = turnContext;
+    const split = splitForCompaction(history, agent.compaction);
+
+    if (split === undefined || compact === undefined) {
+        return { history, summary: undefined };
+    }
+
+    try {
+        const summary = await compact({ env, messages: buildModelMessages({ history: split.older }), model: agent.compaction?.model ?? agent.model });
+
+        return summary.length > 0 ? { history: split.recent, summary } : { history, summary: undefined };
+    } catch {
+        // A failed summary is non-fatal — fall back to the full history.
+        return { history, summary: undefined };
+    }
+};
+
+/**
  * One LLM turn's decision, produced inside the `llm:turn:N` durable step so the
- * whole turn — history read, `prepareStep` overrides, and the model call —
- * memoizes as a unit and a replay returns the recorded decision without
- * re-running any of it. `prepareStep` living inside the step is what keeps a
- * non-deterministic compaction (e.g. an LLM summarization) replay-safe.
+ * whole turn — history read, compaction, `prepareStep` overrides, and the model
+ * call — memoizes as a unit and a replay returns the recorded decision without
+ * re-running any of it. Compaction and `prepareStep` living inside the step is
+ * what keeps a non-deterministic summarization replay-safe.
  */
 const generateTurn = async (turnContext: TurnContext, turn: number, steps: ReadonlyArray<AgentStepInfo>): Promise<AgentGenerateResult> => {
     const { agent, env, generate, instructions, listMessages, memoryContext, onTokenDelta, run, step, streamGenerate, threadKey } = turnContext;
 
     return step.do(`llm:turn:${String(turn)}`, async () => {
-        const history = (await run(listMessages, { key: threadKey })) as AgentMessageRow[];
+        const rawHistory = (await run(listMessages, { key: threadKey })) as AgentMessageRow[];
+        const { history, summary } = await compactHistory(turnContext, rawHistory);
 
         let prepared: PreparedTurn = {
             activeTools: agent.activeTools,
-            messages: buildModelMessages({ history, instructions, memoryContext }),
+            messages: buildModelMessages({ history, instructions, memoryContext, summary }),
             model: undefined,
             toolChoice: agent.toolChoice,
         };
@@ -821,7 +885,8 @@ const runTurns = async (
  * step-name sequence.
  */
 const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> => {
-    const { agent, env, exportName, extractEpisode, extractGraph, generate, instanceId, onTokenDelta, params, paths, run, step, streamGenerate } = options;
+    const { agent, compact, env, exportName, extractEpisode, extractGraph, generate, instanceId, onTokenDelta, params, paths, run, step, streamGenerate } =
+        options;
     const maxTurns = agent.maxTurns ?? DEFAULT_MAX_TURNS;
     const stopConditions = normalizeStopWhen(agent.stopWhen);
 
@@ -889,6 +954,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     const turnContext: TurnContext = {
         agent,
+        compact,
         env,
         generate,
         getState,
@@ -980,4 +1046,4 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 };
 
 export type { AgentLoopOptions };
-export { runAgentLoop };
+export { runAgentLoop, splitForCompaction };

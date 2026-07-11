@@ -2,7 +2,7 @@ import type { WorkflowDefinition } from "@lunora/workflow";
 import { defineWorkflow } from "@lunora/workflow";
 
 import { runAgentLoop } from "./agent-loop";
-import { createAgentGenerate, createEpisodeExtract, createGraphExtract, createStreamGenerate } from "./generate";
+import { createAgentGenerate, createCompact, createEpisodeExtract, createGraphExtract, createStreamGenerate } from "./generate";
 import { agentDefaultName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "./paths";
 import resolveAgentRun from "./resolve-run";
@@ -36,6 +36,10 @@ const compileAgentWorkflow = (
         handler: async (context) =>
             runAgentLoop({
                 agent,
+                // Automatic history compaction. Dormant unless the agent declares
+                // a `compaction` config; the loop gates on it, so any other agent
+                // takes the byte-identical no-compaction path.
+                compact: createCompact(),
                 env: context.env,
                 exportName,
                 // Run-end graph extraction. Dormant unless the agent declares a

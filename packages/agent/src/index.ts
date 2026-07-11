@@ -1,5 +1,5 @@
 export type { AgentLoopOptions } from "./agent-loop";
-export { runAgentLoop } from "./agent-loop";
+export { runAgentLoop, splitForCompaction } from "./agent-loop";
 export type { AgentMemoryReadInput, AgentMemorySearchHit, AgentMemorySearchInput, AgentMemorySearchResult } from "./agentic-memory";
 export { collectAgenticMemoryTools, toSearchResults } from "./agentic-memory";
 export { agentAsTool } from "./as-tool";

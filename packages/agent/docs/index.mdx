@@ -98,6 +98,15 @@ the durable loop:
   final answer (no pending tool calls) reports `result.stopped === "final"`.
 - **`prepareStep`** — mutate the request just before a turn (swap the model,
   trim messages, force a tool). Must be deterministic — it runs on replay.
+- **`compaction`** — automatic history compaction. Set
+  `compaction: { maxMessages }` and once the thread history exceeds
+  `maxMessages`, the loop summarizes the older messages (all but the most recent
+  `keepRecent`, default `ceil(maxMessages / 2)`) into one system-message brief
+  and prompts the model with that brief plus the recent tail — keeping context
+  bounded as a conversation grows. The summary is produced inside the turn's
+  memoized durable step (replay-safe) by a cheaper `compaction.model` if set,
+  else the agent's model; `prepareStep` still runs after and can override
+  further. Absent, the full history is sent every turn.
 - **`output`** — a `FlexibleSchema` (zod or `jsonSchema(...)`) for a structured
   final answer; the typed value is surfaced on `result.output`.
 - **`onStepFinish`** — a callback after each turn (observability/side channels).

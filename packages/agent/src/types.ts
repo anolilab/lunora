@@ -426,6 +426,26 @@ export interface AgentConfig {
     activeTools?: ReadonlyArray<string>;
 
     /**
+     * Automatic thread-history compaction. When the persisted history exceeds
+     * `maxMessages`, the loop summarizes the older messages (all but the most
+     * recent `keepRecent`, default `ceil(maxMessages / 2)`) into one system-message
+     * brief and prompts the model with that brief plus the recent tail — keeping
+     * the context bounded as a conversation grows. The summary is produced inside
+     * the turn's memoized durable step (replay-safe) by `model` (a cheaper model
+     * may be set, else the agent's). Absent (the default) disables compaction —
+     * the full history is sent every turn, exactly as before. A manual
+     * {@link AgentConfig.prepareStep} still runs after and can override further.
+     */
+    compaction?: {
+        /** How many most-recent messages to keep verbatim (default `ceil(maxMessages / 2)`). */
+        keepRecent?: number;
+        /** Compact once history exceeds this many messages. */
+        maxMessages: number;
+        /** Model for the summarization step (defaults to the agent's model). */
+        model?: AgentModelInput;
+    };
+
+    /**
      * Seed the thread's synced state — a static, JSON-serializable object set on
      * the thread row at creation only (first writer wins, like `owner`/`title`),
      * so a `useAgentState` client sees it immediately. Keep it DETERMINISTIC (no
@@ -807,6 +827,23 @@ export type AgentGraphExtract = (input: {
     /** The user message that started the run. */
     userInput: string;
 }) => Promise<AgentGraphExtraction>;
+
+/**
+ * The history-compaction seam: given the OLDER model messages to condense (and
+ * the model to run it on), return a summary brief. Production wires AI SDK
+ * `generateText` (`createCompact`); the loop calls it INSIDE the turn's memoized
+ * `llm:turn:N` step so the summarization is replay-safe. Absent (the default)
+ * disables compaction, so an agent with no `compaction` config — and every unit
+ * test that doesn't opt in — is byte-identical.
+ */
+export type AgentCompact = (input: {
+    /** The Worker env, for resolving a Workers AI model id. */
+    env: Record<string, unknown>;
+    /** The older conversation messages to summarize (already assembled). */
+    messages: ModelMessage[];
+    /** The compaction model (the config's `model`, else the agent's). */
+    model: AgentModelInput;
+}) => Promise<string>;
 
 /** The one-line summary an episodic-memory run records for later recency recall. */
 export interface AgentEpisodeExtraction {

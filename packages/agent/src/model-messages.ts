@@ -40,7 +40,12 @@ const toolMessage = (row: AgentMessageRow): ModelMessage => {
  * tool calls/results correlated the way providers expect (assistant tool-call
  * parts answered by tool-result parts sharing the `toolCallId`).
  */
-const buildModelMessages = (options: { history: ReadonlyArray<AgentMessageRow>; instructions?: string; memoryContext?: string }): ModelMessage[] => {
+const buildModelMessages = (options: {
+    history: ReadonlyArray<AgentMessageRow>;
+    instructions?: string;
+    memoryContext?: string;
+    summary?: string;
+}): ModelMessage[] => {
     const messages: ModelMessage[] = [];
 
     if (options.instructions !== undefined && options.instructions.length > 0) {
@@ -49,6 +54,13 @@ const buildModelMessages = (options: { history: ReadonlyArray<AgentMessageRow>; 
 
     if (options.memoryContext !== undefined && options.memoryContext.length > 0) {
         messages.push({ content: `Relevant context retrieved for this conversation:\n\n${options.memoryContext}`, role: "system" });
+    }
+
+    // The compaction brief (a summary of the older history that was dropped from
+    // the prompt) sits after retrieved context and before the recent tail, so the
+    // model reads it as established background for the remaining turns.
+    if (options.summary !== undefined && options.summary.length > 0) {
+        messages.push({ content: `Summary of the earlier conversation:\n\n${options.summary}`, role: "system" });
     }
 
     for (const row of options.history) {

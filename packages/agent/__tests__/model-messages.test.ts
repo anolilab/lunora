@@ -35,6 +35,29 @@ describe(buildModelMessages, () => {
         expect(messages[5]).toStrictEqual({ content: "It is sunny.", role: "assistant" });
     });
 
+    it("inserts the compaction summary after memory context and before the recent tail", () => {
+        const messages = buildModelMessages({
+            history: [{ content: "and now?", role: "user", seq: 9 }],
+            instructions: "Be brief.",
+            memoryContext: "Berlin facts.",
+            summary: "Earlier the user asked about the weather; it was sunny.",
+        });
+
+        expect(messages[0]).toStrictEqual({ content: "Be brief.", role: "system" });
+        expect(messages[1]?.content as string).toContain("Berlin facts.");
+        // The summary is its own system message, after memory, before history.
+        expect(messages[2]?.role).toBe("system");
+        expect(messages[2]?.content as string).toContain("Summary of the earlier conversation:");
+        expect(messages[2]?.content as string).toContain("it was sunny.");
+        expect(messages[3]).toStrictEqual({ content: "and now?", role: "user" });
+    });
+
+    it("omits an empty compaction summary", () => {
+        const messages = buildModelMessages({ history: [{ content: "hi", role: "user", seq: 0 }], summary: "" });
+
+        expect(messages).toStrictEqual([{ content: "hi", role: "user" }]);
+    });
+
     it("omits empty instructions and memory, and skips text-less tool-call parts", () => {
         const messages = buildModelMessages({
             history: [{ content: "", role: "assistant", seq: 0, toolCalls: [{ id: "c", input: {}, name: "t" }] }],

@@ -5,6 +5,7 @@ import type { LanguageModel, LanguageModelUsage, ModelMessage, Tool } from "ai";
 import { generateText, jsonSchema, Output, streamText, tool as aiTool } from "ai";
 
 import type {
+    AgentCompact,
     AgentDefinition,
     AgentEpisodeExtract,
     AgentGenerate,
@@ -313,4 +314,28 @@ const createEpisodeExtract =
         return { summary: text.trim() };
     };
 
-export { createAgentGenerate, createEpisodeExtract, createGraphExtract, createStreamGenerate, resolveAgentModel };
+/** System prompt steering the history-compaction summarizer. */
+const COMPACTION_SYSTEM =
+    "You are compacting an ongoing conversation. Summarize the messages so far into a concise brief that preserves " +
+    "decisions made, facts established, open questions, and current task state — everything the assistant needs to continue " +
+    "coherently. Write it as notes for the assistant, not a reply to the user. No preamble.";
+
+/**
+ * Build the production history-compaction seam over AI SDK `generateText`: it
+ * summarizes the older conversation messages under {@link COMPACTION_SYSTEM} and
+ * returns the brief. Wired by `compileAgentWorkflow` and called inside the loop's
+ * memoized `llm:turn:N` step so the summarization is replay-safe.
+ */
+const createCompact =
+    (): AgentCompact =>
+    async ({ env, messages, model }) => {
+        const { text } = await generateText({
+            messages,
+            model: resolveAgentModel(model, env),
+            system: COMPACTION_SYSTEM,
+        });
+
+        return text.trim();
+    };
+
+export { createAgentGenerate, createCompact, createEpisodeExtract, createGraphExtract, createStreamGenerate, resolveAgentModel };
