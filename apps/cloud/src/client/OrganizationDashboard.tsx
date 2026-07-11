@@ -5,8 +5,11 @@ import { useState } from "react";
 import { api } from "../../lunora/_generated/api.js";
 import { ActivitySection } from "./ActivitySection";
 import { BillingSection } from "./BillingSection";
+import { BuildsSection } from "./BuildsSection";
 import { DeployKeysSection } from "./DeployKeysSection";
+import { DomainsSection } from "./DomainsSection";
 import { InvitationsSection } from "./InvitationsSection";
+import { LogsSection } from "./LogsSection";
 import { MembersSection } from "./MembersSection";
 import { ProjectsSection } from "./ProjectsSection";
 import { SecretsSection } from "./SecretsSection";
@@ -18,13 +21,16 @@ interface OrganizationDashboardProps {
     organizationId: OrgId;
 }
 
-type Tab = "activity" | "billing" | "invitations" | "keys" | "members" | "projects" | "secrets" | "usage";
+type Tab = "activity" | "billing" | "builds" | "domains" | "invitations" | "keys" | "logs" | "members" | "projects" | "secrets" | "usage";
 
 const TABS: { id: Tab; label: string }[] = [
     { id: "projects", label: "Projects" },
     { id: "members", label: "Members" },
     { id: "keys", label: "Deploy keys" },
     { id: "secrets", label: "Secrets" },
+    { id: "domains", label: "Domains" },
+    { id: "builds", label: "Builds" },
+    { id: "logs", label: "Logs" },
     { id: "invitations", label: "Invitations" },
     { id: "usage", label: "Usage" },
     { id: "billing", label: "Billing" },
@@ -72,6 +78,9 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
             {tab === "keys" ? <DeployKeysSection organizationId={organizationId} /> : null}
             {tab === "invitations" ? <InvitationsSection organizationId={organizationId} /> : null}
             {tab === "secrets" ? <SecretsSection organizationId={organizationId} /> : null}
+            {tab === "domains" ? <DomainsSection organizationId={organizationId} /> : null}
+            {tab === "builds" ? <BuildsSection organizationId={organizationId} /> : null}
+            {tab === "logs" ? <LogsSection organizationId={organizationId} /> : null}
             {tab === "usage" ? <UsageSection organizationId={organizationId} /> : null}
             {tab === "billing" ? <BillingSection organizationId={organizationId} /> : null}
             {tab === "activity" ? <ActivitySection organizationId={organizationId} /> : null}
