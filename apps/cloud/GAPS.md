@@ -180,7 +180,7 @@ apply. Use them; a bad dispatcher push takes down a cell.
 
 A non-prod cell for end-to-end platform changes before they touch tenants.
 
-### E4. ⭐ Fleet runtime versioning: fat vs thin tenant worker (🧭 — decides A1/A3 bundle format)
+### E4. ⭐ Fleet runtime versioning: fat vs thin tenant worker (✅ spike packaged + fat pipeline shipped; 🌐 probe run pending)
 
 The runtime is bundled into each tenant worker; a security patch today means
 rebuild + redeploy the fleet. Thin worker (central runtime via dynamic dispatch)

@@ -124,6 +124,8 @@ export const create = mutation
         kind: v.union(v.literal("production"), v.literal("preview"), v.literal("dev")),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
+        // @lunora/runtime version bundled into this release (fleet-upgrade planner input, GAPS.md E4).
+        runtimeVersion: v.optional(v.string()),
         scriptName: v.string(),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number }> => {
@@ -166,6 +168,7 @@ export const create = mutation
             organizationId: arguments_.organizationId,
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name, not a Cypress projectId
             queuedAt: now,
+            ...(arguments_.runtimeVersion === undefined ? {} : { runtimeVersion: arguments_.runtimeVersion }),
             scriptName: `${arguments_.scriptName}-v${String(version)}`,
             status: "queued",
             updatedAt: now,
