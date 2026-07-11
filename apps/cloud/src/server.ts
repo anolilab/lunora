@@ -4,12 +4,11 @@ import { admin, passkey, twoFactor } from "@lunora/auth/plugins";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
 import { createMailerFromEnv } from "@lunora/mail";
-import type { PaymentsFromContextOptions, StripeClientLike } from "@lunora/payment";
-import { createStripeAdapter } from "@lunora/payment";
+import type { PaymentsFromContextOptions } from "@lunora/payment";
+import { createCreemAdapter } from "@lunora/payment/creem";
 import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@lunora/runtime";
 import { createWorker } from "@lunora/runtime";
-// eslint-disable-next-line import/no-named-as-default -- `stripe`'s default export is the `Stripe` class; this is its documented import form
-import Stripe from "stripe";
+import { Creem } from "creem";
 
 import { LUNORA_CRONS } from "../lunora/_generated/crons.js";
 import { LUNORA_FUNCTIONS } from "../lunora/_generated/functions.js";
@@ -62,40 +61,46 @@ const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
 };
 
 interface ShardEnv {
+    /** Creem API key (MoR billing, §4). Absent → billing reads work, live calls fail. */
+    CREEM_API_KEY?: string;
+    /** "true" routes the SDK at Creem's sandbox (test-api.creem.io). */
+    CREEM_TEST_MODE?: string;
+    CREEM_WEBHOOK_SECRET?: string;
     DB?: D1DatabaseLike;
-    STRIPE_SECRET_KEY?: string;
-    STRIPE_WEBHOOK_SECRET?: string;
 }
 
 /**
  * Build the `@lunora/payment` config for a shard request (CLOUD-PLAN.md §4).
  * The org id is the payment `referenceId`; the store rides `ctx.db` (the
  * `.global()` payment tables in the control-plane D1). The provider adapter is
- * always wired so entitlement reads work offline — only live Stripe calls
- * (checkout/portal/webhook) need a real `STRIPE_SECRET_KEY`. Membership is
+ * always wired so entitlement reads work offline — only live Creem calls
+ * (checkout/portal/webhook) need a real `CREEM_API_KEY`. Creem is a
+ * Merchant-of-Record: it is the legal seller and calculates/collects/remits
+ * sales tax/VAT globally (the GAPS.md C3 decision). Membership is
  * gated by the `lunora/billing.ts` functions (which `assertMember` before
  * touching `ctx.payments`), so the per-caller `authorize` here is allow-all.
  */
-// Memoized per isolate: the Stripe client + adapter are pure functions of env
+// Memoized per isolate: the Creem client + adapter are pure functions of env
 // (stable within an isolate), so build them once instead of on every shard
 // request that touches `ctx.payments`.
 let cachedPayment: { config: PaymentsFromContextOptions; key: string } | null = null;
 
 const paymentConfig = (env: ShardEnv): PaymentsFromContextOptions => {
-    const key = `${env.STRIPE_SECRET_KEY ?? ""}|${env.STRIPE_WEBHOOK_SECRET ?? ""}`;
+    const key = `${env.CREEM_API_KEY ?? ""}|${env.CREEM_WEBHOOK_SECRET ?? ""}|${env.CREEM_TEST_MODE ?? ""}`;
 
     if (cachedPayment?.key !== key) {
         cachedPayment = {
             config: {
-                adapter: createStripeAdapter({
-                    // A real `Stripe` instance satisfies the structural client; the cast
-                    // keeps the package free of a hard `stripe` type dependency. A
-                    // placeholder key keeps construction from throwing when billing isn't
-                    // configured — live calls then fail with a clear Stripe auth error.
-                    client: new Stripe(env.STRIPE_SECRET_KEY ?? "sk_unconfigured", {
-                        httpClient: Stripe.createFetchHttpClient(),
-                    }) as unknown as StripeClientLike,
-                    webhookSecret: env.STRIPE_WEBHOOK_SECRET ?? "",
+                adapter: createCreemAdapter({
+                    // A real `Creem` instance satisfies the structural client; the cast
+                    // keeps the app decoupled from the SDK's full types. A placeholder
+                    // key keeps construction from throwing when billing isn't
+                    // configured — live calls then fail with a clear Creem auth error.
+                    client: new Creem({
+                        apiKey: env.CREEM_API_KEY ?? "unconfigured",
+                        ...(env.CREEM_TEST_MODE === "true" ? { server: "test" as const } : {}),
+                    }),
+                    webhookSecret: env.CREEM_WEBHOOK_SECRET ?? "",
                 }),
                 authorize: () => true,
                 entitlements: LUNORA_CLOUD_PLANS,
@@ -138,6 +143,10 @@ interface Env {
     AUTH_SECRET?: string;
     /** Base URL better-auth resolves callbacks against. */
     AUTH_URL?: string;
+    /** Creem (MoR) billing secrets (§4). Absent → billing reads work, live calls fail. */
+    CREEM_API_KEY?: string;
+    CREEM_TEST_MODE?: string;
+    CREEM_WEBHOOK_SECRET?: string;
     /** Control-plane D1 — backs the `.global()` cells/organizations tables + auth. */
     DB: unknown;
     /** Dispatch namespace — used by the cron fan-out to tick tenants (§2.4). */
@@ -153,9 +162,6 @@ interface Env {
     /** Sender address for auth (verification / reset) email; captured in dev. */
     MAIL_FROM?: string;
     SHARD: ShardNamespaceLike;
-    /** Stripe billing secrets (§4). Absent → billing reads work, live calls fail. */
-    STRIPE_SECRET_KEY?: string;
-    STRIPE_WEBHOOK_SECRET?: string;
 }
 
 /** Build the OAuth provider map from env — only providers with creds are enabled. */
