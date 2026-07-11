@@ -13,7 +13,7 @@ import type { CellScheduler } from "./scheduler";
  * deployment can be driven end-to-end in tests with a fake provisioner.
  */
 
-export type DeployPhase = "failed" | "live" | "provisioning" | "queued";
+export type DeployPhase = "failed" | "live" | "provisioning" | "queued" | "verifying";
 
 export interface DeployProgress {
     bundleHash?: string;
@@ -29,6 +29,11 @@ export interface RunDeploymentOptions {
     priority?: number;
     provisioner: Provisioner;
     scheduler: CellScheduler;
+    // Health check the freshly uploaded (versioned) script before it is
+    // declared live (GAPS.md A1). Returning `false` fails the deployment — the
+    // previously active version keeps serving; the pointer is never touched.
+    // Omit to skip verification (previews/dev).
+    verify?: (result: ProvisionResult) => Promise<boolean>;
 }
 
 export type DeployOutcome = { error: string; status: "failed" } | { result: ProvisionResult; status: "live" };
@@ -43,6 +48,18 @@ export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDepl
 
     try {
         const result = await options.scheduler.run(() => options.provisioner.deploy(spec), { priority: options.priority });
+
+        if (options.verify) {
+            await emit({ phase: "verifying", url: result.url });
+
+            const healthy = await options.verify(result);
+
+            if (!healthy) {
+                await emit({ error: "health check failed", phase: "failed", url: result.url });
+
+                return { error: "health check failed", status: "failed" };
+            }
+        }
 
         await emit({ bundleHash: result.bundleHash, phase: "live", url: result.url });
 
