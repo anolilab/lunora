@@ -15,8 +15,8 @@ export { adaptMcpResult, mcpTools } from "./mcp";
 export { buildModelMessages } from "./model-messages";
 export { agentBindingName, agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "./naming";
 export { AGENT_MODULE, DEFAULT_AGENT_FUNCTION_PATHS, SANDBOX_INVOKE_PATH, SANDBOX_MODULE, toFunctionReference } from "./paths";
-export type { BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions } from "./sandbox";
-export { browserTool, containerTool } from "./sandbox";
+export type { BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions, FsToolInput, FsToolOptions } from "./sandbox";
+export { browserTool, containerTool, fsTool } from "./sandbox";
 export { defineSkill, isSkillDefinition } from "./skill";
 export type {
     AgentAsToolOptions,

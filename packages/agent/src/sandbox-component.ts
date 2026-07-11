@@ -33,23 +33,46 @@ interface SandboxContainerAccessor {
     };
 }
 
+/** Structural view of one listed R2 object. */
+interface R2ObjectLike {
+    key: string;
+    size: number;
+}
+
+/** Structural subset of the Cloudflare `R2Bucket` binding the fs sandbox uses. */
+interface R2BucketLike {
+    delete: (key: string) => Promise<void>;
+    get: (key: string) => Promise<{ text: () => Promise<string> } | null>;
+    head: (key: string) => Promise<R2ObjectLike | null>;
+    list: (options?: { limit?: number; prefix?: string }) => Promise<{ objects: ReadonlyArray<R2ObjectLike> }>;
+    put: (key: string, value: string) => Promise<unknown>;
+}
+
 /** The action ctx the dispatcher casts to — codegen attaches these on an action ctx. */
 interface SandboxActionContext {
     browser?: SandboxBrowserSurface;
     containers?: Record<string, SandboxContainerAccessor>;
+    /** The Worker env bindings — the fs sandbox reads its R2 bucket from here. */
+    env?: Record<string, unknown>;
 }
 
-/** Args the browser/container tools dispatch — a flat superset of both unions. */
+/** Args the browser/container/fs tools dispatch — a flat superset of the unions. */
 interface SandboxInvokeArgs {
     args?: string[];
     body?: string;
+    /** fs: the R2 bucket binding name. */
+    bucket?: string;
     command?: string;
+    /** fs: content for a `write`. */
+    content?: string;
     fullPage?: boolean;
-    kind: "browser" | "container";
+    kind: "browser" | "container" | "fs";
     method?: string;
     name?: string;
     op: string;
     path?: string;
+    /** fs: the author-pinned prefix the tool is scoped under. */
+    root?: string;
     selector?: string;
     type?: string;
     url?: string;
@@ -128,6 +151,103 @@ const runContainerOp = async (accessor: SandboxContainerAccessor, request: Sandb
     throw new LunoraError("INTERNAL", `@lunora/agent: sandbox container op "${request.op}" is not supported`);
 };
 
+/** Strip leading/trailing `/` without a regex (avoids backtracking / recompilation). */
+const trimSlashes = (value: string): string => {
+    let start = 0;
+    let end = value.length;
+
+    while (start < end && value[start] === "/") {
+        start += 1;
+    }
+
+    while (end > start && value[end - 1] === "/") {
+        end -= 1;
+    }
+
+    return value.slice(start, end);
+};
+
+/**
+ * Resolve a model-supplied `path` to an absolute R2 key UNDER `root`, rejecting
+ * any `..` that would escape the sandbox root. Every returned key is guaranteed
+ * to start with the normalized `root`, so the model can never read or write
+ * outside its own prefix — the fs sandbox's core isolation guarantee.
+ */
+const resolveFsKey = (root: string, path: string): string => {
+    const base = trimSlashes(root);
+    const segments: string[] = [];
+
+    for (const segment of path.split("/")) {
+        if (segment === "" || segment === ".") {
+            continue;
+        }
+
+        if (segment === "..") {
+            if (segments.length === 0) {
+                throw new LunoraError("BAD_REQUEST", "@lunora/agent: fs path escapes the sandbox root");
+            }
+
+            segments.pop();
+
+            continue;
+        }
+
+        segments.push(segment);
+    }
+
+    const relative = segments.join("/");
+
+    return base && relative ? `${base}/${relative}` : base || relative;
+};
+
+/**
+ * Run one R2-backed virtual-filesystem op, scoped under `root`. `ls` lists the
+ * keys under a directory (root-relative), `read`/`write`/`rm`/`stat` operate on a
+ * single file. workerd has no real shell; this is a persistent object-store FS.
+ */
+const runFsOp = async (bucket: R2BucketLike, root: string, request: SandboxInvokeArgs): Promise<unknown> => {
+    const base = trimSlashes(root);
+    const key = resolveFsKey(root, request.path ?? "");
+
+    switch (request.op) {
+        case "ls": {
+            const prefix = key.length > 0 ? `${key}/` : "";
+            const { objects } = await bucket.list({ prefix });
+            // Strip the sandbox root so the model sees root-relative paths.
+            const strip = base.length > 0 ? base.length + 1 : 0;
+
+            return { entries: objects.map((object) => object.key.slice(strip)) };
+        }
+        case "read": {
+            const object = await bucket.get(key);
+
+            if (!object) {
+                throw new LunoraError("NOT_FOUND", `@lunora/agent: fs read: no file at "${request.path ?? ""}"`);
+            }
+
+            return object.text();
+        }
+        case "rm": {
+            await bucket.delete(key);
+
+            return { path: request.path ?? "", removed: true };
+        }
+        case "stat": {
+            const head = await bucket.head(key);
+
+            return head ? { exists: true, size: head.size } : { exists: false };
+        }
+        case "write": {
+            await bucket.put(key, request.content ?? "");
+
+            return { bytes: (request.content ?? "").length, path: request.path ?? "", wrote: true };
+        }
+        default: {
+            throw new LunoraError("INTERNAL", `@lunora/agent: sandbox fs op "${request.op}" is not supported`);
+        }
+    }
+};
+
 /**
  * Build the sandbox runtime component: the single internal action the
  * batteries-included `browserTool`/`containerTool` dispatch to. Codegen
@@ -141,13 +261,16 @@ const sandboxComponent = (): SandboxComponent => {
         .input({
             args: v.optional(v.array(v.string())),
             body: v.optional(v.string()),
+            bucket: v.optional(v.string()),
             command: v.optional(v.string()),
+            content: v.optional(v.string()),
             fullPage: v.optional(v.boolean()),
-            kind: v.union(v.literal("browser"), v.literal("container")),
+            kind: v.union(v.literal("browser"), v.literal("container"), v.literal("fs")),
             method: v.optional(v.string()),
             name: v.optional(v.string()),
             op: v.string(),
             path: v.optional(v.string()),
+            root: v.optional(v.string()),
             selector: v.optional(v.string()),
             type: v.optional(v.string()),
             url: v.optional(v.string()),
@@ -162,6 +285,19 @@ const sandboxComponent = (): SandboxComponent => {
                 }
 
                 return runBrowserOp(surface.browser, request);
+            }
+
+            if (request.kind === "fs") {
+                const bucket = surface.env?.[request.bucket ?? ""] as R2BucketLike | undefined;
+
+                if (!bucket || typeof bucket.get !== "function") {
+                    throw new LunoraError(
+                        "INTERNAL",
+                        `@lunora/agent: sandbox fs op found no R2 bucket "${request.bucket ?? ""}" on env — declare the r2_bucket binding in wrangler.jsonc and run codegen`,
+                    );
+                }
+
+                return runFsOp(bucket, request.root ?? "", request);
             }
 
             const name = request.name ?? "";
@@ -180,5 +316,5 @@ const sandboxComponent = (): SandboxComponent => {
     return { invoke };
 };
 
-export type { SandboxComponent, SandboxRegisteredFunction };
-export { sandboxComponent };
+export type { R2BucketLike, SandboxComponent, SandboxInvokeArgs, SandboxRegisteredFunction };
+export { resolveFsKey, runFsOp, sandboxComponent };

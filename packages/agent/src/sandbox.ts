@@ -47,6 +47,39 @@ interface BrowserToolOptions {
     needsApproval?: ((input: BrowserToolInput) => boolean) | boolean;
 }
 
+/**
+ * The model-provided input to a {@link fsTool} call — a discriminated union on
+ * `op` over an R2-backed virtual filesystem. Paths are relative to the tool's
+ * pinned `root`; a `..` that escapes the root is rejected server-side.
+ */
+type FsToolInput =
+    | { op: "ls"; path?: string }
+    | { op: "read"; path: string }
+    | { op: "rm"; path: string }
+    | { op: "stat"; path: string }
+    | { content: string; op: "write"; path: string };
+
+/** Author-supplied config for `fsTool`. */
+interface FsToolOptions {
+    /** Override the model-facing description (what the tool does). */
+    description?: string;
+
+    /**
+     * Gate a call behind a human approval. Defaults to gating the WRITING ops
+     * (`write`, `rm`) — a prompt-injected model shouldn't silently overwrite or
+     * delete the sandbox — while `ls`/`read`/`stat` run unattended. Pass a boolean
+     * or a predicate (evaluated from replay-stable input, so keep it deterministic).
+     */
+    needsApproval?: ((input: FsToolInput) => boolean) | boolean;
+
+    /**
+     * A fixed key prefix every path is scoped under (e.g. `"agents/support"`),
+     * isolating this tool's files from the rest of the bucket. Default: the bucket
+     * root. The server rejects any `..` that would escape it.
+     */
+    root?: string;
+}
+
 /** Author-supplied config for `containerTool`. */
 interface ContainerToolOptions {
     /** Override the model-facing description (what the tool does). */
@@ -71,6 +104,23 @@ const DEFAULT_BROWSER_DESCRIPTION =
 const DEFAULT_CONTAINER_DESCRIPTION =
     "Talk to a sandboxed container: `fetch` an HTTP path on it, or `exec` a command inside it. " +
     'Set `op` to "fetch" (with `path`) or "exec" (with `command`).';
+
+const DEFAULT_FS_DESCRIPTION =
+    "Read and write files in a persistent sandbox filesystem. " +
+    'Set `op` to "ls" (list a directory), "read", "write" (with `content`), "rm", or "stat", and pass `path`.';
+
+/** The default gate for `fsTool` — writing ops (`write`/`rm`) pause for approval; reads run unattended. */
+const defaultFsGate = (input: FsToolInput): boolean => input.op === "write" || input.op === "rm";
+
+const FS_TOOL_SCHEMA = jsonSchema<FsToolInput>({
+    properties: {
+        content: { description: "write: the file contents.", type: "string" },
+        op: { description: "The filesystem operation to run.", enum: ["ls", "read", "write", "rm", "stat"], type: "string" },
+        path: { description: "The file or directory path, relative to the sandbox root.", type: "string" },
+    },
+    required: ["op"],
+    type: "object",
+});
 
 const BROWSER_TOOL_SCHEMA = jsonSchema<BrowserToolInput>({
     properties: {
@@ -226,5 +276,43 @@ const containerTool = (name: string, options: ContainerToolOptions = {}): AgentT
     };
 };
 
-export type { BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions };
-export { browserTool, containerTool };
+/**
+ * A batteries-included agent tool exposing a persistent, R2-backed virtual
+ * filesystem. `bucket` is the R2 binding name; every path is scoped under the
+ * pinned `opts.root` (a `..` that would escape it is rejected). One tool exposes
+ * `ls`/`read`/`write`/`rm`/`stat`; the model picks via `op`. The call dispatches
+ * to the auto-registered `sandbox:invoke` action, which reads the bucket from
+ * `ctx.env`. workerd has no real shell — this is object-store-backed file I/O.
+ *
+ * By default the writing ops (`write`/`rm`) pause for a human approval while
+ * reads run unattended; pass `opts.needsApproval` to change that. Importing the
+ * tool registers the dispatcher; the app must declare the `r2_bucket` binding in
+ * `wrangler.jsonc` (the fs op throws a directed error until it is wired).
+ *
+ * ```ts
+ * import { defineAgent, fsTool } from "@lunora/agent/sandbox";
+ *
+ * export const coder = defineAgent({
+ *     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+ *     tools: { fs: fsTool("SANDBOX_BUCKET", { root: "agents/coder" }) },
+ * });
+ * ```
+ */
+const fsTool = (bucket: string, options: FsToolOptions = {}): AgentToolDefinition<FsToolInput> => {
+    if (typeof bucket !== "string" || bucket.length === 0) {
+        throw new LunoraError("INTERNAL", "@lunora/agent: fsTool requires an R2 `bucket` binding name (the r2_bucket declared in wrangler.jsonc)");
+    }
+
+    return {
+        description: options.description ?? DEFAULT_FS_DESCRIPTION,
+        // Pin kind/bucket/root LAST so out-of-schema model input can never override
+        // the authoritative bucket + sandbox root the author pinned.
+        execute: (input, context: AgentToolContext) => context.run(SANDBOX_REF, { ...input, bucket, kind: "fs", root: options.root ?? "" }),
+        inputSchema: FS_TOOL_SCHEMA,
+        isLunoraAgentTool: true,
+        needsApproval: options.needsApproval ?? defaultFsGate,
+    };
+};
+
+export type { BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions, FsToolInput, FsToolOptions };
+export { browserTool, containerTool, fsTool };

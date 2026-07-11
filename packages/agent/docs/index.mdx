@@ -346,15 +346,15 @@ tools: {
 }
 ```
 
-## Sandbox tools (batteries-included browser + containers)
+## Sandbox tools (batteries-included browser + containers + filesystem)
 
-Two batteries-included tools give an agent a **headless browser** and a
-**sandboxed container** with minimal glue. Import them from `@lunora/agent` (or
-the `@lunora/agent/sandbox` subpath) and drop them into `tools` — codegen does
-the rest:
+Batteries-included tools give an agent a **headless browser**, a **sandboxed
+container**, and an **R2-backed filesystem** with minimal glue. Import them from
+`@lunora/agent` (or the `@lunora/agent/sandbox` subpath) and drop them into
+`tools` — codegen does the rest:
 
 ```ts
-import { browserTool, containerTool, defineAgent } from "@lunora/agent";
+import { browserTool, containerTool, defineAgent, fsTool } from "@lunora/agent";
 
 export const operator = defineAgent({
     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
@@ -363,6 +363,8 @@ export const operator = defineAgent({
         browser: browserTool(),
         // Talks to `ctx.containers.sandbox` (a `lunora/containers.ts` export).
         sandbox: containerTool("sandbox"),
+        // A persistent R2-backed filesystem scoped to `agents/operator`.
+        fs: fsTool("SANDBOX_BUCKET", { root: "agents/operator" }),
     },
 });
 ```
@@ -384,6 +386,15 @@ export const operator = defineAgent({
   runs unattended, so scope the container's routes accordingly. Pass
   `opts.needsApproval` (a boolean or a predicate over the input) to widen or
   disable the gate.
+- **`fsTool(bucket, opts?)`** exposes a persistent, **R2-backed virtual
+  filesystem** — `op` is `ls` / `read` / `write` (with `content`) / `rm` / `stat`,
+  over the R2 binding named `bucket`. Every path is scoped under `opts.root` (e.g.
+  `"agents/coder"`); a `..` that would escape the root is rejected server-side, so
+  the model can only touch its own prefix. **The writing ops (`write`/`rm`) are
+  gated behind a human approval by default**; reads run unattended. workerd has no
+  real shell, so this is object-store file I/O, not a POSIX shell. The app must
+  declare the `r2_bucket` binding in `wrangler.jsonc` (the op throws a directed
+  error until it is wired).
 
 Why it needs little wiring: a tool's `execute` runs inside the durable tool step,
 which has no `ctx.browser`/`ctx.containers`. Both tools instead dispatch to a
