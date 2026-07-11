@@ -24,6 +24,20 @@ bridge at `@lunora/react-native/auth`.
     [`examples/expo`](https://github.com/anolilab/lunora/tree/alpha/examples/expo).
 </Callout>
 
+## Scaffold a new app
+
+The fastest start is the `expo` template — a full Expo app (iOS, Android, and
+web) wired to a Lunora worker backend, with auth and the live-chat example
+already in place:
+
+```sh
+lunora init my-app -t expo
+```
+
+Then follow the generated `README.md` (create a D1 database, set `AUTH_SECRET`,
+`lunora codegen`, and `expo start`). To add Lunora to an existing Expo app
+instead, wire it by hand as below.
+
 ## Install
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
