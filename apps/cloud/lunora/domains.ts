@@ -4,6 +4,7 @@ import { randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
+import { orgEntitlements } from "./entitlements";
 
 /**
  * Custom domains (GAPS.md B1). A hostname is added (minting a TXT verification
@@ -44,8 +45,17 @@ export const add = mutation
         redirectTo: v.optional(v.string()),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"domains">; txtName: string; txtToken: string }> => {
-        await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
+        const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
+
         await assertRowInOrg(context, arguments_.projectId, arguments_.organizationId, "project");
+
+        // Custom domains are a plan feature (GAPS.md B1) — enforce the
+        // entitlement, not just the flag on the pricing page.
+        const entitlements = await orgEntitlements(context, arguments_.organizationId);
+
+        if (!entitlements.has("customDomains")) {
+            throw new LunoraError("FORBIDDEN", "custom domains require a plan with the customDomains feature");
+        }
 
         const hostname = arguments_.hostname.toLowerCase().trim();
 
@@ -64,6 +74,14 @@ export const add = mutation
             ...(arguments_.redirectTo === undefined ? {} : { redirectTo: arguments_.redirectTo }),
             txtToken,
             updatedAt: now,
+        });
+
+        await context.db.insert("auditLog", {
+            action: "domain.add",
+            actorUserId: member.userId,
+            createdAt: now,
+            organizationId: arguments_.organizationId,
+            target: hostname,
         });
 
         return { id, txtName: `_lunora.${hostname}`, txtToken };
@@ -85,10 +103,20 @@ export const list = query
 export const remove = mutation
     .input({ id: v.id("domains"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
-        await assertMember(context, organizationId, ["owner", "admin"]);
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
         await assertRowInOrg(context, id, organizationId, "domain");
 
+        const domain = (await context.db.get(id)) as DomainRow | null;
+
         await context.db.delete(id);
+        await context.db.insert("auditLog", {
+            action: "domain.remove",
+            actorUserId: member.userId,
+            createdAt: Date.now(),
+            organizationId,
+            target: domain?.hostname,
+        });
     });
 
 /**

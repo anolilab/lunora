@@ -1,4 +1,4 @@
-import { useQuery } from "@lunora/react";
+import { useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -22,6 +22,7 @@ const formatTime = (ms: number): string => new Date(ms).toLocaleString();
  */
 export const DeploymentsSection = ({ onBack, organizationId, projectId, projectName }: DeploymentsSectionProps): ReactElement => {
     const deployments = useQuery(api.deployments.listByProject, { organizationId, projectId });
+    const rollback = useMutation(api.deployments.rollback);
 
     return (
         <div className="stack">
@@ -46,6 +47,7 @@ export const DeploymentsSection = ({ onBack, organizationId, projectId, projectN
                                     <th>URL</th>
                                     <th>Branch</th>
                                     <th>Created</th>
+                                    <th aria-label="Actions" />
                                 </tr>
                             </thead>
                             <tbody>
@@ -68,6 +70,19 @@ export const DeploymentsSection = ({ onBack, organizationId, projectId, projectN
                                         </td>
                                         <td>{deployment.branch ?? <span className="muted">—</span>}</td>
                                         <td className="muted">{formatTime(deployment.createdAt)}</td>
+                                        <td>
+                                            {deployment.status === "superseded" ? (
+                                                <button
+                                                    className="link"
+                                                    onClick={() => {
+                                                        void rollback.mutate({ id: deployment._id, organizationId });
+                                                    }}
+                                                    type="button"
+                                                >
+                                                    Roll back
+                                                </button>
+                                            ) : null}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>

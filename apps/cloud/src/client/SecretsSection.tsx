@@ -25,6 +25,7 @@ export const SecretsSection = ({ organizationId }: SecretsSectionProps): ReactEl
 
     const [name, setName] = useState("");
     const [value, setValue] = useState("");
+    const [environment, setEnvironment] = useState("all");
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -92,7 +93,7 @@ export const SecretsSection = ({ organizationId }: SecretsSectionProps): ReactEl
                             // try-with-finally or throw-in-try yet).
                             const save = async (): Promise<void> => {
                                 const response = await fetch("/v1/secrets", {
-                                    body: JSON.stringify({ name, organizationId, projectId, value }),
+                                    body: JSON.stringify({ environment, name, organizationId, projectId, value }),
                                     credentials: "include",
                                     headers: { "content-type": "application/json" },
                                     method: "POST",
@@ -128,6 +129,18 @@ export const SecretsSection = ({ organizationId }: SecretsSectionProps): ReactEl
                             required
                             value={name}
                         />
+                        <select
+                            aria-label="Secret environment"
+                            onChange={(event) => {
+                                setEnvironment(event.target.value);
+                            }}
+                            value={environment}
+                        >
+                            <option value="all">All environments</option>
+                            <option value="production">Production</option>
+                            <option value="preview">Preview</option>
+                            <option value="dev">Dev</option>
+                        </select>
                         <input
                             aria-label="Secret value"
                             onChange={(event) => {

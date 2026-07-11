@@ -37,6 +37,37 @@ const TABS: { id: Tab; label: string }[] = [
     { id: "activity", label: "Activity" },
 ];
 
+interface OrgFlags {
+    deletionRequestedAt?: number;
+    suspendedAt?: number;
+    suspendedReason?: string;
+}
+
+/** Suspension / pending-deletion banners (GAPS.md C1/C2/D3). */
+const OrgBanners = ({ org }: { org: OrgFlags }): ReactElement | null => {
+    if (org.suspendedAt === undefined && org.deletionRequestedAt === undefined) {
+        return null;
+    }
+
+    return (
+        <>
+            {org.suspendedAt === undefined ? null : (
+                <div className="callout error" role="alert">
+                    This organization is suspended
+                    {org.suspendedReason === "dunning"
+                        ? " — payment failed. Update your billing details to restore service."
+                        : " — spend cap reached. Raise the cap or upgrade your plan to restore service."}
+                </div>
+            )}
+            {org.deletionRequestedAt === undefined ? null : (
+                <div className="callout" role="alert">
+                    Deletion requested — this organization and all its data will be erased after the 30-day retention window.
+                </div>
+            )}
+        </>
+    );
+};
+
 /**
  * Per-organization control panel. The active org is resolved from the live
  * `organizations.list` query (so the header stays correct after a rename), and
@@ -57,6 +88,8 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
                 <h2>{org ? org.name : "Organization"}</h2>
                 {org ? <span className="badge">{org.plan}</span> : null}
             </div>
+
+            {org ? <OrgBanners org={org as OrgFlags} /> : null}
 
             <nav className="tabs">
                 {TABS.map((entry) => (
