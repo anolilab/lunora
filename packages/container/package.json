@@ -46,6 +46,10 @@
             "types": "./dist/bridge.d.ts",
             "import": "./dist/bridge.mjs"
         },
+        "./otel": {
+            "types": "./dist/otel.d.ts",
+            "import": "./dist/otel.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

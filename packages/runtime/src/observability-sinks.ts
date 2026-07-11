@@ -18,6 +18,7 @@
  * third party. Scrub or redact before enabling it against an external service
  * if that is a concern.
  */
+import { encodeAttribute, mergeHeaders, OTLP_SEVERITY, otlpRandomHex, otlpUnixNano, wrapResourceLogs, wrapResourceSpans } from "../../../shared/otlp";
 import type { LogEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 
 /** Shared shape for sinks that can be limited to error events only. */
@@ -29,45 +30,82 @@ interface OnlyErrorsOption {
 /** Returns true when the event should be skipped under an `onlyErrors` filter. */
 const shouldSkip = (event: ObservabilityEvent, onlyErrors: boolean | undefined): boolean => onlyErrors === true && event.ok;
 
-/**
- * Case-insensitively merge `overrides` onto `defaults`, with `overrides`
- * winning. HTTP header names are case-insensitive, so a naive object spread of
- * `{ "content-type": ..., ...overrides }` would keep BOTH `content-type` and a
- * user-supplied `Content-Type` as distinct object keys; the `fetch`/`Headers`
- * constructor then *combines* them ("application/json, text/plain") instead of
- * letting the caller override. Normalising the key first guarantees a single,
- * caller-controlled value per header.
- */
-const mergeHeaders = (defaults: Record<string, string>, overrides: Record<string, string> | undefined): Record<string, string> => {
-    if (!overrides) {
-        return { ...defaults };
+/** Build the OTLP trace-export body for one RPC dispatch event. */
+const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: number): unknown => {
+    const attributes = [encodeAttribute("lunora.function_path", event.functionPath), encodeAttribute("lunora.ok", event.ok)];
+
+    if (event.shardKey !== undefined) {
+        attributes.push(encodeAttribute("lunora.shard_key", event.shardKey));
     }
 
-    const merged: Record<string, string> = {};
-    const seen = new Map<string, string>();
-
-    for (const [name, value] of Object.entries(defaults)) {
-        const lower = name.toLowerCase();
-
-        seen.set(lower, name);
-        merged[name] = value;
+    if (event.error) {
+        // `error.type` is the OTel semantic-convention key; keep the numeric
+        // HTTP-ish status under the lunora namespace.
+        attributes.push(encodeAttribute("error.type", event.error.code), encodeAttribute("lunora.error_status", event.error.status));
     }
 
-    for (const [name, value] of Object.entries(overrides)) {
-        const lower = name.toLowerCase();
-        const existing = seen.get(lower);
+    if (event.fanOut) {
+        attributes.push(
+            encodeAttribute("lunora.fanout.table", event.fanOut.table),
+            encodeAttribute("lunora.fanout.shards", event.fanOut.shards),
+            encodeAttribute("lunora.fanout.failed", event.fanOut.failed),
+        );
+    }
 
-        if (existing === undefined) {
-            seen.set(lower, name);
-            merged[name] = value;
-        } else {
-            // Replace the existing key's value in place so the override wins
-            // without introducing a second, differently-cased duplicate.
-            merged[existing] = value;
+    const span = {
+        attributes,
+        endTimeUnixNano: otlpUnixNano(endMs),
+        // SPAN_KIND_SERVER — a dispatched RPC is server-side request handling.
+        kind: 2,
+        name: event.functionPath,
+        spanId: otlpRandomHex(8),
+        startTimeUnixNano: otlpUnixNano(endMs - event.durationMs),
+        // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
+        status: event.ok ? { code: 1 } : { code: 2, message: event.error?.message ?? "" },
+        traceId: otlpRandomHex(16),
+    };
+
+    return wrapResourceSpans(span, "@lunora/runtime", serviceName);
+};
+
+/** Build the OTLP log-export body for one application log line. */
+const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
+    const attributes = [encodeAttribute("lunora.function_path", event.functionPath)];
+
+    if (event.shardKey !== undefined) {
+        attributes.push(encodeAttribute("lunora.shard_key", event.shardKey));
+    }
+
+    if (event.userId !== undefined) {
+        attributes.push(encodeAttribute("lunora.user_id", event.userId));
+    }
+
+    const logRecord = {
+        attributes,
+        body: { stringValue: event.message },
+        severityNumber: OTLP_SEVERITY[event.level],
+        severityText: event.level.toUpperCase(),
+        timeUnixNano: otlpUnixNano(event.ts),
+    };
+
+    return wrapResourceLogs(logRecord, "@lunora/runtime", serviceName);
+};
+
+/** POST an OTLP payload fire-and-forget, keeping it alive past the response when a request context is present. */
+const otlpPost = (url: string, body: unknown, headers: Record<string, string>, context?: ObservabilitySinkContext): void => {
+    try {
+        // `.catch` swallows any rejection so a failed export can never reject
+        // into the dispatch path.
+        const sent = fetch(url, { body: JSON.stringify(body), headers, method: "POST" }).catch(() => {
+            // Network error / non-OK response — intentionally ignored.
+        });
+
+        if (context?.waitUntil) {
+            context.waitUntil(sent);
         }
+    } catch {
+        // `fetch` throwing synchronously (e.g. an invalid URL) must not break dispatch.
     }
-
-    return merged;
 };
 
 /**
@@ -309,6 +347,97 @@ export const analyticsEngineSink = (options: AnalyticsEngineSinkOptions): Observ
             } catch {
                 // A missing or throwing dataset binding must not break dispatch.
             }
+        },
+    };
+};
+
+/** Options for {@link otlpSink}. */
+export interface OtlpSinkOptions extends OnlyErrorsOption {
+    /**
+     * The OTLP-over-HTTP collector base endpoint (e.g.
+     * `https://collector.example.com`). Following the OTel base-endpoint
+     * convention, the sink POSTs spans to `${endpoint}/v1/traces` and log
+     * records to `${endpoint}/v1/logs`; a trailing slash is tolerated.
+     */
+    endpoint: string;
+
+    /**
+     * Extra headers merged onto every OTLP POST — typically an `Authorization`
+     * bearer plus the `x-lunora-deployment` / `x-lunora-org` correlation headers
+     * the platform injects at deploy. `Content-Type: application/json` is set by
+     * default and may be overridden here.
+     */
+    headers?: Record<string, string>;
+
+    /**
+     * Value of the `service.name` resource attribute on every exported span and
+     * log — the logical service the telemetry belongs to. Defaults to `lunora`.
+     */
+    serviceName?: string;
+
+    /**
+     * Convenience bearer token: when set, an `Authorization: Bearer` header
+     * carrying it is added to every POST (overriding any authorization in
+     * `headers`). Mirrors the container exporter so the platform can inject the
+     * same `LUNORA_OTLP_TOKEN` into both. Leave unset for an unauthenticated collector.
+     */
+    token?: string;
+}
+
+/**
+ * A fire-and-forget sink that exports telemetry over OTLP-over-HTTP (JSON).
+ *
+ * This is the single, standard wire contract both the worker and (via the
+ * container exporter helper) container processes use, so telemetry from either
+ * side lands in the same collector. Each RPC dispatch becomes one OTLP **span**
+ * (`${endpoint}/v1/traces`) named after its `functionPath`, with start/end
+ * derived from `durationMs` and status OK/ERROR; each `ctx.log.*` line becomes
+ * one OTLP **log record** (`${endpoint}/v1/logs`). Trace/span ids are random
+ * per span — real trace correlation (worker→container `traceparent`) is a later
+ * phase.
+ *
+ * Like {@link webhookSink}, each export is its own `fetch`, registered with the
+ * request's `context.waitUntil` when present so it survives isolate teardown,
+ * and every rejection is swallowed so a flaky collector never surfaces to the
+ * caller.
+ *
+ * Privacy: spans carry `error.type`/`error.message` and logs carry the rendered
+ * `message`, which may include user input. Point `endpoint` only at a collector
+ * you trust, and gate PII upstream if that is a concern.
+ * @param options Sink options: `endpoint` is the collector base URL, `headers`
+ * are merged onto every POST (auth + correlation), `serviceName` sets the
+ * resource `service.name`, and `onlyErrors` exports error spans only.
+ */
+export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
+    const { endpoint, headers, onlyErrors, token } = options;
+    const serviceName = options.serviceName ?? "lunora";
+
+    // Strip trailing slashes without a regex — a `/\/+$/`-style pattern trips
+    // the ReDoS linter, and this runs once per sink construction anyway.
+    let base = endpoint;
+
+    while (base.endsWith("/")) {
+        base = base.slice(0, -1);
+    }
+
+    const tracesUrl = `${base}/v1/traces`;
+    const logsUrl = `${base}/v1/logs`;
+    // `token` is applied last (inside `mergeHeaders`) so it wins over any
+    // authorization in `headers`, matching the container exporter's precedence.
+    const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers, token);
+
+    return {
+        onLog: (event, context) => {
+            // Application log lines are exported whole; `onlyErrors` scopes the
+            // RPC span stream, not the developer's `ctx.log` output.
+            otlpPost(logsUrl, otlpLogBody(event, serviceName), mergedHeaders, context);
+        },
+        onRpc: (event, context) => {
+            if (shouldSkip(event, onlyErrors)) {
+                return;
+            }
+
+            otlpPost(tracesUrl, otlpTraceBody(event, serviceName, Date.now()), mergedHeaders, context);
         },
     };
 };
