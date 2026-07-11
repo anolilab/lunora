@@ -3131,6 +3131,9 @@
                         "type": "string",
                         "x-lunora-table": "cells"
                       },
+                      "jurisdiction": {
+                        "type": "string"
+                      },
                       "name": {
                         "type": "string"
                       },
@@ -3155,7 +3158,6 @@
                       }
                     },
                     "required": [
-                      "cellId",
                       "name",
                       "slug"
                     ],
