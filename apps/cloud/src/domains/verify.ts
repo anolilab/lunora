@@ -41,7 +41,9 @@ export const createDohResolver =
         }
     };
 
-const stripQuotesAndDot = (value: string): string => value.replaceAll('"', "").replace(/\.$/u, "").toLowerCase();
+const TRAILING_DOT = /\.$/u;
+
+const stripQuotesAndDot = (value: string): string => value.replaceAll('"', "").replace(TRAILING_DOT, "").toLowerCase();
 
 export interface VerifyDomainOptions {
     /** Hostnames the domain must CNAME toward (e.g. the app apex). Empty = skip the pointing check. */
