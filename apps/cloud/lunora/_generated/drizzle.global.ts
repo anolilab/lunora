@@ -41,6 +41,8 @@ export const members = sqliteTable("members", {
 export const projects = sqliteTable("projects", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
+    activeDeploymentId: text("activeDeploymentId"),
+    activeScriptName: text("activeScriptName"),
     createdAt: real("createdAt").notNull(),
     framework: text("framework"),
     githubRepo: text("githubRepo"),
@@ -56,6 +58,7 @@ export const deployments = sqliteTable("deployments", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     adminToken: text("adminToken"),
+    alias: text("alias"),
     branch: text("branch"),
     cronSpecs: text("cronSpecs", { mode: "json" }).$type<Array<string>>(),
     bundleHash: text("bundleHash"),
@@ -69,10 +72,19 @@ export const deployments = sqliteTable("deployments", {
     status: text("status").notNull(),
     updatedAt: real("updatedAt").notNull(),
     url: text("url"),
+    version: real("version"),
+    queuedAt: real("queuedAt"),
+    provisioningAt: real("provisioningAt"),
+    verifyingAt: real("verifyingAt"),
+    liveAt: real("liveAt"),
+    supersededAt: real("supersededAt"),
+    failedAt: real("failedAt"),
+    destroyedAt: real("destroyedAt"),
 }, (t) => ({
     by_script: index("by_script").on(t.scriptName),
     by_project: index("by_project").on(t.projectId),
     by_kind: index("by_kind").on(t.kind),
+    by_alias: index("by_alias").on(t.alias),
 }));
 
 export const deployKeys = sqliteTable("deployKeys", {

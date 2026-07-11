@@ -30,6 +30,10 @@ export interface DeployTarget {
  * deploy request has no user session — see CLOUD-PLAN.md §2.2).
  */
 export interface DeployBackend {
+    // Swap the project's stable-URL pointer to this now-healthy deployment and
+    // supersede the previous live release (GAPS.md A1). Omit to skip pointer
+    // management (legacy single-script mode).
+    activateDeployment?: (input: { deploymentId: string; key: string }) => Promise<void>;
     createDeployment: (input: {
         adminToken: string;
         branch?: string;
@@ -38,14 +42,14 @@ export interface DeployBackend {
         organizationId: string;
         projectId: string; // secret-scanner:allow -- domain field name
         scriptName: string;
-    }) => Promise<{ deploymentId: string }>;
+    }) => Promise<{ deploymentId: string; scriptName?: string; version?: number }>;
     /** Decrypted tenant env secrets to inject into the deployed Worker (§7). Optional. */
     resolveSecrets?: (input: { key: string; organizationId: string; projectId: string }) => Promise<Record<string, string>>; // secret-scanner:allow -- domain field name
     updateStatus: (input: {
         bundleHash?: string;
         deploymentId: string;
         key: string;
-        status: "failed" | "live" | "provisioning";
+        status: "failed" | "live" | "provisioning" | "verifying";
         url?: string;
     }) => Promise<void>;
     verifyKey: (key: string) => Promise<DeployTarget | null>;
@@ -57,6 +61,8 @@ export interface DeployHandlerDeps {
     cell: string;
     /** Map a deployment kind to the dispatch namespace it deploys into. */
     dispatchNamespace: (kind: DeployKind) => string;
+    /** Probe the uploaded script's URL before release (GAPS.md A1); `false` fails the deployment without touching the active pointer. Omit to skip health gating. */
+    healthCheck?: (url: string) => Promise<boolean>;
     provisioner: Provisioner;
     scheduler: CellScheduler;
 }
@@ -146,9 +152,13 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
     const adminToken = randomSecret();
 
     let deploymentId: string;
+    // The backend mints a versioned, immutable script name per release
+    // (`{alias}-v{n}`, GAPS.md A1); fall back to the requested name when the
+    // backend doesn't version (legacy single-script mode).
+    let releaseScriptName = scriptName;
 
     try {
-        ({ deploymentId } = await deps.backend.createDeployment({
+        const created = await deps.backend.createDeployment({
             adminToken,
             branch,
             key,
@@ -156,7 +166,10 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
             organizationId: target.organizationId,
             projectId,
             scriptName,
-        }));
+        });
+
+        deploymentId = created.deploymentId;
+        releaseScriptName = created.scriptName ?? scriptName;
     } catch (error) {
         return json(403, { error: error instanceof Error ? error.message : "failed to record deployment" });
     }
@@ -195,22 +208,44 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 bundle,
                 cell: deps.cell,
                 dispatchNamespace: deps.dispatchNamespace(kind),
-                scriptName,
+                scriptName: releaseScriptName,
                 secrets: { ...tenantSecrets, LUNORA_ADMIN_TOKEN: adminToken },
                 tags: [`org:${target.organizationId}`, `project:${projectId}`, `env:${kind}`],
             };
 
+            const { healthCheck } = deps;
             const outcome = await runDeployment(spec, {
                 onProgress: async (progress: DeployProgress) => {
                     write({ ...progress, deploymentId });
 
-                    if (progress.phase === "provisioning" || progress.phase === "live" || progress.phase === "failed") {
+                    if (progress.phase === "provisioning" || progress.phase === "verifying" || progress.phase === "live" || progress.phase === "failed") {
                         await deps.backend.updateStatus({ bundleHash: progress.bundleHash, deploymentId, key, status: progress.phase, url: progress.url });
                     }
                 },
                 provisioner: deps.provisioner,
                 scheduler: deps.scheduler,
+                ...(healthCheck ? { verify: (result) => healthCheck(result.url) } : {}),
             });
+
+            // Health-checked release: swap the project's stable-URL pointer to
+            // this deployment and supersede the previous one (GAPS.md A1). An
+            // activation failure downgrades the release to failed — the old
+            // version keeps serving.
+            if (outcome.status === "live" && deps.backend.activateDeployment) {
+                try {
+                    await deps.backend.activateDeployment({ deploymentId, key });
+                    write({ deploymentId, event: "released" });
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : "activation failed";
+
+                    write({ deploymentId, error: message, phase: "failed" });
+                    await deps.backend.updateStatus({ deploymentId, key, status: "failed" });
+                    write({ deploymentId, done: true, status: "failed" });
+                    controller.close();
+
+                    return;
+                }
+            }
 
             write({ deploymentId, done: true, status: outcome.status });
             controller.close();
