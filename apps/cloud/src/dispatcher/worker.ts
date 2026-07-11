@@ -76,6 +76,12 @@ export default {
             return NOT_FOUND("no tenant for this hostname");
         }
 
+        // Spend-cap / abuse suspension (GAPS.md C1): the control plane encodes
+        // a suspended org as the sentinel plan "suspended".
+        if (route.plan === "suspended") {
+            return new Response("this deployment is suspended — see your billing page", { status: 503 });
+        }
+
         try {
             // Per-plan runtime caps (§4): CPU + subrequests scale with the tenant's
             // plan, falling back to the free tier when the plan is unknown.
