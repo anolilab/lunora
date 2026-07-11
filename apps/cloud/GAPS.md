@@ -128,7 +128,7 @@ a `suspended` bit and serves 503 with a billing link). Unsuspend on
 plan-upgrade webhook or support action. The AUP (🧭 legal doc) is the authority;
 this is the mechanism.
 
-### C2. Dunning / payment-failure lifecycle (🌐 + 🔨 state machine)
+### C2. Dunning / payment-failure lifecycle (✅ state machine shipped, 🌐 Stripe config)
 
 Payment-failure → email → grace period → suspend → delete, driven off
 `@lunora/payment` webhook events. The state machine + crons are 🔨; the Stripe
@@ -146,7 +146,7 @@ D1 Time Travel export to platform R2 in a _different_ cell, on a cron; tested
 restore runbook. The single most-critical 🌐 item — the control-plane DB is the
 crown jewel.
 
-### D2. `lunora eject` — self-serve full export (🔨 framework, exists partially)
+### D2. `lunora eject` — self-serve full export (✅ packaging core shipped)
 
 Data-plane export/import RPCs already exist in the framework; the missing part
 is the one-command CLI packaging (export all shards + D1 + R2 + scaffold a BYO
@@ -194,8 +194,8 @@ this decision either way.
 - **Dashboard SSO (SAML/OIDC) + SCIM** (🌐) — `sso` plan flag exists, unwired.
   better-auth's SSO/OIDC plugins are the path.
 - **SOC 2 roadmap, DPA, sub-processor list** (🧭).
-- **EU data-residency toggle** — cells already carry `jurisdiction`; needs the
-  org-level picker + placement rule (🔨 small).
+- **EU data-residency toggle** — ✅ shipped: `organizations.create` takes a
+  `jurisdiction` and places on a matching active cell.
 - **Frontend hosting scope** (🧭) — host the tenant's static frontend (WfP
   static assets, one origin) or backend-only? Shapes B1 routing and the deploy
   API; decide with B1.
