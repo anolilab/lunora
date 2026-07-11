@@ -20,6 +20,14 @@ crons.interval("rollup platform usage", { hours: 1 }, internal.usage.rollup, {})
 // recovered ones (GAPS.md C1 abuse/bill-shock control).
 crons.interval("enforce spend caps", { hours: 1 }, internal.usage.enforceSpendCaps, {});
 
+// Prune tenant runtime logs past the 48h retention window (GAPS.md B2).
+crons.interval("prune tenant logs", { hours: 6 }, internal.logs.prune, {});
+
+// Erase orgs whose deletion request aged past the 30-day retention window
+// (GAPS.md D3 right-to-erasure). Every 12h — the purge itself gates on the
+// per-org retention cutoff, so cadence only affects erasure latency.
+crons.interval("purge deleted organizations", { hours: 12 }, internal.organizations.purgeDeleted, {});
+
 // Every-minute heartbeat that emits the `*/1 * * * *` trigger the edge cron
 // fan-out rides on (§2.4) — the job itself is a no-op; see lunora/fanout.ts.
 crons.interval("tenant cron fan-out tick", { minutes: 1 }, internal.fanout.tick, {});
