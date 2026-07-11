@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { LogEvent, ObservabilityEvent } from "../src/observability";
+import type { LogEvent, LogLevel, ObservabilityEvent } from "../src/observability";
 import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks";
-import { analyticsEngineSink, combineSinks, consoleSink, sentrySink, webhookSink } from "../src/observability-sinks";
+import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, sentrySink, webhookSink } from "../src/observability-sinks";
 
 const okEvent: ObservabilityEvent = { durationMs: 5, functionPath: "messages:list", ok: true, shardKey: "channel-1" };
 const errorEvent: ObservabilityEvent = {
@@ -11,6 +11,72 @@ const errorEvent: ObservabilityEvent = {
     functionPath: "messages:send",
     ok: false,
     shardKey: "channel-1",
+};
+
+/** A 16-byte trace id, hex-encoded per the OTLP/JSON `trace_id` exception. */
+const TRACE_ID_HEX = /^[0-9a-f]{32}$/;
+/** An 8-byte span id, hex-encoded per the OTLP/JSON `span_id` exception. */
+const SPAN_ID_HEX = /^[0-9a-f]{16}$/;
+/** A `*UnixNano` value derived from whole milliseconds — the six trailing zeros are exact. */
+const UNIX_NANO = /^\d+000000$/;
+
+/** One OTLP `AnyValue`, as it appears in the JSON wire form. */
+interface OtlpValue {
+    boolValue?: boolean;
+    doubleValue?: number;
+    intValue?: string;
+    stringValue?: string;
+}
+
+/** One OTLP `KeyValue` attribute. */
+interface OtlpKeyValue {
+    key: string;
+    value: OtlpValue;
+}
+
+/** The subset of an OTLP span the tests assert on. */
+interface ParsedSpan {
+    attributes: OtlpKeyValue[];
+    endTimeUnixNano: string;
+    kind: number;
+    name: string;
+    spanId: string;
+    startTimeUnixNano: string;
+    status: { code: number; message?: string };
+    traceId: string;
+}
+
+/** The subset of an OTLP log record the tests assert on. */
+interface ParsedLogRecord {
+    attributes: OtlpKeyValue[];
+    body: OtlpValue;
+    severityNumber: number;
+    severityText: string;
+    timeUnixNano: string;
+}
+
+/** Look up an attribute's value by key. */
+const attrValue = (attributes: OtlpKeyValue[], key: string): OtlpValue | undefined => attributes.find((entry) => entry.key === key)?.value;
+
+/** Decode a POSTed OTLP trace-export body down to its single span + resource attributes. */
+const spanFrom = (init: RequestInit): { resourceAttributes: OtlpKeyValue[]; scopeName: string; span: ParsedSpan } => {
+    const parsed = JSON.parse(init.body as string) as {
+        resourceSpans: { resource: { attributes: OtlpKeyValue[] }; scopeSpans: { scope: { name: string }; spans: ParsedSpan[] }[] }[];
+    };
+    const resourceSpan = parsed.resourceSpans[0]!;
+    const scopeSpan = resourceSpan.scopeSpans[0]!;
+
+    return { resourceAttributes: resourceSpan.resource.attributes, scopeName: scopeSpan.scope.name, span: scopeSpan.spans[0]! };
+};
+
+/** Decode a POSTed OTLP log-export body down to its single log record + resource attributes. */
+const logFrom = (init: RequestInit): { record: ParsedLogRecord; resourceAttributes: OtlpKeyValue[] } => {
+    const parsed = JSON.parse(init.body as string) as {
+        resourceLogs: { resource: { attributes: OtlpKeyValue[] }; scopeLogs: { logRecords: ParsedLogRecord[]; scope: { name: string } }[] }[];
+    };
+    const resourceLog = parsed.resourceLogs[0]!;
+
+    return { record: resourceLog.scopeLogs[0]!.logRecords[0]!, resourceAttributes: resourceLog.resource.attributes };
 };
 
 describe("observability-sinks", () => {
@@ -452,6 +518,314 @@ describe("observability-sinks", () => {
                     },
                 },
             });
+
+            expect(() => {
+                sink.onRpc!(okEvent);
+            }).not.toThrow();
+        });
+    });
+
+    describe("otlpSink", () => {
+        afterEach(() => {
+            vi.restoreAllMocks();
+            vi.unstubAllGlobals();
+        });
+
+        it("posts a well-formed OTLP span to the traces endpoint for an ok rpc event", () => {
+            expect.assertions(9);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onRpc!(okEvent);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(url).toBe("https://collector.example/v1/traces");
+            expect(init.method).toBe("POST");
+
+            const { resourceAttributes, span } = spanFrom(init);
+
+            expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "lunora" });
+            expect(span.name).toBe("messages:list");
+            // SPAN_KIND_SERVER — a dispatched RPC is server-side handling.
+            expect(span.kind).toBe(2);
+            // STATUS_CODE_OK, with no status message.
+            expect(span.status).toStrictEqual({ code: 1 });
+            expect(span.traceId).toMatch(TRACE_ID_HEX);
+            expect(span.spanId).toMatch(SPAN_ID_HEX);
+        });
+
+        it("encodes error status, error.type, and the status message for a failed event", () => {
+            expect.assertions(4);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onRpc!(errorEvent);
+
+            const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            // STATUS_CODE_ERROR carries the human-readable message.
+            expect(span.status).toStrictEqual({ code: 2, message: "boom: user@example.com" });
+            expect(attrValue(span.attributes, "error.type")).toStrictEqual({ stringValue: "CONFLICT" });
+            expect(attrValue(span.attributes, "lunora.error_status")).toStrictEqual({ intValue: "409" });
+            expect(attrValue(span.attributes, "lunora.ok")).toStrictEqual({ boolValue: false });
+        });
+
+        it("derives span start and end from durationMs at nanosecond precision", () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onRpc!(okEvent);
+
+            const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(span.startTimeUnixNano).toMatch(UNIX_NANO);
+            expect(span.endTimeUnixNano).toMatch(UNIX_NANO);
+            // end - start must equal durationMs (5ms) in nanos, exactly — BigInt
+            // avoids the double-rounding a ~1.7e18 nanosecond value would suffer.
+            expect(BigInt(span.endTimeUnixNano) - BigInt(span.startTimeUnixNano)).toBe(BigInt(5 * 1_000_000));
+        });
+
+        it("records fan-out cardinality and the aggregated table as attributes", () => {
+            expect.assertions(4);
+
+            const fanOutEvent: ObservabilityEvent = {
+                durationMs: 12,
+                fanOut: { failed: 1, shards: 4, table: "messages" },
+                functionPath: "messages:countAll",
+                ok: true,
+            };
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onRpc!(fanOutEvent);
+
+            const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(attrValue(span.attributes, "lunora.fanout.table")).toStrictEqual({ stringValue: "messages" });
+            expect(attrValue(span.attributes, "lunora.fanout.shards")).toStrictEqual({ intValue: "4" });
+            expect(attrValue(span.attributes, "lunora.fanout.failed")).toStrictEqual({ intValue: "1" });
+            // A fan-out has no single shard key.
+            expect(attrValue(span.attributes, "lunora.shard_key")).toBeUndefined();
+        });
+
+        it("posts a well-formed OTLP log record to the logs endpoint", () => {
+            expect.assertions(6);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onLog!({ args: ["hi"], functionPath: "messages:list", level: "info", message: "hello", shardKey: "channel-1", ts: 1700, userId: "user-1" });
+
+            const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(url).toBe("https://collector.example/v1/logs");
+
+            const { record } = logFrom(init);
+
+            expect(record.body).toStrictEqual({ stringValue: "hello" });
+            expect(record.severityNumber).toBe(9);
+            expect(record.severityText).toBe("INFO");
+            // ts (1700ms) → nanos with six trailing zeros.
+            expect(record.timeUnixNano).toBe("1700000000");
+            expect(attrValue(record.attributes, "lunora.user_id")).toStrictEqual({ stringValue: "user-1" });
+        });
+
+        it("maps each log level to its OTLP severity number", () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const levels: LogLevel[] = ["debug", "error", "info", "log", "warn"];
+
+            for (const level of levels) {
+                sink.onLog!({ args: [], functionPath: "a:b", level, message: "m", ts: 1 });
+            }
+
+            const numbers = fetchMock.mock.calls.map((call) => logFrom(call[1] as RequestInit).record.severityNumber);
+
+            // debug=DEBUG(5), error=ERROR(17), info=INFO(9), log→INFO(9), warn=WARN(13).
+            expect(numbers).toStrictEqual([5, 17, 9, 9, 13]);
+        });
+
+        it("tolerates a trailing slash on the endpoint", () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example///" });
+
+            sink.onRpc!(okEvent);
+
+            const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(url).toBe("https://collector.example/v1/traces");
+        });
+
+        it("skips ok rpc spans when onlyErrors is set but still exports logs", () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example", onlyErrors: true });
+
+            sink.onRpc!(okEvent);
+
+            expect(fetchMock).not.toHaveBeenCalled();
+
+            sink.onRpc!(errorEvent);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            // onlyErrors scopes the RPC span stream, not developer log lines.
+            sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "m", ts: 1 });
+
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+        });
+
+        it("merges auth and correlation headers onto a default content-type", () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({
+                endpoint: "https://collector.example",
+                headers: { authorization: "Bearer tok", "x-lunora-deployment": "dep_1", "x-lunora-org": "org_1" },
+            });
+
+            sink.onRpc!(okEvent);
+
+            const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(init.headers).toStrictEqual({
+                authorization: "Bearer tok",
+                "content-type": "application/json",
+                "x-lunora-deployment": "dep_1",
+                "x-lunora-org": "org_1",
+            });
+        });
+
+        it("adds a Bearer token that overrides any authorization in headers", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({
+                endpoint: "https://collector.example",
+                headers: { Authorization: "Bearer stale" },
+                token: "svc-token",
+            });
+
+            sink.onRpc!(okEvent);
+
+            const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+            const sentHeaders = init.headers as Record<string, string>;
+            const authKeys = Object.keys(sentHeaders).filter((key) => key.toLowerCase() === "authorization");
+
+            // The token wins over the stale header, without introducing a second key.
+            expect(sentHeaders[authKeys[0]!]).toBe("Bearer svc-token");
+            expect(authKeys).toHaveLength(1);
+        });
+
+        it("lets a differently-cased content-type override the default without duplicating it", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example", headers: { "Content-Type": "application/x-protobuf" } });
+
+            sink.onRpc!(okEvent);
+
+            const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+            const sentHeaders = init.headers as Record<string, string>;
+
+            expect(sentHeaders["content-type"]).toBe("application/x-protobuf");
+            expect(Object.keys(sentHeaders).filter((key) => key.toLowerCase() === "content-type")).toHaveLength(1);
+        });
+
+        it("sets a custom service.name resource attribute on spans and logs", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example", serviceName: "checkout-api" });
+
+            sink.onRpc!(okEvent);
+            sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "m", ts: 1 });
+
+            const { resourceAttributes: spanResource } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+            const { resourceAttributes: logResource } = logFrom((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1]);
+
+            expect(attrValue(spanResource, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
+            expect(attrValue(logResource, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
+        });
+
+        it("registers the send with ctx.waitUntil when a request context is provided", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const waitUntil = vi.fn<(promise: Promise<unknown>) => void>();
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onRpc!(okEvent, { waitUntil });
+
+            expect(waitUntil).toHaveBeenCalledTimes(1);
+            expect(waitUntil).toHaveBeenCalledWith(expect.any(Promise));
+        });
+
+        it("swallows a rejected fetch", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => {
+                throw new Error("collector down");
+            });
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            expect(() => {
+                sink.onRpc!(okEvent);
+            }).not.toThrow();
+
+            // Let the rejected promise settle without an unhandled rejection.
+            await Promise.resolve();
+        });
+
+        it("swallows a synchronous fetch throw", () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(() => {
+                throw new Error("invalid url");
+            });
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "not-a-url" });
 
             expect(() => {
                 sink.onRpc!(okEvent);

@@ -1,0 +1,182 @@
+---
+title: Observability
+description: Ship Lunora's RPC and log telemetry to any OTLP collector — the otlpSink worker option, the zero-config container exporter, and the one wire contract they share.
+---
+
+Every Lunora function call produces two kinds of telemetry: an **RPC event** (one
+per query/mutation/action — path, duration, ok/error, shard, fan-out) and **log
+events** (the lines your handlers emit). A _sink_ receives them. Locally, the
+Studio groups error events into an **Issues** view with no setup. To watch a
+deployed app you point a sink at an [OpenTelemetry](https://opentelemetry.io/)
+collector — your own, a vendor's, or the Lunora cloud — and the worker **and** any
+container ship the same telemetry over one protocol.
+
+## Sinks
+
+A sink is passed to `createWorker` as the `observability` option. Lunora ships
+several; combine them with `combineSinks`.
+
+| Sink                         | Ships to                                         |
+| ---------------------------- | ------------------------------------------------ |
+| `consoleSink()`              | `console` (local dev)                            |
+| `otlpSink({ endpoint })`     | any OTLP-over-HTTP collector                     |
+| `webhookSink({ url })`       | an arbitrary HTTP endpoint (your own JSON shape) |
+| `sentrySink({ dsn })`        | Sentry                                           |
+| `analyticsEngineSink({ … })` | a Cloudflare Analytics Engine dataset            |
+
+```ts
+import { analyticsEngineSink, combineSinks, otlpSink } from "@lunora/runtime";
+
+export default createWorker({
+    // …schema, functions…
+    observability: combineSinks(
+        otlpSink({ endpoint: env.LUNORA_OTLP_ENDPOINT, token: env.LUNORA_OTLP_TOKEN }),
+        analyticsEngineSink({ dataset: env.ANALYTICS }),
+    ),
+});
+```
+
+Every sink accepts `onlyErrors: true` to drop successful RPC events and export
+only failures (log events always pass through).
+
+### `otlpSink`
+
+```ts
+otlpSink({
+    endpoint: env.LUNORA_OTLP_ENDPOINT, // required — the collector base URL
+    token: env.LUNORA_OTLP_TOKEN, // optional — sent as `Authorization: Bearer <token>`
+    headers: { "x-lunora-deployment": env.LUNORA_DEPLOYMENT_ID }, // optional correlation headers
+    serviceName: "my-app", // optional — the `service.name` resource attribute (default `"lunora"`)
+    onlyErrors: false, // optional — export only error spans
+});
+```
+
+Read `endpoint`/`token` from the environment so the platform can inject them at
+deploy time with no code change. Each event is one fire-and-forget POST; on a
+Worker it is registered with `waitUntil` so it outlives the response.
+
+## Container telemetry
+
+Code running **inside** a [container](/docs/packages/container) can't use a worker
+sink — it is a separate process. `@lunora/container/otel` gives it a zero-config exporter that
+speaks the exact same wire contract, so container spans and worker spans land in
+the same collector side by side.
+
+```ts
+import { createContainerTelemetry } from "@lunora/container/otel";
+
+// Reads LUNORA_OTLP_ENDPOINT / LUNORA_OTLP_TOKEN from the container env.
+const telemetry = createContainerTelemetry();
+
+// Time a unit of work — records an ok span, or an error span if it throws.
+const result = await telemetry.trace("transcode", () => transcode(job), { jobId: job.id });
+
+telemetry.emitLog({ level: "info", message: "done", attributes: { jobId: job.id } });
+
+// Before the process exits, flush any in-flight sends.
+await telemetry.flush();
+```
+
+With no endpoint resolvable the exporter is a **silent no-op** (`telemetry.enabled
+=== false`) — `trace` still runs your work, it just records nothing. The same code
+runs unchanged locally and in the cloud.
+
+Thread the endpoint/token into the container the same way any other config
+reaches it — declare them on `defineContainer`:
+
+```ts
+defineContainer({
+    name: "transcoder",
+    // …
+    env: { LUNORA_OTLP_ENDPOINT: env.LUNORA_OTLP_ENDPOINT },
+    secrets: ["LUNORA_OTLP_TOKEN"],
+    // The collector host must be reachable from the container egress allow-list.
+    allowedHosts: ["collector.example.com"],
+});
+```
+
+## The wire contract
+
+Both the worker `otlpSink` and the container exporter conform to one contract, so
+any OTLP-compatible collector — and the Lunora cloud ingest — accepts either
+without special-casing.
+
+**Transport.** [OTLP over HTTP](https://opentelemetry.io/docs/specs/otlp/#otlphttp)
+with **JSON** encoding (not protobuf). Two endpoints, derived from the configured
+base `endpoint` (trailing slashes are tolerated):
+
+| Signal | Request                     |
+| ------ | --------------------------- |
+| Spans  | `POST {endpoint}/v1/traces` |
+| Logs   | `POST {endpoint}/v1/logs`   |
+
+**Headers.**
+
+| Header                             | Value                                                     |
+| ---------------------------------- | --------------------------------------------------------- |
+| `content-type`                     | `application/json`                                        |
+| `authorization`                    | `Bearer <token>` — when a `token` is configured           |
+| `x-lunora-deployment` (convention) | the deployment id, for the ingest to attribute the sender |
+| `x-lunora-org` (convention)        | the organization id                                       |
+
+The `x-lunora-*` headers are a convention the cloud ingest reads to route
+telemetry; pass them through the `headers` option. A collector that ignores them
+still accepts the payload.
+
+**Encoding.** Bodies are standard OTLP `ExportTraceServiceRequest` /
+`ExportLogsServiceRequest` JSON. Per the OTLP/JSON spec:
+
+- `traceId` is 16 random bytes as **32 lowercase hex** chars; `spanId` is 8 bytes
+  as **16 hex** chars (the documented exception to proto3 JSON's base64 `bytes`).
+- `timeUnixNano` fields are the **nanoseconds since the epoch as a decimal
+  string** (Lunora works in millis, so this is the millisecond value followed by
+  six zeros — exact).
+- `resource` carries a `service.name` attribute; the instrumentation `scope.name`
+  is `@lunora/runtime` (worker) or `@lunora/container` (container).
+- Attribute values follow the OTLP `AnyValue` union — strings as `stringValue`,
+  booleans as `boolValue`, integers as `intValue` (a decimal string), floats as
+  `doubleValue`.
+
+**Span shape.** One span per RPC event (worker) or per `trace`/`emitSpan`
+(container):
+
+| Field               | Worker (`otlpSink`)                        | Container      |
+| ------------------- | ------------------------------------------ | -------------- |
+| `kind`              | `2` (SERVER)                               | `1` (INTERNAL) |
+| `startTimeUnixNano` | end − `durationMs`                         | your `startMs` |
+| `status.code`       | `1` ok / `2` error (with `status.message`) | same           |
+
+Worker spans carry these attributes:
+
+| Attribute              | When         | Value                                   |
+| ---------------------- | ------------ | --------------------------------------- |
+| `lunora.function_path` | always       | the function path, e.g. `messages:list` |
+| `lunora.ok`            | always       | boolean                                 |
+| `lunora.shard_key`     | if sharded   | the shard key                           |
+| `error.type`           | on error     | the Lunora error `code`                 |
+| `lunora.error_status`  | on error     | the HTTP/RPC status (int)               |
+| `lunora.fanout.table`  | on a fan-out | the table fanned across                 |
+| `lunora.fanout.shards` | on a fan-out | shard count (int)                       |
+| `lunora.fanout.failed` | on a fan-out | failed-shard count (int)                |
+
+Container spans carry whatever `attributes` you pass, plus `error.type` when the
+work throws.
+
+**Log record shape.** `body.stringValue` is the message; `severityText` is the
+upper-cased level; `severityNumber` maps as:
+
+| Level          | `severityNumber` |
+| -------------- | ---------------- |
+| `debug`        | 5                |
+| `info` / `log` | 9                |
+| `warn`         | 13               |
+| `error`        | 17               |
+
+Worker log records also carry `lunora.function_path`, and `lunora.shard_key` /
+`lunora.user_id` when known.
+
+## Privacy
+
+Spans carry `error.type` and error messages, and log records carry the rendered
+message — either can include user-supplied input. Point `endpoint` only at a
+collector you trust, and use `onlyErrors` to narrow what leaves the deployment.

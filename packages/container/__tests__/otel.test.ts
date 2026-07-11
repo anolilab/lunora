@@ -1,0 +1,353 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { OtelFetchLike } from "../src/otel";
+import { createContainerTelemetry } from "../src/otel";
+
+/** One OTLP `AnyValue`, as decoded from a POSTed body. */
+interface OtlpValue {
+    boolValue?: boolean;
+    doubleValue?: number;
+    intValue?: string;
+    stringValue?: string;
+}
+
+/** One OTLP `KeyValue` attribute. */
+interface OtlpKeyValue {
+    key: string;
+    value: OtlpValue;
+}
+
+/** A decoded OTLP span. */
+interface ParsedSpan {
+    attributes: OtlpKeyValue[];
+    endTimeUnixNano: string;
+    kind: number;
+    name: string;
+    spanId: string;
+    startTimeUnixNano: string;
+    status: { code: number; message?: string };
+    traceId: string;
+}
+
+/** A decoded OTLP log record. */
+interface ParsedLogRecord {
+    attributes: OtlpKeyValue[];
+    body: { stringValue: string };
+    severityNumber: number;
+    severityText: string;
+    timeUnixNano: string;
+}
+
+const TRACE_ID_HEX = /^[0-9a-f]{32}$/;
+const SPAN_ID_HEX = /^[0-9a-f]{16}$/;
+const UNIX_NANO = /^\d+000000$/;
+
+/** A fetch stub recording every request; resolves `{ ok, status }`. */
+const stubFetch = (
+    init: { ok?: boolean; status?: number } = {},
+): { calls: { body: string; headers: Record<string, string>; url: string }[]; fetch: OtelFetchLike } => {
+    const calls: { body: string; headers: Record<string, string>; url: string }[] = [];
+
+    const fetch: OtelFetchLike = async (url, requestInit) => {
+        calls.push({ body: requestInit.body, headers: requestInit.headers, url });
+
+        return { ok: init.ok ?? true, status: init.status ?? 200 };
+    };
+
+    return { calls, fetch };
+};
+
+/** Find an attribute value by key. */
+const attrValue = (attributes: OtlpKeyValue[], key: string): OtlpValue | undefined => attributes.find((attribute) => attribute.key === key)?.value;
+
+/** Decode a POSTed OTLP trace-export body into its single span. */
+const spanFrom = (body: string): { resourceAttributes: OtlpKeyValue[]; scopeName: string; span: ParsedSpan } => {
+    const parsed = JSON.parse(body) as {
+        resourceSpans: { resource: { attributes: OtlpKeyValue[] }; scopeSpans: { scope: { name: string }; spans: ParsedSpan[] }[] }[];
+    };
+    const resourceSpan = parsed.resourceSpans[0]!;
+    const scopeSpan = resourceSpan.scopeSpans[0]!;
+
+    return { resourceAttributes: resourceSpan.resource.attributes, scopeName: scopeSpan.scope.name, span: scopeSpan.spans[0]! };
+};
+
+/** Decode a POSTed OTLP log-export body into its single record. */
+const logFrom = (body: string): { record: ParsedLogRecord; resourceAttributes: OtlpKeyValue[]; scopeName: string } => {
+    const parsed = JSON.parse(body) as {
+        resourceLogs: { resource: { attributes: OtlpKeyValue[] }; scopeLogs: { logRecords: ParsedLogRecord[]; scope: { name: string } }[] }[];
+    };
+    const resourceLog = parsed.resourceLogs[0]!;
+    const scopeLog = resourceLog.scopeLogs[0]!;
+
+    return { record: scopeLog.logRecords[0]!, resourceAttributes: resourceLog.resource.attributes, scopeName: scopeLog.scope.name };
+};
+
+describe(createContainerTelemetry, () => {
+    afterEach(() => {
+        vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it("is disabled and no-ops when no endpoint resolves", async () => {
+        expect.assertions(3);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ fetch });
+
+        expect(telemetry.enabled).toBe(false);
+
+        telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        telemetry.emitLog({ message: "hi" });
+        await telemetry.flush();
+
+        expect(calls).toHaveLength(0);
+        // `trace` still runs its work even when disabled.
+        await expect(telemetry.trace("op", async () => 42)).resolves.toBe(42);
+    });
+
+    it("resolves the endpoint from LUNORA_OTLP_ENDPOINT", async () => {
+        expect.assertions(2);
+
+        vi.stubEnv("LUNORA_OTLP_ENDPOINT", "https://collect.example.com");
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ fetch });
+
+        expect(telemetry.enabled).toBe(true);
+
+        telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        await telemetry.flush();
+
+        expect(calls[0]!.url).toBe("https://collect.example.com/v1/traces");
+    });
+
+    it("posts a well-formed span for a successful operation", async () => {
+        expect.assertions(9);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        telemetry.emitSpan({ attributes: { jobId: "j1" }, endMs: 10, name: "transcode", startMs: 5 });
+        await telemetry.flush();
+
+        expect(calls[0]!.url).toBe("https://collect.example.com/v1/traces");
+
+        const { resourceAttributes, scopeName, span } = spanFrom(calls[0]!.body);
+
+        expect(span.name).toBe("transcode");
+        // SPAN_KIND_INTERNAL / STATUS_CODE_OK.
+        expect(span.kind).toBe(1);
+        expect(span.status.code).toBe(1);
+        expect(span.traceId).toMatch(TRACE_ID_HEX);
+        expect(span.spanId).toMatch(SPAN_ID_HEX);
+        expect(attrValue(span.attributes, "jobId")?.stringValue).toBe("j1");
+        expect(attrValue(resourceAttributes, "service.name")?.stringValue).toBe("lunora-container");
+        expect(scopeName).toBe("@lunora/container");
+    });
+
+    it("marks an errored span with status ERROR, message, and error.type", async () => {
+        expect.assertions(4);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        telemetry.emitSpan({ endMs: 10, error: { message: "boom", type: "RangeError" }, name: "op", startMs: 0 });
+        await telemetry.flush();
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        // STATUS_CODE_ERROR.
+        expect(span.status.code).toBe(2);
+        expect(span.status.message).toBe("boom");
+        expect(attrValue(span.attributes, "error.type")?.stringValue).toBe("RangeError");
+        expect(span.name).toBe("op");
+    });
+
+    it("encodes start/end as nanosecond strings with exact ms→ns precision", async () => {
+        expect.assertions(3);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        telemetry.emitSpan({ endMs: 1005, name: "op", startMs: 1000 });
+        await telemetry.flush();
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        expect(span.startTimeUnixNano).toMatch(UNIX_NANO);
+        expect(span.endTimeUnixNano).toMatch(UNIX_NANO);
+        expect(BigInt(span.endTimeUnixNano) - BigInt(span.startTimeUnixNano)).toBe(BigInt(5 * 1_000_000));
+    });
+
+    it("encodes attribute value kinds by JS type", async () => {
+        expect.assertions(4);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        telemetry.emitSpan({ attributes: { count: 3, ok: true, ratio: 1.5, tag: "x" }, endMs: 10, name: "op", startMs: 0 });
+        await telemetry.flush();
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        expect(attrValue(span.attributes, "count")?.intValue).toBe("3");
+        expect(attrValue(span.attributes, "ratio")?.doubleValue).toBe(1.5);
+        expect(attrValue(span.attributes, "ok")?.boolValue).toBe(true);
+        expect(attrValue(span.attributes, "tag")?.stringValue).toBe("x");
+    });
+
+    it("posts a well-formed log record with mapped severity", async () => {
+        expect.assertions(6);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        telemetry.emitLog({ attributes: { jobId: "j1" }, level: "warn", message: "slow", ts: 1700 });
+        await telemetry.flush();
+
+        expect(calls[0]!.url).toBe("https://collect.example.com/v1/logs");
+
+        const { record, scopeName } = logFrom(calls[0]!.body);
+
+        expect(record.body.stringValue).toBe("slow");
+        expect(record.severityNumber).toBe(13);
+        expect(record.severityText).toBe("WARN");
+        expect(attrValue(record.attributes, "jobId")?.stringValue).toBe("j1");
+        expect(scopeName).toBe("@lunora/container");
+    });
+
+    it("maps each log level to its OTLP severity number and defaults to info", async () => {
+        expect.assertions(1);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        telemetry.emitLog({ level: "debug", message: "d" });
+        telemetry.emitLog({ level: "error", message: "e" });
+        telemetry.emitLog({ level: "info", message: "i" });
+        telemetry.emitLog({ message: "default" });
+        telemetry.emitLog({ level: "warn", message: "w" });
+        await telemetry.flush();
+
+        expect(calls.map((call) => logFrom(call.body).record.severityNumber)).toStrictEqual([5, 17, 9, 9, 13]);
+    });
+
+    it("tolerates a trailing slash on the endpoint", async () => {
+        expect.assertions(2);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com///", fetch });
+
+        telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        telemetry.emitLog({ message: "hi" });
+        await telemetry.flush();
+
+        expect(calls[0]!.url).toBe("https://collect.example.com/v1/traces");
+        expect(calls[1]!.url).toBe("https://collect.example.com/v1/logs");
+    });
+
+    it("sends a bearer token and merges headers case-insensitively", async () => {
+        expect.assertions(3);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            headers: { "Content-Type": "application/json; charset=utf-8", "x-lunora-deployment": "dep-1" },
+            token: "svc-token",
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        await telemetry.flush();
+
+        expect(calls[0]!.headers.authorization).toBe("Bearer svc-token");
+        expect(calls[0]!.headers["x-lunora-deployment"]).toBe("dep-1");
+        // A cased `Content-Type` override replaces the default rather than duplicating it.
+        expect(calls[0]!.headers["content-type"]).toBe("application/json; charset=utf-8");
+    });
+
+    it("honors a custom serviceName on spans and logs", async () => {
+        expect.assertions(2);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch, serviceName: "transcoder" });
+
+        telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        telemetry.emitLog({ message: "hi" });
+        await telemetry.flush();
+
+        expect(attrValue(spanFrom(calls[0]!.body).resourceAttributes, "service.name")?.stringValue).toBe("transcoder");
+        expect(attrValue(logFrom(calls[1]!.body).resourceAttributes, "service.name")?.stringValue).toBe("transcoder");
+    });
+
+    it("times a successful trace() and returns its value", async () => {
+        expect.assertions(4);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        const result = await telemetry.trace("op", async () => 42, { k: "v" });
+
+        await telemetry.flush();
+
+        expect(result).toBe(42);
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        expect(span.name).toBe("op");
+        expect(span.status.code).toBe(1);
+        expect(attrValue(span.attributes, "k")?.stringValue).toBe("v");
+    });
+
+    it("records an errored span and rethrows when trace()'s work throws", async () => {
+        expect.assertions(4);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        await expect(
+            telemetry.trace("op", async () => {
+                throw new TypeError("boom");
+            }),
+        ).rejects.toThrow("boom");
+
+        await telemetry.flush();
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        expect(span.status.code).toBe(2);
+        expect(span.status.message).toBe("boom");
+        expect(attrValue(span.attributes, "error.type")?.stringValue).toBe("TypeError");
+    });
+
+    it("reports a rejected send to onError without throwing", async () => {
+        expect.assertions(2);
+
+        const onError = vi.fn<(error: unknown) => void>();
+        const failing: OtelFetchLike = async () => {
+            throw new Error("network down");
+        };
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch: failing, onError });
+
+        expect(() => {
+            telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        }).not.toThrow();
+
+        await telemetry.flush();
+
+        expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    });
+
+    it("reports a missing fetch to onError without throwing", async () => {
+        expect.assertions(2);
+
+        vi.stubGlobal("fetch", undefined);
+        const onError = vi.fn<(error: unknown) => void>();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", onError });
+
+        expect(() => {
+            telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        }).not.toThrow();
+        expect(onError).toHaveBeenCalledWith(expect.any(TypeError));
+    });
+});

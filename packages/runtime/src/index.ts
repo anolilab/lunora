@@ -76,10 +76,11 @@ export type {
     AnalyticsEngineDataPointLike,
     AnalyticsEngineDatasetLike,
     AnalyticsEngineSinkOptions,
+    OtlpSinkOptions,
     SentrySinkOptions,
     WebhookSinkOptions,
 } from "./observability-sinks";
-export { analyticsEngineSink, combineSinks, consoleSink, sentrySink, webhookSink } from "./observability-sinks";
+export { analyticsEngineSink, combineSinks, consoleSink, otlpSink, sentrySink, webhookSink } from "./observability-sinks";
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,
