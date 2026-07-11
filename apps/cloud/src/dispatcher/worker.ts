@@ -1,7 +1,8 @@
 import { limitsForPlan } from "../billing/plans";
 import type { AnalyticsEngineDatasetLike } from "../metering/analytics";
 import { recordRequestUsage } from "../metering/analytics";
-import { createPlanResolver, createRouteResolver, resolveTenant } from "./route";
+import type { CustomDomainRoute } from "./route";
+import { createCustomDomainResolver, createPlanResolver, createRouteResolver, resolveTenant } from "./route";
 
 /**
  * The Lunora Cloud dispatcher Worker (CLOUD-PLAN.md §2.1) — a SEPARATE,
@@ -41,12 +42,14 @@ const NOT_FOUND = (message: string): Response => new Response(message, { status:
 // config changes.
 let planResolver: ((scriptName: string) => Promise<string | undefined>) | undefined;
 let routeResolver: ((label: string) => Promise<null | string>) | undefined;
+let customDomainResolver: ((hostname: string) => Promise<CustomDomainRoute | null>) | undefined;
 let resolverKey = "";
 
 const buildResolvers = (env: DispatcherEnv): void => {
     if (!env.CONTROL_PLANE_URL || !env.CONTROL_PLANE_TOKEN) {
         planResolver = undefined;
         routeResolver = undefined;
+        customDomainResolver = undefined;
 
         return;
     }
@@ -58,6 +61,7 @@ const buildResolvers = (env: DispatcherEnv): void => {
 
         planResolver = createPlanResolver(options);
         routeResolver = createRouteResolver(options);
+        customDomainResolver = createCustomDomainResolver(options);
         resolverKey = key;
     }
 };
@@ -66,9 +70,27 @@ export default {
     async fetch(request: Request, env: DispatcherEnv): Promise<Response> {
         buildResolvers(env);
 
-        const route = await resolveTenant(new URL(request.url).hostname, {
-            appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app",
+        const url = new URL(request.url);
+        const appDomain = env.LUNORA_APP_DOMAIN ?? "lunora.app";
+
+        // Custom domains (GAPS.md B1): a non-apex hostname resolves through the
+        // verified-domains lookup; redirect-only rows answer here directly.
+        if (customDomainResolver && !url.hostname.toLowerCase().endsWith(`.${appDomain}`)) {
+            const custom = await customDomainResolver(url.hostname.toLowerCase());
+
+            if (custom?.redirectTo) {
+                return Response.redirect(custom.redirectTo, custom.redirectStatusCode ?? 308);
+            }
+        }
+
+        const route = await resolveTenant(url.hostname, {
+            appDomain,
             resolveAlias: routeResolver,
+            resolveCustomDomain: async (hostname) => {
+                const custom = await customDomainResolver?.(hostname);
+
+                return custom?.scriptName ?? null;
+            },
             resolvePlan: planResolver,
         });
 
