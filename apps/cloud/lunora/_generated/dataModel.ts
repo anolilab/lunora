@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "domains" | "auditLog" | "invitations" | "platformUsage" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -120,6 +120,45 @@ export interface Doc_deployKeys {
     projectId?: Id<"projects">;
     revokedAt?: number;
     type: unknown;
+}
+
+export interface Doc_githubInstallations {
+    _id: Id<"githubInstallations">;
+    _creationTime: number;
+    accountLogin: string;
+    createdAt: number;
+    installationId: number;
+    organizationId: Id<"organizations">;
+}
+
+export interface Doc_builds {
+    _id: Id<"builds">;
+    _creationTime: number;
+    branch: string;
+    bundleHash?: string;
+    commitSha: string;
+    createdAt: number;
+    deploymentId?: string;
+    error?: string;
+    organizationId: Id<"organizations">;
+    processingBy?: string;
+    processingStartedAt?: number;
+    projectId: Id<"projects">;
+    status: "pending" | "building" | "successful" | "failed";
+    updatedAt: number;
+    buildingAt?: number;
+    successfulAt?: number;
+    failedAt?: number;
+}
+
+export interface Doc_buildLogs {
+    _id: Id<"buildLogs">;
+    _creationTime: number;
+    buildId: Id<"builds">;
+    createdAt: number;
+    level: "info" | "error";
+    line: string;
+    organizationId: Id<"organizations">;
 }
 
 export interface Doc_domains {
@@ -252,6 +291,9 @@ export interface DataModel {
     projects: Doc_projects;
     deployments: Doc_deployments;
     deployKeys: Doc_deployKeys;
+    githubInstallations: Doc_githubInstallations;
+    builds: Doc_builds;
+    buildLogs: Doc_buildLogs;
     domains: Doc_domains;
     auditLog: Doc_auditLog;
     invitations: Doc_invitations;
@@ -277,6 +319,9 @@ export interface IndexNamesByTable {
     projects: "by_org_slug" | "by_github_repo";
     deployments: "by_script" | "by_project" | "by_kind" | "by_alias";
     deployKeys: "by_org" | "by_hash";
+    githubInstallations: "by_org" | "by_installation";
+    builds: "by_project_commit" | "by_project";
+    buildLogs: "by_build";
     domains: "by_project" | "by_hostname";
     auditLog: "by_org";
     invitations: "by_token" | "by_org";
@@ -299,6 +344,9 @@ export interface SearchIndexNamesByTable {
     projects: never;
     deployments: never;
     deployKeys: never;
+    githubInstallations: never;
+    builds: never;
+    buildLogs: never;
     domains: never;
     auditLog: never;
     invitations: never;
@@ -321,6 +369,9 @@ export interface RankIndexNamesByTable {
     projects: never;
     deployments: never;
     deployKeys: never;
+    githubInstallations: never;
+    builds: never;
+    buildLogs: never;
     domains: never;
     auditLog: never;
     invitations: never;
@@ -421,6 +472,45 @@ export interface Insert_deployKeys {
     projectId?: Id<"projects">;
     revokedAt?: number;
     type: unknown;
+}
+
+export interface Insert_githubInstallations {
+    _id?: Id<"githubInstallations">;
+    _creationTime?: number;
+    accountLogin: string;
+    createdAt: number;
+    installationId: number;
+    organizationId: Id<"organizations">;
+}
+
+export interface Insert_builds {
+    _id?: Id<"builds">;
+    _creationTime?: number;
+    branch: string;
+    bundleHash?: string;
+    commitSha: string;
+    createdAt: number;
+    deploymentId?: string;
+    error?: string;
+    organizationId: Id<"organizations">;
+    processingBy?: string;
+    processingStartedAt?: number;
+    projectId: Id<"projects">;
+    status: "pending" | "building" | "successful" | "failed";
+    updatedAt: number;
+    buildingAt?: number;
+    successfulAt?: number;
+    failedAt?: number;
+}
+
+export interface Insert_buildLogs {
+    _id?: Id<"buildLogs">;
+    _creationTime?: number;
+    buildId: Id<"builds">;
+    createdAt: number;
+    level: "info" | "error";
+    line: string;
+    organizationId: Id<"organizations">;
 }
 
 export interface Insert_domains {
@@ -554,6 +644,9 @@ export interface InsertModel {
     projects: Insert_projects;
     deployments: Insert_deployments;
     deployKeys: Insert_deployKeys;
+    githubInstallations: Insert_githubInstallations;
+    builds: Insert_builds;
+    buildLogs: Insert_buildLogs;
     domains: Insert_domains;
     auditLog: Insert_auditLog;
     invitations: Insert_invitations;
@@ -591,6 +684,9 @@ export interface Relations {
     projects: {};
     deployments: {};
     deployKeys: {};
+    githubInstallations: {};
+    builds: {};
+    buildLogs: {};
     domains: {};
     auditLog: {};
     invitations: {};

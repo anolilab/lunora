@@ -18,6 +18,11 @@ export interface ApiTypes {
         processWebhook: FunctionReference<"action", { body: string; signature: string }, { applied: boolean; status: number; }>;
         subscription: FunctionReference<"query", { organizationId: Id<"organizations"> }, { cancelAtPeriodEnd?: false | true; currentPeriodEnd?: number; priceId: string; provider: string; referenceId: string; state: string }[]>;
     };
+    builds: {
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; status: "building" | "failed" | "pending" | "successful" }[]>;
+        logs: FunctionReference<"query", { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }, { createdAt: number; level: "error" | "info"; line: string; }[]>;
+        recordPush: FunctionReference<"mutation", { branch: string; commitSha: string; repository: string }, { buildId: Id<"builds">; reused: boolean; } | null>;
+    };
     cells: {
         list: FunctionReference<"query", {}, { _id: Id<"cells">; cloudflareAccountId: string; createdAt: number; dispatchNamespacePrefix: string; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
         register: FunctionReference<"mutation", { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }, Id<"cells">>;
@@ -32,7 +37,7 @@ export interface ApiTypes {
         activate: FunctionReference<"mutation", { deployKey?: string; id: Id<"deployments"> }, void>;
         adminTarget: FunctionReference<"query", { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken: string; url: string; } | null>;
         create: FunctionReference<"mutation", { adminToken?: string; branch?: string; cronSpecs?: Array<string>; deployKey?: string; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string }, { deploymentId: Id<"deployments">; scriptName: string; version: number; }>;
-        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"deployments">; adminToken?: string; alias?: string; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued" | "superseded" | "verifying"; updatedAt: number; url?: string; version?: number }[]>;
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"deployments">; adminToken?: string; alias?: string; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "building" | "failed" | "destroyed" | "live" | "provisioning" | "queued" | "superseded" | "verifying"; updatedAt: number; url?: string; version?: number }[]>;
         planForScript: FunctionReference<"query", { scriptName: string }, { plan: string; }>;
         rollback: FunctionReference<"mutation", { deployKey?: string; id: Id<"deployments">; organizationId: Id<"organizations"> }, { scriptName: string; version?: number; }>;
         routeForAlias: FunctionReference<"query", { alias: string }, { scriptName: string; } | null>;
@@ -46,10 +51,15 @@ export interface ApiTypes {
         remove: FunctionReference<"mutation", { id: Id<"domains">; organizationId: Id<"organizations"> }, void>;
         routeForHostname: FunctionReference<"query", { hostname: string }, { redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
     };
+    github_installations: {
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"githubInstallations">; accountLogin: string; createdAt: number; installationId: number; organizationId: Id<"organizations"> }[]>;
+        record: FunctionReference<"mutation", { accountLogin: string; installationId: number }, Id<"githubInstallations"> | null>;
+        remove: FunctionReference<"mutation", { installationId: number }, void>;
+    };
     invitations: {
         accept: FunctionReference<"mutation", { token: string }, { organizationId: Id<"organizations">; }>;
         invite: FunctionReference<"mutation", { email: string; organizationId: Id<"organizations"> }, { id: Id<"invitations">; token: string; }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { organizationId: Id<"organizations">; status: "accepted" | "pending" | "revoked"; _id: Id<"invitations">; createdAt: number; email: string; expiresAt: number; invitedBy: string; role: "admin" | "member" | "owner" | "viewer" }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { organizationId: Id<"organizations">; status: "pending" | "accepted" | "revoked"; _id: Id<"invitations">; createdAt: number; email: string; expiresAt: number; invitedBy: string; role: "admin" | "member" | "owner" | "viewer" }[]>;
         revoke: FunctionReference<"mutation", { id: Id<"invitations">; organizationId: Id<"organizations"> }, void>;
     };
     members: {
@@ -83,6 +93,12 @@ export const api = anyApi as unknown as ApiTypes;
 
 /** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
 export interface InternalApiTypes {
+    builds: {
+        appendLog: FunctionReference<"mutation", { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }, void>;
+        claimNext: FunctionReference<"mutation", { runnerId: string }, { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; } | null>;
+        complete: FunctionReference<"mutation", { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }, void>;
+        fail: FunctionReference<"mutation", { buildId: Id<"builds">; error: string; runnerId: string }, void>;
+    };
     deployments: {
         cleanupExpiredPreviews: FunctionReference<"mutation", {}, { destroyed: number; }>;
     };
