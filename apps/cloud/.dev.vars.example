@@ -18,11 +18,14 @@ CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 # Generate with: openssl rand -hex 32
 GITHUB_WEBHOOK_SECRET=replace-with-openssl-rand-hex-32
 
-# ── Billing (§4) — Stripe via @lunora/payment ────────────────────────────────
+# ── Billing (§4) — Creem (Merchant of Record) via @lunora/payment ───────────
+# Creem is the legal seller and handles sales tax/VAT globally (GAPS.md C3).
 # Absent → entitlement reads still work (everyone resolves to the free plan);
 # checkout / portal / webhook fail until these are set.
-STRIPE_SECRET_KEY=sk_test_replace-me
-STRIPE_WEBHOOK_SECRET=whsec_replace-me
+CREEM_API_KEY=creem_test_replace-me
+CREEM_WEBHOOK_SECRET=whsec_replace-me
+# Point the SDK at Creem's sandbox (test-api.creem.io) during development.
+CREEM_TEST_MODE=true
 
 # ── Email (§3) — @lunora/mail ────────────────────────────────────────────────
 # In dev, mail is captured into the studio Mail tab (no transport needed). For

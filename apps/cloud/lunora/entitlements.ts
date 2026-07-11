@@ -10,7 +10,7 @@ import type { QueryCtx as QueryContext } from "./_generated/server.js";
 /**
  * Live entitlement resolution (CLOUD-PLAN.md §4). Quota is enforced against the
  * org's **synced subscription state**, not the static `organizations.plan`
- * column — the Stripe webhook writes `subscriptions`, so reading them here is the
+ * column — the billing (Creem) webhook writes `subscriptions`, so reading them here is the
  * single source of truth (the `plan` column is just the nominal tier the org was
  * created under). An org with no active subscription resolves to the free-plan
  * baseline, so a non-subscriber is always bounded.

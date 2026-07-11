@@ -7,9 +7,9 @@ import type { Entitlements, EntitlementsConfig } from "@lunora/payment";
  * with no active subscription resolves to no entitlements, so we fall back to
  * the `free` plan's limits as the baseline.
  *
- * `priceIds` are placeholders here; the real provider price ids are configured
- * per environment when the payment provider (Stripe/Polar via `@lunora/payment`)
- * is wired.
+ * `priceIds` are placeholders here; Creem is product-based, so these map to
+ * real Creem product ids configured per environment when the provider (Creem
+ * via `@lunora/payment/creem`) is wired.
  */
 export const LUNORA_CLOUD_PLANS: EntitlementsConfig = {
     plans: {

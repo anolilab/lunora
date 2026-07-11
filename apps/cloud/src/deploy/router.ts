@@ -160,7 +160,8 @@ const handleAdminRoute = async (request: Request, environment: RouterEnv): Promi
 };
 
 /**
- * `POST /v1/billing/webhook` — provider (Stripe) billing webhook (§4). Reads the
+ * `POST /v1/billing/webhook` — provider (Creem, the Merchant of Record) billing
+ * webhook (§4). Reads the
  * raw body + signature and forwards them to the signature-verifying action so
  * the verification + store write happen where `ctx.payments` exists.
  */
@@ -172,7 +173,7 @@ const handleBillingWebhookRoute = async (request: Request, environment: RouterEn
     }
 
     const body = await request.text();
-    const signature = request.headers.get("stripe-signature") ?? "";
+    const signature = request.headers.get("creem-signature") ?? "";
     const result = await context.runAction<{ applied: boolean; status: number }>(api.billing.processWebhook, { body, signature });
 
     return Response.json({ applied: result.applied }, { status: result.status });

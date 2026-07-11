@@ -33,9 +33,9 @@
         "@lunora/server": "workspace:*",
         "@lunora/values": "workspace:*",
         "better-auth": "catalog:auth",
+        "creem": "^1.5.3",
         "react": "catalog:frontend",
-        "react-dom": "catalog:frontend",
-        "stripe": "^19.0.0"
+        "react-dom": "catalog:frontend"
     },
     "devDependencies": {
         "@lunora/cli": "workspace:*",
