@@ -32,7 +32,7 @@ export const buildByoWrangler = (target: Pick<EjectTarget, "projectSlug" | "scri
         d1_databases: [
             {
                 binding: "GLOBAL_DB",
-                database_id: "<create with: wrangler d1 create " + target.projectSlug + ">",
+                database_id: `<create with: wrangler d1 create ${target.projectSlug}>`,
                 database_name: target.projectSlug,
             },
         ],
