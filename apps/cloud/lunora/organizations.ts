@@ -104,6 +104,17 @@ export const create = mutation
         return organizationId;
     });
 
+/** Rename an organization (owner only). The slug is immutable (it's the URL identity). */
+export const rename = mutation
+    .input({ name: v.string(), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { name, organizationId } }): Promise<void> => {
+        const member = await assertMember(context, organizationId, ["owner"]);
+        const now = Date.now();
+
+        await context.db.patch(organizationId, { name });
+        await context.db.insert("auditLog", { action: "organization.rename", actorUserId: member.userId, createdAt: now, organizationId, target: name });
+    });
+
 /** Deletion grace window (GAPS.md D3): 30 days to change your mind before the purge. */
 export const DELETION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -115,18 +126,22 @@ export const DELETION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const requestDeletion = mutation
     .input({ organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<void> => {
-        await assertMember(context, organizationId, ["owner"]);
+        const member = await assertMember(context, organizationId, ["owner"]);
+        const now = Date.now();
 
-        await context.db.patch(organizationId, { deletionRequestedAt: Date.now() });
+        await context.db.patch(organizationId, { deletionRequestedAt: now });
+        await context.db.insert("auditLog", { action: "organization.deletion.request", actorUserId: member.userId, createdAt: now, organizationId });
     });
 
 /** Cancel a pending deletion request (owner only). */
 export const cancelDeletion = mutation
     .input({ organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<void> => {
-        await assertMember(context, organizationId, ["owner"]);
+        const member = await assertMember(context, organizationId, ["owner"]);
+        const now = Date.now();
 
         await context.db.patch(organizationId, { deletionRequestedAt: undefined });
+        await context.db.insert("auditLog", { action: "organization.deletion.cancel", actorUserId: member.userId, createdAt: now, organizationId });
     });
 
 /**

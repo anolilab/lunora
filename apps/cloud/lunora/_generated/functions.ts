@@ -57,6 +57,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "builds:appendLog": lunora_builds_2.appendLog as unknown as RegisteredLunoraFunction,
     "builds:claimNext": lunora_builds_2.claimNext as unknown as RegisteredLunoraFunction,
     "builds:complete": lunora_builds_2.complete as unknown as RegisteredLunoraFunction,
+    "builds:expireStale": lunora_builds_2.expireStale as unknown as RegisteredLunoraFunction,
     "builds:fail": lunora_builds_2.fail as unknown as RegisteredLunoraFunction,
     "builds:listByProject": lunora_builds_2.listByProject as unknown as RegisteredLunoraFunction,
     "builds:logs": lunora_builds_2.logs as unknown as RegisteredLunoraFunction,
@@ -73,6 +74,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "deployments:create": lunora_deployments_5.create as unknown as RegisteredLunoraFunction,
     "deployments:listByProject": lunora_deployments_5.listByProject as unknown as RegisteredLunoraFunction,
     "deployments:planForScript": lunora_deployments_5.planForScript as unknown as RegisteredLunoraFunction,
+    "deployments:pruneSuperseded": lunora_deployments_5.pruneSuperseded as unknown as RegisteredLunoraFunction,
     "deployments:rollback": lunora_deployments_5.rollback as unknown as RegisteredLunoraFunction,
     "deployments:routeForAlias": lunora_deployments_5.routeForAlias as unknown as RegisteredLunoraFunction,
     "deployments:updateStatus": lunora_deployments_5.updateStatus as unknown as RegisteredLunoraFunction,
@@ -83,6 +85,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "domains:remove": lunora_domains_6.remove as unknown as RegisteredLunoraFunction,
     "domains:routeForHostname": lunora_domains_6.routeForHostname as unknown as RegisteredLunoraFunction,
     "fanout:tick": lunora_fanout_7.tick as unknown as RegisteredLunoraFunction,
+    "github_installations:claim": lunora_github_installations_8.claim as unknown as RegisteredLunoraFunction,
     "github_installations:list": lunora_github_installations_8.list as unknown as RegisteredLunoraFunction,
     "github_installations:record": lunora_github_installations_8.record as unknown as RegisteredLunoraFunction,
     "github_installations:remove": lunora_github_installations_8.remove as unknown as RegisteredLunoraFunction,
@@ -96,15 +99,18 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "members:add": lunora_members_11.add as unknown as RegisteredLunoraFunction,
     "members:list": lunora_members_11.list as unknown as RegisteredLunoraFunction,
     "members:remove": lunora_members_11.remove as unknown as RegisteredLunoraFunction,
+    "members:setRole": lunora_members_11.setRole as unknown as RegisteredLunoraFunction,
     "organizations:cancelDeletion": lunora_organizations_12.cancelDeletion as unknown as RegisteredLunoraFunction,
     "organizations:create": lunora_organizations_12.create as unknown as RegisteredLunoraFunction,
     "organizations:getBySlug": lunora_organizations_12.getBySlug as unknown as RegisteredLunoraFunction,
     "organizations:list": lunora_organizations_12.list as unknown as RegisteredLunoraFunction,
     "organizations:purgeDeleted": lunora_organizations_12.purgeDeleted as unknown as RegisteredLunoraFunction,
+    "organizations:rename": lunora_organizations_12.rename as unknown as RegisteredLunoraFunction,
     "organizations:requestDeletion": lunora_organizations_12.requestDeletion as unknown as RegisteredLunoraFunction,
     "projects:byGithubRepo": lunora_projects_13.byGithubRepo as unknown as RegisteredLunoraFunction,
     "projects:create": lunora_projects_13.create as unknown as RegisteredLunoraFunction,
     "projects:listByOrg": lunora_projects_13.listByOrg as unknown as RegisteredLunoraFunction,
+    "projects:rename": lunora_projects_13.rename as unknown as RegisteredLunoraFunction,
     "secrets:list": lunora_secrets_14.list as unknown as RegisteredLunoraFunction,
     "secrets:listEncrypted": lunora_secrets_14.listEncrypted as unknown as RegisteredLunoraFunction,
     "secrets:remove": lunora_secrets_14.remove as unknown as RegisteredLunoraFunction,
@@ -218,8 +224,9 @@ installCompiledValidatorMap(lunora_builds_2.recordPush.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["branch"] !== "string") return DEFER;
 if (typeof source["commitSha"] !== "string") return DEFER;
+if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
 if (typeof source["repository"] !== "string") return DEFER;
-return { "branch": source["branch"], "commitSha": source["commitSha"], "repository": source["repository"] };
+return { "branch": source["branch"], "commitSha": source["commitSha"], "installationId": source["installationId"], "repository": source["repository"] };
 });
 installCompiledValidatorMap(lunora_cells_3.register.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -356,6 +363,12 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (typeof source["hostname"] !== "string") return DEFER;
 return { "hostname": source["hostname"] };
 });
+installCompiledValidatorMap(lunora_github_installations_8.claim.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "installationId": source["installationId"], "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_github_installations_8.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
@@ -434,6 +447,12 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (typeof source["slug"] !== "string") return DEFER;
 return { "slug": source["slug"] };
 });
+installCompiledValidatorMap(lunora_organizations_12.rename.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["name"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "name": source["name"], "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_organizations_12.requestDeletion.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
@@ -470,39 +489,24 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
+installCompiledValidatorMap(lunora_projects_13.rename.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["name"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "name": source["name"], "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_secrets_14.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
-installCompiledValidatorMap(lunora_secrets_14.listEncrypted.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-let __has1 = false;
-let __val1;
-if (source["deployKey"] !== undefined) {
-if (typeof source["deployKey"] !== "string") return DEFER;
-__val1 = source["deployKey"];
-__has1 = true;
-}
-if (typeof source["organizationId"] !== "string") return DEFER;
-if (typeof source["projectId"] !== "string") return DEFER;
-return { ...(__has1 ? { "deployKey": __val1 } : {}), "organizationId": source["organizationId"], "projectId": source["projectId"] };
-});
 installCompiledValidatorMap(lunora_secrets_14.remove.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
-});
-installCompiledValidatorMap(lunora_secrets_14.store.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-if (typeof source["ciphertext"] !== "string") return DEFER;
-if (typeof source["iv"] !== "string") return DEFER;
-if (typeof source["name"] !== "string") return DEFER;
-if (typeof source["organizationId"] !== "string") return DEFER;
-if (typeof source["projectId"] !== "string") return DEFER;
-return { "ciphertext": source["ciphertext"], "iv": source["iv"], "name": source["name"], "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
 installCompiledValidatorMap(lunora_usage_15.ingest.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -600,10 +604,11 @@ export interface Caller {
         appendLog: (args: { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }) => Promise<void>;
         claimNext: (args: { runnerId: string }) => Promise<{ buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; } | null>;
         complete: (args: { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }) => Promise<void>;
+        expireStale: (args?: {}) => Promise<{ expired: number; }>;
         fail: (args: { buildId: Id<"builds">; error: string; runnerId: string }) => Promise<void>;
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; status: "building" | "failed" | "pending" | "successful" }[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
-        recordPush: (args: { branch: string; commitSha: string; repository: string }) => Promise<{ buildId: Id<"builds">; reused: boolean; } | null>;
+        recordPush: (args: { branch: string; commitSha: string; installationId: number; repository: string }) => Promise<{ buildId: Id<"builds">; reused: boolean; } | null>;
     };
     cells: {
         list: (args?: {}) => Promise<{ _id: Id<"cells">; cloudflareAccountId: string; createdAt: number; dispatchNamespacePrefix: string; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
@@ -622,6 +627,7 @@ export interface Caller {
         create: (args: { adminToken?: string; branch?: string; cronSpecs?: Array<string>; deployKey?: string; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: string; scriptName: string }) => Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number; }>;
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"deployments">; adminToken?: string; alias?: string; branch?: string; bundleHash?: string; createdAt: number; createdBy: string; expiresAt?: number; kind: "dev" | "preview" | "production"; organizationId: Id<"organizations">; projectId: Id<"projects">; scriptName: string; status: "building" | "failed" | "destroyed" | "live" | "provisioning" | "queued" | "superseded" | "verifying"; updatedAt: number; url?: string; version?: number }[]>;
         planForScript: (args: { scriptName: string }) => Promise<{ plan: string; }>;
+        pruneSuperseded: (args?: {}) => Promise<{ pruned: number; }>;
         rollback: (args: { deployKey?: string; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ scriptName: string; version?: number; }>;
         routeForAlias: (args: { alias: string }) => Promise<{ scriptName: string; } | null>;
         updateStatus: (args: { bundleHash?: string; deployKey?: string; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: string }) => Promise<void>;
@@ -638,8 +644,9 @@ export interface Caller {
         tick: (args?: {}) => Promise<{ ok: true; }>;
     };
     github_installations: {
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"githubInstallations">; accountLogin: string; createdAt: number; installationId: number; organizationId: Id<"organizations"> }[]>;
-        record: (args: { accountLogin: string; installationId: number }) => Promise<Id<"githubInstallations"> | null>;
+        claim: (args: { installationId: number; organizationId: Id<"organizations"> }) => Promise<void>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; organizationId?: Id<"organizations"> }[]>;
+        record: (args: { accountLogin: string; installationId: number }) => Promise<Id<"githubInstallations">>;
         remove: (args: { installationId: number }) => Promise<void>;
     };
     invitations: {
@@ -657,6 +664,7 @@ export interface Caller {
         add: (args: { organizationId: Id<"organizations">; userId: string }) => Promise<Id<"members">>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"members">; createdAt: number; organizationId: Id<"organizations">; role: "admin" | "member" | "owner" | "viewer"; userId: string }[]>;
         remove: (args: { id: Id<"members">; organizationId: Id<"organizations"> }) => Promise<void>;
+        setRole: (args: { id: Id<"members">; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }) => Promise<void>;
     };
     organizations: {
         cancelDeletion: (args: { organizationId: Id<"organizations"> }) => Promise<void>;
@@ -664,18 +672,20 @@ export interface Caller {
         getBySlug: (args: { slug: string }) => Promise<null | { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }>;
         list: (args?: {}) => Promise<{ _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }[]>;
         purgeDeleted: (args?: {}) => Promise<{ purged: number; }>;
+        rename: (args: { name: string; organizationId: Id<"organizations"> }) => Promise<void>;
         requestDeletion: (args: { organizationId: Id<"organizations"> }) => Promise<void>;
     };
     projects: {
         byGithubRepo: (args: { repository: string }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: (args: { framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; slug: string }) => Promise<Id<"projects">>;
         listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; slug: string }[]>;
+        rename: (args: { id: Id<"projects">; name: string; organizationId: Id<"organizations"> }) => Promise<void>;
     };
     secrets: {
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ createdAt: number; id: Id<"secrets">; name: string; updatedAt: number; }[]>;
-        listEncrypted: (args: { deployKey?: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; iv: string; name: string; }[]>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ createdAt: number; environment: string; id: Id<"secrets">; name: string; updatedAt: number; }[]>;
+        listEncrypted: (args: { deployKey?: string; environment?: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; iv: string; name: string; }[]>;
         remove: (args: { id: Id<"secrets">; organizationId: Id<"organizations"> }) => Promise<void>;
-        store: (args: { ciphertext: string; iv: string; name: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<Id<"secrets">>;
+        store: (args: { ciphertext: string; environment?: "all" | "production" | "preview" | "dev"; iv: string; name: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<Id<"secrets">>;
     };
     usage: {
         enforceSpendCaps: (args?: {}) => Promise<{ suspended: number; unsuspended: number; }>;
@@ -718,6 +728,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         appendLog: (args) => callRegistered(context, "builds:appendLog", args),
         claimNext: (args) => callRegistered(context, "builds:claimNext", args),
         complete: (args) => callRegistered(context, "builds:complete", args),
+        expireStale: (args) => callRegistered(context, "builds:expireStale", args),
         fail: (args) => callRegistered(context, "builds:fail", args),
         listByProject: (args) => callRegistered(context, "builds:listByProject", args),
         logs: (args) => callRegistered(context, "builds:logs", args),
@@ -740,6 +751,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         create: (args) => callRegistered(context, "deployments:create", args),
         listByProject: (args) => callRegistered(context, "deployments:listByProject", args),
         planForScript: (args) => callRegistered(context, "deployments:planForScript", args),
+        pruneSuperseded: (args) => callRegistered(context, "deployments:pruneSuperseded", args),
         rollback: (args) => callRegistered(context, "deployments:rollback", args),
         routeForAlias: (args) => callRegistered(context, "deployments:routeForAlias", args),
         updateStatus: (args) => callRegistered(context, "deployments:updateStatus", args),
@@ -756,6 +768,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         tick: (args) => callRegistered(context, "fanout:tick", args),
     },
     github_installations: {
+        claim: (args) => callRegistered(context, "github_installations:claim", args),
         list: (args) => callRegistered(context, "github_installations:list", args),
         record: (args) => callRegistered(context, "github_installations:record", args),
         remove: (args) => callRegistered(context, "github_installations:remove", args),
@@ -775,6 +788,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         add: (args) => callRegistered(context, "members:add", args),
         list: (args) => callRegistered(context, "members:list", args),
         remove: (args) => callRegistered(context, "members:remove", args),
+        setRole: (args) => callRegistered(context, "members:setRole", args),
     },
     organizations: {
         cancelDeletion: (args) => callRegistered(context, "organizations:cancelDeletion", args),
@@ -782,12 +796,14 @@ export const createCaller = (context: CallerCtx): Caller => ({
         getBySlug: (args) => callRegistered(context, "organizations:getBySlug", args),
         list: (args) => callRegistered(context, "organizations:list", args),
         purgeDeleted: (args) => callRegistered(context, "organizations:purgeDeleted", args),
+        rename: (args) => callRegistered(context, "organizations:rename", args),
         requestDeletion: (args) => callRegistered(context, "organizations:requestDeletion", args),
     },
     projects: {
         byGithubRepo: (args) => callRegistered(context, "projects:byGithubRepo", args),
         create: (args) => callRegistered(context, "projects:create", args),
         listByOrg: (args) => callRegistered(context, "projects:listByOrg", args),
+        rename: (args) => callRegistered(context, "projects:rename", args),
     },
     secrets: {
         list: (args) => callRegistered(context, "secrets:list", args),

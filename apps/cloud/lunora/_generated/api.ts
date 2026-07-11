@@ -21,7 +21,7 @@ export interface ApiTypes {
     builds: {
         listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; status: "building" | "failed" | "pending" | "successful" }[]>;
         logs: FunctionReference<"query", { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }, { createdAt: number; level: "error" | "info"; line: string; }[]>;
-        recordPush: FunctionReference<"mutation", { branch: string; commitSha: string; repository: string }, { buildId: Id<"builds">; reused: boolean; } | null>;
+        recordPush: FunctionReference<"mutation", { branch: string; commitSha: string; installationId: number; repository: string }, { buildId: Id<"builds">; reused: boolean; } | null>;
     };
     cells: {
         list: FunctionReference<"query", {}, { _id: Id<"cells">; cloudflareAccountId: string; createdAt: number; dispatchNamespacePrefix: string; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
@@ -52,8 +52,9 @@ export interface ApiTypes {
         routeForHostname: FunctionReference<"query", { hostname: string }, { redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
     };
     github_installations: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"githubInstallations">; accountLogin: string; createdAt: number; installationId: number; organizationId: Id<"organizations"> }[]>;
-        record: FunctionReference<"mutation", { accountLogin: string; installationId: number }, Id<"githubInstallations"> | null>;
+        claim: FunctionReference<"mutation", { installationId: number; organizationId: Id<"organizations"> }, void>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; organizationId?: Id<"organizations"> }[]>;
+        record: FunctionReference<"mutation", { accountLogin: string; installationId: number }, Id<"githubInstallations">>;
         remove: FunctionReference<"mutation", { installationId: number }, void>;
     };
     invitations: {
@@ -70,24 +71,27 @@ export interface ApiTypes {
         add: FunctionReference<"mutation", { organizationId: Id<"organizations">; userId: string }, Id<"members">>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"members">; createdAt: number; organizationId: Id<"organizations">; role: "admin" | "member" | "owner" | "viewer"; userId: string }[]>;
         remove: FunctionReference<"mutation", { id: Id<"members">; organizationId: Id<"organizations"> }, void>;
+        setRole: FunctionReference<"mutation", { id: Id<"members">; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }, void>;
     };
     organizations: {
         cancelDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
         create: FunctionReference<"mutation", { cellId?: Id<"cells">; jurisdiction?: string; name: string; plan?: "free" | "pro" | "enterprise"; slug: string }, Id<"organizations">>;
         getBySlug: FunctionReference<"query", { slug: string }, null | { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }>;
         list: FunctionReference<"query", {}, { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }[]>;
+        rename: FunctionReference<"mutation", { name: string; organizationId: Id<"organizations"> }, void>;
         requestDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
     };
     projects: {
         byGithubRepo: FunctionReference<"query", { repository: string }, { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: FunctionReference<"mutation", { framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; slug: string }, Id<"projects">>;
         listByOrg: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"projects">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; slug: string }[]>;
+        rename: FunctionReference<"mutation", { id: Id<"projects">; name: string; organizationId: Id<"organizations"> }, void>;
     };
     secrets: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { createdAt: number; id: Id<"secrets">; name: string; updatedAt: number; }[]>;
-        listEncrypted: FunctionReference<"query", { deployKey?: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }, { ciphertext: string; iv: string; name: string; }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { createdAt: number; environment: string; id: Id<"secrets">; name: string; updatedAt: number; }[]>;
+        listEncrypted: FunctionReference<"query", { deployKey?: string; environment?: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects"> }, { ciphertext: string; iv: string; name: string; }[]>;
         remove: FunctionReference<"mutation", { id: Id<"secrets">; organizationId: Id<"organizations"> }, void>;
-        store: FunctionReference<"mutation", { ciphertext: string; iv: string; name: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }, Id<"secrets">>;
+        store: FunctionReference<"mutation", { ciphertext: string; environment?: "all" | "production" | "preview" | "dev"; iv: string; name: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }, Id<"secrets">>;
     };
     usage: {
         ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }, Id<"platformUsage">>;
@@ -106,10 +110,12 @@ export interface InternalApiTypes {
         appendLog: FunctionReference<"mutation", { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }, void>;
         claimNext: FunctionReference<"mutation", { runnerId: string }, { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; } | null>;
         complete: FunctionReference<"mutation", { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }, void>;
+        expireStale: FunctionReference<"mutation", {}, { expired: number; }>;
         fail: FunctionReference<"mutation", { buildId: Id<"builds">; error: string; runnerId: string }, void>;
     };
     deployments: {
         cleanupExpiredPreviews: FunctionReference<"mutation", {}, { destroyed: number; }>;
+        pruneSuperseded: FunctionReference<"mutation", {}, { pruned: number; }>;
     };
     fanout: {
         tick: FunctionReference<"mutation", {}, { ok: true; }>;

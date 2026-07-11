@@ -63,3 +63,40 @@ export const remove = mutation
 
         await context.db.delete(id);
     });
+
+/**
+ * Change a member's role (owner only). Demoting the last owner is refused —
+ * an org must always have one.
+ */
+export const setRole = mutation
+    .input({
+        id: v.id("members"),
+        organizationId: v.id("organizations"),
+        role: v.union(v.literal("owner"), v.literal("admin"), v.literal("member"), v.literal("viewer")),
+    })
+    .mutation(async ({ ctx: context, args: { id, organizationId, role: newRole } }): Promise<void> => {
+        const caller = await assertMember(context, organizationId, ["owner"]);
+        const target = (await context.db.get(id)) as MemberRow | null;
+
+        if (target?.organizationId !== organizationId) {
+            throw new LunoraError("NOT_FOUND", "member not found in this organization");
+        }
+
+        if (target.role === "owner" && newRole !== "owner") {
+            const { page } = await context.db.members.findMany({ where: { organizationId } });
+            const owners = (page as unknown as MemberRow[]).filter((member) => member.role === "owner");
+
+            if (owners.length <= 1) {
+                throw new LunoraError("CONFLICT", "cannot demote the last owner");
+            }
+        }
+
+        await context.db.patch(id, { role: newRole });
+        await context.db.insert("auditLog", {
+            action: "member.set-role",
+            actorUserId: caller.userId,
+            createdAt: Date.now(),
+            organizationId,
+            target: `${target.userId} → ${newRole}`,
+        });
+    });
