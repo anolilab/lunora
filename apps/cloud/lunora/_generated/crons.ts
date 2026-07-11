@@ -31,6 +31,7 @@ export const LUNORA_CRON_TRIGGERS: ReadonlyArray<string> = [
 export const LUNORA_CRONS: Record<string, ReadonlyArray<LunoraCronJob>> = {
     "0 */1 * * *": [
         { name: "cleanup expired previews", functionPath: "deployments:cleanupExpiredPreviews", args: {} },
+        { name: "enforce spend caps", functionPath: "usage:enforceSpendCaps", args: {} },
         { name: "rollup platform usage", functionPath: "usage:rollup", args: {} },
     ],
     "*/1 * * * *": [

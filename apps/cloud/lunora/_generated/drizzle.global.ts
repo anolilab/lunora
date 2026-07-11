@@ -23,6 +23,8 @@ export const organizations = sqliteTable("organizations", {
     createdAt: real("createdAt").notNull(),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
+    spendCapMinor: real("spendCapMinor"),
+    suspendedAt: real("suspendedAt"),
 }, (t) => ({
     by_slug: uniqueIndex("by_slug").on(t.slug),
 }));
