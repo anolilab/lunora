@@ -17,7 +17,32 @@ interface Env {
 }
 
 let worker: null | ReturnType<typeof createWorker> = null;
-let authInstance: null | ReturnType<typeof buildAuth> = null;
+let authReady: null | Promise<ReturnType<typeof buildAuth>> = null;
+
+/**
+ * Build the auth instance exactly once — even under concurrent requests — and
+ * only *after* `ensureMigrated` has created the better-auth tables. Every caller
+ * awaits the same promise, so no request can reach `handleAuthRequest` /
+ * `getSession` before the schema exists (assigning the instance before awaiting
+ * migrations would let a concurrent request slip through that window). On
+ * failure the promise is cleared so the next request retries instead of caching
+ * a permanent error.
+ */
+const ensureAuthReady = (env: Env): Promise<ReturnType<typeof buildAuth>> => {
+    if (!authReady) {
+        authReady = (async (): Promise<ReturnType<typeof buildAuth>> => {
+            await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB }));
+
+            return buildAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB });
+        })().catch((error: unknown) => {
+            authReady = null;
+
+            throw error;
+        });
+    }
+
+    return authReady;
+};
 
 /**
  * Worker entry for the Expo example — the same shape as any Lunora worker with
@@ -38,13 +63,9 @@ let authInstance: null | ReturnType<typeof buildAuth> = null;
  */
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
-        if (!authInstance) {
-            authInstance = buildAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB });
+        const auth = await ensureAuthReady(env);
 
-            await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB }));
-        }
-
-        const authResponse = await handleAuthRequest(authInstance, request);
+        const authResponse = await handleAuthRequest(auth, request);
 
         if (authResponse) {
             return authResponse;
@@ -54,8 +75,7 @@ export default {
             worker = createWorker({
                 openApiSpec,
                 resolveIdentity: async (identityRequest) => {
-                    // `authInstance` is always set above before any request work.
-                    const session = await authInstance!.api.getSession({ headers: identityRequest.headers });
+                    const session = await auth.api.getSession({ headers: identityRequest.headers });
 
                     return session?.user?.id ? { userId: session.user.id } : null;
                 },

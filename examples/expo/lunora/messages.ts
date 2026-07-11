@@ -35,11 +35,12 @@ const assertSignedIn = (userId: null | string): string => {
 export const list = query.query(async ({ ctx }): Promise<MessageRow[]> => {
     assertSignedIn(ctx.auth.userId);
 
-    const rows = await ctx.db.query("messages").withIndex("by_created").collect();
+    // Read the newest PAGE_SIZE rows straight off the `by_created` index
+    // (descending), then reverse to oldest-first for chat order — never scans
+    // past the page we keep.
+    const rows = await ctx.db.query("messages").withIndex("by_created").order("desc").take(PAGE_SIZE);
 
-    // Keep the last PAGE_SIZE, chronological. `by_created` scans ascending, so
-    // slice from the tail and leave it oldest-first for the UI.
-    return rows.slice(-PAGE_SIZE);
+    return rows.reverse();
 });
 
 /**

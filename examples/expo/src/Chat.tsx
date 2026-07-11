@@ -1,6 +1,6 @@
 import { useConnectionStatus, useMutation, useQuery } from "@lunora/react-native";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { authClient } from "./auth-client";
@@ -26,10 +26,19 @@ export function Chat(): ReactElement {
     const myName = session?.user.name ?? session?.user.email ?? "me";
 
     const messages = useQuery(api.messages.list, {});
-    const { mutate: send, pending } = useMutation(api.messages.send);
+    const { error: sendError, mutate: send, pending } = useMutation(api.messages.send);
     const status = useConnectionStatus();
 
     const [draft, setDraft] = useState("");
+
+    const listRef = useRef<FlatList>(null);
+
+    // Reveal newly arrived messages (live-query deltas and the initial load).
+    useEffect(() => {
+        if (messages?.length) {
+            listRef.current?.scrollToEnd({ animated: true });
+        }
+    }, [messages]);
 
     const handleSend = (): void => {
         const text = draft.trim();
@@ -38,8 +47,13 @@ export function Chat(): ReactElement {
             return;
         }
 
+        // Clear the composer optimistically, but restore the text if the send is
+        // rejected so it's never lost — only when the user hasn't started a new
+        // draft. `sendError` surfaces the failure below the input either way.
         setDraft("");
-        void send({ authorName: myName, text });
+        send({ authorName: myName, text }).catch(() => {
+            setDraft((current) => (current === "" ? text : current));
+        });
     };
 
     const badge = STATUS[status] ?? STATUS.idle;
@@ -61,6 +75,7 @@ export function Chat(): ReactElement {
                 contentContainerStyle={styles.listContent}
                 data={messages ?? []}
                 keyExtractor={(item) => item._id}
+                ref={listRef}
                 renderItem={({ item }) => {
                     const mine = item.userId === myUserId;
 
@@ -72,6 +87,8 @@ export function Chat(): ReactElement {
                     );
                 }}
             />
+
+            {sendError ? <Text style={styles.error}>{sendError.message}</Text> : null}
 
             <View style={styles.composer}>
                 <TextInput onChangeText={setDraft} onSubmitEditing={handleSend} placeholder="Message" returnKeyType="send" style={styles.input} value={draft} />
@@ -90,6 +107,7 @@ const styles = StyleSheet.create({
     bubbleTheirs: { alignSelf: "flex-start", backgroundColor: "#e5e7eb" },
     composer: { borderColor: "#e5e7eb", borderTopWidth: 1, flexDirection: "row", gap: 8, padding: 8 },
     dot: { borderRadius: 4, height: 8, width: 8 },
+    error: { color: "#dc2626", paddingBottom: 4, paddingHorizontal: 12, textAlign: "center" },
     flex: { flex: 1 },
     header: { alignItems: "center", borderBottomColor: "#e5e7eb", borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", padding: 12 },
     headerRight: { alignItems: "center", flexDirection: "row", gap: 8 },

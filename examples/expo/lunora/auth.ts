@@ -22,9 +22,12 @@ const options = (env: { AUTH_SECRET: string; AUTH_URL?: string }): LunoraAuthOpt
     baseURL: env.AUTH_URL,
     emailAndPassword: {
         enabled: true,
-        sendResetPassword: async ({ url, user }) => {
+        sendResetPassword: async ({ user }) => {
+            // Log only a non-sensitive identifier — never the reset URL (a
+            // credential) or the user's email (PII). In production swap this for
+            // an `@lunora/mail` send that delivers the `url` to the user.
             // eslint-disable-next-line no-console
-            console.log(`[auth] password reset for ${user.email}: ${url}`);
+            console.log(`[auth] password reset requested for user ${user.id}`);
         },
     },
     plugins: [expo()],
