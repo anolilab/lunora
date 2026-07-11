@@ -103,6 +103,7 @@ export interface Doc_deployments {
     updatedAt: number;
     url?: string;
     version?: number;
+    runtimeVersion?: string;
     queuedAt?: number;
     provisioningAt?: number;
     verifyingAt?: number;
@@ -472,6 +473,7 @@ export interface Insert_deployments {
     updatedAt: number;
     url?: string;
     version?: number;
+    runtimeVersion?: string;
     queuedAt?: number;
     provisioningAt?: number;
     verifyingAt?: number;
