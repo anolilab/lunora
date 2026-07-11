@@ -40,8 +40,13 @@ const HASH_KEY = "__ragHash";
 const COUNT_KEY = "__ragChunks";
 /** Metadata key holding the source's importance weight, when one was set. */
 const IMPORTANCE_KEY = "__ragImportance";
+/** Metadata key (chunk #0 only) recording the embedding-model version tag, when one was set. */
+const MODEL_KEY = "__ragModel";
 
-const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_KEY, SOURCE_KEY, TEXT_KEY]);
+const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_KEY, MODEL_KEY, SOURCE_KEY, TEXT_KEY]);
+
+/** Allowed shape of {@link RagConfig.embeddingModelVersion} — safe in a Vectorize namespace + chunk-id prefix. */
+const MODEL_VERSION_PATTERN = /^[\w.-]{1,40}$/;
 
 /**
  * The namespace segment prepended to every chunk id. Vectorize ids are index-
@@ -161,9 +166,30 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `topK` must be a positive integer");
     }
 
+    if (config.embeddingModelVersion !== undefined && !MODEL_VERSION_PATTERN.test(config.embeddingModelVersion)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            '@lunora/ai/rag: `embeddingModelVersion` must match /^[A-Za-z0-9._-]{1,40}$/ (a short, stable tag like "bge-v1.5")',
+        );
+    }
+
     const splitter = config.chunk ?? ((text: string): ReadonlyArray<string> => fixedWindowChunks(text, chunkSize, chunkOverlap));
     const { textStore } = config;
     const topKCeiling = textStore ? MAX_TOP_K : MAX_TOP_K_FULL_METADATA;
+
+    // The embedding-model version tag partitions the vector space by folding into
+    // the *effective* namespace: `withModelTag` maps the caller's (tenant)
+    // namespace to the namespace/id space actually written to Vectorize + the
+    // text store. Un-versioned indexes (`modelTag === undefined`) are the
+    // identity map, so their chunk ids/namespaces are byte-identical to before.
+    const modelTag = config.embeddingModelVersion;
+    const withModelTag = (namespace: string | undefined): string | undefined => {
+        if (modelTag === undefined) {
+            return namespace;
+        }
+
+        return namespace === undefined ? modelTag : `${modelTag}::${namespace}`;
+    };
 
     return (context: RagContext): Rag => {
         // Resolved once per bound ctx, lazily — so a misconfigured model only
@@ -226,8 +252,9 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `importance` must be a number in [0, 1]");
             }
 
+            const effectiveNamespace = withModelTag(input.namespace);
             const hash = await sha256Hex(input.text);
-            const previous = await readHead(input.id, input.namespace);
+            const previous = await readHead(input.id, effectiveNamespace);
 
             // Unchanged content is a no-op re-sync: skip chunking, embedding,
             // and every write. (Vectorize applies mutations asynchronously, so
@@ -236,13 +263,13 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             if (previous.hash === hash && previous.chunks !== undefined) {
                 return {
                     chunks: previous.chunks,
-                    ids: Array.from({ length: previous.chunks }, (_, chunkIndex) => chunkVectorId(input.namespace, input.id, chunkIndex)),
+                    ids: Array.from({ length: previous.chunks }, (_, chunkIndex) => chunkVectorId(effectiveNamespace, input.id, chunkIndex)),
                     unchanged: true,
                 };
             }
 
             const pieces = splitter(input.text);
-            const ids = pieces.map((_, chunkIndex) => chunkVectorId(input.namespace, input.id, chunkIndex));
+            const ids = pieces.map((_, chunkIndex) => chunkVectorId(effectiveNamespace, input.id, chunkIndex));
 
             if (pieces.length === 0 && input.allowEmptySources === false) {
                 throw new LunoraError("BAD_REQUEST", `@lunora/ai/rag: source "${input.id}" produced zero chunks — set allowEmptySources: true to allow this`);
@@ -257,7 +284,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                     pieces.map((text, chunkIndex) => {
                         return { chunkIndex, id: ids[chunkIndex] as string, sourceId: input.id, text };
                     }),
-                    { namespace: input.namespace },
+                    { namespace: effectiveNamespace },
                 );
             }
 
@@ -282,6 +309,10 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 if (chunkIndex === 0) {
                     metadata[HASH_KEY] = hash;
                     metadata[COUNT_KEY] = pieces.length;
+
+                    if (modelTag !== undefined) {
+                        metadata[MODEL_KEY] = modelTag;
+                    }
                 }
 
                 // Vector upsert
@@ -290,7 +321,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                     id,
                     input: piece,
                     metadata,
-                    namespace: input.namespace,
+                    namespace: effectiveNamespace,
                 });
 
                 // Text-search upsert (hybrid mode): upsert without an embed
@@ -301,7 +332,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                         id,
                         input: piece,
                         metadata,
-                        namespace: input.namespace,
+                        namespace: effectiveNamespace,
                     });
                 }
 
@@ -314,7 +345,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // them so they cannot keep matching. New chunks are already written,
             // so retrieval never observes a gap.
             if (previous.chunks !== undefined && previous.chunks > pieces.length) {
-                await deleteChunkRange(input.id, pieces.length, previous.chunks, input.namespace);
+                await deleteChunkRange(input.id, pieces.length, previous.chunks, effectiveNamespace);
             }
 
             return { chunks: pieces.length, ids, unchanged: false };
@@ -323,20 +354,21 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         const remove = async (input: RemoveInput): Promise<void> => {
             checkNamespace(input.namespace);
 
-            const previous = await readHead(input.id, input.namespace);
+            const effectiveNamespace = withModelTag(input.namespace);
+            const previous = await readHead(input.id, effectiveNamespace);
             const totalChunks = previous.chunks ?? 1;
 
             // Clean up the text-search index first (if configured), then vectors.
             if (config.textSearch) {
-                const ids = Array.from({ length: totalChunks }, (_, offset) => chunkVectorId(input.namespace, input.id, offset));
+                const ids = Array.from({ length: totalChunks }, (_, offset) => chunkVectorId(effectiveNamespace, input.id, offset));
 
-                await context.vectors.deleteByIds(config.textSearch.index, ids, input.namespace);
+                await context.vectors.deleteByIds(config.textSearch.index, ids, effectiveNamespace);
             }
 
             // Without a head record there is nothing reliable to delete; a
             // head without a count (never written by this helper) still has
             // chunk #0 itself to clean up.
-            await deleteChunkRange(input.id, 0, totalChunks, input.namespace);
+            await deleteChunkRange(input.id, 0, totalChunks, effectiveNamespace);
         };
 
         /** Fetch chunk texts by vector id — from the text store or from vector metadata. */
@@ -379,7 +411,11 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
          * document order — matches stay small for embedding quality while the
          * model sees the surrounding passage.
          */
-        const expandChunks = async (chunks: ReadonlyArray<RetrievedChunk>, options: RetrieveOptions | undefined): Promise<ReadonlyArray<RetrievedChunk>> => {
+        const expandChunks = async (
+            chunks: ReadonlyArray<RetrievedChunk>,
+            options: RetrieveOptions | undefined,
+            effectiveNamespace: string | undefined,
+        ): Promise<ReadonlyArray<RetrievedChunk>> => {
             const before = options?.chunkContext?.before ?? 0;
             const after = options?.chunkContext?.after ?? 0;
 
@@ -397,7 +433,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             for (const chunk of chunks) {
                 for (let offset = -before; offset <= after; offset += 1) {
                     const neighbourIndex = chunk.chunkIndex + offset;
-                    const id = chunkVectorId(options?.namespace, chunk.sourceId, neighbourIndex);
+                    const id = chunkVectorId(effectiveNamespace, chunk.sourceId, neighbourIndex);
 
                     if (offset !== 0 && neighbourIndex >= 0 && !known.has(id)) {
                         neighbourIds.add(id);
@@ -405,9 +441,9 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 }
             }
 
-            const neighbourTexts = await textsByIds([...neighbourIds], options?.namespace);
+            const neighbourTexts = await textsByIds([...neighbourIds], effectiveNamespace);
             const textOf = (sourceId: string, chunkIndex: number): string | undefined => {
-                const id = chunkVectorId(options?.namespace, sourceId, chunkIndex);
+                const id = chunkVectorId(effectiveNamespace, sourceId, chunkIndex);
 
                 return known.get(id) ?? neighbourTexts.get(id);
             };
@@ -486,6 +522,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         const retrieve = async (query: string, options?: RetrieveOptions): Promise<RetrieveResult> => {
             checkNamespace(options?.namespace);
 
+            const effectiveNamespace = withModelTag(options?.namespace);
             const resolvedFilter = resolveFilter(options?.filter);
             const topK = Math.min(options?.topK ?? defaultTopK, topKCeiling);
 
@@ -494,12 +531,12 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 embed: embedText,
                 filter: resolvedFilter,
                 input: query,
-                namespace: options?.namespace,
+                namespace: effectiveNamespace,
                 returnMetadata: textStore ? "indexed" : "all",
                 topK,
             });
 
-            let chunks = await hydrateFromStore(parseMatches(vectorResult, options?.namespace), options?.namespace);
+            let chunks = await hydrateFromStore(parseMatches(vectorResult, effectiveNamespace), effectiveNamespace);
 
             // Hybrid search: also query the text-search index and fuse via RRF.
             if (config.textSearch) {
@@ -508,12 +545,12 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 const textResult = await context.vectors.query(config.textSearch.index, {
                     input: query,
                     filter: resolvedFilter,
-                    namespace: options?.namespace,
+                    namespace: effectiveNamespace,
                     returnMetadata: textStore ? "indexed" : "all",
                     topK: textTopK,
                 });
 
-                const textChunks = await hydrateFromStore(parseMatches(textResult, options?.namespace), options?.namespace);
+                const textChunks = await hydrateFromStore(parseMatches(textResult, effectiveNamespace), effectiveNamespace);
 
                 chunks = [...hybridRank(chunks, textChunks)];
             }
@@ -528,7 +565,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 chunks = chunks.filter((chunk) => chunk.score >= minScore);
             }
 
-            chunks = [...(await expandChunks(chunks, options))];
+            chunks = [...(await expandChunks(chunks, options, effectiveNamespace))];
 
             const sources: RagSource[] = [];
             const seen = new Set<string>();

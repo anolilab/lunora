@@ -592,6 +592,63 @@ describe(defineRag, () => {
         expect(result).toMatchObject({ sources: [{ id: "weather" }] });
     });
 
+    describe("embedding-model versioning", () => {
+        it("partitions the vector space by the version tag so a model swap can't return stale vectors", async () => {
+            const { store, vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors);
+            const v1 = defineRag({ allowSharedNamespace: true, embeddingModelVersion: "bge-v1", index: "docs" })(ctx);
+            const v2 = defineRag({ allowSharedNamespace: true, embeddingModelVersion: "bge-v2", index: "docs" })(ctx);
+
+            await v1.index({ id: "doc-1", text: "rain storm cloud" });
+
+            // Ids + the stored namespace carry the tag; chunk #0 records it.
+            expect([...store.keys()]).toStrictEqual(["bge-v1#doc-1#0"]);
+            expect(store.get("bge-v1#doc-1#0")?.namespace).toBe("bge-v1");
+            expect(store.get("bge-v1#doc-1#0")?.metadata?.["__ragModel"]).toBe("bge-v1");
+
+            // The new model's queries are partitioned away from the old vectors.
+            const stale = await v2.retrieve("rain storm cloud");
+
+            expect(stale.chunks).toStrictEqual([]);
+
+            // The original model still sees them; the internal tag never leaks.
+            const fresh = await v1.retrieve("rain storm cloud");
+
+            expect(fresh.chunks.map((chunk) => chunk.sourceId)).toStrictEqual(["doc-1"]);
+            expect(fresh.chunks[0]?.metadata).toBeUndefined();
+
+            // Re-indexing under the new model repartitions cleanly (both coexist).
+            await v2.index({ id: "doc-1", text: "rain storm cloud" });
+
+            expect([...store.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["bge-v1#doc-1#0", "bge-v2#doc-1#0"]);
+
+            const repartitioned = await v2.retrieve("rain storm cloud");
+
+            expect(repartitioned.chunks.map((chunk) => chunk.sourceId)).toStrictEqual(["doc-1"]);
+        });
+
+        it("composes the version tag with the tenant namespace", async () => {
+            const { queryCalls, store, vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ embeddingModelVersion: "v2", index: "docs" })(ctx);
+
+            await docs.index({ id: "doc-1", namespace: "tenant-a", text: "rain storm cloud" });
+
+            expect([...store.keys()]).toStrictEqual(["v2%3A%3Atenant-a#doc-1#0"]);
+            expect(store.get("v2%3A%3Atenant-a#doc-1#0")?.namespace).toBe("v2::tenant-a");
+
+            const result = await docs.retrieve("rain storm cloud", { namespace: "tenant-a" });
+
+            expect(result.chunks.map((chunk) => chunk.sourceId)).toStrictEqual(["doc-1"]);
+            expect(queryCalls.at(-1)?.namespace).toBe("v2::tenant-a");
+        });
+
+        it("rejects an invalid version tag at config time", () => {
+            expect(() => defineRag({ embeddingModelVersion: "has spaces", index: "docs" })).toThrow(LunoraError);
+            expect(() => defineRag({ embeddingModelVersion: "x".repeat(41), index: "docs" })).toThrow(/embeddingModelVersion/u);
+        });
+    });
+
     describe("guessMimeTypeFromExtension", () => {
         it("returns known MIME types", () => {
             expect(guessMimeTypeFromExtension(".pdf")).toBe("application/pdf");

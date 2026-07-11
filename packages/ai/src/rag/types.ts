@@ -160,6 +160,23 @@ export interface RagConfig {
     embeddingModel?: EmbeddingModelInput;
 
     /**
+     * Embedding-model version tag — an opt-in discriminator that partitions the
+     * vector space so a model swap can never silently return garbage. Vectors
+     * embedded by one model live in a different space from another's, and
+     * querying across the two returns meaningless neighbours. When set, the tag
+     * is folded into the effective Vectorize namespace (and chunk-id prefix) of
+     * every index/retrieve/remove, so bumping it re-partitions cleanly: old
+     * vectors become unreachable to new queries (empty ≫ wrong) until sources
+     * are re-indexed under the new tag.
+     *
+     * Set + bump this whenever you change {@link RagConfig.embeddingModel} (or
+     * its dimensions). Opt-in and non-breaking — omitting it keeps the exact
+     * chunk-id/namespace scheme of un-versioned indexes. Must match
+     * `^[A-Za-z0-9._-]{1,40}$` (e.g. `"bge-v1.5"`, `"v2"`).
+     */
+    embeddingModelVersion?: string;
+
+    /**
      * Pre-defined named filter expressions. Each key is a filter name users
      * pass through `RetrieveOptions.filter`. Throws at retrieve-time if the
      * name is not found here — catches spelling mistakes early.
