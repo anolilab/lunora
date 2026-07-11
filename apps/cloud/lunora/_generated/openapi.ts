@@ -1573,6 +1573,365 @@ export const openApiSpec: Record<string, unknown> = {
                 "x-lunora-function-kind": "mutation"
             }
         },
+        "/_lunora/rpc#domains:add": {
+            "post": {
+                "description": "Invoke the `mutation` `domains:add` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "domains:add",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "hostname": {
+                                                "type": "string"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "projectId": {
+                                                "description": "Id<\"projects\">",
+                                                "type": "string",
+                                                "x-lunora-table": "projects"
+                                            },
+                                            "redirectStatusCode": {
+                                                "type": "number"
+                                            },
+                                            "redirectTo": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "required": [
+                                            "hostname",
+                                            "organizationId",
+                                            "projectId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "domains:add",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: domains:add",
+                "tags": [
+                    "domains"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
+        "/_lunora/rpc#domains:list": {
+            "post": {
+                "description": "Invoke the `query` `domains:list` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "domains:list",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "projectId": {
+                                                "description": "Id<\"projects\">",
+                                                "type": "string",
+                                                "x-lunora-table": "projects"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId",
+                                            "projectId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "domains:list",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "query: domains:list",
+                "tags": [
+                    "domains"
+                ],
+                "x-lunora-function-kind": "query"
+            }
+        },
+        "/_lunora/rpc#domains:markVerified": {
+            "post": {
+                "description": "Invoke the `mutation` `domains:markVerified` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "domains:markVerified",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "customHostnameId": {
+                                                "type": "string"
+                                            },
+                                            "id": {
+                                                "description": "Id<\"domains\">",
+                                                "type": "string",
+                                                "x-lunora-table": "domains"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "verified": {
+                                                "type": "boolean"
+                                            }
+                                        },
+                                        "required": [
+                                            "id",
+                                            "organizationId",
+                                            "verified"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "domains:markVerified",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: domains:markVerified",
+                "tags": [
+                    "domains"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
+        "/_lunora/rpc#domains:remove": {
+            "post": {
+                "description": "Invoke the `mutation` `domains:remove` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "domains:remove",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "id": {
+                                                "description": "Id<\"domains\">",
+                                                "type": "string",
+                                                "x-lunora-table": "domains"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            }
+                                        },
+                                        "required": [
+                                            "id",
+                                            "organizationId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "domains:remove",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: domains:remove",
+                "tags": [
+                    "domains"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
+        "/_lunora/rpc#domains:routeForHostname": {
+            "post": {
+                "description": "Invoke the `query` `domains:routeForHostname` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "domains:routeForHostname",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "hostname": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "required": [
+                                            "hostname"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "domains:routeForHostname",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "query: domains:routeForHostname",
+                "tags": [
+                    "domains"
+                ],
+                "x-lunora-function-kind": "query"
+            }
+        },
         "/_lunora/rpc#invitations:accept": {
             "post": {
                 "description": "Invoke the `mutation` `invitations:accept` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -2914,6 +3273,10 @@ export const openApiSpec: Record<string, unknown> = {
         {
             "description": "Operations declared in `lunora/deployments`.",
             "name": "deployments"
+        },
+        {
+            "description": "Operations declared in `lunora/domains`.",
+            "name": "domains"
         },
         {
             "description": "Operations declared in `lunora/invitations`.",

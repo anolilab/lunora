@@ -38,6 +38,13 @@ export interface ApiTypes {
         routeForAlias: FunctionReference<"query", { alias: string }, { scriptName: string; } | null>;
         updateStatus: FunctionReference<"mutation", { bundleHash?: string; deployKey?: string; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: string }, void>;
     };
+    domains: {
+        add: FunctionReference<"mutation", { hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string }, { id: Id<"domains">; txtName: string; txtToken: string; }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
+        markVerified: FunctionReference<"mutation", { customHostnameId?: string; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }, void>;
+        remove: FunctionReference<"mutation", { id: Id<"domains">; organizationId: Id<"organizations"> }, void>;
+        routeForHostname: FunctionReference<"query", { hostname: string }, { redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
+    };
     invitations: {
         accept: FunctionReference<"mutation", { token: string }, { organizationId: Id<"organizations">; }>;
         invite: FunctionReference<"mutation", { email: string; organizationId: Id<"organizations"> }, { id: Id<"invitations">; token: string; }>;
