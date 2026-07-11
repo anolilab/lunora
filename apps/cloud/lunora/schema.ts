@@ -62,6 +62,9 @@ export default defineSchema({
         // Set by the spend-cap enforcement cron (or support action); the
         // dispatcher serves 503 for a suspended org's tenants.
         suspendedAt: v.optional(v.number()),
+        // Right-to-erasure (GAPS.md D3): an owner requested deletion; the purge
+        // cron erases the org's data once the retention window passes.
+        deletionRequestedAt: v.optional(v.number()),
     })
         .global()
         .index("by_slug", ["slug"], { unique: true }),
@@ -165,6 +168,21 @@ export default defineSchema({
         .global()
         .index("by_hash", ["hashedKey"], { unique: true })
         .index("by_org", ["organizationId"]),
+
+    // Tenant runtime logs (GAPS.md B2): console/exception events batched in by
+    // the dispatch-namespace tail worker via `POST /v1/logs/ingest`. Retention-
+    // capped by the prune cron; the ingest seam can re-point to Analytics
+    // Engine later without touching consumers.
+    tenantLogs: defineTable({
+        createdAt: v.number(),
+        level: v.union(v.literal("log"), v.literal("warn"), v.literal("error")),
+        line: v.string(),
+        organizationId: v.id("organizations"),
+        scriptName: v.string(),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        .index("by_script", ["scriptName"]),
 
     // GitHub App installations (GAPS.md A4): which org a GitHub App install
     // belongs to; push webhooks are scoped to the triggering installation.

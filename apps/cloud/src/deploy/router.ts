@@ -351,6 +351,45 @@ const handleTenantRouteRoute = async (request: Request, environment: RouterEnv):
     return Response.json(result ?? { scriptName: null });
 };
 
+interface LogsBody {
+    deployKey?: string;
+    lines?: { createdAt?: number; level?: "error" | "log" | "warn"; line?: string }[];
+    organizationId?: string;
+    scriptName?: string;
+}
+
+/**
+ * `POST /v1/logs/ingest` — tenant runtime log ingestion (GAPS.md B2). The
+ * dispatch-namespace tail worker batches console/exception events here;
+ * deploy-key authorized inside the `logs.ingest` mutation.
+ */
+const handleLogsIngestRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const body = (await request.json().catch(() => null)) as LogsBody | null;
+
+    if (!body?.deployKey || !body.organizationId || !body.scriptName || !Array.isArray(body.lines)) {
+        return jsonError(400, "deployKey, organizationId, scriptName and lines are required");
+    }
+
+    try {
+        const result = await context.runMutation<{ ingested: number }>(api.logs.ingest, {
+            deployKey: body.deployKey,
+            lines: body.lines,
+            organizationId: body.organizationId,
+            scriptName: body.scriptName,
+        });
+
+        return Response.json(result);
+    } catch (error) {
+        return jsonError(403, error instanceof Error ? error.message : "log ingestion rejected");
+    }
+};
+
 interface DomainBody {
     hostname?: string;
     id?: string;
@@ -607,6 +646,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         "/v1/domains/verify": handleDomainVerifyRoute,
         "/v1/github/webhook": handleWebhookRoute,
         "/v1/invitations/send": handleInviteRoute,
+        "/v1/logs/ingest": handleLogsIngestRoute,
         "/v1/secrets": handleSecretRoute,
         "/v1/usage": handleUsageRoute,
     };
