@@ -1,5 +1,9 @@
+import { generateText } from "@lunora/ai";
+import { LunoraError } from "@lunora/server";
+
+import { buildTriagePrompt } from "../src/telemetry/triage";
 import type { Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
+import { action, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 
 /**
@@ -47,4 +51,59 @@ export const setStatus = mutation
         await context.db.patch(id, status === "resolved" ? { closedAt: now, status, updatedAt: now } : { closedAt: undefined, status, updatedAt: now });
 
         return id;
+    });
+
+/** A fast, capable Workers AI instruct model for incident triage. */
+const TRIAGE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
+interface IncidentDocument {
+    container?: string;
+    count: number;
+    hash: string;
+    kind: "crash_loop" | "error_spike" | "oom";
+    title: string;
+}
+
+interface RelatedIssue {
+    count: number;
+    culprit: string;
+    sampleMessage: string;
+    title: string;
+}
+
+/**
+ * AI-triage an incident (any member): summarize the likely root cause and the
+ * highest-impact next step from the incident and its related error groups, via
+ * Workers AI (`@lunora/ai`). On-demand and ephemeral — the summary is returned
+ * to the caller, not persisted. Billed per call, so it runs only when a member
+ * explicitly asks (the dashboard "Triage" button).
+ */
+export const triage = action
+    .input({ id: v.id("incidents"), organizationId: v.id("organizations") })
+    .action(async ({ ctx: context, args: { id, organizationId } }): Promise<{ summary: string }> => {
+        await assertMember(context, organizationId);
+        await assertRowInOrg(context, id, organizationId, "incident");
+
+        const incident = (await context.db.get(id)) as IncidentDocument | null;
+
+        if (!incident) {
+            throw new LunoraError("NOT_FOUND", "incident not found");
+        }
+
+        const { page } = await context.db.issues.findMany({ where: { hash: incident.hash, organizationId } });
+        const issues = (page as unknown as RelatedIssue[]).map((issue) => {
+            return {
+                count: issue.count,
+                culprit: issue.culprit,
+                sampleMessage: issue.sampleMessage,
+                title: issue.title,
+            };
+        });
+
+        const { text } = await generateText({
+            model: context.ai.model(TRIAGE_MODEL),
+            prompt: buildTriagePrompt({ container: incident.container, count: incident.count, kind: incident.kind, title: incident.title }, issues),
+        });
+
+        return { summary: text };
     });

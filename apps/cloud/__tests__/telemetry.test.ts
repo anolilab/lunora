@@ -6,6 +6,7 @@ import { crossesThreshold, isSafeWebhookUrl, renderAlert } from "../src/telemetr
 import type { OtlpTracePayload } from "../src/telemetry/otlp";
 import { decodeTelemetryEvents } from "../src/telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../src/telemetry/store";
+import { buildTriagePrompt } from "../src/telemetry/triage";
 
 /** Build an OTLP `KeyValue[]` from a flat string map. */
 const attributes = (map: Record<string, string>): { key: string; value: { stringValue: string } }[] =>
@@ -194,5 +195,24 @@ describe(isSafeWebhookUrl, () => {
         ]) {
             expect(isSafeWebhookUrl(bad)).toBe(false);
         }
+    });
+});
+
+describe(buildTriagePrompt, () => {
+    it("includes the incident and its related errors", () => {
+        const prompt = buildTriagePrompt({ container: "transcoder", count: 4, kind: "oom", title: "exit 137" }, [
+            { count: 9, culprit: "container:transcoder", sampleMessage: "killed (OOM)", title: "exit 137" },
+        ]);
+
+        expect(prompt).toContain("Incident: exit 137");
+        expect(prompt).toContain("Kind: oom (container: transcoder)");
+        expect(prompt).toContain("1. container:transcoder (9×): killed (OOM)");
+    });
+
+    it("notes when there are no related errors", () => {
+        const prompt = buildTriagePrompt({ count: 1, kind: "crash_loop", title: "boom" }, []);
+
+        expect(prompt).toContain("(none captured)");
+        expect(prompt).not.toContain("(container:");
     });
 });

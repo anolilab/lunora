@@ -5,6 +5,8 @@ import type { AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, LogSink, M
 import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
 import { asBucketStorage, createSecrets, LunoraError } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
+import type { AiBindingLike, LunoraAi } from "@lunora/ai";
+import { createAi } from "@lunora/ai";
 import type { LunoraDatabaseLike as LunoraPaymentDbLike, LunoraPayment, PaymentsFromContextOptions } from "@lunora/payment";
 import { paymentsFromContext } from "@lunora/payment";
 
@@ -2693,12 +2695,12 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:incidents:45:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:incidents:49:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in setStatus (incidents:45) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in setStatus (incidents:49) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -2706,7 +2708,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "setStatus",
             "file": "incidents",
             "kind": "mutation",
-            "line": 45
+            "line": 49
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
@@ -3642,6 +3644,25 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "setStatus",
             "file": "incidents",
             "kind": "mutation",
+            "sensitive": false
+        },
+        "name": "public_mutation_without_ratelimit",
+        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
+        "title": "Public write without a rate limit"
+    },
+    {
+        "cacheKey": "public_mutation_without_ratelimit:incidents:triage",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
+        "detail": "Public action `triage` (incidents) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "triage",
+            "file": "incidents",
+            "kind": "action",
             "sensitive": false
         },
         "name": "public_mutation_without_ratelimit",
@@ -5227,6 +5248,24 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
         "title": "Public string argument has no length bound"
+    },
+    {
+        "cacheKey": "ai_unbounded_generation_public:incidents:triage",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public procedure runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound. Generation bills per output token, so an anonymous caller can request arbitrarily long completions in a loop — a denial-of-wallet vector that also ties up worker time on long streams.",
+        "detail": "`triage` (incidents) is public and runs an AI generation with no `maxOutputTokens` bound — an anonymous caller can drive unbounded, billable completions in a loop. Add a `maxOutputTokens` cap and rate-limit the entry point.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "triage",
+            "file": "incidents",
+            "kind": "action"
+        },
+        "name": "ai_unbounded_generation_public",
+        "remediation": "Cap the completion with `maxOutputTokens` in the generation config, and rate-limit the public entry point (`.use(rateLimit(...))`). For expensive models, prefer running generation from an internal, authenticated path rather than exposing it directly to anonymous callers.",
+        "title": "Public procedure runs unbounded AI generation (no maxOutputTokens)"
     }
 ];
 
@@ -5269,6 +5308,7 @@ export interface ShardDOConfig {
     observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
+    ai?: (env: Record<string, unknown>) => AiBindingLike;
     payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;
     d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;
 }
@@ -5355,6 +5395,23 @@ const globalDbStub: DatabaseWriterLike = {
     replace: async () => {
         throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
+};
+
+const aiStub: LunoraAi = {
+    embeddingModel: () => {
+        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
+    },
+    model: () => {
+        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
+    },
+    run: async () => {
+        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
+    },
+    // workersai is a callable-with-properties; a bare throwing arrow isn't
+    // structurally assignable, so cast it. Never invoked (the stub throws first).
+    workersai: (() => {
+        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
+    }) as unknown as LunoraAi["workersai"],
 };
 
 const paymentStub: LunoraPayment = {
@@ -5766,6 +5823,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
 
+            const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
+            const ai: LunoraAi = aiBinding ? createAi({ binding: aiBinding as AiBindingLike }) : aiStub;
+
             const secrets = createSecrets(env);
 
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
@@ -5857,6 +5917,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 orm: bindOrm(facade),
                 scheduler,
                 storage,
+                ai,
                 secrets,
                 payments,
             };
