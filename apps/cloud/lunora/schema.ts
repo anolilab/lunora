@@ -166,6 +166,58 @@ export default defineSchema({
         .index("by_hash", ["hashedKey"], { unique: true })
         .index("by_org", ["organizationId"]),
 
+    // GitHub App installations (GAPS.md A4): which org a GitHub App install
+    // belongs to; push webhooks are scoped to the triggering installation.
+    githubInstallations: defineTable({
+        accountLogin: v.string(),
+        createdAt: v.number(),
+        installationId: v.number(),
+        organizationId: v.id("organizations"),
+    })
+        .global()
+        .index("by_installation", ["installationId"], { unique: true })
+        .index("by_org", ["organizationId"]),
+
+    // Server-side builds (GAPS.md A3): a push (or PR) creates a build; the
+    // runner claims it via a lease, streams lines into buildLogs, and hands the
+    // bundle to the deploy pipeline. Dedup: a successful build for the same
+    // (project, commitSha) is reused instead of rebuilt.
+    builds: defineTable({
+        branch: v.string(),
+        bundleHash: v.optional(v.string()),
+        commitSha: v.string(),
+        createdAt: v.number(),
+        // The deployment this build fed, once deployed.
+        deploymentId: v.optional(v.string()),
+        error: v.optional(v.string()),
+        organizationId: v.id("organizations"),
+        // Work lease: which runner is on it and since when (stale after 30 min).
+        processingBy: v.optional(v.string()),
+        processingStartedAt: v.optional(v.number()),
+        projectId: v.id("projects"),
+        status: v.union(v.literal("pending"), v.literal("building"), v.literal("successful"), v.literal("failed")),
+        updatedAt: v.number(),
+        // Phase timestamps (A2 pattern).
+        buildingAt: v.optional(v.number()),
+        successfulAt: v.optional(v.number()),
+        failedAt: v.optional(v.number()),
+    })
+        .global()
+        .index("by_project", ["projectId"])
+        .index("by_project_commit", ["projectId", "commitSha"]),
+
+    // Streamed build output, one row per line (GAPS.md A3); the dashboard tails
+    // a build live. Pruned with the retention cron.
+    buildLogs: defineTable({
+        buildId: v.id("builds"),
+        createdAt: v.number(),
+        level: v.union(v.literal("info"), v.literal("error")),
+        line: v.string(),
+        organizationId: v.id("organizations"),
+    })
+        .global()
+        .index("by_build", ["buildId"]),
+
     // Custom domains (GAPS.md B1). A hostname routes to a project's active
     // deployment once DNS-verified; cert issuance (Cloudflare for SaaS) is only
     // requested for verified rows — DB-gated on-demand TLS.
