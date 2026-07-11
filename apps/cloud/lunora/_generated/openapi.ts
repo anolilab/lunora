@@ -1357,6 +1357,9 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "projects"
                                             },
+                                            "runtimeVersion": {
+                                                "type": "string"
+                                            },
                                             "scriptName": {
                                                 "type": "string"
                                             }
