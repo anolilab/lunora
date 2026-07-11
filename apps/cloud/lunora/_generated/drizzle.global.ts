@@ -105,6 +105,24 @@ export const deployKeys = sqliteTable("deployKeys", {
     by_hash: uniqueIndex("by_hash").on(t.hashedKey),
 }));
 
+export const domains = sqliteTable("domains", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    customHostnameId: text("customHostnameId"),
+    createdAt: real("createdAt").notNull(),
+    hostname: text("hostname").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    projectId: text("projectId").references(() => projects._id).notNull(),
+    redirectStatusCode: real("redirectStatusCode"),
+    redirectTo: text("redirectTo"),
+    txtToken: text("txtToken").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+    verifiedAt: real("verifiedAt"),
+}, (t) => ({
+    by_project: index("by_project").on(t.projectId),
+    by_hostname: uniqueIndex("by_hostname").on(t.hostname),
+}));
+
 export const auditLog = sqliteTable("auditLog", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "auditLog" | "invitations" | "platformUsage" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "domains" | "auditLog" | "invitations" | "platformUsage" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -120,6 +120,21 @@ export interface Doc_deployKeys {
     projectId?: Id<"projects">;
     revokedAt?: number;
     type: unknown;
+}
+
+export interface Doc_domains {
+    _id: Id<"domains">;
+    _creationTime: number;
+    customHostnameId?: string;
+    createdAt: number;
+    hostname: string;
+    organizationId: Id<"organizations">;
+    projectId: Id<"projects">;
+    redirectStatusCode?: number;
+    redirectTo?: string;
+    txtToken: string;
+    updatedAt: number;
+    verifiedAt?: number;
 }
 
 export interface Doc_auditLog {
@@ -237,6 +252,7 @@ export interface DataModel {
     projects: Doc_projects;
     deployments: Doc_deployments;
     deployKeys: Doc_deployKeys;
+    domains: Doc_domains;
     auditLog: Doc_auditLog;
     invitations: Doc_invitations;
     platformUsage: Doc_platformUsage;
@@ -261,6 +277,7 @@ export interface IndexNamesByTable {
     projects: "by_org_slug" | "by_github_repo";
     deployments: "by_script" | "by_project" | "by_kind" | "by_alias";
     deployKeys: "by_org" | "by_hash";
+    domains: "by_project" | "by_hostname";
     auditLog: "by_org";
     invitations: "by_token" | "by_org";
     platformUsage: "by_org";
@@ -282,6 +299,7 @@ export interface SearchIndexNamesByTable {
     projects: never;
     deployments: never;
     deployKeys: never;
+    domains: never;
     auditLog: never;
     invitations: never;
     platformUsage: never;
@@ -303,6 +321,7 @@ export interface RankIndexNamesByTable {
     projects: never;
     deployments: never;
     deployKeys: never;
+    domains: never;
     auditLog: never;
     invitations: never;
     platformUsage: never;
@@ -402,6 +421,21 @@ export interface Insert_deployKeys {
     projectId?: Id<"projects">;
     revokedAt?: number;
     type: unknown;
+}
+
+export interface Insert_domains {
+    _id?: Id<"domains">;
+    _creationTime?: number;
+    customHostnameId?: string;
+    createdAt: number;
+    hostname: string;
+    organizationId: Id<"organizations">;
+    projectId: Id<"projects">;
+    redirectStatusCode?: number;
+    redirectTo?: string;
+    txtToken: string;
+    updatedAt: number;
+    verifiedAt?: number;
 }
 
 export interface Insert_auditLog {
@@ -520,6 +554,7 @@ export interface InsertModel {
     projects: Insert_projects;
     deployments: Insert_deployments;
     deployKeys: Insert_deployKeys;
+    domains: Insert_domains;
     auditLog: Insert_auditLog;
     invitations: Insert_invitations;
     platformUsage: Insert_platformUsage;
@@ -556,6 +591,7 @@ export interface Relations {
     projects: {};
     deployments: {};
     deployKeys: {};
+    domains: {};
     auditLog: {};
     invitations: {};
     platformUsage: {};
