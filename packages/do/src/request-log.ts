@@ -21,6 +21,7 @@
  * It must not grow into a pipeline.
  */
 
+import { fingerprintError } from "@lunora/fingerprint";
 import { redact, standardRules } from "@visulima/redact";
 
 import type { SqlCursor, SqlExec } from "./ctx-db";
@@ -115,6 +116,46 @@ interface ReadRequestLogOptions {
 /** Payload of a `__lunora_admin__:getRequestLog` call: the recorded entries, newest first. */
 interface RequestLogResult {
     entries: RequestLogEntry[];
+}
+
+/**
+ * One grouped error **Issue**: many `error`-outcome request-log rows that share a
+ * fingerprint folded into a single triage row. The `hash` is the same stable key
+ * a cloud Incident groups on, so a local Issue and a cloud Incident are the same
+ * object.
+ */
+interface ErrorIssue {
+    /** Number of `error` rows folded into this Issue within the scanned window. */
+    count: number;
+    /** The `&lt;file>:&lt;function>` (or `container:&lt;name>`) the errors came from. */
+    culprit: string;
+    /** Wall-clock millis of the oldest folded row. */
+    firstSeen: number;
+    /** Stable 16-char grouping hash over `functionPath :: bucket(message)`. */
+    hash: string;
+    /** Wall-clock millis of the newest folded row. */
+    lastSeen: number;
+    /** A representative raw error message — taken from the most recent folded row. */
+    sampleMessage: string;
+    /** Human-readable title (first line of the sample message, capped). */
+    title: string;
+}
+
+/** Payload of a `__lunora_admin__:getIssues` call: grouped error Issues, most-recently-active first. */
+interface IssuesResult {
+    issues: ErrorIssue[];
+}
+
+/** Filters for {@link readErrorIssues}; forwarded to {@link readRequestLog} with `outcome` forced to `error`. */
+interface ReadIssuesOptions {
+    /** Functions whose path begins with this prefix (a `&lt;file>:` or `&lt;file>:&lt;fn>` correlation). */
+    functionPathPrefix?: string;
+    /** Upper bound on error rows scanned before grouping, clamped to [1, 10000]. */
+    limit?: number;
+    /** Exact shard-key match. */
+    shardKey?: string;
+    /** Exact acting-userId match. */
+    userId?: string;
 }
 
 /** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags. */
@@ -508,11 +549,59 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
     });
 };
 
+/**
+ * Group the recent `error`-outcome request-log rows into stable **Issues**.
+ *
+ * A pure read-side aggregation over the bounded readout — no new storage, no
+ * transport (see the module docstring): it reads the recent `error` rows via
+ * {@link readRequestLog} and folds them with `@lunora/fingerprint`'s
+ * `fingerprintError`, whose canonical hash is `functionPath :: bucket(message)`.
+ * That collapses per-occurrence noise — a route-scanner sweep (`/wp-admin`,
+ * `/.env`), a per-request id in the message (`user 12345 not found`) — onto one
+ * Issue, and matches the grouping a cloud Incident uses. Container crashes fold
+ * in too, since they land as `error` rows under `functionPath: "container:&lt;name>"`.
+ *
+ * `readRequestLog` returns rows newest-first, so the first sighting of each hash
+ * is the newest row — it seeds `title`/`sampleMessage`/`lastSeen`; older rows
+ * only extend `count` and `firstSeen`. Result is ordered most-recently-active
+ * first.
+ */
+const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIssue[] => {
+    const rows = readRequestLog(sql, {
+        functionPathPrefix: options.functionPathPrefix,
+        limit: options.limit,
+        outcome: "error",
+        shardKey: options.shardKey,
+        userId: options.userId,
+    });
+
+    const issues = new Map<string, ErrorIssue>();
+
+    for (const row of rows) {
+        const message = row.errorMessage ?? "";
+        const { culprit, hash, title } = fingerprintError({ functionPath: row.functionPath, message });
+        const existing = issues.get(hash);
+
+        if (existing === undefined) {
+            issues.set(hash, { count: 1, culprit, firstSeen: row.ts, hash, lastSeen: row.ts, sampleMessage: message, title });
+
+            continue;
+        }
+
+        existing.count += 1;
+        existing.firstSeen = Math.min(existing.firstSeen, row.ts);
+        existing.lastSeen = Math.max(existing.lastSeen, row.ts);
+    }
+
+    return [...issues.values()].toSorted((a, b) => b.lastSeen - a.lastSeen);
+};
+
 export {
     appendRequestLogEntry,
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
+    readErrorIssues,
     readRequestLog,
     redactArgs,
     renderLogMessage,
@@ -522,7 +611,10 @@ export {
 export type {
     AppendRequestLogEntry,
     ContextLogLevel,
+    ErrorIssue,
+    IssuesResult,
     LogEventInput,
+    ReadIssuesOptions,
     ReadRequestLogOptions,
     RequestLogEntry,
     RequestLogResult,
