@@ -36,6 +36,9 @@ const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {
         "organizationId": "organizations",
         "projectId": "projects"
     },
+    "overageDebits": {
+        "organizationId": "organizations"
+    },
     "tenantLogs": {
         "organizationId": "organizations"
     },
@@ -163,6 +166,17 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
                 "hashedKey"
             ],
             "name": "by_hash",
+            "type": "index",
+            "unique": true
+        }
+    ],
+    "overageDebits": [
+        {
+            "fields": [
+                "organizationId",
+                "periodStart"
+            ],
+            "name": "by_org_period",
             "type": "index",
             "unique": true
         }
@@ -763,6 +777,40 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "name": "type",
             "optional": false,
             "type": "any"
+        }
+    ],
+    "overageDebits": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "debitedCredits",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "organizationId",
+            "optional": false,
+            "type": "id",
+            "ref": "organizations"
+        },
+        {
+            "name": "periodStart",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "updatedAt",
+            "optional": false,
+            "type": "number"
         }
     ],
     "tenantLogs": [
@@ -2538,6 +2586,26 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "file": "usage",
             "kind": "mutation",
             "line": 193
+        },
+        "name": "nondeterministic_query_mutation",
+        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
+        "title": "Non-deterministic call in query/mutation handler"
+    },
+    {
+        "cacheKey": "nondeterministic_query_mutation:usage:240:Date.now",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
+        "detail": "`Date.now(…)` in recordOverageDebit (usage:240) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "callee": "Date.now",
+            "exportName": "recordOverageDebit",
+            "file": "usage",
+            "kind": "mutation",
+            "line": 240
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
@@ -4960,6 +5028,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             facade["projects"] = bindTableFacade(db, "projects");
             facade["deployments"] = bindTableFacade(db, "deployments");
             facade["deployKeys"] = bindTableFacade(db, "deployKeys");
+            facade["overageDebits"] = bindTableFacade(db, "overageDebits");
             facade["tenantLogs"] = bindTableFacade(db, "tenantLogs");
             facade["githubInstallations"] = bindTableFacade(db, "githubInstallations");
             facade["builds"] = bindTableFacade(db, "builds");
