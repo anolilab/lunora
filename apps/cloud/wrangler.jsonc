@@ -45,6 +45,22 @@
             "binding": "ANALYTICS",
             "dataset": "ANALYTICS",
         },
+        {
+            // Observability metrics stream (issue/incident counts per ingest);
+            // read back via the AE SQL API for the hosted dashboards.
+            "binding": "TELEMETRY",
+            "dataset": "TELEMETRY",
+        },
+    ],
+    // Durable archive for raw decoded telemetry events (Pipeline → R2, read back
+    // with R2 SQL). The bucket is bound here; the `TELEMETRY_PIPELINE` producer is
+    // provisioned per cell with `wrangler pipelines create` (its remote name can't
+    // be minted from config) and the telemetry store no-ops until it is present.
+    "r2_buckets": [
+        {
+            "binding": "TELEMETRY_BUCKET",
+            "bucket_name": "lunora-cloud-telemetry",
+        },
     ],
     "observability": {
         "enabled": true,

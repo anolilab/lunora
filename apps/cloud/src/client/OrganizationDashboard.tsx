@@ -8,7 +8,9 @@ import { BillingSection } from "./BillingSection";
 import { BuildsSection } from "./BuildsSection";
 import { DeployKeysSection } from "./DeployKeysSection";
 import { DomainsSection } from "./DomainsSection";
+import { IncidentsSection } from "./IncidentsSection";
 import { InvitationsSection } from "./InvitationsSection";
+import { IssuesSection } from "./IssuesSection";
 import { LogsSection } from "./LogsSection";
 import { MembersSection } from "./MembersSection";
 import { ProjectsSection } from "./ProjectsSection";
@@ -21,7 +23,8 @@ interface OrganizationDashboardProps {
     organizationId: OrgId;
 }
 
-type Tab = "activity" | "billing" | "builds" | "domains" | "invitations" | "keys" | "logs" | "members" | "projects" | "secrets" | "usage";
+type Tab =
+    "activity" | "billing" | "builds" | "domains" | "incidents" | "invitations" | "issues" | "keys" | "logs" | "members" | "projects" | "secrets" | "usage";
 
 const TABS: { id: Tab; label: string }[] = [
     { id: "projects", label: "Projects" },
@@ -31,11 +34,30 @@ const TABS: { id: Tab; label: string }[] = [
     { id: "domains", label: "Domains" },
     { id: "builds", label: "Builds" },
     { id: "logs", label: "Logs" },
+    { id: "issues", label: "Issues" },
+    { id: "incidents", label: "Incidents" },
     { id: "invitations", label: "Invitations" },
     { id: "usage", label: "Usage" },
     { id: "billing", label: "Billing" },
     { id: "activity", label: "Activity" },
 ];
+
+/** Tab → live section. Every section mounts against the same `organizationId`. */
+const SECTIONS: Record<Tab, (props: { organizationId: OrgId }) => ReactElement> = {
+    activity: ActivitySection,
+    billing: BillingSection,
+    builds: BuildsSection,
+    domains: DomainsSection,
+    incidents: IncidentsSection,
+    invitations: InvitationsSection,
+    issues: IssuesSection,
+    keys: DeployKeysSection,
+    logs: LogsSection,
+    members: MembersSection,
+    projects: ProjectsSection,
+    secrets: SecretsSection,
+    usage: UsageSection,
+};
 
 interface OrgFlags {
     deletionRequestedAt?: number;
@@ -78,6 +100,7 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
     const [tab, setTab] = useState<Tab>("projects");
 
     const org = organizations?.find((candidate) => candidate._id === organizationId);
+    const ActiveSection = SECTIONS[tab];
 
     return (
         <div className="stack">
@@ -106,17 +129,7 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
                 ))}
             </nav>
 
-            {tab === "projects" ? <ProjectsSection organizationId={organizationId} /> : null}
-            {tab === "members" ? <MembersSection organizationId={organizationId} /> : null}
-            {tab === "keys" ? <DeployKeysSection organizationId={organizationId} /> : null}
-            {tab === "invitations" ? <InvitationsSection organizationId={organizationId} /> : null}
-            {tab === "secrets" ? <SecretsSection organizationId={organizationId} /> : null}
-            {tab === "domains" ? <DomainsSection organizationId={organizationId} /> : null}
-            {tab === "builds" ? <BuildsSection organizationId={organizationId} /> : null}
-            {tab === "logs" ? <LogsSection organizationId={organizationId} /> : null}
-            {tab === "usage" ? <UsageSection organizationId={organizationId} /> : null}
-            {tab === "billing" ? <BillingSection organizationId={organizationId} /> : null}
-            {tab === "activity" ? <ActivitySection organizationId={organizationId} /> : null}
+            <ActiveSection organizationId={organizationId} />
         </div>
     );
 };

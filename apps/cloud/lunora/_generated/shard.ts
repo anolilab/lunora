@@ -3,7 +3,7 @@
 
 import type { AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, LogSink, MaskPoliciesResult, MigrationRunResult, RunShardApplyCdcArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike } from "@lunora/do";
 import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
-import { asBucketStorage, createSecrets } from "@lunora/server";
+import { asBucketStorage, createSecrets, LunoraError } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
 import type { LunoraDatabaseLike as LunoraPaymentDbLike, LunoraPayment, PaymentsFromContextOptions } from "@lunora/payment";
 import { paymentsFromContext } from "@lunora/payment";
@@ -61,6 +61,14 @@ const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {
         "organizationId": "organizations"
     },
     "platformUsage": {
+        "deploymentId": "deployments",
+        "organizationId": "organizations"
+    },
+    "issues": {
+        "deploymentId": "deployments",
+        "organizationId": "organizations"
+    },
+    "incidents": {
         "deploymentId": "deployments",
         "organizationId": "organizations"
     },
@@ -270,6 +278,42 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
         }
     ],
     "platformUsage": [
+        {
+            "fields": [
+                "organizationId"
+            ],
+            "name": "by_org",
+            "type": "index"
+        }
+    ],
+    "issues": [
+        {
+            "fields": [
+                "organizationId",
+                "hash"
+            ],
+            "name": "by_org_hash",
+            "type": "index",
+            "unique": true
+        },
+        {
+            "fields": [
+                "organizationId"
+            ],
+            "name": "by_org",
+            "type": "index"
+        }
+    ],
+    "incidents": [
+        {
+            "fields": [
+                "organizationId",
+                "hash"
+            ],
+            "name": "by_org_hash",
+            "type": "index",
+            "unique": true
+        },
         {
             "fields": [
                 "organizationId"
@@ -1176,6 +1220,166 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "type": "number"
         }
     ],
+    "issues": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "count",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "createdAt",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "culprit",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "deploymentId",
+            "optional": true,
+            "type": "id",
+            "ref": "deployments"
+        },
+        {
+            "name": "firstSeen",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "hash",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "lastSeen",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "organizationId",
+            "optional": false,
+            "type": "id",
+            "ref": "organizations"
+        },
+        {
+            "name": "sampleMessage",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "status",
+            "optional": false,
+            "type": "union"
+        },
+        {
+            "name": "title",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "updatedAt",
+            "optional": false,
+            "type": "number"
+        }
+    ],
+    "incidents": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "closedAt",
+            "optional": true,
+            "type": "number"
+        },
+        {
+            "name": "container",
+            "optional": true,
+            "type": "string"
+        },
+        {
+            "name": "count",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "createdAt",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "deploymentId",
+            "optional": true,
+            "type": "id",
+            "ref": "deployments"
+        },
+        {
+            "name": "hash",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "instance",
+            "optional": true,
+            "type": "string"
+        },
+        {
+            "name": "kind",
+            "optional": false,
+            "type": "union"
+        },
+        {
+            "name": "lastSeen",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "openedAt",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "organizationId",
+            "optional": false,
+            "type": "id",
+            "ref": "organizations"
+        },
+        {
+            "name": "status",
+            "optional": false,
+            "type": "union"
+        },
+        {
+            "name": "title",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "updatedAt",
+            "optional": false,
+            "type": "number"
+        }
+    ],
     "secrets": [
         {
             "name": "_id",
@@ -1510,6 +1714,60 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             ],
             "index": "by_project",
             "table": "builds"
+        },
+        "name": "duplicate_index",
+        "remediation": "Drop the redundant index; the covering index already serves its lookups.",
+        "title": "Duplicate / redundant index"
+    },
+    {
+        "cacheKey": "duplicate_index:issues:by_org",
+        "categories": [
+            "PERFORMANCE"
+        ],
+        "description": "A secondary index is redundant because another index already covers every lookup it serves (its columns are a leading prefix of the other's). The redundant index costs storage and is maintained on every write for no read benefit.",
+        "detail": "Index \"by_org\" on table \"issues\" (organizationId) is redundant — index \"by_org_hash\" (organizationId, hash) already covers its lookups.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "coveredBy": {
+                "fields": [
+                    "organizationId",
+                    "hash"
+                ],
+                "name": "by_org_hash"
+            },
+            "fields": [
+                "organizationId"
+            ],
+            "index": "by_org",
+            "table": "issues"
+        },
+        "name": "duplicate_index",
+        "remediation": "Drop the redundant index; the covering index already serves its lookups.",
+        "title": "Duplicate / redundant index"
+    },
+    {
+        "cacheKey": "duplicate_index:incidents:by_org",
+        "categories": [
+            "PERFORMANCE"
+        ],
+        "description": "A secondary index is redundant because another index already covers every lookup it serves (its columns are a leading prefix of the other's). The redundant index costs storage and is maintained on every write for no read benefit.",
+        "detail": "Index \"by_org\" on table \"incidents\" (organizationId) is redundant — index \"by_org_hash\" (organizationId, hash) already covers its lookups.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "coveredBy": {
+                "fields": [
+                    "organizationId",
+                    "hash"
+                ],
+                "name": "by_org_hash"
+            },
+            "fields": [
+                "organizationId"
+            ],
+            "index": "by_org",
+            "table": "incidents"
         },
         "name": "duplicate_index",
         "remediation": "Drop the redundant index; the covering index already serves its lookups.",
@@ -2124,6 +2382,26 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
+        "cacheKey": "nondeterministic_query_mutation:incidents:47:Date.now",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
+        "detail": "`Date.now(…)` in setStatus (incidents:47) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "callee": "Date.now",
+            "exportName": "setStatus",
+            "file": "incidents",
+            "kind": "mutation",
+            "line": 47
+        },
+        "name": "nondeterministic_query_mutation",
+        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
+        "title": "Non-deterministic call in query/mutation handler"
+    },
+    {
         "cacheKey": "nondeterministic_query_mutation:invitations:53:Date.now",
         "categories": [
             "SCHEMA"
@@ -2178,6 +2456,26 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "file": "invitations",
             "kind": "mutation",
             "line": 106
+        },
+        "name": "nondeterministic_query_mutation",
+        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
+        "title": "Non-deterministic call in query/mutation handler"
+    },
+    {
+        "cacheKey": "nondeterministic_query_mutation:issues:46:Date.now",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
+        "detail": "`Date.now(…)` in setStatus (issues:46) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "callee": "Date.now",
+            "exportName": "setStatus",
+            "file": "issues",
+            "kind": "mutation",
+            "line": 46
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
@@ -2458,6 +2756,26 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "file": "secrets",
             "kind": "mutation",
             "line": 45
+        },
+        "name": "nondeterministic_query_mutation",
+        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
+        "title": "Non-deterministic call in query/mutation handler"
+    },
+    {
+        "cacheKey": "nondeterministic_query_mutation:telemetry:94:Date.now",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
+        "detail": "`Date.now(…)` in ingest (telemetry:94) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "callee": "Date.now",
+            "exportName": "ingest",
+            "file": "telemetry",
+            "kind": "mutation",
+            "line": 94
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
@@ -2905,6 +3223,25 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Public write without a rate limit"
     },
     {
+        "cacheKey": "public_mutation_without_ratelimit:incidents:setStatus",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
+        "detail": "Public mutation `setStatus` (incidents) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "setStatus",
+            "file": "incidents",
+            "kind": "mutation",
+            "sensitive": false
+        },
+        "name": "public_mutation_without_ratelimit",
+        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
+        "title": "Public write without a rate limit"
+    },
+    {
         "cacheKey": "public_mutation_without_ratelimit:invitations:invite",
         "categories": [
             "SECURITY"
@@ -2954,6 +3291,25 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "metadata": {
             "exportName": "accept",
             "file": "invitations",
+            "kind": "mutation",
+            "sensitive": false
+        },
+        "name": "public_mutation_without_ratelimit",
+        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
+        "title": "Public write without a rate limit"
+    },
+    {
+        "cacheKey": "public_mutation_without_ratelimit:issues:setStatus",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
+        "detail": "Public mutation `setStatus` (issues) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "setStatus",
+            "file": "issues",
             "kind": "mutation",
             "sensitive": false
         },
@@ -3182,6 +3538,25 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "metadata": {
             "exportName": "remove",
             "file": "secrets",
+            "kind": "mutation",
+            "sensitive": false
+        },
+        "name": "public_mutation_without_ratelimit",
+        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
+        "title": "Public write without a rate limit"
+    },
+    {
+        "cacheKey": "public_mutation_without_ratelimit:telemetry:ingest",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
+        "detail": "Public mutation `ingest` (telemetry) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "ingest",
+            "file": "telemetry",
             "kind": "mutation",
             "sensitive": false
         },
@@ -4352,6 +4727,25 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Public string argument has no length bound"
     },
     {
+        "cacheKey": "unbounded_string_arg:telemetry:ingest:deployKey",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
+        "detail": "Arg `deployKey` of public procedure `ingest` (telemetry:80) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "facing": "EXTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "argument": "deployKey",
+            "exportName": "ingest",
+            "file": "telemetry",
+            "line": 80
+        },
+        "name": "unbounded_string_arg",
+        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
+        "title": "Public string argument has no length bound"
+    },
+    {
         "cacheKey": "unbounded_string_arg:usage:ingest:deployKey",
         "categories": [
             "SECURITY"
@@ -4548,11 +4942,7 @@ const dispatchRun = async (expected: FunctionKind, functionPath: string, args: R
     }
 
     if (runDepth >= MAX_RUN_DEPTH) {
-        throw Object.assign(new Error(`ctx.run*: composition depth limit (${MAX_RUN_DEPTH}) exceeded — likely a cyclic runQuery/runMutation`), {
-            name: "LunoraError",
-            code: "RUN_DEPTH_EXCEEDED",
-            status: 500,
-        });
+        throw new LunoraError("RUN_DEPTH_EXCEEDED", `ctx.run*: composition depth limit (${MAX_RUN_DEPTH}) exceeded — likely a cyclic runQuery/runMutation`);
     }
 
     runDepth += 1;
@@ -4580,11 +4970,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // `isSystemDispatch()`). A client RPC never carries that flag, so its
             // internals stay not-found and never leak across the external boundary.
             if (!registered || (registered.visibility === "internal" && !this.isSystemDispatch())) {
-                throw Object.assign(new Error(`function not registered: ${functionPath}`), {
-                    name: "LunoraError",
-                    code: "FUNCTION_NOT_FOUND",
-                    status: 404,
-                });
+                throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
             }
 
             this.ensureMigrated();
@@ -4702,11 +5088,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const migration = LUNORA_MIGRATIONS[args.id];
 
             if (!migration) {
-                throw Object.assign(new Error(`data migration "${args.id}" is not registered`), {
-                    name: "LunoraError",
-                    code: "MIGRATION_NOT_FOUND",
-                    status: 404,
-                });
+                throw new LunoraError("MIGRATION_NOT_FOUND", `data migration "${args.id}" is not registered`, { status: 404 });
             }
 
             this.ensureMigrated();
@@ -4742,18 +5124,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const definition = (schema as unknown as SchemaLike).tables[args.table];
 
             if (!definition) {
-                throw Object.assign(new Error(`unknown table: ${args.table}`), { name: "LunoraError", code: "UNKNOWN_TABLE", status: 404 });
+                throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${args.table}`, { status: 404 });
             }
 
             // `.global()` tables live in D1, not this DO's SQLite — editing them
             // here would corrupt nothing but would fail confusingly, so reject up
             // front with a clear code the studio can surface.
             if (definition.shardMode?.kind === "global") {
-                throw Object.assign(new Error(`table "${args.table}" is global; edit it through D1, not the shard`), {
-                    name: "LunoraError",
-                    code: "GLOBAL_TABLE_NOT_EDITABLE",
-                    status: 400,
-                });
+                throw new LunoraError("GLOBAL_TABLE_NOT_EDITABLE", `table "${args.table}" is global; edit it through D1, not the shard`, { status: 400 });
             }
 
             this.ensureMigrated();
@@ -4797,17 +5175,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const definition = (schema as unknown as SchemaLike).tables[table];
 
             if (!definition) {
-                throw Object.assign(new Error(`unknown table: ${table}`), { name: "LunoraError", code: "UNKNOWN_TABLE", status: 404 });
+                throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
             }
 
             // `.global()` tables live in D1, not this DO's SQLite — the same
             // guard `runShardWrite` applies to single-row edits.
             if (definition.shardMode?.kind === "global") {
-                throw Object.assign(new Error(`table "${table}" is global; edit it through D1, not the shard`), {
-                    name: "LunoraError",
-                    code: "GLOBAL_TABLE_NOT_EDITABLE",
-                    status: 400,
-                });
+                throw new LunoraError("GLOBAL_TABLE_NOT_EDITABLE", `table "${table}" is global; edit it through D1, not the shard`, { status: 400 });
             }
 
             this.ensureMigrated();
@@ -4848,7 +5222,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // `rankBefore` is optional on `DatabaseWriterLike` (the D1 twin omits it),
             // but the shard writer from `createShardCtxDb` always defines it.
             if (!writer.rankBefore) {
-                throw Object.assign(new Error("rankBefore is unavailable on the shard writer"), { name: "LunoraError", code: "NOT_IMPLEMENTED", status: 500 });
+                throw new LunoraError("NOT_IMPLEMENTED", "rankBefore is unavailable on the shard writer", { status: 500 });
             }
 
             return writer.rankBefore(args.table, args.index, {
@@ -4878,7 +5252,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // directions live in the schema's rankIndex, so the shard reads them itself;
             // `args.directions` is only the coordinator's comparator hint and isn't forwarded.
             if (!writer.rankPageRows) {
-                throw Object.assign(new Error("rankPage is unavailable on the shard writer"), { name: "LunoraError", code: "NOT_IMPLEMENTED", status: 500 });
+                throw new LunoraError("NOT_IMPLEMENTED", "rankPage is unavailable on the shard writer", { status: 500 });
             }
 
             return writer.rankPageRows(args.table, args.index, {
@@ -4968,6 +5342,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             facade["auditLog"] = bindTableFacade(db, "auditLog");
             facade["invitations"] = bindTableFacade(db, "invitations");
             facade["platformUsage"] = bindTableFacade(db, "platformUsage");
+            facade["issues"] = bindTableFacade(db, "issues");
+            facade["incidents"] = bindTableFacade(db, "incidents");
             facade["secrets"] = bindTableFacade(db, "secrets");
             facade["customers"] = bindTableFacade(db, "customers");
             facade["events"] = bindTableFacade(db, "events");

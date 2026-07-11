@@ -1,3 +1,5 @@
+import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
+import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { RateLimiter } from "@lunora/ratelimit";
 import type { ExecutionContextLike } from "@lunora/runtime";
 
@@ -9,6 +11,9 @@ import { handleGitHubWebhook } from "../github/webhook";
 import { sendInvitationEmail } from "../mail/notify";
 import { createCloudflareProvisioner } from "../provision";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
+import type { OtlpTracePayload } from "../telemetry/otlp";
+import { decodeTelemetryEvents } from "../telemetry/otlp";
+import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { DeployBackend, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
 import { CellScheduler } from "./scheduler";
@@ -34,6 +39,10 @@ interface RouterEnv {
     MAIL_FROM?: string;
     /** 32-byte hex master key for tenant-secret envelope encryption (§7). */
     SECRET_ENCRYPTION_KEY?: string;
+    /** Observability metrics dataset for the telemetry ingest (may be unbound). */
+    TELEMETRY?: AnalyticsEngineDatasetLike;
+    /** Raw-telemetry archive Pipeline for the telemetry ingest (may be unbound). */
+    TELEMETRY_PIPELINE?: PipelineBindingLike;
 }
 
 interface HttpRouterLike {
@@ -78,6 +87,16 @@ interface EncryptedSecretRow {
     ciphertext: string;
     iv: string;
     name: string;
+}
+
+/**
+ * `POST /v1/telemetry` body — an OTLP `ExportTraceServiceRequest` (its
+ * `resourceSpans`) plus the deploy-key/org fields that authenticate + route it.
+ */
+interface TelemetryBody extends OtlpTracePayload {
+    deployKey?: string;
+    deploymentId?: string;
+    organizationId?: string;
 }
 
 const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
@@ -401,6 +420,47 @@ const handleLogsIngestRoute = async (request: Request, environment: RouterEnv): 
     }
 };
 
+/**
+ * `POST /v1/telemetry` — Cloud Observability ingest. Accepts OTLP-over-HTTP/JSON
+ * from the tenant Worker `otlpSink` and the `@lunora/container` exporter, decodes
+ * the error spans, and folds them into grouped issues/incidents (deploy-key
+ * authorized inside `telemetry.ingest`). Metrics + raw archival are best-effort
+ * side-effects that never block or fail the ingest.
+ */
+const handleTelemetryRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const body = (await request.json().catch(() => null)) as TelemetryBody | null;
+
+    if (!body?.deployKey || !body.organizationId) {
+        return jsonError(400, "deployKey and organizationId are required");
+    }
+
+    const events = decodeTelemetryEvents(body);
+
+    try {
+        const result = await context.runMutation<{ incidents: number; issues: number }>(api.telemetry.ingest, {
+            deployKey: body.deployKey,
+            deploymentId: body.deploymentId,
+            events,
+            organizationId: body.organizationId,
+        });
+
+        const store = createCloudflareTelemetryStore(environment);
+
+        store.recordCounts({ incidents: result.incidents, issues: result.issues, organizationId: body.organizationId });
+        await store.archiveEvents(events).catch(() => undefined);
+
+        return Response.json(result);
+    } catch (error) {
+        return jsonError(403, error instanceof Error ? error.message : "telemetry rejected");
+    }
+};
+
 interface DomainBody {
     hostname?: string;
     id?: string;
@@ -664,6 +724,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         "/v1/invitations/send": handleInviteRoute,
         "/v1/logs/ingest": handleLogsIngestRoute,
         "/v1/secrets": handleSecretRoute,
+        "/v1/telemetry": handleTelemetryRoute,
         "/v1/usage": handleUsageRoute,
     };
 

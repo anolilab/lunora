@@ -57,11 +57,19 @@ export interface ApiTypes {
         record: FunctionReference<"mutation", { accountLogin: string; installationId: number }, Id<"githubInstallations">>;
         remove: FunctionReference<"mutation", { installationId: number }, void>;
     };
+    incidents: {
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
+        setStatus: FunctionReference<"mutation", { id: Id<"incidents">; organizationId: Id<"organizations">; status: unknown }, Id<"incidents">>;
+    };
     invitations: {
         accept: FunctionReference<"mutation", { token: string }, { organizationId: Id<"organizations">; }>;
         invite: FunctionReference<"mutation", { email: string; organizationId: Id<"organizations"> }, { id: Id<"invitations">; token: string; }>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { organizationId: Id<"organizations">; status: "pending" | "accepted" | "revoked"; _id: Id<"invitations">; createdAt: number; email: string; expiresAt: number; invitedBy: string; role: "admin" | "member" | "owner" | "viewer" }[]>;
         revoke: FunctionReference<"mutation", { id: Id<"invitations">; organizationId: Id<"organizations"> }, void>;
+    };
+    issues: {
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"issues">; count: number; culprit: string; firstSeen: number; hash: string; lastSeen: number; organizationId: Id<"organizations">; sampleMessage: string; status: "open" | "resolved"; title: string }[]>;
+        setStatus: FunctionReference<"mutation", { id: Id<"issues">; organizationId: Id<"organizations">; status: unknown }, Id<"issues">>;
     };
     logs: {
         ingest: FunctionReference<"mutation", { deployKey: string; lines: Array<{ createdAt: number | undefined; level: "log" | "warn" | "error"; line: string }>; organizationId: Id<"organizations">; scriptName: string }, { ingested: number; }>;
@@ -92,6 +100,9 @@ export interface ApiTypes {
         listEncrypted: FunctionReference<"query", { deployKey?: string; environment?: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects"> }, { ciphertext: string; iv: string; name: string; }[]>;
         remove: FunctionReference<"mutation", { id: Id<"secrets">; organizationId: Id<"organizations"> }, void>;
         store: FunctionReference<"mutation", { ciphertext: string; environment?: "all" | "production" | "preview" | "dev"; iv: string; name: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }, Id<"secrets">>;
+    };
+    telemetry: {
+        ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; organizationId: Id<"organizations"> }, { incidents: number; issues: number; }>;
     };
     usage: {
         ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }, Id<"platformUsage">>;
