@@ -17,6 +17,7 @@
  * expect(result.average).toBeGreaterThan(0.5);
  * ```
  */
+import { LunoraError } from "@lunora/errors";
 
 /** One sample handed to a {@link Scorer}. */
 interface ScorerSample {
@@ -63,8 +64,13 @@ interface EvalResult {
     items: EvalItemResult[];
 }
 
-/** First signed decimal in a string — used to parse an LLM judge's numeric verdict. */
-const FIRST_NUMBER = /-?\d+(?:\.\d+)?/u;
+/**
+ * The verdict number at the START of an LLM judge's reply — the instructed
+ * format (`"0.8 - reason"`). Anchored so a number elsewhere in prose (e.g. the
+ * `0` in "on a 0-1 scale", or an "order #42" reference) is NOT mistaken for the
+ * score; a non-compliant reply with no leading number scores 0 (fail-closed).
+ */
+const LEADING_SCORE = /^\s*(-?\d+(?:\.\d+)?)/u;
 
 /** Clamp a number into `[0, 1]` (a non-finite value scores 0). */
 const clamp01 = (value: number): number => (Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0);
@@ -109,13 +115,15 @@ const exactMatchScorer = (): Scorer => {
 
 /** Score the fraction of `keywords` (case-insensitive) present in the output. */
 const keywordScorer = (keywords: ReadonlyArray<string>): Scorer => {
+    // An empty rubric would score everything a silent 1 — the opposite of a
+    // meaningful eval. Reject it at construction (like `codeTool`/`fsTool`).
+    if (keywords.length === 0) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/testing: keywordScorer requires at least one keyword");
+    }
+
     return {
         name: "keyword-coverage",
         score: ({ output }): ScoreResult => {
-            if (keywords.length === 0) {
-                return { reason: "no keywords", score: 1 };
-            }
-
             const lower = output.toLowerCase();
             const hits = keywords.filter((keyword) => lower.includes(keyword.toLowerCase())).length;
 
@@ -137,9 +145,9 @@ const buildJudgePrompt = (criteria: string, sample: ScorerSample): string =>
 
 /** Parse an LLM judge's reply (`"0.8 - mostly correct"`) into a clamped {@link ScoreResult}. */
 const parseJudgeScore = (raw: string): ScoreResult => {
-    const match = FIRST_NUMBER.exec(raw);
+    const match = LEADING_SCORE.exec(raw);
 
-    return { reason: raw.trim(), score: match ? clamp01(Number(match[0])) : 0 };
+    return { reason: raw.trim(), score: match ? clamp01(Number(match[1])) : 0 };
 };
 
 /**
@@ -157,9 +165,25 @@ const llmScorer = (options: { criteria: string; judge: (prompt: string) => Promi
 
 /** Run every scorer over one sample (concurrently) → each verdict keyed by name + their mean. */
 const scoreSample = async (sample: ScorerSample, scorers: ReadonlyArray<Scorer>): Promise<{ average: number; scores: Record<string, ScoreResult> }> => {
-    const entries = await Promise.all(scorers.map(async (scorer) => [scorer.name, normalizeScore(await scorer.score(sample))] as const));
+    const results = await Promise.all(
+        scorers.map(async (scorer) => {
+            return { name: scorer.name, result: normalizeScore(await scorer.score(sample)) };
+        }),
+    );
+    const scores: Record<string, ScoreResult> = {};
+    const seen = new Map<string, number>();
 
-    return { average: mean(entries.map(([, result]) => result.score)), scores: Object.fromEntries(entries) };
+    for (const { name, result } of results) {
+        // Disambiguate a repeated scorer name (e.g. two `exact-match`s) with a
+        // `#n` suffix so every verdict survives in `scores` and stays consistent
+        // with `average` — a plain `Object.fromEntries` would drop all but the last.
+        const priorCount = seen.get(name) ?? 0;
+
+        seen.set(name, priorCount + 1);
+        scores[priorCount === 0 ? name : `${name}#${String(priorCount + 1)}`] = result;
+    }
+
+    return { average: mean(results.map(({ result }) => result.score)), scores };
 };
 
 /**

@@ -24,6 +24,10 @@ describe("heuristic scorers", () => {
 
         expect(result).toStrictEqual({ reason: "2/3 keywords present", score: 2 / 3 });
     });
+
+    it("keywordScorer rejects an empty keyword list at construction", () => {
+        expect(() => keywordScorer([])).toThrow(/at least one keyword/u);
+    });
 });
 
 describe(llmScorer, () => {
@@ -44,6 +48,14 @@ describe(llmScorer, () => {
 
         await expect(scorer.score({ output: "y" })).resolves.toStrictEqual({ reason: "no idea", score: 0 });
     });
+
+    it("does not mis-score a reply whose leading number isn't the verdict", async () => {
+        // The parser is anchored to the start, so a stray number in prose (an
+        // "order #42" ref that once scored a bogus 1) no longer wins.
+        const scorer = llmScorer({ criteria: "x", judge: async () => "Order #42 handled well — 0.8" });
+
+        await expect(scorer.score({ output: "y" })).resolves.toStrictEqual({ reason: "Order #42 handled well — 0.8", score: 0 });
+    });
 });
 
 describe(scoreSample, () => {
@@ -53,6 +65,17 @@ describe(scoreSample, () => {
         expect(scores["contains:shipped"]?.score).toBe(1);
         expect(scores["exact-match"]?.score).toBe(0);
         expect(average).toBe(0.5);
+    });
+
+    it("disambiguates duplicate scorer names so every verdict survives in `scores`", async () => {
+        const { average, scores } = await scoreSample({ expected: "yes", output: "yes" }, [exactMatchScorer(), exactMatchScorer()]);
+
+        // Both verdicts are kept (a plain keyed record would drop one), and the
+        // breakdown stays consistent with the average over both.
+        expect(Object.keys(scores)).toStrictEqual(["exact-match", "exact-match#2"]);
+        expect(scores["exact-match"]?.score).toBe(1);
+        expect(scores["exact-match#2"]?.score).toBe(1);
+        expect(average).toBe(1);
     });
 });
 
@@ -65,12 +88,12 @@ describe(evaluate, () => {
         // A deterministic producer standing in for an agent harness run.
         const produce = (input: string): string => (input.includes("cancel") ? "It was refunded." : "It shipped Tuesday.");
 
-        const result = await evaluate(cases, produce, [keywordScorer([])]);
+        const result = await evaluate(cases, produce, [keywordScorer(["it"])]);
 
         expect(result.items).toHaveLength(2);
         expect(result.items[0]?.output).toBe("It shipped Tuesday.");
         expect(result.items[1]?.output).toBe("It was refunded.");
-        // keywordScorer([]) scores 1 for every case → average 1.
+        // Both outputs contain "it" (case-insensitive) → every case scores 1 → average 1.
         expect(result.average).toBe(1);
     });
 
