@@ -1,6 +1,7 @@
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { resolveAgentModel } from "./generate";
+import { firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
 import { buildModelMessages } from "./model-messages";
 import { agentBindingName } from "./naming";
 import { toFunctionReference } from "./paths";
@@ -433,7 +434,7 @@ const dispatchSemanticMemory = async (source: AgentMemorySource, input: string, 
 
     const memorySource = toFunctionReference(source.source);
     const { topK } = source;
-    const stepName = source.key === "default" ? "memory:retrieve" : `memory:retrieve:${source.key}`;
+    const stepName = memoryStepName("memory:retrieve", source.key);
     const retrieved = await step.do(stepName, async () => run(memorySource, { query: input, ...(topK === undefined ? {} : { topK }) }));
 
     return readRetrievedContext(retrieved);
@@ -456,7 +457,7 @@ const dispatchGraphMemory = async (
         return undefined;
     }
 
-    const stepName = source.key === "default" ? "memory:traverse" : `memory:traverse:${source.key}`;
+    const stepName = memoryStepName("memory:traverse", source.key);
     const retrieved = await step.do(stepName, async () => run(graphTraverse, { owner, query: input, ...graphTraverseBounds(source.graph) }));
 
     return readRetrievedContext(retrieved);
@@ -480,12 +481,10 @@ const retrieveMemoryContext = async (
     step: AgentStepLike,
     run: AgentRunFunction,
 ): Promise<string | undefined> => {
-    // Fallback for a directly-authored definition (no folded `memorySources`): a
-    // `"graph"` source is always injected; an `"agentic"`-mode semantic `memory`
-    // is NOT — it mints a `searchMemory` tool the model drives itself.
-    const sources =
-        agent.memorySources ??
-        (agent.memory && (agent.memory.kind === "graph" || agent.memory.mode !== "agentic") ? [{ key: "default", ...agent.memory }] : []);
+    // The injected source set: the list `defineAgent` folded, else the
+    // directly-authored `memory` as the `"default"` source (an `"agentic"`-mode
+    // semantic memory is excluded — it mints a `searchMemory` tool instead).
+    const sources = resolveInjectedSources(agent);
 
     if (sources.length === 0) {
         return undefined;
@@ -508,17 +507,6 @@ const retrieveMemoryContext = async (
     }
 
     return contexts.length > 0 ? contexts.join("\n\n") : undefined;
-};
-
-/**
- * The first `"graph"`-kind memory source, if any — the write target for run-end
- * extraction. Mirrors {@link retrieveMemoryContext}'s source resolution (folded
- * `memorySources`, else the directly-authored `memory`).
- */
-const firstGraphSource = (agent: AgentDefinition): AgentMemorySource | undefined => {
-    const sources = agent.memorySources ?? (agent.memory ? [{ key: "default", ...agent.memory }] : []);
-
-    return sources.find((source) => source.kind === "graph");
 };
 
 /**
@@ -558,13 +546,11 @@ const extractGraphMemoryAtRunEnd = async (options: {
         return;
     }
 
-    const suffix = source.key === "default" ? "" : `:${source.key}`;
-
     try {
-        const extracted = await step.do(`memory:extract${suffix}`, async () =>
+        const extracted = await step.do(memoryStepName("memory:extract", source.key), async () =>
             extractGraph({ assistantText: finalText, env, model: source.graph?.extractionModel ?? agent.model, userInput: input }), );
 
-        await run(toFunctionReference(paths.graphUpsert), { ...extracted, messageKey: `${instanceId}:extract${suffix}`, owner });
+        await run(toFunctionReference(paths.graphUpsert), { ...extracted, messageKey: `${instanceId}:${memoryStepName("extract", source.key)}`, owner });
     } catch {
         // A failed extraction is non-fatal — the answer is already persisted.
     }
