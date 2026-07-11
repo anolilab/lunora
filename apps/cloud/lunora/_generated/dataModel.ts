@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -235,6 +235,42 @@ export interface Doc_platformUsage {
     quantity: number;
 }
 
+export interface Doc_issues {
+    _id: Id<"issues">;
+    _creationTime: number;
+    count: number;
+    createdAt: number;
+    culprit: string;
+    deploymentId?: Id<"deployments">;
+    firstSeen: number;
+    hash: string;
+    lastSeen: number;
+    organizationId: Id<"organizations">;
+    sampleMessage: string;
+    status: "open" | "resolved";
+    title: string;
+    updatedAt: number;
+}
+
+export interface Doc_incidents {
+    _id: Id<"incidents">;
+    _creationTime: number;
+    closedAt?: number;
+    container?: string;
+    count: number;
+    createdAt: number;
+    deploymentId?: Id<"deployments">;
+    hash: string;
+    instance?: string;
+    kind: "crash_loop" | "oom" | "error_spike";
+    lastSeen: number;
+    openedAt: number;
+    organizationId: Id<"organizations">;
+    status: "open" | "resolved";
+    title: string;
+    updatedAt: number;
+}
+
 export interface Doc_secrets {
     _id: Id<"secrets">;
     _creationTime: number;
@@ -326,6 +362,8 @@ export interface DataModel {
     auditLog: Doc_auditLog;
     invitations: Doc_invitations;
     platformUsage: Doc_platformUsage;
+    issues: Doc_issues;
+    incidents: Doc_incidents;
     secrets: Doc_secrets;
     customers: Doc_customers;
     events: Doc_events;
@@ -356,6 +394,8 @@ export interface IndexNamesByTable {
     auditLog: "by_org";
     invitations: "by_token" | "by_org";
     platformUsage: "by_org";
+    issues: "by_org_hash" | "by_org";
+    incidents: "by_org_hash" | "by_org";
     secrets: "by_project_env_name" | "by_project";
     customers: "by_reference" | "by_provider_customer";
     events: "by_provider_event";
@@ -383,6 +423,8 @@ export interface SearchIndexNamesByTable {
     auditLog: never;
     invitations: never;
     platformUsage: never;
+    issues: never;
+    incidents: never;
     secrets: never;
     customers: never;
     events: never;
@@ -410,6 +452,8 @@ export interface RankIndexNamesByTable {
     auditLog: never;
     invitations: never;
     platformUsage: never;
+    issues: never;
+    incidents: never;
     secrets: never;
     customers: never;
     events: never;
@@ -621,6 +665,42 @@ export interface Insert_platformUsage {
     quantity: number;
 }
 
+export interface Insert_issues {
+    _id?: Id<"issues">;
+    _creationTime?: number;
+    count: number;
+    createdAt: number;
+    culprit: string;
+    deploymentId?: Id<"deployments">;
+    firstSeen: number;
+    hash: string;
+    lastSeen: number;
+    organizationId: Id<"organizations">;
+    sampleMessage: string;
+    status: "open" | "resolved";
+    title: string;
+    updatedAt: number;
+}
+
+export interface Insert_incidents {
+    _id?: Id<"incidents">;
+    _creationTime?: number;
+    closedAt?: number;
+    container?: string;
+    count: number;
+    createdAt: number;
+    deploymentId?: Id<"deployments">;
+    hash: string;
+    instance?: string;
+    kind: "crash_loop" | "oom" | "error_spike";
+    lastSeen: number;
+    openedAt: number;
+    organizationId: Id<"organizations">;
+    status: "open" | "resolved";
+    title: string;
+    updatedAt: number;
+}
+
 export interface Insert_secrets {
     _id?: Id<"secrets">;
     _creationTime?: number;
@@ -713,6 +793,8 @@ export interface InsertModel {
     auditLog: Insert_auditLog;
     invitations: Insert_invitations;
     platformUsage: Insert_platformUsage;
+    issues: Insert_issues;
+    incidents: Insert_incidents;
     secrets: Insert_secrets;
     customers: Insert_customers;
     events: Insert_events;
@@ -755,6 +837,8 @@ export interface Relations {
     auditLog: {};
     invitations: {};
     platformUsage: {};
+    issues: {};
+    incidents: {};
     secrets: {};
     customers: {};
     events: {};
