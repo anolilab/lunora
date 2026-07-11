@@ -1,3 +1,4 @@
+import { evaluateSpendCap } from "../src/billing/spend";
 import { aggregateUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
@@ -22,16 +23,15 @@ export const record = internalMutation
         periodStart: v.number(),
         quantity: v.number(),
     })
-    .mutation(
-        async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> =>
-            context.db.insert("platformUsage", {
-                createdAt: Date.now(),
-                deploymentId: arguments_.deploymentId,
-                kind: arguments_.kind,
-                organizationId: arguments_.organizationId,
-                periodStart: arguments_.periodStart,
-                quantity: arguments_.quantity,
-            }),
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> =>
+        context.db.insert("platformUsage", {
+            createdAt: Date.now(),
+            deploymentId: arguments_.deploymentId,
+            kind: arguments_.kind,
+            organizationId: arguments_.organizationId,
+            periodStart: arguments_.periodStart,
+            quantity: arguments_.quantity,
+        }),
     );
 
 /**
@@ -142,3 +142,51 @@ export const summary = query
 
         return aggregateUsage(page, periodStart);
     });
+
+/**
+ * Enforce aggregate spend caps (GAPS.md C1). Estimates each org's current-
+ * period spend from the metered platform usage and suspends orgs over their
+ * cap (plan default or org override) — the dispatcher serves 503 for a
+ * suspended org's tenants. Self-healing: orgs back under the cap (new period,
+ * raised cap, upgraded plan) are unsuspended on the next run. SYSTEM only
+ * (cron dispatch).
+ */
+export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context }): Promise<{ suspended: number; unsuspended: number }> => {
+    const periodStart = currentPeriodStart();
+    const { page: usageRows } = await context.db.platformUsage.findMany({});
+    const byOrg = new Map<string, { cpuMs: number; requests: number }>();
+
+    for (const row of usageRows as unknown as PlatformUsageRow[]) {
+        if (row.periodStart < periodStart || (row.kind !== "requests" && row.kind !== "cpuMs")) {
+            continue;
+        }
+
+        const bucket = byOrg.get(row.organizationId) ?? { cpuMs: 0, requests: 0 };
+
+        bucket[row.kind] += row.quantity;
+        byOrg.set(row.organizationId, bucket);
+    }
+
+    const { page: organizationPage } = await context.db.organizations.findMany({});
+    const organizations = organizationPage as unknown as { _id: string; plan: string; spendCapMinor?: number; suspendedAt?: number }[];
+
+    let suspended = 0;
+    let unsuspended = 0;
+
+    for (const organization of organizations) {
+        const usage = byOrg.get(organization._id) ?? { cpuMs: 0, requests: 0 };
+        const decision = evaluateSpendCap({ capMinorOverride: organization.spendCapMinor, plan: organization.plan, usage });
+
+        if (decision.suspend && organization.suspendedAt === undefined) {
+            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: Date.now() });
+            suspended += 1;
+        } else if (!decision.suspend && organization.suspendedAt !== undefined) {
+            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: undefined });
+            unsuspended += 1;
+        }
+    }
+
+    return { suspended, unsuspended };
+});

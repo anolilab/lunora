@@ -56,6 +56,12 @@ export default defineSchema({
         name: v.string(),
         plan,
         slug: v.string(),
+        // Aggregate period spend cap in minor units (GAPS.md C1). Unset = the
+        // plan default; explicit 0 = uncapped (support escape hatch).
+        spendCapMinor: v.optional(v.number()),
+        // Set by the spend-cap enforcement cron (or support action); the
+        // dispatcher serves 503 for a suspended org's tenants.
+        suspendedAt: v.optional(v.number()),
     })
         .global()
         .index("by_slug", ["slug"], { unique: true }),
