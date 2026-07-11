@@ -2671,6 +2671,185 @@ export const openApiSpec: Record<string, unknown> = {
                 "x-lunora-function-kind": "mutation"
             }
         },
+        "/_lunora/rpc#logs:ingest": {
+            "post": {
+                "description": "Invoke the `mutation` `logs:ingest` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "logs:ingest",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "deployKey": {
+                                                "type": "string"
+                                            },
+                                            "lines": {
+                                                "items": {
+                                                    "additionalProperties": false,
+                                                    "properties": {
+                                                        "createdAt": {
+                                                            "type": "number"
+                                                        },
+                                                        "level": {
+                                                            "anyOf": [
+                                                                {
+                                                                    "const": "log",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "warn",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "error",
+                                                                    "type": "string"
+                                                                }
+                                                            ]
+                                                        },
+                                                        "line": {
+                                                            "type": "string"
+                                                        }
+                                                    },
+                                                    "required": [
+                                                        "level",
+                                                        "line"
+                                                    ],
+                                                    "type": "object"
+                                                },
+                                                "type": "array"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "scriptName": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "required": [
+                                            "deployKey",
+                                            "lines",
+                                            "organizationId",
+                                            "scriptName"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "logs:ingest",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: logs:ingest",
+                "tags": [
+                    "logs"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
+        "/_lunora/rpc#logs:list": {
+            "post": {
+                "description": "Invoke the `query` `logs:list` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "logs:list",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "afterCreatedAt": {
+                                                "type": "number"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            },
+                                            "scriptName": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId",
+                                            "scriptName"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "logs:list",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "query: logs:list",
+                "tags": [
+                    "logs"
+                ],
+                "x-lunora-function-kind": "query"
+            }
+        },
         "/_lunora/rpc#members:add": {
             "post": {
                 "description": "Invoke the `mutation` `members:add` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -2869,6 +3048,70 @@ export const openApiSpec: Record<string, unknown> = {
                 "summary": "mutation: members:remove",
                 "tags": [
                     "members"
+                ],
+                "x-lunora-function-kind": "mutation"
+            }
+        },
+        "/_lunora/rpc#organizations:cancelDeletion": {
+            "post": {
+                "description": "Invoke the `mutation` `organizations:cancelDeletion` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "organizations:cancelDeletion",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "organizations:cancelDeletion",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: organizations:cancelDeletion",
+                "tags": [
+                    "organizations"
                 ],
                 "x-lunora-function-kind": "mutation"
             }
@@ -3077,6 +3320,70 @@ export const openApiSpec: Record<string, unknown> = {
                     "organizations"
                 ],
                 "x-lunora-function-kind": "query"
+            }
+        },
+        "/_lunora/rpc#organizations:requestDeletion": {
+            "post": {
+                "description": "Invoke the `mutation` `organizations:requestDeletion` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "organizations:requestDeletion",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            }
+                                        },
+                                        "required": [
+                                            "organizationId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "organizations:requestDeletion",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: organizations:requestDeletion",
+                "tags": [
+                    "organizations"
+                ],
+                "x-lunora-function-kind": "mutation"
             }
         },
         "/_lunora/rpc#projects:byGithubRepo": {
@@ -3764,6 +4071,10 @@ export const openApiSpec: Record<string, unknown> = {
         {
             "description": "Operations declared in `lunora/invitations`.",
             "name": "invitations"
+        },
+        {
+            "description": "Operations declared in `lunora/logs`.",
+            "name": "logs"
         },
         {
             "description": "Operations declared in `lunora/members`.",

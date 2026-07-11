@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "tenantLogs" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -57,6 +57,7 @@ export interface Doc_organizations {
     slug: string;
     spendCapMinor?: number;
     suspendedAt?: number;
+    deletionRequestedAt?: number;
 }
 
 export interface Doc_members {
@@ -120,6 +121,16 @@ export interface Doc_deployKeys {
     projectId?: Id<"projects">;
     revokedAt?: number;
     type: unknown;
+}
+
+export interface Doc_tenantLogs {
+    _id: Id<"tenantLogs">;
+    _creationTime: number;
+    createdAt: number;
+    level: "log" | "warn" | "error";
+    line: string;
+    organizationId: Id<"organizations">;
+    scriptName: string;
 }
 
 export interface Doc_githubInstallations {
@@ -291,6 +302,7 @@ export interface DataModel {
     projects: Doc_projects;
     deployments: Doc_deployments;
     deployKeys: Doc_deployKeys;
+    tenantLogs: Doc_tenantLogs;
     githubInstallations: Doc_githubInstallations;
     builds: Doc_builds;
     buildLogs: Doc_buildLogs;
@@ -319,6 +331,7 @@ export interface IndexNamesByTable {
     projects: "by_org_slug" | "by_github_repo";
     deployments: "by_script" | "by_project" | "by_kind" | "by_alias";
     deployKeys: "by_org" | "by_hash";
+    tenantLogs: "by_script" | "by_org";
     githubInstallations: "by_org" | "by_installation";
     builds: "by_project_commit" | "by_project";
     buildLogs: "by_build";
@@ -344,6 +357,7 @@ export interface SearchIndexNamesByTable {
     projects: never;
     deployments: never;
     deployKeys: never;
+    tenantLogs: never;
     githubInstallations: never;
     builds: never;
     buildLogs: never;
@@ -369,6 +383,7 @@ export interface RankIndexNamesByTable {
     projects: never;
     deployments: never;
     deployKeys: never;
+    tenantLogs: never;
     githubInstallations: never;
     builds: never;
     buildLogs: never;
@@ -409,6 +424,7 @@ export interface Insert_organizations {
     slug: string;
     spendCapMinor?: number;
     suspendedAt?: number;
+    deletionRequestedAt?: number;
 }
 
 export interface Insert_members {
@@ -472,6 +488,16 @@ export interface Insert_deployKeys {
     projectId?: Id<"projects">;
     revokedAt?: number;
     type: unknown;
+}
+
+export interface Insert_tenantLogs {
+    _id?: Id<"tenantLogs">;
+    _creationTime?: number;
+    createdAt: number;
+    level: "log" | "warn" | "error";
+    line: string;
+    organizationId: Id<"organizations">;
+    scriptName: string;
 }
 
 export interface Insert_githubInstallations {
@@ -644,6 +670,7 @@ export interface InsertModel {
     projects: Insert_projects;
     deployments: Insert_deployments;
     deployKeys: Insert_deployKeys;
+    tenantLogs: Insert_tenantLogs;
     githubInstallations: Insert_githubInstallations;
     builds: Insert_builds;
     buildLogs: Insert_buildLogs;
@@ -684,6 +711,7 @@ export interface Relations {
     projects: {};
     deployments: {};
     deployKeys: {};
+    tenantLogs: {};
     githubInstallations: {};
     builds: {};
     buildLogs: {};

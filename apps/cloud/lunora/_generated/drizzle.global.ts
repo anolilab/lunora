@@ -25,6 +25,7 @@ export const organizations = sqliteTable("organizations", {
     slug: text("slug").notNull(),
     spendCapMinor: real("spendCapMinor"),
     suspendedAt: real("suspendedAt"),
+    deletionRequestedAt: real("deletionRequestedAt"),
 }, (t) => ({
     by_slug: uniqueIndex("by_slug").on(t.slug),
 }));
@@ -103,6 +104,19 @@ export const deployKeys = sqliteTable("deployKeys", {
 }, (t) => ({
     by_org: index("by_org").on(t.organizationId),
     by_hash: uniqueIndex("by_hash").on(t.hashedKey),
+}));
+
+export const tenantLogs = sqliteTable("tenantLogs", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    level: text("level", { mode: "json" }).$type<"log" | "warn" | "error">().notNull(),
+    line: text("line").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    scriptName: text("scriptName").notNull(),
+}, (t) => ({
+    by_script: index("by_script").on(t.scriptName),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const githubInstallations = sqliteTable("githubInstallations", {
