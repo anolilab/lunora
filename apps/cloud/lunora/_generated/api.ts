@@ -62,15 +62,21 @@ export interface ApiTypes {
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { organizationId: Id<"organizations">; status: "pending" | "accepted" | "revoked"; _id: Id<"invitations">; createdAt: number; email: string; expiresAt: number; invitedBy: string; role: "admin" | "member" | "owner" | "viewer" }[]>;
         revoke: FunctionReference<"mutation", { id: Id<"invitations">; organizationId: Id<"organizations"> }, void>;
     };
+    logs: {
+        ingest: FunctionReference<"mutation", { deployKey: string; lines: Array<{ createdAt: number | undefined; level: "log" | "warn" | "error"; line: string }>; organizationId: Id<"organizations">; scriptName: string }, { ingested: number; }>;
+        list: FunctionReference<"query", { afterCreatedAt?: number; organizationId: Id<"organizations">; scriptName: string }, { createdAt: number; level: "error" | "log" | "warn"; line: string; }[]>;
+    };
     members: {
         add: FunctionReference<"mutation", { organizationId: Id<"organizations">; userId: string }, Id<"members">>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"members">; createdAt: number; organizationId: Id<"organizations">; role: "admin" | "member" | "owner" | "viewer"; userId: string }[]>;
         remove: FunctionReference<"mutation", { id: Id<"members">; organizationId: Id<"organizations"> }, void>;
     };
     organizations: {
+        cancelDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
         create: FunctionReference<"mutation", { cellId: Id<"cells">; name: string; plan?: "free" | "pro" | "enterprise"; slug: string }, Id<"organizations">>;
         getBySlug: FunctionReference<"query", { slug: string }, null | { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }>;
         list: FunctionReference<"query", {}, { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }[]>;
+        requestDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
     };
     projects: {
         byGithubRepo: FunctionReference<"query", { repository: string }, { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
@@ -104,6 +110,12 @@ export interface InternalApiTypes {
     };
     fanout: {
         tick: FunctionReference<"mutation", {}, { ok: true; }>;
+    };
+    logs: {
+        prune: FunctionReference<"mutation", {}, { pruned: number; }>;
+    };
+    organizations: {
+        purgeDeleted: FunctionReference<"mutation", {}, { purged: number; }>;
     };
     usage: {
         enforceSpendCaps: FunctionReference<"mutation", {}, { suspended: number; unsuspended: number; }>;
