@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createDohResolver, verifyDomain } from "../src/domains/verify";
 
@@ -65,5 +65,38 @@ describe(createDohResolver, () => {
         const downFetch = (() => Promise.reject(new Error("down"))) as unknown as typeof fetch;
 
         await expect(createDohResolver(downFetch)("a.com", "CNAME")).resolves.toStrictEqual([]);
+    });
+});
+
+describe("custom-domain dispatcher resolution", () => {
+    it("caches lookups, routes scripts, and surfaces redirects", async () => {
+        const { createCustomDomainResolver } = await import("../src/dispatcher/route");
+        const fetchMock = vi.fn(() => Promise.resolve(Response.json({ scriptName: "app-v3" })));
+        const resolve = createCustomDomainResolver({
+            controlPlaneToken: "t",
+            controlPlaneUrl: "https://cp",
+            fetch: fetchMock,
+            now: () => 0,
+        });
+
+        await expect(resolve("app.example.com")).resolves.toStrictEqual({ scriptName: "app-v3" });
+        await expect(resolve("app.example.com")).resolves.toStrictEqual({ scriptName: "app-v3" });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        const redirecting = createCustomDomainResolver({
+            controlPlaneToken: "t",
+            controlPlaneUrl: "https://cp",
+            fetch: () => Promise.resolve(Response.json({ redirectStatusCode: 301, redirectTo: "https://www.example.com" })),
+        });
+
+        await expect(redirecting("example.com")).resolves.toStrictEqual({ redirectStatusCode: 301, redirectTo: "https://www.example.com" });
+
+        const empty = createCustomDomainResolver({
+            controlPlaneToken: "t",
+            controlPlaneUrl: "https://cp",
+            fetch: () => Promise.resolve(Response.json({})),
+        });
+
+        await expect(empty("unknown.example.com")).resolves.toBeNull();
     });
 });
