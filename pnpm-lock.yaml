@@ -19,6 +19,9 @@ catalogs:
       specifier: 3.3.1
       version: 3.3.1
   auth:
+    '@better-auth/expo':
+      specifier: ^1.6.23
+      version: 1.6.23
     '@better-auth/passkey':
       specifier: ^1.6.23
       version: 1.6.23
@@ -2910,7 +2913,7 @@ importers:
         version: link:../react
     devDependencies:
       '@better-auth/expo':
-        specifier: ^1.6.23
+        specifier: catalog:auth
         version: 1.6.23(@better-auth/core@1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@5.20260708.1)(@opentelemetry/api@1.9.1)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.28.17)(nanostores@1.3.0))(better-auth@1.6.23(d34c8a61b16b8790bb3b08af268b7951))(expo-constants@57.0.3(expo@57.0.4)(react-native@0.86.0(@babel/core@8.0.1)(@types/react@19.2.17)(react@19.2.7)))(expo-linking@57.0.2(expo@57.0.4)(react-native@0.86.0(@babel/core@8.0.1)(@types/react@19.2.17)(react@19.2.7))(react@19.2.7))(expo-network@57.0.0(expo@57.0.4)(react@19.2.7))(expo-web-browser@57.0.0(expo@57.0.4)(react-native@0.86.0(@babel/core@8.0.1)(@types/react@19.2.17)(react@19.2.7)))
       '@tanstack/react-query':
         specifier: catalog:frontend

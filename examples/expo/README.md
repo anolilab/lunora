@@ -15,8 +15,9 @@ It's one folder with two halves:
 
 - `createLunoraClient` with `AsyncStorage` persistence — sends made offline are
   queued and flush on reconnect.
-- better-auth over Expo `SecureStore`, bridged into the Lunora client with
-  `expoAuthHeaders` so the live socket and RPC run as the signed-in user.
+- better-auth over Expo `SecureStore`, bridged into the Lunora client as a bearer
+  token (`expoBearerToken` → `setAuthToken`/`setWsToken`) so the live socket and
+  RPC run as the signed-in user.
 - `useQuery` (live subscription), `useMutation` (optimistic), and
   `useConnectionStatus` (the live/offline badge) from `@lunora/react-native`.
 
@@ -43,8 +44,9 @@ export EXPO_PUBLIC_LUNORA_URL="http://<your-lan-ip>:8787"
 pnpm start                              # then press i / a, or scan the QR
 ```
 
-Sign up, and you're in the chat. Open a second device (or the web target,
-`pnpm web`) to watch messages sync live.
+Sign up, and you're in the chat. Open a second device (or simulator) to watch
+messages sync live. This example targets iOS + Android; the `lunora init -t expo`
+template adds a web target too.
 
 > **Auth over a native scheme.** `app.json` sets `scheme: "expoexample"`, which
 > `src/auth-client.ts` passes to the Expo plugin and `lunora/auth.ts` lists as a
@@ -56,11 +58,11 @@ Sign up, and you're in the chat. Open a second device (or the web target,
 | --------------------- | ------------------------------------------------------------- |
 | `lunora/schema.ts`    | The `messages` table.                                         |
 | `lunora/messages.ts`  | `list` query (live) + `send` mutation (auth-gated).           |
-| `lunora/auth.ts`      | better-auth config (email/password + Expo plugin).            |
+| `lunora/auth.ts`      | better-auth config (email/password + Expo + bearer plugins).  |
 | `src/server/index.ts` | Worker entry: auth routing + `resolveIdentity` + the ShardDO. |
 | `src/auth-client.ts`  | better-auth Expo client (SecureStore).                        |
-| `src/lunora.ts`       | `createLunoraClient` (AsyncStorage + `expoAuthHeaders`).      |
-| `App.tsx`             | Providers + the session gate (Login ↔ Chat).                  |
+| `src/lunora.ts`       | `createLunoraClient` (AsyncStorage).                          |
+| `App.tsx`             | Providers, session gate, and the bearer-token sync.           |
 | `src/Login.tsx`       | Email/password sign-in / sign-up.                             |
 | `src/Chat.tsx`        | Live message list + composer.                                 |
 

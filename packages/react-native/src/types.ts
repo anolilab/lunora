@@ -2,15 +2,16 @@ import type { AsyncStorageLike, LunoraClientOptions } from "@lunora/client";
 
 /**
  * A `() => headers` factory the React Native client threads onto every HTTP RPC
- * request *and* the WebSocket upgrade. It exists because React Native has no
- * shared cookie jar the way a browser does: the session credential lives in the
- * app's own storage (Expo `SecureStore`, better-auth's Expo plugin, …) and must
- * be attached explicitly. Return `undefined` (or an empty object) when signed
- * out so anonymous requests carry no stale credential.
+ * request *and* the WebSocket upgrade — a generic escape hatch for attaching a
+ * **custom** credential header (an API-gateway key, a proxy token, …) that
+ * React Native's missing cookie jar can't carry implicitly. Return `undefined`
+ * (or an empty object) when there's nothing to attach.
  *
- * The typical wiring pairs this with `@lunora/react-native/auth`'s
- * `expoAuthHeaders`, which reads the better-auth Expo cookie (see the package
- * README for the full example).
+ * For better-auth Expo sessions, prefer a **bearer** token instead: read it with
+ * `@lunora/react-native/auth`'s `expoBearerToken` and feed it to
+ * `client.setAuthToken` / `setWsToken` (see the package README). A bearer avoids
+ * the `Cookie` header the runtime's CSRF guard rejects on `Origin`-less native
+ * requests.
  */
 export type AuthHeadersFactory = () => Record<string, string> | undefined;
 

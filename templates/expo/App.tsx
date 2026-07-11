@@ -1,7 +1,9 @@
 import { LunoraProvider } from "@lunora/react-native";
+import { expoBearerToken } from "@lunora/react-native/auth";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StatusBar } from "expo-status-bar";
 import type { ReactElement } from "react";
+import { useEffect } from "react";
 import { ActivityIndicator, SafeAreaView, StyleSheet, View } from "react-native";
 
 import { authClient } from "./src/auth-client";
@@ -16,6 +18,16 @@ const queryClient = new QueryClient();
 /** Flip between the sign-in screen and the chat based on the better-auth session. */
 function Root(): ReactElement {
     const { data: session, isPending } = authClient.useSession();
+
+    // Bridge the better-auth Expo session into the Lunora client as a bearer
+    // token — HTTP `Authorization` (`setAuthToken`) and the WS `?token=`
+    // (`setWsToken`) — re-synced whenever the session changes (sign-in/out).
+    useEffect(() => {
+        const token = expoBearerToken(authClient);
+
+        lunoraClient.setAuthToken(token);
+        lunoraClient.setWsToken(token ?? undefined);
+    }, [session]);
 
     if (isPending) {
         return (

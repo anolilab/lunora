@@ -75,15 +75,13 @@ cookie origins correctly.
 ## Running on web
 
 The app bundles for the browser via `react-native-web`, and the live chat works
-the same. Two web-specific notes:
+the same on web as on native. Auth is a **bearer** token, not a cookie: the HTTP
+RPC carries it in the `Authorization` header and the WebSocket carries it in the
+`?token=` query param, so nothing depends on the browser cookie jar or on the
+worker being same-origin. One web-specific note:
 
 - **Auth storage:** `expo-secure-store` has no web build, so `src/auth-client.ts`
-  falls back to `localStorage` on web.
-- **Socket auth:** the native client authenticates the WebSocket with an explicit
-  `Cookie` header (React Native has no cookie jar); browsers ignore custom
-  WebSocket headers and block a manual `Cookie`, so on web the socket relies on
-  the browser's own cookie jar — which requires the worker to be **same-origin**
-  with the web app (e.g. behind a shared domain/proxy in production).
+  falls back to `localStorage` on web to persist the session.
 
 ## Renaming the app scheme
 

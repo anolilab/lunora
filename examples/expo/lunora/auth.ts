@@ -1,5 +1,6 @@
 import type { LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, lunoraD1Adapter } from "@lunora/auth";
+import { bearer } from "@lunora/auth/plugins";
 import { expo } from "@better-auth/expo";
 
 /** The app's URL scheme (see `app.json` → `expo.scheme`) — a trusted origin for native requests. */
@@ -8,11 +9,19 @@ const APP_SCHEME = "expoexample";
 /**
  * Auth config shared by the runtime and migration instances.
  *
- * Email/password only, plus the better-auth **Expo** plugin — the server half of
- * the native integration. `expo()` marks the app scheme as a trusted origin and
- * stops better-auth from rewriting the origin on native requests, so the session
- * cookie the mobile client stores in `SecureStore` (and replays via
- * `expoAuthHeaders`) is accepted. `trustedOrigins` lists the scheme explicitly.
+ * Email/password only, plus two better-auth plugins that make up the server half
+ * of the native integration:
+ *
+ * - `expo()` marks the app scheme as a trusted origin and stops better-auth from
+ *   rewriting the origin on native requests, so the sign-in the mobile client
+ *   runs against `/api/auth/*` works.
+ * - `bearer()` lets `getSession` authenticate from an `Authorization: Bearer`
+ *   header, not just a cookie. The native client sends its session as a bearer
+ *   token (React Native has no cookie jar, and a `Cookie` header would be
+ *   rejected by the runtime's CSRF guard on an `Origin`-less native request) —
+ *   see `src/lunora.ts` / `src/server/index.ts`.
+ *
+ * `trustedOrigins` lists the scheme explicitly.
  *
  * The password-reset delivery hook logs to the console — the standard dev
  * pattern. In production swap it for an `@lunora/mail` send.
@@ -30,7 +39,7 @@ const options = (env: { AUTH_SECRET: string; AUTH_URL?: string }): LunoraAuthOpt
             console.log(`[auth] password reset requested for user ${user.id}`);
         },
     },
-    plugins: [expo()],
+    plugins: [expo(), bearer()],
     secret: env.AUTH_SECRET,
     trustedOrigins: [`${APP_SCHEME}://`],
 });

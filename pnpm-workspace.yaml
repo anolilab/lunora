@@ -381,6 +381,7 @@ catalogs:
     vitest: 4.1.10
     zod: 4.4.3
   auth:
+    "@better-auth/expo": ^1.6.23
     "@better-auth/passkey": ^1.6.23
     "better-auth": ^1.6.23
     jose: ^6.2.3

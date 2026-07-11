@@ -76,18 +76,25 @@ export const withAuthWebSocket = (WebSocketImpl: typeof WebSocket, getAuthHeader
 export const createLunoraClient = (options: CreateLunoraClientOptions): LunoraClient => {
     const { getAuthHeaders, storage, ...rest } = options;
 
-    // React Native provides `fetch`/`WebSocket` as globals; honour an explicit
-    // override, otherwise reach for the global (and leave `undefined` so the
-    // client's own fallback logic runs when neither is present — e.g. tests).
-    const baseFetch = rest.fetch ?? (typeof fetch === "function" ? fetch : undefined);
-    const baseWebSocket = rest.WebSocket ?? (typeof WebSocket === "function" ? WebSocket : undefined);
+    // Only touch `fetch`/`WebSocket` when there's an auth-headers factory to
+    // inject AND the caller hasn't supplied its own transport (an explicit
+    // `fetch`/`WebSocket` takes precedence). Otherwise leave them unset so
+    // `LunoraClient` does its own global resolution — crucially, it binds `fetch`
+    // to `globalThis`, and on the web target (`react-native-web`) an *unbound*
+    // `fetch` throws `TypeError: Illegal invocation`. When we do wrap the global,
+    // bind it the same way so the wrapped transport is safe on web too.
+    const authedFetch =
+        getAuthHeaders && rest.fetch === undefined && typeof fetch === "function" ? withAuthHeaders(fetch.bind(globalThis), getAuthHeaders) : rest.fetch;
+
+    const authedWebSocket =
+        getAuthHeaders && rest.WebSocket === undefined && typeof WebSocket === "function" ? withAuthWebSocket(WebSocket, getAuthHeaders) : rest.WebSocket;
 
     return new LunoraClient({
         ...rest,
         // Auto-wire AsyncStorage persistence unless the caller passed an explicit
         // `persistence` (including `false` to opt out).
         persistence: rest.persistence ?? (storage ? createAsyncStoragePersistence({ storage }) : undefined),
-        fetch: baseFetch && getAuthHeaders ? withAuthHeaders(baseFetch, getAuthHeaders) : baseFetch,
-        WebSocket: baseWebSocket && getAuthHeaders ? withAuthWebSocket(baseWebSocket, getAuthHeaders) : baseWebSocket,
+        fetch: authedFetch,
+        WebSocket: authedWebSocket,
     });
 };

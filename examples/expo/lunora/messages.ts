@@ -45,10 +45,15 @@ export const list = query.query(async ({ ctx }): Promise<MessageRow[]> => {
 
 /**
  * Post a message. `userId` is stamped from the authenticated session (never
- * trusted from the client); `authorName` is the sender's own display name.
+ * trusted from the client); `authorName` is the sender's own display name. Both
+ * text inputs are length-bounded so a client can't submit an arbitrarily large
+ * payload.
  */
 export const send = mutation
-    .input({ authorName: v.string(), text: v.string() })
+    .input({
+        authorName: v.string().meta({ schema: { maxLength: 256 } }),
+        text: v.string().meta({ schema: { maxLength: 4096 } }),
+    })
     .mutation(async ({ args: { authorName, text }, ctx }): Promise<Id<"messages">> => {
         const userId = assertSignedIn(ctx.auth.userId);
         const trimmed = text.trim();

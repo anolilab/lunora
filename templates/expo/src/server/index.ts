@@ -52,10 +52,13 @@ const ensureAuthReady = (env: Env): Promise<ReturnType<typeof buildAuth>> => {
  *    Expo plugin's routes and the app-scheme trusted origin live here too.
  * 2. Everything else → Lunora's RPC + WebSocket surface.
  *
- * `resolveIdentity` reads the session from the request headers — the mobile
- * client has no cookie jar, so it attaches the session `Cookie` explicitly (via
- * `@lunora/react-native/auth`'s `expoAuthHeaders`) to both HTTP RPC and the
- * WebSocket upgrade, and `getSession` reads it the same way here.
+ * `resolveIdentity` reads the session as a **bearer** token — React Native has
+ * no cookie jar, so the client sends the session in the `Authorization` header
+ * on HTTP RPC and as `?token=` on the WebSocket upgrade (a browser can't set
+ * headers on a WS handshake). We fold that `?token=` into an `Authorization`
+ * header so better-auth's `bearer` plugin resolves both via `getSession`. A
+ * bearer avoids the `Cookie` header the runtime's CSRF guard rejects on an
+ * `Origin`-less native request.
  *
  * `ensureMigrated` creates the better-auth tables once, on the first request —
  * fine for a demo; for production prefer `compileMigrationsSql` +
@@ -75,7 +78,17 @@ export default {
             worker = createWorker({
                 openApiSpec,
                 resolveIdentity: async (identityRequest) => {
-                    const session = await auth.api.getSession({ headers: identityRequest.headers });
+                    // HTTP RPC carries `Authorization: Bearer <token>`; the WS
+                    // upgrade can't set headers, so the client sends the same token
+                    // as `?token=`. Fold it into the header the `bearer` plugin reads.
+                    const headers = new Headers(identityRequest.headers);
+                    const wsToken = new URL(identityRequest.url).searchParams.get("token");
+
+                    if (wsToken !== null && !headers.has("authorization")) {
+                        headers.set("authorization", `Bearer ${wsToken}`);
+                    }
+
+                    const session = await auth.api.getSession({ headers });
 
                     return session?.user?.id ? { userId: session.user.id } : null;
                 },
