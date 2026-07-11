@@ -82,6 +82,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "secrets:listEncrypted": lunora_secrets_10.listEncrypted as unknown as RegisteredLunoraFunction,
     "secrets:remove": lunora_secrets_10.remove as unknown as RegisteredLunoraFunction,
     "secrets:store": lunora_secrets_10.store as unknown as RegisteredLunoraFunction,
+    "usage:enforceSpendCaps": lunora_usage_11.enforceSpendCaps as unknown as RegisteredLunoraFunction,
     "usage:ingest": lunora_usage_11.ingest as unknown as RegisteredLunoraFunction,
     "usage:record": lunora_usage_11.record as unknown as RegisteredLunoraFunction,
     "usage:rollup": lunora_usage_11.rollup as unknown as RegisteredLunoraFunction,
@@ -470,6 +471,7 @@ export interface Caller {
         store: (args: { ciphertext: string; iv: string; name: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<Id<"secrets">>;
     };
     usage: {
+        enforceSpendCaps: (args?: {}) => Promise<{ suspended: number; unsuspended: number; }>;
         ingest: (args: { deployKey: string; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
         record: (args: { deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
         rollup: (args?: {}) => Promise<{ compacted: number; }>;
@@ -556,6 +558,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         store: (args) => callRegistered(context, "secrets:store", args),
     },
     usage: {
+        enforceSpendCaps: (args) => callRegistered(context, "usage:enforceSpendCaps", args),
         ingest: (args) => callRegistered(context, "usage:ingest", args),
         record: (args) => callRegistered(context, "usage:record", args),
         rollup: (args) => callRegistered(context, "usage:rollup", args),

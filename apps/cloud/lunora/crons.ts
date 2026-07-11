@@ -16,6 +16,10 @@ crons.interval("cleanup expired previews", { hours: 1 }, internal.deployments.cl
 // Compact closed-period platform-usage events once an hour (§4 metering rollup).
 crons.interval("rollup platform usage", { hours: 1 }, internal.usage.rollup, {});
 
+// Suspend orgs whose estimated period spend breached their cap; unsuspend the
+// recovered ones (GAPS.md C1 abuse/bill-shock control).
+crons.interval("enforce spend caps", { hours: 1 }, internal.usage.enforceSpendCaps, {});
+
 // Every-minute heartbeat that emits the `*/1 * * * *` trigger the edge cron
 // fan-out rides on (§2.4) — the job itself is a no-op; see lunora/fanout.ts.
 crons.interval("tenant cron fan-out tick", { minutes: 1 }, internal.fanout.tick, {});
