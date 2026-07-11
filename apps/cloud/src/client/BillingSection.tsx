@@ -12,7 +12,7 @@ interface BillingSectionProps {
 
 /**
  * Billing tab (§4). Reads the org's resolved entitlements and webhook-synced
- * subscriptions live, and drives Stripe Checkout / the billing portal through
+ * subscriptions live, and drives Creem checkout / the hosted billing portal through
  * the `billing.checkout` / `billing.portal` actions (which redirect the browser
  * to the provider). Price ids are environment config; entered here rather than
  * hardcoded in the client.
@@ -129,7 +129,7 @@ export const BillingSection = ({ organizationId }: BillingSectionProps): ReactEl
                         onChange={(event) => {
                             setPriceId(event.target.value);
                         }}
-                        placeholder="price_… (from your Stripe dashboard)"
+                        placeholder="prod_… (from your Creem dashboard)"
                         required
                         value={priceId}
                     />

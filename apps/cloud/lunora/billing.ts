@@ -17,7 +17,7 @@ import { assertMember } from "./authz";
  * D1), and the provider adapter comes from `createShardDO({ payment })` in
  * `src/server.ts`.
  *
- * Checkout/portal/webhook need a configured provider (Stripe keys); entitlement
+ * Checkout/portal/webhook need a configured provider (Creem keys); entitlement
  * reads (`entitlements`, `subscription`) work offline — an org with no active
  * subscription resolves to the free-plan baseline.
  */
@@ -118,7 +118,7 @@ export const processWebhook = action
     .action(async ({ ctx: context, args: { body, signature } }): Promise<{ applied: boolean; status: number }> => {
         const request = new Request("https://internal/billing/webhook", {
             body,
-            headers: { "stripe-signature": signature },
+            headers: { "creem-signature": signature },
             method: "POST",
         });
         const response = await context.payments.handleWebhook(request);

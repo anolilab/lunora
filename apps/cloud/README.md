@@ -12,11 +12,12 @@ Cloudflare Workers for Platforms; it is **not** a tenant worker.
 > `POST /v1/deploy` streaming endpoint, a **real Cloudflare REST provisioner**
 > (`src/cloudflare/api.ts` — D1/R2 create, dispatch-script upload, secrets), the
 > dispatcher Worker with **per-plan runtime limits**, the hosted-studio React SPA
-> (`src/client`), **billing on `@lunora/payment`** (Stripe checkout/portal/webhook,
+> (`src/client`), **billing on `@lunora/payment`** (Creem — a Merchant of Record
+> that handles global sales tax/VAT — checkout/portal/webhook,
 > entitlements, metering ingestion), and **hardened better-auth** (mail-backed
 > verification/reset, optional OAuth, 2FA/passkeys, rate limiting). Still open
 > (needs live infra/services): end-to-end deploy validation, the billing-provider
-> charge wiring against a real Stripe account, cell bring-up IaC, custom domains,
+> charge wiring against a real Creem account, cell bring-up IaC, custom domains,
 > and the remaining "Forgotten must-haves" in `CLOUD-PLAN.md`.
 
 ## Layout
@@ -152,18 +153,18 @@ real Cloudflare — the wire calls themselves are implemented, not stubbed.)
 ### Billing & metering (`lunora/billing.ts`, `src/billing/`, §4)
 
 Billing rides `@lunora/payment` with the **organization id as the payment
-`referenceId`**. `src/server.ts` wires a Stripe adapter into `createShardDO({
+`referenceId`**. `src/server.ts` wires the Creem adapter into `createShardDO({
 payment })`, so the billing functions get `ctx.payments`: `checkout` / `portal`
-(owner/admin actions that redirect to Stripe), `entitlements` / `subscription`
+(owner/admin actions that redirect to Creem's hosted pages), `entitlements` / `subscription`
 (member reads that resolve plan → features/limits through `LUNORA_CLOUD_PLANS`,
 falling back to the free baseline), and `processWebhook` (signature-verified,
-mounted at `POST /v1/billing/webhook`). Entitlement reads work without Stripe
+mounted at `POST /v1/billing/webhook`). Entitlement reads work without Creem
 keys; only live calls need them.
 
 **Quota is enforced against live subscription state**, not the static
 `organizations.plan` column: `lunora/entitlements.ts` resolves the org's
 entitlements from its synced `subscriptions` (the single source of truth), and
-`projects`/`members` creation call `assertWithinQuota` — so a Stripe upgrade
+`projects`/`members` creation call `assertWithinQuota` — so a plan upgrade
 raises the limits immediately, with no column to keep in sync.
 
 Platform **metering** is end-to-end: the dispatcher emits one Analytics Engine
