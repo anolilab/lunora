@@ -80,6 +80,15 @@ export const planForScript = query.input({ scriptName: v.string() }).query(async
         return { plan: "free" };
     }
 
+    // A suspended org (spend cap breached / abuse, GAPS.md C1) resolves to the
+    // sentinel plan "suspended" — the dispatcher serves 503 for it. Encoded in
+    // the plan string so the dispatcher's existing TTL cache carries it.
+    const organization = (await context.db.get(deployment.organizationId)) as { suspendedAt?: number } | null;
+
+    if (organization?.suspendedAt !== undefined) {
+        return { plan: "suspended" };
+    }
+
     const entitlements = await orgEntitlements(context, deployment.organizationId);
 
     return { plan: highestPlan(entitlements.plans) };

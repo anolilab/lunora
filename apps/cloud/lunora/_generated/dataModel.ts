@@ -55,6 +55,8 @@ export interface Doc_organizations {
     createdAt: number;
     name: string;
     slug: string;
+    spendCapMinor?: number;
+    suspendedAt?: number;
 }
 
 export interface Doc_members {
@@ -335,6 +337,8 @@ export interface Insert_organizations {
     createdAt: number;
     name: string;
     slug: string;
+    spendCapMinor?: number;
+    suspendedAt?: number;
 }
 
 export interface Insert_members {
