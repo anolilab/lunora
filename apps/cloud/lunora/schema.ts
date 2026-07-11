@@ -166,6 +166,28 @@ export default defineSchema({
         .index("by_hash", ["hashedKey"], { unique: true })
         .index("by_org", ["organizationId"]),
 
+    // Custom domains (GAPS.md B1). A hostname routes to a project's active
+    // deployment once DNS-verified; cert issuance (Cloudflare for SaaS) is only
+    // requested for verified rows — DB-gated on-demand TLS.
+    domains: defineTable({
+        // Cloudflare for SaaS custom-hostname id, once provisioned (🌐 path).
+        customHostnameId: v.optional(v.string()),
+        createdAt: v.number(),
+        hostname: v.string(),
+        organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
+        // Redirect-only domains (e.g. apex → www): no routing, just a redirect.
+        redirectStatusCode: v.optional(v.number()),
+        redirectTo: v.optional(v.string()),
+        // Expected value of the `_lunora.<hostname>` TXT record.
+        txtToken: v.string(),
+        updatedAt: v.number(),
+        verifiedAt: v.optional(v.number()),
+    })
+        .global()
+        .index("by_hostname", ["hostname"], { unique: true })
+        .index("by_project", ["projectId"]),
+
     auditLog: defineTable({
         action: v.string(),
         actorUserId: v.string(),
