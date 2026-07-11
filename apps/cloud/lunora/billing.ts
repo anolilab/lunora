@@ -1,9 +1,11 @@
 import type { Subscription } from "@lunora/payment";
 import { resolveEntitlements } from "@lunora/payment";
 
+import { evaluateDunning } from "../src/billing/dunning";
 import type { QuotaResource } from "../src/billing/plans";
 import { effectiveLimit, LUNORA_CLOUD_PLANS } from "../src/billing/plans";
-import { action, query, v } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel.js";
+import { action, internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 
 /**
@@ -124,3 +126,79 @@ export const processWebhook = action
 
         return { applied: result.applied ?? false, status: response.status };
     });
+
+/**
+ * Dunning enforcement (GAPS.md C2): payment failure → 14-day grace → suspend.
+ * Reads the synced subscription states per org (the billing webhook keeps them
+ * current), stamps/clears `paymentFailedAt`, and suspends orgs whose grace ran
+ * out — lifting only its own suspensions on recovery (spend-cap/support ones
+ * stay). SYSTEM only (cron dispatch).
+ */
+export const enforceDunning = internalMutation.mutation(async ({ ctx: context }): Promise<{ graced: number; recovered: number; suspended: number }> => {
+    const now = Date.now();
+    const { page: subscriptionPage } = await context.db.subscriptions.findMany({});
+    const statesByOrg = new Map<string, string[]>();
+
+    for (const row of subscriptionPage as unknown as SubscriptionRow[]) {
+        const states = statesByOrg.get(row.referenceId) ?? [];
+
+        states.push(row.state);
+        statesByOrg.set(row.referenceId, states);
+    }
+
+    const { page: organizationPage } = await context.db.organizations.findMany({});
+    const organizations = organizationPage as unknown as {
+        _id: string;
+        paymentFailedAt?: number;
+        suspendedAt?: number;
+        suspendedReason?: string;
+    }[];
+
+    // Map the evaluated phase to the patch this org needs (or null for no-op);
+    // extracted so the loop stays a flat apply.
+    const patchFor = (
+        organization: { paymentFailedAt?: number; suspendedAt?: number; suspendedReason?: string },
+        decision: ReturnType<typeof evaluateDunning>,
+    ): null | { counter: "graced" | "recovered" | "suspended"; patch: Record<string, unknown> } => {
+        if (decision.phase === "ok") {
+            if (organization.paymentFailedAt === undefined && organization.suspendedReason !== "dunning") {
+                return null;
+            }
+
+            return {
+                counter: "recovered",
+                patch: {
+                    paymentFailedAt: undefined,
+                    ...(organization.suspendedReason === "dunning" ? { suspendedAt: undefined, suspendedReason: undefined } : {}),
+                },
+            };
+        }
+
+        if (decision.phase === "grace") {
+            return organization.paymentFailedAt === undefined ? { counter: "graced", patch: { paymentFailedAt: decision.paymentFailedAt } } : null;
+        }
+
+        return organization.suspendedAt === undefined
+            ? { counter: "suspended", patch: { paymentFailedAt: decision.paymentFailedAt, suspendedAt: now, suspendedReason: "dunning" } }
+            : null;
+    };
+
+    const counters = { graced: 0, recovered: 0, suspended: 0 };
+
+    for (const organization of organizations) {
+        const decision = evaluateDunning({
+            now,
+            paymentFailedAt: organization.paymentFailedAt,
+            subscriptionStates: statesByOrg.get(organization._id) ?? [],
+        });
+        const outcome = patchFor(organization, decision);
+
+        if (outcome) {
+            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+            await context.db.patch(organization._id as Id<"organizations">, outcome.patch);
+            counters[outcome.counter] += 1;
+        }
+    }
+
+    return counters;
+});

@@ -57,6 +57,8 @@ export interface Doc_organizations {
     slug: string;
     spendCapMinor?: number;
     suspendedAt?: number;
+    suspendedReason?: string;
+    paymentFailedAt?: number;
     deletionRequestedAt?: number;
 }
 
@@ -424,6 +426,8 @@ export interface Insert_organizations {
     slug: string;
     spendCapMinor?: number;
     suspendedAt?: number;
+    suspendedReason?: string;
+    paymentFailedAt?: number;
     deletionRequestedAt?: number;
 }
 
