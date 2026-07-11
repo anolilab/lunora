@@ -1,13 +1,14 @@
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { resolveAgentModel } from "./generate";
-import { firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
+import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
 import { buildModelMessages } from "./model-messages";
 import { agentBindingName } from "./naming";
 import { toFunctionReference } from "./paths";
 import type {
     AgentConfig,
     AgentDefinition,
+    AgentEpisodeExtract,
     AgentFunctionPaths,
     AgentGenerate,
     AgentGenerateOptions,
@@ -36,6 +37,13 @@ interface AgentLoopOptions {
     env: Record<string, unknown>;
     /** The agent's `lunora/agents.ts` export name (thread attribution). */
     exportName: string;
+
+    /**
+     * The run-end episode-summary seam — production wires AI SDK `generateText`.
+     * Absent (the default) disables episode recording, so an agent with no
+     * episodic memory, and every unit test that doesn't opt in, is byte-identical.
+     */
+    extractEpisode?: AgentEpisodeExtract;
 
     /**
      * The run-end graph-extraction seam — production wires AI SDK `generateText`
@@ -464,6 +472,29 @@ const dispatchGraphMemory = async (
 };
 
 /**
+ * Dispatch an `"episodic"` source's recency recall as a `memory:recall[:&lt;key>]`
+ * step and read its context. Owner-scoped by design: an anonymous run (no
+ * `owner`) has no episode timeline, so the source no-ops for that run.
+ */
+const dispatchEpisodicMemory = async (
+    source: AgentMemorySource,
+    owner: string | undefined,
+    episodeRecall: ReturnType<typeof toFunctionReference>,
+    step: AgentStepLike,
+    run: AgentRunFunction,
+): Promise<string | undefined> => {
+    if (owner === undefined) {
+        return undefined;
+    }
+
+    const stepName = memoryStepName("memory:recall", source.key);
+    const retrieved = await step.do(stepName, async () =>
+        run(episodeRecall, { owner, ...(source.episodic?.recall === undefined ? {} : { limit: source.episodic.recall }) }), );
+
+    return readRetrievedContext(retrieved);
+};
+
+/**
  * Dispatch every configured memory source once per run and return the joined
  * context. Sources run in a STABLE order — the default source (from `memory`)
  * first, then skill `knowledge` in declaration order — each inside its own
@@ -473,6 +504,29 @@ const dispatchGraphMemory = async (
  * collide). Sourced from `agent.memorySources` (folded by `defineAgent`), falling
  * back to `agent.memory` alone for a directly-authored definition.
  */
+/** Route one injected source to its dispatcher by kind (episodic / graph / semantic). */
+const dispatchInjectedSource = async (
+    source: AgentMemorySource,
+    deps: {
+        episodeRecall: ReturnType<typeof toFunctionReference>;
+        graphTraverse: ReturnType<typeof toFunctionReference>;
+        input: string;
+        owner: string | undefined;
+        run: AgentRunFunction;
+        step: AgentStepLike;
+    },
+): Promise<string | undefined> => {
+    if (source.kind === "episodic") {
+        return dispatchEpisodicMemory(source, deps.owner, deps.episodeRecall, deps.step, deps.run);
+    }
+
+    if (source.kind === "graph") {
+        return dispatchGraphMemory(source, deps.input, deps.owner, deps.graphTraverse, deps.step, deps.run);
+    }
+
+    return dispatchSemanticMemory(source, deps.input, deps.step, deps.run);
+};
+
 const retrieveMemoryContext = async (
     agent: AgentDefinition,
     input: string,
@@ -491,15 +545,12 @@ const retrieveMemoryContext = async (
     }
 
     const graphTraverse = toFunctionReference(paths.graphTraverse);
+    const episodeRecall = toFunctionReference(paths.episodeRecall);
     const contexts: string[] = [];
 
     for (const source of sources) {
-        const context =
-            source.kind === "graph"
-                ? // eslint-disable-next-line no-await-in-loop -- sequential durable steps in a stable order ARE the replay-safe execution model
-                  await dispatchGraphMemory(source, input, owner, graphTraverse, step, run)
-                : // eslint-disable-next-line no-await-in-loop -- see above
-                  await dispatchSemanticMemory(source, input, step, run);
+        // eslint-disable-next-line no-await-in-loop -- sequential durable steps in a stable order ARE the replay-safe execution model
+        const context = await dispatchInjectedSource(source, { episodeRecall, graphTraverse, input, owner, run, step });
 
         if (context !== undefined) {
             contexts.push(context);
@@ -553,6 +604,58 @@ const extractGraphMemoryAtRunEnd = async (options: {
         await run(toFunctionReference(paths.graphUpsert), { ...extracted, messageKey: `${instanceId}:${memoryStepName("extract", source.key)}`, owner });
     } catch {
         // A failed extraction is non-fatal — the answer is already persisted.
+    }
+};
+
+/**
+ * Run-end owner-scoped episode recording. When an episodic memory source is
+ * configured and the run has an `owner` + a final answer, summarize the exchange
+ * in a MEMOIZED `memory:episode[:&lt;key>]` step (the model never re-runs on
+ * replay), then record it via an IDEMPOTENT dispatch keyed by the instance (the
+ * `byOwnerMessageKey` unique index no-ops a replay). No-ops otherwise — an
+ * anonymous run has no episode scope, and a run with no episodic source or no
+ * `extractEpisode` seam skips it entirely (byte-identical to before).
+ *
+ * Best-effort: a summarization failure must not fail a run whose answer is
+ * already persisted, so a throw here is swallowed.
+ */
+const extractEpisodeAtRunEnd = async (options: {
+    agent: AgentDefinition;
+    env: Record<string, unknown>;
+    extractEpisode: AgentEpisodeExtract | undefined;
+    finalText: string | undefined;
+    input: string;
+    instanceId: string;
+    owner: string | undefined;
+    paths: AgentFunctionPaths;
+    run: AgentRunFunction;
+    step: AgentStepLike;
+    threadKey: string;
+}): Promise<void> => {
+    const { agent, env, extractEpisode, finalText, input, instanceId, owner, paths, run, step, threadKey } = options;
+
+    if (extractEpisode === undefined || owner === undefined || finalText === undefined || finalText.length === 0) {
+        return;
+    }
+
+    const source = firstEpisodicSource(agent);
+
+    if (source === undefined) {
+        return;
+    }
+
+    try {
+        const { summary } = await step.do(memoryStepName("memory:episode", source.key), async () =>
+            extractEpisode({ assistantText: finalText, env, model: source.episodic?.extractionModel ?? agent.model, userInput: input }), );
+
+        await run(toFunctionReference(paths.episodeUpsert), {
+            messageKey: `${instanceId}:${memoryStepName("episode", source.key)}`,
+            owner,
+            summary,
+            threadKey,
+        });
+    } catch {
+        // A failed summary is non-fatal — the answer is already persisted.
     }
 };
 
@@ -718,7 +821,7 @@ const runTurns = async (
  * step-name sequence.
  */
 const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> => {
-    const { agent, env, exportName, extractGraph, generate, instanceId, onTokenDelta, params, paths, run, step, streamGenerate } = options;
+    const { agent, env, exportName, extractEpisode, extractGraph, generate, instanceId, onTokenDelta, params, paths, run, step, streamGenerate } = options;
     const maxTurns = agent.maxTurns ?? DEFAULT_MAX_TURNS;
     const stopConditions = normalizeStopWhen(agent.stopWhen);
 
@@ -826,6 +929,23 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
             paths,
             run,
             step,
+        });
+
+        // Run-end episode recording (owner-scoped, best-effort). No-ops unless an
+        // episodic memory source, an `owner`, a final answer, and the seam are all
+        // present — so a non-episodic or anonymous run is byte-identical.
+        await extractEpisodeAtRunEnd({
+            agent,
+            env,
+            extractEpisode,
+            finalText: final?.text,
+            input: params.input,
+            instanceId,
+            owner: params.owner,
+            paths,
+            run,
+            step,
+            threadKey: params.threadKey,
         });
 
         if (final) {

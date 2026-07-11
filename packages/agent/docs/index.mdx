@@ -680,6 +680,34 @@ export const support = defineAgent({
 > dispatch doing bounded, indexed local reads (replay-stable: no `Date.now()` or
 > randomness), which keeps the whole graph on one owner-stable shard.
 
+### Episodic memory (`kind: "episodic"`)
+
+Where semantic and graph memory recall by _relevance_, episodic memory recalls
+by _recency_: it summarizes each completed run into one line and, on the next
+run, injects the owner's most recent episodes as a short timeline. Set
+`kind: "episodic"` — no `source` action, no infrastructure:
+
+```ts
+export const support = defineAgent({
+    memory: { episodic: { recall: 5 }, kind: "episodic" },
+    model: "...",
+});
+```
+
+- **Owner-scoped, cross-thread.** Episodes live in the agent's own DO-SQLite as
+  the `agent_episodes` table (shipped with the `agent` schema extension), keyed
+  by `owner`, so a run recalls the timeline of that user's earlier runs across
+  every thread. An **anonymous run (no `owner`) no-ops** the tier.
+- **Auto-summarized on write.** After a run answers, a memoized `memory:episode`
+  step runs one LLM call (a cheaper `episodic.extractionModel` can be set) to
+  condense the exchange into a one-sentence episode, then idempotently records
+  it — a crash + resume never double-records the same run.
+- **Recency recall on read.** A `memory:recall` step returns the owner's most
+  recent `recall` episodes (default 5, max 20) rendered oldest → newest as
+  `- <summary>` lines, injected like any other memory context.
+- Same accumulate-forever caveat as the graph tier: episodes are never evicted
+  (a weight/age prune is a follow-up).
+
 ## Testing
 
 `@lunora/testing` ships `agentHarness` — an in-memory double over the same

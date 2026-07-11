@@ -124,7 +124,13 @@ const callMutation = async <R>(
 describe(agentComponent, () => {
     it("ships the auto-prefixed thread tables as a schema extension", () => {
         expect(agentExtension.key).toBe("agent");
-        expect(Object.keys(agentExtension.tables).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["edges", "entities", "messages", "threads"]);
+        expect(Object.keys(agentExtension.tables).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "edges",
+            "entities",
+            "episodes",
+            "messages",
+            "threads",
+        ]);
     });
 
     it("marks the mutations internal and the queries public", () => {
@@ -529,6 +535,68 @@ describe("graph memory", () => {
 
         // Only the heaviest (Beta, weight 0.9) edge is kept.
         expect(result.context).toBe("- hub —[works_at]→ beta");
+    });
+});
+
+describe("episodic memory", () => {
+    it("records an episode and is idempotent on replay (same owner+messageKey)", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        const episode = { messageKey: "wf-1:episode", owner: "u1", summary: "  Fixed the login bug.  ", threadKey: "t-1" };
+
+        const first = await callMutation(functions.agentEpisodeUpsert, ctx, episode);
+
+        expect(first).toStrictEqual({ recorded: true });
+        expect(rows.get("agent_episodes")).toHaveLength(1);
+        // The summary is trimmed on write.
+        expect(rows.get("agent_episodes")?.[0]?.["summary"]).toBe("Fixed the login bug.");
+
+        // A replay (same owner+messageKey) no-ops — no duplicate row.
+        const second = await callMutation(functions.agentEpisodeUpsert, ctx, episode);
+
+        expect(second).toStrictEqual({ recorded: false });
+        expect(rows.get("agent_episodes")).toHaveLength(1);
+    });
+
+    it("drops a blank summary", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        const result = await callMutation(functions.agentEpisodeUpsert, ctx, { messageKey: "k", owner: "u1", summary: "   " });
+
+        expect(result).toStrictEqual({ recorded: false });
+        expect(rows.get("agent_episodes") ?? []).toStrictEqual([]);
+    });
+
+    it("recalls the most recent episodes in chronological order, bounded by limit", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        // Explicit createdAt makes recall order deterministic (oldest → newest).
+        for (const [index, summary] of ["first", "second", "third", "fourth"].entries()) {
+            // eslint-disable-next-line no-await-in-loop -- sequential inserts for deterministic ordering
+            await callMutation(functions.agentEpisodeUpsert, ctx, { createdAt: 1000 + index, messageKey: `k${String(index)}`, owner: "u1", summary });
+        }
+
+        // limit 2 keeps the two most-recent, rendered oldest → newest.
+        await expect(callMutation(functions.agentEpisodeRecall, ctx, { limit: 2, owner: "u1" })).resolves.toStrictEqual({
+            context: "- third\n- fourth",
+        });
+
+        // No limit → default (5), so all four surface in order.
+        await expect(callMutation(functions.agentEpisodeRecall, ctx, { owner: "u1" })).resolves.toStrictEqual({
+            context: "- first\n- second\n- third\n- fourth",
+        });
+    });
+
+    it("is owner-scoped: another owner's episodes are invisible", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEpisodeUpsert, ctx, { createdAt: 1, messageKey: "k", owner: "u1", summary: "u1 episode" });
+
+        await expect(callMutation(functions.agentEpisodeRecall, ctx, { owner: "u2" })).resolves.toStrictEqual({ context: "" });
     });
 });
 

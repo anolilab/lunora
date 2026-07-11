@@ -167,8 +167,8 @@ const assertActiveToolsExposeMemory = (activeTools: ReadonlyArray<string> | unde
  */
 const assertMemorySourcesConfigured = (config: AgentConfig, skills: ReadonlyArray<SkillDefinition>): void => {
     const requireSource = (memory: AgentMemoryOptions | undefined, label: string): void => {
-        if (memory && memory.kind !== "graph" && memory.source === undefined) {
-            throw new LunoraError("INTERNAL", `@lunora/agent: ${label} requires a \`source\` action unless \`kind: "graph"\``);
+        if (memory && memory.kind !== "graph" && memory.kind !== "episodic" && memory.source === undefined) {
+            throw new LunoraError("INTERNAL", `@lunora/agent: ${label} requires a \`source\` action unless \`kind: "graph"\` or \`kind: "episodic"\``);
         }
     };
 

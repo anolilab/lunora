@@ -6,6 +6,7 @@ import { generateText, jsonSchema, Output, streamText, tool as aiTool } from "ai
 
 import type {
     AgentDefinition,
+    AgentEpisodeExtract,
     AgentGenerate,
     AgentGenerateOptions,
     AgentGraphExtract,
@@ -282,4 +283,34 @@ const createGraphExtract =
         return output;
     };
 
-export { createAgentGenerate, createGraphExtract, createStreamGenerate, resolveAgentModel };
+/** Prompt the run-end episode summarizer to condense the exchange into one memory-log sentence. */
+const buildEpisodePrompt = (userInput: string, assistantText: string): string =>
+    [
+        "Summarize the following exchange as ONE concise past-tense sentence for a long-term memory log.",
+        "Capture what the user wanted and what was done or decided — a durable fact worth recalling in a later conversation.",
+        "No preamble and no quotes: return only the sentence.",
+        "",
+        `User: ${userInput}`,
+        "",
+        `Assistant: ${assistantText}`,
+    ].join("\n");
+
+/**
+ * Build the production run-end episode-extraction seam over AI SDK `generateText`.
+ * Unlike the graph extractor this needs no structured schema — an episode is a
+ * single natural-language summary — so it returns the trimmed model text. Wired
+ * by `compileAgentWorkflow` and called inside the loop's memoized
+ * `memory:episode` step.
+ */
+const createEpisodeExtract =
+    (): AgentEpisodeExtract =>
+    async ({ assistantText, env, model, userInput }) => {
+        const { text } = await generateText({
+            model: resolveAgentModel(model, env),
+            prompt: buildEpisodePrompt(userInput, assistantText),
+        });
+
+        return { summary: text.trim() };
+    };
+
+export { createAgentGenerate, createEpisodeExtract, createGraphExtract, createStreamGenerate, resolveAgentModel };

@@ -5,6 +5,7 @@ import { v } from "@lunora/values";
 
 import type { AgentRegisteredFunction } from "./component-shared";
 import { AGENT_EXTENSION_KEY, asInternal, definedColumns } from "./component-shared";
+import { episodeTables, episodicComponent } from "./episodic-component";
 import { graphComponent, graphTables } from "./graph-component";
 
 /** Bare table names — auto-prefixed with the extension key at merge time. */
@@ -122,6 +123,10 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
         // live in graph-component.ts alongside the functions that read/write
         // them; spread in here so the app still merges one `agentExtension`.
         ...graphTables,
+
+        // The owner-scoped episodic-memory table (`agent_episodes`) lives in
+        // episodic-component.ts alongside its functions; spread in here too.
+        ...episodeTables,
     },
 });
 
@@ -134,6 +139,8 @@ export interface AgentComponent {
     functions: {
         agentAppendMessage: AgentRegisteredFunction;
         agentEnsureThread: AgentRegisteredFunction;
+        agentEpisodeRecall: AgentRegisteredFunction;
+        agentEpisodeUpsert: AgentRegisteredFunction;
         agentGraphTraverse: AgentRegisteredFunction;
         agentGraphUpsert: AgentRegisteredFunction;
         agentMessages: AgentRegisteredFunction;
@@ -619,11 +626,17 @@ export const agentComponent = (): AgentComponent => {
     // functions in so codegen auto-registers them under `agents:*`.
     const graph = graphComponent();
 
+    // The owner-scoped episodic-memory tier (table + recall/upsert functions)
+    // lives in episodic-component.ts; fold its functions in the same way.
+    const episodic = episodicComponent();
+
     return {
         extension: agentExtension,
         functions: {
             agentAppendMessage: asInternal(agentAppendMessage),
             agentEnsureThread: asInternal(agentEnsureThread),
+            agentEpisodeRecall: episodic.agentEpisodeRecall,
+            agentEpisodeUpsert: episodic.agentEpisodeUpsert,
             agentGraphTraverse: graph.agentGraphTraverse,
             agentGraphUpsert: graph.agentGraphUpsert,
             agentMessages,

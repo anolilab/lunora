@@ -362,7 +362,7 @@ describe("auto-registered agent runtime functions", () => {
     };
 
     it("registers the runtime functions in the dispatch table, imported from @lunora/agent", () => {
-        expect.assertions(14);
+        expect.assertions(16);
 
         const content = emitFunctions({ agents: discoverSupportAgent(), functions: [] });
 
@@ -372,6 +372,8 @@ describe("auto-registered agent runtime functions", () => {
         for (const name of [
             "agentAppendMessage",
             "agentEnsureThread",
+            "agentEpisodeRecall",
+            "agentEpisodeUpsert",
             "agentGraphTraverse",
             "agentGraphUpsert",
             "agentMessages",
@@ -445,7 +447,16 @@ describe("auto-registered agent runtime functions", () => {
                 .filter(([, definition]) => definition.visibility === "internal")
                 .map(([name]) => name)
                 .toSorted((a, b) => a.localeCompare(b)),
-        ).toStrictEqual(["agentAppendMessage", "agentEnsureThread", "agentGraphTraverse", "agentGraphUpsert", "agentPatchThread", "agentSetState"]);
+        ).toStrictEqual([
+            "agentAppendMessage",
+            "agentEnsureThread",
+            "agentEpisodeRecall",
+            "agentEpisodeUpsert",
+            "agentGraphTraverse",
+            "agentGraphUpsert",
+            "agentPatchThread",
+            "agentSetState",
+        ]);
         expect(
             Object.entries(runtime)
                 .filter(([, definition]) => definition.visibility === undefined)

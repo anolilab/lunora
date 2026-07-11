@@ -188,9 +188,9 @@ const collectAgenticMemoryTools = (config: AgentConfig, skills: ReadonlyArray<Sk
     const tools: Record<string, AnyAgentTool> = {};
 
     for (const source of sources) {
-        // Agentic tools are a semantic-kind feature; a graph source is always
-        // auto-injected (via `collectMemorySources`) and mints no tool.
-        if (source.kind === "graph" || source.mode !== "agentic" || source.source === undefined) {
+        // Agentic tools are a semantic-kind feature; a graph or episodic source is
+        // always auto-injected (via `collectMemorySources`) and mints no tool.
+        if (source.kind === "graph" || source.kind === "episodic" || source.mode !== "agentic" || source.source === undefined) {
             continue;
         }
 

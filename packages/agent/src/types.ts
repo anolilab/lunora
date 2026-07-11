@@ -170,6 +170,20 @@ export type AgentModelInput = LanguageModel | ((env: Record<string, unknown>) =>
  */
 export interface AgentMemoryOptions {
     /**
+     * Episodic-tier options — read only when {@link AgentMemoryOptions.kind} is
+     * `"episodic"`. `recall` bounds how many recent episodes are injected per run
+     * (default 5, capped at 20); `extractionModel` overrides the (optionally
+     * cheaper) model that summarizes each run into an episode (defaults to the
+     * agent's own model).
+     */
+    episodic?: {
+        /** Model for the run-end episode-summary step (defaults to the agent's model). */
+        extractionModel?: AgentModelInput;
+        /** Max recent episodes recalled per run (default 5, max 20). */
+        recall?: number;
+    };
+
+    /**
      * Graph-tier bounds and extraction model — read only when
      * {@link AgentMemoryOptions.kind} is `"graph"`. `depth`/`maxSeeds`/`fanOut`/
      * `maxNodes` bound the run-time BFS traversal; `extractionModel` overrides the
@@ -193,9 +207,11 @@ export interface AgentMemoryOptions {
      * `"semantic"` (default) is vector RAG over {@link AgentMemoryOptions.source}.
      * `"graph"` traverses the owner-scoped entity/relation graph (auto-extracted
      * on write, keyed by the thread's `owner`) via the built-in traverse function
-     * and ignores `source`. See {@link AgentMemoryOptions}.
+     * and ignores `source`. `"episodic"` recalls a recency-ordered timeline of the
+     * owner's past runs (each summarized at run end); it also ignores `source`.
+     * See {@link AgentMemoryOptions}.
      */
-    kind?: "graph" | "semantic";
+    kind?: "episodic" | "graph" | "semantic";
 
     /**
      * `"inject"` (default) auto-injects one top-k context system message per
@@ -676,6 +692,10 @@ export interface AgentRunResult {
 export interface AgentFunctionPaths {
     appendMessage: string;
     ensureThread: string;
+    /** The internal `agents:agentEpisodeRecall` query the loop dispatches for an episodic-kind read. */
+    episodeRecall: string;
+    /** The internal `agents:agentEpisodeUpsert` mutation the loop dispatches on run-end episode extraction. */
+    episodeUpsert: string;
     /** The internal `agents:agentGraphTraverse` query the loop dispatches for a graph-kind read. */
     graphTraverse: string;
     /** The internal `agents:agentGraphUpsert` mutation the loop dispatches on run-end graph extraction. */
@@ -787,6 +807,30 @@ export type AgentGraphExtract = (input: {
     /** The user message that started the run. */
     userInput: string;
 }) => Promise<AgentGraphExtraction>;
+
+/** The one-line summary an episodic-memory run records for later recency recall. */
+export interface AgentEpisodeExtraction {
+    summary: string;
+}
+
+/**
+ * The run-end episode-extraction seam: given the run's exchange and the model to
+ * run it on, return a one/two-sentence summary. Production wires AI SDK
+ * `generateText` (`createEpisodeExtract`); the durable loop calls it inside a
+ * memoized `memory:episode` step so the model never re-runs on replay. Absent
+ * (the default) disables extraction, so an agent with no episodic memory — and
+ * every unit test that doesn't opt in — is byte-identical.
+ */
+export type AgentEpisodeExtract = (input: {
+    /** The run's final assistant answer. */
+    assistantText: string;
+    /** The Worker env, for resolving a Workers AI model id. */
+    env: Record<string, unknown>;
+    /** The extraction model (the source's `extractionModel`, else the agent's). */
+    model: AgentModelInput;
+    /** The user message that started the run. */
+    userInput: string;
+}) => Promise<AgentEpisodeExtraction>;
 
 /**
  * A live token delta produced while a turn streams. Ephemeral — deltas are
