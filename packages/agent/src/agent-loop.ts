@@ -610,6 +610,30 @@ const dispatchInjectedSource = async (
     return dispatchSemanticMemory(source, deps.input, deps.step, deps.run);
 };
 
+/**
+ * Drop all but the FIRST episodic source. Episodic recall is owner-global
+ * (identical for every episodic source) and only the first is the write target,
+ * so injecting more than one would duplicate the same timeline. Collapsing it
+ * here keeps the injection loop uniform (no per-source special case).
+ */
+const dedupeEpisodicSources = (sources: ReadonlyArray<AgentMemorySource>): AgentMemorySource[] => {
+    let seenEpisodic = false;
+
+    return sources.filter((source) => {
+        if (source.kind !== "episodic") {
+            return true;
+        }
+
+        if (seenEpisodic) {
+            return false;
+        }
+
+        seenEpisodic = true;
+
+        return true;
+    });
+};
+
 const retrieveMemoryContext = async (
     agent: AgentDefinition,
     input: string,
@@ -621,7 +645,8 @@ const retrieveMemoryContext = async (
     // The injected source set: the list `defineAgent` folded, else the
     // directly-authored `memory` as the `"default"` source (an `"agentic"`-mode
     // semantic memory is excluded — it mints a `searchMemory` tool instead).
-    const sources = resolveInjectedSources(agent);
+    // Collapse duplicate episodic sources up front so the loop body is uniform.
+    const sources = dedupeEpisodicSources(resolveInjectedSources(agent));
 
     if (sources.length === 0) {
         return undefined;
@@ -630,20 +655,8 @@ const retrieveMemoryContext = async (
     const graphTraverse = toFunctionReference(paths.graphTraverse);
     const episodeRecall = toFunctionReference(paths.episodeRecall);
     const contexts: string[] = [];
-    // Episodic recall is owner-global (identical for every episodic source) and
-    // only the first episodic source is the write target, so inject it once —
-    // multiple episodic sources would otherwise duplicate the same timeline.
-    let episodicInjected = false;
 
     for (const source of sources) {
-        if (source.kind === "episodic") {
-            if (episodicInjected) {
-                continue;
-            }
-
-            episodicInjected = true;
-        }
-
         // eslint-disable-next-line no-await-in-loop -- sequential durable steps in a stable order ARE the replay-safe execution model
         const context = await dispatchInjectedSource(source, { episodeRecall, graphTraverse, input, owner, run, step });
 

@@ -6,6 +6,7 @@ import { dispatchAgentChannel, verifyDiscord, verifyGithub, verifySlack } from "
 const encoder = new TextEncoder();
 
 const NO_BINDING_PATTERN = /no Workflow binding/u;
+const TRANSIENT_FAILURE_PATTERN = /temporarily unavailable/u;
 
 const bytesToHex = (bytes: Uint8Array): string => [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
@@ -295,6 +296,62 @@ describe(dispatchAgentChannel, () => {
         expect(second.status).toBe(200);
         // The redelivery's duplicate instance id is rejected → no second run.
         expect(created).toStrictEqual([{ input: "hi", threadKey: "t" }]);
+    });
+
+    it("rethrows a non-duplicate create failure so the provider redelivers (not a silent 200)", async () => {
+        // A binding whose create() always fails with a transient/service error —
+        // NOT a duplicate-instance rejection. The handler must surface it (reject)
+        // so the webhook answers non-2xx and the provider retries the delivery.
+        const binding = {
+            create: async (): Promise<{ id: string }> => {
+                throw new Error("workflows service temporarily unavailable");
+            },
+            get: async (): Promise<never> => {
+                throw new Error("unused");
+            },
+        };
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return { input: "hi", threadKey: "t" };
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const body = JSON.stringify({ event: {}, event_id: "Ev-transient" });
+
+        await expect(handler(await slackRequest(secret, body), env)).rejects.toThrow(TRANSIENT_FAILURE_PATTERN);
+    });
+
+    it("does not dedupe deliveries with an empty event id (falls back to a non-idempotent create)", async () => {
+        const { binding, created } = fakeBinding();
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return { input: "hi", threadKey: "t" };
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        // An empty (but present) event_id sanitizes to no dedup key — each delivery
+        // must start its own run rather than collapsing to a single "slack-" id.
+        const body = JSON.stringify({ event: {}, event_id: "" });
+
+        const first = await handler(await slackRequest(secret, body), env);
+        const second = await handler(await slackRequest(secret, body), env);
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+        expect(created).toStrictEqual([
+            { input: "hi", threadKey: "t" },
+            { input: "hi", threadKey: "t" },
+        ]);
     });
 
     it("returns 400 for a request with no recognized signature headers", async () => {

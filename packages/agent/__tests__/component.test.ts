@@ -59,16 +59,27 @@ interface IndexQuery {
     order: (direction: "asc" | "desc") => { collect: () => Promise<FakeRow[]>; take: (limit: number) => Promise<FakeRow[]> };
 }
 
-const makeIndexQuery = (candidates: FakeRow[], build: (q: unknown) => unknown): IndexQuery => {
+/** Index names whose final sort column is `createdAt` — the only ones this double models `.order()` for. */
+const CREATED_AT_INDEXES = new Set(["byOwnerCreatedAt"]);
+
+const makeIndexQuery = (candidates: FakeRow[], indexName: string, build: (q: unknown) => unknown): IndexQuery => {
     const conditions = collectConditions(build);
     const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
-    // `.order()` sorts by `createdAt` (the recency index key the episodic tier uses).
-    const ordered = (direction: "asc" | "desc"): FakeRow[] =>
-        matches().toSorted((a, b) => {
+    // This double approximates `.order()` by sorting on `createdAt`; the REAL
+    // TableReader sorts by the index's key columns. Guard so a future `.order()`
+    // on a differently-keyed index fails loudly here instead of silently
+    // returning a wrong order (a false green).
+    const ordered = (direction: "asc" | "desc"): FakeRow[] => {
+        if (!CREATED_AT_INDEXES.has(indexName)) {
+            throw new Error(`test double: .order() is only modeled for a createdAt-keyed index, not "${indexName}"`);
+        }
+
+        return matches().toSorted((a, b) => {
             const delta = ((a["createdAt"] as number | undefined) ?? 0) - ((b["createdAt"] as number | undefined) ?? 0);
 
             return direction === "desc" ? -delta : delta;
         });
+    };
 
     return {
         collect: async () => matches(),
@@ -135,7 +146,7 @@ const fakeDatabase = (auth?: { userId?: string }): { ctx: { auth: { userId?: str
         },
         query: (table: string) => {
             return {
-                withIndex: (_name: string, build: (q: unknown) => unknown) => makeIndexQuery(tableRows(table), build),
+                withIndex: (name: string, build: (q: unknown) => unknown) => makeIndexQuery(tableRows(table), name, build),
             };
         },
     };

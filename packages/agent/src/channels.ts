@@ -210,6 +210,21 @@ type EligibleTarget = { config: NonNullable<AgentDefinition["onInbound"]>; targe
 /** Characters not allowed in a Cloudflare Workflow instance id — hoisted, avoids recompilation. */
 const UNSAFE_INSTANCE_ID = /[^\w-]/gu;
 
+/** Matches Cloudflare Workflows' "instance already exists" rejection (hoisted). */
+const DUPLICATE_INSTANCE = /already[\s-]?exists/iu;
+
+/** A bare `200 OK` — the provider's "delivered, do not redeliver" acknowledgement. */
+const ack = (): Response => new Response(undefined, { status: 200 });
+
+/**
+ * Whether a `workflow.create()` rejection is a duplicate-instance-id error — the
+ * idempotency signal — as opposed to a transient/config failure (Workflows
+ * service error, instance-creation quota, bad params). Only the former may be
+ * acked; every other failure MUST surface so the handler returns non-2xx and the
+ * provider redelivers, rather than silently dropping the event.
+ */
+const isDuplicateInstanceError = (error: unknown): boolean => DUPLICATE_INSTANCE.test(error instanceof Error ? error.message : String(error));
+
 /**
  * A stable per-delivery id for idempotent dispatch: GitHub's `X-GitHub-Delivery`
  * header, else Slack's `event_id` / Discord's interaction `id` from the (already
@@ -233,8 +248,12 @@ const deliveryId = (channel: AgentInboundChannelKind, headers: Headers, body: st
 /**
  * Start the run for a claimed event, idempotently. A provider redelivery carries
  * the SAME delivery id, and Cloudflare Workflows rejects a duplicate instance id
- * — so a retry acks `200` (already handled) instead of starting a second run.
- * When no delivery id is available, falls back to a non-idempotent create.
+ * — so a redelivery acks `200` (already handled) instead of starting a second
+ * run. Only a *duplicate-instance* rejection is acked; any other `create()`
+ * failure (service error, quota, bad binding) is rethrown so the handler returns
+ * non-2xx and the provider redelivers rather than the event being lost. When no
+ * usable delivery id is available (absent, or sanitized to empty), falls back to
+ * a non-idempotent create.
  */
 const startChannelRun = async (
     workflow: AgentWorkflowBindingLike,
@@ -242,20 +261,29 @@ const startChannelRun = async (
     channel: AgentInboundChannelKind,
     id: string | undefined,
 ): Promise<Response> => {
-    if (id === undefined) {
+    // Sanitize the id alone (the `channel-` prefix is already instance-id-safe);
+    // an id absent or reduced to empty by sanitization gives no dedup key.
+    const sanitizedId = id === undefined ? "" : id.replaceAll(UNSAFE_INSTANCE_ID, "");
+
+    if (sanitizedId === "") {
         await workflow.create({ params: run });
 
-        return new Response(undefined, { status: 200 });
+        return ack();
     }
 
     try {
-        await workflow.create({ id: `${channel}-${id}`.replaceAll(UNSAFE_INSTANCE_ID, "").slice(0, 60), params: run });
-    } catch {
-        // A duplicate instance id ⇒ this delivery was already handled; ack it.
-        return new Response(undefined, { status: 200 });
+        await workflow.create({ id: `${channel}-${sanitizedId}`.slice(0, 60), params: run });
+    } catch (error) {
+        if (isDuplicateInstanceError(error)) {
+            return ack();
+        }
+
+        // A transient/config failure — NOT a redelivery. Surface it so the
+        // handler answers non-2xx and the provider retries the delivery.
+        throw error;
     }
 
-    return new Response(undefined, { status: 200 });
+    return ack();
 };
 
 /**

@@ -7,6 +7,7 @@ const UNKNOWN_REF_PATTERN = /unknown result "missing"/u;
 const UNKNOWN_TOOL_PATTERN = /unknown tool "nope"/u;
 const EMPTY_TOOLS_PATTERN = /non-empty map of tools/u;
 const GATED_TOOL_PATTERN = /cannot compose "gated"/u;
+const DUPLICATE_ID_PATTERN = /duplicate code step id "dup"/u;
 
 const context = {} as AgentToolContext;
 
@@ -85,6 +86,27 @@ describe(runToolScript, () => {
 
     it("throws on a step calling an unknown tool", async () => {
         await expect(runToolScript({ steps: [{ id: "x", tool: "nope" }] }, { real: fakeTool(1) }, context, 16)).rejects.toThrow(UNKNOWN_TOOL_PATTERN);
+    });
+
+    it("rejects duplicate step ids up front, before running any tool", async () => {
+        const calls: unknown[] = [];
+        const tools = { t: fakeTool("ok", calls) };
+
+        await expect(
+            runToolScript(
+                {
+                    steps: [
+                        { id: "dup", tool: "t" },
+                        { id: "dup", tool: "t" },
+                    ],
+                },
+                tools,
+                context,
+                16,
+            ),
+        ).rejects.toThrow(DUPLICATE_ID_PATTERN);
+        // Fail-fast: neither step executed (no partial side effects).
+        expect(calls).toStrictEqual([]);
     });
 
     it("caps a large step output in the returned results while the full value still flows to refs", async () => {

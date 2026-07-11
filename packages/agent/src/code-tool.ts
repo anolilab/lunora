@@ -141,6 +141,23 @@ const runToolScript = async (
     const byId: Record<string, unknown> = {};
     const results: { id: string; output: unknown }[] = [];
 
+    // Reject duplicate step ids UP FRONT, before any tool runs: two steps sharing
+    // an id would derive the same per-step idempotency key (a side-effecting call
+    // could be skipped as a replay) and the later output would clobber the earlier
+    // in `byId` (shifting `$from` semantics). Fail fast with no partial side effects.
+    const seenIds = new Set<string>();
+
+    for (const step of steps) {
+        if (seenIds.has(step.id)) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `@lunora/agent: duplicate code step id "${step.id}" — each step id must be unique (later steps reference an output by id via $from)`,
+            );
+        }
+
+        seenIds.add(step.id);
+    }
+
     for (const step of steps) {
         const tool = tools[step.tool];
 
