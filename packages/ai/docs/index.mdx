@@ -123,6 +123,32 @@ KV, …): text moves out of metadata and the `topK` ceiling lifts to 100. The
 default chunker is a fixed 1000-char window with 200 overlap; pass `chunk` for
 token/sentence/semantic strategies.
 
+### Bring your own embeddings — no `env.AI` binding
+
+`embeddingModel` takes a Workers AI model **id** (a string, resolved through
+`ctx.ai` — so it needs the `env.AI` binding) **or** a ready-made AI SDK
+`EmbeddingModel` **object**. Pass an object and the helper embeds through it
+directly, never touching `ctx.ai` — so a RAG index over OpenAI (or any provider)
+needs **no Workers AI binding at all**. `ctx.vectors` (Vectorize) is still
+required — it's the store.
+
+```ts
+import { openai } from "@ai-sdk/openai";
+import { defineRag } from "@lunora/ai/rag";
+
+// A model *object*, not an id → embeds without ctx.ai / env.AI.
+export const docs = defineRag({
+    embeddingModel: openai.textEmbeddingModel("text-embedding-3-small"),
+    index: "docs",
+});
+```
+
+Because the object path skips `ctx.ai`, you can even bind a hand-built context
+carrying only `vectors` (e.g. in a test or a non-action caller):
+`docs({ vectors: ctx.vectors }).retrieve(question)`. A model-**id** string with
+no `ctx.ai` present throws a directed error telling you to pass a model object or
+wire `ctx.ai`.
+
 ### Embedding-model versioning
 
 Embeddings from different models are not comparable — swap the model and every

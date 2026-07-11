@@ -246,6 +246,35 @@ describe(defineRag, () => {
         expect(vi.mocked(embed).mock.calls.length).toBeGreaterThan(0);
     });
 
+    it("embeds via a direct AI SDK EmbeddingModel object without `ctx.ai` (bring-your-own, no env.AI)", async () => {
+        const { store, vectors } = memoryVectors();
+        // A hand-built context carrying ONLY `vectors` — no `ai`, so no `env.AI`
+        // binding is provisioned. The bring-your-own model is used as-is.
+        const ownModel = { specificationVersion: "v2" } as unknown as EmbeddingModel;
+        const ctx: RagContext = { vectors };
+        const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, embeddingModel: ownModel, index: "docs" });
+
+        const result = await docs(ctx).index({ id: "doc-1", text: "alpha | beta" });
+
+        expect(result.chunks).toBe(2);
+        expect([...store.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["doc-1#0", "doc-1#1"]);
+
+        // Retrieval runs over the same object-model path — no `ctx.ai` needed.
+        const { chunks } = await docs(ctx).retrieve("alpha");
+
+        expect(chunks.length).toBeGreaterThan(0);
+        // The object model was handed straight to `aiEmbed` (no `ctx.ai` indirection).
+        expect((vi.mocked(embed).mock.calls.at(-1)?.[0] as { model: unknown }).model).toBe(ownModel);
+    });
+
+    it("throws a directed error for a model-id string when the context has no `ctx.ai`", async () => {
+        const { vectors } = memoryVectors();
+        const ctx: RagContext = { vectors };
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
+
+        await expect(docs(ctx).index({ id: "doc-1", text: "hello" })).rejects.toThrow(/no `ai` \(env\.AI\)/u);
+    });
+
     it("retrieves ranked chunks with prompt-ready context and deduped sources", async () => {
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);

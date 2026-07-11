@@ -70,7 +70,16 @@ export interface RagVectors {
  * carrying the two facades works in tests.
  */
 export interface RagContext {
-    ai: Pick<LunoraAi, "embeddingModel">;
+    /**
+     * Resolves a Workers AI embedding-model id (or the omitted default) — an
+     * `ActionCtx`'s `ctx.ai` satisfies it. OPTIONAL: when
+     * {@link RagConfig.embeddingModel} is a direct AI SDK `EmbeddingModel` object
+     * (bring-your-own embeddings, e.g. `@ai-sdk/openai`), the helper uses that
+     * object as-is and never reads `ai`, so a hand-built context may omit it and
+     * no `env.AI` binding is needed. A model-id string (or an omitted model) with
+     * no `ai` present throws a directed error.
+     */
+    ai?: Pick<LunoraAi, "embeddingModel">;
 
     /**
      * The verified retrieval identity, read by {@link RagConfig.rlsFilter} to

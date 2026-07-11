@@ -127,6 +127,32 @@ const assembleContext = (chunks: ReadonlyArray<RetrievedChunk>): string =>
     chunks.map((chunk) => `[source:${chunk.sourceId}#${String(chunk.chunkIndex)}]\n${chunk.text}`).join("\n\n");
 
 /**
+ * Resolve the embedding model for a bound context. A direct AI SDK
+ * `EmbeddingModel` object is used as-is and NEVER touches `ctx.ai` — so a
+ * bring-your-own-embeddings RAG (e.g. `@ai-sdk/openai`) needs no `ctx.ai` and no
+ * `env.AI` binding. A model-id string (or an omitted model, which defers to
+ * `ctx.ai`'s default) resolves through `ctx.ai`, which requires the Workers AI
+ * binding; a missing `ctx.ai` throws a directed error rather than a bare
+ * "cannot read `embeddingModel` of undefined".
+ */
+// eslint-disable-next-line sonarjs/function-return-type -- single return type (EmbeddingModel); the object-passthrough vs computed-return trips sonar's heuristic (same as create-ai.ts)
+const resolveEmbeddingModel = (input: RagConfig["embeddingModel"], ai: RagContext["ai"]): EmbeddingModel => {
+    if (typeof input === "object") {
+        return input;
+    }
+
+    if (ai === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            "@lunora/ai/rag: `embeddingModel` is a Workers AI model id (or omitted) but the bound context has no `ai` (env.AI). " +
+                "Pass an AI SDK EmbeddingModel object to embed without Workers AI, or bind a context whose `ctx.ai` is wired.",
+        );
+    }
+
+    return ai.embeddingModel(input);
+};
+
+/**
  * Declare a RAG index over the two facades every Lunora action already has:
  * `ctx.ai` (embeddings) + `ctx.vectors` (Vectorize). Returns a per-request
  * factory — bind a ctx to get `{ index, retrieve, remove, asTool }`:
@@ -143,6 +169,11 @@ const assembleContext = (chunks: ReadonlyArray<RetrievedChunk>): string =>
  * Pure composition — no new binding, no I/O until a method runs. Chunk text
  * lives in vector metadata by default (`topK` ≤ 20); supply `textStore` to move
  * it into your own storage and lift the ceiling to 100 — see `RagTextStore`.
+ *
+ * `ctx.ai` is only needed to resolve a Workers AI `embeddingModel` id. Pass a
+ * direct AI SDK `EmbeddingModel` object (`@ai-sdk/openai`, …) and the helper
+ * embeds through it without `ctx.ai` — so a bring-your-own-embeddings index
+ * needs no `env.AI` binding (bind any context carrying just `vectors`).
  */
 const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     if (typeof config.index !== "string" || config.index.length === 0) {
@@ -198,7 +229,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         let model: EmbeddingModel | undefined;
 
         const embedText = async (text: string): Promise<ReadonlyArray<number>> => {
-            model ??= context.ai.embeddingModel(config.embeddingModel);
+            model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
 
             const { embedding } = await aiEmbed({ model, value: text });
 
