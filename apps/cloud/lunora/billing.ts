@@ -196,6 +196,18 @@ export const enforceDunning = internalMutation.mutation(async ({ ctx: context })
         if (outcome) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
             await context.db.patch(organization._id as Id<"organizations">, outcome.patch);
+
+            if (outcome.counter === "suspended") {
+                // eslint-disable-next-line no-await-in-loop -- one audit row per transition
+                await context.db.insert("auditLog", {
+                    action: "organization.suspend",
+                    actorUserId: "system:dunning",
+                    createdAt: now,
+                    organizationId: organization._id,
+                    target: "payment failure grace exhausted",
+                });
+            }
+
             counters[outcome.counter] += 1;
         }
     }

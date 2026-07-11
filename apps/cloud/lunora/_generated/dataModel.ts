@@ -140,9 +140,10 @@ export interface Doc_githubInstallations {
     _id: Id<"githubInstallations">;
     _creationTime: number;
     accountLogin: string;
+    claimedAt?: number;
     createdAt: number;
     installationId: number;
-    organizationId: Id<"organizations">;
+    organizationId?: Id<"organizations">;
 }
 
 export interface Doc_builds {
@@ -229,6 +230,7 @@ export interface Doc_secrets {
     _creationTime: number;
     ciphertext: string;
     createdAt: number;
+    environment: "all" | "production" | "preview" | "dev";
     iv: string;
     name: string;
     organizationId: Id<"organizations">;
@@ -342,7 +344,7 @@ export interface IndexNamesByTable {
     auditLog: "by_org";
     invitations: "by_token" | "by_org";
     platformUsage: "by_org";
-    secrets: "by_project_name" | "by_project";
+    secrets: "by_project_env_name" | "by_project";
     customers: "by_reference" | "by_provider_customer";
     events: "by_provider_event";
     paymentSessions: "by_reference" | "by_provider_session";
@@ -510,9 +512,10 @@ export interface Insert_githubInstallations {
     _id?: Id<"githubInstallations">;
     _creationTime?: number;
     accountLogin: string;
+    claimedAt?: number;
     createdAt: number;
     installationId: number;
-    organizationId: Id<"organizations">;
+    organizationId?: Id<"organizations">;
 }
 
 export interface Insert_builds {
@@ -599,6 +602,7 @@ export interface Insert_secrets {
     _creationTime?: number;
     ciphertext: string;
     createdAt: number;
+    environment: "all" | "production" | "preview" | "dev";
     iv: string;
     name: string;
     organizationId: Id<"organizations">;
