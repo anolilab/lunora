@@ -93,6 +93,7 @@ const PitrPanel = lazyNamed(() => import("../features/database/pitr-panel"), "Pi
 const FlagsPanel = lazyNamed(() => import("../features/flags/flags-panel"), "FlagsPanel");
 const FunctionRunner = lazyNamed(() => import("../features/functions/function-runner"), "FunctionRunner");
 const FunctionStatsPanel = lazyNamed(() => import("../features/functions/function-stats"), "FunctionStatsPanel");
+const IssuesPanel = lazyNamed(() => import("../features/issues/issues-panel"), "IssuesPanel");
 const AuditPanel = lazyNamed(() => import("../features/logs/audit-panel"), "AuditPanel");
 const LogDrainsPanel = lazyNamed(() => import("../features/logs/log-drains-panel"), "LogDrainsPanel");
 // `logs-panel` re-exports several types alongside the component, which trips the
@@ -142,6 +143,7 @@ type StudioTab =
     | "health"
     | "home"
     | "insights"
+    | "issues"
     | "kv"
     | "logs"
     | "mail"
@@ -321,6 +323,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     health: <path d="M3 12h4l2 6 4-14 2 8h6" />,
     home: <path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />,
     insights: <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.2 1.2h5l.2-1.2c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3ZM9.5 20.5h5M10 18h4" />,
+    issues: <path d="M10.3 4.3 2.5 18a2 2 0 0 0 1.7 3h15.6a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0ZM12 9v4m0 3v.01" />,
     kv: <path d="M5 5h14v4H5V5Zm0 5h14v4H5v-4Zm0 5h14v4H5v-4Z" />,
     logs: <path d="M5 6h14M5 10h14M5 14h9M5 18h11" />,
     mail: <path d="M4 5h16v14H4V5Zm0 1.5 8 6 8-6" />,
@@ -360,10 +363,10 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "overview", tabs: ["home", "dashboards"] },
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
-    { key: "functions", tabs: ["functions", "api", "workflows", "agents", "queues", "containers"] },
+    { key: "functions", tabs: ["functions", "api", "workflows", "agents", "queues"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
-    { key: "observability", tabs: ["logs", "audit", "realtime", "fanout", "metrics", "analytics", "health"] },
+    { key: "observability", tabs: ["issues", "logs", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health"] },
     { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
     { key: "operations", tabs: ["schedule", "mail", "drains", "payments", "flags"] },
     { key: "settings", tabs: ["settings"] },
@@ -461,6 +464,7 @@ const TABS = exhaustiveRouteTabs([
     "rls",
     "permissions",
     "insights",
+    "issues",
     "logs",
     "realtime",
     "fanout",
@@ -825,6 +829,7 @@ const StudioLayout = (): ReactElement => {
             health: t("Health"),
             home: t("Home"),
             insights: t("Performance"),
+            issues: t("Issues"),
             kv: t("KV"),
             logs: t("Logs"),
             metrics: t("Metrics"),
@@ -881,6 +886,7 @@ const StudioLayout = (): ReactElement => {
         health: t("At-a-glance connection, error, and shard signals."),
         home: t("Connection, health, and advisor summary for your deployment."),
         insights: t("Surface slow functions, error spikes, and cache problems."),
+        issues: t("Grouped error triage — Worker throws and container crashes folded by fingerprint."),
         logs: t("A live stream of recent function logs."),
         metrics: t("Per-shard health and aggregate metrics."),
         migrations: t("Review migration status and run them."),
@@ -1099,6 +1105,7 @@ const buildRouter = ({
         health: <HealthPanel initialShardKey={initialShardKey} />,
         home: <HomePanel initialShardKey={initialShardKey} />,
         insights: <InsightsPanel initialShardKey={initialShardKey} />,
+        issues: <IssuesPanel initialShardKey={initialShardKey} />,
         logs: <LogsPanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
