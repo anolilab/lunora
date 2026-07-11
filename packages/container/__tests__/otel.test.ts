@@ -23,6 +23,7 @@ interface ParsedSpan {
     endTimeUnixNano: string;
     kind: number;
     name: string;
+    parentSpanId?: string;
     spanId: string;
     startTimeUnixNano: string;
     status: { code: number; message?: string };
@@ -143,6 +144,40 @@ describe(createContainerTelemetry, () => {
         expect(attrValue(span.attributes, "jobId")?.stringValue).toBe("j1");
         expect(attrValue(resourceAttributes, "service.name")?.stringValue).toBe("lunora-container");
         expect(scopeName).toBe("@lunora/container");
+    });
+
+    it("stitches spans under a parent traceparent", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "transcode", startMs: 5 });
+        await telemetry.flush();
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        // Inherits the Worker's trace id and hangs off its span id...
+        expect(span.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
+        expect(span.parentSpanId).toBe("b7ad6b7169203331");
+        // ...but keeps its own child span id.
+        expect(span.spanId).toMatch(SPAN_ID_HEX);
+        expect(span.spanId).not.toBe("b7ad6b7169203331");
+    });
+
+    it("mints a fresh root trace when the traceparent is malformed", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch, traceparent: "not-a-traceparent" });
+
+        telemetry.emitSpan({ endMs: 10, name: "x", startMs: 5 });
+        await telemetry.flush();
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        expect(span.traceId).toMatch(TRACE_ID_HEX);
+        expect(span.parentSpanId).toBeUndefined();
     });
 
     it("marks an errored span with status ERROR, message, and error.type", async () => {

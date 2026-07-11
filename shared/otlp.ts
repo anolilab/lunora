@@ -71,6 +71,49 @@ const otlpRandomHex = (bytes: number): string => {
     return hex;
 };
 
+/** Lowercase-hex validator for `traceparent` id fields. */
+const HEX_ONLY = /^[0-9a-f]+$/;
+
+/**
+ * Build a W3C `traceparent` header from a 32-hex trace id + 16-hex span id:
+ * `00-<trace-id>-<span-id>-01` (version 0, sampled). The ids are the same
+ * lowercase-hex form {@link otlpRandomHex} produces, so a worker's trace/span id
+ * composes into a `traceparent` with no reformatting.
+ */
+const buildTraceparent = (traceId: string, spanId: string): string => `00-${traceId}-${spanId}-01`;
+
+/**
+ * Parse a W3C `traceparent` into `{ traceId, parentSpanId }`, or `undefined` when
+ * malformed. Validates the 4-field `version-traceId-spanId-flags` shape (32-hex
+ * trace id, 16-hex span id) and rejects the all-zero ids the spec forbids. Only
+ * the two ids are returned — the version/flags are accepted but not surfaced.
+ */
+const parseTraceparent = (header: null | string | undefined): { parentSpanId: string; traceId: string } | undefined => {
+    if (header === null || header === undefined) {
+        return undefined;
+    }
+
+    const parts = header.trim().toLowerCase().split("-");
+    const traceId = parts[1];
+    const parentSpanId = parts[2];
+
+    if (
+        parts.length !== 4 ||
+        traceId === undefined ||
+        parentSpanId === undefined ||
+        traceId.length !== 32 ||
+        parentSpanId.length !== 16 ||
+        !HEX_ONLY.test(traceId) ||
+        !HEX_ONLY.test(parentSpanId) ||
+        traceId === "00000000000000000000000000000000" ||
+        parentSpanId === "0000000000000000"
+    ) {
+        return undefined;
+    }
+
+    return { parentSpanId, traceId };
+};
+
 /** Encode one attribute, choosing the OTLP value kind from the JS type. */
 const encodeAttribute = (key: string, value: OtlpAttributeValue): OtlpAttribute => {
     if (typeof value === "boolean") {
@@ -170,4 +213,15 @@ const wrapResourceLogs = (logRecord: unknown, scopeName: string, serviceName: st
 };
 
 export type { OtlpAnyValue, OtlpAttribute, OtlpAttributeValue, OtlpLevel };
-export { encodeAttribute, encodeAttributes, mergeHeaders, OTLP_SEVERITY, otlpRandomHex, otlpUnixNano, wrapResourceLogs, wrapResourceSpans };
+export {
+    buildTraceparent,
+    encodeAttribute,
+    encodeAttributes,
+    mergeHeaders,
+    OTLP_SEVERITY,
+    otlpRandomHex,
+    otlpUnixNano,
+    parseTraceparent,
+    wrapResourceLogs,
+    wrapResourceSpans,
+};

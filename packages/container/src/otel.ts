@@ -27,6 +27,7 @@ import {
     OTLP_SEVERITY,
     otlpRandomHex,
     otlpUnixNano,
+    parseTraceparent,
     wrapResourceLogs,
     wrapResourceSpans,
 } from "../../../shared/otlp";
@@ -88,6 +89,14 @@ interface ContainerTelemetryOptions {
     timeoutMs?: number;
     /** Bearer token sent as an `Authorization: Bearer` header; defaults to the `LUNORA_OTLP_TOKEN` env var. */
     token?: string;
+
+    /**
+     * W3C `traceparent` of the Worker RPC that invoked this container; defaults to
+     * the `LUNORA_TRACEPARENT` env var. When present (and well-formed) every span
+     * inherits its trace id and hangs off its span id, so container spans stitch
+     * under the Worker's trace instead of forming a fresh, disconnected trace.
+     */
+    traceparent?: string;
 }
 
 /** Default {@link ContainerTelemetryOptions.timeoutMs} — the OTLP-exporter-conventional 10s. */
@@ -133,7 +142,7 @@ const resolveFetch = (injected: OtelFetchLike | undefined): OtelFetchLike | unde
 };
 
 /** Build the OTLP trace-export body for one container span. */
-const traceBody = (span: ContainerSpanInput, serviceName: string): unknown => {
+const traceBody = (span: ContainerSpanInput, serviceName: string, parent: { parentSpanId: string; traceId: string } | undefined): unknown => {
     const attributes = encodeAttributes(span.attributes);
 
     if (span.error?.type !== undefined) {
@@ -146,11 +155,14 @@ const traceBody = (span: ContainerSpanInput, serviceName: string): unknown => {
         // SPAN_KIND_INTERNAL — the container's own work, not a server/client edge.
         kind: 1,
         name: span.name,
+        // Always the span's own (child) id; with a parent, hang it off the parent
+        // span and inherit the parent's trace id so the spans stitch into one trace.
+        ...(parent === undefined ? {} : { parentSpanId: parent.parentSpanId }),
         spanId: otlpRandomHex(8),
         startTimeUnixNano: otlpUnixNano(span.startMs),
         // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
         status: span.error === undefined ? { code: 1 } : { code: 2, message: span.error.message },
-        traceId: otlpRandomHex(16),
+        traceId: parent?.traceId ?? otlpRandomHex(16),
     };
 
     return wrapResourceSpans(otlpSpan, "@lunora/container", serviceName);
@@ -191,6 +203,7 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     const enabled = endpoint !== undefined && endpoint.length > 0;
     const token = options.token ?? readEnv("LUNORA_OTLP_TOKEN");
     const serviceName = options.serviceName ?? readEnv("LUNORA_SERVICE_NAME") ?? "lunora-container";
+    const parent = parseTraceparent(options.traceparent ?? readEnv("LUNORA_TRACEPARENT"));
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fetchImpl = resolveFetch(options.fetch);
     const headers = mergeHeaders({ "content-type": "application/json" }, options.headers, token);
@@ -260,7 +273,7 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
             return;
         }
 
-        send(tracesUrl, traceBody(span, serviceName));
+        send(tracesUrl, traceBody(span, serviceName, parent));
     };
 
     const emitLog = (log: ContainerLogInput): void => {

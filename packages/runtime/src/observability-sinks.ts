@@ -58,11 +58,13 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
         // SPAN_KIND_SERVER — a dispatched RPC is server-side request handling.
         kind: 2,
         name: event.functionPath,
-        spanId: otlpRandomHex(8),
+        // Reuse the dispatch's trace context when the runtime set it (so this span
+        // shares the id it propagated as `traceparent`); else mint fresh ids.
+        spanId: event.spanId ?? otlpRandomHex(8),
         startTimeUnixNano: otlpUnixNano(endMs - event.durationMs),
         // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
         status: event.ok ? { code: 1 } : { code: 2, message: event.error?.message ?? "" },
-        traceId: otlpRandomHex(16),
+        traceId: event.traceId ?? otlpRandomHex(16),
     };
 
     return wrapResourceSpans(span, "@lunora/runtime", serviceName);

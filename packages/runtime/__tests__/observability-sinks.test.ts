@@ -560,6 +560,23 @@ describe("observability-sinks", () => {
             expect(span.spanId).toMatch(SPAN_ID_HEX);
         });
 
+        it("reuses the dispatch's trace/span ids when the event carries them", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onRpc!({ ...okEvent, spanId: "b7ad6b7169203331", traceId: "0af7651916cd43dd8448eb211c80319c" });
+
+            const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            // The span rides the ids the runtime propagated as `traceparent`, not fresh ones.
+            expect(span.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
+            expect(span.spanId).toBe("b7ad6b7169203331");
+        });
+
         it("encodes error status, error.type, and the status message for a failed event", () => {
             expect.assertions(4);
 
