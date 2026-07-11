@@ -59,9 +59,15 @@ export default defineSchema({
         // Aggregate period spend cap in minor units (GAPS.md C1). Unset = the
         // plan default; explicit 0 = uncapped (support escape hatch).
         spendCapMinor: v.optional(v.number()),
-        // Set by the spend-cap enforcement cron (or support action); the
+        // Set by the spend-cap or dunning enforcement crons (or support); the
         // dispatcher serves 503 for a suspended org's tenants.
         suspendedAt: v.optional(v.number()),
+        // Which mechanism suspended the org ("spend-cap" | "dunning" |
+        // "support"); each cron only lifts its own suspensions.
+        suspendedReason: v.optional(v.string()),
+        // Dunning (GAPS.md C2): when payment failure was first observed; the
+        // grace window measures from here.
+        paymentFailedAt: v.optional(v.number()),
         // Right-to-erasure (GAPS.md D3): an owner requested deletion; the purge
         // cron erases the org's data once the retention window passes.
         deletionRequestedAt: v.optional(v.number()),

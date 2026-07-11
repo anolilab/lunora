@@ -25,6 +25,8 @@ export const organizations = sqliteTable("organizations", {
     slug: text("slug").notNull(),
     spendCapMinor: real("spendCapMinor"),
     suspendedAt: real("suspendedAt"),
+    suspendedReason: text("suspendedReason"),
+    paymentFailedAt: real("paymentFailedAt"),
     deletionRequestedAt: real("deletionRequestedAt"),
 }, (t) => ({
     by_slug: uniqueIndex("by_slug").on(t.slug),
