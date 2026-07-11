@@ -85,6 +85,78 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
     return null;
 };
 
+export interface PushIntent {
+    branch: string;
+    commitSha: string;
+    repository: string;
+}
+
+interface PushPayload {
+    after?: string;
+    ref?: string;
+    repository?: { default_branch?: string; full_name?: string };
+}
+
+const ZERO_SHA = /^0+$/u;
+
+/**
+ * Map a `push` webhook payload to a build intent (GAPS.md A4), or `null` when
+ * irrelevant: only pushes to the repository's default branch build (Zeitwork's
+ * rule), and branch-delete pushes (zero SHA) are ignored.
+ */
+export const parsePushEvent = (payload: unknown): null | PushIntent => {
+    if (!payload || typeof payload !== "object") {
+        return null;
+    }
+
+    const event = payload as PushPayload;
+    const repository = event.repository?.full_name;
+    const defaultBranch = event.repository?.default_branch ?? "main";
+    const commitSha = event.after;
+
+    if (typeof repository !== "string" || typeof commitSha !== "string" || event.ref !== `refs/heads/${defaultBranch}`) {
+        return null;
+    }
+
+    if (ZERO_SHA.test(commitSha)) {
+        return null;
+    }
+
+    return { branch: defaultBranch, commitSha, repository };
+};
+
+export interface InstallationIntent {
+    accountLogin: string;
+    action: "created" | "deleted";
+    installationId: number;
+}
+
+interface InstallationPayload {
+    action?: string;
+    installation?: { account?: { login?: string }; id?: number };
+}
+
+/** Map an `installation` webhook payload to a link/unlink intent (GAPS.md A4), or `null`. */
+export const parseInstallationEvent = (payload: unknown): InstallationIntent | null => {
+    if (!payload || typeof payload !== "object") {
+        return null;
+    }
+
+    const event = payload as InstallationPayload;
+    const installationId = event.installation?.id;
+    const accountLogin = event.installation?.account?.login;
+
+    if (typeof installationId !== "number" || typeof accountLogin !== "string") {
+        return null;
+    }
+
+    if (event.action === "created" || event.action === "deleted") {
+        return { accountLogin, action: event.action, installationId };
+    }
+
+    return null;
+};
+
 /** Resolves a connected GitHub repository to its Lunora project. */
 export type ResolveProject = (repository: string) => Promise<null | { organizationId: string; projectId: string; slug: string }>; // secret-scanner:allow -- domain field name
 
@@ -98,7 +170,16 @@ export type ResolveProject = (repository: string) => Promise<null | { organizati
  * (CI holds it); previews tear down via their TTL cron (§2.3). So this endpoint's
  * job is project resolution + acknowledgement, not minting cross-org deploys.
  */
-export const handleGitHubWebhook = async (request: Request, options: { resolveProject: ResolveProject; secret: string }): Promise<Response> => {
+export interface GitHubWebhookHooks {
+    /** Link/unlink a GitHub App installation (`installation` events, GAPS.md A4). */
+    onInstallation?: (intent: InstallationIntent) => Promise<void>;
+    /** Record a build for a default-branch push (`push` events, GAPS.md A4). Returns the build id or null when the repo isn't connected. */
+    onPush?: (intent: PushIntent) => Promise<null | { buildId: string; reused: boolean }>;
+    resolveProject: ResolveProject;
+    secret: string;
+}
+
+export const handleGitHubWebhook = async (request: Request, options: GitHubWebhookHooks): Promise<Response> => {
     const body = await request.text();
 
     if (!(await verifyGitHubSignature(options.secret, body, request.headers.get("x-hub-signature-256")))) {
@@ -111,6 +192,36 @@ export const handleGitHubWebhook = async (request: Request, options: { resolvePr
         payload = JSON.parse(body);
     } catch {
         return Response.json({ error: "invalid JSON body" }, { status: 400 });
+    }
+
+    const eventName = request.headers.get("x-github-event");
+
+    if (eventName === "installation" && options.onInstallation) {
+        const installation = parseInstallationEvent(payload);
+
+        if (!installation) {
+            return Response.json({ ignored: true }, { status: 202 });
+        }
+
+        await options.onInstallation(installation);
+
+        return Response.json({ accepted: true, installation: installation.action }, { status: 200 });
+    }
+
+    if (eventName === "push" && options.onPush) {
+        const push = parsePushEvent(payload);
+
+        if (!push) {
+            return Response.json({ ignored: true }, { status: 202 });
+        }
+
+        const build = await options.onPush(push);
+
+        if (!build) {
+            return Response.json({ ignored: true, reason: "repository not connected to a project" }, { status: 202 });
+        }
+
+        return Response.json({ accepted: true, ...build }, { status: 200 });
     }
 
     const intent = parsePullRequestEvent(payload);
