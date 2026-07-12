@@ -68,6 +68,7 @@ export interface ApiTypes {
     incidents: {
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
         setStatus: FunctionReference<"mutation", { id: Id<"incidents">; organizationId: Id<"organizations">; status: unknown }, Id<"incidents">>;
+        triage: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { summary: string; }>;
     };
     invitations: {
         accept: FunctionReference<"mutation", { token: string }, { organizationId: Id<"organizations">; }>;
