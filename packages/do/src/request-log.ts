@@ -561,9 +561,14 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
  * Issue, and matches the grouping a cloud Incident uses. Container crashes fold
  * in too, since they land as `error` rows under `functionPath: "container:&lt;name>"`.
  *
- * Rows come back newest-first, so the first sighting of each hash is the newest
- * row — it seeds `title`/`sampleMessage`/`lastSeen`; older rows only extend
- * `count` and `firstSeen`. Result is ordered most-recently-active first.
+ * Rows come back in `seq` (insert) order, which is NOT `ts` order: a container
+ * lifecycle row carries the caller's envelope `ts`, so an out-of-order or
+ * clock-skewed push can land an older-`ts` row at a higher `seq`. The
+ * representative `title`/`sampleMessage` are therefore tracked by maximum `ts`,
+ * not by first sighting, so they always describe the same occurrence `lastSeen`
+ * points at. `culprit` needs no such tracking — it is `functionPath`, which is
+ * an input to the hash and so is invariant across a group. Result is ordered
+ * most-recently-active first.
  *
  * This projects only the three columns grouping needs (`function_path`,
  * `error_message`, `ts`) instead of going through {@link readRequestLog}'s full
@@ -604,6 +609,8 @@ const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIs
     ).toArray();
 
     const issues = new Map<string, ErrorIssue>();
+    /** `ts` of the row currently supplying each Issue's `title`/`sampleMessage`. */
+    const sampleTs = new Map<string, number>();
 
     for (const row of rows) {
         const message = row.error_message ?? "";
@@ -612,6 +619,7 @@ const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIs
 
         if (existing === undefined) {
             issues.set(hash, { count: 1, culprit, firstSeen: row.ts, hash, lastSeen: row.ts, sampleMessage: message, title });
+            sampleTs.set(hash, row.ts);
 
             continue;
         }
@@ -619,6 +627,13 @@ const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIs
         existing.count += 1;
         existing.firstSeen = Math.min(existing.firstSeen, row.ts);
         existing.lastSeen = Math.max(existing.lastSeen, row.ts);
+
+        // Strictly newer only, so a `ts` tie keeps the higher-`seq` (later-written) row.
+        if (row.ts > (sampleTs.get(hash) ?? Number.NEGATIVE_INFINITY)) {
+            sampleTs.set(hash, row.ts);
+            existing.sampleMessage = message;
+            existing.title = title;
+        }
     }
 
     return [...issues.values()].toSorted((a, b) => b.lastSeen - a.lastSeen);

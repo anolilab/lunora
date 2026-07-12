@@ -258,6 +258,31 @@ describe("readErrorIssues (grouped Issues over the bounded readout)", () => {
         }
     });
 
+    it("takes the representative sample from the newest `ts`, not the newest `seq`", () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            // `seq` is insert order, but `ts` is caller-supplied on a container
+            // lifecycle row — so an out-of-order / clock-skewed push can write an
+            // OLDER-`ts` row at a HIGHER `seq`. Here the second append is the older
+            // occurrence, so the sample must still come from the first (newer `ts`).
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom at 9000", functionPath: "container:transcoder", outcome: "error", ts: 9000 }));
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom at 1000", functionPath: "container:transcoder", outcome: "error", ts: 1000 }));
+
+            const issues = readErrorIssues(database.sql);
+
+            expect(issues).toHaveLength(1);
+            expect(issues[0]!.firstSeen).toBe(1000);
+            expect(issues[0]!.lastSeen).toBe(9000);
+            // Must describe the same occurrence `lastSeen` points at.
+            expect(issues[0]!.sampleMessage).toBe("boom at 9000");
+        } finally {
+            database.close();
+        }
+    });
+
     it("collapses a bot sweep into one Issue and never folds an ok row", () => {
         expect.assertions(3);
 
