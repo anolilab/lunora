@@ -85,6 +85,9 @@
 "package: react":
     - changed-files:
           - any-glob-to-any-file: "packages/react/**/*"
+"package: react-native":
+    - changed-files:
+          - any-glob-to-any-file: "packages/react-native/**/*"
 "package: runtime":
     - changed-files:
           - any-glob-to-any-file: "packages/runtime/**/*"

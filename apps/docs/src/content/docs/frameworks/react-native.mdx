@@ -1,0 +1,227 @@
+---
+title: React Native / Expo
+description: Use Lunora in a React Native / Expo app — the same live hooks, plus an AsyncStorage-backed client and a better-auth Expo bridge.
+---
+
+`@lunora/react-native` is the React Native / Expo entry to Lunora. It
+**re-exports the entire [`@lunora/react`](/docs/frameworks/react) surface** — the
+hooks are `react-dom`-free and touch no browser-only global, so `useQuery`,
+`useMutation`, `useSubscription`, `useAuth`, `usePresence`, `useConnectionStatus`
+and the rest run unchanged on a phone — and adds the two things a native app
+needs that a browser gives you for free:
+
+- a **durable offline queue** backed by `AsyncStorage` (React Native has no
+  IndexedDB, which the browser client auto-probes), and
+- **credentialed requests**: there is no cookie jar in React Native, so the
+  session has to be attached to every HTTP RPC call _and_ the WebSocket upgrade
+  explicitly.
+
+Both are wrapped up in `createLunoraClient`, plus a one-import better-auth Expo
+bridge at `@lunora/react-native/auth`.
+
+<Callout type="info">
+    A complete example — auth, a live message list, optimistic + offline-safe sends — lives at
+    [`examples/expo`](https://github.com/anolilab/lunora/tree/alpha/examples/expo).
+</Callout>
+
+## Scaffold a new app
+
+The fastest start is the `expo` template — a full Expo app (iOS, Android, and
+web) wired to a Lunora worker backend, with auth and the live-chat example
+already in place:
+
+```sh
+lunora init my-app -t expo
+```
+
+Then follow the generated `README.md` (create a D1 database, set `AUTH_SECRET`,
+`lunora codegen`, and `expo start`). To add Lunora to an existing Expo app
+instead, wire it by hand as below.
+
+## Install
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```sh tab="pnpm"
+pnpm add @lunora/react-native @lunora/react @tanstack/react-query react
+npx expo install @react-native-async-storage/async-storage
+```
+
+```sh tab="npm"
+npm install @lunora/react-native @lunora/react @tanstack/react-query react
+npx expo install @react-native-async-storage/async-storage
+```
+
+```sh tab="yarn"
+yarn add @lunora/react-native @lunora/react @tanstack/react-query react
+npx expo install @react-native-async-storage/async-storage
+```
+
+```sh tab="bun"
+bun add @lunora/react-native @lunora/react @tanstack/react-query react
+npx expo install @react-native-async-storage/async-storage
+```
+
+</Tabs>
+
+For auth also add `better-auth @better-auth/expo` and
+`npx expo install expo-secure-store expo-web-browser expo-linking expo-constants expo-network`.
+
+## Create the client
+
+`createLunoraClient` is a thin wrapper over `new LunoraClient(options)`. Pass
+`storage` to persist the offline queue across restarts.
+
+```ts title="lunora.ts"
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { createLunoraClient } from "@lunora/react-native";
+
+export const client = createLunoraClient({
+    url: process.env.EXPO_PUBLIC_LUNORA_URL!, // e.g. https://my-app.workers.dev
+    storage: AsyncStorage,
+});
+```
+
+## Provide it
+
+Mount `<LunoraProvider>` (re-exported from this package) inside a TanStack Query
+provider, exactly as on the web.
+
+```tsx title="App.tsx"
+import { LunoraProvider } from "@lunora/react-native";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+import { client } from "./lunora";
+import { Chat } from "./Chat";
+
+const queryClient = new QueryClient();
+
+export default function App() {
+    return (
+        <QueryClientProvider client={queryClient}>
+            <LunoraProvider client={client}>
+                <Chat />
+            </LunoraProvider>
+        </QueryClientProvider>
+    );
+}
+```
+
+## Live queries and mutations
+
+The hooks are the React ones — only the host components change (`View`, `Text`,
+`FlatList` instead of DOM elements).
+
+```tsx title="Chat.tsx"
+import { useMutation, useQuery } from "@lunora/react-native";
+import { FlatList, Text } from "react-native";
+
+import { api } from "./lunora/_generated/api";
+
+export function Chat() {
+    const messages = useQuery(api.messages.list, {});
+    const { mutate: send } = useMutation(api.messages.send);
+
+    return <FlatList data={messages ?? []} keyExtractor={(m) => m._id} renderItem={({ item }) => <Text>{item.text}</Text>} />;
+}
+```
+
+`useQuery` opens a live WebSocket subscription; `send` is optimistic and, thanks
+to the AsyncStorage persistence, queued and retried when offline.
+
+## Authentication (better-auth + Expo)
+
+React Native has no cookie jar, so the session is sent as a **bearer** token —
+the HTTP RPC carries it in the `Authorization` header and the live socket in the
+`?token=` query param (see [How auth reaches the live socket](#how-auth-reaches-the-live-socket)).
+The [better-auth Expo](https://www.better-auth.com/docs/integrations/expo)
+plugin persists the session in `SecureStore`; `expoBearerToken` reads the token
+out.
+
+```ts title="auth-client.ts"
+import { expoClient } from "@lunora/react-native/auth";
+import { createAuthClient } from "better-auth/react";
+import * as SecureStore from "expo-secure-store";
+
+export const authClient = createAuthClient({
+    baseURL: process.env.EXPO_PUBLIC_LUNORA_URL!,
+    plugins: [expoClient({ scheme: "myapp", storage: SecureStore })],
+});
+```
+
+```ts title="lunora.ts"
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { createLunoraClient } from "@lunora/react-native";
+
+export const client = createLunoraClient({
+    url: process.env.EXPO_PUBLIC_LUNORA_URL!,
+    storage: AsyncStorage,
+});
+```
+
+Bridge the session into the client whenever it changes — `setAuthToken` for HTTP,
+`setWsToken` for the socket:
+
+```tsx title="App.tsx"
+import { expoBearerToken } from "@lunora/react-native/auth";
+import { useEffect } from "react";
+
+import { authClient } from "./auth-client";
+import { client } from "./lunora";
+
+// inside a component that renders once the session is known:
+const { data: session } = authClient.useSession();
+
+useEffect(() => {
+    const token = expoBearerToken(authClient);
+    client.setAuthToken(token); // HTTP `Authorization: Bearer …`
+    client.setWsToken(token ?? undefined); // WS `?token=…`
+}, [session]);
+```
+
+On the **server**, add better-auth's `expo()` and `bearer()` plugins, and fold
+the socket's `?token=` into an `Authorization` header in `resolveIdentity`:
+
+```ts
+import { bearer } from "@lunora/auth/plugins";
+import { expo } from "@better-auth/expo";
+
+// authOptions.plugins:      [expo(), bearer(), /* … */]
+// authOptions.trustedOrigins: ["myapp://"]
+
+// createWorker({
+//   resolveIdentity: async (request) => {
+//     const headers = new Headers(request.headers);
+//     const wsToken = new URL(request.url).searchParams.get("token");
+//     if (wsToken && !headers.has("authorization")) headers.set("authorization", `Bearer ${wsToken}`);
+//     const session = await auth.api.getSession({ headers });
+//     return session?.user?.id ? { userId: session.user.id } : null;
+//   },
+// });
+```
+
+<Callout type="warn">The `scheme` in `app.json`, the `expoClient({scheme})` call, and the server's `trustedOrigins` must all match.</Callout>
+
+## How auth reaches the live socket
+
+Lunora's runtime enables a CSRF Origin-check by default: it rejects any
+state-changing HTTP request or WebSocket upgrade that carries a `Cookie` but no
+trusted `Origin`. React Native sends no `Origin`, so a cookie credential would be
+rejected once signed in. A **bearer** token sidesteps that — it carries no
+`Cookie`, so it's exempt. The HTTP RPC sends `Authorization: Bearer <token>`; the
+socket can't set headers from a browser, so the token rides `?token=`, and the
+worker's `resolveIdentity` folds it back into an `Authorization` header for
+better-auth's `bearer` plugin. The same wiring works unchanged on
+`react-native-web`.
+
+## API
+
+`createLunoraClient(options)` accepts everything on `LunoraClientOptions` plus
+`storage` (an `AsyncStorage`-shaped store, wired to the offline queue) and
+`getAuthHeaders` (`() => Record<string, string> | undefined`, a generic
+custom-header escape hatch — prefer a bearer token for better-auth sessions). An
+explicit `persistence`, `fetch`, or `WebSocket` takes precedence.
+
+`@lunora/react-native/auth` exports `expoBearerToken(authClient)` and re-exports
+`expoClient`, `setupExpoFocusManager`, and `setupExpoOnlineManager` from
+`@better-auth/expo/client`.

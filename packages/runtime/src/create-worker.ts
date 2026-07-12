@@ -4,6 +4,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
 import type { AuthAdmin, AuthIntrospector } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
@@ -2476,10 +2477,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const rpcStartedAt = Date.now();
         const { observability } = options;
 
+        // Trace context for this dispatch, generated at entry (before the shard
+        // runs the handler) so it can both ride the dispatch's own span and reach
+        // the shard as a `traceparent` — letting a container the handler calls
+        // stitch its spans under the same trace (W3C trace-context propagation).
+        const traceId = otlpRandomHex(16);
+        const spanId = otlpRandomHex(8);
+
         // Re-emit the RPC body to the shard at its `/rpc` route.
         const forwarded = new Request(`https://shard.internal/rpc`, {
             body: JSON.stringify({ args, functionPath }),
-            headers: forwardedHeaders,
+            headers: { ...forwardedHeaders, traceparent: buildTraceparent(traceId, spanId) },
             method: "POST",
         });
 
@@ -2496,6 +2504,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     functionPath,
                     ok: response.ok,
                     shardKey,
+                    spanId,
+                    traceId,
                     ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
                 },
                 sinkContext,
@@ -2508,7 +2518,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // (and would drop `statusText`).
             return response;
         } catch (error) {
-            emitRpcEvent(observability, buildErrorEvent(functionPath, Date.now() - rpcStartedAt, error, { shardKey }), sinkContext);
+            emitRpcEvent(observability, { ...buildErrorEvent(functionPath, Date.now() - rpcStartedAt, error, { shardKey }), spanId, traceId }, sinkContext);
             throw error;
         }
     };

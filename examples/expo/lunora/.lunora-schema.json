@@ -1,0 +1,34 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "messages": {
+            "fields": {
+                "authorName": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "text": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "userId": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_created": {
+                    "fields": ["createdAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        }
+    },
+    "version": 1
+}

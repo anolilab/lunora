@@ -494,10 +494,11 @@ describe("lunora init", () => {
             expect(errors.join("\n")).toContain("template not found in local source");
         });
 
-        it("isTemplate accepts the 6 real template dir names and next (not the removed vite-react)", () => {
-            expect.assertions(9);
+        it("isTemplate accepts the real template dir names and next (not the removed vite-react)", () => {
+            expect.assertions(10);
 
             expect(isTemplate("astro")).toBe(true);
+            expect(isTemplate("expo")).toBe(true);
             expect(isTemplate("nuxt")).toBe(true);
             expect(isTemplate("standalone")).toBe(true);
             expect(isTemplate("sveltekit")).toBe(true);
@@ -529,6 +530,34 @@ describe("lunora init", () => {
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
             // vite.config.ts does NOT exist in the astro template (class-B framework)
             expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
+        });
+
+        it("expo template scaffolds the RN client, worker backend, and app config", async () => {
+            expect.assertions(8);
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "expo-app",
+                templateType: "expo",
+            });
+
+            expect(result.code).toBe(0);
+
+            const target = join(workdir, "expo-app");
+            const appJson = readFileSync(join(target, "app.json"), "utf8");
+
+            // Expo-specific entry + config — proves we did NOT fall back to vite.
+            expect(existsSync(join(target, "app.json"))).toBe(true);
+            expect(existsSync(join(target, "App.tsx"))).toBe(true);
+            expect(existsSync(join(target, "src", "Chat.tsx"))).toBe(true);
+            // The worker backend + Lunora schema.
+            expect(existsSync(join(target, "src", "server", "index.ts"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
+            expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
+            // {{name}} is substituted into the app manifest.
+            expect(appJson).toContain('"slug": "expo-app"');
         });
     });
 

@@ -1,0 +1,106 @@
+---
+title: "@lunora/react-native"
+description: React Native / Expo bindings for Lunora — the @lunora/react hooks plus an AsyncStorage-backed client factory and a better-auth Expo bridge.
+---
+
+`@lunora/react-native` is the React Native / Expo entry to Lunora. It
+**re-exports the entire [`@lunora/react`](/docs/packages/react) surface** — the
+hooks are `react-dom`-free and touch no browser-only global, so `useQuery`,
+`useMutation`, `useSubscription`, `useAuth`, `useConnectionStatus` and the rest
+run unchanged on native — and adds the two things a native app needs that a
+browser gives you for free: an `AsyncStorage`-backed offline queue, and
+credentialed requests (React Native has no cookie jar, so the session has to be
+attached to every HTTP RPC call and the WebSocket upgrade explicitly).
+
+See the [React Native / Expo guide](/docs/frameworks/react-native) for the
+task-oriented walkthrough.
+
+```tsx
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { createLunoraClient, LunoraProvider, useQuery } from "@lunora/react-native";
+import { api } from "@/lunora/_generated/api";
+
+const client = createLunoraClient({
+    url: process.env.EXPO_PUBLIC_LUNORA_URL!,
+    storage: AsyncStorage,
+});
+
+const Root = () => (
+    <LunoraProvider client={client}>
+        <Chat />
+    </LunoraProvider>
+);
+```
+
+## `createLunoraClient(options)`
+
+A thin wrapper over `new LunoraClient(options)`. Accepts everything on
+`LunoraClientOptions` (`url`, `wsUrl`, `authBasePath`, `persistenceVersion`, …)
+plus two React-Native conveniences:
+
+- **`storage`** — React Native `AsyncStorage` (or any `getItem`/`setItem`/`removeItem`
+  store). Wires `createAsyncStoragePersistence` so the offline mutation queue
+  survives an app restart. The browser client auto-probes IndexedDB, which React
+  Native lacks, so without this the queue stays in memory.
+- **`getAuthHeaders`** — `() => Record<string, string> | undefined`. A generic
+  escape hatch for a **custom** credential header (an API-gateway key, a proxy
+  token) attached to every HTTP RPC request **and** the WebSocket upgrade. For
+  better-auth sessions prefer a bearer token (below) — a `Cookie` header here
+  would be rejected by the runtime's CSRF guard on an `Origin`-less native request.
+
+An explicit `persistence`, `fetch`, or `WebSocket` takes precedence over the
+convenience derived from `storage` / `getAuthHeaders`.
+
+## Hooks & provider
+
+Re-exported verbatim from [`@lunora/react`](/docs/packages/react): `LunoraProvider`,
+`useLunora`, `useQuery`, `useMutation`, `useSubscription`, `useAuth`,
+`usePresence`, `useConnectionStatus`, `usePaginatedQuery`, `useInfiniteQuery`,
+`useStream`, `useFlag`/`useFlags`, `useRateLimit`, the `Authenticated` /
+`Unauthenticated` / `AuthLoading` gates, and the framework-neutral error
+discriminators. Mount them inside a `<QueryClientProvider>` exactly as on the web.
+
+## `@lunora/react-native/auth`
+
+The better-auth Expo bridge. Auth is a **bearer** token: React Native has no
+cookie jar, and a `Cookie` header would be rejected by the runtime's CSRF guard
+on an `Origin`-less native request, so the session rides the `Authorization`
+header (HTTP RPC) and the `?token=` query param (the socket) instead.
+
+- **`expoBearerToken(authClient)`** — reads the better-auth Expo session token
+  (from `getCookie()`) for use with `client.setAuthToken` (HTTP) and
+  `client.setWsToken` (socket); returns `null` when signed out.
+- **`expoClient`, `setupExpoFocusManager`, `setupExpoOnlineManager`** — re-exported
+  from `@better-auth/expo/client`.
+
+```tsx
+import { createAuthClient } from "better-auth/react";
+import { expoClient, expoBearerToken } from "@lunora/react-native/auth";
+import * as SecureStore from "expo-secure-store";
+
+export const authClient = createAuthClient({
+    baseURL: process.env.EXPO_PUBLIC_LUNORA_URL!,
+    plugins: [expoClient({ scheme: "myapp", storage: SecureStore })],
+});
+
+export const client = createLunoraClient({
+    url: process.env.EXPO_PUBLIC_LUNORA_URL!,
+    storage: AsyncStorage,
+});
+
+// Sync the token into the client whenever the session changes (e.g. in an effect
+// keyed on `authClient.useSession()`):
+const token = expoBearerToken(authClient);
+client.setAuthToken(token);
+client.setWsToken(token ?? undefined);
+```
+
+On the server, add better-auth's `expo()` **and** `bearer()` plugins, and fold
+the socket's `?token=` into an `Authorization` header in `resolveIdentity` (see
+[`@lunora/auth`](/docs/packages/auth)).
+
+## See also
+
+- [React Native / Expo guide](/docs/frameworks/react-native)
+- [@lunora/react](/docs/packages/react)
+- [@lunora/client](/docs/packages/client)

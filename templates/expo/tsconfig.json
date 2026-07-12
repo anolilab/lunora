@@ -1,0 +1,10 @@
+{
+    "extends": "expo/tsconfig.base",
+    "compilerOptions": {
+        "strict": true,
+        "skipLibCheck": true,
+        "types": ["node"]
+    },
+    "include": ["App.tsx", "index.ts", "src/**/*.ts", "src/**/*.tsx", "lunora/**/*.ts", "expo-env.d.ts"],
+    "exclude": ["node_modules", "babel.config.js", "metro.config.js"]
+}

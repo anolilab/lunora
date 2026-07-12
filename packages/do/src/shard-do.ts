@@ -1640,6 +1640,9 @@ abstract class ShardDO {
      */
     private currentRequestIp: string | undefined;
 
+    /** W3C `traceparent` of the inbound RPC; forwarded onto outbound container fetches. */
+    private currentRequestTraceparent: string | undefined;
+
     /**
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
      * `x-lunora-mutation-id` header. When set, the dispatch path dedups the call
@@ -2029,6 +2032,7 @@ abstract class ShardDO {
         // unauthenticated traffic by IP).
         this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
         this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
+        this.currentRequestTraceparent = request.headers.get("traceparent") ?? undefined;
         // Reset the per-request read/cache capture (filled by `runCachedQuery`
         // for cached query paths) so a previous dispatch can't leak into this
         // entry's logged read set / cache-hit flag.
@@ -2213,6 +2217,7 @@ abstract class ShardDO {
             this.currentRequestIdentity = undefined;
             this.currentRequestIp = undefined;
             this.currentRequestSystem = false;
+            this.currentRequestTraceparent = undefined;
             this.currentScannedTables = undefined;
             this.currentIndexHits = undefined;
             this.currentRequestReadTables = undefined;
@@ -2847,6 +2852,15 @@ abstract class ShardDO {
      */
     protected getCurrentIp(): string | undefined {
         return this.currentRequestIp;
+    }
+
+    /**
+     * W3C `traceparent` of the inbound RPC (forwarded by the runtime), or
+     * `undefined`. `buildCtx` passes it to `createContainerContext` so outbound
+     * container fetches carry it and the container's spans join the same trace.
+     */
+    protected getCurrentTraceparent(): string | undefined {
+        return this.currentRequestTraceparent;
     }
 
     /**

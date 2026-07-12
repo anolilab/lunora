@@ -247,7 +247,7 @@ describe("emit (containers)", () => {
 
         expect(shard).toContain('import { createContainerContext } from "@lunora/container";');
         expect(shard).toContain('{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 5 },');
-        expect(shard).toContain("const containers = createContainerContext(env, LUNORA_CONTAINERS);");
+        expect(shard).toContain("const containers = createContainerContext(env, LUNORA_CONTAINERS, undefined, this.getCurrentTraceparent());");
         expect(shard).toContain("containers,");
     });
 
@@ -262,6 +262,6 @@ describe("emit (containers)", () => {
 
         const shard = emitShard({ schema: { ...EMPTY_SCHEMA, jurisdiction: "us" }, containers: discover() });
 
-        expect(shard).toContain('const containers = createContainerContext(env, LUNORA_CONTAINERS, "us");');
+        expect(shard).toContain('const containers = createContainerContext(env, LUNORA_CONTAINERS, "us", this.getCurrentTraceparent());');
     });
 });

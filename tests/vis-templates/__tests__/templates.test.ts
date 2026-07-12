@@ -143,6 +143,7 @@ const MAJOR_OVERRIDES: Record<string, Record<string, number>> = {
 const REQUIRED_ADAPTER: Record<string, string | null> = {
     analog: null,
     astro: "@lunora/react",
+    expo: "@lunora/react-native",
     nuxt: "@lunora/vue",
     "react-router": "@lunora/react",
     standalone: null,

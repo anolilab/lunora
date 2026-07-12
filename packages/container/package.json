@@ -1,6 +1,6 @@
 {
     "name": "@lunora/container",
-    "version": "1.0.0-alpha.9",
+    "version": "1.0.0-alpha.11",
     "description": "Cloudflare Containers for Lunora: defineContainer, generated Container DO classes, and the ctx.containers action surface",
     "keywords": [
         "cloudflare",
@@ -45,6 +45,10 @@
         "./bridge": {
             "types": "./dist/bridge.d.ts",
             "import": "./dist/bridge.mjs"
+        },
+        "./otel": {
+            "types": "./dist/otel.d.ts",
+            "import": "./dist/otel.mjs"
         },
         "./package.json": "./package.json"
     },

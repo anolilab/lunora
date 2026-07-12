@@ -264,11 +264,17 @@ const DEFAULT_COLD_START_BACKOFF_MS = 500;
 /** The header `@cloudflare/containers`' `switchPort` sets to target a non-default container port. */
 const TARGET_PORT_HEADER = "cf-container-target-port";
 
-const toRequest = (input: Request | string, init?: RequestInit, port?: number): Request => {
+const toRequest = (input: Request | string, init?: RequestInit, port?: number, traceparent?: string): Request => {
     const request = typeof input === "string" && input.startsWith("/") ? new Request(`http://container${input}`, init) : new Request(input, init);
 
     if (port !== undefined) {
         request.headers.set(TARGET_PORT_HEADER, String(port));
+    }
+
+    if (traceparent !== undefined) {
+        // Propagate the Worker RPC's W3C trace context so the container's own OTLP
+        // spans (via `@lunora/container/otel`) stitch under the same trace.
+        request.headers.set("traceparent", traceparent);
     }
 
     return request;
@@ -379,7 +385,12 @@ const isColdStartTransient = async (response: Response): Promise<boolean> => {
  * body) is sent exactly once. `.port()` re-binds the same `send`, so multi-port
  * routing composes with the retry uniformly.
  */
-const coldStartRetryingHandle = (send: (request: Request) => Promise<Response>, options: InstanceRetryOptions = {}, port?: number): ContainerHandle => {
+const coldStartRetryingHandle = (
+    send: (request: Request) => Promise<Response>,
+    options: InstanceRetryOptions = {},
+    port?: number,
+    traceparent?: string,
+): ContainerHandle => {
     const attempts = Math.max(1, options.attempts ?? DEFAULT_COLD_START_ATTEMPTS);
     const baseBackoff = options.backoffMs ?? DEFAULT_COLD_START_BACKOFF_MS;
     const maxBackoff = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
@@ -401,7 +412,7 @@ const coldStartRetryingHandle = (send: (request: Request) => Promise<Response>, 
 
                 try {
                     // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
-                    const response = await send(toRequest(input, init, port));
+                    const response = await send(toRequest(input, init, port, traceparent));
 
                     // eslint-disable-next-line no-await-in-loop -- the cold-start check peeks the body
                     if (isLastAttempt || !(await isColdStartTransient(response))) {
@@ -421,12 +432,12 @@ const coldStartRetryingHandle = (send: (request: Request) => Promise<Response>, 
             // keeps the control flow total for the type checker.
             throw lastError instanceof Error ? lastError : new Error("ctx.containers: cold-start retry exhausted");
         },
-        port: (targetPort) => coldStartRetryingHandle(send, options, targetPort),
+        port: (targetPort) => coldStartRetryingHandle(send, options, targetPort, traceparent),
     };
 };
 
-const handleFor = (namespace: ContainerNamespaceLike, instanceName: string, options?: InstanceRetryOptions): ContainerHandle =>
-    coldStartRetryingHandle(async (request) => namespace.get(namespace.idFromName(instanceName)).fetch(request), options);
+const handleFor = (namespace: ContainerNamespaceLike, instanceName: string, options?: InstanceRetryOptions, traceparent?: string): ContainerHandle =>
+    coldStartRetryingHandle(async (request) => namespace.get(namespace.idFromName(instanceName)).fetch(request), options, undefined, traceparent);
 
 /** Lifecycle/egress RPCs `instanceHandleFor` forwards to the container DO stub. */
 type ContainerStubMethod = keyof Omit<ContainerStubLike, "fetch">;
@@ -464,11 +475,12 @@ const instanceHandleFor = (
     spec: ContainerBindingSpec,
     instanceName: string,
     options?: InstanceRetryOptions,
+    traceparent?: string,
 ): ContainerInstanceHandle => {
     const stub = (): ContainerStubLike => namespace.get(namespace.idFromName(instanceName));
 
     return {
-        ...coldStartRetryingHandle(async (request) => stub().fetch(request), options),
+        ...coldStartRetryingHandle(async (request) => stub().fetch(request), options, undefined, traceparent),
         destroy: async () => lifecycleCall(stub(), "destroy", spec.binding),
         egress: egressControlsFor(stub, spec.binding),
         getState: async () => lifecycleCall(stub(), "getState", spec.binding),
@@ -492,7 +504,13 @@ const retryOnServerError = (response: Response): boolean => response.status >= 5
  * backoff. Pure over the namespace, so it's testable with a fake. The final
  * attempt's outcome (response or thrown error) is returned/propagated as-is.
  */
-const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, options: PoolOptions = {}, port?: number): ContainerHandle => {
+const poolHandleFor = (
+    namespace: ContainerNamespaceLike,
+    spec: ContainerBindingSpec,
+    options: PoolOptions = {},
+    port?: number,
+    traceparent?: string,
+): ContainerHandle => {
     const size = options.size ?? spec.maxInstances ?? DEFAULT_POOL_SIZE;
     const attempts = Math.max(1, options.attempts ?? 3);
     const baseBackoff = options.backoffMs ?? 100;
@@ -516,7 +534,7 @@ const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBinding
                     await sleep(Math.min(baseBackoff * 2 ** (attempt - 1), maxBackoff));
                 }
 
-                const request = toRequest(input, init, port);
+                const request = toRequest(input, init, port, traceparent);
 
                 try {
                     // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
@@ -533,15 +551,15 @@ const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBinding
             // Exhausted attempts after a thrown error on the last try.
             throw lastError instanceof Error ? lastError : new Error(`ctx.containers.${spec.exportName}.pool(): all ${String(totalAttempts)} attempts failed`);
         },
-        port: (targetPort) => poolHandleFor(namespace, spec, options, targetPort),
+        port: (targetPort) => poolHandleFor(namespace, spec, options, targetPort, traceparent),
     };
 };
 
-const accessorFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec): ContainerAccessor => {
+const accessorFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, traceparent?: string): ContainerAccessor => {
     return {
-        any: (count, options) => handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), options),
-        get: (name, options) => instanceHandleFor(namespace, spec, name, options),
-        pool: (options) => poolHandleFor(namespace, spec, options),
+        any: (count, options) => handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), options, traceparent),
+        get: (name, options) => instanceHandleFor(namespace, spec, name, options, traceparent),
+        pool: (options) => poolHandleFor(namespace, spec, options, undefined, traceparent),
     };
 };
 
@@ -559,15 +577,19 @@ const missingBindingAccessor = (spec: ContainerBindingSpec): ContainerAccessor =
 
 /**
  * Build the `ctx.containers` record from the Worker `env`. Called by the
- * generated ShardDO with the specs codegen derived from
- * `lunora/containers.ts`. A missing binding doesn't throw here — only when the
- * handle is actually used — so one unprovisioned container never breaks
- * unrelated functions.
+ * generated ShardDO with the specs codegen derived from `lunora/containers.ts`.
+ * A missing binding doesn't throw here — only when the handle is actually used —
+ * so one unprovisioned container never breaks unrelated functions.
+ *
+ * `traceparent` (the inbound RPC's W3C trace context, forwarded by the runtime
+ * and read off the request by the DO) is stamped onto every outbound container
+ * `fetch`, so the container's own spans stitch under the Worker's trace.
  */
 const createContainerContext = (
     env: Record<string, unknown>,
     specs: ReadonlyArray<ContainerBindingSpec>,
     jurisdiction?: DurableObjectJurisdiction,
+    traceparent?: string,
 ): Record<string, ContainerAccessor> => {
     const containers: Record<string, ContainerAccessor> = {};
 
@@ -576,7 +598,7 @@ const createContainerContext = (
 
         containers[spec.exportName] =
             binding && typeof binding.idFromName === "function" && typeof binding.get === "function"
-                ? accessorFor(applyJurisdiction(binding, jurisdiction), spec)
+                ? accessorFor(applyJurisdiction(binding, jurisdiction), spec, traceparent)
                 : missingBindingAccessor(spec);
     }
 
