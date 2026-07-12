@@ -22,6 +22,7 @@ import type {
 } from "@lunora/server";
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
+import type { LunoraAi } from "@lunora/ai";
 import type { LunoraPayment } from "@lunora/payment";
 
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
@@ -41,6 +42,8 @@ export type StorageBucketName = "default";
  */
 export interface CloudflareBindings {
     readonly [binding: string]: unknown;
+    /** Workers AI binding (the conventional `env.AI`), narrowing `ctx.ai`. */
+    readonly AI?: unknown;
 }
 
 /** Alias for {@link CloudflareBindings} — the typed shape of `env`. */
@@ -89,6 +92,7 @@ export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;
+    readonly ai: LunoraAi;
     readonly payments: LunoraPayment;
 }
 

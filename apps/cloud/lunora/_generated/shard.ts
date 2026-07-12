@@ -5,6 +5,8 @@ import type { AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, LogSink, M
 import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
 import { asBucketStorage, createSecrets, LunoraError } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
+import type { AiBindingLike, LunoraAi } from "@lunora/ai";
+import { createAi } from "@lunora/ai";
 import type { LunoraDatabaseLike as LunoraPaymentDbLike, LunoraPayment, PaymentsFromContextOptions } from "@lunora/payment";
 import { paymentsFromContext } from "@lunora/payment";
 
@@ -308,6 +310,14 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
         }
     ],
     "issues": [
+        {
+            "fields": [
+                "organizationId",
+                "culprit"
+            ],
+            "name": "by_org_culprit",
+            "type": "index"
+        },
         {
             "fields": [
                 "organizationId",
@@ -1944,16 +1954,16 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "PERFORMANCE"
         ],
         "description": "A secondary index is redundant because another index already covers every lookup it serves (its columns are a leading prefix of the other's). The redundant index costs storage and is maintained on every write for no read benefit.",
-        "detail": "Index \"by_org\" on table \"issues\" (organizationId) is redundant — index \"by_org_hash\" (organizationId, hash) already covers its lookups.",
+        "detail": "Index \"by_org\" on table \"issues\" (organizationId) is redundant — index \"by_org_culprit\" (organizationId, culprit) already covers its lookups.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
             "coveredBy": {
                 "fields": [
                     "organizationId",
-                    "hash"
+                    "culprit"
                 ],
-                "name": "by_org_hash"
+                "name": "by_org_culprit"
             },
             "fields": [
                 "organizationId"
@@ -2693,12 +2703,12 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:incidents:45:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:incidents:52:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in setStatus (incidents:45) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in setStatus (incidents:52) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -2706,7 +2716,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "setStatus",
             "file": "incidents",
             "kind": "mutation",
-            "line": 45
+            "line": 52
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
@@ -3642,6 +3652,25 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "setStatus",
             "file": "incidents",
             "kind": "mutation",
+            "sensitive": false
+        },
+        "name": "public_mutation_without_ratelimit",
+        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
+        "title": "Public write without a rate limit"
+    },
+    {
+        "cacheKey": "public_mutation_without_ratelimit:incidents:triage",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
+        "detail": "Public action `triage` (incidents) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "triage",
+            "file": "incidents",
+            "kind": "action",
             "sensitive": false
         },
         "name": "public_mutation_without_ratelimit",
@@ -5269,6 +5298,7 @@ export interface ShardDOConfig {
     observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
+    ai?: (env: Record<string, unknown>) => AiBindingLike;
     payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;
     d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;
 }
@@ -5355,6 +5385,23 @@ const globalDbStub: DatabaseWriterLike = {
     replace: async () => {
         throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
+};
+
+const aiStub: LunoraAi = {
+    embeddingModel: () => {
+        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
+    },
+    model: () => {
+        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
+    },
+    run: async () => {
+        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
+    },
+    // workersai is a callable-with-properties; a bare throwing arrow isn't
+    // structurally assignable, so cast it. Never invoked (the stub throws first).
+    workersai: (() => {
+        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
+    }) as unknown as LunoraAi["workersai"],
 };
 
 const paymentStub: LunoraPayment = {
@@ -5766,6 +5813,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
 
+            const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
+            const ai: LunoraAi = aiBinding ? createAi({ binding: aiBinding as AiBindingLike }) : aiStub;
+
             const secrets = createSecrets(env);
 
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
@@ -5857,6 +5907,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 orm: bindOrm(facade),
                 scheduler,
                 storage,
+                ai,
                 secrets,
                 payments,
             };
