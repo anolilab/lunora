@@ -31,7 +31,7 @@
         // `0 */1 * * *` fires the control plane's own code crons (preview cleanup,
         // usage rollup). `* * * * *` drives the tenant cron fan-out — the fan-out
         // matches each tenant's expression against the current minute (src/fanout).
-        "crons": ["0 */1 * * *", "0 */6 * * *", "0 */12 * * *", "*/1 * * * *"],
+        "crons": ["0 */1 * * *", "0 */6 * * *", "*/1 * * * *"],
     },
     "vars": {
         // The Cloudflare account this cell provisions into.
