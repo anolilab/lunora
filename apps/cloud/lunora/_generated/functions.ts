@@ -122,6 +122,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "usage:record": lunora_usage_15.record as unknown as RegisteredLunoraFunction,
     "usage:recordOverageDebit": lunora_usage_15.recordOverageDebit as unknown as RegisteredLunoraFunction,
     "usage:rollup": lunora_usage_15.rollup as unknown as RegisteredLunoraFunction,
+    "usage:series": lunora_usage_15.series as unknown as RegisteredLunoraFunction,
     "usage:summary": lunora_usage_15.summary as unknown as RegisteredLunoraFunction,
 };
 
@@ -559,6 +560,12 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "debitedCredits": source["debitedCredits"], "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
+installCompiledValidatorMap(lunora_usage_15.series.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
+return { "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
+});
 installCompiledValidatorMap(lunora_usage_15.summary.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
@@ -717,6 +724,7 @@ export interface Caller {
         record: (args: { deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
         recordOverageDebit: (args: { debitedCredits: number; organizationId: Id<"organizations">; periodStart: number }) => Promise<void>;
         rollup: (args?: {}) => Promise<{ compacted: number; }>;
+        series: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<{ cpuMs: number; day: number; requests: number; }[]>;
         summary: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<Record<"requests" | "cpuMs" | "storageBytes", number>>;
     };
 }
@@ -844,6 +852,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         record: (args) => callRegistered(context, "usage:record", args),
         recordOverageDebit: (args) => callRegistered(context, "usage:recordOverageDebit", args),
         rollup: (args) => callRegistered(context, "usage:rollup", args),
+        series: (args) => callRegistered(context, "usage:series", args),
         summary: (args) => callRegistered(context, "usage:summary", args),
     },
 });

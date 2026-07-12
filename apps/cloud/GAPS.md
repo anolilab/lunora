@@ -279,3 +279,47 @@ mail-capable edge path — 🌐),
 control-plane PATs (decision: org-scoped deploy keys ARE the API tokens), and
 the dispatcher cache's ≤60 s pointer-swap propagation (documented behavior; a
 purge ping is a later optimization).
+
+---
+
+## Ring 3 (studio/UX pass from the Maple teardown, 2026-07-12)
+
+Reference: github.com/MapleTechLabs/maple — an OTel observability platform
+(NOT a deploy platform; no core overlap) with a best-in-class dashboard.
+**FSL-1.1 with a Competing-Use clause: ideas only, zero code reuse.**
+
+Shipped in this pass (own implementations):
+
+- **Usage meters with included-vs-overage split** — plan-quota bars (amber at
+  80%, red past the allowance) with the honest prepaid-credits overage label,
+  wired to `INCLUDED_USAGE` + the live usage summary.
+- **Daily usage chart** — `usage.series` (per-day buckets from the raw
+  metering events) rendered by a zero-dependency SVG bar chart.
+- **⌘K command palette** — tab navigation + actions, substring matching,
+  full keyboard flow; state resets by remount, no libraries.
+
+Backlog (ranked; all our-own-code):
+
+1. **Alerting pillar** — rules (error-rate/latency/health on deployments),
+   incidents, notification destinations (email/webhook). A whole product
+   pillar; design against the platformUsage + tenantLogs streams.
+2. **Deployment health charts on the project page** — request volume / error
+   rate per deployment (needs status-code capture in the dispatcher metering
+   first: add `outcome` blob to the AE data point).
+3. **Log viewer upgrade** — severity chips, filter bar, virtualized list,
+   log↔deployment correlation links.
+4. **Design-system pass** — dark-first token palette, severity color ramp,
+   consistent empty states with actionable copy (Maple's DESIGN.md rigor is
+   the bar, not the source).
+5. **Onboarding checklist** — first-run "create project → issue key → first
+   deploy → see it live" checklist on the dashboard, replacing bare empty
+   tabs.
+6. **Time-range picker** — shared presets (1h/24h/7d/30d) across usage/logs
+   once the data streams carry enough resolution.
+7. **Deploy-key roll UX** — one-click roll (issue+revoke atomically) in the
+   keys tab.
+8. **MCP surface** — expose the control plane to agents (list projects,
+   deployments, logs, trigger rollback) via `@lunora/mcp`; strong
+   differentiator and cheap given the framework ships an MCP package.
+9. **Integrations hub** — OAuth connect cards (GitHub App install, Creem
+   portal) instead of bare settings fields.
