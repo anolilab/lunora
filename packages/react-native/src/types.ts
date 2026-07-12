@@ -21,9 +21,10 @@ export type AuthHeadersFactory = () => Record<string, string> | undefined;
  * React-Native-shaped conveniences layered on. `storage` wires the
  * AsyncStorage-backed offline-queue persistence for you (the browser default
  * auto-probes IndexedDB, which React Native lacks, so without this the queue
- * stays in memory and is lost on reload). `getAuthHeaders` attaches a credential
- * to both the HTTP RPC path and the WebSocket upgrade, since React Native has no
- * cookie jar to do it implicitly.
+ * stays in memory and is lost on reload). `getAuthHeaders` is a generic escape
+ * hatch for a custom credential header on both the HTTP RPC path and the
+ * WebSocket upgrade; for better-auth sessions prefer a bearer token
+ * (`expoBearerToken` + the client's `setAuthToken` / `setWsToken`).
  *
  * The `persistence`, `fetch`, and `WebSocket` fields of `LunoraClientOptions`
  * are still accepted and take precedence when you need full control; the two
