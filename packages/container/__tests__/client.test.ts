@@ -61,6 +61,27 @@ describe(createContainerContext, () => {
         expect(requests[0]!.url).toBe("https://example.com/probe");
     });
 
+    it("stamps the forwarded traceparent onto outbound container requests (get / any / pool)", async () => {
+        expect.assertions(3);
+
+        const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        const { namespace, requests } = fakeNamespace();
+        const containers = createContainerContext(
+            { CONTAINER_TRANSCODER: namespace },
+            [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 2 }],
+            undefined,
+            traceparent,
+        );
+
+        await containers.transcoder!.get("a").fetch("/x");
+        await containers.transcoder!.any().fetch("/x");
+        await containers.transcoder!.pool().fetch("/x");
+
+        for (const request of requests) {
+            expect(request.headers.get("traceparent")).toBe(traceparent);
+        }
+    });
+
     it(".any() picks a pool instance within maxInstances", async () => {
         expect.assertions(2);
 

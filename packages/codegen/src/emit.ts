@@ -2465,10 +2465,11 @@ const emitContainerFragments = (
 
     return {
         // Schema `.jurisdiction("…")` pins every container DO this shard reaches
-        // to the data-residency region; the arg is omitted when undeclared so
-        // existing generated output is unchanged.
+        // to the data-residency region (`undefined` when undeclared). The trailing
+        // `this.getCurrentTraceparent()` forwards the inbound RPC's W3C trace
+        // context onto outbound container fetches so their spans join the trace.
         build: `
-            const containers = createContainerContext(env, LUNORA_CONTAINERS${jurisdiction ? `, ${JSON.stringify(jurisdiction)}` : ""});
+            const containers = createContainerContext(env, LUNORA_CONTAINERS, ${jurisdiction ? JSON.stringify(jurisdiction) : "undefined"}, this.getCurrentTraceparent());
 `,
         contextField: `\n                containers,`,
         importLines: [`import type { ContainerBindingSpec } from "@lunora/container";`, `import { createContainerContext } from "@lunora/container";`],

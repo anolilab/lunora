@@ -49,6 +49,17 @@ export interface ObservabilityEvent {
     ok: boolean;
     /** Shard key for single-shard calls; absent for fan-outs. */
     shardKey?: string;
+
+    /**
+     * W3C trace context for this dispatch, generated once at dispatch entry (32-
+     * and 16-hex). A sink (e.g. `otlpSink`) reuses these for the dispatch's span
+     * instead of minting fresh ids, and the runtime propagates them to the shard
+     * as a `traceparent` so a container the handler calls can stitch its spans
+     * under the same trace. Absent on paths that don't originate a trace (a sink
+     * falls back to random ids).
+     */
+    spanId?: string;
+    traceId?: string;
 }
 
 /** Severity of a {@link LogEvent}, mirroring the usual console levels. */
