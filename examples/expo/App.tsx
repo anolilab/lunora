@@ -4,7 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StatusBar } from "expo-status-bar";
 import type { ReactElement } from "react";
 import { useEffect } from "react";
-import { ActivityIndicator, SafeAreaView, StyleSheet, View } from "react-native";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { authClient } from "./src/auth-client";
 import { Chat } from "./src/Chat";
@@ -42,14 +43,16 @@ function Root(): ReactElement {
 
 export default function App(): ReactElement {
     return (
-        <QueryClientProvider client={queryClient}>
-            <LunoraProvider client={lunoraClient}>
-                <SafeAreaView style={styles.container}>
-                    <Root />
-                    <StatusBar style="auto" />
-                </SafeAreaView>
-            </LunoraProvider>
-        </QueryClientProvider>
+        <SafeAreaProvider>
+            <QueryClientProvider client={queryClient}>
+                <LunoraProvider client={lunoraClient}>
+                    <SafeAreaView style={styles.container}>
+                        <Root />
+                        <StatusBar style="auto" />
+                    </SafeAreaView>
+                </LunoraProvider>
+            </QueryClientProvider>
+        </SafeAreaProvider>
     );
 }
 
