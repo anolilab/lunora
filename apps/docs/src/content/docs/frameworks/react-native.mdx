@@ -183,7 +183,8 @@ On the **server**, add better-auth's `expo()` and `bearer()` plugins, and fold
 the socket's `?token=` into an `Authorization` header in `resolveIdentity`:
 
 ```ts
-import { bearer, expo } from "@lunora/auth/plugins";
+import { bearer } from "@lunora/auth/plugins";
+import { expo } from "@better-auth/expo";
 
 // authOptions.plugins:      [expo(), bearer(), /* … */]
 // authOptions.trustedOrigins: ["myapp://"]

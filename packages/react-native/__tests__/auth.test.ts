@@ -1,19 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { expoBearerToken } from "../src/auth";
-
-// `../src/auth` re-exports `@better-auth/expo/client`, which pulls in Expo native
-// modules vitest can't load — stub it (vitest hoists this above the import) so
-// only the pure `expoBearerToken` runs.
-vi.mock(import('@better-auth/expo/client'), () => {
-    return {
-        expoClient: () => {
-            return {};
-        },
-        setupExpoFocusManager: () => {},
-        setupExpoOnlineManager: () => {},
-    };
-});
+// Import from `../src/bearer` (Expo-free), not `../src/auth` (which re-exports
+// `@better-auth/expo/client` → Expo native modules vitest can't load).
+import expoBearerToken from "../src/bearer";
 
 describe("expoBearerToken", () => {
     it("extracts the better-auth session token from the Expo cookie string", () => {

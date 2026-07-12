@@ -144,7 +144,8 @@ the socket's `?token=` into an `Authorization` header in `resolveIdentity` (see
 `@lunora/auth`):
 
 ```ts
-import { bearer, expo } from "@lunora/auth/plugins";
+import { bearer } from "@lunora/auth/plugins";
+import { expo } from "@better-auth/expo";
 
 // authOptions.plugins: [expo(), bearer(), /* … */]
 // authOptions.trustedOrigins: ["myapp://"]
