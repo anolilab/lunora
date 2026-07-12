@@ -24,6 +24,7 @@
         "@lunora/client": "workspace:*",
         "@lunora/d1": "workspace:*",
         "@lunora/do": "workspace:*",
+        "@lunora/fingerprint": "workspace:*",
         "@lunora/mail": "workspace:*",
         "@lunora/payment": "workspace:*",
         "@lunora/ratelimit": "workspace:*",

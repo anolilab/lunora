@@ -878,6 +878,9 @@ importers:
       '@lunora/do':
         specifier: workspace:*
         version: link:../../packages/do
+      '@lunora/fingerprint':
+        specifier: workspace:*
+        version: link:../../packages/fingerprint
       '@lunora/mail':
         specifier: workspace:*
         version: link:../../packages/mail
@@ -2626,6 +2629,33 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
+
+  packages/fingerprint:
+    devDependencies:
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(tinybench@2.9.0)(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.10)
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.0
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.93(3d14972a43cfad196c20f1651b85c453)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.10)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 3.2.0
+      typescript:
+        specifier: catalog:tsc
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.0)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/flags:
     dependencies:
