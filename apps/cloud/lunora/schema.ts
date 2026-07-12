@@ -330,6 +330,106 @@ export default defineSchema({
         .global()
         .index("by_org", ["organizationId"]),
 
+    // Grouped application errors — the Cloud Observability "Issues" view. The
+    // telemetry ingest (`POST /v1/telemetry`) fingerprints each error event
+    // (function path + normalized message, via `@lunora/fingerprint`) and folds
+    // it onto one row per (org, hash) — cross-deployment, and the *same* hash the
+    // local Studio computes, so a local Issue and a cloud Issue are one object.
+    // `count`/`lastSeen` grow as the same error recurs.
+    issues: defineTable({
+        count: v.number(),
+        createdAt: v.number(),
+        // What raised it — the function path (or `container:<name>` for a crash).
+        culprit: v.string(),
+        // Last deployment the error was seen on (metadata; the group is per-org).
+        deploymentId: v.optional(v.id("deployments")),
+        firstSeen: v.number(),
+        // Stable 16-char grouping hash from `@lunora/fingerprint`.
+        hash: v.string(),
+        lastSeen: v.number(),
+        organizationId: v.id("organizations"),
+        // A representative raw message for the group (last seen).
+        sampleMessage: v.string(),
+        status: v.union(v.literal("open"), v.literal("resolved")),
+        title: v.string(),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        // One issue per (org, hash); the ingest upserts through this index.
+        .index("by_org_hash", ["organizationId", "hash"], { unique: true }),
+
+    // Higher-level incidents (crash-loop / OOM / error-spike) opened from
+    // container lifecycle telemetry. Fingerprinted like issues (by container +
+    // reason) so repeated crashes fold onto one open incident; resolved from the
+    // dashboard (auto-resolve on a cleared pattern is a Phase 4 concern).
+    incidents: defineTable({
+        closedAt: v.optional(v.number()),
+        // Container name, when the incident is container-sourced.
+        container: v.optional(v.string()),
+        count: v.number(),
+        createdAt: v.number(),
+        deploymentId: v.optional(v.id("deployments")),
+        hash: v.string(),
+        // Container DO instance id, when known.
+        instance: v.optional(v.string()),
+        kind: v.union(v.literal("crash_loop"), v.literal("oom"), v.literal("error_spike")),
+        lastSeen: v.number(),
+        openedAt: v.number(),
+        organizationId: v.id("organizations"),
+        status: v.union(v.literal("open"), v.literal("resolved")),
+        title: v.string(),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        .index("by_org_hash", ["organizationId", "hash"], { unique: true }),
+
+    // Alert rules (Observability "watches while you sleep"). A rule fires the
+    // first time a matching issue/incident's event count reaches `threshold`,
+    // delivering to `destination` over `channel`. Configured from the dashboard;
+    // evaluated (pure) inside the telemetry ingest.
+    alertRules: defineTable({
+        channel: v.union(v.literal("email"), v.literal("webhook")),
+        createdAt: v.number(),
+        // Email address (channel "email") or URL (channel "webhook").
+        destination: v.string(),
+        enabled: v.boolean(),
+        name: v.string(),
+        organizationId: v.id("organizations"),
+        // What the rule watches.
+        target: v.union(v.literal("issue"), v.literal("incident")),
+        // Fire when the source's count first reaches this value.
+        threshold: v.number(),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_org", ["organizationId"]),
+
+    // Fired alerts — the audit trail + delivery state for each rule trip. The
+    // ingest inserts a `firing` row (with the notification denormalized so the
+    // edge needs no re-read); the edge delivers it (email/webhook) and stamps it
+    // `delivered`/`failed`. The dashboard lists recent alerts per org.
+    alerts: defineTable({
+        // Rendered notification content, denormalized at fire time.
+        body: v.string(),
+        channel: v.union(v.literal("email"), v.literal("webhook")),
+        createdAt: v.number(),
+        deliveredAt: v.optional(v.number()),
+        destination: v.string(),
+        // Fingerprint hash of the issue/incident that tripped the rule.
+        hash: v.string(),
+        organizationId: v.id("organizations"),
+        ruleId: v.id("alertRules"),
+        status: v.union(v.literal("firing"), v.literal("delivered"), v.literal("failed")),
+        subject: v.string(),
+        target: v.union(v.literal("issue"), v.literal("incident")),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        .index("by_status", ["status"]),
+
     // Tenant environment secrets (§7). Stored AES-256-GCM encrypted at the edge
     // (`src/secrets/crypto.ts`) — only ciphertext + IV live here. Materialized +
     // decrypted at deploy time into the tenant Worker's script secrets.
