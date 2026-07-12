@@ -44,7 +44,9 @@ const GENERATED = {
         "QueryCtx",
         "v",
     ]),
-    "@/lunora/_generated/api": new Set(["api", "FunctionReference", "internal"]),
+    // `agents` / `workflows` are the typed scheduler-target reference objects
+    // codegen emits alongside `api` / `internal` when the project declares them.
+    "@/lunora/_generated/api": new Set(["agents", "api", "FunctionReference", "internal", "workflows"]),
 };
 
 // Umbrella `lunorash/<sub>` re-exports the base packages.
