@@ -863,6 +863,9 @@ importers:
 
   apps/cloud:
     dependencies:
+      '@lunora/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
