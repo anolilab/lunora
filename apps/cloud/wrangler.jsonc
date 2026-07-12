@@ -62,6 +62,12 @@
             "bucket_name": "lunora-cloud-telemetry",
         },
     ],
+    // Workers AI — powers the on-demand incident AI-triage action
+    // (`incidents.triage`). Inference is billed per call; the action only runs
+    // when a member clicks "Triage" in the dashboard.
+    "ai": {
+        "binding": "AI",
+    },
     "observability": {
         "enabled": true,
         "head_sampling_rate": 1,

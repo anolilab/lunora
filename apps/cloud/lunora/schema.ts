@@ -357,7 +357,11 @@ export default defineSchema({
         .global()
         .index("by_org", ["organizationId"])
         // One issue per (org, hash); the ingest upserts through this index.
-        .index("by_org_hash", ["organizationId", "hash"], { unique: true }),
+        .index("by_org_hash", ["organizationId", "hash"], { unique: true })
+        // Errors grouped by what raised them — lets `incidents.triage` pull the
+        // *other* error groups from a crashing container (culprit
+        // `container:<name>`) without scanning the org's whole issue set.
+        .index("by_org_culprit", ["organizationId", "culprit"]),
 
     // Higher-level incidents (crash-loop / OOM / error-spike) opened from
     // container lifecycle telemetry. Fingerprinted like issues (by container +
