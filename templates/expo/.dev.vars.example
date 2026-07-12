@@ -1,0 +1,8 @@
+# Local dev secrets for the Lunora worker (copy to `.dev.vars`, gitignored).
+#
+#   cp .dev.vars.example .dev.vars   # then fill in
+#
+# Generate a strong secret with: openssl rand -hex 32
+
+# Required — the worker throws "AUTH_SECRET is required" without it.
+AUTH_SECRET="replace-with-openssl-rand-hex-32"

@@ -32,6 +32,15 @@ const listDirectories = (parent: string): string[] =>
 const CANONICAL_TEMPLATE = "standalone";
 const CANONICAL_DIR = join(TEMPLATES_DIR, CANONICAL_TEMPLATE, "lunora");
 
+/**
+ * Templates whose `lunora/` backend is intentionally bespoke, not the shared
+ * starter — excluded from the identity invariant. `expo` is a complete auth'd
+ * chat app (its own schema + an auth-gated live-query backend, `expo()`/`bearer()`
+ * auth), demonstrating the React Native integration — not the generic messages
+ * demo the framework templates embed.
+ */
+const EXEMPT_TEMPLATES = new Set(["expo"]);
+
 /** The shared scaffold files are those present in the canonical `standalone/lunora/` directory. */
 const sharedFiles = readdirSync(CANONICAL_DIR).filter((entry) => statSync(join(CANONICAL_DIR, entry)).isFile());
 
@@ -46,7 +55,7 @@ describe("templates/*/lunora scaffold identity", () => {
         expect(templateNames.length).toBeGreaterThanOrEqual(6);
     });
 
-    describe.each(templateNames.filter((name) => name !== CANONICAL_TEMPLATE))("templates/%s/lunora", (templateName) => {
+    describe.each(templateNames.filter((name) => name !== CANONICAL_TEMPLATE && !EXEMPT_TEMPLATES.has(name)))("templates/%s/lunora", (templateName) => {
         describe.each(sharedFiles)("%s", (file) => {
             test(`matches the canonical copy in templates/${CANONICAL_TEMPLATE}/lunora`, () => {
                 const canonicalPath = join(CANONICAL_DIR, file);

@@ -168,6 +168,16 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Client & UI"]!,
         category: "Client & UI",
+        description: "React Native / Expo integration: the React hooks plus an AsyncStorage client factory and a better-auth Expo bridge.",
+        docsPath: "/docs/packages/react-native",
+        features: ["AsyncStorage offline queue", "Credentialed fetch + WebSocket", "better-auth Expo bridge"],
+        name: "React Native",
+        npmName: "@lunora/react-native",
+        slug: "react-native",
+    },
+    {
+        accentColor: categoryColors["Client & UI"]!,
+        category: "Client & UI",
         description: "Live queries, optimistic mutations, reactive loaders for SolidJS.",
         docsPath: "/docs/packages/solid",
         features: ["Live queries", "Optimistic mutations", "Reactive loaders"],

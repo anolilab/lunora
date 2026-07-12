@@ -59,7 +59,7 @@ const COPY = {
     packageManager: "Which package manager?",
 } as const;
 
-type Template = "analog" | "astro" | "next" | "nuxt" | "react-router" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid";
+type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "react-router" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid";
 
 interface InitCommandOptions {
     /**
@@ -1272,6 +1272,7 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
     { description: "AnalogJS (Angular) — single-worker, Lunora mounted in Nitro", label: "Analog", value: "analog" },
     { description: "Nuxt (Vue) — single-worker, Lunora mounted in Nitro", label: "Nuxt", value: "nuxt" },
     { description: "SvelteKit + a standalone Lunora worker", label: "SvelteKit", value: "sveltekit" },
+    { description: "React Native (Expo) — an iOS/Android/web app + a Lunora worker backend", label: "React Native · Expo", value: "expo" },
     { description: "Worker only — no frontend", label: "Standalone", value: "standalone" },
 ];
 
@@ -1617,6 +1618,7 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
 const isTemplate = (value: unknown): value is Template =>
     value === "analog" ||
     value === "astro" ||
+    value === "expo" ||
     value === "next" ||
     value === "nuxt" ||
     value === "react-router" ||

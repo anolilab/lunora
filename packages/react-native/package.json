@@ -1,0 +1,101 @@
+{
+    "name": "@lunora/react-native",
+    "version": "1.0.0-alpha.0",
+    "description": "React Native / Expo integration for Lunora: an AsyncStorage-backed client factory, the useQuery/useMutation/useSubscription hooks, and a one-call better-auth Expo client",
+    "keywords": [
+        "cloudflare",
+        "durable-objects",
+        "expo",
+        "hooks",
+        "lunora",
+        "react-native",
+        "realtime",
+        "usequery",
+        "workers"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/react-native"
+    },
+    "files": [
+        "./dist",
+        "README.md",
+        "LICENSE.md",
+        "__assets__"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./auth": {
+            "types": "./dist/auth.d.ts",
+            "import": "./dist/auth.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
+    },
+    "dependencies": {
+        "@lunora/client": "1.0.0-alpha.21",
+        "@lunora/react": "1.0.0-alpha.23"
+    },
+    "devDependencies": {
+        "@better-auth/expo": "catalog:auth",
+        "@tanstack/react-query": "catalog:frontend",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "better-auth": "catalog:auth",
+        "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
+        "react": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@better-auth/expo": "^1.6.23",
+        "@tanstack/react-query": "^5.101.0",
+        "better-auth": "^1.6.23",
+        "react": "^19.2.7"
+    },
+    "peerDependenciesMeta": {
+        "@better-auth/expo": {
+            "optional": true
+        },
+        "better-auth": {
+            "optional": true
+        }
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

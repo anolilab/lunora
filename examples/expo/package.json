@@ -1,0 +1,56 @@
+{
+    "name": "@lunora-example/expo",
+    "version": "0.0.0",
+    "private": true,
+    "license": "FSL-1.1-Apache-2.0",
+    "main": "index.ts",
+    "scripts": {
+        "start": "expo start --dev-client",
+        "android": "expo run:android",
+        "ios": "expo run:ios",
+        "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
+        "deploy": "wrangler deploy",
+        "dev:server": "wrangler dev",
+        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit"
+    },
+    "dependencies": {
+        "@better-auth/expo": "^1.6.23",
+        "@lunora/auth": "workspace:*",
+        "@lunora/react": "workspace:*",
+        "@lunora/react-native": "workspace:*",
+        "@react-native-async-storage/async-storage": "3.1.1",
+        "@tanstack/react-query": "catalog:frontend",
+        "better-auth": "catalog:auth",
+        "expo": "~57.0.4",
+        "expo-constants": "~57.0.3",
+        "expo-dev-client": "~57.0.5",
+        "expo-linking": "~57.0.2",
+        "expo-modules-core": "~57.0.3",
+        "expo-network": "~57.0.0",
+        "expo-secure-store": "~57.0.0",
+        "expo-status-bar": "~57.0.0",
+        "expo-web-browser": "~57.0.0",
+        "lunorash": "workspace:*",
+        "react": "catalog:frontend",
+        "react-native": "0.86.0",
+        "react-native-safe-area-context": "~5.8.0"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "wrangler": "catalog:cloudflare"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    },
+    "expo": {
+        "install": {
+            "exclude": [
+                "@react-native-async-storage/async-storage",
+                "react-native-safe-area-context"
+            ]
+        }
+    }
+}

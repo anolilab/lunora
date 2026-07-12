@@ -127,5 +127,36 @@ describe("lunora init smoke", () => {
 
             expect(wranglerResult.problems).toEqual([]);
         });
+
+        it("expo template produces a project that codegen + wrangler validator accept", async () => {
+            expect.assertions(4);
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "expo-smoke",
+                templateType: "expo",
+            });
+
+            expect(result.code).toBe(0);
+
+            const projectRoot = join(workdir, "expo-smoke");
+            const codegenResult = runCodegen({ projectRoot });
+
+            expect(existsSync(join(codegenResult.outputDirectory, "api.ts"))).toBe(true);
+
+            // The expo template ships `lunora/messages.ts` (a `list` query + `send`
+            // mutation). Assert codegen discovered the functions, not merely emitted
+            // an empty api — even though the project also has a non-function helper
+            // (`lunora/auth.ts`) alongside the schema.
+            const api = readFileSync(join(codegenResult.outputDirectory, "api.ts"), "utf8");
+
+            expect(api).toContain("send:");
+
+            const wranglerResult = validateWranglerProject({ projectRoot });
+
+            expect(wranglerResult.problems).toEqual([]);
+        });
     });
 });

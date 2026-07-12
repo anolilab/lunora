@@ -2,7 +2,8 @@
 #
 # Template scaffold+install+build smoke matrix.
 #
-# For each of the 8 templates under templates/ this script:
+# For each worker-toolchain template under templates/ (all except SKIP_TEMPLATES)
+# this script:
 #   1. Copies the template into a fresh scratch subdirectory.
 #   2. Injects pnpm overrides that map every @lunora/* dep to a local
 #      packed tarball so pnpm install never touches the npm registry.
@@ -66,11 +67,33 @@ ONLY_TEMPLATE="${1:-}"
 XFAIL_BUILD=()
 
 # ---------------------------------------------------------------------------
+# Templates excluded from this worker-toolchain smoke matrix.
+# The Expo template is a React Native (Metro) app, not a Vite/workerd project:
+# its `pnpm install` pulls a different, largely-native toolchain (react-native,
+# expo) that isn't represented by the allowBuilds list below, and it has no
+# `pnpm run build` step. It's validated separately by the CLI init smoke test
+# (scaffold → `lunora codegen` → `tsc`), mirroring how examples/expo is checked.
+# ---------------------------------------------------------------------------
+SKIP_TEMPLATES=("expo")
+
+is_skipped() {
+    local name="$1"
+    for s in "${SKIP_TEMPLATES[@]+"${SKIP_TEMPLATES[@]}"}"; do
+        [[ "$s" == "$name" ]] && return 0
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # Discover templates (dynamic, so adding a new dir is automatically included).
 # ---------------------------------------------------------------------------
 TEMPLATES=()
 for t_dir in "$REPO_ROOT/templates"/*/; do
     tname="$(basename "$t_dir")"
+    if is_skipped "$tname"; then
+        echo "==> Skipping $tname (not part of the worker-toolchain smoke matrix)"
+        continue
+    fi
     TEMPLATES+=("$tname")
 done
 

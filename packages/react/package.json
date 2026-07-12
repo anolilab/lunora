@@ -104,7 +104,7 @@
             "optional": false
         },
         "react-dom": {
-            "optional": false
+            "optional": true
         }
     },
     "engines": {

@@ -1,0 +1,159 @@
+import { LunoraClient } from "@lunora/client";
+import { describe, expect, it, vi } from "vitest";
+
+import { createLunoraClient, withAuthHeaders, withAuthWebSocket } from "../src/create-lunora-client";
+
+const makeFetchSpy = () => vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => Promise.resolve(new Response(null, { status: 204 })));
+
+describe("withAuthHeaders", () => {
+    it("merges the auth headers under the caller's own headers", async () => {
+        const spy = makeFetchSpy();
+        const wrapped = withAuthHeaders(spy, () => {
+            return { Cookie: "session=abc", "X-App": "demo" };
+        });
+
+        await wrapped("https://api.example.com/rpc", { headers: { "Content-Type": "application/json" } });
+
+        const headers = new Headers(spy.mock.calls[0]![1]!.headers);
+
+        expect(headers.get("cookie")).toBe("session=abc");
+        expect(headers.get("x-app")).toBe("demo");
+        // The caller's own headers survive alongside the injected auth headers.
+        expect(headers.get("content-type")).toBe("application/json");
+    });
+
+    it("lets the caller's headers win on a key clash (an explicit bearer beats the factory)", async () => {
+        const spy = makeFetchSpy();
+        const wrapped = withAuthHeaders(spy, () => {
+            return { authorization: "Bearer from-factory" }; // secret-scanner:allow -- test fixture, not a real credential
+        });
+
+        await wrapped("https://api.example.com/rpc", { headers: { authorization: "Bearer from-caller" } }); // secret-scanner:allow -- test fixture, not a real credential
+
+        expect(new Headers(spy.mock.calls[0]![1]!.headers).get("authorization")).toBe("Bearer from-caller");
+    });
+
+    it("passes the request straight through when the factory returns undefined (signed out)", async () => {
+        const spy = makeFetchSpy();
+        const init: RequestInit = { headers: { "Content-Type": "application/json" } };
+        const wrapped = withAuthHeaders(spy, () => undefined);
+
+        await wrapped("https://api.example.com/rpc", init);
+
+        // Untouched init object — no wrapping allocation when there's nothing to add.
+        expect(spy.mock.calls[0]![1]).toBe(init);
+    });
+
+    it("re-reads the factory on every call so a refreshed credential takes effect", async () => {
+        const spy = makeFetchSpy();
+        let cookie = "session=first";
+        const wrapped = withAuthHeaders(spy, () => {
+            return { Cookie: cookie };
+        });
+
+        await wrapped("https://api.example.com/rpc");
+        cookie = "session=second";
+        await wrapped("https://api.example.com/rpc");
+
+        expect(new Headers(spy.mock.calls[0]![1]!.headers).get("cookie")).toBe("session=first");
+        expect(new Headers(spy.mock.calls[1]![1]!.headers).get("cookie")).toBe("session=second");
+    });
+});
+
+describe("withAuthWebSocket", () => {
+    // A fake React Native WebSocket that records its constructor arguments — the
+    // real one accepts a third `{ headers }` options argument the browser lacks.
+    const makeFakeWebSocket = () => {
+        const calls: { options?: unknown; protocols?: string | string[]; url: string | URL }[] = [];
+
+        // eslint-disable-next-line @typescript-eslint/no-extraneous-class -- a recording stub: the constructor's side effect is the whole point
+        class FakeWebSocket {
+            public constructor(url: string | URL, protocols?: string | string[], options?: unknown) {
+                calls.push({ options, protocols, url });
+            }
+        }
+
+        return { calls, FakeWebSocket: FakeWebSocket as unknown as typeof WebSocket };
+    };
+
+    it("injects the current headers onto the upgrade request", () => {
+        const { calls, FakeWebSocket } = makeFakeWebSocket();
+        const Wrapped = withAuthWebSocket(FakeWebSocket, () => {
+            return { Cookie: "session=abc" };
+        });
+
+        const socket = new Wrapped("wss://api.example.com/_lunora/ws");
+
+        expect(socket).toBeInstanceOf(Wrapped);
+        expect(calls[0]!.url).toBe("wss://api.example.com/_lunora/ws");
+        expect(calls[0]!.options).toStrictEqual({ headers: { Cookie: "session=abc" } });
+    });
+
+    it("passes no options object when signed out", () => {
+        const { calls, FakeWebSocket } = makeFakeWebSocket();
+        const Wrapped = withAuthWebSocket(FakeWebSocket, () => undefined);
+
+        const socket = new Wrapped("wss://api.example.com/_lunora/ws");
+
+        expect(socket).toBeInstanceOf(Wrapped);
+        expect(calls[0]!.options).toBeUndefined();
+    });
+
+    it("re-reads the factory per socket so a reconnect picks up a new token", () => {
+        const { calls, FakeWebSocket } = makeFakeWebSocket();
+        let cookie = "session=first";
+        const Wrapped = withAuthWebSocket(FakeWebSocket, () => {
+            return { Cookie: cookie };
+        });
+
+        const first = new Wrapped("wss://api.example.com/_lunora/ws");
+
+        cookie = "session=second";
+
+        const second = new Wrapped("wss://api.example.com/_lunora/ws");
+
+        expect(first).toBeInstanceOf(Wrapped);
+        expect(second).toBeInstanceOf(Wrapped);
+        expect(calls[0]!.options).toStrictEqual({ headers: { Cookie: "session=first" } });
+        expect(calls[1]!.options).toStrictEqual({ headers: { Cookie: "session=second" } });
+    });
+});
+
+describe("createLunoraClient", () => {
+    it("constructs a LunoraClient with the given url", () => {
+        const client = createLunoraClient({ url: "https://api.example.com" });
+
+        expect(client).toBeInstanceOf(LunoraClient);
+        expect(client.url).toBe("https://api.example.com");
+    });
+
+    it("derives an AsyncStorage persistence adapter from `storage`", () => {
+        const store = new Map<string, string>();
+        const storage = {
+            getItem: async (key: string) => store.get(key) ?? null,
+            removeItem: async (key: string) => {
+                store.delete(key);
+            },
+            setItem: async (key: string, value: string) => {
+                store.set(key, value);
+            },
+        };
+
+        // A smoke assertion: constructing with `storage` wires persistence without
+        // throwing. The adapter itself is covered by @lunora/client's own suite.
+        expect(() => createLunoraClient({ storage, url: "https://api.example.com" })).not.toThrow();
+    });
+
+    it("honours an explicit `persistence: false` over `storage`", () => {
+        const store = new Map<string, string>();
+        const storage = {
+            getItem: async (key: string) => store.get(key) ?? null,
+            removeItem: async () => {},
+            setItem: async (key: string, value: string) => {
+                store.set(key, value);
+            },
+        };
+
+        expect(() => createLunoraClient({ persistence: false, storage, url: "https://api.example.com" })).not.toThrow();
+    });
+});
