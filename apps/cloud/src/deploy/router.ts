@@ -4,11 +4,12 @@ import { RateLimiter } from "@lunora/ratelimit";
 import type { ExecutionContextLike } from "@lunora/runtime";
 
 import { api } from "../../lunora/_generated/api.js";
+import type { AlertDelivery } from "../../lunora/telemetry";
 import { proxyAdminRequest } from "../admin/proxy";
 import { createHttpCloudflareApi } from "../cloudflare/api";
 import { createDohResolver, verifyDomain } from "../domains/verify";
 import { handleGitHubWebhook } from "../github/webhook";
-import { sendInvitationEmail } from "../mail/notify";
+import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createCloudflareProvisioner } from "../provision";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
 import type { OtlpTracePayload } from "../telemetry/otlp";
@@ -444,7 +445,7 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
     const events = decodeTelemetryEvents(body);
 
     try {
-        const result = await context.runMutation<{ incidents: number; issues: number }>(api.telemetry.ingest, {
+        const result = await context.runMutation<{ alerts: AlertDelivery[]; incidents: number; issues: number }>(api.telemetry.ingest, {
             deployKey: body.deployKey,
             deploymentId: body.deploymentId,
             events,
@@ -456,7 +457,21 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
         store.recordCounts({ incidents: result.incidents, issues: result.issues, organizationId: body.organizationId });
         await store.archiveEvents(events).catch(() => undefined);
 
-        return Response.json(result);
+        // Deliver any alerts the ingest fired (best-effort), then stamp them delivered.
+        if (result.alerts.length > 0) {
+            const environmentRecord = environment as unknown as Record<string, unknown>;
+
+            await Promise.all(result.alerts.map((alert) => deliverAlert(environmentRecord, alert).catch(() => undefined)));
+            await context
+                .runMutation(api.alerts.markDelivered, {
+                    deployKey: body.deployKey,
+                    ids: result.alerts.map((alert) => alert.id),
+                    organizationId: body.organizationId,
+                })
+                .catch(() => undefined);
+        }
+
+        return Response.json({ alerts: result.alerts.length, incidents: result.incidents, issues: result.issues });
     } catch (error) {
         return jsonError(403, error instanceof Error ? error.message : "telemetry rejected");
     }

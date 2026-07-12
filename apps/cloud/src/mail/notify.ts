@@ -1,5 +1,7 @@
 import { createMailerFromEnv } from "@lunora/mail";
 
+import { isSafeWebhookUrl } from "../telemetry/alerts";
+
 /**
  * Transactional email for the control plane (CLOUD-PLAN.md §3). Built on
  * `@lunora/mail`'s env-driven mailer: a Resend transport in production (or the
@@ -27,4 +29,42 @@ export const sendInvitationEmail = async (env: Record<string, unknown>, invitati
         text: `You've been invited${org} on Lunora Cloud.\n\nAccept your invitation:\n${invitation.acceptUrl}`,
         to: invitation.to,
     });
+};
+
+/** A fired alert to deliver over its rule's channel. */
+export interface AlertNotification {
+    /** Rendered notification body. */
+    body: string;
+    channel: "email" | "webhook";
+    /** Email address (`email`) or URL to POST (`webhook`). */
+    destination: string;
+    /** Notification subject / summary line. */
+    subject: string;
+}
+
+/**
+ * Deliver a fired Observability alert over its channel. A webhook is a JSON POST
+ * of `{ subject, body }`; email goes through the same env-driven mailer as
+ * invitations. Runs at the Worker edge (the telemetry ingest handler); throws on
+ * transport failure so the caller can mark the alert failed (best-effort — a
+ * failed send never blocks ingest).
+ */
+export const deliverAlert = async (env: Record<string, unknown>, alert: AlertNotification): Promise<void> => {
+    if (alert.channel === "webhook") {
+        // Defense in depth against SSRF: never fetch an unsafe destination, even if
+        // one slipped past `createRule` (e.g. a rule created before this guard).
+        if (!isSafeWebhookUrl(alert.destination)) {
+            throw new Error("unsafe webhook destination");
+        }
+
+        await fetch(alert.destination, {
+            body: JSON.stringify({ body: alert.body, subject: alert.subject }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        });
+
+        return;
+    }
+
+    await createMailerFromEnv(env).send({ subject: alert.subject, text: alert.body, to: alert.destination });
 };

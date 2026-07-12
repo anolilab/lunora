@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alerts" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -271,6 +271,37 @@ export interface Doc_incidents {
     updatedAt: number;
 }
 
+export interface Doc_alertRules {
+    _id: Id<"alertRules">;
+    _creationTime: number;
+    channel: "email" | "webhook";
+    createdAt: number;
+    destination: string;
+    enabled: boolean;
+    name: string;
+    organizationId: Id<"organizations">;
+    target: "issue" | "incident";
+    threshold: number;
+    updatedAt: number;
+}
+
+export interface Doc_alerts {
+    _id: Id<"alerts">;
+    _creationTime: number;
+    body: string;
+    channel: "email" | "webhook";
+    createdAt: number;
+    deliveredAt?: number;
+    destination: string;
+    hash: string;
+    organizationId: Id<"organizations">;
+    ruleId: Id<"alertRules">;
+    status: "firing" | "delivered" | "failed";
+    subject: string;
+    target: "issue" | "incident";
+    updatedAt: number;
+}
+
 export interface Doc_secrets {
     _id: Id<"secrets">;
     _creationTime: number;
@@ -364,6 +395,8 @@ export interface DataModel {
     platformUsage: Doc_platformUsage;
     issues: Doc_issues;
     incidents: Doc_incidents;
+    alertRules: Doc_alertRules;
+    alerts: Doc_alerts;
     secrets: Doc_secrets;
     customers: Doc_customers;
     events: Doc_events;
@@ -396,6 +429,8 @@ export interface IndexNamesByTable {
     platformUsage: "by_org";
     issues: "by_org_hash" | "by_org";
     incidents: "by_org_hash" | "by_org";
+    alertRules: "by_org";
+    alerts: "by_status" | "by_org";
     secrets: "by_project_env_name" | "by_project";
     customers: "by_reference" | "by_provider_customer";
     events: "by_provider_event";
@@ -425,6 +460,8 @@ export interface SearchIndexNamesByTable {
     platformUsage: never;
     issues: never;
     incidents: never;
+    alertRules: never;
+    alerts: never;
     secrets: never;
     customers: never;
     events: never;
@@ -454,6 +491,8 @@ export interface RankIndexNamesByTable {
     platformUsage: never;
     issues: never;
     incidents: never;
+    alertRules: never;
+    alerts: never;
     secrets: never;
     customers: never;
     events: never;
@@ -701,6 +740,37 @@ export interface Insert_incidents {
     updatedAt: number;
 }
 
+export interface Insert_alertRules {
+    _id?: Id<"alertRules">;
+    _creationTime?: number;
+    channel: "email" | "webhook";
+    createdAt: number;
+    destination: string;
+    enabled: boolean;
+    name: string;
+    organizationId: Id<"organizations">;
+    target: "issue" | "incident";
+    threshold: number;
+    updatedAt: number;
+}
+
+export interface Insert_alerts {
+    _id?: Id<"alerts">;
+    _creationTime?: number;
+    body: string;
+    channel: "email" | "webhook";
+    createdAt: number;
+    deliveredAt?: number;
+    destination: string;
+    hash: string;
+    organizationId: Id<"organizations">;
+    ruleId: Id<"alertRules">;
+    status: "firing" | "delivered" | "failed";
+    subject: string;
+    target: "issue" | "incident";
+    updatedAt: number;
+}
+
 export interface Insert_secrets {
     _id?: Id<"secrets">;
     _creationTime?: number;
@@ -795,6 +865,8 @@ export interface InsertModel {
     platformUsage: Insert_platformUsage;
     issues: Insert_issues;
     incidents: Insert_incidents;
+    alertRules: Insert_alertRules;
+    alerts: Insert_alerts;
     secrets: Insert_secrets;
     customers: Insert_customers;
     events: Insert_events;
@@ -839,6 +911,8 @@ export interface Relations {
     platformUsage: {};
     issues: {};
     incidents: {};
+    alertRules: {};
+    alerts: {};
     secrets: {};
     customers: {};
     events: {};

@@ -385,6 +385,51 @@ export default defineSchema({
         .index("by_org", ["organizationId"])
         .index("by_org_hash", ["organizationId", "hash"], { unique: true }),
 
+    // Alert rules (Observability "watches while you sleep"). A rule fires the
+    // first time a matching issue/incident's event count reaches `threshold`,
+    // delivering to `destination` over `channel`. Configured from the dashboard;
+    // evaluated (pure) inside the telemetry ingest.
+    alertRules: defineTable({
+        channel: v.union(v.literal("email"), v.literal("webhook")),
+        createdAt: v.number(),
+        // Email address (channel "email") or URL (channel "webhook").
+        destination: v.string(),
+        enabled: v.boolean(),
+        name: v.string(),
+        organizationId: v.id("organizations"),
+        // What the rule watches.
+        target: v.union(v.literal("issue"), v.literal("incident")),
+        // Fire when the source's count first reaches this value.
+        threshold: v.number(),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_org", ["organizationId"]),
+
+    // Fired alerts — the audit trail + delivery state for each rule trip. The
+    // ingest inserts a `firing` row (with the notification denormalized so the
+    // edge needs no re-read); the edge delivers it (email/webhook) and stamps it
+    // `delivered`/`failed`. The dashboard lists recent alerts per org.
+    alerts: defineTable({
+        // Rendered notification content, denormalized at fire time.
+        body: v.string(),
+        channel: v.union(v.literal("email"), v.literal("webhook")),
+        createdAt: v.number(),
+        deliveredAt: v.optional(v.number()),
+        destination: v.string(),
+        // Fingerprint hash of the issue/incident that tripped the rule.
+        hash: v.string(),
+        organizationId: v.id("organizations"),
+        ruleId: v.id("alertRules"),
+        status: v.union(v.literal("firing"), v.literal("delivered"), v.literal("failed")),
+        subject: v.string(),
+        target: v.union(v.literal("issue"), v.literal("incident")),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        .index("by_status", ["status"]),
+
     // Tenant environment secrets (§7). Stored AES-256-GCM encrypted at the edge
     // (`src/secrets/crypto.ts`) — only ciphertext + IV live here. Materialized +
     // decrypted at deploy time into the tenant Worker's script secrets.
