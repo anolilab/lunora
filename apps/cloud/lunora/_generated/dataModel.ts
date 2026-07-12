@@ -427,7 +427,7 @@ export interface IndexNamesByTable {
     auditLog: "by_org";
     invitations: "by_token" | "by_org";
     platformUsage: "by_org";
-    issues: "by_org_hash" | "by_org";
+    issues: "by_org_culprit" | "by_org_hash" | "by_org";
     incidents: "by_org_hash" | "by_org";
     alertRules: "by_org";
     alerts: "by_status" | "by_org";

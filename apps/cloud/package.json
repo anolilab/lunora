@@ -19,6 +19,7 @@
         "test": "vitest run"
     },
     "dependencies": {
+        "@lunora/ai": "workspace:*",
         "@lunora/auth": "workspace:*",
         "@lunora/bindings": "workspace:*",
         "@lunora/client": "workspace:*",

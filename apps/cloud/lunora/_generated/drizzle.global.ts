@@ -257,6 +257,7 @@ export const issues = sqliteTable("issues", {
     title: text("title").notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
+    by_org_culprit: index("by_org_culprit").on(t.organizationId, t.culprit),
     by_org_hash: uniqueIndex("by_org_hash").on(t.organizationId, t.hash),
     by_org: index("by_org").on(t.organizationId),
 }));
