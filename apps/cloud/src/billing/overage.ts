@@ -121,3 +121,57 @@ export const reconcileOverage = async (
 
     return { credits: plan.debitCredits, status: "debited" };
 };
+
+export interface OverageOrgInput {
+    alreadyDebitedCredits: number;
+    organizationId: string;
+    periodStart: number;
+    plan: string;
+    usage: PeriodUsage;
+}
+
+export interface OverageFleetPorts {
+    /** Advance the platform-side watermark after a successful debit (forward-only upstream). */
+    advanceWatermark: (organizationId: string, periodStart: number, debitedCredits: number) => Promise<void>;
+    ledger: CreditsLedgerPort;
+    /** Balance can't cover the owed delta — suspend via the C1 machinery. */
+    onExhausted: (organizationId: string) => Promise<void>;
+}
+
+export interface OverageFleetSummary {
+    debitedCredits: number;
+    debitedOrgs: number;
+    exhausted: number;
+}
+
+/**
+ * Reconcile every org's overage for the period. Per-org failures are isolated
+ * (one org's Creem error never blocks the fleet), the watermark only advances
+ * after the debit succeeded, and exhausted orgs go to the suspension hook.
+ */
+export const reconcileAllOverages = async (organizations: ReadonlyArray<OverageOrgInput>, ports: OverageFleetPorts): Promise<OverageFleetSummary> => {
+    const summary: OverageFleetSummary = { debitedCredits: 0, debitedOrgs: 0, exhausted: 0 };
+
+    for (const organization of organizations) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- sequential: each org's debit is one paced provider call
+            const outcome = await reconcileOverage(organization, ports.ledger);
+
+            if (outcome.status === "debited") {
+                // eslint-disable-next-line no-await-in-loop -- watermark write must follow its own debit
+                await ports.advanceWatermark(organization.organizationId, organization.periodStart, organization.alreadyDebitedCredits + outcome.credits);
+                summary.debitedCredits += outcome.credits;
+                summary.debitedOrgs += 1;
+            } else if (outcome.status === "exhausted") {
+                // eslint-disable-next-line no-await-in-loop -- suspension follows its own org's outcome
+                await ports.onExhausted(organization.organizationId);
+                summary.exhausted += 1;
+            }
+        } catch {
+            // Isolated: a provider blip on one org is retried on the next run
+            // (the watermark did not advance, so nothing is lost or doubled).
+        }
+    }
+
+    return summary;
+};

@@ -496,6 +496,11 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "type": "number"
         },
         {
+            "name": "creditsAccountId",
+            "optional": true,
+            "type": "string"
+        },
+        {
             "name": "deletionRequestedAt",
             "optional": true,
             "type": "number"
