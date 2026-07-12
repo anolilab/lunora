@@ -103,6 +103,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "organizations:cancelDeletion": lunora_organizations_12.cancelDeletion as unknown as RegisteredLunoraFunction,
     "organizations:create": lunora_organizations_12.create as unknown as RegisteredLunoraFunction,
     "organizations:getBySlug": lunora_organizations_12.getBySlug as unknown as RegisteredLunoraFunction,
+    "organizations:linkCreditsAccount": lunora_organizations_12.linkCreditsAccount as unknown as RegisteredLunoraFunction,
     "organizations:list": lunora_organizations_12.list as unknown as RegisteredLunoraFunction,
     "organizations:purgeDeleted": lunora_organizations_12.purgeDeleted as unknown as RegisteredLunoraFunction,
     "organizations:rename": lunora_organizations_12.rename as unknown as RegisteredLunoraFunction,
@@ -449,6 +450,12 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (typeof source["slug"] !== "string") return DEFER;
 return { "slug": source["slug"] };
 });
+installCompiledValidatorMap(lunora_organizations_12.linkCreditsAccount.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["creditsAccountId"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "creditsAccountId": source["creditsAccountId"], "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_organizations_12.rename.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["name"] !== "string") return DEFER;
@@ -685,6 +692,7 @@ export interface Caller {
         cancelDeletion: (args: { organizationId: Id<"organizations"> }) => Promise<void>;
         create: (args: { cellId?: Id<"cells">; jurisdiction?: string; name: string; plan?: "free" | "pro" | "enterprise"; slug: string }) => Promise<Id<"organizations">>;
         getBySlug: (args: { slug: string }) => Promise<null | { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }>;
+        linkCreditsAccount: (args: { creditsAccountId: string; organizationId: Id<"organizations"> }) => Promise<void>;
         list: (args?: {}) => Promise<{ _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; name: string; plan: "enterprise" | "free" | "pro"; slug: string }[]>;
         purgeDeleted: (args?: {}) => Promise<{ purged: number; }>;
         rename: (args: { name: string; organizationId: Id<"organizations"> }) => Promise<void>;
@@ -811,6 +819,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         cancelDeletion: (args) => callRegistered(context, "organizations:cancelDeletion", args),
         create: (args) => callRegistered(context, "organizations:create", args),
         getBySlug: (args) => callRegistered(context, "organizations:getBySlug", args),
+        linkCreditsAccount: (args) => callRegistered(context, "organizations:linkCreditsAccount", args),
         list: (args) => callRegistered(context, "organizations:list", args),
         purgeDeleted: (args) => callRegistered(context, "organizations:purgeDeleted", args),
         rename: (args) => callRegistered(context, "organizations:rename", args),
