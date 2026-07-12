@@ -68,6 +68,9 @@ export default defineSchema({
         // Dunning (GAPS.md C2): when payment failure was first observed; the
         // grace window measures from here.
         paymentFailedAt: v.optional(v.number()),
+        // Creem credits-account id (prepaid overage, GAPS.md C3): set when the
+        // first credit pack is purchased; the reconciliation debits against it.
+        creditsAccountId: v.optional(v.string()),
         // Right-to-erasure (GAPS.md D3): an owner requested deletion; the purge
         // cron erases the org's data once the retention window passes.
         deletionRequestedAt: v.optional(v.number()),

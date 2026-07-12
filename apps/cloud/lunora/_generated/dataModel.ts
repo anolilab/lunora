@@ -59,6 +59,7 @@ export interface Doc_organizations {
     suspendedAt?: number;
     suspendedReason?: string;
     paymentFailedAt?: number;
+    creditsAccountId?: string;
     deletionRequestedAt?: number;
 }
 
@@ -444,6 +445,7 @@ export interface Insert_organizations {
     suspendedAt?: number;
     suspendedReason?: string;
     paymentFailedAt?: number;
+    creditsAccountId?: string;
     deletionRequestedAt?: number;
 }
 

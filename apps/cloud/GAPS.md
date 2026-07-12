@@ -153,9 +153,15 @@ the account) and the platform debits usage beyond the plan's included quota —
 watermark-delta debits that are crash-safe idempotent) + the `overageDebits`
 watermark table. An exhausted balance degrades service via the existing C1
 suspension machinery — no negative balances, no surprise invoices, and every
-credit purchase is a normal taxed MoR sale. 🌐 remaining: create the credit-pack
-products, wire the reconciliation cron to the live Creem credits API
-(`CreditsLedgerPort`), and credit accounts from the purchase webhook.
+credit purchase is a normal taxed MoR sale. The Creem-backed
+ledger adapter (`src/billing/creem-credits.ts`: balance/debit over
+`customerCredits`, `applyCreditPurchase` creating the account seeded on first
+buy), the fleet reconciliation driver (`reconcileAllOverages`: per-org failure
+isolation, watermark-after-debit ordering, exhausted → suspension hook), the
+`organizations.creditsAccountId` linkage, and 6 more tests are ✅. 🌐 remaining:
+create the credit-pack products, schedule the reconciliation against live
+credentials, and map pack purchases in the billing webhook to
+`applyCreditPurchase`.
 
 ## D. Data & trust
 
