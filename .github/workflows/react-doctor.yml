@@ -45,6 +45,12 @@
             # upstream publish. The previous action revision shipped no such pin
             # and its unpinned `npx latest` intermittently "exited with status 0
             # before producing a JSON report", failing the check.
+            #
+            # Keep the action and the tool in lockstep when bumping either: the
+            # action validates the tool's JSON report against a fixed set of known
+            # `schemaVersion`s, so a floating tool can emit a newer schema the
+            # pinned action rejects as a failed scan. v2.2.7 knows schema 1–3;
+            # tool 0.7.6 emits schema 3.
             - "uses": "millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784" # react-doctor@v2.2.7
               "with":
                   "version": "0.7.6"
