@@ -22,7 +22,6 @@ export interface LunoraCronJob {
 export const LUNORA_CRON_TRIGGERS: ReadonlyArray<string> = [
     "0 */1 * * *",
     "0 */6 * * *",
-    "0 */12 * * *",
     "*/1 * * * *",
 ];
 
@@ -41,8 +40,6 @@ export const LUNORA_CRONS: Record<string, ReadonlyArray<LunoraCronJob>> = {
         { name: "enforce dunning", functionPath: "billing:enforceDunning", args: {} },
         { name: "prune superseded releases", functionPath: "deployments:pruneSuperseded", args: {} },
         { name: "prune tenant logs", functionPath: "logs:prune", args: {} },
-    ],
-    "0 */12 * * *": [
         { name: "purge deleted organizations", functionPath: "organizations:purgeDeleted", args: {} },
     ],
     "*/1 * * * *": [
