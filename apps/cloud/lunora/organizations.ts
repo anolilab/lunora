@@ -205,3 +205,21 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
 
     return { purged: due.length };
 });
+
+/**
+ * Persist the org's Creem credits-account id after the first credit-pack
+ * purchase created it (GAPS.md C3 prepaid overage). Never overwrites an
+ * existing id — an account, once linked, stays linked. SYSTEM only
+ * (billing-webhook post-processing dispatch).
+ */
+export const linkCreditsAccount = internalMutation
+    .input({ creditsAccountId: v.string(), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { creditsAccountId, organizationId } }): Promise<void> => {
+        const organization = (await context.db.get(organizationId)) as null | (OrganizationRow & { creditsAccountId?: string });
+
+        if (!organization || organization.creditsAccountId !== undefined) {
+            return;
+        }
+
+        await context.db.patch(organizationId, { creditsAccountId });
+    });
