@@ -64,6 +64,7 @@ export const ingest = mutation
 
 interface PlatformUsageRow {
     _id: Id<"platformUsage">;
+    createdAt: number;
     kind: "cpuMs" | "requests" | "storageBytes";
     organizationId: Id<"organizations">;
     periodStart: number;
@@ -248,4 +249,38 @@ export const recordOverageDebit = internalMutation
         if (debitedCredits > row.debitedCredits) {
             await context.db.patch(row._id, { debitedCredits, updatedAt: now });
         }
+    });
+
+/**
+ * Daily usage series for the period (members) — feeds the studio's usage
+ * chart (GAPS.md ring 3). Buckets raw `platformUsage` events by UTC day of
+ * their `createdAt`; compacted history keeps period totals correct, so the
+ * series is best-effort recent detail, not an invoice.
+ */
+export const series = query
+    .input({ organizationId: v.id("organizations"), periodStart: v.number() })
+    .query(async ({ ctx: context, args: { organizationId, periodStart } }): Promise<{ cpuMs: number; day: number; requests: number }[]> => {
+        await assertMember(context, organizationId);
+
+        const { page } = await context.db.platformUsage.findMany({ where: { organizationId } });
+        const dayMs = 24 * 60 * 60 * 1000;
+        const buckets = new Map<number, { cpuMs: number; requests: number }>();
+
+        for (const row of page as unknown as PlatformUsageRow[]) {
+            if (row.periodStart !== periodStart || (row.kind !== "requests" && row.kind !== "cpuMs")) {
+                continue;
+            }
+
+            const day = Math.floor(row.createdAt / dayMs) * dayMs;
+            const bucket = buckets.get(day) ?? { cpuMs: 0, requests: 0 };
+
+            bucket[row.kind] += row.quantity;
+            buckets.set(day, bucket);
+        }
+
+        return [...buckets.entries()]
+            .map(([day, bucket]) => {
+                return { day, ...bucket };
+            })
+            .toSorted((a, b) => a.day - b.day);
     });
