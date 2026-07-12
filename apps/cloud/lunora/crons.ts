@@ -35,9 +35,10 @@ crons.interval("prune superseded releases", { hours: 6 }, internal.deployments.p
 crons.interval("expire stale builds", { hours: 1 }, internal.builds.expireStale, {});
 
 // Erase orgs whose deletion request aged past the 30-day retention window
-// (GAPS.md D3 right-to-erasure). Every 12h — the purge itself gates on the
-// per-org retention cutoff, so cadence only affects erasure latency.
-crons.interval("purge deleted organizations", { hours: 12 }, internal.organizations.purgeDeleted, {});
+// (GAPS.md D3 right-to-erasure). Rides the 6h bucket — the purge itself gates
+// on the per-org retention cutoff, so cadence only affects erasure latency, and
+// reusing an existing expression keeps us within Cloudflare's 3-trigger cap.
+crons.interval("purge deleted organizations", { hours: 6 }, internal.organizations.purgeDeleted, {});
 
 // Every-minute heartbeat that emits the `*/1 * * * *` trigger the edge cron
 // fan-out rides on (§2.4) — the job itself is a no-op; see lunora/fanout.ts.
