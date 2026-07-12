@@ -1,11 +1,12 @@
 import { useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import { ActivitySection } from "./ActivitySection";
 import { BillingSection } from "./BillingSection";
 import { BuildsSection } from "./BuildsSection";
+import { CommandPalette } from "./CommandPalette";
 import { DeployKeysSection } from "./DeployKeysSection";
 import { DomainsSection } from "./DomainsSection";
 import { InvitationsSection } from "./InvitationsSection";
@@ -15,6 +16,8 @@ import { ProjectsSection } from "./ProjectsSection";
 import { SecretsSection } from "./SecretsSection";
 import type { OrgId } from "./types";
 import { UsageSection } from "./UsageSection";
+import type { PaletteCommand } from "./use-command-palette";
+import { useCommandPalette } from "./use-command-palette";
 
 interface OrganizationDashboardProps {
     onBack: () => void;
@@ -76,8 +79,25 @@ const OrgBanners = ({ org }: { org: OrgFlags }): ReactElement | null => {
 export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDashboardProps): ReactElement => {
     const organizations = useQuery(api.organizations.list, {});
     const [tab, setTab] = useState<Tab>("projects");
+    const palette = useCommandPalette();
 
     const org = organizations?.find((candidate) => candidate._id === organizationId);
+    const paletteCommands: PaletteCommand[] = useMemo(
+        () => [
+            ...TABS.map((entry) => {
+                return {
+                    group: "Go to",
+                    id: `tab:${entry.id}`,
+                    label: entry.label,
+                    run: () => {
+                        setTab(entry.id);
+                    },
+                };
+            }),
+            { group: "Actions", id: "back", label: "Back to organizations", run: onBack },
+        ],
+        [onBack],
+    );
 
     return (
         <div className="stack">
@@ -90,6 +110,8 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
             </div>
 
             {org ? <OrgBanners org={org as OrgFlags} /> : null}
+
+            <CommandPalette commands={paletteCommands} onClose={palette.close} open={palette.open} />
 
             <nav className="tabs">
                 {TABS.map((entry) => (
