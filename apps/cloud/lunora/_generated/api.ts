@@ -95,6 +95,7 @@ export interface ApiTypes {
     };
     usage: {
         ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }, Id<"platformUsage">>;
+        series: FunctionReference<"query", { organizationId: Id<"organizations">; periodStart: number }, { cpuMs: number; day: number; requests: number; }[]>;
         summary: FunctionReference<"query", { organizationId: Id<"organizations">; periodStart: number }, Record<"requests" | "cpuMs" | "storageBytes", number>>;
     };
 }
