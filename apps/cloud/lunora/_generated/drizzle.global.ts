@@ -241,6 +241,84 @@ export const platformUsage = sqliteTable("platformUsage", {
     by_org: index("by_org").on(t.organizationId),
 }));
 
+export const issues = sqliteTable("issues", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    count: real("count").notNull(),
+    createdAt: real("createdAt").notNull(),
+    culprit: text("culprit").notNull(),
+    deploymentId: text("deploymentId").references(() => deployments._id),
+    firstSeen: real("firstSeen").notNull(),
+    hash: text("hash").notNull(),
+    lastSeen: real("lastSeen").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    sampleMessage: text("sampleMessage").notNull(),
+    status: text("status", { mode: "json" }).$type<"open" | "resolved">().notNull(),
+    title: text("title").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org_hash: uniqueIndex("by_org_hash").on(t.organizationId, t.hash),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const incidents = sqliteTable("incidents", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    closedAt: real("closedAt"),
+    container: text("container"),
+    count: real("count").notNull(),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId").references(() => deployments._id),
+    hash: text("hash").notNull(),
+    instance: text("instance"),
+    kind: text("kind", { mode: "json" }).$type<"crash_loop" | "oom" | "error_spike">().notNull(),
+    lastSeen: real("lastSeen").notNull(),
+    openedAt: real("openedAt").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    status: text("status", { mode: "json" }).$type<"open" | "resolved">().notNull(),
+    title: text("title").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org_hash: uniqueIndex("by_org_hash").on(t.organizationId, t.hash),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const alertRules = sqliteTable("alertRules", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    channel: text("channel", { mode: "json" }).$type<"email" | "webhook">().notNull(),
+    createdAt: real("createdAt").notNull(),
+    destination: text("destination").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull(),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident">().notNull(),
+    threshold: real("threshold").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const alerts = sqliteTable("alerts", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    body: text("body").notNull(),
+    channel: text("channel", { mode: "json" }).$type<"email" | "webhook">().notNull(),
+    createdAt: real("createdAt").notNull(),
+    deliveredAt: real("deliveredAt"),
+    destination: text("destination").notNull(),
+    hash: text("hash").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    ruleId: text("ruleId").references(() => alertRules._id).notNull(),
+    status: text("status", { mode: "json" }).$type<"firing" | "delivered" | "failed">().notNull(),
+    subject: text("subject").notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident">().notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_status: index("by_status").on(t.status),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
 export const secrets = sqliteTable("secrets", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
