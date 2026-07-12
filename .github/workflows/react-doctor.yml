@@ -26,18 +26,25 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
                   "fetch-depth": "0"
-            # NOTE(security): SHA-pinned to the commit behind the react-doctor@0.5.6
-            # tagged release (resolved via `gh api repos/millionco/react-doctor/git/refs/tags/...`).
-            # Bump deliberately by re-resolving the tag's commit SHA.
-            # Also note: pinning this action SHA does not fully pin the tool if the action
-            # internally runs `npx -y react-doctor@latest`; verify and pin that version too.
+            # NOTE(security): SHA-pinned to the commit behind the react-doctor
+            # action's v2.2.7 release (resolved via
+            # `gh api repos/millionco/react-doctor/git/refs/tags/v2.2.7`, then
+            # dereffing the annotated tag to its commit). Bump deliberately by
+            # re-resolving a newer tag's commit SHA.
             #
             # `scope: changed` (the action's default) auto-compares against the
             # PR's base branch via a base SHA derived from the PR event — works
             # for any base (alpha/main/…), so no branch needs to be hardcoded.
             # The fetch-depth:0 checkout above provides the history it needs.
             #
-            # No `github-token` input: react-doctor@0.5.6 doesn't accept one
-            # (it reads the ambient GITHUB_TOKEN), and passing it triggers an
-            # "Unexpected input(s) 'github-token'" warning.
-            - "uses": "millionco/react-doctor@15238de7019167e740c9fc08b800d9732c2ab477" # react-doctor@0.5.6
+            # No `github-token` input: the action reads the ambient GITHUB_TOKEN,
+            # so passing one triggers an "Unexpected input(s)" warning.
+            #
+            # `version` pins the react-doctor npm tool (the action otherwise runs
+            # `@latest`) so the scan is reproducible and can't break on an
+            # upstream publish. The previous action revision shipped no such pin
+            # and its unpinned `npx latest` intermittently "exited with status 0
+            # before producing a JSON report", failing the check.
+            - "uses": "millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784" # react-doctor@v2.2.7
+              "with":
+                  "version": "0.7.6"
