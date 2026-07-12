@@ -1,6 +1,6 @@
 import { useLunora, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { Id } from "../../lunora/_generated/dataModel.js";
@@ -31,10 +31,20 @@ export const IncidentsSection = ({ organizationId }: IncidentsSectionProps): Rea
     const incidents = useQuery(api.incidents.list, gated ? "skip" : { organizationId });
 
     const [triage, setTriage] = useState<{ summary: string; title: string } | null>(null);
-    const [busyId, setBusyId] = useState<null | string>(null);
+    const [busyId, setBusyId] = useState<Id<"incidents"> | null>(null);
     const [error, setError] = useState<null | string>(null);
 
+    // Only the latest triage request may write state. Without this, triaging A and
+    // then B races: whichever resolves first clears `busyId`, re-enabling the other
+    // row's button while its (billed) call is still in flight — and a slow A landing
+    // after B would overwrite B's summary with a stale one.
+    const latestRequest = useRef(0);
+
     const runTriage = (id: Id<"incidents">, title: string): void => {
+        const request = latestRequest.current + 1;
+
+        latestRequest.current = request;
+
         setError(null);
         setBusyId(id);
 
@@ -45,9 +55,17 @@ export const IncidentsSection = ({ organizationId }: IncidentsSectionProps): Rea
             try {
                 const { summary } = await client.action(api.incidents.triage, { id, organizationId });
 
+                if (latestRequest.current !== request) {
+                    return;
+                }
+
                 setTriage({ summary, title });
                 setBusyId(null);
             } catch (error_: unknown) {
+                if (latestRequest.current !== request) {
+                    return;
+                }
+
                 setError(error_ instanceof Error ? error_.message : "triage failed");
                 setBusyId(null);
             }

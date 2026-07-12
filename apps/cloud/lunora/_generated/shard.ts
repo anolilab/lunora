@@ -313,6 +313,14 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
         {
             "fields": [
                 "organizationId",
+                "culprit"
+            ],
+            "name": "by_org_culprit",
+            "type": "index"
+        },
+        {
+            "fields": [
+                "organizationId",
                 "hash"
             ],
             "name": "by_org_hash",
@@ -1946,16 +1954,16 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "PERFORMANCE"
         ],
         "description": "A secondary index is redundant because another index already covers every lookup it serves (its columns are a leading prefix of the other's). The redundant index costs storage and is maintained on every write for no read benefit.",
-        "detail": "Index \"by_org\" on table \"issues\" (organizationId) is redundant — index \"by_org_hash\" (organizationId, hash) already covers its lookups.",
+        "detail": "Index \"by_org\" on table \"issues\" (organizationId) is redundant — index \"by_org_culprit\" (organizationId, culprit) already covers its lookups.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
             "coveredBy": {
                 "fields": [
                     "organizationId",
-                    "hash"
+                    "culprit"
                 ],
-                "name": "by_org_hash"
+                "name": "by_org_culprit"
             },
             "fields": [
                 "organizationId"
@@ -2695,12 +2703,12 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:incidents:49:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:incidents:52:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in setStatus (incidents:49) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in setStatus (incidents:52) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -2708,7 +2716,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "setStatus",
             "file": "incidents",
             "kind": "mutation",
-            "line": 49
+            "line": 52
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
@@ -5248,24 +5256,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
         "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "ai_unbounded_generation_public:incidents:triage",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public procedure runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound. Generation bills per output token, so an anonymous caller can request arbitrarily long completions in a loop — a denial-of-wallet vector that also ties up worker time on long streams.",
-        "detail": "`triage` (incidents) is public and runs an AI generation with no `maxOutputTokens` bound — an anonymous caller can drive unbounded, billable completions in a loop. Add a `maxOutputTokens` cap and rate-limit the entry point.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "triage",
-            "file": "incidents",
-            "kind": "action"
-        },
-        "name": "ai_unbounded_generation_public",
-        "remediation": "Cap the completion with `maxOutputTokens` in the generation config, and rate-limit the public entry point (`.use(rateLimit(...))`). For expensive models, prefer running generation from an internal, authenticated path rather than exposing it directly to anonymous callers.",
-        "title": "Public procedure runs unbounded AI generation (no maxOutputTokens)"
     }
 ];
 
