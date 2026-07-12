@@ -561,25 +561,53 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
  * Issue, and matches the grouping a cloud Incident uses. Container crashes fold
  * in too, since they land as `error` rows under `functionPath: "container:&lt;name>"`.
  *
- * `readRequestLog` returns rows newest-first, so the first sighting of each hash
- * is the newest row — it seeds `title`/`sampleMessage`/`lastSeen`; older rows
- * only extend `count` and `firstSeen`. Result is ordered most-recently-active
- * first.
+ * Rows come back newest-first, so the first sighting of each hash is the newest
+ * row — it seeds `title`/`sampleMessage`/`lastSeen`; older rows only extend
+ * `count` and `firstSeen`. Result is ordered most-recently-active first.
+ *
+ * This projects only the three columns grouping needs (`function_path`,
+ * `error_message`, `ts`) instead of going through {@link readRequestLog}'s full
+ * 14-column hydrate + per-row `JSON.parse` of args/identity/tables — none of
+ * which the fold reads. The `getIssues` subscription carries the admin wildcard,
+ * so it re-runs on every write-flush; keeping this read lean matters.
  */
 const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIssue[] => {
-    const rows = readRequestLog(sql, {
-        functionPathPrefix: options.functionPathPrefix,
-        limit: options.limit,
-        outcome: "error",
-        shardKey: options.shardKey,
-        userId: options.userId,
-    });
+    ensureRequestLogTable(sql);
+
+    const limit = Math.max(1, Math.min(options.limit ?? REQUEST_LOG_RETENTION, 10_000));
+
+    const conjuncts: string[] = ["outcome = 'error'"];
+    const parameters: unknown[] = [];
+
+    if (options.functionPathPrefix !== undefined && options.functionPathPrefix !== "") {
+        conjuncts.push(String.raw`function_path LIKE ? ESCAPE '\'`);
+        parameters.push(`${escapeLike(options.functionPathPrefix)}%`);
+    }
+
+    if (options.userId !== undefined && options.userId !== "") {
+        conjuncts.push("user_id = ?");
+        parameters.push(options.userId);
+    }
+
+    if (options.shardKey !== undefined && options.shardKey !== "") {
+        conjuncts.push("shard_key = ?");
+        parameters.push(options.shardKey);
+    }
+
+    parameters.push(limit);
+
+    const rows = runSql<{ error_message: null | string; function_path: string; ts: number }>(
+        sql,
+        `SELECT function_path, error_message, ts
+         FROM "${REQUEST_LOG_TABLE}" WHERE ${conjuncts.join(" AND ")} ORDER BY seq DESC LIMIT ?`,
+        ...parameters,
+    ).toArray();
 
     const issues = new Map<string, ErrorIssue>();
 
     for (const row of rows) {
-        const message = row.errorMessage ?? "";
-        const { culprit, hash, title } = fingerprintError({ functionPath: row.functionPath, message });
+        const message = row.error_message ?? "";
+        const { culprit, hash, title } = fingerprintError({ functionPath: row.function_path, message });
         const existing = issues.get(hash);
 
         if (existing === undefined) {

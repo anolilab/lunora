@@ -26,20 +26,12 @@ const HASH_LEN = 16;
 /** Cap for the display title so a runaway message can't blow out the UI. */
 const TITLE_MAX = 120;
 
-/** First truthy (non-empty) value, or the empty string — the intent of `a || b`. */
-const firstNonEmpty = (...values: (string | null | undefined)[]): string => {
-    for (const value of values) {
-        if (value) {
-            return value;
-        }
-    }
-
-    return "";
-};
-
 const buildTitle = (message: string, code: string | null | undefined, culprit: string): string => {
     const firstLine = (message.split("\n", 1)[0] ?? "").trim();
-    const base = firstNonEmpty(firstLine, code, culprit, "Error");
+    // `||` not `??` on purpose — an empty string must fall through to the next
+    // candidate, which nullish-coalescing would keep.
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- empty-string fallthrough is intended
+    const base = firstLine || code || culprit || "Error";
 
     return base.length > TITLE_MAX ? `${base.slice(0, TITLE_MAX - 1)}…` : base;
 };
@@ -75,7 +67,7 @@ export interface ErrorFingerprint {
  * of whether the error came from a live sink event or a persisted history row.
  */
 export const fingerprintError = (input: FingerprintErrorInput): ErrorFingerprint => {
-    const culprit = firstNonEmpty(input.functionPath, "unknown");
+    const culprit = input.functionPath || "unknown";
     const bucket = messageBucketFor(input.message);
     const canonical = `lunora::${culprit}::${bucket}`;
     const hash = sha256Hex(canonical).slice(0, HASH_LEN);

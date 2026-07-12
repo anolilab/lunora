@@ -111,6 +111,7 @@ import {
     readErrorIssues,
     readRequestLog,
     renderLogMessage,
+    REQUEST_LOG_TABLE,
 } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
@@ -2225,6 +2226,15 @@ abstract class ShardDO {
                 message,
                 timestamp: Date.now(),
             });
+
+            // A fresh error row landed, but the failed dispatch's own writes (if
+            // any) rolled back, so nothing else drives a refresh. Mark the reqlog
+            // table changed and flush so the live `getLogs`/`getIssues`
+            // admin-wildcard subscriptions re-run and surface the throw in real
+            // time — the ok path flushes here too. Any rolled-back data tables
+            // still in the pending set re-read committed state, so no stale push.
+            this.recordChangedTable(REQUEST_LOG_TABLE);
+            await this.flushChangedTables();
 
             return this.errorToResponse(error);
         } finally {
@@ -4977,13 +4987,20 @@ abstract class ShardDO {
      * bucket(message)`). The in-memory buffer stays the live Logs feed; the
      * durable row is what survives hibernation for triage.
      */
-    private handleRecordContainerEvent(args: Record<string, unknown>): Response {
+    private async handleRecordContainerEvent(args: Record<string, unknown>): Promise<Response> {
         const entry = parseRecordContainerEventArgs(args);
 
         this.logs.push(entry);
 
-        if (entry.level === "error") {
-            const config = this.requestLogConfig();
+        // A crash is either an explicit `error`-level event (an `onError`) OR a
+        // `stop` that exited non-zero — the normal crash-loop signal. The exit
+        // code rides the `stop` message as `(exit <n>)` and is parsed onto
+        // `entry.exitCode`; a `stop` is always `level: "info"`, so without the
+        // exit-code arm the common crash path would never fold into Issues (only
+        // `onError` would), contradicting this method's contract.
+        const crashed = entry.level === "error" || (entry.exitCode !== undefined && entry.exitCode !== 0);
+
+        if (crashed) {
             const logEntry: AppendRequestLogEntry = {
                 durationMs: 0,
                 errorMessage: entry.message,
@@ -4993,11 +5010,18 @@ abstract class ShardDO {
                 ts: entry.timestamp,
             };
 
-            try {
-                appendRequestLogEntry(this.state.storage.sql as unknown as SqlExec, logEntry, { captureRaw: config.captureRaw, retention: config.retention });
-            } catch {
-                // Best-effort: never let request-log persistence fail the container-event push.
-            }
+            // Shared seam with `recordRequestLog` — persists the durable row AND
+            // streams the Logpush event, so a container crash reaches external
+            // sinks like every other error (best-effort throughout).
+            this.persistRequestLog(logEntry, this.requestLogConfig());
+
+            // The row lands through raw SQL the change-tracker can't observe, and
+            // a container push carries no other write — so without this the live
+            // `getIssues`/`getLogs` subscriptions (admin-wildcard memos, re-run
+            // only when a flush finds a changed table) would show the crash only
+            // once some unrelated write happened to flush.
+            this.recordChangedTable(REQUEST_LOG_TABLE);
+            await this.flushChangedTables();
         }
 
         return jsonResponse({ result: { recorded: true } }, 200);
@@ -5430,24 +5454,41 @@ abstract class ShardDO {
             userId: this.getCurrentUserId(),
         };
 
+        this.persistRequestLog(entry, config);
+    }
+
+    /**
+     * The single durable-row + Logpush write seam for `__lunora_reqlog__`. Both
+     * the per-dispatch {@link recordRequestLog} and the container-crash path
+     * ({@link handleRecordContainerEvent}) funnel through here so they can't
+     * drift — before this was extracted the container writer persisted the row
+     * but silently skipped the Logpush emit every other error got.
+     *
+     * Best-effort by contract: a SQL failure (e.g. a test double with no `sql`
+     * handle) or a serialization hiccup in the emit must NEVER turn a served
+     * request — or a container event push — into a failed one, so each half is
+     * swallowed independently.
+     *
+     * Errors are always streamed to `console` (rare, high-value — they ride CF
+     * Workers Logs at error level and the dev-server formats them in the
+     * terminal), redacted in prod like any other event. The full per-dispatch
+     * summary stream (successful OKs too) stays opt-in behind
+     * `LUNORA_REQUEST_LOG_EMIT` so a hot shard doesn't emit a line per call.
+     */
+    private persistRequestLog(entry: AppendRequestLogEntry, config: { captureRaw: boolean; emit: boolean; retention: number | undefined }): void {
         const writeOptions: RequestLogWriteOptions = { captureRaw: config.captureRaw, retention: config.retention };
 
         try {
             appendRequestLogEntry(this.state.storage.sql as unknown as SqlExec, entry, writeOptions);
         } catch {
-            // Best-effort: never let request-log persistence fail the request.
+            // Best-effort: never let request-log persistence fail the caller.
         }
 
-        // Errors are always streamed to `console` (rare, high-value — they ride
-        // CF Workers Logs at error level and the dev-server formats them in the
-        // terminal), redacted in prod like any other event. The full per-dispatch
-        // summary stream (successful OKs too) stays opt-in behind
-        // `LUNORA_REQUEST_LOG_EMIT` so a hot shard doesn't emit a line per call.
-        if (config.emit || outcome === "error") {
+        if (config.emit || entry.outcome === "error") {
             try {
                 emitRequestLogEvent(entry, writeOptions);
             } catch {
-                // Best-effort: never let event emission fail the request.
+                // Best-effort: never let event emission fail the caller.
             }
         }
     }

@@ -108,12 +108,23 @@ export const fingerprintLog = (input: LogFingerprintInput): Fingerprint => {
  */
 const MESSAGE_BUCKET_MAX = 160;
 
+/**
+ * Upper bound on the raw message length fed to the bucketer's regexes. Several
+ * of them (the email/word patterns especially) backtrack super-linearly on a
+ * long run with no delimiter, and an `error_message` is stored verbatim with no
+ * size cap and can carry attacker-influenced input — so an unbounded message
+ * would let one crafted error stall the DO's single thread. The final bucket is
+ * only {@link MESSAGE_BUCKET_MAX} chars anyway, so clamping the input first is
+ * transparent for any real message and bounds the regex work.
+ */
+const MESSAGE_INPUT_MAX = 1024;
+
 export const messageBucketFor = (message: string | null | undefined): string => {
     if (!message) {
         return "";
     }
 
-    let s = unwrapAnthropicErrorMessage(message);
+    let s = unwrapAnthropicErrorMessage(message.length > MESSAGE_INPUT_MAX ? message.slice(0, MESSAGE_INPUT_MAX) : message);
 
     s = s.replace(/https?:\/\/\S+/gi, "<url>");
     s = collapseRequestPaths(s);
@@ -151,7 +162,9 @@ const unwrapAnthropicErrorMessage = (raw: string): string => {
 };
 
 export const normalizeMessage = (body: string): string => {
-    let s = body;
+    // Same super-linear-backtracking guard as messageBucketFor — clamp before
+    // the regexes run so an unbounded body can't stall the thread.
+    let s = body.length > MESSAGE_INPUT_MAX ? body.slice(0, MESSAGE_INPUT_MAX) : body;
 
     s = s.replace(/https?:\/\/\S+/gi, "<url>");
     s = collapseRequestPaths(s);
@@ -169,6 +182,75 @@ export const normalizeMessage = (body: string): string => {
     return s;
 };
 
+/**
+ * Strip a trailing `:<line>:<col>` from a frame location, returning the bare
+ * path (or `null` when the suffix isn't there).
+ *
+ * Deliberately index-based rather than a regex. The upstream patterns
+ * (`^(.+?)\s+\((.+?):\d+:\d+\)$` / `^(.+?):\d+:\d+$`) pair a lazy `.+?` with a
+ * numeric suffix, which backtracks quadratically on an adversarial line — and a
+ * stacktrace is attacker-influenced input (it can carry a user-supplied string
+ * in a frame name). CodeQL flags them as polynomial-ReDoS sinks. Scanning from
+ * the end is linear and accepts exactly the same shapes.
+ */
+const splitLocation = (location: string): string | null => {
+    const colonBeforeColumn = location.lastIndexOf(":");
+
+    if (colonBeforeColumn <= 0) {
+        return null;
+    }
+
+    const colonBeforeLine = location.lastIndexOf(":", colonBeforeColumn - 1);
+
+    if (colonBeforeLine <= 0) {
+        return null;
+    }
+
+    const line = location.slice(colonBeforeLine + 1, colonBeforeColumn);
+    const column = location.slice(colonBeforeColumn + 1);
+
+    if (!isDigits(line) || !isDigits(column)) {
+        return null;
+    }
+
+    return location.slice(0, colonBeforeLine);
+};
+
+const isDigits = (s: string): boolean => s.length > 0 && !/\D/.test(s);
+
+/**
+ * Split `fn (path:line:col)` into its function and location halves. Mirrors the
+ * lazy `(.+?)\s+\(` of the upstream regex — the FIRST whitespace-then-`(` whose
+ * remainder parses as a location wins — so a frame whose function name itself
+ * contains ` (` groups identically to upstream.
+ */
+const splitFramedLocation = (body: string): Frame | null => {
+    if (!body.endsWith(")")) {
+        return null;
+    }
+
+    for (let index = body.indexOf("("); index > 0; index = body.indexOf("(", index + 1)) {
+        const separator = body[index - 1] ?? "";
+
+        // The upstream `\s+` — the `(` must be preceded by whitespace, so an
+        // in-name paren like `Object.foo(anonymous)` isn't mistaken for a location.
+        if (!/\s/.test(separator)) {
+            continue;
+        }
+
+        const path = splitLocation(body.slice(index + 1, -1));
+        const fn = body.slice(0, index).trimEnd();
+
+        // Upstream's `(.+?)` requires a non-empty function name; an empty one
+        // falls through to the bare `path:line:col` shape, as it does there.
+        if (path !== null && fn.length > 0) {
+            return { fn, path };
+        }
+    }
+
+    return null;
+};
+
 const parseFrames = (stacktrace: string): Frame[] => {
     const out: Frame[] = [];
 
@@ -180,19 +262,17 @@ const parseFrames = (stacktrace: string): Frame[] => {
         }
 
         const body = line.slice(3);
+        const framed = splitFramedLocation(body);
 
-        const withFn = body.match(/^(.+?)\s+\((.+?):\d+:\d+\)$/);
-
-        if (withFn) {
-            out.push({ fn: withFn[1] ?? null, path: withFn[2] ?? "" });
+        if (framed) {
+            out.push(framed);
             continue;
         }
 
-        const bare = body.match(/^(.+?):\d+:\d+$/);
+        const bare = splitLocation(body);
 
-        if (bare) {
-            out.push({ fn: null, path: bare[1] ?? "" });
-            continue;
+        if (bare !== null && bare.length > 0) {
+            out.push({ fn: null, path: bare });
         }
     }
 

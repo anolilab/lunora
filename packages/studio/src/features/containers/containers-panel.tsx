@@ -74,7 +74,7 @@ const ContainersPanel = (): ReactElement => {
             <div className="flex flex-wrap items-center gap-2">
                 <p className="text-sm text-muted-foreground">
                     {t(
-                        "Cloudflare Containers are observed from their lifecycle log stream. This shows the current state per container — ports and health checks aren't carried in that stream.",
+                        "Cloudflare Containers are observed from their lifecycle log stream. This shows the current state per instance — ports and health checks aren't carried in that stream.",
                     )}
                 </p>
                 <LiveError message={liveError} prefix="containers" />

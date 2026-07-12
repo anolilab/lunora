@@ -874,7 +874,7 @@ const StudioLayout = (): ReactElement => {
         audit: t("A durable log of admin state-changing operations."),
         authConfig: t("Enabled plugins and session config (read-only)."),
         authSessions: t("Browse and revoke active sessions across all users."),
-        containers: t("Live Cloudflare Containers — current lifecycle state per container from the log stream."),
+        containers: t("Live Cloudflare Containers — current lifecycle state per instance from the log stream."),
         dashboards: t("Chart widgets backed by saved read-only SQL queries."),
         data: t("Browse and edit rows across your shard and global tables."),
         drains: t("Forward logs to Logpush, Tail Workers, or a webhook collector."),

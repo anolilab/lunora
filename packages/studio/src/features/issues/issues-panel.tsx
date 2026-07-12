@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
@@ -12,6 +12,7 @@ import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
 import type { ErrorIssue, IssuesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { formatTimestamp } from "../../lib/internal";
 
 interface IssuesPanelProps {
     /** Shard key the panel reads issues from. Defaults to the root shard. */
@@ -51,7 +52,7 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
     const { data, error, liveError } = useAdminQuery<IssuesResult>(ADMIN_FUNCTIONS.getIssues, {}, { live: true, shardKey: debouncedShard });
 
     const loaded = data !== undefined;
-    const issues = useMemo(() => issuesOf(data), [data]);
+    const issues = issuesOf(data);
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-issues-panel">
@@ -100,12 +101,8 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
                                         <TableCell className="text-right">
                                             <Badge variant="secondary">{issue.count}</Badge>
                                         </TableCell>
-                                        <TableCell className="text-xs tabular-nums text-muted-foreground">
-                                            {new Date(issue.firstSeen).toLocaleString()}
-                                        </TableCell>
-                                        <TableCell className="text-xs tabular-nums text-muted-foreground">
-                                            {new Date(issue.lastSeen).toLocaleString()}
-                                        </TableCell>
+                                        <TableCell className="text-xs tabular-nums text-muted-foreground">{formatTimestamp(issue.firstSeen)}</TableCell>
+                                        <TableCell className="text-xs tabular-nums text-muted-foreground">{formatTimestamp(issue.lastSeen)}</TableCell>
                                     </TableRow>
                                 ))}
                             </TableBody>
