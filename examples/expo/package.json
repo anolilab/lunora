@@ -35,11 +35,6 @@
         "react-native": "0.86.0",
         "react-native-safe-area-context": "~5.8.0"
     },
-    "expo": {
-        "install": {
-            "exclude": ["@react-native-async-storage/async-storage", "react-native-safe-area-context"]
-        }
-    },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
@@ -49,5 +44,13 @@
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
+    },
+    "expo": {
+        "install": {
+            "exclude": [
+                "@react-native-async-storage/async-storage",
+                "react-native-safe-area-context"
+            ]
+        }
     }
 }
