@@ -57,11 +57,20 @@ export const deliverAlert = async (env: Record<string, unknown>, alert: AlertNot
             throw new Error("unsafe webhook destination");
         }
 
-        await fetch(alert.destination, {
+        const response = await fetch(alert.destination, {
             body: JSON.stringify({ body: alert.body, subject: alert.subject }),
             headers: { "content-type": "application/json" },
             method: "POST",
+            // `isSafeWebhookUrl` only vets the original URL, so a vetted public host that
+            // 3xx-redirects to an internal address (e.g. the metadata IP) would still be
+            // an SSRF sink if we followed it. `redirect: "manual"` surfaces the redirect
+            // here instead of the runtime chasing the `Location` header.
+            redirect: "manual",
         });
+
+        if (response.status >= 300 && response.status < 400) {
+            throw new Error("unsafe webhook redirect");
+        }
 
         return;
     }

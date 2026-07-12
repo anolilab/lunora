@@ -70,7 +70,8 @@ const isPrivateIpv4 = (host: string): boolean => {
  * aim it at internal infrastructure. Requires `https://` to a public host —
  * rejects other schemes, embedded credentials, `localhost`/`*.local`/`*.internal`,
  * loopback/private/link-local IPv4 (incl. the `169.254.169.254` metadata IP), and
- * IPv6 loopback/ULA/link-local. This is string-level validation — it cannot defeat
+ * IPv6 loopback/unspecified/ULA/link-local/IPv4-mapped. This is string-level
+ * validation — it cannot defeat
  * DNS rebinding (a proxy would be needed), but it blocks the direct-address cases.
  */
 export const isSafeWebhookUrl = (destination: string): boolean => {
@@ -92,8 +93,12 @@ export const isSafeWebhookUrl = (destination: string): boolean => {
         return false;
     }
 
-    // IPv6 loopback (::1), ULA (fc00::/7 → fc/fd), link-local (fe80::/10 → fe8–feb).
-    if (host === "::1" || host.startsWith("fc") || host.startsWith("fd") || IPV6_LINK_LOCAL.test(host)) {
+    // Reject non-global IPv6. `::`-prefixed covers the unspecified address (`::`),
+    // loopback (`::1`), and IPv4-mapped/-compatible forms — the URL parser compresses
+    // the embedded IPv4 to hex (`::ffff:169.254.169.254` → `::ffff:7f00:1`), so there is
+    // no dotted quad left to re-check, and no legitimate public host sits in `::/…`.
+    // Plus ULA (fc00::/7 → fc/fd) and link-local (fe80::/10 → fe8–feb).
+    if (host.startsWith("::") || host.startsWith("fc") || host.startsWith("fd") || IPV6_LINK_LOCAL.test(host)) {
         return false;
     }
 

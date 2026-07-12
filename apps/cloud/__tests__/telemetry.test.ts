@@ -166,6 +166,7 @@ describe(isSafeWebhookUrl, () => {
     it("accepts an https URL to a public host", () => {
         expect(isSafeWebhookUrl("https://hooks.example.com/lunora")).toBe(true);
         expect(isSafeWebhookUrl("https://203.0.113.10/hook")).toBe(true);
+        expect(isSafeWebhookUrl("https://[2606:4700::1111]/hook")).toBe(true); // public IPv6
     });
 
     it("rejects SSRF-prone destinations", () => {
@@ -182,6 +183,12 @@ describe(isSafeWebhookUrl, () => {
             "https://172.16.0.9/x",
             "https://100.64.0.1/x", // CGNAT
             "https://[::1]/x", // IPv6 loopback
+            "https://[::]/x", // IPv6 unspecified
+            "https://[::ffff:169.254.169.254]/x", // IPv4-mapped IPv6 → metadata IP
+            "https://[::ffff:127.0.0.1]/x", // IPv4-mapped IPv6 → loopback
+            "https://2130706433/x", // decimal-encoded 127.0.0.1
+            "https://0x7f000001/x", // hex-encoded 127.0.0.1
+            "https://0177.0.0.1/x", // octal-encoded loopback
             "ftp://example.com/x",
             "not a url",
         ]) {
