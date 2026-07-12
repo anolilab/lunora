@@ -180,6 +180,43 @@ describe(createContainerTelemetry, () => {
         expect(span.parentSpanId).toBeUndefined();
     });
 
+    it("stitches under a future-version traceparent that carries trailing fields", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            // Version `cc` (future) with an extra field appended — the spec says to
+            // parse the first four fields and ignore the rest, not drop the header.
+            traceparent: "cc-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01-extra",
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "transcode", startMs: 5 });
+        await telemetry.flush();
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        expect(span.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
+        expect(span.parentSpanId).toBe("b7ad6b7169203331");
+    });
+
+    it("mints a fresh root trace when the traceparent uses the reserved `ff` version", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "ff-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "x", startMs: 5 });
+        await telemetry.flush();
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        expect(span.traceId).toMatch(TRACE_ID_HEX);
+        expect(span.traceId).not.toBe("0af7651916cd43dd8448eb211c80319c");
+        expect(span.parentSpanId).toBeUndefined();
+    });
+
     it("marks an errored span with status ERROR, message, and error.type", async () => {
         expect.assertions(4);
 

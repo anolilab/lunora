@@ -84,9 +84,15 @@ const buildTraceparent = (traceId: string, spanId: string): string => `00-${trac
 
 /**
  * Parse a W3C `traceparent` into `{ traceId, parentSpanId }`, or `undefined` when
- * malformed. Validates the 4-field `version-traceId-spanId-flags` shape (32-hex
- * trace id, 16-hex span id) and rejects the all-zero ids the spec forbids. Only
- * the two ids are returned — the version/flags are accepted but not surfaced.
+ * malformed. Validates the `version-traceId-spanId-flags` shape (2-hex version,
+ * 32-hex trace id, 16-hex span id, 2-hex flags) and rejects the all-zero ids the
+ * spec forbids. Only the two ids are returned — the version/flags are validated
+ * but not surfaced.
+ *
+ * Forward-compatible per the spec: version `00` is strict (exactly four fields),
+ * but a future version may append fields, so a `>= 4`-field header on a higher
+ * version parses off its first four and ignores the rest rather than being
+ * dropped. The reserved version `ff` is rejected.
  */
 const parseTraceparent = (header: null | string | undefined): { parentSpanId: string; traceId: string } | undefined => {
     if (header === null || header === undefined) {
@@ -94,13 +100,21 @@ const parseTraceparent = (header: null | string | undefined): { parentSpanId: st
     }
 
     const parts = header.trim().toLowerCase().split("-");
-    const traceId = parts[1];
-    const parentSpanId = parts[2];
+    const [version, traceId, parentSpanId, flags] = parts;
 
     if (
-        parts.length !== 4 ||
+        parts.length < 4 ||
+        version === undefined ||
+        version.length !== 2 ||
+        !HEX_ONLY.test(version) ||
+        version === "ff" ||
+        // Version 00 forbids trailing fields; only a future version may carry them.
+        (version === "00" && parts.length !== 4) ||
         traceId === undefined ||
         parentSpanId === undefined ||
+        flags === undefined ||
+        flags.length !== 2 ||
+        !HEX_ONLY.test(flags) ||
         traceId.length !== 32 ||
         parentSpanId.length !== 16 ||
         !HEX_ONLY.test(traceId) ||

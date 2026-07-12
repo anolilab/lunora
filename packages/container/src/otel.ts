@@ -95,6 +95,22 @@ interface ContainerTelemetryOptions {
      * the `LUNORA_TRACEPARENT` env var. When present (and well-formed) every span
      * inherits its trace id and hangs off its span id, so container spans stitch
      * under the Worker's trace instead of forming a fresh, disconnected trace.
+     *
+     * `@lunora/container` stamps this trace context as the **`traceparent` request
+     * header** on every proxied fetch (`ctx.containers.&lt;name>.…`), so a container
+     * that serves many requests should read it per request and create a telemetry
+     * instance scoped to that request — the trace context differs each call, so a
+     * single process-lifetime instance can't carry it:
+     *
+     * ```ts
+     * // inside the container's request handler
+     * const telemetry = createContainerTelemetry({ traceparent: request.headers.get("traceparent") ?? undefined });
+     * await telemetry.trace("transcode", () => transcode(job));
+     * await telemetry.flush();
+     * ```
+     *
+     * The `LUNORA_TRACEPARENT` env fallback fits a one-shot container that
+     * processes a single job per start (the value is fixed for the process).
      */
     traceparent?: string;
 }
