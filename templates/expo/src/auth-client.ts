@@ -20,7 +20,7 @@ export const LUNORA_URL = process.env.EXPO_PUBLIC_LUNORA_URL ?? "http://localhos
  * keychain/keystore; on web the browser's cookie jar also carries it, so this
  * only needs to persist what `expoClient` reads back via `getCookie()`.
  */
-const sessionStorage: SecureStorageLike =
+const sessionStore: SecureStorageLike =
     Platform.OS === "web"
         ? {
               getItem: (key) => (typeof localStorage === "undefined" ? null : localStorage.getItem(key)),
@@ -40,5 +40,5 @@ const sessionStorage: SecureStorageLike =
  */
 export const authClient = createAuthClient({
     baseURL: LUNORA_URL,
-    plugins: [expoClient({ scheme: APP_SCHEME, storage: sessionStorage })],
+    plugins: [expoClient({ scheme: APP_SCHEME, storage: sessionStore })],
 });
