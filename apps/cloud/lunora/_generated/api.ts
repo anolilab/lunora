@@ -124,6 +124,7 @@ export interface InternalApiTypes {
         prune: FunctionReference<"mutation", {}, { pruned: number; }>;
     };
     organizations: {
+        linkCreditsAccount: FunctionReference<"mutation", { creditsAccountId: string; organizationId: Id<"organizations"> }, void>;
         purgeDeleted: FunctionReference<"mutation", {}, { purged: number; }>;
     };
     usage: {
