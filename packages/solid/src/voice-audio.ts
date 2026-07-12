@@ -91,7 +91,7 @@ const toPcm16 = (samples: Float32Array, inputSampleRate: number): Uint8Array => 
         const sample = samples[Math.floor(index * ratio)] ?? 0;
         const clamped = Math.max(-1, Math.min(1, sample));
 
-        view.setInt16(index * 2, clamped < 0 ? clamped * 0x80_00 : clamped * 0x7F_FF, true);
+        view.setInt16(index * 2, clamped < 0 ? clamped * 0x80_00 : clamped * 0x7f_ff, true);
     }
 
     return new Uint8Array(buffer);
