@@ -1,0 +1,89 @@
+{
+    "name": "@lunora/replica",
+    "version": "0.0.0",
+    "description": "Local-first replica runtime + local SQLite mirror for Lunora",
+    "license": "FSL-1.1-Apache-2.0",
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./react": {
+            "types": "./dist/react.d.ts",
+            "import": "./dist/react.mjs"
+        },
+        "./adapters/sqljs": {
+            "types": "./dist/adapters/sqljs.d.ts",
+            "import": "./dist/adapters/sqljs.mjs"
+        },
+        "./adapters/better-sqlite3": {
+            "types": "./dist/adapters/better-sqlite3.d.ts",
+            "import": "./dist/adapters/better-sqlite3.mjs"
+        },
+        "./adapters/sqlite-wasm": {
+            "types": "./dist/adapters/sqlite-wasm.d.ts",
+            "import": "./dist/adapters/sqlite-wasm.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "devDependencies": {
+        "@lunora/server": "1.0.0-alpha.17",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@visulima/packem": "catalog:build",
+        "esbuild": "catalog:build",
+        "react": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@lunora/server": ">=1.0.0-alpha.17 <2.0.0",
+        "@sqlite.org/sqlite-wasm": "*",
+        "better-sqlite3": "*",
+        "react": "^18.0.0 || ^19.0.0",
+        "sql.js": "^1.0.0"
+    },
+    "peerDependenciesMeta": {
+        "@lunora/server": {
+            "optional": true
+        },
+        "@sqlite.org/sqlite-wasm": {
+            "optional": true
+        },
+        "better-sqlite3": {
+            "optional": true
+        },
+        "react": {
+            "optional": true
+        },
+        "sql.js": {
+            "optional": true
+        }
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.10.0"
+    }
+}
