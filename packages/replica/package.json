@@ -2,7 +2,29 @@
     "name": "@lunora/replica",
     "version": "1.0.0-alpha.1",
     "description": "Local-first replica runtime + local SQLite mirror for Lunora",
+    "keywords": [
+        "cloudflare",
+        "durable-objects",
+        "event-sourcing",
+        "local-first",
+        "lunora",
+        "replica",
+        "sqlite",
+        "sync",
+        "workers"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
     "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/replica"
+    },
     "files": [
         "dist",
         "README.md",
@@ -47,13 +69,15 @@
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
-        "test": "vitest run"
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
     },
     "devDependencies": {
         "@lunora/server": "1.0.0-alpha.24",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "react": "catalog:frontend",
         "typescript": "catalog:tsc",
@@ -84,6 +108,6 @@
         }
     },
     "engines": {
-        "node": "^22.15.0 || >=24.10.0"
+        "node": "^22.15.0 || >=24.11.0"
     }
 }

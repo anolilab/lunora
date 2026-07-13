@@ -3066,6 +3066,9 @@ importers:
       '@visulima/packem':
         specifier: catalog:build
         version: 2.0.0-alpha.93(3d14972a43cfad196c20f1651b85c453)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.10)
       esbuild:
         specifier: catalog:build
         version: 0.28.1
