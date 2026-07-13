@@ -102,8 +102,17 @@ import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
 import type { OwnerRelay, RelayHost, RelayMember } from "./relay-hub";
 import { createRelayLink, DEFAULT_MAX_RELAYS } from "./relay-hub";
-import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
-import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
+import type { AppendRequestLogEntry, ContextLogLevel, IssuesResult, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
+import {
+    appendRequestLogEntry,
+    emitLogEvent,
+    emitRequestLogEvent,
+    ensureRequestLogTable,
+    readErrorIssues,
+    readRequestLog,
+    renderLogMessage,
+    REQUEST_LOG_TABLE,
+} from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
 import type { ShapePokePart, ShapeRowOp } from "./shape-global-diff";
@@ -780,6 +789,9 @@ const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fa
  */
 type ContainerLogEntry = LogEntry & { functionPath: string };
 
+/** Recovers the process exit code embedded in a container `stop` message as `(exit &lt;n>)`. */
+const CONTAINER_EXIT_CODE_PATTERN = /\(exit (\d+)\)/;
+
 /**
  * Validate the `__lunora_admin__:recordContainerEvent` payload — the Container
  * DO's best-effort push of one lifecycle transition (`@lunora/container`'s
@@ -810,8 +822,19 @@ const parseRecordContainerEventArgs = (args: Record<string, unknown>): Container
     const detail = typeof envelope["message"] === "string" ? envelope["message"] : undefined;
     const timestamp = typeof envelope["ts"] === "number" ? envelope["ts"] : Date.now();
 
+    // The per-instance correlation id (the container's Durable Object id) rides
+    // the envelope as `instance`; carry it through so the Studio can fold rows
+    // per running instance instead of collapsing every instance of a container
+    // into one lane. The exit code is embedded in the `stop` message as
+    // `(exit <n>)` (never a structured field), so recover it here.
+    const instance = typeof envelope["instance"] === "string" && envelope["instance"] !== "" ? envelope["instance"] : undefined;
+    const exitRaw = detail === undefined ? undefined : CONTAINER_EXIT_CODE_PATTERN.exec(detail)?.[1];
+    const exitCode = exitRaw === undefined ? undefined : Number.parseInt(exitRaw, 10);
+
     return {
+        exitCode,
         functionPath: `container:${container}`,
+        instance,
         level,
         message: detail === undefined || detail === "" ? event : `${event}: ${detail}`,
         timestamp,
@@ -2203,6 +2226,15 @@ abstract class ShardDO {
                 message,
                 timestamp: Date.now(),
             });
+
+            // A fresh error row landed, but the failed dispatch's own writes (if
+            // any) rolled back, so nothing else drives a refresh. Mark the reqlog
+            // table changed and flush so the live `getLogs`/`getIssues`
+            // admin-wildcard subscriptions re-run and surface the throw in real
+            // time — the ok path flushes here too. Any rolled-back data tables
+            // still in the pending set re-read committed state, so no stale push.
+            this.recordChangedTable(REQUEST_LOG_TABLE);
+            await this.flushChangedTables();
 
             return this.errorToResponse(error);
         } finally {
@@ -4946,11 +4978,51 @@ abstract class ShardDO {
      * the panel renders it alongside `ctx.log` lines. Admin-gated by
      * `handleAdminRpc`'s caller (the same `LUNORA_ADMIN_TOKEN` bearer as every
      * other admin write).
+     *
+     * An `error`-level lifecycle event (a crash/`onError`, or a non-zero-exit
+     * `stop`) is ALSO appended as an `error`-outcome row to the durable
+     * `__lunora_reqlog__` — the same readout `getIssues` groups over — so a
+     * crash-looping container folds into the Issues list right beside Worker
+     * errors (they share the `fingerprintError` hash over `functionPath ::
+     * bucket(message)`). The in-memory buffer stays the live Logs feed; the
+     * durable row is what survives hibernation for triage.
      */
-    private handleRecordContainerEvent(args: Record<string, unknown>): Response {
+    private async handleRecordContainerEvent(args: Record<string, unknown>): Promise<Response> {
         const entry = parseRecordContainerEventArgs(args);
 
         this.logs.push(entry);
+
+        // A crash is either an explicit `error`-level event (an `onError`) OR a
+        // `stop` that exited non-zero — the normal crash-loop signal. The exit
+        // code rides the `stop` message as `(exit <n>)` and is parsed onto
+        // `entry.exitCode`; a `stop` is always `level: "info"`, so without the
+        // exit-code arm the common crash path would never fold into Issues (only
+        // `onError` would), contradicting this method's contract.
+        const crashed = entry.level === "error" || (entry.exitCode !== undefined && entry.exitCode !== 0);
+
+        if (crashed) {
+            const logEntry: AppendRequestLogEntry = {
+                durationMs: 0,
+                errorMessage: entry.message,
+                functionPath: entry.functionPath,
+                outcome: "error",
+                shardKey: this.state.id?.name,
+                ts: entry.timestamp,
+            };
+
+            // Shared seam with `recordRequestLog` — persists the durable row AND
+            // streams the Logpush event, so a container crash reaches external
+            // sinks like every other error (best-effort throughout).
+            this.persistRequestLog(logEntry, this.requestLogConfig());
+
+            // The row lands through raw SQL the change-tracker can't observe, and
+            // a container push carries no other write — so without this the live
+            // `getIssues`/`getLogs` subscriptions (admin-wildcard memos, re-run
+            // only when a flush finds a changed table) would show the crash only
+            // once some unrelated write happened to flush.
+            this.recordChangedTable(REQUEST_LOG_TABLE);
+            await this.flushChangedTables();
+        }
 
         return jsonResponse({ result: { recorded: true } }, 200);
     }
@@ -5382,24 +5454,41 @@ abstract class ShardDO {
             userId: this.getCurrentUserId(),
         };
 
+        this.persistRequestLog(entry, config);
+    }
+
+    /**
+     * The single durable-row + Logpush write seam for `__lunora_reqlog__`. Both
+     * the per-dispatch {@link recordRequestLog} and the container-crash path
+     * ({@link handleRecordContainerEvent}) funnel through here so they can't
+     * drift — before this was extracted the container writer persisted the row
+     * but silently skipped the Logpush emit every other error got.
+     *
+     * Best-effort by contract: a SQL failure (e.g. a test double with no `sql`
+     * handle) or a serialization hiccup in the emit must NEVER turn a served
+     * request — or a container event push — into a failed one, so each half is
+     * swallowed independently.
+     *
+     * Errors are always streamed to `console` (rare, high-value — they ride CF
+     * Workers Logs at error level and the dev-server formats them in the
+     * terminal), redacted in prod like any other event. The full per-dispatch
+     * summary stream (successful OKs too) stays opt-in behind
+     * `LUNORA_REQUEST_LOG_EMIT` so a hot shard doesn't emit a line per call.
+     */
+    private persistRequestLog(entry: AppendRequestLogEntry, config: { captureRaw: boolean; emit: boolean; retention: number | undefined }): void {
         const writeOptions: RequestLogWriteOptions = { captureRaw: config.captureRaw, retention: config.retention };
 
         try {
             appendRequestLogEntry(this.state.storage.sql as unknown as SqlExec, entry, writeOptions);
         } catch {
-            // Best-effort: never let request-log persistence fail the request.
+            // Best-effort: never let request-log persistence fail the caller.
         }
 
-        // Errors are always streamed to `console` (rare, high-value — they ride
-        // CF Workers Logs at error level and the dev-server formats them in the
-        // terminal), redacted in prod like any other event. The full per-dispatch
-        // summary stream (successful OKs too) stays opt-in behind
-        // `LUNORA_REQUEST_LOG_EMIT` so a hot shard doesn't emit a line per call.
-        if (config.emit || outcome === "error") {
+        if (config.emit || entry.outcome === "error") {
             try {
                 emitRequestLogEvent(entry, writeOptions);
             } catch {
-                // Best-effort: never let event emission fail the request.
+                // Best-effort: never let event emission fail the caller.
             }
         }
     }
@@ -5521,6 +5610,10 @@ abstract class ShardDO {
 
         if (functionPath === ADMIN_FUNCTIONS.getRequestLog) {
             return this.readAdminRequestLog(sql, args);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getIssues) {
+            return this.readAdminIssues(sql, args);
         }
 
         const durable = this.readAdminDurableSignal(functionPath, sql, args);
@@ -5833,6 +5926,35 @@ abstract class ShardDO {
                 shardKey: typeof args["shardKey"] === "string" ? args["shardKey"] : undefined,
                 sinceSeq: typeof args["sinceSeq"] === "number" ? args["sinceSeq"] : undefined,
                 tableTouched: typeof args["tableTouched"] === "string" ? args["tableTouched"] : undefined,
+                userId: typeof args["userId"] === "string" ? args["userId"] : undefined,
+            }),
+        };
+
+        return { result, tables: new Set([ADMIN_WILDCARD]) };
+    }
+
+    /**
+     * Resolve a `getIssues` admin read: fold the recent `error`-outcome
+     * request-log rows into grouped {@link readErrorIssues Issues} by fingerprint,
+     * accepting the same optional correlation filters as `getRequestLog`
+     * (function-path prefix, exact shardKey/userId) plus a `limit` on rows
+     * scanned. This is a read over the bounded reqlog readout — no new store —
+     * so a self-hosted worker gets grouped error triage for free. Carries the
+     * {@link ADMIN_WILDCARD} like the other log reads so a live Issues
+     * subscription re-runs on every write-flush (the per-socket JSON memo still
+     * suppresses byte-identical pushes).
+     */
+    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
+    private readAdminIssues(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
+        // Defensive: the reqlog table may not exist yet on a shard that has never
+        // served a logged dispatch, so ensure it before the read.
+        ensureRequestLogTable(sql);
+
+        const result: IssuesResult = {
+            issues: readErrorIssues(sql, {
+                functionPathPrefix: typeof args["functionPathPrefix"] === "string" ? args["functionPathPrefix"] : undefined,
+                limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+                shardKey: typeof args["shardKey"] === "string" ? args["shardKey"] : undefined,
                 userId: typeof args["userId"] === "string" ? args["userId"] : undefined,
             }),
         };

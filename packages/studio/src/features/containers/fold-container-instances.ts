@@ -19,19 +19,27 @@ const EVENT_STATE: Record<string, ContainerLifecycleState> = {
 };
 
 /**
- * One container's current state, folded from its latest lifecycle transition.
+ * One container instance's current state, folded from its latest lifecycle
+ * transition.
  *
- * There is no per-instance id, port, or health signal in the log envelope:
- * `@lunora/do` maps the Container DO's best-effort lifecycle push to
- * `functionPath: "container:&lt;name>"` + a `&lt;event>` / `&lt;event>: &lt;detail>`
- * message, dropping the instance id. So this view is per-container, not
- * per-instance — the strongest signal the already-emitted data carries.
+ * The log envelope now carries the per-instance Durable Object id
+ * (`entry.instance`) and, for a `stop`, the process `exitCode`; `@lunora/do`
+ * maps the Container DO's best-effort lifecycle push to `functionPath:
+ * "container:&lt;name>"` + a `&lt;event>` / `&lt;event>: &lt;detail>` message. So this view
+ * is keyed per `(name, instance)` — many concurrent instances of one container
+ * fold into their own rows instead of collapsing into a single lane. An entry
+ * with no instance id (older buffers, or a pre-instance transition) folds under
+ * a synthetic single-lane key so it still renders.
  */
 interface ContainerInstanceRow {
     /** Detail after the `&lt;event>:` marker (a stop reason / error message), when present. */
     readonly detail?: string;
     /** The raw lifecycle transition token that produced the current state (`start`/`stop`/`sleep`/`error`). */
     readonly event: string;
+    /** Process exit code, present on a `stop` transition that carried one. */
+    readonly exitCode?: number;
+    /** The per-instance Durable Object id, when the envelope carried one. */
+    readonly instance?: string;
     /** Buffer severity of the last transition. */
     readonly level: LogLevel;
     /** The `lunora/containers.ts` export name. */
@@ -64,10 +72,12 @@ const parseContainerMessage = (message: string): { detail?: string; event: strin
 
 /**
  * Reduce a shard's log entries (newest-first, as `getLogs` returns them) to the
- * current state of each container — the panel's "current containers" view. Only
- * `container:&lt;name>` entries are considered; for each container the entry with
- * the greatest timestamp wins. Pure + order-independent, so it is unit-testable
- * in isolation and stable regardless of the buffer's ordering.
+ * current state of each container instance — the panel's "current containers"
+ * view. Only `container:&lt;name>` entries are considered; rows are keyed per
+ * `(name, instance)` so concurrent instances stay distinct, and for each key the
+ * entry with the greatest timestamp wins. An entry with no instance id folds
+ * under the container name alone. Pure + order-independent, so it is
+ * unit-testable in isolation and stable regardless of the buffer's ordering.
  */
 const foldContainerInstances = (entries: ReadonlyArray<LogEntry>): ContainerInstanceRow[] => {
     const latest = new Map<string, ContainerInstanceRow>();
@@ -85,7 +95,11 @@ const foldContainerInstances = (entries: ReadonlyArray<LogEntry>): ContainerInst
             continue;
         }
 
-        const previous = latest.get(name);
+        // Key per `(name, instance)` so many concurrent instances of one
+        // container fold into their own rows. JSON-encode the pair so no name /
+        // instance combination can collide with a different one.
+        const key = JSON.stringify([name, entry.instance ?? ""]);
+        const previous = latest.get(key);
 
         if (previous !== undefined && previous.timestamp >= entry.timestamp) {
             continue;
@@ -93,9 +107,11 @@ const foldContainerInstances = (entries: ReadonlyArray<LogEntry>): ContainerInst
 
         const { detail, event } = parseContainerMessage(entry.message);
 
-        latest.set(name, {
+        latest.set(key, {
             detail,
             event,
+            exitCode: entry.exitCode,
+            instance: entry.instance,
             level: entry.level,
             name,
             state: EVENT_STATE[event] ?? "unknown",
@@ -103,7 +119,9 @@ const foldContainerInstances = (entries: ReadonlyArray<LogEntry>): ContainerInst
         });
     }
 
-    return [...latest.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+    // Group by container name, then by instance id, so the panel lists each
+    // container's instances together in a stable order.
+    return [...latest.values()].toSorted((a, b) => a.name.localeCompare(b.name) || (a.instance ?? "").localeCompare(b.instance ?? ""));
 };
 
 export { CONTAINER_LOG_PREFIX, foldContainerInstances, parseContainerMessage };

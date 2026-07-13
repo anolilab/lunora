@@ -1261,17 +1261,116 @@ describe("shardDO admin introspection", () => {
         await expect(recorded.json()).resolves.toEqual({ result: { recorded: true } });
 
         const logs = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}, ADMIN_TOKEN));
-        const body = await logs.json<{ result: { entries: { functionPath?: string; level: string; message: string; timestamp: number }[] } }>();
+        const body = await logs.json<{
+            result: { entries: { exitCode?: number; functionPath?: string; instance?: string; level: string; message: string; timestamp: number }[] };
+        }>();
 
         expect(logs.status).toBe(200);
         // `functionPath` groups it as a container source; the message folds the
-        // transition and the detail; the timestamp is the envelope's `ts`.
+        // transition and the detail; the timestamp is the envelope's `ts`; the
+        // per-instance DO id and the `(exit <n>)` code are carried through.
         expect(body.result.entries).toContainEqual({
+            exitCode: 137,
             functionPath: "container:transcoder",
+            instance: "do-abc123",
             level: "info",
             message: "stop: runtime_signal (exit 137)",
             timestamp: 1_700_000_000_000,
         });
+    });
+
+    it("folds an error-level container event into the getIssues stream", async () => {
+        expect.assertions(3);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Two crashes of the same container with different instance ids: they
+        // share the `container:transcoder :: bucket(message)` fingerprint, so
+        // getIssues folds them into one Issue with count 2 — right beside any
+        // Worker error, since both go through the same durable readout.
+        const crash = (instance: string) => {
+            return {
+                container: "transcoder",
+                event: "error",
+                instance,
+                level: "error",
+                message: "OOM killed (exit 137)",
+                source: "lunora",
+                ts: 1_700_000_000_000,
+                type: "container",
+            };
+        };
+
+        const first = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordContainerEvent, { event: crash("do-a") }, ADMIN_TOKEN));
+        const second = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordContainerEvent, { event: crash("do-b") }, ADMIN_TOKEN));
+
+        expect([first.status, second.status]).toStrictEqual([200, 200]);
+
+        const issues = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getIssues, {}, ADMIN_TOKEN));
+        const body = await issues.json<{ result: { issues: { count: number; culprit: string; title: string }[] } }>();
+
+        expect(issues.status).toBe(200);
+
+        const issue = body.result.issues.find((candidate) => candidate.culprit === "container:transcoder");
+
+        expect(issue?.count).toBe(2);
+    });
+
+    it("folds a non-zero-exit `stop` (level info) into the getIssues stream", async () => {
+        expect.assertions(3);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // A crash-loop's normal signal is a `stop` with a non-zero exit code —
+        // NOT an `error`-level event. The lifecycle envelope carries it as
+        // `level: "info"` with `(exit <n>)` in the message, so the handler must
+        // treat the parsed non-zero exit code as a crash and append an error row.
+        const crashStop = {
+            container: "transcoder",
+            event: "stop",
+            instance: "do-a",
+            level: "info",
+            message: "runtime_signal (exit 137)",
+            source: "lunora",
+            ts: 1_700_000_000_000,
+            type: "container",
+        };
+
+        const recorded = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordContainerEvent, { event: crashStop }, ADMIN_TOKEN));
+
+        expect(recorded.status).toBe(200);
+
+        const issues = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getIssues, {}, ADMIN_TOKEN));
+        const body = await issues.json<{ result: { issues: { count: number; culprit: string }[] } }>();
+
+        expect(issues.status).toBe(200);
+        expect(body.result.issues.find((candidate) => candidate.culprit === "container:transcoder")?.count).toBe(1);
+    });
+
+    it("does NOT fold a clean `stop` (exit 0) into the getIssues stream", async () => {
+        expect.assertions(2);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const cleanStop = {
+            container: "transcoder",
+            event: "stop",
+            instance: "do-a",
+            level: "info",
+            message: "graceful shutdown (exit 0)",
+            source: "lunora",
+            ts: 1_700_000_000_000,
+            type: "container",
+        };
+
+        const recorded = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordContainerEvent, { event: cleanStop }, ADMIN_TOKEN));
+
+        expect(recorded.status).toBe(200);
+
+        const issues = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getIssues, {}, ADMIN_TOKEN));
+        const body = await issues.json<{ result: { issues: { culprit: string }[] } }>();
+
+        expect(body.result.issues.some((candidate) => candidate.culprit === "container:transcoder")).toBe(false);
     });
 
     it("rejects (400) a recordContainerEvent with a missing envelope", async () => {

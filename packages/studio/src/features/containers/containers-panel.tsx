@@ -43,13 +43,13 @@ const entriesOf = (result: unknown): LogEntry[] => {
  * / stopped / error), the last transition, and any detail (a stop reason / error
  * message).
  *
- * Data-source note: the lifecycle envelope carries only `name` + transition +
- * detail — `@lunora/do` folds the Container DO's push to `functionPath:
- * "container:&lt;name>"`, dropping the per-instance id, and the envelope has no
- * ports/health. So this is a per-container view, not per-instance, and it does
- * not surface ports or health checks (those live in static `defineContainer`
- * config, not the runtime stream). It streams live over the same admin WS the
- * Logs panel uses.
+ * Data-source note: the lifecycle envelope carries `name` + the per-instance
+ * Durable Object id + transition + detail (and a process `exitCode` on a stop) —
+ * `@lunora/do` folds the Container DO's push to `functionPath:
+ * "container:&lt;name>"` and carries the instance id through, so this is a
+ * per-instance view. The envelope has no ports/health, so those aren't surfaced
+ * (they live in static `defineContainer` config, not the runtime stream). It
+ * streams live over the same admin WS the Logs panel uses.
  */
 const ContainersPanel = (): ReactElement => {
     const t = useT();
@@ -74,7 +74,7 @@ const ContainersPanel = (): ReactElement => {
             <div className="flex flex-wrap items-center gap-2">
                 <p className="text-sm text-muted-foreground">
                     {t(
-                        "Cloudflare Containers are observed from their lifecycle log stream. This shows the current state per container — ports and health checks aren't carried in that stream.",
+                        "Cloudflare Containers are observed from their lifecycle log stream. This shows the current state per instance — ports and health checks aren't carried in that stream.",
                     )}
                 </p>
                 <LiveError message={liveError} prefix="containers" />
@@ -95,16 +95,24 @@ const ContainersPanel = (): ReactElement => {
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>{t("Container")}</TableHead>
+                                    <TableHead>{t("Instance")}</TableHead>
                                     <TableHead>{t("State")}</TableHead>
                                     <TableHead>{t("Last event")}</TableHead>
                                     <TableHead>{t("Detail")}</TableHead>
+                                    <TableHead>{t("Exit")}</TableHead>
                                     <TableHead>{t("When")}</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
                                 {rows.map((row) => (
-                                    <TableRow data-testid={`containers-row-${row.name}`} key={row.name}>
+                                    <TableRow
+                                        data-testid={`containers-row-${row.name}${row.instance === undefined ? "" : `-${row.instance}`}`}
+                                        key={`${row.name}/${row.instance ?? ""}`}
+                                    >
                                         <TableCell className="font-mono text-xs">{row.name}</TableCell>
+                                        <TableCell className="max-w-40 truncate font-mono text-xs text-muted-foreground" title={row.instance}>
+                                            {row.instance ?? "—"}
+                                        </TableCell>
                                         <TableCell>
                                             <Badge variant={STATE_VARIANT[row.state]}>{row.state}</Badge>
                                         </TableCell>
@@ -112,6 +120,7 @@ const ContainersPanel = (): ReactElement => {
                                         <TableCell className="max-w-64 truncate text-xs text-muted-foreground" title={row.detail}>
                                             {row.detail ?? "—"}
                                         </TableCell>
+                                        <TableCell className="font-mono text-xs tabular-nums text-muted-foreground">{row.exitCode ?? "—"}</TableCell>
                                         <TableCell className="text-xs tabular-nums text-muted-foreground">{new Date(row.timestamp).toLocaleString()}</TableCell>
                                     </TableRow>
                                 ))}

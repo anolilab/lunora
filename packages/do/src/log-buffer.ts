@@ -4,10 +4,14 @@ type LogLevel = "debug" | "error" | "info" | "warn";
 /**
  * One buffered log line. `functionPath` is the RPC that produced it (when the
  * entry came from the RPC dispatch site); `timestamp` is `Date.now()` at the
- * moment it was pushed.
+ * moment it was pushed. `instance`/`exitCode` are populated for container
+ * lifecycle entries: `instance` correlates the per-instance Durable Object id,
+ * `exitCode` carries the process exit code parsed out of a `stop` event.
  */
 interface LogEntry {
+    exitCode?: number;
     functionPath?: string;
+    instance?: string;
     level: LogLevel;
     message: string;
     timestamp: number;

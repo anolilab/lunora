@@ -97,4 +97,43 @@ describe("foldContainerInstances", () => {
 
         expect(foldContainerInstances([containerEntry("weird", "teleport", 1)])[0]?.state).toBe("unknown");
     });
+
+    it("keeps concurrent instances of one container as distinct rows keyed per (name, instance)", () => {
+        expect.assertions(4);
+
+        const rows = foldContainerInstances([
+            { exitCode: undefined, functionPath: "container:transcoder", instance: "do-a", level: "info", message: "start", timestamp: 10 },
+            { exitCode: undefined, functionPath: "container:transcoder", instance: "do-b", level: "info", message: "start", timestamp: 11 },
+        ]);
+
+        expect(rows).toHaveLength(2);
+        expect(rows.map((row) => row.instance)).toStrictEqual(["do-a", "do-b"]);
+        expect(rows.every((row) => row.name === "transcoder")).toBe(true);
+        expect(rows.every((row) => row.state === "running")).toBe(true);
+    });
+
+    it("folds transitions of the same instance and carries the parsed exit code", () => {
+        expect.assertions(3);
+
+        const rows = foldContainerInstances([
+            { exitCode: 137, functionPath: "container:transcoder", instance: "do-a", level: "error", message: "stop: killed (exit 137)", timestamp: 200 },
+            { exitCode: undefined, functionPath: "container:transcoder", instance: "do-a", level: "info", message: "start", timestamp: 100 },
+        ]);
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.state).toBe("stopped");
+        expect(rows[0]?.exitCode).toBe(137);
+    });
+
+    it("groups a container's instances together, ordered by instance id", () => {
+        expect.assertions(1);
+
+        const rows = foldContainerInstances([
+            { functionPath: "container:zeta", instance: "do-2", level: "info", message: "start", timestamp: 1 },
+            { functionPath: "container:alpha", instance: "do-9", level: "info", message: "start", timestamp: 2 },
+            { functionPath: "container:alpha", instance: "do-1", level: "info", message: "start", timestamp: 3 },
+        ]);
+
+        expect(rows.map((row) => `${row.name}/${row.instance ?? ""}`)).toStrictEqual(["alpha/do-1", "alpha/do-9", "zeta/do-2"]);
+    });
 });

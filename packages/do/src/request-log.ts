@@ -21,6 +21,7 @@
  * It must not grow into a pipeline.
  */
 
+import { fingerprintError } from "@lunora/fingerprint";
 import { redact, standardRules } from "@visulima/redact";
 
 import type { SqlCursor, SqlExec } from "./ctx-db";
@@ -115,6 +116,46 @@ interface ReadRequestLogOptions {
 /** Payload of a `__lunora_admin__:getRequestLog` call: the recorded entries, newest first. */
 interface RequestLogResult {
     entries: RequestLogEntry[];
+}
+
+/**
+ * One grouped error **Issue**: many `error`-outcome request-log rows that share a
+ * fingerprint folded into a single triage row. The `hash` is the same stable key
+ * a cloud Incident groups on, so a local Issue and a cloud Incident are the same
+ * object.
+ */
+interface ErrorIssue {
+    /** Number of `error` rows folded into this Issue within the scanned window. */
+    count: number;
+    /** The `&lt;file>:&lt;function>` (or `container:&lt;name>`) the errors came from. */
+    culprit: string;
+    /** Wall-clock millis of the oldest folded row. */
+    firstSeen: number;
+    /** Stable 16-char grouping hash over `functionPath :: bucket(message)`. */
+    hash: string;
+    /** Wall-clock millis of the newest folded row. */
+    lastSeen: number;
+    /** A representative raw error message — taken from the most recent folded row. */
+    sampleMessage: string;
+    /** Human-readable title (first line of the sample message, capped). */
+    title: string;
+}
+
+/** Payload of a `__lunora_admin__:getIssues` call: grouped error Issues, most-recently-active first. */
+interface IssuesResult {
+    issues: ErrorIssue[];
+}
+
+/** Filters for {@link readErrorIssues}; forwarded to {@link readRequestLog} with `outcome` forced to `error`. */
+interface ReadIssuesOptions {
+    /** Functions whose path begins with this prefix (a `&lt;file>:` or `&lt;file>:&lt;fn>` correlation). */
+    functionPathPrefix?: string;
+    /** Upper bound on error rows scanned before grouping, clamped to [1, 10000]. */
+    limit?: number;
+    /** Exact shard-key match. */
+    shardKey?: string;
+    /** Exact acting-userId match. */
+    userId?: string;
 }
 
 /** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags. */
@@ -508,11 +549,102 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
     });
 };
 
+/**
+ * Group the recent `error`-outcome request-log rows into stable **Issues**.
+ *
+ * A pure read-side aggregation over the bounded readout — no new storage, no
+ * transport (see the module docstring): it reads the recent `error` rows via
+ * {@link readRequestLog} and folds them with `@lunora/fingerprint`'s
+ * `fingerprintError`, whose canonical hash is `functionPath :: bucket(message)`.
+ * That collapses per-occurrence noise — a route-scanner sweep (`/wp-admin`,
+ * `/.env`), a per-request id in the message (`user 12345 not found`) — onto one
+ * Issue, and matches the grouping a cloud Incident uses. Container crashes fold
+ * in too, since they land as `error` rows under `functionPath: "container:&lt;name>"`.
+ *
+ * Rows come back in `seq` (insert) order, which is NOT `ts` order: a container
+ * lifecycle row carries the caller's envelope `ts`, so an out-of-order or
+ * clock-skewed push can land an older-`ts` row at a higher `seq`. The
+ * representative `title`/`sampleMessage` are therefore tracked by maximum `ts`,
+ * not by first sighting, so they always describe the same occurrence `lastSeen`
+ * points at. `culprit` needs no such tracking — it is `functionPath`, which is
+ * an input to the hash and so is invariant across a group. Result is ordered
+ * most-recently-active first.
+ *
+ * This projects only the three columns grouping needs (`function_path`,
+ * `error_message`, `ts`) instead of going through {@link readRequestLog}'s full
+ * 14-column hydrate + per-row `JSON.parse` of args/identity/tables — none of
+ * which the fold reads. The `getIssues` subscription carries the admin wildcard,
+ * so it re-runs on every write-flush; keeping this read lean matters.
+ */
+const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIssue[] => {
+    ensureRequestLogTable(sql);
+
+    const limit = Math.max(1, Math.min(options.limit ?? REQUEST_LOG_RETENTION, 10_000));
+
+    const conjuncts: string[] = ["outcome = 'error'"];
+    const parameters: unknown[] = [];
+
+    if (options.functionPathPrefix !== undefined && options.functionPathPrefix !== "") {
+        conjuncts.push(String.raw`function_path LIKE ? ESCAPE '\'`);
+        parameters.push(`${escapeLike(options.functionPathPrefix)}%`);
+    }
+
+    if (options.userId !== undefined && options.userId !== "") {
+        conjuncts.push("user_id = ?");
+        parameters.push(options.userId);
+    }
+
+    if (options.shardKey !== undefined && options.shardKey !== "") {
+        conjuncts.push("shard_key = ?");
+        parameters.push(options.shardKey);
+    }
+
+    parameters.push(limit);
+
+    const rows = runSql<{ error_message: null | string; function_path: string; ts: number }>(
+        sql,
+        `SELECT function_path, error_message, ts
+         FROM "${REQUEST_LOG_TABLE}" WHERE ${conjuncts.join(" AND ")} ORDER BY seq DESC LIMIT ?`,
+        ...parameters,
+    ).toArray();
+
+    const issues = new Map<string, ErrorIssue>();
+    /** `ts` of the row currently supplying each Issue's `title`/`sampleMessage`. */
+    const sampleTs = new Map<string, number>();
+
+    for (const row of rows) {
+        const message = row.error_message ?? "";
+        const { culprit, hash, title } = fingerprintError({ functionPath: row.function_path, message });
+        const existing = issues.get(hash);
+
+        if (existing === undefined) {
+            issues.set(hash, { count: 1, culprit, firstSeen: row.ts, hash, lastSeen: row.ts, sampleMessage: message, title });
+            sampleTs.set(hash, row.ts);
+
+            continue;
+        }
+
+        existing.count += 1;
+        existing.firstSeen = Math.min(existing.firstSeen, row.ts);
+        existing.lastSeen = Math.max(existing.lastSeen, row.ts);
+
+        // Strictly newer only, so a `ts` tie keeps the higher-`seq` (later-written) row.
+        if (row.ts > (sampleTs.get(hash) ?? Number.NEGATIVE_INFINITY)) {
+            sampleTs.set(hash, row.ts);
+            existing.sampleMessage = message;
+            existing.title = title;
+        }
+    }
+
+    return [...issues.values()].toSorted((a, b) => b.lastSeen - a.lastSeen);
+};
+
 export {
     appendRequestLogEntry,
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
+    readErrorIssues,
     readRequestLog,
     redactArgs,
     renderLogMessage,
@@ -522,7 +654,10 @@ export {
 export type {
     AppendRequestLogEntry,
     ContextLogLevel,
+    ErrorIssue,
+    IssuesResult,
     LogEventInput,
+    ReadIssuesOptions,
     ReadRequestLogOptions,
     RequestLogEntry,
     RequestLogResult,

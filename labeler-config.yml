@@ -55,6 +55,9 @@
 "package: errors":
     - changed-files:
           - any-glob-to-any-file: "packages/errors/**/*"
+"package: fingerprint":
+    - changed-files:
+          - any-glob-to-any-file: "packages/fingerprint/**/*"
 "package: flags":
     - changed-files:
           - any-glob-to-any-file: "packages/flags/**/*"

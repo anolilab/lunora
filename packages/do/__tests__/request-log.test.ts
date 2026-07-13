@@ -5,6 +5,7 @@ import {
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
+    readErrorIssues,
     readRequestLog,
     redactArgs,
     renderLogMessage,
@@ -229,6 +230,137 @@ describe("request-log module", () => {
 
         // captureRaw (dev) returns the value untouched.
         expect(redactArgs({ password: "hunter2" }, true)).toStrictEqual({ password: "hunter2" });
+    });
+});
+
+describe("readErrorIssues (grouped Issues over the bounded readout)", () => {
+    it("folds error rows sharing a fingerprint into one Issue with count + first/last seen", () => {
+        expect.assertions(6);
+
+        const database = createSqliteExec();
+
+        try {
+            // Same function + same normalized bucket ("user <n> not found") → one Issue.
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "User 12345 not found", functionPath: "messages:list", outcome: "error", ts: 1000 }));
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "User 67890 not found", functionPath: "messages:list", outcome: "error", ts: 2000 }));
+
+            const issues = readErrorIssues(database.sql);
+
+            expect(issues).toHaveLength(1);
+            expect(issues[0]!.count).toBe(2);
+            expect(issues[0]!.culprit).toBe("messages:list");
+            expect(issues[0]!.firstSeen).toBe(1000);
+            expect(issues[0]!.lastSeen).toBe(2000);
+            // The newest folded row seeds the representative sample.
+            expect(issues[0]!.sampleMessage).toBe("User 67890 not found");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("takes the representative sample from the newest `ts`, not the newest `seq`", () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            // `seq` is insert order, but `ts` is caller-supplied on a container
+            // lifecycle row — so an out-of-order / clock-skewed push can write an
+            // OLDER-`ts` row at a HIGHER `seq`. Here the second append is the older
+            // occurrence, so the sample must still come from the first (newer `ts`).
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom at 9000", functionPath: "container:transcoder", outcome: "error", ts: 9000 }));
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom at 1000", functionPath: "container:transcoder", outcome: "error", ts: 1000 }));
+
+            const issues = readErrorIssues(database.sql);
+
+            expect(issues).toHaveLength(1);
+            expect(issues[0]!.firstSeen).toBe(1000);
+            expect(issues[0]!.lastSeen).toBe(9000);
+            // Must describe the same occurrence `lastSeen` points at.
+            expect(issues[0]!.sampleMessage).toBe("boom at 9000");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("collapses a bot sweep into one Issue and never folds an ok row", () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(
+                database.sql,
+                entry({ errorMessage: "no route for GET /wp-admin/install.php", functionPath: "http:router", outcome: "error", ts: 1 }),
+            );
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "no route for GET /.env", functionPath: "http:router", outcome: "error", ts: 2 }));
+            // An `ok` dispatch must never surface as an Issue.
+            appendRequestLogEntry(database.sql, entry({ functionPath: "http:router", outcome: "ok", ts: 3 }));
+
+            const issues = readErrorIssues(database.sql);
+
+            expect(issues).toHaveLength(1);
+            expect(issues[0]!.count).toBe(2);
+            expect(issues[0]!.hash).toMatch(/^[0-9a-f]{16}$/);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("keeps distinct functions in separate Issues, most-recently-active first", () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "a:b", outcome: "error", ts: 1000 }));
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "c:d", outcome: "error", ts: 2000 }));
+
+            const issues = readErrorIssues(database.sql);
+
+            expect(issues).toHaveLength(2);
+            // Same message under a different function → a different hash.
+            expect(issues[0]!.hash).not.toBe(issues[1]!.hash);
+            // Ordered by lastSeen desc: c:d (ts 2000) before a:b (ts 1000).
+            expect(issues.map((issue) => issue.culprit)).toEqual(["c:d", "a:b"]);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("folds container crash rows beside Worker errors", () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "exited with code 137", functionPath: "container:transcoder", outcome: "error", ts: 1 }));
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "exited with code 137", functionPath: "container:transcoder", outcome: "error", ts: 2 }));
+
+            const issues = readErrorIssues(database.sql);
+
+            expect(issues).toHaveLength(1);
+            expect(issues[0]!.culprit).toBe("container:transcoder");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("honours the functionPathPrefix filter", () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "messages:list", outcome: "error", ts: 1 }));
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "posts:list", outcome: "error", ts: 2 }));
+
+            const issues = readErrorIssues(database.sql, { functionPathPrefix: "messages:" });
+
+            expect(issues.map((issue) => issue.culprit)).toEqual(["messages:list"]);
+        } finally {
+            database.close();
+        }
     });
 });
 

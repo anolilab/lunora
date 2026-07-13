@@ -47,6 +47,7 @@ overrides:
   "@lunora/dispatch": "workspace:*"
   "@lunora/do": "workspace:*"
   "@lunora/errors": "workspace:*"
+  "@lunora/fingerprint": "workspace:*"
   "@lunora/flags": "workspace:*"
   "@lunora/hyperdrive": "workspace:*"
   "@lunora/mail": "workspace:*"
