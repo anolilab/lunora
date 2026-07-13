@@ -54,6 +54,7 @@ export { useAgentState } from "./use-agent-state";
 export type { AgentToolEvent, UseAgentToolEventsApi, UseAgentToolEventsOptions, UseAgentToolEventsResult } from "./use-agent-tool-events";
 export { useAgentToolEvents } from "./use-agent-tool-events";
 export { default as useAuth } from "./use-auth";
+export { default as useClientQuery } from "./use-client-query";
 export { default as useConnectionStatus } from "./use-connection-status";
 export type { FlagContext, FlagValue } from "./use-flag";
 export { useFlag, useFlags } from "./use-flag";
@@ -80,3 +81,8 @@ export { useVoiceAgent } from "./use-voice-agent";
 // React-only user gets them without a second import (see the header note).
 export type { LunoraErrorCode } from "@lunora/client";
 export { getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRateLimitedError, isUnauthorizedError } from "@lunora/client";
+
+// Local client-query refs — the createClientQuery factory + the ref type are
+// re-exported so a React-only user imports everything from one package.
+export type { ClientQueryRef } from "@lunora/client";
+export { createClientQuery } from "@lunora/client";
