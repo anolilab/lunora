@@ -91,6 +91,9 @@
 "package: react-native":
     - changed-files:
           - any-glob-to-any-file: "packages/react-native/**/*"
+"package: replica":
+    - changed-files:
+          - any-glob-to-any-file: "packages/replica/**/*"
 "package: runtime":
     - changed-files:
           - any-glob-to-any-file: "packages/runtime/**/*"

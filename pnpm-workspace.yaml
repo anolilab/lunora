@@ -454,6 +454,7 @@ allowBuilds:
   # build step (the tarball ships dist/), so skip it.
   '@coinbase/x402': false
   '@parcel/watcher': true
+  better-sqlite3: true
   core-js: false
   cpu-features: true
   esbuild: true
