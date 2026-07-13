@@ -5,6 +5,9 @@ import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { stableStringify } from "../../../shared/stable-key";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import createInMemoryBookmarkStorage from "./bookmark";
+import type { ClientQueryRef } from "./client-query-store";
+import { ClientQueryStore } from "./client-query-store";
+import { TabCoordinator } from "./cross-tab";
 import { applyDelta, isMutationDelta } from "./delta-merge";
 import type { LunoraErrorCode } from "./errors";
 import Listeners from "./listeners";
@@ -283,6 +286,15 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
      * once; every write is rolled back atomically if the mutation fails.
      */
     optimisticUpdate?: OptimisticUpdate<TArgs>;
+
+    /**
+     * Sync predicate evaluated just before the offline queue replays this
+     * write on reconnect. When it returns `false` the mutation is dropped
+     * instead of replayed — use it to guard against replaying writes whose
+     * assumptions are no longer valid (e.g. the document it referred to was
+     * deleted by another client while this tab was offline).
+     */
+    precondition?: () => boolean;
     shardKey?: string;
 }
 
@@ -571,6 +583,11 @@ const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count:
 const TRANSIENT_BATCH_ERROR_CODES = new Set(["SHARD_ERROR", "SHARD_UNAVAILABLE"]);
 
 /**
+ * @internal
+ */
+const RESOLVED_PROMISE = Promise.resolve();
+
+/**
  * Lunora browser/edge client. Talks RPC over HTTP and real-time deltas over
  * a single multiplexed WebSocket.
  *
@@ -581,9 +598,24 @@ class LunoraClient {
     /** Hard cap on concurrently-buffered pokes — a backstop that reclaims buffers abandoned by a mid-poke disconnect (no `pokeEnd`). Far above any real concurrent-in-flight count. */
     private static readonly MAX_POKE_BUFFERS = 256;
 
+    /**
+     * Create a typed {@link ClientQueryRef}. Convenience wrapper around
+     * {@link createClientQuery} so you don't need a separate import.
+     * @example
+     * ```ts
+     * const sidebarOpen = LunoraClient.createClientQuery("sidebarOpen", true);
+     * ```
+     */
+    public static createClientQuery<T>(key: string, defaultValue: T): ClientQueryRef<T> {
+        return { defaultValue, key };
+    }
+
     public readonly url: string;
 
     public readonly wsUrl: string;
+
+    /** Local reactive store for {@link ClientQueryRef} values — no server round-trip. Private; reach it via `getClientQuery` / `setClientQuery` / `subscribeClientQuery`. */
+    private readonly clientQueryStore: ClientQueryStore;
 
     private wsToken: string | undefined;
 
@@ -614,6 +646,23 @@ class LunoraClient {
 
     /** Stable per-client id stamped onto every `OutboxMutation` (custom-mutator watermark). */
     private readonly clientId: string;
+
+    /**
+     * `true` when the constructor's hydration microtask has finished loading the
+     * durable read cache (Pillar 2) into `hydratedQueryCache`. Signals that
+     * the cache is ready for synchronous `peekHydratedQuery` reads.
+     */
+    private readyResolved = false;
+
+    /** Resolvers for `whenReady()` — called once hydration completes. */
+    private readyResolve: (() => void) | undefined;
+
+    /**
+     * Promise that resolves once the durable read cache has been loaded. When
+     * `hydrateOnStart` is not set or no query cache is configured, resolves
+     * immediately (the constructor creates an already-resolved promise).
+     */
+    private readonly readyPromise: Promise<void>;
 
     /**
      * Highest custom-mutator watermark the server has echoed for this client,
@@ -658,6 +707,13 @@ class LunoraClient {
     private cacheFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
     private readonly subscriptions = new SubscriptionRegistry();
+
+    /**
+     * Cross-tab coordinator; created only when `crossTabSync: true`. When the
+     * client is not the elected leader, all WebSocket operations are skipped.
+     * Not `readonly` — `close()` clears it (mirrors `outboxLeaderRelease`).
+     */
+    private tabCoordinator: TabCoordinator | undefined;
 
     /** One {@link ShardConnection} per shard key (keyed by `shardKey ?? ""`). */
     private readonly connections = new Map<string, ShardConnection>();
@@ -781,6 +837,79 @@ class LunoraClient {
         this.persistenceVersion = options.persistenceVersion;
         this.queryCache = resolveQueryCacheAdapter(options.queryCache);
         this.onPersistenceError = options.offlineQueue?.onPersistenceError;
+        this.clientQueryStore = new ClientQueryStore();
+
+        // Cross-tab coordinator: when `crossTabSync` is set, tabs coordinate
+        // via BroadcastChannel so only one tab (the leader) opens WS sockets.
+        if (options.crossTabSync) {
+            this.tabCoordinator = new TabCoordinator({
+                onBecomeLeader: () => {
+                    // Re-open sockets for every active subscription now that
+                    // we own the WS connections.
+                    for (const state of this.subscriptions.all()) {
+                        this.ensureSocket(state.shardKey);
+                        this.sendSubscribeIfOpen(state);
+                    }
+                },
+                onStopBeingLeader: () => {
+                    // Close all WS connections now that another tab leads.
+                    for (const [key, conn] of this.connections) {
+                        conn.socket?.close();
+                        this.connections.delete(key);
+                    }
+                },
+                onSubscriptionData: (key, data) => {
+                    // A follower tab received the authoritative server value from
+                    // the leader. Update serverBase and re-fold any local optimistic
+                    // layers so the displayed value reflects both the new base and
+                    // the follower's own pending writes.
+                    const state = this.subscriptions.get(key);
+
+                    if (state) {
+                        state.serverBase = data;
+
+                        const folded = state.optimisticLayers.length === 0 ? data : foldOptimistic(data, state.optimisticLayers);
+
+                        state.lastValue = folded;
+
+                        for (const callback of state.callbacks) {
+                            try {
+                                callback(folded);
+                            } catch {
+                                /* user callback threw — ignore */
+                            }
+                        }
+                    }
+                },
+                onSubscriptionError: (key, error) => {
+                    const state = this.subscriptions.get(key);
+
+                    if (state) {
+                        for (const callback of state.errorCallbacks) {
+                            try {
+                                callback(error);
+                            } catch {
+                                /* user callback threw — ignore */
+                            }
+                        }
+                    }
+                },
+            });
+            this.tabCoordinator.start();
+        } else {
+            this.tabCoordinator = undefined;
+        }
+
+        // `whenReady()` resolved immediately when no durable cache needs loading
+        // or the caller opted out of hydration-gated rendering.
+        if (options.hydrateOnStart && this.queryCache) {
+            this.readyPromise = new Promise<void>((resolve) => {
+                this.readyResolve = resolve;
+            });
+        } else {
+            this.readyResolved = true;
+            this.readyPromise = RESOLVED_PROMISE;
+        }
         this.offlineQueue = new OfflineQueue(options.offlineQueue, {
             onEvict: (entry, error) => {
                 this.emitItemSettled(entry, "rejected", error);
@@ -812,7 +941,21 @@ class LunoraClient {
             // `subscribe()` for each key seeds its value before any socket opens.
             // Best-effort and identity-gated at seed time.
             queueMicrotask((): void => {
-                this.hydrateQueryCache().catch(() => undefined);
+                const hydration = async (): Promise<void> => {
+                    try {
+                        await this.hydrateQueryCache();
+                    } catch {
+                        // Cache hydration failed — proceed without cache.
+                    } finally {
+                        this.readyResolved = true;
+                        this.readyResolve?.();
+                    }
+                };
+
+                hydration().catch(() => {
+                    // Cache hydration is best-effort; failures are already
+                    // handled inside the hydration function.
+                });
             });
         }
     }
@@ -1311,6 +1454,156 @@ class LunoraClient {
         return this.mutationSettledListeners.add(listener);
     }
 
+    // --- Client Query (local state) ----------------------------------------
+
+    /**
+     * Read the current value for a {@link ClientQueryRef}. Returns
+     * `ref.defaultValue` when no value has been explicitly set.
+     */
+    public getClientQuery<T>(ref: ClientQueryRef<T>): T {
+        return this.clientQueryStore.get(ref);
+    }
+
+    /**
+     * Set a new value for `ref` and notify every subscriber. Pass `undefined`
+     * to reset the slot to `ref.defaultValue`.
+     */
+    public setClientQuery<T>(ref: ClientQueryRef<T>, value: T): void {
+        this.clientQueryStore.set(ref, value);
+    }
+
+    /**
+     * Subscribe to changes for `ref`. The callback is NOT invoked on
+     * registration — call {@link getClientQuery} for the current value.
+     * Returns an unsubscribe function.
+     */
+    public subscribeClientQuery(ref: ClientQueryRef, callback: (value: unknown) => void): Unsubscribe {
+        return this.clientQueryStore.subscribe(ref, callback);
+    }
+
+    /**
+     * Reset a {@link ClientQueryRef} to its default value, notifying every
+     * subscriber. Equivalent to `setClientQuery(ref, ref.defaultValue)` but
+     * removes the stored entry so a future {@link getClientQuery} returns
+     * the default rather than an explicitly-set value.
+     */
+    public resetClientQuery(ref: ClientQueryRef): void {
+        this.clientQueryStore.reset(ref);
+    }
+
+    /**
+     * Capture a snapshot of the current live query value at call time and
+     * produce a `() => boolean` precondition that compares it against the
+     * value at replay time (on queue drain / reconnect).
+     *
+     * When the precondition is checked it re-reads the query's current value
+     * via `peekActiveQueryValue`. If the value differs from what was
+     * captured at call time the precondition returns `false` and the offline
+     * mutation is dropped as stale.
+     *
+     * This is a method wrapper around `createSnapshotPrecondition` that
+     * binds the client instance for you — no need to pass `client` explicitly.
+     * @example
+     * ```ts
+     * client.mutation(api.todos.update, { id, text }, {
+     *   precondition: client.snapshotPrecondition(api.todos.list, { userId }),
+     * });
+     * ```
+     */
+    public snapshotPrecondition(functionRef: FunctionReference, args: Record<string, unknown>, shardKey?: string): () => boolean {
+        const snapshot = this.peekActiveQueryValue(functionRef.__lunoraRef, args, shardKey);
+        const snapshotKey = snapshot === undefined ? undefined : stableStringify(snapshot);
+
+        return (): boolean => {
+            const current = this.peekActiveQueryValue(functionRef.__lunoraRef, args, shardKey);
+
+            // Both undefined → no snapshot taken and no value now → no conflict.
+            if (snapshotKey === undefined && current === undefined) {
+                return true;
+            }
+
+            // One is undefined, the other is not → the value appeared or disappeared.
+            if (snapshotKey === undefined || current === undefined) {
+                return false;
+            }
+
+            return stableStringify(current) === snapshotKey;
+        };
+    }
+
+    // --- Hydration helpers --------------------------------------------------
+
+    /**
+     * Resolves once the durable read cache has been loaded into memory. When
+     * `hydrateOnStart` is not configured or no query cache adapter is active,
+     * returns an already-resolved promise so callers can always await it
+     * unconditionally.
+     *
+     * Framework adapters (React, Vue, etc.) use this to gate the first
+     * (enabled) render of a live query behind hydration, so the user sees
+     * cached data instead of an undefined flash before the socket round-trip.
+     */
+    public whenReady(): Promise<void> {
+        return this.readyPromise;
+    }
+
+    /**
+     * Synchronously reports whether {@link whenReady} has already resolved (the
+     * durable read cache is loaded, or none is configured). Framework adapters
+     * read this to seed the hydration-gate state on the first render without
+     * awaiting, then subscribe via {@link whenReady} for the pending case.
+     */
+    public get isReady(): boolean {
+        return this.readyResolved;
+    }
+
+    /**
+     * Synchronously peek at a value the durable read cache loaded for the given
+     * function path + args + shard key. Returns `undefined` when:
+     *
+     * - No query cache adapter is configured.
+     * - Hydration hasn't completed yet (race — await {@link whenReady} first).
+     * - The cached value's identity fingerprint doesn't match the current auth.
+     *
+     * Unlike the internal {@link takeHydratedCache}, this is a READ-ONLY peek:
+     * the cached entry stays in `hydratedQueryCache` so the subscription created
+     * later by {@link subscribe} consumes it normally.
+     */
+    public peekHydratedQuery(functionPath: string, args: Record<string, unknown>, shardKey?: string): unknown {
+        if (!this.readyResolved) {
+            return undefined;
+        }
+
+        const argsKey = stableStringify(args);
+        const key = queryCacheKey(functionPath, argsKey, shardKey);
+        const entry = this.hydratedQueryCache.get(key);
+
+        if (entry === undefined) {
+            return undefined;
+        }
+
+        return entry.identity === this.identityFingerprint() ? entry.value : undefined;
+    }
+
+    /**
+     * Peek at the **current live value** of an active subscription, if one
+     * exists. Returns the subscription's `lastValue` (which includes any
+     * optimistic overlay) or `undefined` if no subscription is active for the
+     * given `(functionPath, args, shardKey)`.
+     *
+     * Unlike {@link peekHydratedQuery} (which reads from the durable read cache
+     * and is independent of active subscriptions), this method reflects the
+     * current in-memory state of an already-opened subscription — useful for
+     * offline mutation preconditions that need to snapshot the value at call time
+     * and compare it at replay time.
+     */
+    public peekActiveQueryValue(functionPath: string, args: Record<string, unknown>, shardKey?: string): unknown {
+        const key = SubscriptionRegistry.key(functionPath, args, shardKey);
+        const state = this.subscriptions.get(key);
+
+        return state?.lastValue;
+    }
+
     // --- RPC ---------------------------------------------------------------
 
     public async query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
@@ -1453,7 +1746,15 @@ class LunoraClient {
         const midReconnect = wsState === "connecting" && connectedGate;
 
         if ((wsState !== "open" && !hasSocket && shouldQueueOffline) || midReconnect) {
-            return this.enqueueOfflineMutation(function_, argsRecord, options.shardKey, mutationId, optimisticRollbacks, optimisticConfirms);
+            return this.enqueueOfflineMutation(
+                function_,
+                argsRecord,
+                options.shardKey,
+                mutationId,
+                optimisticRollbacks,
+                optimisticConfirms,
+                options.precondition,
+            );
         }
 
         try {
@@ -2808,6 +3109,10 @@ class LunoraClient {
         // closures they close over outlive the terminal client.
         this.shapeSubscriptions.clear();
         this.pokeBuffers.clear();
+
+        // Stop cross-tab coordination and release the BroadcastChannel.
+        this.tabCoordinator?.stop();
+        this.tabCoordinator = undefined;
     }
 
     // --- Internals ----------------------------------------------------------
@@ -2830,6 +3135,7 @@ class LunoraClient {
         mutationId: string,
         optimisticRollbacks: (() => void)[],
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
+        precondition?: () => boolean,
     ): Promise<ReturnOf<F>> {
         // Bind the issuing identity at enqueue time so the write can only replay
         // under the same identity (see flushOfflineQueue).
@@ -2880,6 +3186,8 @@ class LunoraClient {
                 // Persist the stamp alongside the record so a hydrated write can
                 // only replay under the identity that queued it.
                 identity: issuingIdentity,
+                // Optional precondition checked before replay — see drainConflict.
+                precondition,
                 // Confirm the per-call optimistic layer(s) against the commit cursor
                 // the flush replay echoes (see flushOfflineQueue).
                 onCommit: (commitCursor) => {
@@ -2943,7 +3251,6 @@ class LunoraClient {
         const hydrate = (): void => {
             this.hydratePersistedQueue().catch(() => undefined);
         };
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only API; the `!locks` branch is the React Native / older-browser / SSR fallback
         const locks = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks;
 
         if (!locks) {
@@ -3519,6 +3826,12 @@ class LunoraClient {
 
     private ensureSocket(shardKey: string | undefined): void {
         if (this.closed || this.WebSocketImpl === undefined) {
+            return;
+        }
+
+        // When cross-tab sync is active and this tab is not the WS leader,
+        // skip opening sockets — the leader tab owns all connections.
+        if (this.tabCoordinator && !this.tabCoordinator.isLeader()) {
             return;
         }
 
@@ -4115,6 +4428,15 @@ class LunoraClient {
         // through whatever optimistic layers remain pending (rebasing).
         dropConfirmedLayers(state, state.serverCursor);
         notifySubscription(state, state.optimisticLayers.length === 0 ? payload : foldOptimistic(payload, state.optimisticLayers));
+
+        // When cross-tab sync is active and we're the WS leader, broadcast
+        // the new value to follower tabs so they stay in sync without their
+        // own WS connections.
+        if (this.tabCoordinator?.isLeader()) {
+            const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
+
+            this.tabCoordinator.broadcastSubscriptionData(key, payload);
+        }
     }
 
     /**
@@ -4441,6 +4763,21 @@ class LunoraClient {
     }
 
     private async flushOfflineQueue(shardKey: string | undefined): Promise<void> {
+        // Drop stale writes whose precondition no longer holds before draining
+        // the remaining valid mutations for replay. Each conflicted entry is
+        // rejected with `OFFLINE_PRECONDITION_FAILED` inline.
+        const conflicted = this.offlineQueue.drainConflict();
+
+        for (const item of conflicted) {
+            this.unpersist(item.id);
+            this.queuedIdentities.delete(item.id ?? "");
+            // Stamp `.code` (not just `.message`) so `onMutationSettled` sees the
+            // documented code — matches every other terminal path in this file.
+            const error = new Error("offline mutation skipped: precondition failed before replay");
+            (error as Error & { code?: string }).code = "OFFLINE_PRECONDITION_FAILED";
+            this.emitItemSettled(item, "rejected", error);
+        }
+
         const key = connectionKey(shardKey);
         const drained = this.offlineQueue.drain((item) => connectionKey(item.shardKey) === key);
 
