@@ -1,11 +1,15 @@
 /* eslint-disable no-underscore-dangle -- `__lunoraRef` is the Lunora function-reference field the wire types expose; fixtures mirror it verbatim. */
-import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, StreamHandle, StreamIterable, Unsubscribe } from "@lunora/client";
+import { createStream } from "@lunora/client";
+import { vi } from "vitest";
+
+const keyOf = (functionPath: string, args: Record<string, unknown>): string => `${functionPath}::${JSON.stringify(args)}`;
 
 /**
  * A minimal stand-in for `LunoraClient` exposing just the surface the Solid
- * adapter touches (`subscribe` / `mutation`). It records subscriptions and lets a
- * test push values to the live callback, so we can assert the synchronous seed
- * vs. the later live update without a real WebSocket.
+ * adapter touches (`subscribe` / `mutation` / `stream`). It records subscriptions
+ * and stream calls and lets a test push values to the live callback, so we can
+ * assert the synchronous seed vs. the later live update without a real WebSocket.
  */
 export interface FakeSubscription {
     args: Record<string, unknown>;
@@ -17,19 +21,38 @@ export interface FakeSubscription {
     unsubscribed: boolean;
 }
 
+export interface FakeStreamCall {
+    args: Record<string, unknown>;
+    functionPath: string;
+    /** The producer side — drive the stream with `handle.push`/`complete`/`fail`. */
+    handle: StreamHandle;
+    /** The consumer iterable handed back to the primitive. */
+    iterable: StreamIterable<unknown>;
+    /** Spy invoked when the primitive cancels its iterator (teardown / args change). */
+    onCancel: ReturnType<typeof vi.fn>;
+    options: { maxBuffer?: number; shardKey?: string };
+}
+
 export interface FakeClient {
     /** As a typed `LunoraClient` for passing through the provider. */
     asClient: LunoraClient;
+    /** Await a macrotask so a stream consumer's `for await` loop drains queued chunks into its signal. */
+    flush: () => Promise<void>;
     mutationCalls: { args: unknown; functionPath: string }[];
+    /** Push a chunk to every open stream matching `(functionPath, args)`. */
+    pushStream: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
     /** Resolve the next `mutation()` with this value (default: echoes args). */
     setMutationResult: (value: unknown) => void;
     /** Reject the next `mutation()` with this error. */
     setMutationThrow: (error: Error) => void;
+    /** Every `stream` call made against the fake, in order. */
+    streamCalls: FakeStreamCall[];
     subscriptions: FakeSubscription[];
 }
 
 export const createFakeClient = (): FakeClient => {
     const subscriptions: FakeSubscription[] = [];
+    const streamCalls: FakeStreamCall[] = [];
     const mutationCalls: { args: unknown; functionPath: string }[] = [];
 
     let mutationResult: unknown;
@@ -44,6 +67,25 @@ export const createFakeClient = (): FakeClient => {
             }
 
             return Promise.resolve(mutationResult ?? args);
+        },
+        stream: <F extends FunctionReference<"stream">>(
+            function_: F,
+            args: ArgsOf<F>,
+            options: { maxBuffer?: number; shardKey?: string } = {},
+        ): StreamIterable<ReturnOf<F>> => {
+            const onCancel = vi.fn<() => void>();
+            const { handle, iterable } = createStream<unknown>({ maxBuffer: options.maxBuffer, onCancel });
+
+            streamCalls.push({
+                args: args ?? {},
+                functionPath: function_.__lunoraRef,
+                handle,
+                iterable,
+                onCancel,
+                options,
+            });
+
+            return iterable as StreamIterable<ReturnOf<F>>;
         },
         subscribe: (
             function_: FunctionReference,
@@ -68,15 +110,35 @@ export const createFakeClient = (): FakeClient => {
         },
     };
 
+    const pushStream = (functionPath: string, args: Record<string, unknown>, value: unknown): void => {
+        const target = keyOf(functionPath, args);
+
+        for (const call of streamCalls) {
+            if (keyOf(call.functionPath, call.args) === target) {
+                call.handle.push(value);
+            }
+        }
+    };
+
+    // A stream consumer drains its queue across microtasks; a macrotask hop
+    // guarantees every buffered chunk has landed in the primitive's `chunks` signal.
+    const flush = (): Promise<void> =>
+        new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
     return {
         asClient: client as unknown as LunoraClient,
+        flush,
         mutationCalls,
+        pushStream,
         setMutationResult: (value: unknown) => {
             mutationResult = value;
         },
         setMutationThrow: (error: Error) => {
             mutationThrow = error;
         },
+        streamCalls,
         subscriptions,
     };
 };

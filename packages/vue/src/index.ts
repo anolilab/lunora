@@ -35,6 +35,22 @@ export type {
     UseQueryOptions,
     User,
 } from "./types";
+export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
+export { useAgent } from "./use-agent";
+export type {
+    AgentChatMessage,
+    AgentLiveEvent,
+    AgentProgressEvent,
+    AgentTokenDelta,
+    UseAgentChatApi,
+    UseAgentChatOptions,
+    UseAgentChatResult,
+} from "./use-agent-chat";
+export { useAgentChat } from "./use-agent-chat";
+export type { UseAgentStateApi, UseAgentStateOptions, UseAgentStateResult } from "./use-agent-state";
+export { useAgentState } from "./use-agent-state";
+export type { AgentToolEvent, UseAgentToolEventsApi, UseAgentToolEventsOptions, UseAgentToolEventsResult } from "./use-agent-tool-events";
+export { useAgentToolEvents } from "./use-agent-tool-events";
 export type { UseAuthResult } from "./use-auth";
 export { useAuth } from "./use-auth";
 export { default as useConnectionStatus } from "./use-connection-status";
@@ -58,5 +74,9 @@ export { usePresence } from "./use-presence";
 export { subscribeToQuery, useQuery } from "./use-query";
 export type { UseRateLimitOptions, UseRateLimitResult } from "./use-rate-limit";
 export { useRateLimit } from "./use-rate-limit";
+export type { UseStreamOptions, UseStreamResult, UseStreamStatus } from "./use-stream";
+export { useStream } from "./use-stream";
 export type { UseSubscriptionResult } from "./use-subscription";
 export { useSubscription } from "./use-subscription";
+export type { UseVoiceAgentOptions, UseVoiceAgentResult, VoiceAudioFormat, VoiceReference, VoiceStatus } from "./use-voice-agent";
+export { useVoiceAgent } from "./use-voice-agent";

@@ -6,13 +6,17 @@
  * writes are enabled), each backed by `LunoraClient` over HTTP RPC. The server
  * is read-only by default — the write tools are exposed only when `allowWrites`
  * (or the `LUNORA_MCP_ALLOW_WRITES` env) is set, and every run tool is
- * allowlisted against the deployment's discovered public functions. Run the
+ * allowlisted against the deployment's discovered public functions. It can also
+ * front durable `@lunora/agent` runs as `agent_&lt;name>` tools when `allowAgents`
+ * (or `LUNORA_MCP_ALLOW_AGENTS` + `LUNORA_MCP_AGENTS`) is set. Run the
  * `lunora-mcp` binary (configured via the `LUNORA_URL`, `LUNORA_ADMIN_TOKEN`,
  * and `LUNORA_MCP_ALLOW_WRITES` env vars) for the stdio transport, serve the
  * server remotely over Streamable HTTP with `createMcpFetchHandler` (a
  * Workers-ready `Request` → `Response` handler), or build a server
  * programmatically with `createLunoraMcpServer` and connect any transport.
  */
+export type { CallAgentToolOptions, McpAgentExposure } from "./agent-tools";
+export { AGENT_RUN_INPUT_SCHEMA, AGENT_STATUS_TOOL_NAME, agentToolDefinitions, callAgentTool, parseAgentsEnv } from "./agent-tools";
 export type { McpFetchHandler } from "./http";
 export { createMcpFetchHandler } from "./http";
 export type { PaidMcpChargeConfig, PaidMcpServer, PaidMcpServerConfig, RegisterPaidToolOptions, RegisterToolOptions, ToolHandler } from "./paid";

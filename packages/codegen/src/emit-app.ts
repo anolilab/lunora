@@ -5,6 +5,13 @@ import type { IdentityIR, JurisdictionIR } from "./ir";
 
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
 interface EmitAppOptions {
+    /**
+     * Inbound-email agents (`defineAgent({ onEmail })`) → wire the worker's
+     * top-level `email()` handler to `dispatchAgentEmail(...)` (from
+     * `@lunora/agent/inbound`), so received mail starts a durable run. Empty/absent
+     * ⇒ no wiring, byte-identical output for email-free (and agent-free) projects.
+     */
+    emailAgents?: ReadonlyArray<{ bindingName: string; exportName: string }>;
     /** App depends on `@lunora/cloudflare-access` → emit `.access()` (wire the Cloudflare Access `resolveIdentity`, composed ahead of `@lunora/auth` when both are present). */
     hasAccess: boolean;
     /** App uses `@lunora/ai` / `ctx.ai` → emit `.ai()` (override the Workers AI binding backing `ctx.ai`). */
@@ -49,6 +56,15 @@ interface EmitAppOptions {
     jurisdiction?: JurisdictionIR;
     /** Project depends on the unscoped `lunorash` umbrella → import the runtime via `lunorash/runtime` instead of `@lunora/runtime`. */
     useUmbrella: boolean;
+
+    /**
+     * Voice-enabled agents (`defineAgent({ voice: … })`) → wire
+     * `options.voiceAgents`, mapping each agent's export name to its `VOICE_*`
+     * Durable Object namespace binding so the runtime exposes
+     * `/_lunora/voice/&lt;exportName>`. Empty/absent ⇒ no wiring, byte-identical
+     * output for voice-free (and agent-free) projects.
+     */
+    voiceAgents?: ReadonlyArray<{ bindingName: string; exportName: string }>;
     /** An OpenAPI spec is emitted (`openapi.ts`) → wire `openApiSpec` into the worker. */
     wantsOpenApi: boolean;
     /** An OpenRPC spec is emitted (`openrpc.ts`) → wire `openRpcSpec` into the worker. */
@@ -106,6 +122,29 @@ const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
 
 /** KV-browser import — the zero-config env-scanning introspector factory backing `createWorker({ kvIntrospector })`. */
 const buildKvImports = (hasKv: boolean): string[] => (hasKv ? [`import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";`] : []);
+
+/** Whether any `onEmail` agents were discovered (⇒ wire the worker `email()` handler). */
+const hasEmailAgents = (options: EmitAppOptions): boolean => (options.emailAgents?.length ?? 0) > 0;
+
+/**
+ * Inbound-email wiring imports: the `dispatchAgentEmail` factory (a VALUE from
+ * `@lunora/agent/inbound`) and the agent definitions as a namespace (so their
+ * `onEmail` mappers are reachable at runtime). Empty when no `onEmail` agent is
+ * declared, keeping email-free output byte-identical. `@lunora/agent` is an
+ * opt-in add-on the umbrella never re-exports, so this is unconditionally
+ * `@lunora/agent/inbound` regardless of `useUmbrella`.
+ */
+const buildInboundImports = (options: EmitAppOptions): string[] =>
+    hasEmailAgents(options) ? [`import { dispatchAgentEmail } from "@lunora/agent/inbound";`] : [];
+
+/**
+ * The agent-definitions namespace import — `import * as lunoraAgentDefinitions
+ * from "../agents.js"` — so each `onEmail` agent's mapper is reachable when the
+ * generated `email()` handler dispatches. Empty (byte-identical output) when no
+ * `onEmail` agent is declared.
+ */
+const buildAgentDefinitionsImport = (options: EmitAppOptions): string[] =>
+    hasEmailAgents(options) ? [`import * as lunoraAgentDefinitions from "../agents.js";`] : [];
 
 /** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
 const buildImportLines = (options: EmitAppOptions): string[] => {
@@ -171,10 +210,12 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
             ? [`import type { R2BucketLike, Storage } from "@lunora/storage";`, `import { createBucketStorage, createStorage } from "@lunora/storage";`]
             : []),
         ...(hasWorkflow ? [`import { createWorkflowsRestClient } from "@lunora/workflow";`] : []),
+        ...buildInboundImports(options),
         `import type { ${[...runtimeTypeImports].toSorted((a, b) => a.localeCompare(b)).join(", ")} } from "${runtimeModule}";`,
         `import { ${runtimeValueImports} } from "${runtimeModule}";`,
         ``,
         ...buildIdentityImports(options.identity),
+        ...buildAgentDefinitionsImport(options),
         ...(hasGlobal || hasHyperdriveGlobal ? [`import schema from "../schema.js";`] : []),
         `import { LUNORA_CRONS } from "./crons.js";`,
         `import { LUNORA_FUNCTIONS } from "./functions.js";`,
@@ -554,6 +595,23 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
         }`,
           ]
         : []),
+    // Voice-enabled agents: map each export name to its `VOICE_*` Durable Object
+    // namespace so the runtime serves `/_lunora/voice/<exportName>`. Read off
+    // `env` structurally (the binding is provisioned by the config layer's
+    // reconcile step, so it may not be on the generated `Env` type). Emitted only
+    // when at least one agent opted into voice — voice-free output is unchanged.
+    ...(options.voiceAgents && options.voiceAgents.length > 0
+        ? [
+              `        options.voiceAgents = {
+${options.voiceAgents
+    .map(
+        (agent) =>
+            `            ${JSON.stringify(agent.exportName)}: (env as Record<string, unknown>)[${JSON.stringify(agent.bindingName)}] as ShardNamespaceLike,`,
+    )
+    .join("\n")}
+        };`,
+          ]
+        : []),
 ];
 
 /** The `shardDO` + spec fields the worker always (or conditionally) carries. */
@@ -772,6 +830,22 @@ const emitApp = (options: EmitAppOptions): string => {
         : `        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`;
     const assembleParameter = options.hasFramework ? `host?: FrameworkHostHandler` : ``;
 
+    // Auto-wire the worker's `email()` handler for `defineAgent({ onEmail })`
+    // agents: received mail starts a durable run via `dispatchAgentEmail`
+    // (`@lunora/agent/inbound`). Emitted as the DEFAULT `composed.email`, ahead of
+    // the manual `.onEmail(...)` override below, so a hand-registered handler still
+    // wins. Empty when no `onEmail` agent is declared — email-free (and agent-free)
+    // output stays byte-identical.
+    const emailAgents = options.emailAgents ?? [];
+    const emailAgentsBlock =
+        emailAgents.length > 0
+            ? `        composed.email = dispatchAgentEmail([
+${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, binding: ${JSON.stringify(agent.bindingName)} },`).join("\n")}
+        ]);
+
+`
+            : "";
+
     // Public terminals: always `build()`; `.buildFrameworkWorker(host)` only when
     // a worker-composition framework adapter is a dependency.
     const buildTerminals = `    /** Materialise the standalone Cloudflare worker + \`ShardDO\` class. */
@@ -856,7 +930,7 @@ ${buildWorkerLine}
             }
         };
 
-        if (this.emailHandler) {
+${emailAgentsBlock}        if (this.emailHandler) {
             const handler = this.emailHandler;
 
             composed.email = (message, rawEnv, context) => handler(rawEnv as Env)(message, rawEnv, context);

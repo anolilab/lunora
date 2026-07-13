@@ -760,6 +760,22 @@ interface ScheduledJob {
     shardKey?: string;
 }
 
+/**
+ * A schedulable durable-workflow reference — the generated `workflows.&lt;name>` /
+ * `agents.&lt;name>` object, which carries its `WORKFLOW_*`/`AGENT_*` binding and
+ * stable name. Structural mirror of `@lunora/scheduler`'s `WorkflowReference` so
+ * `ctx.scheduler` can target a workflow/agent without a dependency on
+ * `@lunora/scheduler` / `@lunora/workflow`. A scheduled workflow target starts a
+ * fresh instance on fire (the args become its `params`).
+ */
+interface SchedulableWorkflowReference {
+    /** The `WORKFLOW_*`/`AGENT_*` binding name (present on a generated ref). */
+    readonly binding?: string;
+    readonly isLunoraWorkflow: true;
+    /** The workflow/agent export/stable name (present on a generated ref). */
+    readonly name?: string;
+}
+
 interface Scheduler {
     /** Cancel a pending job by id. `cancelled` is `false` when no such job exists. */
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
@@ -767,8 +783,16 @@ interface Scheduler {
     get: (id: string) => Promise<ScheduledJob | null>;
     /** List all pending scheduled jobs. */
     list: () => Promise<ScheduledJob[]>;
-    runAfter: (delayMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
+
+    /**
+     * Schedule a one-shot run `delayMs` from now. `target` is a function path
+     * (`"ns:fn"`) dispatched as a one-shot, or a generated `workflows.&lt;name>` /
+     * `agents.&lt;name>` reference which starts a fresh durable instance on fire
+     * (the args become its `params`).
+     */
+    runAfter: (delayMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    /** Like {@link Scheduler.runAfter} but fires at an absolute epoch-ms timestamp. */
+    runAt: (timestampMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
 }
 
 // --- Durable workflows -------------------------------------------------------

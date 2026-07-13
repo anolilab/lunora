@@ -43,6 +43,33 @@ stored deadline:
 await ctx.scheduler.runAt(trial.endsAt, "billing:expireTrial", { userId });
 ```
 
+### Scheduling an agent or workflow
+
+`runAfter` / `runAt` also accept a generated durable-target reference —
+`agents.<name>` from [`@lunora/agent`](/docs/packages/agent) or
+`workflows.<name>` from [`@lunora/workflow`](/docs/packages/workflow) — instead
+of a `"namespace:function"` path. Each fire starts a **fresh durable instance**
+of that agent/workflow, so a one-shot delayed agent run is just a scheduled
+target:
+
+```ts
+import { mutation, v } from "@/lunora/_generated/server";
+import { agents } from "@/lunora/_generated/api";
+
+export const ticketOpened = mutation.input({ ticketId: v.id("tickets") }).mutation(async ({ ctx, args: { ticketId } }) => {
+    await ctx.db.patch(ticketId, { state: "open" });
+
+    // Kick off a durable support-agent run five minutes from now.
+    await ctx.scheduler.runAfter(5 * 60_000, agents.support, { prompt: "Draft a first reply", ticketId });
+});
+```
+
+The second argument's shape decides the dispatch: a string path runs a Lunora
+function, a generated `agents.<name>` / `workflows.<name>` reference starts a new
+durable instance with the args as its run input. For a **recurring** agent, give
+`cronJobs()` the same `agents.<name>` target — see
+[recurring jobs](#recurring-jobs-cron-triggers) below.
+
 ### Scheduling from a mutation vs. an action
 
 The two contexts schedule identically, but the intent differs:
