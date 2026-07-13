@@ -1,6 +1,6 @@
 {
     "name": "@lunora/replica",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.1",
     "description": "Local-first replica runtime + local SQLite mirror for Lunora",
     "license": "FSL-1.1-Apache-2.0",
     "files": [
@@ -50,7 +50,7 @@
         "test": "vitest run"
     },
     "devDependencies": {
-        "@lunora/server": "1.0.0-alpha.17",
+        "@lunora/server": "1.0.0-alpha.24",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@visulima/packem": "catalog:build",
@@ -60,7 +60,7 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@lunora/server": ">=1.0.0-alpha.17 <2.0.0",
+        "@lunora/server": "1.0.0-alpha.24",
         "@sqlite.org/sqlite-wasm": "*",
         "better-sqlite3": "*",
         "react": "^18.0.0 || ^19.0.0",
