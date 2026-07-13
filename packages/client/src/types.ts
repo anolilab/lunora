@@ -275,6 +275,17 @@ export interface LunoraClientOptions {
      * Defaults to 10000 (10s); set to `0` (or negative) to disable.
      */
     connectTimeoutMs?: number;
+
+    /**
+     * When `true`, tabs sharing the same origin coordinate via BroadcastChannel
+     * so only one tab (the "leader") opens WebSocket connections to the server.
+     * Follower tabs receive subscription data through the channel instead.
+     *
+     * Reduces simultaneous WS connections, bandwidth, and cross-tab state drift.
+     * Requires `BroadcastChannel` (browser-only); silently ignored otherwise.
+     * Defaults to `false`.
+     */
+    crossTabSync?: boolean;
     fetch?: typeof fetch;
 
     /**
@@ -285,6 +296,17 @@ export interface LunoraClientOptions {
      * `0` (or a negative value) to disable the heartbeat entirely.
      */
     heartbeatIntervalMs?: number;
+
+    /**
+     * When `true` and a `queryCache` is active, framework hooks (React, Vue, …)
+     * wait for the durable cache to finish hydrating before their first render
+     * with an enabled subscription, so users see cached data instead of an
+     * undefined flash before the socket round-trip. Defaults to `false`.
+     *
+     * Requires `queryCache` to be set (not `false`); silently ignored otherwise.
+     */
+    hydrateOnStart?: boolean;
+
     offlineQueue?: OfflineQueueOptions;
 
     /**
