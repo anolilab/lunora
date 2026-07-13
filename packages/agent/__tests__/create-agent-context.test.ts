@@ -91,4 +91,18 @@ describe(createAgentContext, () => {
         expect(terminateCalls).toStrictEqual(["run-7"]);
         expect(dispatches).toStrictEqual([{ args: { instanceId: "run-7", status: "cancelled" }, path: "agents:agentPatchThread" }]);
     });
+
+    it("still resolves cancel when the thread-status patch fails (the run is already terminated)", async () => {
+        const { binding, terminateCalls } = fakeBinding();
+        // The status patch fails, but terminate() already succeeded — the run is
+        // gone, so cancel() must not surface the bookkeeping failure.
+        const dispatch = async (): Promise<unknown> => {
+            throw new Error("dispatch unavailable");
+        };
+
+        const agents = createAgentContext({ AGENT_SUPPORT: binding }, [{ binding: "AGENT_SUPPORT", exportName: "support" }], dispatch);
+
+        await expect(agents["support"]!.cancel("run-9")).resolves.toBeUndefined();
+        expect(terminateCalls).toStrictEqual(["run-9"]);
+    });
 });

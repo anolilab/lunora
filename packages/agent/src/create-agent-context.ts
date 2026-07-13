@@ -45,7 +45,17 @@ const createAgentContext = (env: Record<string, unknown>, specs: ReadonlyArray<A
                 const instance = await resolve().get(id);
 
                 await instance.terminate();
-                await resolveDispatch()(patchThread, { instanceId: id, status: "cancelled" });
+
+                // `terminate` is the irreversible act — the run is already gone.
+                // The status patch is best-effort bookkeeping: if it fails, cancel()
+                // must NOT throw (a retry would re-terminate an already-dead
+                // instance), so swallow it. The stale "running" status is reconciled
+                // out-of-band rather than leaving the thread wedged.
+                try {
+                    await resolveDispatch()(patchThread, { instanceId: id, status: "cancelled" });
+                } catch {
+                    // Non-fatal — the run is terminated; thread status is reconciled separately.
+                }
             },
             // Carried from the codegen spec (`defineAgent({ publicRun: true })`).
             // Gates the public `agents:agentRun` mutation fail-closed; the
