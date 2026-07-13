@@ -2,6 +2,7 @@ import type { FunctionReference, LunoraClient, StreamHandle, StreamIterable } fr
 import { createStream } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
@@ -97,7 +98,11 @@ interface HarnessProps {
 const Harness = ({ onReady, options }: HarnessProps): ReactElement => {
     const result = useAgentChat(options);
 
-    onReady(result);
+    // Expose the latest committed result to the test from an effect — invoking a
+    // prop callback during render is impure (React may replay/discard renders).
+    useEffect(() => {
+        onReady(result);
+    });
 
     return (
         <div>

@@ -1,6 +1,7 @@
 import type { FunctionReference } from "@lunora/client";
 import { act, render } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { useEffect } from "react";
 import { describe, expect, it } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
@@ -41,7 +42,11 @@ interface HarnessProps {
 const Harness = ({ onReady, options }: HarnessProps): ReactElement => {
     const result = useAgentState<SupportState>(options);
 
-    onReady(result);
+    // Expose the latest committed result to the test from an effect — invoking a
+    // prop callback during render is impure (React may replay/discard renders).
+    useEffect(() => {
+        onReady(result);
+    });
 
     return <span>{result.state ? String(result.state.step) : ""}</span>;
 };
