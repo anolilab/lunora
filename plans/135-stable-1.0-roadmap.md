@@ -87,9 +87,12 @@ sandbox — GitHub-hosted runners are unaffected by that sandbox limitation).
       `lunorash` umbrella (1 test / 22 src — it IS the recommended install),
       `errors` (1/6, everything depends on it), `fingerprint` (1/4),
       `dispatch` (1/4), `ai` (3/11), `replica` (8/23), `db` (4/7).
-- [ ] **Nightly full-matrix run**: `vis affected` on PRs is fine, but add a
+- [x] **Nightly full-matrix run**: `vis affected` on PRs is fine, but add a
       scheduled workflow running the FULL test suite (all packages, workerd job,
       e2e un-skipped) so unchanged packages still get re-verified.
+      _Done 2026-07-16: `.github/workflows/nightly.yml` — 03:00 UTC cron +
+      `workflow_dispatch`; full `pnpm run test` on node 22/24, the workerd
+      matrix, and e2e unconditionally; not a required check._
 - [ ] **De-flake and expand e2e**: remove the standing `CI_E2E_SKIP` /
       `LUNORA_E2E=skip` escape hatch (fix root causes; Playwright `retries: 2`
       stays), and grow past the 7 chat-app specs — at minimum: sharding
