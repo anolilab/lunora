@@ -112,21 +112,26 @@ Nothing tagged stable may throw on an advertised path.
       `Date` / `Map` / `Set` / `URL` / bytes args currently fail loud in
       `stableStringify` on the reactive hot path. Implement, or document the
       supported arg domain and keep the loud failure as the contract.
-- [ ] **`mode: "incremental"` on tables** (`packages/server/src/schema.ts:672`,
-      throws today): implement, or cut from the 1.0 surface (remove from
-      types/docs, keep as post-1.0 plan).
+- [x] **`mode: "incremental"` on tables** — CUT from the 1.0 surface
+      (2026-07-16): `ExternalSourceMode` narrowed to `"full-pull"` so typed
+      callers get a compile-time error instead of a runtime throw; the
+      discovery/advisor seam is kept for the post-1.0 return, scoped in
+      `plans/136-incremental-table-mode.md` (P3, demand-gated).
 - [ ] **Plan 052**: typed SSE consumer for `httpRoute.<verb>().stream()` —
       finish the client half or de-advertise `.stream()` for 1.0.
-- [ ] **Next.js template**: `lunora init -t next` errors "not yet available"
-      (`packages/cli/src/commands/init/handler.ts:1375`). Ship `templates/next`
-      (spike done, plan 110) or drop the option from help/docs until it exists.
-- [ ] Sweep `@deprecated` remnants before the API freeze: ratelimit
-      shard-selection option (`rate-limiter.ts:26`), runtime `authAdmin`
-      worker option (`create-worker.ts:556`) — remove in the last alpha, since
-      1.0 is the free breaking-change moment.
-- [ ] Migration scaffold `TODO_table` placeholder UX
-      (`packages/cli/src/commands/migrate/handler.ts:285`) — prompt for the
-      table instead (small, but it's first-run UX).
+- [x] **Next.js template** — SHIPPED (2026-07-16): `templates/next/` (App
+      Router on the OpenNext Cloudflare adapter, two-worker split like nuxt,
+      RSC preload via `@lunora/react/server` + `usePreloadedQuery` hydration);
+      `lunora init -t next` guard dropped, picker/help/docs updated, scaffold
+      covered in init tests + template validation manifests.
+- [x] Sweep `@deprecated` remnants — DONE (2026-07-16): removed the ratelimit
+      `random` shard-selection hook and the runtime `authIntrospector` worker
+      option (superseded by `WorkerOptions.authAdmin`); tests migrated to the
+      superseding paths.
+- [x] Migration scaffold `TODO_table` placeholder UX — DONE (2026-07-16):
+      `migrate create` now prompts for the table interactively (schema-derived
+      choices via the new `promptText`/`promptSelect` helpers in
+      `@lunora/config`) and fails with a clear error non-interactively.
 
 ## Phase 3 — API-stability guarantees & promotion mechanics
 
