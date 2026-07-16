@@ -1,8 +1,12 @@
 import { RateLimiter, rateLimit, createDbStore } from "lunorash/ratelimit";
 
+import type { MutationCtx } from "#lunora/_generated/server.js";
 import { mutation, query, v } from "#lunora/_generated/server.js";
 
-const limiter = (ctx: { db: unknown }) =>
+// Typed against the generated MutationCtx so `rateLimit(limiter, ...)` infers
+// the full procedure context — `ctx.auth` in the key callback and a typed
+// `ctx.db` in the downstream handler both depend on it.
+const limiter = (ctx: MutationCtx) =>
     new RateLimiter({
         config: {
             send: { kind: "token bucket", period: 60_000, rate: 30 },
