@@ -181,16 +181,24 @@ Nothing tagged stable may throw on an advertised path.
 
 ## Phase 4 — Docs & onboarding completeness
 
-- [ ] **Wire the 7 orphaned package docs into the site nav**: `agent`,
+- [x] **Wire the 7 orphaned package docs into the site nav**: `agent`,
       `angular`, `cloudflare-access`, `errors`, `flags`, `nuxt`, `replica` have
       authored `docs/` that never surface because they're missing from
       `CATEGORY_CONFIG` in `apps/docs/scripts/copy-package-docs.js` (+
       `generate-packages.js` / `packages-metadata.json`). Consider generating
       the nav from the filesystem so this class of bug can't recur.
-- [ ] Author docs for the 3 packages with none: `fingerprint`, `sql-store`
+      _Done: nav now derived from `project.json` `category:*` tags via a shared
+      `scripts/package-categories.js` (both scripts), so a docful package can't
+      be orphaned again; all seven surface + curated metadata added._
+- [x] Author docs for the 3 packages with none: `fingerprint`, `sql-store`
       (internal — a short "don't depend on this" page), `x402`.
-- [ ] Add `frameworks/angular.mdx` and `frameworks/nuxt.mdx` guides (packages
+      _Done: `docs/index.mdx` authored for all three (hash contract / both
+      x402 rails + custody & spend policy / internal-notice) — auto-wired into
+      the nav by the tag-derived sidebar._
+- [x] Add `frameworks/angular.mdx` and `frameworks/nuxt.mdx` guides (packages
       ship, guides don't).
+      _Done: both guides added (mirroring vue/astro), registered in the docs
+      meta.json, and vue.mdx's stale "no single-worker Nuxt" caveat replaced._
 - [x] **Write the 1.0 trio** — DONE (2026-07-16): `docs/versioning.mdx`
       (channels + provisional Phase-0 tier table), `docs/migrating/from-alpha.mdx`
       (living upgrade guide over the landed breaking changes), and
