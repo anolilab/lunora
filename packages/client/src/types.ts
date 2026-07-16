@@ -24,6 +24,45 @@ export type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R>
 /** Extract the return type from a {@link FunctionReference}. */
 export type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
 
+/**
+ * Typed reference to an HTTP-SSE stream route (`httpRoute.&lt;verb>(path).stream()`)
+ * emitted by `@lunora/codegen` as `httpStreams.&lt;namespace>.&lt;name>`.
+ *
+ * Distinct from {@link FunctionReference}: this is the **HTTP-SSE route stream**
+ * (opened with `fetch` + `ReadableStream` against the route's own URL), not the
+ * WS procedure stream (`kind: "stream"`). At runtime it carries the HTTP verb
+ * and the route path; the phantom marker carries the chunk / searchParams /
+ * params types so `httpStream` (and the framework hooks over it) infer the
+ * chunk type end-to-end.
+ */
+export interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params = unknown> {
+    /**
+     * Phantom marker carrying the `Chunk`/`SearchParams`/`Params` type
+     * parameters for inference. Never present at runtime; declared in a
+     * covariant (output) position so a concrete reference stays assignable to
+     * a widened one.
+     */
+    readonly __lunoraHttpStream?: { chunk: Chunk; params: Params; searchParams: SearchParams };
+    /** HTTP verb the route binds to (uppercased), e.g. `"GET"`. */
+    readonly method: string;
+    /** The route path as declared, e.g. `/api/tokens/:id` — `:name` segments are filled from `params`. */
+    readonly path: string;
+}
+
+/** The call-side args of an HTTP-SSE stream route: `:name` path params plus URL query params. */
+export interface HttpStreamCallArgs<SearchParams = unknown, Params = unknown> {
+    /** Values for the route path's `:name` segments. */
+    params?: Params;
+    /** URL query params, appended to the request URL (undefined entries are skipped). */
+    searchParams?: SearchParams;
+}
+
+/** Extract the chunk type from a {@link HttpStreamRef}. */
+export type HttpStreamChunkOf<R> = R extends HttpStreamRef<infer Chunk, infer _S, infer _P> ? Chunk : never;
+
+/** Extract the call-side args type from a {@link HttpStreamRef}. */
+export type HttpStreamArgsOf<R> = R extends HttpStreamRef<infer _C, infer S, infer P> ? HttpStreamCallArgs<S, P> : never;
+
 export type Unsubscribe = () => void;
 
 /**

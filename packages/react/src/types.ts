@@ -67,6 +67,9 @@ export interface UseAuthResult {
 export {
     type ArgsOf,
     type FunctionReference,
+    type HttpStreamArgsOf,
+    type HttpStreamChunkOf,
+    type HttpStreamRef,
     type LunoraClient,
     type OptimisticLocalStore,
     type OptimisticUpdate,

@@ -1072,4 +1072,5 @@ export {
     listLunoraSourceFiles,
     lunoraRelativePath,
     procedureHandler,
+    unwrapHandlerReturn,
 };

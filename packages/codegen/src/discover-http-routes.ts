@@ -3,7 +3,7 @@ import { relative, sep } from "node:path";
 import type { CallExpression, Node as TsNode, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { listLunoraSourceFiles } from "./discover-functions";
+import { listLunoraSourceFiles, unwrapHandlerReturn } from "./discover-functions";
 import type { HttpRouteIR, ValidatorIR } from "./ir";
 import { parseObjectShape, parseValidator } from "./parse-validator";
 
@@ -158,6 +158,24 @@ const walkRouteChain = (terminalCall: CallExpression, terminalStep: string): Rou
 };
 
 /**
+ * Render the SSE chunk type of a `.stream(handler)` terminal — the `R` the
+ * handler yields. The handler is the terminal call's only argument; its
+ * `AsyncGenerator&lt;R, …>` / `AsyncIterable&lt;R>` return type is unwrapped by
+ * `unwrapHandlerReturn` (shared with function discovery), so the same
+ * degraded-checker fallbacks apply. `"unknown"` when the argument isn't an
+ * inline function expression (e.g. a hoisted identifier).
+ */
+const chunkTypeFromStreamTerminal = (call: CallExpression): string => {
+    const handler = call.getArguments()[0];
+
+    if (!handler || !(Node.isArrowFunction(handler) || Node.isFunctionExpression(handler))) {
+        return "unknown";
+    }
+
+    return unwrapHandlerReturn(handler);
+};
+
+/**
  * Recognise a `httpRoute` builder terminal (`.handler(...)` / `.stream(...)`),
  * returning the fully-walked {@link HttpRouteIR} or `undefined` when the chain
  * isn't a Lunora REST route.
@@ -184,6 +202,7 @@ const routeFromTerminal = (call: CallExpression, callee: PropertyAccessExpressio
         path: state.path,
         searchParams: state.searchParams,
         stream: state.stream,
+        ...(state.stream ? { chunkType: chunkTypeFromStreamTerminal(call) } : {}),
         ...(state.output ? { output: state.output } : {}),
     };
 };

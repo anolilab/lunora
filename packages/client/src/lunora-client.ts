@@ -10,6 +10,7 @@ import { ClientQueryStore } from "./client-query-store";
 import { TabCoordinator } from "./cross-tab";
 import { applyDelta, isMutationDelta } from "./delta-merge";
 import type { LunoraErrorCode } from "./errors";
+import { httpStream } from "./http-stream";
 import Listeners from "./listeners";
 import type { OptimisticUpdate } from "./local-store";
 import { createLocalStore } from "./local-store";
@@ -44,6 +45,9 @@ import type {
     GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
+    HttpStreamArgsOf,
+    HttpStreamChunkOf,
+    HttpStreamRef,
     KvKeyListResult,
     KvNamespaceSummary,
     KvValueResult,
@@ -3080,6 +3084,46 @@ class LunoraClient {
         }
 
         return iterable;
+    }
+
+    /**
+     * Open a typed **HTTP-SSE route stream** (`httpRoute.&lt;verb>(path).stream()`).
+     * Distinct from {@link LunoraClient.stream}, which consumes the WS procedure
+     * stream (`kind: "stream"`): this one opens the route's own URL with `fetch`
+     * and parses the Server-Sent Events framing the route pump writes (`data:`
+     * chunks, a final `event: complete`, an `event: error` on throw).
+     *
+     * The reference comes from the generated `httpStreams.*` registry, so the
+     * yielded chunk type is the route handler's yielded type. Cancelling the
+     * returned iterable (or aborting `options.signal`) aborts the fetch, which
+     * the server handler observes via its `signal`. The client's bearer token
+     * (when set) rides as an `authorization` header.
+     */
+    public httpStream<Ref extends HttpStreamRef>(
+        route: Ref,
+        args?: HttpStreamArgsOf<Ref>,
+        options: { headers?: Record<string, string>; maxBuffer?: number; signal?: AbortSignal } = {},
+    ): StreamIterable<HttpStreamChunkOf<Ref>> {
+        if (this.closed) {
+            throw new LunoraError("CLIENT_CLOSED", "LunoraClient is closed");
+        }
+
+        if (!this.fetchImpl) {
+            throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
+        }
+
+        const headers: Record<string, string> = {
+            ...(this.authToken ? { authorization: `Bearer ${this.authToken}` } : {}),
+            ...options.headers,
+        };
+
+        return httpStream(route, args, {
+            baseUrl: this.url,
+            fetch: this.fetchImpl,
+            headers,
+            maxBuffer: options.maxBuffer,
+            signal: options.signal,
+        });
     }
 
     public close(): void {

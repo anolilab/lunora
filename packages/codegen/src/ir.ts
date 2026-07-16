@@ -902,6 +902,15 @@ export interface StorageRulesMetadataIR {
 export interface HttpRouteIR {
     /** `v.*` validators decoding the JSON request body (`.body({...})`), keyed by field. */
     body: Record<string, ValidatorIR>;
+
+    /**
+     * Rendered TS type of one SSE chunk — the `R` the `.stream(handler)`
+     * handler yields — inferred from the handler via the type checker. Present
+     * only when {@link HttpRouteIR.stream} is `true`; `"unknown"` when the
+     * checker can't resolve enough context. Feeds the emitted
+     * `HttpStreamRef&lt;Chunk, …>` so the chunk type flows to the client.
+     */
+    chunkType?: string;
     /** Export binding name of the route handler (used only for diagnostics / dedupe). */
     exportName: string;
     /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "http". */
