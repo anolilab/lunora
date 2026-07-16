@@ -112,11 +112,18 @@ sandbox — GitHub-hosted runners are unaffected by that sandbox limitation).
       _Done 2026-07-16: `.github/workflows/nightly.yml` — 03:00 UTC cron +
       `workflow_dispatch`; full `pnpm run test` on node 22/24, the workerd
       matrix, and e2e unconditionally; not a required check._
-- [ ] **De-flake and expand e2e**: remove the standing `CI_E2E_SKIP` /
+- [x] **De-flake and expand e2e**: remove the standing `CI_E2E_SKIP` /
       `LUNORA_E2E=skip` escape hatch (fix root causes; Playwright `retries: 2`
       stays), and grow past the 7 chat-app specs — at minimum: sharding
       failover, offline queue replay, auth+RLS end-to-end, `lunora init`
       scaffold-install-deploy smoke against a packed tarball.
+      _Done 2026-07-16: escape hatch removed (test.yml + config); boot de-flaked
+      (180s budget, captured child output, port pre-flight, process-group
+      teardown, firefox-if-installed); +4 specs — offline replay ordering,
+      auth+RLS over live WS (new `notes` RLS surface in the playground),
+      same-shard convergence, `lunora init → codegen → tsc` smoke via the built
+      CLI (`--from templates`; registry install/deploy stays in
+      `scripts/clean-machine-smoke.sh`); 3 consecutive green full runs._
 - [ ] Fix or quarantine the Studio jsdom component-test hang so those 90+ tests
       run in CI (dedicated job acceptable).
 - [x] Write the deferred real-binding tests: Hyperdrive round-trip
