@@ -104,10 +104,14 @@ sandbox — GitHub-hosted runners are unaffected by that sandbox limitation).
 
 Nothing tagged stable may throw on an advertised path.
 
-- [ ] **Ship plan 095 (SECURITY, P2)**: ephemeral WS admin token — today the
-      master `LUNORA_ADMIN_TOKEN` travels in the WebSocket URL query string
-      (logged/cached). This is the only open security-audit finding and must
-      land before any stable cut.
+- [x] **Ship plan 095 (SECURITY, P2)** — SHIPPED (2026-07-16, all 3 phases):
+      the worker mints a 60s HMAC-signed ephemeral token
+      (`POST /_lunora/admin/ws-token`, master-bearer/adminGate-gated); the
+      client accepts an async `WsTokenProvider` re-resolved per (re)connect;
+      Studio mints via header auth with caching/early-refresh/fallback; opt-in
+      enforcement (`requireEphemeralWsToken` /
+      `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`) rejects the raw master token in
+      `?token=`. Plan file removed (shipped).
 - [ ] **Ship plan 090**: subscription/cache-key arg wire fidelity — `bigint` /
       `Date` / `Map` / `Set` / `URL` / bytes args currently fail loud in
       `stableStringify` on the reactive hot path. Implement, or document the
