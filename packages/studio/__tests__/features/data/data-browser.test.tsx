@@ -1,6 +1,7 @@
 import { LunoraProvider } from "@lunora/react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DataBrowserProps } from "../../../src/features/data/data-browser";
@@ -61,9 +62,37 @@ const createBrowserClient = (): MockClientHooks =>
         },
     });
 
+/**
+ * Test host emulating the studio's URL-controlled wiring: the open table is
+ * DERIVED from `tableParam` (there is no local selection state inside the
+ * browser any more), and `onSelectTable` is the navigation callback. Selection
+ * lives here as plain state, and an FK-nav's `search` option re-seeds the
+ * search the way the URL would.
+ */
+const ControlledDataBrowser = ({ editable, initialShardKey, pageSize }: DataBrowserProps): ReactElement => {
+    const [table, setTable] = useState<string | undefined>(undefined);
+    const [search, setSearch] = useState<string | undefined>(undefined);
+
+    const onSelectTable = (next: string, options?: { search?: string }): void => {
+        setTable(next);
+        setSearch(options?.search);
+    };
+
+    return (
+        <DataBrowser
+            editable={editable}
+            initialSearch={search}
+            initialShardKey={initialShardKey}
+            onSelectTable={onSelectTable}
+            pageSize={pageSize}
+            tableParam={table}
+        />
+    );
+};
+
 const renderBrowser = (mock: MockClientHooks, props: DataBrowserProps = {}): ReactElement => (
     <LunoraProvider client={mock.asClient}>
-        <DataBrowser editable={props.editable} initialShardKey={props.initialShardKey} pageSize={props.pageSize} />
+        <ControlledDataBrowser editable={props.editable} initialShardKey={props.initialShardKey} pageSize={props.pageSize} />
     </LunoraProvider>
 );
 
@@ -75,10 +104,11 @@ describe("dataBrowser", () => {
 
         render(renderBrowser(mock));
 
-        await screen.findByTestId("db-table-list");
-
         // The sidebar renders the table name and its row-count badge separately.
-        expect(screen.getByTestId("db-table-messages").textContent).toBe("messages3");
+        // (findBy: the list only populates once the async `listTables` resolves.)
+        const messagesRow = await screen.findByTestId("db-table-messages");
+
+        expect(messagesRow.textContent).toBe("messages3");
         expect(screen.getByTestId("db-table-users").textContent).toBe("users1");
     });
 
@@ -399,8 +429,11 @@ describe("dataBrowser", () => {
 
         expect(rowTexts()).toEqual(["again", "hello", "world"]);
 
-        // asc -> desc -> unsorted restores document order.
+        // asc -> desc -> unsorted restores document order. Each click triggers a
+        // server re-fetch that unmounts the grid until the page lands, so settle
+        // between clicks instead of firing them back-to-back.
         fireEvent.click(screen.getByTestId("db-sort-text"));
+        await expectRowOrder(["world", "hello", "again"]);
         fireEvent.click(screen.getByTestId("db-sort-text"));
         await expectRowOrder(["hello", "world", "again"]);
 
@@ -429,11 +462,13 @@ describe("dataBrowser", () => {
 
         expect(rowTexts()).toEqual(["world"]);
 
-        const searchCall = mock.query.mock.calls.findLast((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage) as [
-            unknown,
-            { offset: number; search: string },
-            unknown,
-        ];
+        // The row count rides a separate predicate-keyed `readTablePage` call
+        // (limit 1, no offset) — pick the PAGE read (`skipCount: true`), not
+        // whichever of the two happened to resolve last.
+        const searchCall = mock.query.mock.calls.findLast(
+            (call) =>
+                (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage && (call[1] as { skipCount?: boolean }).skipCount === true,
+        ) as [unknown, { offset: number; search: string }, unknown];
 
         // The search is sent to the server (lowercased trim applied client-side) and resets to page 0.
         expect(searchCall[1].search).toBe("WOR");
@@ -460,7 +495,9 @@ describe("dataBrowser", () => {
             }
         });
 
+        // Sorting is server-side and unmounts the grid while re-fetching — settle.
         fireEvent.click(screen.getByTestId("db-sort-text"));
+        await expectRowOrder(["hello", "world"]);
 
         expect(rowTexts()).toEqual(["hello", "world"]);
     });
@@ -569,11 +606,7 @@ describe("dataBrowser — editable", () => {
         });
 
     const openMessages = async (mock: MockClientHooks): Promise<void> => {
-        render(
-            <LunoraProvider client={mock.asClient}>
-                <DataBrowser editable pageSize={2} />
-            </LunoraProvider>,
-        );
+        render(renderBrowser(mock, { editable: true, pageSize: 2 }));
 
         fireEvent.click(await screen.findByTestId("db-table-messages"));
 
@@ -585,11 +618,7 @@ describe("dataBrowser — editable", () => {
 
         const mock = createBrowserClient();
 
-        render(
-            <LunoraProvider client={mock.asClient}>
-                <DataBrowser pageSize={2} />
-            </LunoraProvider>,
-        );
+        render(renderBrowser(mock, { pageSize: 2 }));
 
         fireEvent.click(await screen.findByTestId("db-table-messages"));
 
@@ -755,23 +784,27 @@ describe("dataBrowser — editable", () => {
     });
 
     it("edits the right row while a filter and sort are active", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const mock = createEditableClient();
 
-        render(
-            <LunoraProvider client={mock.asClient}>
-                <DataBrowser editable pageSize={10} />
-            </LunoraProvider>,
-        );
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
 
         fireEvent.click(await screen.findByTestId("db-table-messages"));
 
         await screen.findByTestId("db-rows");
 
         // Sort descending and search to a single row — `world` is m2 in the fixture.
+        // Sorting is server-side: each click re-fetches (unmounting the grid until
+        // the page lands), so settle between the two clicks.
         fireEvent.click(screen.getByTestId("db-sort-text"));
+        await waitFor(() => {
+            expect(screen.getAllByTestId("db-row").length).toBeGreaterThan(0);
+        });
         fireEvent.click(screen.getByTestId("db-sort-text"));
+        await waitFor(() => {
+            expect(screen.getAllByTestId("db-row").length).toBeGreaterThan(0);
+        });
         fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "world" } });
 
         // Wait for the debounced server search to narrow the page to just m2.
@@ -1061,8 +1094,10 @@ describe("dataBrowser — structured filters and bulk delete", () => {
 
         // Add a clause and set it to `status = archived` → only m3 survives.
         fireEvent.click(screen.getByTestId("db-add-filter"));
-        fireEvent.change(screen.getByTestId("db-filter-column"), { target: { value: "status" } });
-        fireEvent.change(screen.getByTestId("db-filter-value"), { target: { value: "archived" } });
+        // Each filter edit re-keys the page read; the toolbar (and the filter row
+        // with it) unmounts until the new page lands — await each control back.
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-value"), { target: { value: "archived" } });
 
         await waitFor(() => {
             if (screen.getAllByTestId("db-row").length !== 1) {
@@ -1088,8 +1123,10 @@ describe("dataBrowser — structured filters and bulk delete", () => {
 
         // Filter to the two active rows, then bulk-delete them.
         fireEvent.click(screen.getByTestId("db-add-filter"));
-        fireEvent.change(screen.getByTestId("db-filter-column"), { target: { value: "status" } });
-        fireEvent.change(screen.getByTestId("db-filter-value"), { target: { value: "active" } });
+        // Each filter edit re-keys the page read; the toolbar (and the filter row
+        // with it) unmounts until the new page lands — await each control back.
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-value"), { target: { value: "active" } });
 
         await waitFor(() => {
             if (screen.getAllByTestId("db-row").length !== 2) {
@@ -1130,8 +1167,10 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         await screen.findByTestId("db-page");
 
         fireEvent.click(screen.getByTestId("db-add-filter"));
-        fireEvent.change(screen.getByTestId("db-filter-column"), { target: { value: "status" } });
-        fireEvent.change(screen.getByTestId("db-filter-value"), { target: { value: "active" } });
+        // Each filter edit re-keys the page read; the toolbar (and the filter row
+        // with it) unmounts until the new page lands — await each control back.
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-value"), { target: { value: "active" } });
 
         await waitFor(() => {
             if (screen.getAllByTestId("db-row").length !== 2) {

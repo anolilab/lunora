@@ -300,7 +300,20 @@ describe("studio", () => {
         // The compile-time guard (STUDIO_FEATURES_KEY_GUARD) fails the build on drift;
         // this asserts the canonical tuple at runtime so the guard can't be silently deleted.
         expect(STUDIO_FEATURES_KEY_GUARD).toBe(true);
-        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual(["flags", "mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"]);
+        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual([
+            "analytics",
+            "auth",
+            "containers",
+            "flags",
+            "kv",
+            "mail",
+            "payments",
+            "queues",
+            "scheduler",
+            "storage",
+            "vectors",
+            "workflows",
+        ]);
     });
 
     it("keeps the studio's QueueMetadata mirror in lockstep with @lunora/do's contract", () => {
