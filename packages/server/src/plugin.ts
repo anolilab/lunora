@@ -237,10 +237,29 @@ export interface DefinePluginOptions<TExtension extends Record<string, TableDefi
 }
 
 /**
+ * Call signatures for {@link definePlugin}. When `extension` is supplied the
+ * returned plugin's `extension` is typed as PRESENT (not `?`), so the
+ * canonical install pattern `defineSchema(...).extend(plugin.extension)`
+ * typechecks without a non-null assertion — the shape every scaffold template
+ * ships. The bare-options signature keeps `extension` optional for plugins
+ * that carry only middleware.
+ */
+export interface DefinePluginFunction {
+    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
+        key: string,
+        options: DefinePluginOptions<TExtension, TContextIn, TContextOut> & { extension: SchemaExtension<TExtension> },
+    ): Plugin<TExtension, TContextIn, TContextOut> & { readonly extension: SchemaExtension<TExtension> };
+    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
+        key: string,
+        options: DefinePluginOptions<TExtension, TContextIn, TContextOut>,
+    ): Plugin<TExtension, TContextIn, TContextOut>;
+}
+
+/**
  * Package a schema extension + middleware as a reusable plugin. Either
  * field is optional — `definePlugin("foo", {})` is valid but degenerate.
  */
-export const definePlugin = <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
+export const definePlugin = (<TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
     key: string,
     options: DefinePluginOptions<TExtension, TContextIn, TContextOut>,
 ): Plugin<TExtension, TContextIn, TContextOut> => {
@@ -257,7 +276,7 @@ export const definePlugin = <TExtension extends Record<string, TableDefinition>,
         ...(options.extension ? { extension: options.extension } : {}),
         ...(options.middleware ? { middleware: options.middleware } : {}),
     };
-};
+}) as DefinePluginFunction;
 
 /**
  * Bundle of registered functions a {@link Component} ships. Keys are the
