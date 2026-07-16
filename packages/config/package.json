@@ -86,7 +86,7 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@lunora/studio": "1.0.0-alpha.50"
+        "@lunora/studio": ">=1.0.0-alpha.50 <2.0.0-0"
     },
     "peerDependenciesMeta": {
         "@lunora/studio": {

@@ -158,13 +158,18 @@ Nothing tagged stable may throw on an advertised path.
       lightweight `.d.ts` rollup snapshot in `__tests__`) for every Tier-1/2
       package, wired as a CI gate — a breaking change must fail a check, not a
       reviewer's memory.
-- [ ] **Fix exact-alpha sibling peers** (direct 1.0 blocker — these break the
+- [x] **Fix exact-alpha sibling peers** (direct 1.0 blocker — these break the
       moment a sibling promotes): `cloudflare-access`, `replica`, `seed` pin
       `@lunora/server@1.0.0-alpha.24` (seed also `values@1.0.0-alpha.7`);
       `config` and `vite` pin `@lunora/studio@1.0.0-alpha.50`. Re-pin to ranges
       that survive promotion (e.g. `>=1.0.0-alpha.24 <2`) and add a repo check
       (extend `scripts/check-cerebro-peer-lockstep.js` or a new script) so an
       exact sibling pin can't reappear.
+      **Done**: all 6 pins re-pinned to `>=<floor> <2.0.0-0` ranges,
+      `.multi-releaserc.json` sets `deps.bump: "satisfy"` (the default
+      `"override"` was the clobberer — it rewrote replica's original range to an
+      exact pin on release), and `scripts/check-sibling-peer-ranges.js` guards
+      both in `postinstall`.
 - [ ] **Rehearse the release train**: dry-run multi-semantic-release for the
       `main` merge (all ~46 publishable packages promoting together), including
       the `lunorash` umbrella whose deps must resolve to the stable versions.
