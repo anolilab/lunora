@@ -95,4 +95,5 @@ export type {
     WorkflowInstanceStatus,
     WorkflowInstanceSummary,
     WorkflowStepDetail,
+    WsTokenProvider,
 } from "./types";

@@ -29,6 +29,7 @@ const unitTestFiles = [
     "__tests__/lib/data-view-params.test.ts",
     "__tests__/lib/internal.test.ts",
     "__tests__/lib/mask-preview-heuristic.test.ts",
+    "__tests__/lib/ws-token-provider.test.ts",
 ];
 
 export default getVitestConfig({

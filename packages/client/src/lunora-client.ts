@@ -78,6 +78,7 @@ import type {
     WorkflowInstanceDetail,
     WorkflowInstancePage,
     WorkflowInstanceStatus,
+    WsTokenProvider,
 } from "./types";
 
 const RPC_PATH = "/_lunora/rpc";
@@ -617,7 +618,7 @@ class LunoraClient {
     /** Local reactive store for {@link ClientQueryRef} values — no server round-trip. Private; reach it via `getClientQuery` / `setClientQuery` / `subscribeClientQuery`. */
     private readonly clientQueryStore: ClientQueryStore;
 
-    private wsToken: string | undefined;
+    private wsToken: string | undefined | WsTokenProvider;
 
     /** Better-auth base path (trailing slash stripped) for the `get-session` lookup. */
     private readonly authBasePath: string;
@@ -1174,10 +1175,12 @@ class LunoraClient {
      * Replace the token appended to WS upgrade URLs as `?token=…` and close
      * every open shard socket so the reconnect picks up the new value. Call
      * this whenever the user's WS credential changes (rotating the admin token
-     * in the studio, switching workspaces, etc.). Bearer tokens for HTTP
-     * RPC are independent — see {@link setAuthToken}.
+     * in the studio, switching workspaces, etc.). Accepts a static string or a
+     * {@link WsTokenProvider} resolved fresh at every (re)connect — the channel
+     * for short-lived credentials like the minted ephemeral admin sub-token.
+     * Bearer tokens for HTTP RPC are independent — see {@link setAuthToken}.
      */
-    public setWsToken(token: string | undefined): void {
+    public setWsToken(token: string | undefined | WsTokenProvider): void {
         if (this.wsToken === token) {
             return;
         }
@@ -2000,8 +2003,10 @@ class LunoraClient {
      * Subscribe to the live scheduled-jobs list over the SchedulerDO's admin
      * WebSocket. `onJobs` fires with the full list on connect and on every
      * change (schedule / cancel / alarm-fire). Reconnects with the client's
-     * configured backoff. Requires `wsToken` to be set to the admin token (the
-     * browser can't send an `Authorization` header on a WS). Returns an
+     * configured backoff. Requires `wsToken` to be set to an admin credential
+     * (the browser can't send an `Authorization` header on a WS) — the master
+     * token, or preferably a {@link WsTokenProvider} minting the ephemeral
+     * sub-token so the master credential stays out of the URL. Returns an
      * unsubscribe function that closes the socket and stops reconnecting.
      */
     public subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe {
@@ -2020,16 +2025,12 @@ class LunoraClient {
         let timer: ReturnType<typeof setTimeout> | undefined;
         let closed = false;
 
-        const connect = (): void => {
+        const openWith = (token: string | undefined): void => {
             if (closed || this.WebSocketImpl === undefined) {
                 return;
             }
 
-            // Read `this.wsToken` at connect time (not once at subscribe time) so a
-            // post-subscribe `setWsToken()` rotation is picked up on the next
-            // reconnect attempt instead of looping forever with a stale token the
-            // admin gate rejects.
-            const url = this.wsToken === undefined ? base : `${base}?token=${encodeURIComponent(this.wsToken)}`;
+            const url = token === undefined ? base : `${base}?token=${encodeURIComponent(token)}`;
 
             socket = new this.WebSocketImpl(url);
 
@@ -2053,6 +2054,7 @@ class LunoraClient {
                 socket = undefined;
 
                 if (!closed) {
+                    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the reconnect re-enters `connect`, declared just below with `openWith` in scope
                     timer = setTimeout(connect, reconnect.next());
                 }
             });
@@ -2060,6 +2062,49 @@ class LunoraClient {
             socket.addEventListener("error", () => {
                 /* the runtime follows up with close; reconnect handles it there */
             });
+        };
+
+        /** Resolve the provider-shaped token, then open; a failed mint re-arms the reconnect timer. */
+        const connectWithProvider = async (provider: WsTokenProvider): Promise<void> => {
+            let token: string | undefined;
+
+            try {
+                token = await provider();
+            } catch {
+                if (!closed) {
+                    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the retry re-enters `connect`, declared just below
+                    timer = setTimeout(connect, reconnect.next());
+                }
+
+                return;
+            }
+
+            openWith(token);
+        };
+
+        // Read `this.wsToken` at connect time (not once at subscribe time) so a
+        // post-subscribe `setWsToken()` rotation is picked up on the next
+        // reconnect attempt instead of looping forever with a stale token the
+        // admin gate rejects. A provider-shaped token is resolved fresh per
+        // attempt (re-minting the ephemeral admin sub-token); a provider failure
+        // re-arms the reconnect timer so a broken mint endpoint degrades to
+        // backoff retries.
+        const connect = (): void => {
+            if (closed || this.WebSocketImpl === undefined) {
+                return;
+            }
+
+            const { wsToken } = this;
+
+            if (typeof wsToken === "function") {
+                // `connectWithProvider` never rejects (its awaits are try/caught),
+                // so the fire-and-forget catch is belt-and-braces.
+                connectWithProvider(wsToken).catch(() => undefined);
+
+                return;
+            }
+
+            openWith(wsToken);
         };
 
         connect();
@@ -3550,15 +3595,15 @@ class LunoraClient {
         return conn;
     }
 
-    private wsUrlFor(shardKey: string | undefined): string {
+    private wsUrlFor(shardKey: string | undefined, token: string | undefined): string {
         const params: string[] = [];
 
         if (shardKey !== undefined) {
             params.push(`shard=${encodeURIComponent(shardKey)}`);
         }
 
-        if (this.wsToken !== undefined) {
-            params.push(`token=${encodeURIComponent(this.wsToken)}`);
+        if (token !== undefined) {
+            params.push(`token=${encodeURIComponent(token)}`);
         }
 
         if (params.length === 0) {
@@ -3844,7 +3889,59 @@ class LunoraClient {
         conn.wsState = "connecting";
         this.emitConnectionStatus();
 
-        const socket = new this.WebSocketImpl(this.wsUrlFor(shardKey));
+        // A provider-shaped `wsToken` is resolved fresh per connect attempt (so a
+        // short-lived credential is re-minted on every reconnect, including the
+        // one after a 4001 token-expired drop); a static string keeps the fully
+        // synchronous connect path callers and tests rely on.
+        if (typeof this.wsToken === "function") {
+            // `openSocketWithProvidedToken` never rejects (its awaits are
+            // try/caught), so the fire-and-forget catch is belt-and-braces.
+            this.openSocketWithProvidedToken(conn, shardKey, this.wsToken).catch(() => undefined);
+
+            return;
+        }
+
+        this.openSocket(conn, shardKey, this.wsToken);
+    }
+
+    /**
+     * Resolve the {@link WsTokenProvider} and open the shard socket with the
+     * minted token. The connection is already in the `connecting` state, so the
+     * async gap is race-guarded: a client `close()`, a `setWsToken` bounce, or a
+     * competing connect that landed first all abandon this attempt. A provider
+     * failure fails the attempt through {@link handleDisconnect}, which arms the
+     * normal reconnect backoff — a broken mint endpoint degrades to retries, not
+     * a silent tokenless socket the admin gate would reject.
+     */
+    private async openSocketWithProvidedToken(conn: ShardConnection, shardKey: string | undefined, provider: WsTokenProvider): Promise<void> {
+        let token: string | undefined;
+
+        try {
+            token = await provider();
+        } catch {
+            this.handleDisconnect(conn);
+
+            return;
+        }
+
+        if (this.closed || this.WebSocketImpl === undefined || conn.wsState !== "connecting" || conn.socket !== undefined) {
+            return;
+        }
+
+        this.openSocket(conn, shardKey, token);
+    }
+
+    /** Construct the shard socket and wire its lifecycle handlers. The connection must already be in the `connecting` state. */
+    private openSocket(conn: ShardConnection, shardKey: string | undefined, token: string | undefined): void {
+        if (this.WebSocketImpl === undefined) {
+            return;
+        }
+
+        // Intentional mutation of the shared, long-lived connection record so
+        // the open/close/error handlers all observe the same state machine
+        // (mirrors `handleDisconnect`).
+        /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
+        const socket = new this.WebSocketImpl(this.wsUrlFor(shardKey, token));
 
         conn.socket = socket;
 
@@ -3990,6 +4087,7 @@ class LunoraClient {
                 this.handleDisconnect(conn);
             }
         });
+        /* eslint-enable no-param-reassign */
     }
 
     private handleDisconnect(conn: ShardConnection): void {

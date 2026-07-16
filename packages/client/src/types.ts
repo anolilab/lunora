@@ -236,6 +236,16 @@ export interface QueryCacheAdapter {
     remove: (key: string) => Promise<void>;
 }
 
+/**
+ * Resolves the WS `?token=` credential fresh at every (re)connect — the channel
+ * for short-lived tokens (e.g. the ephemeral admin sub-token the worker mints
+ * at `POST /_lunora/admin/ws-token`) instead of a static secret in the URL.
+ * May return the token synchronously or as a Promise; returning `undefined`
+ * connects without a token. A thrown error / rejected Promise fails that
+ * connect attempt, and the client retries with its normal reconnect backoff.
+ */
+export type WsTokenProvider = () => Promise<string | undefined> | string | undefined;
+
 export interface LunoraClientOptions {
     /**
      * Base path the worker mounts better-auth at, used by the client's
@@ -360,15 +370,22 @@ export interface LunoraClientOptions {
     WebSocket?: typeof WebSocket;
 
     /**
-     * Token appended to the WebSocket URL as `?token=…`. The server matches it
-     * against `LUNORA_WS_BEARER` (to clear the upgrade gate) and/or
+     * Credential appended to the WebSocket URL as `?token=…`. The server matches
+     * it against `LUNORA_WS_BEARER` (to clear the upgrade gate) and/or
      * `LUNORA_ADMIN_TOKEN` (to authorize `__lunora_admin__:*` subscriptions —
-     * what the studio sets it to). Browsers can't set headers on the
-     * `WebSocket` constructor, so the query parameter is the only channel; it
-     * ends up in server logs and history, so prefer a short-lived rotating
-     * token in production.
+     * what the studio supplies). Browsers can't set headers on the `WebSocket`
+     * constructor, so the query parameter is the only channel; it ends up in
+     * server logs and history, so prefer a short-lived rotating token in
+     * production over a static secret.
+     *
+     * Pass a {@link WsTokenProvider} function to resolve the token fresh at
+     * every (re)connect — the channel for short-lived credentials such as the
+     * ephemeral admin sub-token minted by `POST /_lunora/admin/ws-token`
+     * (plan 095): the provider re-mints on each reconnect, including the one
+     * following a `4001` token-expired drop, so a static master token never
+     * has to ride the URL.
      */
-    wsToken?: string;
+    wsToken?: string | WsTokenProvider;
     wsUrl?: string;
 }
 
