@@ -71,9 +71,12 @@ gate.** 10 workerd integration suites exist across `runtime`, `scheduler`,
 lines 89–100; plan 122 is BLOCKED because the pool won't boot in the dev
 sandbox — GitHub-hosted runners are unaffected by that sandbox limitation).
 
-- [ ] **Unblock plan 122**: add a dedicated `workerd-integration` CI job
+- [x] **Unblock plan 122**: add a dedicated `workerd-integration` CI job
       (coverage off — v8/`node:inspector` is unsupported in pool-workers; plain
       `vitest run` with `LUNORA_WORKERD_TESTS=1`). Make it a required check.
+      _Done 2026-07-16: `test-workerd` job in `test.yml` (6-package matrix,
+      `--project workerd`, no coverage) wired into `test-required-check`;
+      runtime verification comes from the first CI run on GitHub._
 - [ ] Extend workerd smoke to packages that ship DO/worker code but have no
       workerd suite today (`queue`, `workflow`, `container`, `x402` boot-smoke).
 - [ ] **Coverage thresholds**: add vitest `coverage.thresholds` to the shared
