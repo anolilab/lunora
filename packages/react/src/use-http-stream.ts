@@ -7,6 +7,10 @@ import { useLunora } from "./lunora-provider";
 import { stableStringify } from "./query-key";
 import type { UseStreamStatus } from "./use-stream";
 
+/**
+ * Result shape returned by {@link useHttpStream}.
+ * @experimental Part of the plan-052 HTTP-SSE stream surface.
+ */
 interface UseHttpStreamResult<T> {
     /** Force-cancel the stream (aborts the fetch) and resolve the iterator. Safe to call multiple times. */
     cancel: () => void;
@@ -16,6 +20,10 @@ interface UseHttpStreamResult<T> {
     status: UseStreamStatus;
 }
 
+/**
+ * Options accepted by {@link useHttpStream}.
+ * @experimental Part of the plan-052 HTTP-SSE stream surface.
+ */
 interface UseHttpStreamOptions {
     /** Forwarded to `client.httpStream()` — caps the in-flight chunk buffer. */
     maxBuffer?: number;
@@ -68,6 +76,7 @@ const reducer = function <T>(state: State<T>, action: Action<T>): State<T> {
  *
  * Pass `"skip"` for `args` to keep the hook mounted without opening a stream
  * (mirrors `useQuery` / `useStream`).
+ * @experimental Shipped with plan 052; reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
  */
 const useHttpStream = <Ref extends HttpStreamRef>(
     route: Ref,

@@ -58,8 +58,11 @@ promise. Proposed tiering (to be ratified by the maintainer):
 Deliverables:
 
 - [ ] Ratify the tier table (maintainer decision).
-- [ ] Annotate experimental surfaces with `@experimental` JSDoc systematically
+- [x] Annotate experimental surfaces with `@experimental` JSDoc systematically
       (today only 4 stability tags exist across the entire repo).
+      _Done 2026-07-16: every export reachable from the nine experimental-tier
+      packages' entry points tagged (~550 declarations) + README notices; the
+      plan-052 HTTP-SSE stream surface tagged across server/client/react/codegen._
 - [ ] Publish the tiering as a docs page ("stability & versioning policy").
 
 ## Phase 1 — Verification backbone (highest-leverage work)

@@ -34,6 +34,7 @@ export type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer 
  * and the route path; the phantom marker carries the chunk / searchParams /
  * params types so `httpStream` (and the framework hooks over it) infer the
  * chunk type end-to-end.
+ * @experimental Shipped with plan 052; reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
  */
 export interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params = unknown> {
     /**
@@ -49,7 +50,10 @@ export interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params =
     readonly path: string;
 }
 
-/** The call-side args of an HTTP-SSE stream route: `:name` path params plus URL query params. */
+/**
+ * The call-side args of an HTTP-SSE stream route: `:name` path params plus URL query params.
+ * @experimental Part of the plan-052 HTTP-SSE stream surface.
+ */
 export interface HttpStreamCallArgs<SearchParams = unknown, Params = unknown> {
     /** Values for the route path's `:name` segments. */
     params?: Params;
@@ -57,10 +61,16 @@ export interface HttpStreamCallArgs<SearchParams = unknown, Params = unknown> {
     searchParams?: SearchParams;
 }
 
-/** Extract the chunk type from a {@link HttpStreamRef}. */
+/**
+ * Extract the chunk type from a {@link HttpStreamRef}.
+ * @experimental Part of the plan-052 HTTP-SSE stream surface.
+ */
 export type HttpStreamChunkOf<R> = R extends HttpStreamRef<infer Chunk, infer _S, infer _P> ? Chunk : never;
 
-/** Extract the call-side args type from a {@link HttpStreamRef}. */
+/**
+ * Extract the call-side args type from a {@link HttpStreamRef}.
+ * @experimental Part of the plan-052 HTTP-SSE stream surface.
+ */
 export type HttpStreamArgsOf<R> = R extends HttpStreamRef<infer _C, infer S, infer P> ? HttpStreamCallArgs<S, P> : never;
 
 export type Unsubscribe = () => void;

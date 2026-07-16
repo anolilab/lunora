@@ -909,6 +909,7 @@ export interface HttpRouteIR {
      * only when {@link HttpRouteIR.stream} is `true`; `"unknown"` when the
      * checker can't resolve enough context. Feeds the emitted
      * `HttpStreamRef&lt;Chunk, …>` so the chunk type flows to the client.
+     * @experimental Part of the plan-052 HTTP-SSE stream surface (the `httpStreams.*` emission).
      */
     chunkType?: string;
     /** Export binding name of the route handler (used only for diagnostics / dedupe). */

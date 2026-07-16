@@ -21,7 +21,10 @@ import type { HttpStreamArgsOf, HttpStreamChunkOf, HttpStreamRef } from "./types
 /** One optional space after an SSE field's colon (`data: x` vs `data:x`) — spec-stripped. */
 const SSE_FIELD_SPACE_RE = /^ /u;
 
-/** Options accepted by {@link httpStream}. */
+/**
+ * Options accepted by {@link httpStream}.
+ * @experimental Part of the plan-052 HTTP-SSE stream surface.
+ */
 interface HttpStreamOptions {
     /**
      * Origin (or origin + prefix) the route path is appended to, e.g.
@@ -245,6 +248,7 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
  * an `event: error` frame (or a transport failure) surfaces as a coded
  * rejection on the next `next()`. `.cancel()` — or aborting `options.signal` —
  * aborts the underlying fetch, which the server observes via `request.signal`.
+ * @experimental Shipped with plan 052; reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
  */
 const httpStream = <Ref extends HttpStreamRef>(
     route: Ref,
