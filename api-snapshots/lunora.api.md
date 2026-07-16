@@ -183,7 +183,7 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `HttpStreamHandlerOptions` (interface)
 
-Re-exported from `@lunora/server` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `Id` (type)
 
@@ -1117,23 +1117,23 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `HttpStreamArgsOf` (type)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `HttpStreamCallArgs` (interface)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `HttpStreamChunkOf` (type)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `HttpStreamOptions` (interface)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `HttpStreamRef` (interface)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `IndexedDbPersistenceOptions` (interface)
 
@@ -1473,7 +1473,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `httpStream` (const)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `isConflictError` (const)
 
@@ -4029,7 +4029,7 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `HttpStreamHandlerOptions` (interface)
 
-Re-exported from `@lunora/server` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `Id` (type)
 

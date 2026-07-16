@@ -520,15 +520,7 @@ interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Body exten
 
 ### `HttpStreamHandlerOptions` (interface)
 
-```ts
-interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params extends ArgsValidator> {
-    ctx: HttpActionCtx;
-    params: InferArgs<Params>;
-    request: Request;
-    searchParams: InferArgs<SearchParams>;
-    signal: AbortSignal;
-}
-```
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `Id` (type)
 

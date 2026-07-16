@@ -193,15 +193,15 @@ type HeartbeatReference = FunctionReference<"mutation", {
 
 ### `HttpStreamArgsOf` (type)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `HttpStreamChunkOf` (type)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `HttpStreamRef` (interface)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `ListPresentReference` (type)
 
@@ -511,22 +511,11 @@ interface UseCheckoutResult {
 
 ### `UseHttpStreamOptions` (interface)
 
-```ts
-interface UseHttpStreamOptions {
-    maxBuffer?: number;
-}
-```
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `UseHttpStreamResult` (interface)
 
-```ts
-interface UseHttpStreamResult<T> {
-    cancel: () => void;
-    chunks: ReadonlyArray<T>;
-    error: Error | undefined;
-    status: UseStreamStatus;
-}
-```
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `UseInfiniteQueryOptions` (interface)
 
@@ -839,9 +828,7 @@ const useFlags: <T extends Record<string, FlagValue>>(flags: T, context?: FlagCo
 
 ### `useHttpStream` (const)
 
-```ts
-const useHttpStream: <Ref extends HttpStreamRef>(route: Ref, args: "skip" | HttpStreamArgsOf<Ref>, options?: UseHttpStreamOptions) => UseHttpStreamResult<HttpStreamChunkOf<Ref>>;
-```
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `useInfiniteQuery` (const)
 
