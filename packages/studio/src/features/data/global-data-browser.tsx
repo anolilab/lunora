@@ -235,6 +235,16 @@ export const GlobalDataBrowser = ({
     // don't run synchronously in the effect. Kept inline rather than shared because
     // each browser's `selectTable` differs (the shard one also resets sort/filter/
     // staged state and is shard-keyed); only this ~6-line wiring would be common.
+    //
+    // `selectTable` is read via a ref so the effect fires on `initialTable` changes
+    // ALONE. Its identity churns with the host's per-render `onSelectTable`, and
+    // depending on it re-ran the effect in the window between a user click (which
+    // claims `appliedInitialTable` optimistically) and the async URL commit — the
+    // stale `initialTable` then reverted the selection to the previous table.
+    const selectTableRef = useRef(selectTable);
+
+    selectTableRef.current = selectTable;
+
     useEffect(() => {
         /* eslint-disable react-you-might-not-need-an-effect/no-event-handler -- URL → selection sync: open the global table named in the URL (cross-tier jump / deep link / back-forward). A given value applies at most once (ref-guarded); there is no user event to hook into. */
         if (initialTable === undefined || initialTable === "" || appliedInitialTable.current === initialTable) {
@@ -245,10 +255,10 @@ export const GlobalDataBrowser = ({
         const target = initialTable;
 
         queueMicrotask(() => {
-            selectTable(target);
+            selectTableRef.current(target);
         });
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
-    }, [initialTable, selectTable]);
+    }, [initialTable]);
 
     const goToPage = (nextOffset: number): void => {
         if (selectedTable === null) {
