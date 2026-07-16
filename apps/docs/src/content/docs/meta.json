@@ -50,6 +50,7 @@
         "tutorial/realtime-chat",
         "---Migrating---",
         "migrating/from-convex",
+        "migrating/from-alpha",
         "---Tooling---",
         "concepts/generated-code",
         "concepts/environment-variables",
