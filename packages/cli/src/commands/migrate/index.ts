@@ -18,7 +18,7 @@ const migrateCommand: Command = {
     name: "migrate",
     options: [
         { description: "Migration name slug (e.g. add_users_email)", name: "name", type: String },
-        { description: "Target table for `create`", name: "table", type: String },
+        { description: "Target table for `create` (prompted for interactively when omitted)", name: "table", type: String },
         { description: "Preview a data migration without rewriting rows", name: "dry-run", type: Boolean },
         { description: "Rows per batch for a data migration", name: "batch-size", type: Number },
         { description: "Cap batches processed this run (maps to the runner's maxBatches)", name: "steps", type: Number },
