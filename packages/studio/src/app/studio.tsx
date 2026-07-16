@@ -17,6 +17,7 @@ import { createContext, lazy, Suspense, use, useEffect, useMemo } from "react";
 import BrandMark from "../components/brand-mark";
 import { ErrorBoundary } from "../components/error-boundary";
 import RulesBanner from "../components/rules-banner";
+import { EnsureThemeProvider } from "../components/theme-provider";
 import { ThemeToggle } from "../components/theme-toggle";
 import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/input";
@@ -1250,21 +1251,26 @@ export const Studio = ({
     scheduledCron,
     scheduledLoad,
 }: StudioProps): ReactElement => {
+    // The header's <ThemeToggle> needs a theme context. `StudioApp` mounts one;
+    // a bare `<Studio>` embed (a public export) gets its own here — inherit-or-own,
+    // exactly like the i18n provider below.
     const shell = (
-        <StudioShell
-            basePath={basePath}
-            chrome={chrome}
-            dataEditable={dataEditable}
-            functions={functions}
-            initialShardKey={initialShardKey}
-            openApiSpec={openApiSpec}
-            openRpcSpec={openRpcSpec}
-            runAsIdentity={runAsIdentity}
-            scheduledCancel={scheduledCancel}
-            scheduledCron={scheduledCron}
-            scheduledLoad={scheduledLoad}
-            schemaEditable={schemaEditable}
-        />
+        <EnsureThemeProvider>
+            <StudioShell
+                basePath={basePath}
+                chrome={chrome}
+                dataEditable={dataEditable}
+                functions={functions}
+                initialShardKey={initialShardKey}
+                openApiSpec={openApiSpec}
+                openRpcSpec={openRpcSpec}
+                runAsIdentity={runAsIdentity}
+                scheduledCancel={scheduledCancel}
+                scheduledCron={scheduledCron}
+                scheduledLoad={scheduledLoad}
+                schemaEditable={schemaEditable}
+            />
+        </EnsureThemeProvider>
     );
 
     if (i18n === undefined && locale === undefined) {
