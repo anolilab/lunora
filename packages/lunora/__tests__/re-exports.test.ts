@@ -24,6 +24,15 @@ const reExports: ReadonlyArray<readonly [string, string]> = [
     ["lunorash/client/auth", "@lunora/client/auth"],
     ["lunorash/client/pagination", "@lunora/client/pagination"],
     ["lunorash/client/ssr", "@lunora/client/ssr"],
+    ["lunorash/errors", "@lunora/errors"],
+    ["lunorash/ratelimit", "@lunora/ratelimit"],
+    ["lunorash/flags", "@lunora/flags"],
+    // The flags providers are re-exported under a flattened alias: the umbrella
+    // exposes `lunorash/flags/<provider>` for `@lunora/flags/providers/<provider>`.
+    ["lunorash/flags/env", "@lunora/flags/providers/env"],
+    ["lunorash/flags/flagship", "@lunora/flags/providers/flagship"],
+    ["lunorash/flags/memory", "@lunora/flags/providers/memory"],
+    ["lunorash/flags/web", "@lunora/flags/web"],
 ];
 
 describe("lunora umbrella re-exports", () => {
