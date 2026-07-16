@@ -80,8 +80,14 @@ sandbox — GitHub-hosted runners are unaffected by that sandbox limitation).
       _Done 2026-07-16: `test-workerd` job in `test.yml` (6-package matrix,
       `--project workerd`, no coverage) wired into `test-required-check`;
       runtime verification comes from the first CI run on GitHub._
-- [ ] Extend workerd smoke to packages that ship DO/worker code but have no
+- [x] Extend workerd smoke to packages that ship DO/worker code but have no
       workerd suite today (`queue`, `workflow`, `container`, `x402` boot-smoke).
+      _Done 2026-07-16: `LUNORA_WORKERD_TESTS=1`-gated `workerd` vitest projects + `__tests__/workerd/` suites for all four (queue: real producer →
+      `queue()` consumer end-to-end; workflow: `LunoraWorkflow` entrypoint runs
+      to completion on the real engine; container: DO boots to the documented
+      no-Docker guard + bridge RPC round-trip; x402: `withX402` + procedure gate
+      402-challenge with the facilitator mocked at the fetch boundary); all four
+      added to the `test-workerd` matrix in `test.yml` + `nightly.yml`._
 - [x] **Coverage thresholds**: add vitest `coverage.thresholds` to the shared
       config (`tools/get-vitest-config.ts`) — start at current levels per
       package, ratchet up; flip Codecov `patch` coverage from `"off"` to a

@@ -1,0 +1,13 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-pool-workers`
+// to boot the test Worker in a real workerd runtime.
+//
+// IMPORTANT: this file is not deployed. It exists so the pool can resolve the
+// Workflow binding + entrypoint class the same way `wrangler dev` would.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-workflow-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "workflows": [{ "name": "smoke-workflow", "binding": "WORKFLOW_SMOKE", "class_name": "SmokeWorkflow" }],
+}

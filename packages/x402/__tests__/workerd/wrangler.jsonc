@@ -1,0 +1,13 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-pool-workers`
+// to boot the test Worker in a real workerd runtime.
+//
+// IMPORTANT: this file is not deployed. No bindings are needed: the x402
+// charge rail is pure fetch-boundary protocol glue, and the facilitator is
+// mocked with `fetchMock` from `cloudflare:test`.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-x402-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+}

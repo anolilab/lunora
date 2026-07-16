@@ -2279,6 +2279,9 @@ importers:
       '@cloudflare/containers':
         specifier: catalog:cloudflare
         version: 0.3.7(patch_hash=3ba8f2fb03ba0aacc344c152676b880643f538de06c958f178f0f453d3b2b957)
+      '@cloudflare/vitest-pool-workers':
+        specifier: catalog:cloudflare
+        version: 0.18.0(@cloudflare/workers-types@5.20260708.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10)
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260708.1
@@ -2303,6 +2306,9 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.0)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.107.0(@cloudflare/workers-types@5.20260708.1)
 
   packages/d1:
     dependencies:
@@ -2864,6 +2870,9 @@ importers:
         specifier: workspace:*
         version: link:../errors
     devDependencies:
+      '@cloudflare/vitest-pool-workers':
+        specifier: catalog:cloudflare
+        version: 0.18.0(@cloudflare/workers-types@5.20260708.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10)
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260708.1
@@ -2891,6 +2900,9 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.0)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.107.0(@cloudflare/workers-types@5.20260708.1)
 
   packages/ratelimit:
     dependencies:
@@ -3749,6 +3761,9 @@ importers:
         specifier: workspace:*
         version: link:../values
     devDependencies:
+      '@cloudflare/vitest-pool-workers':
+        specifier: catalog:cloudflare
+        version: 0.18.0(@cloudflare/workers-types@5.20260708.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10)
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260708.1
@@ -3776,6 +3791,9 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.0)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.107.0(@cloudflare/workers-types@5.20260708.1)
 
   packages/x402:
     dependencies:

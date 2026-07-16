@@ -33,11 +33,16 @@ export default createConfig(
         files: ["**/__tests__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
         rules: {
             "@typescript-eslint/naming-convention": "off",
+            "@typescript-eslint/no-empty-object-type": "off",
             "@typescript-eslint/no-explicit-any": "off",
             "@typescript-eslint/no-non-null-assertion": "off",
             "@typescript-eslint/no-unnecessary-condition": "off",
             "@typescript-eslint/require-await": "off",
+            // `env`/`SELF` from `cloudflare:test` carry upstream @deprecated JSDoc
+            // aliases in the pool types; the workerd suite must use them anyway.
+            "e18e/prefer-static-regex": "off",
             "import/no-extraneous-dependencies": "off",
+            "sonarjs/deprecation": "off",
             "unicorn/no-null": "off",
             "unicorn/prevent-abbreviations": "off",
             "vitest/prefer-expect-assertions": "off",

@@ -1,0 +1,20 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-pool-workers`
+// to boot the test Worker in a real workerd runtime.
+//
+// IMPORTANT: this file is not deployed. It exists so the pool can resolve the
+// Durable Object class name + SQLite migration the same way `wrangler dev`
+// would. There is deliberately NO `containers` section: Miniflare's container
+// support needs a Docker engine, which test sandboxes don't have — the DO boots
+// without a container runtime and the suite asserts the directed guard error
+// (see `container-smoke.workerd.test.ts` for the boundary notes).
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-container-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "CONTAINER_SMOKE", "class_name": "SmokeContainer" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SmokeContainer"] }],
+}

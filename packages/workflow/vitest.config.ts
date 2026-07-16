@@ -1,9 +1,9 @@
+import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
-// The package's source is Node-safe (the only workerd-coupled file, `src/do`,
-// imports `cloudflare:workers`, which is exercised by the build + type-check,
-// not by these unit tests). So a plain Node test project is enough — no
-// `@cloudflare/vitest-pool-workers` projects needed here.
+// Mirror of the shared `tools/get-vitest-config` coverage block. The workers
+// pool relies on `defineConfig` (not the shared helper, which would break the
+// `@cloudflare/vitest-pool-workers` projects), so coverage is wired inline here.
 const coverage = {
     ...coverageConfigDefaults,
     provider: "v8" as const,
@@ -13,18 +13,52 @@ const coverage = {
         ...(coverageConfigDefaults.exclude ?? []),
         "__fixtures__/**",
         "src/**/types.ts",
-        // `src/do` imports `cloudflare:workers` (workerd-only) — verified by the
-        // build + `tsc`, not reachable from Node unit tests.
+        // `src/do` imports `cloudflare:workers` (workerd-only) — covered by the
+        // `workerd` project below, not reachable from the Node unit tests this
+        // coverage run measures.
         "src/do/**",
         "**/node_modules/**",
         "**/dist/**",
     ],
 };
 
+/**
+ * Two-project Vitest config (see `packages/do/vitest.config.ts` for the
+ * rationale behind the `LUNORA_WORKERD_TESTS=1` opt-in gate):
+ *
+ *  - `mocks`   — Node unit suite over context/dispatch doubles. Always on.
+ *  - `workerd` — real workerd via `@cloudflare/vitest-pool-workers`: boots a
+ *                generated-style `LunoraWorkflow` entrypoint on the real
+ *                Workflows engine and drives the typed `ctx.workflows` binding
+ *                surface (see `__tests__/workerd/`).
+ */
+const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";
+
 export default defineConfig({
     test: {
         coverage,
-        environment: "node",
-        include: ["__tests__/**/*.test.ts"],
+        projects: runWorkerd
+            ? [
+                  {
+                      extends: true,
+                      test: { name: "mocks", environment: "node", include: ["__tests__/*.test.ts"] },
+                  },
+                  {
+                      extends: true,
+                      plugins: [
+                          cloudflareTest({
+                              main: "__tests__/workerd/test-worker.ts",
+                              wrangler: { configPath: "./__tests__/workerd/wrangler.jsonc" },
+                          }),
+                      ],
+                      test: { name: "workerd", include: ["__tests__/workerd/**/*.test.ts"] },
+                  },
+              ]
+            : [
+                  {
+                      extends: true,
+                      test: { name: "mocks", environment: "node", include: ["__tests__/*.test.ts"] },
+                  },
+              ],
     },
 });
