@@ -6,6 +6,7 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
+import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
@@ -969,6 +970,15 @@ const VOICE_PATH_PREFIX = "/_lunora/voice/";
 const SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
 /** Admin-gated POST that manually fires one code-defined cron job by name (studio "Run now"). */
 const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
+
+/**
+ * Admin-gated POST minting a short-lived HMAC-signed WS admin sub-token (plan
+ * 095). Authenticated by the master admin bearer in the `Authorization` header;
+ * returns `{ token, expiresAtMs }`. The studio sends the minted token — never
+ * the master token — in the WS `?token=` query string, so the master credential
+ * stays out of URLs/logs.
+ */
+const ADMIN_WS_TOKEN_PATH = "/_lunora/admin/ws-token";
 /** Prefix shared by every Studio admin route (`/_lunora/admin/*`). */
 const ADMIN_PATH_PREFIX = "/_lunora/admin/";
 /** The lone cross-shard admin route that sits outside {@link ADMIN_PATH_PREFIX}. */
@@ -1552,17 +1562,23 @@ const checkAdminAuth = (request: Request, expected: string | undefined): boolean
 /**
  * Admin check for a browser WebSocket upgrade, which can't set an
  * `Authorization` header — so the token rides in the `?token=` query parameter
- * instead (the studio sends it there as the client's `wsToken`). It ends up
- * in server logs, so a short-lived rotating token is preferable in production.
+ * instead (the studio sends it there as the client's `wsToken`). Accepts either
+ * the master admin token (backward compatible) or a short-lived sub-token
+ * minted by `POST /_lunora/admin/ws-token` (plan 095) — the studio sends the
+ * ephemeral token so the master credential never lands in URLs/logs.
  */
-const checkAdminWsToken = (request: Request, expected: string | undefined): boolean => {
+const checkAdminWsToken = async (request: Request, expected: string | undefined): Promise<boolean> => {
     if (!expected || expected.length === 0) {
         return false;
     }
 
     const supplied = new URL(request.url).searchParams.get("token");
 
-    return supplied !== null && constantTimeEqual(expected, supplied);
+    if (supplied === null) {
+        return false;
+    }
+
+    return constantTimeEqual(expected, supplied) || verifyWsAdminToken(expected, supplied);
 };
 
 /**
@@ -2150,7 +2166,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the admin gate, scheduler-namespace requirement, and resolved stub through
     // injected deps (mirroring the other extracted clusters below).
     const scheduledAdminRoutes = buildScheduledAdminRoutes({
-        checkWsAdmin: (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
+        checkWsAdmin: async (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
         requireSchedulerNamespace,
         resolveSchedulerStub,
         schedulerInstanceName: options.schedulerInstanceName ?? "default",
@@ -3403,6 +3419,31 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
         [CRON_JOBS_RUN_PATH]: (request, env) => handleRunCronJob(request, env),
+        // Mint a short-lived HMAC-signed WS admin sub-token (plan 095). Gated by
+        // the master admin bearer (header) / `adminGate`; the studio then sends
+        // the minted token — not the master credential — in the WS `?token=`
+        // query string. Signed with the master token itself, so both isolates
+        // verify statelessly and rotating `LUNORA_ADMIN_TOKEN` invalidates every
+        // outstanding sub-token. `no-store` keeps the token out of caches.
+        [ADMIN_WS_TOKEN_PATH]: async (request) => {
+            if (request.method !== "POST") {
+                throw new LunoraError("ws-token endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            }
+
+            assertAdminAuthorized(request);
+
+            const signingSecret = effectiveAdminToken();
+
+            if (signingSecret === undefined) {
+                // Reachable only via an `adminGate` grant with no static token
+                // configured — there is no key to sign with, so minting is off.
+                throw new LunoraError("ws-token minting requires a configured admin token", { code: "ADMIN_TOKEN_NOT_CONFIGURED", status: 400 });
+            }
+
+            const minted = await mintWsAdminToken(signingSecret);
+
+            return Response.json(minted, { headers: { "cache-control": "no-store" } });
+        },
         // Extracted handler clusters built above, merged in (mirroring the auth
         // plane below): orchestration (migrate / rank / rankpage / shard-traffic /
         // pitr), data-movement (export / import / sync / connector-sync / apply),

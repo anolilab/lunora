@@ -8,6 +8,7 @@ import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { jsonResponse } from "../../../shared/json-response";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
 import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
@@ -7600,9 +7601,14 @@ abstract class ShardDO {
      * server logs, browser history, and `Referer` headers on any
      * subresource the upgrade page loads after the handshake. Use a
      * short-lived rotating token in production rather than a long-lived
-     * secret.
+     * secret — for the ADMIN credential specifically, the worker mints one
+     * (`POST /_lunora/admin/ws-token`, plan 095) and {@link isAdminSocket}
+     * accepts it, so the master `LUNORA_ADMIN_TOKEN` never rides the URL.
+     *
+     * Async because the admin fallback ({@link isAdminSocket}) verifies the
+     * ephemeral sub-token with WebCrypto HMAC.
      */
-    private isUpgradeAllowed(request: Request): boolean {
+    private async isUpgradeAllowed(request: Request): Promise<boolean> {
         const env = (this.env ?? {}) as { LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
         const allowedOrigins = env.LUNORA_ALLOWED_ORIGINS;
 
@@ -7628,11 +7634,12 @@ abstract class ShardDO {
         if (expectedBearer && expectedBearer.length > 0) {
             const supplied = this.suppliedWsToken(request);
 
-            // The admin token is accepted as an alternate credential so a
-            // studio can open its socket even when `LUNORA_WS_BEARER` gates
-            // ordinary subscribers. The socket is flagged admin separately (see
-            // `isAdminSocket`); matching the bearer alone never grants it.
-            if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !this.isAdminSocket(request))) {
+            // The admin credential (master token or minted ephemeral sub-token)
+            // is accepted as an alternate so a studio can open its socket even
+            // when `LUNORA_WS_BEARER` gates ordinary subscribers. The socket is
+            // flagged admin separately (see `isAdminSocket`); matching the
+            // bearer alone never grants it.
+            if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
                 return false;
             }
         }
@@ -7658,12 +7665,16 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether the upgrade presented a token matching `LUNORA_ADMIN_TOKEN`,
-     * constant-time compared. Closed (returns `false`) when the admin token is
-     * unset, mirroring `isAdminAuthorized` for the HTTP path so admin
-     * streaming is opt-in rather than exposed by default.
+     * Whether the upgrade presented an admin credential: the master
+     * `LUNORA_ADMIN_TOKEN` (constant-time compared) or a short-lived sub-token
+     * the worker minted with it (`POST /_lunora/admin/ws-token`, plan 095 —
+     * HMAC-verified statelessly here, since both isolates hold the master token
+     * in `env`). The ephemeral token is what the studio sends in `?token=`, so
+     * the master credential stays out of URLs/logs. Closed (resolves `false`)
+     * when the admin token is unset, mirroring `isAdminAuthorized` for the HTTP
+     * path so admin streaming is opt-in rather than exposed by default.
      */
-    private isAdminSocket(request: Request): boolean {
+    private async isAdminSocket(request: Request): Promise<boolean> {
         const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string };
         const adminToken = env.LUNORA_ADMIN_TOKEN;
 
@@ -7673,7 +7684,11 @@ abstract class ShardDO {
 
         const supplied = this.suppliedWsToken(request);
 
-        return supplied !== undefined && constantTimeEqual(supplied, adminToken);
+        if (supplied === undefined) {
+            return false;
+        }
+
+        return constantTimeEqual(supplied, adminToken) || verifyWsAdminToken(adminToken, supplied);
     }
 
     /**
@@ -7732,10 +7747,15 @@ abstract class ShardDO {
         return undefined;
     }
 
-    private handleWebSocketUpgrade(request: Request): Response {
-        if (!this.isUpgradeAllowed(request)) {
+    private async handleWebSocketUpgrade(request: Request): Promise<Response> {
+        if (!(await this.isUpgradeAllowed(request))) {
             return new Response("Forbidden", { status: 403 });
         }
+
+        // Resolve the admin flag BEFORE accepting the socket: the (async)
+        // sub-token HMAC verify must not sit between `acceptWebSocket` and the
+        // attachment stamp, or an early frame could race an unstamped socket.
+        const admin = await this.isAdminSocket(request);
 
         const pair = new WebSocketPair();
         const client = pair[0];
@@ -7760,7 +7780,7 @@ abstract class ShardDO {
         // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
         // their own) can be gated without re-checking a token per message.
         (server as HibernatableWebSocket).serializeAttachment?.({
-            admin: this.isAdminSocket(request),
+            admin,
             connectionId: crypto.randomUUID(),
             subs: {},
             ...(expiresAt === undefined ? {} : { expiresAt }),
