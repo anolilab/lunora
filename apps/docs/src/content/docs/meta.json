@@ -59,6 +59,7 @@
         "concepts/best-practices",
         "---Operations---",
         "deployment",
+        "production-checklist",
         "concepts/observability",
         "architecture",
         "limits",

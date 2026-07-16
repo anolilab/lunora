@@ -191,9 +191,11 @@ Nothing tagged stable may throw on an advertised path.
       (internal — a short "don't depend on this" page), `x402`.
 - [ ] Add `frameworks/angular.mdx` and `frameworks/nuxt.mdx` guides (packages
       ship, guides don't).
-- [ ] **Write the 1.0 trio**: versioning/stability policy page (the Phase-0
-      tier table), alpha→1.0 upgrade guide, production-readiness checklist
-      (bindings, secrets, limits, observability).
+- [x] **Write the 1.0 trio** — DONE (2026-07-16): `docs/versioning.mdx`
+      (channels + provisional Phase-0 tier table), `docs/migrating/from-alpha.mdx`
+      (living upgrade guide over the landed breaking changes), and
+      `docs/production-checklist.mdx` (bindings, secrets, admin/WS tokens,
+      ratelimit, RLS, migrations, observability, limits, advisors), all in the nav.
 - [ ] Migration guides: `from-convex.mdx` exists; add at least a generic
       "from REST/Express" or "from Firebase" path if 1.0 marketing targets them.
 
