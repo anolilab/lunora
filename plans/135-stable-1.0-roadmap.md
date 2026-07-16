@@ -88,10 +88,15 @@ sandbox — GitHub-hosted runners are unaffected by that sandbox limitation).
       below the floor carry explicit `// ratchet:` overrides; workerd-gated
       inline configs stay threshold-free); Codecov patch gate on at 75%,
       `informational: false`._
-- [ ] **Close the worst unit-coverage gaps** (test files vs src files):
-      `lunorash` umbrella (1 test / 22 src — it IS the recommended install),
-      `errors` (1/6, everything depends on it), `fingerprint` (1/4),
-      `dispatch` (1/4), `ai` (3/11), `replica` (8/23), `db` (4/7).
+- [x] **Close the worst unit-coverage gaps** — DONE (2026-07-16): `lunorash`
+      14→100 tests (exports-map manifest, surface pins, bin), `errors` 25→180
+      (catalog integrity + exhaustive `toErrorBody` redaction sweeps),
+      `fingerprint` 19→41, `dispatch` 8→22, `ai` 68→89 (rag primitives),
+      `replica` 157→223 (real sql.js/better-sqlite3 adapters, DO client wire),
+      `db` 45→55 — which surfaced and fixed a real bug: the unified outbox
+      silently dropped raw offline `client.mutation` writes (empty
+      transactions short-circuit; now carried by an internal transport-carrier
+      collection).
 - [x] **Nightly full-matrix run**: `vis affected` on PRs is fine, but add a
       scheduled workflow running the FULL test suite (all packages, workerd job,
       e2e un-skipped) so unchanged packages still get re-verified.
