@@ -2,7 +2,15 @@
 import type { OfflineExecutor } from "@tanstack/offline-transactions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bindMutators, createCheckpointRegistry, defineCollections, defineMutator, lunoraCollectionOptions, OUTBOX_MUTATION_FN_NAME } from "../src";
+import {
+    bindMutators,
+    createCheckpointRegistry,
+    createExecutorOutboxSink,
+    defineCollections,
+    defineMutator,
+    lunoraCollectionOptions,
+    OUTBOX_MUTATION_FN_NAME,
+} from "../src";
 import {
     createCheckpointRegistry as collectionsCreateCheckpointRegistry,
     defineCollections as collectionsDefineCollections,
@@ -137,6 +145,104 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         }
 
         vi.unstubAllGlobals();
+    });
+
+    /** A raw `client.mutation` offline write, as the unified outbox persists it. */
+    const outboxWrite = (overrides: Partial<Record<string, unknown>> = {}) =>
+        ({
+            args: { text: "hello" },
+            clientId: "c1",
+            functionPath: "messages:send",
+            idempotencyKey: "c1:1",
+            identity: "user-a",
+            mutationId: 1,
+            ...overrides,
+        }) as never;
+
+    it("replays a raw offline write through client.mutation with the original idempotency key", async () => {
+        const { client, mutation } = makeClient();
+        const database = buildDatabase(client);
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite({ shardKey: "room-7" }));
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        // The replay targets the persisted function path and resends the ORIGINAL
+        // idempotency key (not a fresh id), so a committed-but-unacked retry is
+        // deduped server-side; the shard routing survives the round-trip too.
+        expect(mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, { text: "hello" }, { mutationId: "c1:1", shardKey: "room-7" });
+
+        await vi.waitFor(() => {
+            expect(database.pendingCount()).toBe(0);
+        });
+    });
+
+    it("drops a queued write whose captured identity no longer matches the signed-in user", async () => {
+        const { client, mutation } = makeClient({ identity: "user-b" });
+        const database = buildDatabase(client);
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        // The write was captured under user-a; the client is now user-b.
+        await sink.enqueue(outboxWrite({ identity: "user-a" }));
+
+        await vi.waitFor(() => {
+            expect(database.pendingCount()).toBe(0);
+        });
+
+        // Dropped, never replayed as someone else.
+        expect(mutation).not.toHaveBeenCalled();
+    });
+
+    it("retries a transient (code-less) failure until the write lands", { timeout: 10_000 }, async () => {
+        let attempts = 0;
+        const { client, mutation } = makeClient({
+            mutation: async () => {
+                attempts += 1;
+
+                if (attempts === 1) {
+                    // A network blip: no server error code → transient → retried.
+                    throw new Error("socket hang up");
+                }
+
+                return "ok";
+            },
+        });
+        const onWriteRejected = vi.fn<() => void>();
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite());
+
+        // First attempt fails, the executor backs off (~1s) and replays.
+        await vi.waitFor(
+            () => {
+                expect(mutation).toHaveBeenCalledTimes(2);
+            },
+            { interval: 100, timeout: 8000 },
+        );
+
+        // Both attempts replayed under the SAME idempotency key.
+        expect(mutation.mock.calls[0]?.[2]).toStrictEqual({ mutationId: "c1:1", shardKey: undefined });
+        expect(mutation.mock.calls[1]?.[2]).toStrictEqual({ mutationId: "c1:1", shardKey: undefined });
+
+        await vi.waitFor(() => {
+            expect(database.pendingCount()).toBe(0);
+        });
+
+        // A transient failure is retried, never reported as a permanent rejection.
+        expect(onWriteRejected).not.toHaveBeenCalled();
     });
 
     it("drops a transport transaction that carries no replay metadata without calling the server", async () => {

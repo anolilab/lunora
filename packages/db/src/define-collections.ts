@@ -7,7 +7,7 @@ import { NonRetriableError, startOfflineExecutor } from "@tanstack/offline-trans
 
 import { lunoraCollectionOptions } from "./collection-options";
 import type { OutboxMutationMetadata, Row } from "./internals";
-import { createOptimisticOnlineDetector, OUTBOX_MUTATION_FN_NAME, runOutboxMutation } from "./internals";
+import { createOptimisticOnlineDetector, createOutboxCarrier, OUTBOX_MUTATION_FN_NAME, registerOutboxCarrier, runOutboxMutation } from "./internals";
 
 /** Element type of an array (the row type a `list` query returns). */
 type Element<T> = T extends ReadonlyArray<infer E> ? E : never;
@@ -279,8 +279,15 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         );
     };
 
+    // The transport carrier for outbox-routed raw writes (see
+    // `createOutboxCarrier`): registered in the executor's collection registry
+    // under the reserved key — so persisted transport transactions
+    // serialize/deserialize across reloads — but NOT exposed on the returned
+    // `collections` surface.
+    const outboxCarrier = createOutboxCarrier();
+
     const executor = startOfflineExecutor({
-        collections,
+        collections: { ...collections, [OUTBOX_MUTATION_FN_NAME]: outboxCarrier },
         mutationFns,
         onlineDetector: createOptimisticOnlineDetector(),
         ...(options.onLeadershipChange ? { onLeadershipChange: options.onLeadershipChange } : {}),
@@ -305,6 +312,10 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             }
         },
     });
+
+    // Let `createExecutorOutboxSink(executor)` find the carrier when it persists
+    // a raw `client.mutation` offline write through this executor.
+    registerOutboxCarrier(executor, outboxCarrier);
 
     const actions: Record<string, (input: unknown) => { id: string; transaction: Transaction }> = {};
 
