@@ -21,12 +21,6 @@ interface RateLimiterOptions<Names extends string> {
     normalize?: (key: string) => string;
     /** Clock injection for tests. Defaults to `Date.now`. */
     now?: () => number;
-
-    /**
-     * @deprecated Shard selection is now a deterministic hash of `args.key`,
-     * so this option is unused. Retained for type compatibility.
-     */
-    random?: () => number;
     /** Persistence. Defaults to a per-instance in-memory store. */
     store?: RateLimitStore;
 }
