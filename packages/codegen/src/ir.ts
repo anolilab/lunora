@@ -123,13 +123,13 @@ export interface ExternalSourceIR {
     binding: string;
     /** Whether a `columns` projection allow-list was given. */
     columns?: ReadonlyArray<string>;
-    /** `true` when a `reconcileEveryMs` was given (the incremental-mode delete-visibility companion). */
+    /** `true` when a `reconcileEveryMs` was given — reserved for the post-1.0 incremental mode's delete-visibility lint (plan 136; the knob was cut from the 1.0 `.source()` surface). */
     hasReconcile?: boolean;
     /** `true` when a `tenantBy` mapper was given — the tenant-isolation boundary the `external_source_unscoped` lint checks. */
     hasTenantBy: boolean;
     /** The `idColumn` literal, when given (defaults to `"id"` at runtime). */
     idColumn?: string;
-    /** Delete-detection mode literal, when given (`"full-pull"` | `"incremental"`). */
+    /** Delete-detection mode literal, when given (`"full-pull"` today; `"incremental"` is deferred post-1.0, plan 136). */
     mode?: string;
     /** The membership query literal, when statically knowable. */
     query?: string;

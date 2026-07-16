@@ -666,10 +666,15 @@ const validateExternalSources = (tables: Record<string, TableDefinition>): void 
             );
         }
 
-        if (source.mode === "incremental") {
+        // `ExternalSourceMode` is the single literal "full-pull", so a typed caller
+        // cannot reach this — an incremental mode was cut from the 1.0 surface
+        // (deferred post-1.0, plan 136) and is a compile-time error, not a runtime
+        // throw. This guard only catches untyped JS callers passing a stray mode.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `mode` is typed `"full-pull" | undefined` but untyped JS callers can pass anything
+        if (source.mode !== undefined && source.mode !== "full-pull") {
             throw new LunoraError(
                 "INTERNAL",
-                `defineSchema: table "${name}" uses \`mode: "incremental"\`, which is not yet implemented — only "full-pull" (the default) is supported. Remove \`mode\` or set it to "full-pull".`,
+                `defineSchema: table "${name}" uses \`mode: ${JSON.stringify(source.mode)}\` — only "full-pull" (the default) is supported. Remove \`mode\` or set it to "full-pull".`,
             );
         }
     }
