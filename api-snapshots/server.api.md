@@ -2249,7 +2249,7 @@ const definePermission: (name: string, options?: Omit<Permission, "name">) => Pe
 ### `definePlugin` (const)
 
 ```ts
-const definePlugin: <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(key: string, options: DefinePluginOptions<TExtension, TContextIn, TContextOut>) => Plugin<TExtension, TContextIn, TContextOut>;
+const definePlugin: DefinePluginFunction;
 ```
 
 ### `definePolicies` (const)
