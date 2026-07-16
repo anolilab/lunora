@@ -163,11 +163,18 @@ Nothing tagged stable may throw on an advertised path.
 
 ## Phase 3 — API-stability guarantees & promotion mechanics
 
-- [ ] **Public-API snapshot guard**: no api-extractor/API-report tooling exists
+- [x] **Public-API snapshot guard**: no api-extractor/API-report tooling exists
       today. Add per-package public-API snapshot tests (api-extractor, or a
       lightweight `.d.ts` rollup snapshot in `__tests__`) for every Tier-1/2
       package, wired as a CI gate — a breaking change must fail a check, not a
       reviewer's memory.
+      _Done 2026-07-16: `scripts/api-snapshot.js` extracts each Tier-1/2
+      package's per-subpath export surface (name + kind + comment-stripped
+      signature; sibling/third-party re-exports pinned by name only,
+      `@experimental` exports excluded from signature tracking) from the built
+      dist `.d.ts` into committed `api-snapshots/*.api.md`. `pnpm run api:check`
+      diffs it (gated by the `Lint / api-surface` CI job); `pnpm run api:update`
+      regenerates._
 - [x] **Fix exact-alpha sibling peers** (direct 1.0 blocker — these break the
       moment a sibling promotes): `cloudflare-access`, `replica`, `seed` pin
       `@lunora/server@1.0.0-alpha.24` (seed also `values@1.0.0-alpha.7`);
