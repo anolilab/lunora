@@ -1,9 +1,10 @@
-import { useAuth, useLunora } from "@lunora/react";
+import { useAuth, useLunora, useMutation, useQuery } from "@lunora/react";
 import { eq } from "@tanstack/db";
 import { useLiveQuery } from "@tanstack/react-db";
 import type { CSSProperties, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
+import { api } from "../../lunora/_generated/api.js";
 import type { Id } from "../../lunora/_generated/dataModel.js";
 import { clearDraft, getDraftsCollection, writeDraft } from "./drafts-store.js";
 import { getMessagesStore } from "./messages-store.js";
@@ -19,6 +20,7 @@ const LAYOUT_STYLE: CSSProperties = { display: "grid", gap: 16, gridTemplateColu
  */
 export const Chat = (): ReactElement => {
     const [activeChannel, setActiveChannel] = useState<Id<"channels"> | null>(null);
+    const [noteDraft, setNoteDraft] = useState("");
     const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(() => new Set());
     const [sync, setSync] = useState({ online: true, pending: 0 });
 
@@ -75,6 +77,22 @@ export const Chat = (): ReactElement => {
                 }),
         [store],
     );
+
+    // Private per-user notes — a live `useQuery` over the raw WS subscription
+    // (no TanStack DB layer). The server narrows rows via the `rls()` read
+    // policy in `lunora/notes.ts`; this panel exists so the auth-rls E2E can
+    // prove another user's notes never reach this client, even live.
+    const notes = useQuery(api.notes.list, {});
+    const { mutate: addNote } = useMutation(api.notes.add);
+
+    const handleAddNote = (): void => {
+        if (noteDraft.trim() === "") {
+            return;
+        }
+
+        void addNote({ createdAt: Date.now(), text: noteDraft.trim() });
+        setNoteDraft("");
+    };
 
     // The active channel's draft, read live from the localStorage collection.
     const { data: draftRows } = useLiveQuery((q) => q.from({ draft: drafts }), [drafts]);
@@ -141,6 +159,29 @@ export const Chat = (): ReactElement => {
                         </li>
                     ))}
                 </ul>
+                <section aria-label="My notes">
+                    <h2>My notes</h2>
+                    <ul data-testid="notes-list">
+                        {(notes ?? []).map((note) => (
+                            <li key={note._id}>{note.text}</li>
+                        ))}
+                    </ul>
+                    <form
+                        onSubmit={(event) => {
+                            event.preventDefault();
+                            handleAddNote();
+                        }}
+                    >
+                        <input
+                            onChange={(event) => {
+                                setNoteDraft(event.target.value);
+                            }}
+                            placeholder="Add a note…"
+                            value={noteDraft}
+                        />
+                        <button type="submit">Add note</button>
+                    </form>
+                </section>
             </aside>
             <main>
                 <h2>

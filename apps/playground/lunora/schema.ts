@@ -54,6 +54,17 @@ export default defineSchema({
         // (`createdAt < cutoff`) instead of loading every row and filtering in memory.
         .index("by_created", ["createdAt"]),
 
+    // Per-user private notes — the playground's Row-Level Security surface.
+    // Lives in the default root DO; `notes.list` deliberately reads the WHOLE
+    // table and relies on the `rls()` read policy (see lunora/notes.ts) to
+    // narrow it to the caller's rows, so the auth-rls E2E proves the policy —
+    // not a hand-written filter — is what isolates users.
+    notes: defineTable({
+        createdAt: v.number(),
+        ownerId: v.id("users"),
+        text: v.string(),
+    }).index("by_owner", ["ownerId"]),
+
     // Mirror of the better-auth user rows (id + display name), owned by
     // `@lunora/auth`'s adapter rather than a hand-written mutation — hence
     // `.externallyManaged()`.
