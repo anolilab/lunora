@@ -802,6 +802,21 @@ interface WorkerOptions {
     queue?: QueueConsumerHandler;
 
     /**
+     * Enforce the ephemeral WS admin token (plan 095, Phase 3): when `true`,
+     * the worker's WS admin gate rejects the raw master admin token in the
+     * `?token=` query parameter — only a short-lived sub-token minted by
+     * `POST /_lunora/admin/ws-token` (or the master token in the
+     * `Authorization` HEADER, which never leaks via URLs) authorizes. Off by
+     * default (the master token in `?token=` keeps working); also settable per
+     * deployment via `env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`
+     * (`1`/`true`/`on`/`yes`/`enabled`), which the shard/relay Durable Objects
+     * honor for their own upgrade gate too. Flipping it on is the step that
+     * actually closes the URL/log leak — do so once every studio the
+     * deployment uses mints ephemeral tokens (Phase 2).
+     */
+    requireEphemeralWsToken?: boolean;
+
+    /**
      * Resolve the calling identity from the inbound RPC request. Called once
      * per RPC (and per fan-out) before the request is forwarded to the
      * shard. The returned `userId` becomes `ctx.auth.userId` on the shard
@@ -996,6 +1011,13 @@ const STATUS_PATH = "/_lunora/status";
 
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
+
+/**
+ * Env values that read as "on" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` (plan
+ * 095 Phase 3). Mirrors `security-headers.ts`' `ENABLED_ENV_VALUES` and the
+ * shard DO's copy — the two isolates don't import from each other.
+ */
+const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
 
 /**
  * Read the optional caller identity a server-initiated dispatch may forward on
@@ -1567,7 +1589,7 @@ const checkAdminAuth = (request: Request, expected: string | undefined): boolean
  * minted by `POST /_lunora/admin/ws-token` (plan 095) — the studio sends the
  * ephemeral token so the master credential never lands in URLs/logs.
  */
-const checkAdminWsToken = async (request: Request, expected: string | undefined): Promise<boolean> => {
+const checkAdminWsToken = async (request: Request, expected: string | undefined, requireEphemeral: boolean): Promise<boolean> => {
     if (!expected || expected.length === 0) {
         return false;
     }
@@ -1578,7 +1600,20 @@ const checkAdminWsToken = async (request: Request, expected: string | undefined)
         return false;
     }
 
-    return constantTimeEqual(expected, supplied) || verifyWsAdminToken(expected, supplied);
+    if (await verifyWsAdminToken(expected, supplied)) {
+        return true;
+    }
+
+    // Enforcement (plan 095 Phase 3): with `requireEphemeralWsToken` on, a raw
+    // master token in the URL is rejected — the query string is exactly where
+    // it leaks (logs / history / Referer). The header bearer path
+    // (`requestIsAdmin`) is unaffected; browsers can't set it on a WS upgrade,
+    // so it never rides a URL.
+    if (requireEphemeral) {
+        return false;
+    }
+
+    return constantTimeEqual(expected, supplied);
 };
 
 /**
@@ -1657,12 +1692,30 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // and the worker read the same `LUNORA_ADMIN_TOKEN` from `.dev.vars`.
     let envAdminToken: string | undefined;
     const effectiveAdminToken = (): string | undefined => options.adminToken ?? envAdminToken;
+
+    // Ephemeral-WS-token enforcement (plan 095 Phase 3): the explicit worker
+    // option, or — when unset — the `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` env
+    // knob (resolved once per isolate alongside the admin token, same
+    // env-is-constant reasoning). Default off: the master token in `?token=`
+    // keeps authorizing until the operator opts in.
+    let envRequireEphemeralWsToken: boolean | undefined;
+    const effectiveRequireEphemeralWsToken = (): boolean => options.requireEphemeralWsToken ?? envRequireEphemeralWsToken ?? false;
     const resolveAdminTokenFromEnv = (env: unknown): void => {
+        const record = (env ?? {}) as Record<string, unknown>;
+
+        if (envRequireEphemeralWsToken === undefined && options.requireEphemeralWsToken === undefined) {
+            const raw = record["LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN"];
+
+            if (typeof raw === "string" && raw.length > 0) {
+                envRequireEphemeralWsToken = REQUIRE_EPHEMERAL_ENV_VALUES.has(raw.trim().toLowerCase());
+            }
+        }
+
         if (envAdminToken !== undefined || options.adminToken !== undefined) {
             return;
         }
 
-        const value = ((env ?? {}) as Record<string, unknown>)["LUNORA_ADMIN_TOKEN"];
+        const value = record["LUNORA_ADMIN_TOKEN"];
 
         if (typeof value === "string" && value.length > 0) {
             envAdminToken = value;
@@ -2166,7 +2219,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the admin gate, scheduler-namespace requirement, and resolved stub through
     // injected deps (mirroring the other extracted clusters below).
     const scheduledAdminRoutes = buildScheduledAdminRoutes({
-        checkWsAdmin: async (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
+        checkWsAdmin: async (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken(), effectiveRequireEphemeralWsToken()),
         requireSchedulerNamespace,
         resolveSchedulerStub,
         schedulerInstanceName: options.schedulerInstanceName ?? "default",

@@ -149,6 +149,14 @@ const WS_KEEPALIVE_PING = "lunora-ping";
 const WS_KEEPALIVE_PONG = "lunora-pong";
 
 /**
+ * Env values that read as "on" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` (plan
+ * 095 Phase 3 — see {@link ShardDO.isAdminSocket}). Mirrors the runtime's
+ * `REQUIRE_EPHEMERAL_ENV_VALUES` — the two packages don't import from each
+ * other to avoid a circular dep.
+ */
+const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
+
+/**
  * Optional programmatic log sink, resolved from `createShardDO({ observability })`.
  * Structurally a subset of `@lunora/runtime`'s `ObservabilitySink`, so a user can
  * pass the SAME sink object to `createWorker` (which drives `onRpc`) and
@@ -7673,9 +7681,15 @@ abstract class ShardDO {
      * the master credential stays out of URLs/logs. Closed (resolves `false`)
      * when the admin token is unset, mirroring `isAdminAuthorized` for the HTTP
      * path so admin streaming is opt-in rather than exposed by default.
+     *
+     * Enforcement (plan 095 Phase 3): with `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`
+     * set (`1`/`true`/`on`/`yes`/`enabled`), a raw master token in the
+     * `?token=` query parameter is rejected — the query string is exactly
+     * where it leaks. The `Authorization` header path still takes the master
+     * token: browsers can't set it on a WS upgrade, so it never rides a URL.
      */
     private async isAdminSocket(request: Request): Promise<boolean> {
-        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string };
+        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN?: string };
         const adminToken = env.LUNORA_ADMIN_TOKEN;
 
         if (!adminToken || adminToken.length === 0) {
@@ -7688,7 +7702,20 @@ abstract class ShardDO {
             return false;
         }
 
-        return constantTimeEqual(supplied, adminToken) || verifyWsAdminToken(adminToken, supplied);
+        if (await verifyWsAdminToken(adminToken, supplied)) {
+            return true;
+        }
+
+        // `suppliedWsToken` prefers the header; the token came from the query
+        // string only when no bearer header was present.
+        const fromQuery = extractBearerToken(request.headers.get("authorization")) === undefined;
+        const requireEphemeral = REQUIRE_EPHEMERAL_ENV_VALUES.has((env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN ?? "").trim().toLowerCase());
+
+        if (fromQuery && requireEphemeral) {
+            return false;
+        }
+
+        return constantTimeEqual(supplied, adminToken);
     }
 
     /**
