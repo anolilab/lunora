@@ -49,10 +49,10 @@ The single most important decision: **not everything ships as stable 1.0.**
 Trying to stabilize 47 packages at once guarantees either delay or a hollow
 promise. Proposed tiering (to be ratified by the maintainer):
 
-| Tier | Packages | 1.0 treatment |
-| ---- | -------- | ------------- |
-| **Core (stable 1.0)** | `server`, `values`, `errors`, `runtime`, `do`, `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`, `lunorash` umbrella | Full SemVer commitment, API-guarded |
-| **Stable adapters** | `vue`, `solid`, `svelte`, `astro`, `nuxt`, `auth`, `storage`, `scheduler`, `mail`, `ratelimit`, `seed`, `db`, `sql-store` (internal), `studio`, `advisor`, `mcp`, `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`, `fingerprint`, `dispatch` (private) | 1.0 if they pass the same gates; any that don't, hold at `0.x`/`-beta` |
+| Tier                    | Packages                                                                                                                                                                                                                                                                                                | 1.0 treatment                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **Core (stable 1.0)**   | `server`, `values`, `errors`, `runtime`, `do`, `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`, `lunorash` umbrella                                                                                                                                                              | Full SemVer commitment, API-guarded                                                             |
+| **Stable adapters**     | `vue`, `solid`, `svelte`, `astro`, `nuxt`, `auth`, `storage`, `scheduler`, `mail`, `ratelimit`, `seed`, `db`, `sql-store` (internal), `studio`, `advisor`, `mcp`, `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`, `fingerprint`, `dispatch` (private)                      | 1.0 if they pass the same gates; any that don't, hold at `0.x`/`-beta`                          |
 | **Experimental at 1.0** | `agent` (alpha.1, deliberately unsettled per plan 113), `replica` (alpha.2, 8 tests / 23 src files), `x402` (alpha.2, unverified on workerd, CDP-Solana `NOT_IMPLEMENTED`), `react-native` (alpha.2, 226 LoC), `angular` (alpha.8, no framework docs), `ai`, `browser`, `container`, `payment` (assess) | Publish as `1.0.0-beta.*` or `0.x`, tagged experimental in docs; NOT part of the stable promise |
 
 Deliverables:
@@ -96,6 +96,9 @@ sandbox — GitHub-hosted runners are unaffected by that sandbox limitation).
       run in CI (dedicated job acceptable).
 - [ ] Write the deferred real-binding tests: Hyperdrive round-trip
       (`packages/hyperdrive/__tests__/create-hyperdrive.test.ts:138` `it.todo`).
+- [ ] **Dependency hygiene**: triage the open Dependabot alerts on the default
+      branch (13 at 2026-07-16: 4 high / 7 moderate / 2 low) — resolve or
+      formally dismiss each before the stable cut, and keep Renovate green.
 
 ## Phase 2 — Close runtime gaps and the open security item
 
