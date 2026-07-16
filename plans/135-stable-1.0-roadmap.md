@@ -113,8 +113,12 @@ sandbox — GitHub-hosted runners are unaffected by that sandbox limitation).
       scaffold-install-deploy smoke against a packed tarball.
 - [ ] Fix or quarantine the Studio jsdom component-test hang so those 90+ tests
       run in CI (dedicated job acceptable).
-- [ ] Write the deferred real-binding tests: Hyperdrive round-trip
+- [x] Write the deferred real-binding tests: Hyperdrive round-trip
       (`packages/hyperdrive/__tests__/create-hyperdrive.test.ts:138` `it.todo`).
+      _Done 2026-07-16: CI-gated suite drives the real `postgres`/`pg`/`mysql2`
+      drivers through an `env.HYPERDRIVE`-shaped binding over real wire protocols
+      (pglite behind `@electric-sql/pglite-socket`; mysql-memory-server, auto-
+      skipping with reason where the binary download is blocked)._
 - [ ] **Dependency hygiene**: triage the open Dependabot alerts on the default
       branch (13 at 2026-07-16: 4 high / 7 moderate / 2 low) — resolve or
       formally dismiss each before the stable cut, and keep Renovate green.

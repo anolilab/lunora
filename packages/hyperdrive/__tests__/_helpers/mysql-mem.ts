@@ -24,6 +24,8 @@ import { buildMysqlExec } from "../../src/global-exec";
 interface MysqlHarness {
     /** Stop the connection and the mysqld process. */
     close: () => Promise<void>;
+    /** Connection details, e.g. for building an `env.HYPERDRIVE`-shaped binding double. */
+    connection: { database: string; host: string; port: number; user: string };
     /** The {@link SqlExec} the store core / migrations run against (wraps `connection.execute`). */
     exec: SqlExec;
     /** Raw query escape hatch (text protocol) for assertions + per-test table resets. */
@@ -46,6 +48,7 @@ const createMysqlHarness = async (): Promise<MysqlHarness> => {
             await connection.end();
             await database.stop?.();
         },
+        connection: { database: database.dbName, host: "127.0.0.1", port: database.port, user: database.username },
         // mysql2's overloaded `execute` doesn't structurally match Mysql2Execute, but the runtime shape is exactly it.
         exec: buildMysqlExec(connection as unknown as Mysql2Execute),
         query: async (sql, parameters = []) => {
@@ -56,5 +59,20 @@ const createMysqlHarness = async (): Promise<MysqlHarness> => {
     };
 };
 
+/**
+ * Like {@link createMysqlHarness}, but gated on the environment actually being
+ * able to provision mysqld: `mysql-memory-server` downloads the MySQL binary on
+ * first use, and restricted sandboxes (e.g. an egress proxy answering the CDN
+ * with HTTP 403) make that download impossible. Suites consume this and skip —
+ * with the captured reason — instead of failing on an environment limitation.
+ */
+const tryCreateMysqlHarness = async (): Promise<{ harness?: MysqlHarness; unavailable?: string }> => {
+    try {
+        return { harness: await createMysqlHarness() };
+    } catch (error) {
+        return { unavailable: `mysql-memory-server could not provision mysqld in this environment: ${error instanceof Error ? error.message : String(error)}` };
+    }
+};
+
 export type { MysqlHarness };
-export default createMysqlHarness;
+export { createMysqlHarness, tryCreateMysqlHarness };
