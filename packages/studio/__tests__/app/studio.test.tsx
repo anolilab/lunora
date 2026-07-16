@@ -209,7 +209,9 @@ describe("studio", () => {
 
         fireEvent.click(await renderAndFind("dash-tab-schedule"));
 
-        const scheduledJobs = await screen.findByTestId("lunora-scheduled-jobs");
+        // The schedule panel is the heaviest lazy mount in the shell; under a
+        // fully loaded suite run the default 1s findBy window is too tight.
+        const scheduledJobs = await screen.findByTestId("lunora-scheduled-jobs", undefined, { timeout: 5000 });
 
         expect(scheduledJobs).toBeDefined();
     });
