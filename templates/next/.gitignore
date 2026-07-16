@@ -1,0 +1,8 @@
+node_modules
+.next
+.open-next
+dist
+.wrangler
+.lunora/
+.lunora-cache
+lunora/_generated

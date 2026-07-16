@@ -381,21 +381,36 @@ describe("lunora init", () => {
             expect(pkg).toContain('"name": "starter"');
         });
 
-        it("next template is not yet available", async () => {
-            expect.assertions(2);
-
-            const warnings: string[] = [];
+        it("next template scaffolds app router + two-worker entries", async () => {
+            expect.assertions(12);
 
             const result = await runInitCommand({
                 cwd: workdir,
                 from: templatesRoot,
-                logger: { ...silentLogger(), warn: (message) => warnings.push(message) },
-                name: "soon",
+                logger: silentLogger(),
+                name: "next-app",
                 templateType: "next",
             });
 
-            expect(result.code).toBe(1);
-            expect(warnings.join("\n")).toContain("not yet available");
+            expect(result.code).toBe(0);
+
+            const target = join(workdir, "next-app");
+
+            expect(existsSync(join(target, "next.config.ts"))).toBe(true);
+            expect(existsSync(join(target, "open-next.config.ts"))).toBe(true);
+            expect(existsSync(join(target, "app", "layout.tsx"))).toBe(true);
+            expect(existsSync(join(target, "app", "page.tsx"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
+            // Two-worker split: Next SSR worker config + standalone Lunora worker.
+            expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
+            expect(existsSync(join(target, "wrangler.lunora.jsonc"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "server.ts"))).toBe(true);
+
+            const pkg = readFileSync(join(target, "package.json"), "utf8");
+
+            expect(pkg).toContain('"next"');
+            expect(pkg).toContain("@lunora/react");
+            expect(pkg).toContain('"name": "next-app"');
         });
 
         it("refuses to scaffold into a non-empty target", async () => {

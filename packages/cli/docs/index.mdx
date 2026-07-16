@@ -63,16 +63,16 @@ SHA can't be resolved (offline / rate-limited) it falls back to the branch with
 a one-line UNPINNED warning. Pass `-t` / `--template` to choose the starting
 point:
 
-| Template         | Description                                                                                    |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| `vite`           | React + Vite + the Lunora plugin (the default)                                                 |
-| `standalone`     | Worker-only, no frontend                                                                       |
-| `astro`          | Astro + the standalone CLI                                                                     |
-| `nuxt`           | Nuxt + the standalone CLI                                                                      |
-| `sveltekit`      | SvelteKit + the standalone CLI                                                                 |
-| `expo`           | React Native (Expo) app — iOS/Android/web — + a Lunora worker backend                          |
-| `tanstack-start` | TanStack Start + the standalone CLI                                                            |
-| `next`           | Next.js + the standalone CLI — **not yet available**; re-run with `-t vite` or `-t standalone` |
+| Template         | Description                                                           |
+| ---------------- | --------------------------------------------------------------------- |
+| `vite`           | React + Vite + the Lunora plugin (the default)                        |
+| `standalone`     | Worker-only, no frontend                                              |
+| `astro`          | Astro + the standalone CLI                                            |
+| `next`           | Next.js (App Router) + OpenNext on Cloudflare + `@lunora/react`       |
+| `nuxt`           | Nuxt + the standalone CLI                                             |
+| `sveltekit`      | SvelteKit + the standalone CLI                                        |
+| `expo`           | React Native (Expo) app — iOS/Android/web — + a Lunora worker backend |
+| `tanstack-start` | TanStack Start + the standalone CLI                                   |
 
 Additional flags:
 
