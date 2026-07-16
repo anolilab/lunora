@@ -1,5 +1,5 @@
 import { useLunora } from "@lunora/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { TableInfo, TablePage } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -82,7 +82,12 @@ const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schem
         fireAndForget(fetchColumns());
     };
 
-    const schema = { columns, tables };
+    // Referentially stable while the data is unchanged, so consumers (the
+    // autocomplete's `refresh` callback and the panel's probe-refresh effect)
+    // can depend on it without re-firing after every render.
+    const schema = useMemo(() => {
+        return { columns, tables };
+    }, [columns, tables]);
 
     return { probe, schema };
 };
