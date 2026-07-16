@@ -124,8 +124,18 @@ sandbox — GitHub-hosted runners are unaffected by that sandbox limitation).
       same-shard convergence, `lunora init → codegen → tsc` smoke via the built
       CLI (`--from templates`; registry install/deploy stays in
       `scripts/clean-machine-smoke.sh`); 3 consecutive green full runs._
-- [ ] Fix or quarantine the Studio jsdom component-test hang so those 90+ tests
+- [x] Fix or quarantine the Studio jsdom component-test hang so those 90+ tests
       run in CI (dedicated job acceptable).
+      _Done 2026-07-16: the hang was an unbounded render loop in the SQL-editor
+      autocomplete (fixed in `fix(studio)`, plus a bare-`<Studio>` theme-context
+      crash and a global-browser selection race); the rotted tests were repaired
+      (URL-controlled DataBrowser harness, async live-push waits, stale
+      fixtures). Full suite green: 91 files / 734 tests in ~60s. CI: a "Run
+      studio tests" step in test.yml runs unit + component on both node legs,
+      and the nightly/root `test` scripts no longer exclude studio. Nothing
+      quarantined; studio stays excluded from the COVERAGE scripts only (a
+      component run under v8 coverage still stalls — see
+      `packages/studio/vitest.config.ts`)._
 - [x] Write the deferred real-binding tests: Hyperdrive round-trip
       (`packages/hyperdrive/__tests__/create-hyperdrive.test.ts:138` `it.todo`).
       _Done 2026-07-16: CI-gated suite drives the real `postgres`/`pg`/`mysql2`

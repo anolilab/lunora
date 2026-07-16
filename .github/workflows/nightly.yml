@@ -59,18 +59,11 @@
             # Full suite, no `affected` filter. workerd stays off here (the
             # dedicated `test-workerd` job below covers it) and coverage is
             # not collected — the nightly is a pass/fail canary, Codecov is
-            # fed by the PR-path test.yml run.
+            # fed by the PR-path test.yml run. The `test` script includes the
+            # studio package (unit + jsdom component projects) — the old
+            # component-suite hang is fixed, so no extra studio step is needed.
             - "name": "Run all tests"
               "run": "pnpm run test"
-
-            # Same studio wiring as test.yml: the pure-logic `unit` project is
-            # DOM-free and runs here; its jsdom component tests stay excluded.
-            - "name": "Build @lunora/advisor for studio unit tests"
-              "run": |
-                  pnpm --filter "@lunora/advisor" run build
-            - "name": "Run studio unit tests"
-              "run": |
-                  pnpm --filter "@lunora/studio" run test:unit
 
     # Same design as the `test-workerd` job in test.yml (see the comments
     # there): real workerd via @cloudflare/vitest-pool-workers, coverage off

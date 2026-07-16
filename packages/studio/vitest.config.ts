@@ -3,9 +3,10 @@ import { configDefaults } from "vitest/config";
 import { getVitestConfig } from "../../tools/get-vitest-config";
 
 // Pure-logic tests: no React render, no browser storage globals. These run
-// under plain `node` (fast, no jsdom polyfills) so the root test* scripts can
-// execute them without hitting studio's jsdom-component hang (see the
-// `component` project below). Verified DOM-free by running each file under
+// under plain `node` (fast, no jsdom polyfills) so they stay cheap to run in
+// isolation (`test:unit`) — e.g. on the coverage CI leg, where the jsdom
+// `component` project is excluded (see the ratchet note at the bottom).
+// Verified DOM-free by running each file under
 // `--environment node` with no setupFiles — a file belongs here only if it
 // neither renders a component nor touches `localStorage`/`sessionStorage`/
 // `window`/`document` (three originally-considered files — browser-storage,
@@ -45,10 +46,8 @@ export default getVitestConfig(
             // override and run every project against every matching file (verified
             // by bisection: without this line, `--project unit` still picks up and
             // executes the jsdom-only `.tsx` specs, crashing on "document is not
-            // defined" — and running ~90 files' worth of React-render tests under
-            // the `node` environment is what looked like a hang in `test:unit`).
-            // Clearing it here makes each project's own `include` below the sole
-            // file-selection source.
+            // defined"). Clearing it here makes each project's own `include`
+            // below the sole file-selection source.
             include: [],
             projects: [
                 {
@@ -78,9 +77,11 @@ export default getVitestConfig(
         },
     },
     // ratchet: no reliable measurement — studio is excluded from the root
-    // `test:coverage` vis query (`project!=studio`), and a full component-run
-    // under v8 coverage stalls (2026-07-16 attempt; the jsdom-component
-    // slowness documented above). Real floors need the component suite to
-    // finish under coverage first.
+    // COVERAGE vis queries (`project!=studio` in `test:coverage` /
+    // `test:affected:coverage`; the plain `test` scripts run it), because a
+    // full component-run under v8 coverage stalls (2026-07-16 attempt). The
+    // component suite itself is green and fast without coverage (73 files /
+    // 544 tests, ~60s) since the SQL-editor render-loop hang was fixed. Real
+    // floors need the component suite to finish under coverage first.
     { branches: 0, functions: 0, lines: 0, statements: 0 },
 );

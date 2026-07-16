@@ -94,11 +94,13 @@
             # `test-workerd` job below. d1 runs here like any other package —
             # with the workerd gate off, its vitest config exposes only the
             # plain-node "mocks" project (20 files), so neither the old hang
-            # rationale nor the inspector limitation applies. studio is still
-            # excluded from the `test*` scripts — its jsdom COMPONENT tests hang
-            # this runner — but its pure-logic `unit` project is DOM-free and
-            # runs via the "Run studio unit tests" step below. lunora-playground
-            # stays excluded (same hang class as e2e).
+            # rationale nor the inspector limitation applies. studio runs in the
+            # plain `test:affected` leg (its old component-suite hang — a render
+            # loop in the SQL editor — is fixed) but stays excluded from the
+            # COVERAGE scripts: a full component run under v8 coverage still
+            # stalls (see packages/studio/vitest.config.ts). The dedicated
+            # "Run studio tests" step below covers it on both legs.
+            # lunora-playground stays excluded (same hang class as e2e).
             - "name": "Run affected tests"
               "shell": "bash"
               "run": |
@@ -108,15 +110,18 @@
                       pnpm run test:affected
                   fi
 
-            # `derive-runtime-advisories.ts` value-imports `runAdvisor`/`RUNTIME_LINTS`
-            # from `@lunora/advisor`, so its dist must exist for the unit tests to
-            # resolve. Build it unconditionally (it's small) before running.
-            - "name": "Build @lunora/advisor for studio unit tests"
+            # The component tests import @lunora/{react,client,errors,advisor,
+            # bindings} dists, which the affected build above only produces when
+            # they changed. `vis run build` walks upstream deps via dependsOn
+            # (`^build`), so everything studio imports exists for the run.
+            - "name": "Build @lunora/studio dependencies"
               "run": |
-                  pnpm --filter "@lunora/advisor" run build
-            - "name": "Run studio unit tests"
+                  pnpm exec vis run build --query "project=studio"
+            # The full studio suite: the DOM-free `unit` project plus the jsdom
+            # `component` project (73 files / 544 tests, ~1-2 min, no coverage).
+            - "name": "Run studio tests"
               "run": |
-                  pnpm --filter "@lunora/studio" run test:unit
+                  pnpm --filter "@lunora/studio" run test
 
             - "name": "Upload coverage to Codecov"
               "if": "matrix.node_version == '22.15' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
