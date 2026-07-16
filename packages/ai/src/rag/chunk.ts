@@ -3,6 +3,7 @@
  * `overlap` chars. Deliberately simple and deterministic — the zero-config
  * default. Token-aware / sentence / semantic strategies plug in via
  * `RagConfig.chunk`.
+ * @experimental
  */
 const fixedWindowChunks = (text: string, size: number, overlap: number): ReadonlyArray<string> => {
     if (!Number.isInteger(size) || size < 1) {

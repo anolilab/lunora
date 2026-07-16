@@ -6,6 +6,10 @@ import { createQuerySubscription } from "@lunora/client/query";
 import { resolveLunoraClient } from "./client";
 import { shouldOpenSubscription } from "./platform";
 
+/**
+ * `LiveQueryOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface LiveQueryOptions {
     /**
      * Client to bind to. Defaults to the injected `LUNORA_CLIENT`; pass one
@@ -55,6 +59,7 @@ export interface LiveQueryOptions {
  * short-circuit — no network call, no socket; the signal stays `undefined`. To
  * call outside an injection context (e.g. lazily in `ngOnInit`), supply `client`
  * and `destroyRef` via {@link LiveQueryOptions}.
+ * @experimental
  */
 export const liveQuery = <F extends FunctionReference>(
     reference: F,

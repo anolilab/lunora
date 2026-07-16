@@ -20,6 +20,7 @@ import type { TableDiff } from "./table-diff";
  * updated.get("id-1")?.name // "alice-updated"
  * updated.get("id-2")?.name // "bob"
  * ```
+ * @experimental
  */
 const applyDiff = (current: ReadonlyMap<string, Record<string, unknown>>, diff: TableDiff): Map<string, Record<string, unknown>> => {
     const next = new Map(current);
@@ -62,6 +63,7 @@ const applyDiff = (current: ReadonlyMap<string, Record<string, unknown>>, diff: 
  *
  * This is equivalent to calling {@link applyDiff} repeatedly but avoids
  * intermediate map copies.
+ * @experimental
  */
 const applyDiffs = (current: ReadonlyMap<string, Record<string, unknown>>, diffs: ReadonlyArray<TableDiff>): Map<string, Record<string, unknown>> => {
     let result = new Map(current);
@@ -79,6 +81,7 @@ const applyDiffs = (current: ReadonlyMap<string, Record<string, unknown>>, diffs
  * @param snapshot Current snapshot, e.g. `{ users: Map&lt;id, row>, posts: Map&lt;id, row> }`.
  * @param diff Contains the target table name and the row-level changes to merge.
  * @returns A shallow copy of `snapshot` with `diff.table`'s map updated.
+ * @experimental
  */
 const applyDiffToSnapshot = (
     snapshot: ReadonlyMap<string, ReadonlyMap<string, Record<string, unknown>>>,

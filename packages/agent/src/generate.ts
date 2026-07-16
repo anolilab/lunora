@@ -47,7 +47,10 @@ const mapToolCalls = (calls: ReadonlyArray<{ input: unknown; toolCallId: string;
         return { id: call.toolCallId, input: call.input, name: call.toolName };
     });
 
-/** Resolve the configured model against the Worker env (see `AgentModelInput`). */
+/**
+ * Resolve the configured model against the Worker env (see `AgentModelInput`).
+ * @experimental
+ */
 // eslint-disable-next-line sonarjs/function-return-type -- single return type (LanguageModel); the string/object arms trip the heuristic, as in create-ai.ts
 const resolveAgentModel = (model: AgentModelInput, env: Record<string, unknown>): LanguageModel => {
     if (typeof model === "function") {
@@ -136,6 +139,7 @@ const buildTurnRequest = (base: ReturnType<typeof prepareAgentTurn>, { activeToo
  * `activeTools` / `toolChoice` / `model` overrides (from `prepareStep`) arrive
  * on each call. When `output` is set the model runs with `Output.object` and
  * the parsed answer is returned alongside the text.
+ * @experimental
  */
 const createAgentGenerate = (agent: AgentDefinition, env: Record<string, unknown>): AgentGenerate => {
     const base = prepareAgentTurn(agent, env);
@@ -166,6 +170,7 @@ const createAgentGenerate = (agent: AgentDefinition, env: Record<string, unknown
  * workflow replay serves the memoized final value without re-invoking it — no
  * delta is ever re-emitted. The persisted assistant message stays the single
  * source of truth.
+ * @experimental
  */
 const createStreamGenerate = (agent: AgentDefinition, env: Record<string, unknown>): AgentStreamGenerate => {
     const base = prepareAgentTurn(agent, env);
@@ -272,6 +277,7 @@ const buildExtractionPrompt = (userInput: string, assistantText: string): string
  * model over {@link GRAPH_EXTRACTION_SCHEMA}, and returns the parsed
  * `{ entities, relations }`. Wired by `compileAgentWorkflow` and called inside
  * the loop's memoized `memory:extract` step.
+ * @experimental
  */
 const createGraphExtract =
     (): AgentGraphExtract =>
@@ -303,6 +309,7 @@ const buildEpisodePrompt = (userInput: string, assistantText: string): string =>
  * single natural-language summary — so it returns the trimmed model text. Wired
  * by `compileAgentWorkflow` and called inside the loop's memoized
  * `memory:episode` step.
+ * @experimental
  */
 const createEpisodeExtract =
     (): AgentEpisodeExtract =>

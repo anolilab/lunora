@@ -1,5 +1,9 @@
 import { LunoraError } from "@lunora/errors";
 
+/**
+ * `PaymentErrorCode` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 type PaymentErrorCode =
     | "CONFIG_INVALID"
     | "CURRENCY_MISMATCH"
@@ -21,7 +25,10 @@ const STATUS_BY_CODE: Record<PaymentErrorCode, number> = {
     WEBHOOK_TIMESTAMP_INVALID: 400,
 };
 
-/** Typed error for all `@lunora/payment` failures. A `LunoraError` subclass; `status` maps onto an HTTP response. */
+/**
+ * Typed error for all `@lunora/payment` failures. A `LunoraError` subclass; `status` maps onto an HTTP response.
+ * @experimental
+ */
 class LunoraPaymentError extends LunoraError {
     // Narrow the inherited `code` to the payment taxonomy (base sets it).
     declare public readonly code: PaymentErrorCode;

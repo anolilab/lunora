@@ -16,6 +16,7 @@ import type { RetrievedChunk } from "./types";
  *
  * Callers MUST ensure every chunk in both lists carries a unique, comparable
  * `id` — this is guaranteed by the chunk-id scheme `${sourceId}#${chunkIndex}`.
+ * @experimental
  */
 const hybridRank = (vectorResults: ReadonlyArray<RetrievedChunk>, textResults: ReadonlyArray<RetrievedChunk>, k = 60): ReadonlyArray<RetrievedChunk> => {
     const fused = new Map<string, { chunk: RetrievedChunk; score: number; vectorRank: number }>();

@@ -6,6 +6,7 @@
  * the {@link InMemorySnapshotStore} is used for the offline-first
  * local mirror, while a production client would implement this
  * over IndexedDB or OPFS.
+ * @experimental
  */
 export interface SnapshotStore {
     /** Delete all snapshots. */
@@ -30,6 +31,7 @@ export interface SnapshotStore {
  * In-memory snapshot store. Useful for testing and for the local
  * offline-first mirror where persistence is handled at a higher
  * layer (IndexedDB adapter).
+ * @experimental
  */
 export class InMemorySnapshotStore implements SnapshotStore {
     readonly #store = new Map<string, unknown>();

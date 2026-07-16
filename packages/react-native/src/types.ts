@@ -12,6 +12,7 @@ import type { AsyncStorageLike, LunoraClientOptions } from "@lunora/client";
  * `client.setAuthToken` / `setWsToken` (see the package README). A bearer avoids
  * the `Cookie` header the runtime's CSRF guard rejects on `Origin`-less native
  * requests.
+ * @experimental
  */
 export type AuthHeadersFactory = () => Record<string, string> | undefined;
 
@@ -29,6 +30,7 @@ export type AuthHeadersFactory = () => Record<string, string> | undefined;
  * The `persistence`, `fetch`, and `WebSocket` fields of `LunoraClientOptions`
  * are still accepted and take precedence when you need full control; the two
  * conveniences are sugar over exactly those seams.
+ * @experimental
  */
 export interface CreateLunoraClientOptions extends LunoraClientOptions {
     /**

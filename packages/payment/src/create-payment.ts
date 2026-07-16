@@ -34,9 +34,16 @@ import type {
 const stripReferenceId = (metadata: Record<string, string> | undefined): Record<string, string> | undefined =>
     metadata && "referenceId" in metadata ? Object.fromEntries(Object.entries(metadata).filter(([key]) => key !== "referenceId")) : metadata;
 
-/** Returns whether the current caller may act on `referenceId`. Throwing is also treated as denial. */
+/**
+ * Returns whether the current caller may act on `referenceId`. Throwing is also treated as denial.
+ * @experimental
+ */
 export type AuthorizeReference = (referenceId: string) => boolean | Promise<boolean>;
 
+/**
+ * `CreatePaymentOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface CreatePaymentOptions {
     readonly adapter: PaymentAdapter;
 
@@ -52,6 +59,10 @@ export interface CreatePaymentOptions {
     readonly store: PaymentStore;
 }
 
+/**
+ * `LunoraPayment` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface LunoraPayment {
     readonly adapter: PaymentAdapter;
 
@@ -86,6 +97,10 @@ export interface LunoraPayment {
     track: (input: TrackInput) => Promise<TrackResult>;
 }
 
+/**
+ * `createPayment` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     const { adapter, store } = options;
 

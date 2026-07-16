@@ -32,6 +32,7 @@ const buildProvider = (binding: AiBindingLike, gateway?: LunoraAiOptions["gatewa
  *   messages,
  * });
  * ```
+ * @experimental
  */
 const createAi = (options: LunoraAiOptions): LunoraAi => {
     const { binding, defaultEmbeddingModel, defaultModel, gateway, provider } = options;

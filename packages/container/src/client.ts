@@ -13,7 +13,10 @@ import { containerBindingName } from "./define-container";
 import type { DurableObjectJurisdiction } from "./jurisdiction";
 import { applyJurisdiction } from "./jurisdiction";
 
-/** Options for explicitly starting an instance (mirrors `@cloudflare/containers`). */
+/**
+ * Options for explicitly starting an instance (mirrors `@cloudflare/containers`).
+ * @experimental
+ */
 interface ContainerStartOptions {
     /** Override outbound internet access for this start. */
     enableInternet?: boolean;
@@ -25,7 +28,10 @@ interface ContainerStartOptions {
     labels?: Record<string, string>;
 }
 
-/** A container instance's runtime state, as returned by `getState()`. Structural — the platform adds fields over time. */
+/**
+ * A container instance's runtime state, as returned by `getState()`. Structural — the platform adds fields over time.
+ * @experimental
+ */
 interface ContainerInstanceState {
     [key: string]: unknown;
     /** Process exit code, present once the instance has `stopped_with_code`. */
@@ -52,7 +58,10 @@ interface ContainerStubLike {
     stop?: (signal?: number | string) => Promise<void>;
 }
 
-/** What the client needs from a Durable Object namespace binding. */
+/**
+ * What the client needs from a Durable Object namespace binding.
+ * @experimental
+ */
 interface ContainerNamespaceLike {
     get: (id: unknown) => ContainerStubLike;
     idFromName: (name: string) => unknown;
@@ -64,7 +73,10 @@ interface ContainerNamespaceLike {
     jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ContainerNamespaceLike;
 }
 
-/** A handle on one container instance (one Durable Object). */
+/**
+ * A handle on one container instance (one Durable Object).
+ * @experimental
+ */
 interface ContainerHandle {
     /**
      * Send an HTTP (or WebSocket-upgrade) request to the container. A path
@@ -90,6 +102,7 @@ interface ContainerHandle {
  * game, a job runner per id) often needs to tear down or inspect the instance
  * rather than wait for `sleepAfter`, so these wrap the container DO's
  * `start`/`stop`/`destroy`/`getState`.
+ * @experimental
  */
 interface ContainerInstanceHandle extends ContainerHandle {
     /** Stop and discard the instance (its ephemeral disk is lost). */
@@ -127,6 +140,7 @@ interface ContainerInstanceHandle extends ContainerHandle {
  * Each maps to the corresponding `@cloudflare/containers` `Container` RPC, so
  * an app can tighten or relax a single instance's allowed/denied hosts after
  * start without redeploying.
+ * @experimental
  */
 interface ContainerEgressControls {
     /** Add one hostname (or glob) to the allow-list. */
@@ -143,7 +157,10 @@ interface ContainerEgressControls {
     setDenied: (hosts: ReadonlyArray<string>) => Promise<void>;
 }
 
-/** The per-definition accessor exposed as `ctx.containers.&lt;exportName>`. */
+/**
+ * The per-definition accessor exposed as `ctx.containers.&lt;exportName>`.
+ * @experimental
+ */
 interface ContainerAccessor {
     /**
      * A random instance from a fixed pool of `count` (defaults to the
@@ -186,7 +203,10 @@ interface ContainerAccessor {
     pool: (options?: PoolOptions) => ContainerHandle;
 }
 
-/** Tuning for a pooled, retrying container handle. See {@link ContainerAccessor.pool}. */
+/**
+ * Tuning for a pooled, retrying container handle. See {@link ContainerAccessor.pool}.
+ * @experimental
+ */
 interface PoolOptions {
     /** Total attempts before giving up (each on a freshly-picked instance). Default 3. */
     attempts?: number;
@@ -215,6 +235,7 @@ interface PoolOptions {
  * only on the platform's provisioning transients (no-instance / not-listening /
  * rate-limited — see {@link isColdStartTransient}), which is why it's safe by
  * default: those responses mean the request never reached the container.
+ * @experimental
  */
 interface InstanceRetryOptions {
     /**
@@ -229,7 +250,10 @@ interface InstanceRetryOptions {
     maxBackoffMs?: number;
 }
 
-/** Wiring info for one definition, emitted by codegen into the generated DO. */
+/**
+ * Wiring info for one definition, emitted by codegen into the generated DO.
+ * @experimental
+ */
 interface ContainerBindingSpec {
     /** Durable Object binding name, e.g. `CONTAINER_TRANSCODER`. */
     binding: string;
@@ -584,6 +608,7 @@ const missingBindingAccessor = (spec: ContainerBindingSpec): ContainerAccessor =
  * `traceparent` (the inbound RPC's W3C trace context, forwarded by the runtime
  * and read off the request by the DO) is stamped onto every outbound container
  * `fetch`, so the container's own spans stitch under the Worker's trace.
+ * @experimental
  */
 const createContainerContext = (
     env: Record<string, unknown>,
@@ -605,7 +630,10 @@ const createContainerContext = (
     return containers;
 };
 
-/** A test handler: receives the request plus the targeted instance name. */
+/**
+ * A test handler: receives the request plus the targeted instance name.
+ * @experimental
+ */
 type ContainerTestHandler = (request: Request, instance: { name: string }) => Promise<Response> | Response;
 
 /**
@@ -647,6 +675,7 @@ const testNamespaceFor = (handler: ContainerTestHandler): ContainerNamespaceLike
  *     transcoder: (request) => new Response("ok"),
  * });
  * ```
+ * @experimental
  */
 const createContainerTestContext = (handlers: Record<string, ContainerTestHandler>): Record<string, ContainerAccessor> => {
     const containers: Record<string, ContainerAccessor> = {};

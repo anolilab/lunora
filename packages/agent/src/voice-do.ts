@@ -70,6 +70,7 @@ interface HibernatableWebSocket {
  * `SupportVoiceDO extends VoiceSessionDO`, constructed with the agent
  * definition + its export name) bound under the agent's `VOICE_...` Durable
  * Object binding.
+ * @experimental
  */
 class VoiceSessionDO {
     protected readonly agent: AgentDefinition;

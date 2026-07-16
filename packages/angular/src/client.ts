@@ -32,6 +32,7 @@ const sameOriginUrl = (): string => (globalThis as { location?: Location }).loca
  * {@link provideLunora}: it builds one same-origin browser client (which opens
  * its WebSocket lazily on the first subscription). Call {@link provideLunora} to
  * point it at a remote URL or hand it a pre-built client.
+ * @experimental
  */
 export const LUNORA_CLIENT: InjectionToken<LunoraClient> = new InjectionToken<LunoraClient>("lunora.client", {
     factory: (): LunoraClient => new LunoraClient({ url: sameOriginUrl() }),
@@ -43,6 +44,7 @@ export const LUNORA_CLIENT: InjectionToken<LunoraClient> = new InjectionToken<Lu
  * except `url` is optional — it defaults to the page origin in the browser (and to
  * `""` on the server; pass an explicit `url` for SSR data-loading — see
  * {@link sameOriginUrl}).
+ * @experimental
  */
 export type ProvideLunoraOptions = Omit<LunoraClientOptions, "url"> & { url?: string };
 
@@ -60,6 +62,7 @@ export type ProvideLunoraOptions = Omit<LunoraClientOptions, "url"> & { url?: st
  * Pass {@link LunoraClientOptions} to configure a fresh client (URL defaults to
  * the page origin), or hand in an already-constructed {@link LunoraClient} to
  * share one instance (e.g. a client you also preload against during SSR).
+ * @experimental
  */
 export const provideLunora = (optionsOrClient: LunoraClient | ProvideLunoraOptions = {}): EnvironmentProviders =>
     makeEnvironmentProviders([
@@ -86,6 +89,7 @@ export const provideLunora = (optionsOrClient: LunoraClient | ProvideLunoraOptio
  * private readonly client = injectLunoraClient();
  * send = (text: string) => this.client.mutation(api.messages.send, { text });
  * ```
+ * @experimental
  */
 export const injectLunoraClient = (): LunoraClient => inject(LUNORA_CLIENT);
 

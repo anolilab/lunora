@@ -2,6 +2,10 @@ import type { ArgsOf, FunctionReference, LunoraClient, MutationCallOptions, Retu
 
 import { resolveLunoraClient } from "./client";
 
+/**
+ * `MutateOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface MutateOptions<F extends FunctionReference> extends MutationCallOptions<unknown, unknown, ArgsOf<F>> {
     /**
      * Client to run the mutation on. Defaults to the injected `LUNORA_CLIENT`.
@@ -29,6 +33,7 @@ export interface MutateOptions<F extends FunctionReference> extends MutationCall
  *
  * When called from within an injection context you may omit `client` and let it
  * resolve from the injector.
+ * @experimental
  */
 export const mutate = <F extends FunctionReference>(reference: F, args: ArgsOf<F>, options: MutateOptions<F> = {}): Promise<ReturnOf<F>> => {
     const { client, ...callOptions } = options;

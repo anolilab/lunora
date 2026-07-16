@@ -28,7 +28,10 @@ import type { Autumn } from "autumn-js";
 
 import { asRecord, readNumber, readString } from "../json";
 
-/** A per-seat / per-workspace sub-customer with its own feature balances. */
+/**
+ * A per-seat / per-workspace sub-customer with its own feature balances.
+ * @experimental
+ */
 interface AutumnEntity {
     readonly featureId?: string;
     readonly id: string;
@@ -37,6 +40,10 @@ interface AutumnEntity {
     readonly raw: Record<string, unknown>;
 }
 
+/**
+ * `CreateEntityInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 interface CreateEntityInput {
     /** The feature the entity consumes a seat/allowance of (e.g. `"seats"`). */
     readonly featureId: string;
@@ -45,30 +52,47 @@ interface CreateEntityInput {
     readonly name?: string;
 }
 
-/** One point in a usage-events aggregation. */
+/**
+ * One point in a usage-events aggregation.
+ * @experimental
+ */
 interface UsageEventPoint {
     readonly count: number;
     readonly period?: string;
     readonly raw: Record<string, unknown>;
 }
 
+/**
+ * `EventsListInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 interface EventsListInput {
     /** Feature(s) to report on. */
     readonly featureId: ReadonlyArray<string> | string;
 }
 
+/**
+ * `EventsAggregateInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 interface EventsAggregateInput extends EventsListInput {
     /** Time window to aggregate over (aggregate only — `list` ignores it, so it isn't accepted there). */
     readonly range?: "7d" | "24h" | "30d" | "90d" | "last_cycle";
 }
 
-/** A prepaid feature quantity purchased at checkout (e.g. buy 5 seats up front). */
+/**
+ * A prepaid feature quantity purchased at checkout (e.g. buy 5 seats up front).
+ * @experimental
+ */
 interface PrepaidOption {
     readonly featureId: string;
     readonly quantity: number;
 }
 
-/** Autumn-native checkout — richer than the generic `createCheckout` (trials, prepaid, entities, rewards). */
+/**
+ * Autumn-native checkout — richer than the generic `createCheckout` (trials, prepaid, entities, rewards).
+ * @experimental
+ */
 interface AutumnCheckoutInput {
     /** Scope the checkout to a specific entity (seat/workspace) rather than the top-level customer. */
     readonly entityId?: string;
@@ -87,7 +111,10 @@ interface AutumnCheckoutInput {
     readonly successUrl?: string;
 }
 
-/** The subset of the Autumn SDK surface the native facade calls. A real `Autumn` instance satisfies it. */
+/**
+ * The subset of the Autumn SDK surface the native facade calls. A real `Autumn` instance satisfies it.
+ * @experimental
+ */
 interface AutumnFeaturesClientLike {
     readonly billing: unknown;
     readonly entities: unknown;
@@ -96,6 +123,10 @@ interface AutumnFeaturesClientLike {
     readonly referrals: unknown;
 }
 
+/**
+ * `AutumnFeaturesOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 interface AutumnFeaturesOptions {
     readonly client: AutumnFeaturesClientLike;
 }
@@ -124,7 +155,10 @@ const pointsFrom = (result: Record<string, unknown>): UsageEventPoint[] => {
     });
 };
 
-/** The Autumn-native feature facade returned by {@link createAutumnFeatures}. */
+/**
+ * The Autumn-native feature facade returned by {@link createAutumnFeatures}.
+ * @experimental
+ */
 interface AutumnFeatures {
     readonly checkout: (referenceId: string, input: AutumnCheckoutInput) => Promise<{ raw: Record<string, unknown>; url: string }>;
     readonly entities: {
@@ -148,6 +182,7 @@ interface AutumnFeatures {
 /**
  * Build the Autumn-native feature facade over an injected client. Companion to `createAutumnAdapter`;
  * share the same underlying `autumn-js` `Autumn` client between them.
+ * @experimental
  */
 export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeatures => {
     // Public param is the tiny structural shim; internally it is the real SDK so calls are checked.

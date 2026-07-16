@@ -95,6 +95,7 @@ const NON_WORD = /[^\p{L}\p{N}]+/u;
  * The per-owner dedup key for an entity name: trim, collapse internal
  * whitespace, lowercase. Deterministic (no locale) so a workflow replay or
  * retry writes the exact same key — the graph upsert stays idempotent.
+ * @experimental
  */
 const normalizeEntityName = (name: string): string => name.trim().replaceAll(WHITESPACE_RUN, " ").toLowerCase();
 

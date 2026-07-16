@@ -16,6 +16,7 @@ import type { AgentBindingSpec, AgentHandle, AgentRunFunction, AgentRunInput, Ag
  * and the env-backed `createDispatchRunner` (the same runner the workflow body
  * uses — it POSTs to `/_lunora/scheduler/dispatch`) is built on demand; tests
  * inject a `dispatch` double.
+ * @experimental
  */
 const createAgentContext = (env: Record<string, unknown>, specs: ReadonlyArray<AgentBindingSpec>, dispatch?: AgentRunFunction): Record<string, AgentHandle> => {
     const agents: Record<string, AgentHandle> = {};

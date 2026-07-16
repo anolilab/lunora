@@ -3,6 +3,10 @@ import { computed, DestroyRef, inject, signal } from "@angular/core";
 import type { RateLimitConfig, RateLimitStatus, RateLimitValue } from "@lunora/ratelimit";
 import { evaluate } from "@lunora/ratelimit";
 
+/**
+ * `RateLimitOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RateLimitOptions {
     /**
      * `DestroyRef` whose `onDestroy` clears the interval. Defaults to
@@ -20,6 +24,10 @@ export interface RateLimitOptions {
     tickMs?: number;
 }
 
+/**
+ * `RateLimitResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RateLimitResult {
     /** Would consuming `count` (default 1) succeed right now? Does not consume. */
     check: (count?: number) => boolean;
@@ -52,6 +60,7 @@ export interface RateLimitResult {
  * ```ts
  * readonly sendLimit = rateLimit({ kind: "token bucket", period: 1000, rate: 10 });
  * ```
+ * @experimental
  */
 export const rateLimit = (config: RateLimitConfig, options: RateLimitOptions = {}): RateLimitResult => {
     const destroyRef = options.destroyRef ?? inject(DestroyRef);

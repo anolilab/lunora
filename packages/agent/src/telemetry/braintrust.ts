@@ -5,7 +5,10 @@ import { describeError, readField, toolInputOf } from "./common";
 
 const stringOr = (value: unknown, fallback: string): string => (typeof value === "string" && value.length > 0 ? value : fallback);
 
-/** The span handle a {@link BraintrustLike.traced} callback receives. */
+/**
+ * The span handle a {@link BraintrustLike.traced} callback receives.
+ * @experimental
+ */
 export interface BraintrustSpan {
     /** Attach structured fields to the current span. */
     log: (event: Record<string, unknown>) => void;
@@ -16,13 +19,17 @@ export interface BraintrustSpan {
  * `braintrust` is intentionally **not** a dependency — the app passes its own
  * initialized logger, so this package stays dependency-free and works with any
  * compatible Braintrust SDK version.
+ * @experimental
  */
 export interface BraintrustLike {
     /** Run `callback` inside a new traced span and return its result. */
     traced: <T>(callback: (span: BraintrustSpan) => T, args?: { name?: string; type?: string }) => T;
 }
 
-/** Options for {@link braintrustTelemetry}. */
+/**
+ * Options for {@link braintrustTelemetry}.
+ * @experimental
+ */
 export interface BraintrustTelemetryOptions extends CommonOptions {
     /** Span-name prefix for the language-model call (e.g. the agent name). */
     functionId?: string;
@@ -43,6 +50,7 @@ export interface BraintrustTelemetryOptions extends CommonOptions {
  * only when `recordOutputs` is set. `onError` opens a span and logs the error.
  *
  * The app owns Braintrust initialization; pass the logger in as `logger`.
+ * @experimental
  */
 export const braintrustTelemetry = (options: BraintrustTelemetryOptions): Telemetry => {
     const { functionId, logger, recordInputs = false, recordOutputs = false } = options;

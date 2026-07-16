@@ -12,6 +12,10 @@ import type { Subscription } from "./types";
 // Only subscriptions in these states confer entitlements.
 const ACTIVE_STATES: ReadonlySet<Subscription["state"]> = new Set<Subscription["state"]>(["active", "trialing"]);
 
+/**
+ * `PlanDefinition` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface PlanDefinition {
     /** Feature flags this plan grants. */
     readonly features?: ReadonlyArray<string>;
@@ -21,11 +25,19 @@ export interface PlanDefinition {
     readonly priceIds: ReadonlyArray<string>;
 }
 
+/**
+ * `EntitlementsConfig` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface EntitlementsConfig {
     /** Plan name → definition. */
     readonly plans: Record<string, PlanDefinition>;
 }
 
+/**
+ * `Entitlements` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface Entitlements {
     readonly features: ReadonlySet<string>;
     /** True when an active subscription grants `feature`. */
@@ -40,6 +52,7 @@ export interface Entitlements {
  * Start of the window `check` sums metered usage over: the most recent billing-period start among
  * a reference's active subscriptions. `0` (count all-time) when no active subscription reports one
  * — limits still bind, they just never reset until the provider sends a period.
+ * @experimental
  */
 export const usagePeriodStart = (subscriptions: ReadonlyArray<Subscription>): number => {
     let start = 0;
@@ -53,7 +66,10 @@ export const usagePeriodStart = (subscriptions: ReadonlyArray<Subscription>): nu
     return start;
 };
 
-/** Every feature name a config can grant — the union of `features` flags and `limits` keys across all plans, sorted. */
+/**
+ * Every feature name a config can grant — the union of `features` flags and `limits` keys across all plans, sorted.
+ * @experimental
+ */
 export const featureNames = (config: EntitlementsConfig): string[] => {
     const names = new Set<string>();
 
@@ -70,11 +86,17 @@ export const featureNames = (config: EntitlementsConfig): string[] => {
     return [...names].toSorted((a, b) => a.localeCompare(b));
 };
 
-/** Whether the reference holds an entitling (active/trialing) subscription on `priceId` — the basis of a product `check`. */
+/**
+ * Whether the reference holds an entitling (active/trialing) subscription on `priceId` — the basis of a product `check`.
+ * @experimental
+ */
 export const hasActivePrice = (subscriptions: ReadonlyArray<Subscription>, priceId: string): boolean =>
     subscriptions.some((subscription) => subscription.priceId === priceId && ACTIVE_STATES.has(subscription.state));
 
-/** Derive {@link Entitlements} from a reference's subscriptions. Pure — the basis of `check`. */
+/**
+ * Derive {@link Entitlements} from a reference's subscriptions. Pure — the basis of `check`.
+ * @experimental
+ */
 export const resolveEntitlements = (config: EntitlementsConfig, subscriptions: ReadonlyArray<Subscription>): Entitlements => {
     const activePriceIds = new Set(subscriptions.filter((subscription) => ACTIVE_STATES.has(subscription.state)).map((subscription) => subscription.priceId));
 
@@ -109,6 +131,9 @@ export const resolveEntitlements = (config: EntitlementsConfig, subscriptions: R
     };
 };
 
-/** Convenience: resolve entitlements straight from the store for a reference. */
+/**
+ * Convenience: resolve entitlements straight from the store for a reference.
+ * @experimental
+ */
 export const entitlementsForReference = async (store: PaymentStore, config: EntitlementsConfig, referenceId: string): Promise<Entitlements> =>
     resolveEntitlements(config, await store.listSubscriptionsByReference(referenceId));

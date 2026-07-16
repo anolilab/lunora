@@ -97,7 +97,10 @@ const resolveCdpEvmAccount = async (signer: X402CdpSignerConfig, getSecret: GetS
     return cdp.evm.getOrCreateAccount({ name: signer.account });
 };
 
-/** How the wallet reads its key material — wired to `ctx.secrets.get` in an action. */
+/**
+ * How the wallet reads its key material — wired to `ctx.secrets.get` in an action.
+ * @experimental
+ */
 export interface WalletDeps {
     /** Read a secret (e.g. a private key) by name; `undefined` when unset. */
     readonly getSecret: GetSecret;
@@ -107,6 +110,7 @@ export interface WalletDeps {
  * Resolve a viem `LocalAccount` from a raw private key. The key may be given with
  * or without the `0x` prefix. The account is a structural `ClientEvmSigner`
  * (`address` + `signTypedData`), so `@x402/evm` accepts it directly.
+ * @experimental
  */
 export const resolveEvmAccount = async (privateKey: string): Promise<PrivateKeyAccount> => {
     const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
@@ -126,6 +130,7 @@ export const resolveEvmAccount = async (privateKey: string): Promise<PrivateKeyA
  * format) or as a base58 string. A 64-byte value is a full secret key (seed ‖
  * public key); a 32-byte value is the seed alone. The returned signer is a
  * structural `ClientSvmSigner` (`TransactionSigner`), so `@x402/svm` accepts it.
+ * @experimental
  */
 export const resolveSvmSigner = async (secret: string): Promise<ClientSvmSigner> => {
     const trimmed = secret.trim();
@@ -177,6 +182,7 @@ export const resolveSvmSigner = async (secret: string): Promise<ClientSvmSigner>
  * read), `"raw-key"` (a `ctx.secrets` private key → viem account on EVM or a
  * `@solana/kit` keypair on SVM), or `"cdp"` (a Coinbase-managed wallet via
  * `@coinbase/cdp-sdk`).
+ * @experimental
  */
 export const registerWallet = async (client: x402Client, config: X402PayConfig, deps: WalletDeps): Promise<void> => {
     const network = toCaip2(config.network);

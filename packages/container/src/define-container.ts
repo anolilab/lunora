@@ -69,6 +69,7 @@ const dirname = (path: string): string => {
  * `Dockerfile.dev` also counts) is used as-is with its directory as the build
  * context; any other path is treated as the build-context directory and the
  * Dockerfile is expected at `&lt;dir>/Dockerfile`.
+ * @experimental
  */
 const normalizeContainerImage = (image: ContainerImageSource): NormalizedContainerImage => {
     if (typeof image !== "string") {
@@ -95,6 +96,7 @@ const normalizeContainerImage = (image: ContainerImageSource): NormalizedContain
  * `transcoder` → `TranscoderContainer`. wrangler's `containers[].class_name`
  * and the Durable Object binding's `class_name` both reference it, so codegen
  * and the config layer MUST derive it identically — always via this helper.
+ * @experimental
  */
 const containerClassName = (exportName: string): string => `${exportName.charAt(0).toUpperCase()}${exportName.slice(1)}Container`;
 
@@ -103,6 +105,7 @@ const containerClassName = (exportName: string): string => `${exportName.charAt(
  * `CONTAINER_TRANSCODER`, `imageResizer` → `CONTAINER_IMAGE_RESIZER`. The
  * `CONTAINER_` prefix namespaces these away from `SHARD`/`SESSION`/`SCHEDULER`
  * so a container export can never collide with the built-in bindings.
+ * @experimental
  */
 const containerBindingName = (exportName: string): string => `CONTAINER_${exportName.replaceAll(/(?<=[a-z0-9])(?=[A-Z])/g, "_").toUpperCase()}`;
 
@@ -112,6 +115,7 @@ const containerBindingName = (exportName: string): string => `CONTAINER_${export
  * it as the wrangler `containers[].image`, and `lunora deploy` builds that tag
  * with Railpack and `wrangler containers push`es it before deploying — so all
  * three derive the tag from this one helper and can never disagree.
+ * @experimental
  */
 const containerBuildTag = (exportName: string): string => `lunora-${exportName.replaceAll(/(?<=[a-z0-9])(?=[A-Z])/g, "-").toLowerCase()}:build`;
 
@@ -325,6 +329,10 @@ const assertValidContainerRuntimeFields = (config: ContainerConfig): void => {
     assertValidReadyOnChecks(config);
 };
 
+/**
+ * `defineContainer` is part of the experimental `@lunora/container` API and may change without a major version bump.
+ * @experimental
+ */
 const defineContainer = (config: ContainerConfig): ContainerDefinition => {
     assertValidImage(config.image);
 
@@ -367,7 +375,10 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
     return { ...config, isLunoraContainer: true };
 };
 
-/** True when a value is a `defineContainer` result (the runtime brand check). */
+/**
+ * True when a value is a `defineContainer` result (the runtime brand check).
+ * @experimental
+ */
 const isContainerDefinition = (value: unknown): value is ContainerDefinition =>
     typeof value === "object" && value !== null && (value as { isLunoraContainer?: unknown }).isLunoraContainer === true;
 
@@ -376,6 +387,7 @@ const isContainerDefinition = (value: unknown): value is ContainerDefinition =>
  * plus every declared secret resolved from the Worker `env`. A declared secret
  * missing from the Worker env fails fast — starting the container without a
  * credential it was promised yields far worse errors downstream.
+ * @experimental
  */
 const resolveContainerEnvVariables = (definition: ContainerDefinition, workerEnv: Record<string, unknown>, exportName?: string): Record<string, string> => {
     const resolved: Record<string, string> = { ...definition.env };

@@ -67,6 +67,7 @@ const isFreshTimestamp = (timestampSeconds: number, nowSeconds: number, toleranc
  * Verify a Slack request signature (`x-slack-signature` = `v0=` + HMAC over
  * `v0:timestamp:body`), rejecting a stale timestamp to bound replay. `now` is
  * injectable for deterministic tests (defaults to the wall clock).
+ * @experimental
  */
 const verifySlack = async (options: {
     body: string;
@@ -89,7 +90,10 @@ const verifySlack = async (options: {
     return verifyHmacSha256(signingSecret, `v0:${timestamp}:${body}`, signature.slice("v0=".length));
 };
 
-/** Verify a GitHub webhook signature (`x-hub-signature-256` = `sha256=` + HMAC over the body). */
+/**
+ * Verify a GitHub webhook signature (`x-hub-signature-256` = `sha256=` + HMAC over the body).
+ * @experimental
+ */
 const verifyGithub = async (options: { body: string; secret: string; signature: string | undefined }): Promise<boolean> => {
     const { body, secret, signature } = options;
 
@@ -103,6 +107,7 @@ const verifyGithub = async (options: { body: string; secret: string; signature: 
 /**
  * Verify a Discord interaction signature: Ed25519 over `timestamp + body`,
  * `x-signature-ed25519` (hex) against the application's `publicKey` (hex).
+ * @experimental
  */
 const verifyDiscord = async (options: { body: string; publicKey: string; signature: string | undefined; timestamp: string | undefined }): Promise<boolean> => {
     const { body, publicKey, signature, timestamp } = options;
@@ -120,7 +125,10 @@ const verifyDiscord = async (options: { body: string; publicKey: string; signatu
     }
 };
 
-/** One agent wired into the inbound channel HTTP handler. */
+/**
+ * One agent wired into the inbound channel HTTP handler.
+ * @experimental
+ */
 interface AgentChannelTarget {
     /** The agent definition — only its `onInbound` config is read. */
     agent: Pick<AgentDefinition, "onInbound">;
@@ -128,7 +136,10 @@ interface AgentChannelTarget {
     binding: string;
 }
 
-/** The HTTP handler `dispatchAgentChannel` returns — mount it on a webhook route. */
+/**
+ * The HTTP handler `dispatchAgentChannel` returns — mount it on a webhook route.
+ * @experimental
+ */
 type InboundChannelHandler = (request: Request, env: Record<string, unknown>) => Promise<Response>;
 
 /** Detect the channel from the request's signature headers (route-agnostic). */
@@ -295,6 +306,7 @@ const startChannelRun = async (
  * binding. Returns `401` when NO target's signature verifies, `200` on a claim
  * (or a Discord PONG), `204` when a verified event is declined by every mapper,
  * and `400` for an unrecognized webhook.
+ * @experimental
  */
 const dispatchAgentChannel =
     (targets: ReadonlyArray<AgentChannelTarget>): InboundChannelHandler =>

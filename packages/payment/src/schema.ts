@@ -83,6 +83,10 @@ const usageEvents = defineTable({
     .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
     .index("by_reference_feature", ["referenceId", "featureId"]);
 
+/**
+ * `paymentTables` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 const paymentTables: Record<string, TableDefinition> = {
     customers,
     events,

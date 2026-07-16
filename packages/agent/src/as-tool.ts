@@ -96,6 +96,7 @@ const finalAnswer = (history: ReadonlyArray<AgentMessageRow>): string => {
  * Workflows has no in-step await-instance primitive), and the answer is read
  * back from the child's persisted thread — the single source of truth — via the
  * shared `agents:agentMessages` runtime function.
+ * @experimental
  */
 const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubToolInput, string> => {
     if (typeof options.name !== "string" || options.name.length === 0) {

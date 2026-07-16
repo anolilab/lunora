@@ -16,17 +16,24 @@ const defaultLogger: ConsoleLogger = (level, message, fields) => {
     }
 };
 
-/** Severity level passed to a {@link ConsoleLogger}. */
+/**
+ * Severity level passed to a {@link ConsoleLogger}.
+ * @experimental
+ */
 export type ConsoleLogLevel = "error" | "info" | "warn";
 
 /**
  * Structured log sink. Receives a level, a static human message, and a bag of
  * structured fields (never interpolated into the message, so log processors can
  * index them). The default sink writes to `globalThis.console`.
+ * @experimental
  */
 export type ConsoleLogger = (level: ConsoleLogLevel, message: string, fields: Record<string, unknown>) => void;
 
-/** Options for {@link consoleTelemetry}. */
+/**
+ * Options for {@link consoleTelemetry}.
+ * @experimental
+ */
 export interface ConsoleTelemetryOptions extends CommonOptions {
     /**
      * Identifier prefixed into every log message (e.g. the agent name). Helps
@@ -51,6 +58,7 @@ export interface ConsoleTelemetryOptions extends CommonOptions {
  * arguments, and `recordOutputs` to log generated text / tool results.
  *
  * Every callback is defensive (event fields may be absent) and synchronous.
+ * @experimental
  */
 export const consoleTelemetry = (options: ConsoleTelemetryOptions = {}): Telemetry => {
     const { functionId, logger = defaultLogger, recordInputs = false, recordOutputs = false } = options;

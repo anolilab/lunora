@@ -67,6 +67,7 @@ type EventTypeMap<TDefinition extends Record<string, Record<string, unknown>>> =
  *
  * The returned event has no `seq` — it is an optimistic / command payload
  * that the event log will assign a sequence number to on append.
+ * @experimental
  */
 export interface EventFactory<Type extends string, Payload> {
     (payload: Payload): InputEvent<Type, Payload>;
@@ -76,6 +77,7 @@ export interface EventFactory<Type extends string, Payload> {
 
 /**
  * The namespace object returned for each group of events.
+ * @experimental
  */
 export type EventNamespace<Ns extends string, TDefinition extends Record<string, unknown>> = {
     [Name in keyof TDefinition & string]: EventFactory<QualifiedType<Ns, Name>, PayloadOf<TDefinition[Name]>>;
@@ -83,6 +85,7 @@ export type EventNamespace<Ns extends string, TDefinition extends Record<string,
 
 /**
  * The full result of {@link defineEvents}.
+ * @experimental
  */
 export type EventsDefinition<TDefinition extends Record<string, Record<string, unknown>>> = {
     [Ns in keyof TDefinition & string]: EventNamespace<Ns, TDefinition[Ns]>;
@@ -118,6 +121,10 @@ export interface DefineEventsOptions {
     readonly version?: string;
 }
 
+/**
+ * `defineEvents` is part of the experimental `@lunora/replica` API and may change without a major version bump.
+ * @experimental
+ */
 export const defineEvents = <TDefinition extends Record<string, Record<string, unknown>>>(
     definition: TDefinition,
     options?: DefineEventsOptions,

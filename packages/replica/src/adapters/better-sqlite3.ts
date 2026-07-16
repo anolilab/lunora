@@ -12,6 +12,7 @@ import type { SqliteAdapter } from "./types";
  * @param database.exec Execute one or more SQL statements (no params, no results).
  * @param database.prepare Prepare a SQL statement for repeated execution.
  * @param database.transaction Wrap a function so its statements run in a transaction.
+ * @experimental
  */
 export const createBetterSqlite3Adapter = (database: {
     close: () => void;

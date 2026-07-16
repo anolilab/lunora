@@ -31,10 +31,14 @@ type VoiceClientFrame = { text: string; type: "text" } | { type: "commit" } | { 
  * The `agents.&lt;name>Voice` reference codegen emits for a voice-enabled agent — a
  * live, WS-backed session keyed by `threadKey`. A structural subset of the
  * generated member, so passing `api.agents.&lt;name>Voice` type-checks.
+ * @experimental
  */
 type VoiceReference = FunctionReference<"stream", { threadKey: string }, Record<string, unknown>>;
 
-/** The lifecycle of a voice call, mirrored to the UI. */
+/**
+ * The lifecycle of a voice call, mirrored to the UI.
+ * @experimental
+ */
 type VoiceStatus = "idle" | "listening" | "speaking" | "thinking";
 
 /** A minimal structural subset of the DOM `WebSocket` the primitive drives. */
@@ -52,6 +56,10 @@ interface VoiceSocket {
 
 type CreateSocket = (url: string) => VoiceSocket;
 
+/**
+ * `VoiceAgentOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 interface VoiceAgentOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
@@ -87,6 +95,10 @@ interface VoiceAgentOptions {
     voice: VoiceReference;
 }
 
+/**
+ * `VoiceAgentResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 interface VoiceAgentResult {
     /** The current input RMS (0–1) — drive a mic level meter. */
     audioLevel: Signal<number>;
@@ -189,6 +201,7 @@ interface VoiceConnection {
  *
  * Call from an injection context (component/service field or constructor); pass an
  * explicit `client` / `destroyRef` to drive it outside one (e.g. in a test).
+ * @experimental
  */
 const voiceAgent = (options: VoiceAgentOptions): VoiceAgentResult => {
     const {

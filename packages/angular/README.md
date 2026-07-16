@@ -1,5 +1,7 @@
 # @lunora/angular
 
+> **Experimental** — this package is outside the Lunora 1.0 stability promise: its API may change in any release, without a major version bump.
+
 Angular reactive adapter for Lunora — signal-based live queries and mutations.
 
 Thin, idiomatic glue over the framework-neutral `@lunora/client`. Angular signals

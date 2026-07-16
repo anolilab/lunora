@@ -33,7 +33,10 @@ export { assertBoundedPolicy, buildPaymentGuard, buildSpendPolicy, createSpendSt
 export type { WalletDeps } from "./wallet";
 export { registerWallet, resolveEvmAccount, resolveSvmSigner } from "./wallet";
 
-/** A configured pay rail: a payment-enabled `fetch` bounded by the spend policy. */
+/**
+ * A configured pay rail: a payment-enabled `fetch` bounded by the spend policy.
+ * @experimental
+ */
 export interface X402Pay {
     /** A `fetch` that transparently pays for `402`-gated resources under the policy. */
     readonly fetch: PayFetch;
@@ -43,6 +46,7 @@ export interface X402Pay {
  * Build a pay rail for `config`. The returned `fetch` answers `402` challenges by
  * signing and retrying, within `config.policy`. Throws (before touching the
  * signer) when the policy is unbounded.
+ * @experimental
  */
 export const createX402Pay = async (config: X402PayConfig, deps: X402PayDeps): Promise<X402Pay> => {
     const fetch = await createPayFetch(config, deps);
@@ -62,6 +66,7 @@ export const createX402Pay = async (config: X402PayConfig, deps: X402PayDeps): P
  * per-run cap scopes to the ctx, not to each request. A failed build (e.g. an
  * unbounded policy) is memoised too, keeping the rail deterministically
  * fail-closed.
+ * @experimental
  */
 export const lazyX402Pay = (config: X402PayConfig, deps: X402PayDeps): X402Pay => {
     let railPromise: Promise<X402Pay> | undefined;

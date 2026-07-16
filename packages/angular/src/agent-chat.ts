@@ -24,6 +24,7 @@ type AgentThreadReference = FunctionReference<"query", { key: string }, Record<s
  * An app stream reference that tees the agent's in-flight live events, keyed by
  * thread. Carries token deltas and — since `ctx.reportProgress` rides the same
  * sink — tool progress events; this primitive consumes only the token arm.
+ * @experimental
  */
 type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, AgentLiveEvent>;
 
@@ -31,6 +32,7 @@ type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, Ag
  * The `agents.*` reference surface the chat primitive reads. A structural subset
  * of the generated `api.agents`, so the whole generated `api` object is
  * assignable.
+ * @experimental
  */
 interface AgentChatApi {
     agents: {
@@ -40,6 +42,10 @@ interface AgentChatApi {
     };
 }
 
+/**
+ * `AgentChatOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 interface AgentChatOptions {
     /** The generated `api` — its `agents.*` surface provides history, thread state, and approval resolution. */
     api: AgentChatApi;
@@ -82,6 +88,10 @@ interface AgentChatOptions {
     threadKey: string;
 }
 
+/**
+ * `AgentChatResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 interface AgentChatResult {
     /** Approve a paused human-in-the-loop tool call (optionally with a note). */
     approve: (toolCallId: string, note?: string) => Promise<void>;
@@ -161,6 +171,7 @@ const reconcileOptimistic = (optimistic: ReadonlyArray<OptimisticMessage>, durab
  *
  * Call from an injection context (component/service field or constructor); pass an
  * explicit `client` / `destroyRef` to drive it outside one (e.g. in a test).
+ * @experimental
  */
 const agentChat = (options: AgentChatOptions): AgentChatResult => {
     const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;

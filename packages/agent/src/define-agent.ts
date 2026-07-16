@@ -205,6 +205,7 @@ const assertMemorySourcesConfigured = (config: AgentConfig, skills: ReadonlyArra
  *
  * Declaring an agent is enough — codegen auto-registers the `agents:*` runtime
  * functions (from `agentComponent()`) and the `ctx.agents` producer surface.
+ * @experimental
  */
 const defineAgent = (config: AgentConfig): AgentDefinition => {
     // The type forbids it, but a plain-JS caller can still omit the model —
@@ -281,7 +282,10 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
     };
 };
 
-/** Runtime brand check for a {@link AgentDefinition}. */
+/**
+ * Runtime brand check for a {@link AgentDefinition}.
+ * @experimental
+ */
 const isAgentDefinition = (value: unknown): value is AgentDefinition =>
     typeof value === "object" && value !== null && (value as { isLunoraAgent?: unknown }).isLunoraAgent === true;
 
@@ -289,6 +293,7 @@ const isAgentDefinition = (value: unknown): value is AgentDefinition =>
  * Declare an agent tool — see `AgentToolDefinition` for why `execute` runs in
  * the loop's durable step (with an `AgentToolContext`) rather than inside the
  * model call.
+ * @experimental
  */
 const defineAgentTool = <Input, Output>(config: AgentToolConfig<Input, Output>): AgentToolDefinition<Input, Output> => {
     if (typeof config.execute !== "function") {

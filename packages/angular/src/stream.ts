@@ -4,9 +4,16 @@ import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/
 
 import { resolveLunoraClient } from "./client";
 
-/** The lifecycle of a stream the primitive is observing. */
+/**
+ * The lifecycle of a stream the primitive is observing.
+ * @experimental
+ */
 export type StreamStatus = "complete" | "error" | "idle" | "streaming";
 
+/**
+ * `StreamOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface StreamOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
@@ -24,6 +31,10 @@ export interface StreamOptions {
     shardKey?: string;
 }
 
+/**
+ * `StreamResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface StreamResult<T> {
     /** Force-cancel the stream and resolve the iterator. Safe to call multiple times. */
     cancel: () => void;
@@ -53,6 +64,7 @@ export interface StreamResult<T> {
  * ```ts
  * readonly tokens = stream(api.chat.liveEvents, { key: "thread-1" });
  * ```
+ * @experimental
  */
 export const stream = <F extends FunctionReference<"stream">>(
     reference: F,

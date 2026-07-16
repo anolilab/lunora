@@ -5,15 +5,22 @@ import type { FlexibleSchema, LanguageModel, ModelMessage, StopCondition, Teleme
  * Structural mirror of the Lunora function reference (`{ __lunoraRef }`).
  * Declared locally so the loop can mint references to the agent runtime
  * functions by path without importing `@lunora/dispatch`.
+ * @experimental
  */
 export interface AgentFunctionReference {
     __lunoraRef: string;
 }
 
-/** `ctx.run`-shaped dispatcher the loop uses to call Lunora functions. */
+/**
+ * `ctx.run`-shaped dispatcher the loop uses to call Lunora functions.
+ * @experimental
+ */
 export type AgentRunFunction = (reference: AgentFunctionReference, args?: Record<string, unknown>) => Promise<unknown>;
 
-/** Structural subset of the Cloudflare Workflows durable-step API the loop needs. */
+/**
+ * Structural subset of the Cloudflare Workflows durable-step API the loop needs.
+ * @experimental
+ */
 export interface AgentStepLike {
     do: <T>(name: string, callback: () => Promise<T>) => Promise<T>;
 
@@ -38,6 +45,7 @@ export interface AgentStepLike {
  * workflow replay (native step memoization) — but a step that FAILS mid-body
  * is retried at-least-once, so a side-effecting tool (charge a card, send a
  * mail) must dedupe on this key itself.
+ * @experimental
  */
 export interface AgentToolContext {
     /** The Worker environment bindings. */
@@ -107,6 +115,7 @@ export interface AgentToolContext {
  * model call — the loop runs it itself inside a named durable step so a
  * completed call never re-runs on replay, and passes the
  * {@link AgentToolContext} alongside the input.
+ * @experimental
  */
 export interface AgentToolDefinition<Input = unknown, Output = unknown> {
     /** What the tool does — shown to the model. */
@@ -135,7 +144,10 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
     needsApproval?: ((input: Input, context: AgentToolContext) => boolean | Promise<boolean>) | boolean;
 }
 
-/** Author-supplied tool config (see {@link AgentToolDefinition}). */
+/**
+ * Author-supplied tool config (see {@link AgentToolDefinition}).
+ * @experimental
+ */
 export type AgentToolConfig<Input = unknown, Output = unknown> = Omit<AgentToolDefinition<Input, Output>, "isLunoraAgentTool">;
 
 /**
@@ -143,6 +155,7 @@ export type AgentToolConfig<Input = unknown, Output = unknown> = Omit<AgentToolD
  * (`inputSchema`) and a contravariant (`execute`) position, so no single
  * non-`any` instantiation admits every concrete tool — the same reason the AI
  * SDK's `ToolSet` erases its generics.
+ * @experimental
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- variance escape hatch, see above
 export type AnyAgentTool = AgentToolDefinition<any, any>;
@@ -151,6 +164,7 @@ export type AnyAgentTool = AgentToolDefinition<any, any>;
  * The model an agent runs on: a Workers AI model id (resolved via `env.AI`),
  * a prebuilt AI SDK {@link LanguageModel}, or a thunk building one from the
  * Worker env (for providers that need API keys off `env`).
+ * @experimental
  */
 export type AgentModelInput = LanguageModel | ((env: Record<string, unknown>) => LanguageModel);
 
@@ -167,6 +181,7 @@ export type AgentModelInput = LanguageModel | ((env: Record<string, unknown>) =>
  * `"agentic"` skips auto-injection; the source instead mints a `searchMemory`
  * tool the MODEL calls mid-reasoning (Recursive-LM / "read what you need") — each
  * call a memoized durable step, so multi-hop retrieval is crash-safe for free.
+ * @experimental
  */
 export interface AgentMemoryOptions {
     /**
@@ -254,13 +269,17 @@ export interface AgentMemoryOptions {
  * carries `knowledge` (keyed by the skill's name). The key names the durable
  * step — the default source keeps the historic `"memory:retrieve"`, a skill
  * source uses `"memory:retrieve:&lt;key>"` — so replay stays deterministic.
+ * @experimental
  */
 export interface AgentMemorySource extends AgentMemoryOptions {
     /** Stable source key: `"default"` for `memory`, else the contributing skill's name. */
     key: string;
 }
 
-/** Cumulative or per-turn token usage — AI SDK `LanguageModelUsage` field names. */
+/**
+ * Cumulative or per-turn token usage — AI SDK `LanguageModelUsage` field names.
+ * @experimental
+ */
 export interface AgentUsage {
     /** Prompt (input) tokens. */
     inputTokens?: number;
@@ -270,7 +289,10 @@ export interface AgentUsage {
     totalTokens?: number;
 }
 
-/** Context handed to a dynamic {@link AgentConfig.instructions} function. */
+/**
+ * Context handed to a dynamic {@link AgentConfig.instructions} function.
+ * @experimental
+ */
 export interface AgentInstructionsContext {
     /** The Worker environment bindings. */
     env: Record<string, unknown>;
@@ -287,6 +309,7 @@ export interface AgentInstructionsContext {
  * the SAME {@link AnyAgentTool} shape agents already use
  * (`functionTool`/`mcpTools`/`agentAsTool`), and `knowledge` reuses the
  * {@link AgentMemoryOptions} retrieval verbatim.
+ * @experimental
  */
 export interface SkillConfig {
     /**
@@ -318,13 +341,19 @@ export interface SkillConfig {
     tools?: Record<string, AnyAgentTool>;
 }
 
-/** A `defineSkill` result — config plus the brand the agent merge checks. */
+/**
+ * A `defineSkill` result — config plus the brand the agent merge checks.
+ * @experimental
+ */
 export interface SkillDefinition extends SkillConfig {
     /** Runtime brand check (see `isSkillDefinition`). */
     readonly isLunoraSkill: true;
 }
 
-/** One prior turn, as {@link AgentConfig.prepareStep} and `stopWhen` observe it. */
+/**
+ * One prior turn, as {@link AgentConfig.prepareStep} and `stopWhen` observe it.
+ * @experimental
+ */
 export interface AgentStepInfo {
     /** The assistant text of the turn. */
     text: string;
@@ -334,7 +363,10 @@ export interface AgentStepInfo {
     usage?: AgentUsage;
 }
 
-/** The turn summary handed to {@link AgentConfig.onStepFinish}. */
+/**
+ * The turn summary handed to {@link AgentConfig.onStepFinish}.
+ * @experimental
+ */
 export interface AgentStepFinishInfo {
     /** The assistant text produced this turn. */
     text: string;
@@ -350,10 +382,14 @@ export interface AgentStepFinishInfo {
  * Called after each LLM turn with that turn's text, tool calls, and usage. Runs
  * inside a named durable step (`agent:step-finish:&lt;turn>`) so it fires exactly
  * once per turn even across a workflow replay.
+ * @experimental
  */
 export type AgentOnStepFinish = (info: AgentStepFinishInfo) => Promise<void> | void;
 
-/** The input {@link AgentConfig.prepareStep} sees before a turn runs. */
+/**
+ * The input {@link AgentConfig.prepareStep} sees before a turn runs.
+ * @experimental
+ */
 export interface AgentPrepareStepInput {
     /** The messages assembled for this turn (instructions + memory + history). */
     messages: ReadonlyArray<ModelMessage>;
@@ -367,6 +403,7 @@ export interface AgentPrepareStepInput {
  * Per-turn overrides {@link AgentConfig.prepareStep} may return. A returned
  * `messages` array **replaces** the assembled history for that turn — the seam
  * where history compaction lives.
+ * @experimental
  */
 export interface AgentPrepareStepResult {
     /** Restrict the tools exposed to the model this turn (by name). */
@@ -384,12 +421,14 @@ export interface AgentPrepareStepResult {
 /**
  * Adjust the next turn before it runs — mirrors AI SDK's `prepareStep`. Invoked
  * inside the turn's durable step so its effect is memoized on replay.
+ * @experimental
  */
 export type AgentPrepareStep = (input: AgentPrepareStepInput) => AgentPrepareStepResult | Promise<AgentPrepareStepResult | undefined> | undefined;
 
 /**
  * The subset of {@link AgentRunInput} an {@link AgentEmailMapper} returns to
  * start a run from an inbound email.
+ * @experimental
  */
 export interface AgentEmailRun {
     /** The user message that starts (or continues) the thread — the model's prompt. */
@@ -418,6 +457,7 @@ export interface AgentEmailRun {
  * is dispatched with RLS bypassed. Gate on `email.authentication` (DKIM/SPF/DMARC
  * verdicts) here before returning a run, and treat every returned field as
  * untrusted input.
+ * @experimental
  */
 export type AgentEmailMapper = (email: InboundEmail) => AgentEmailRun | null | Promise<AgentEmailRun | null | undefined> | undefined;
 
@@ -427,7 +467,10 @@ export type AgentInboundChannelKind = "discord" | "github" | "slack";
 /** The run-input an inbound-channel mapper returns — the same shape as {@link AgentEmailRun}. */
 export type AgentChannelRun = AgentEmailRun;
 
-/** The verified, parsed webhook event handed to an {@link AgentInboundChannel.map} mapper. */
+/**
+ * The verified, parsed webhook event handed to an {@link AgentInboundChannel.map} mapper.
+ * @experimental
+ */
 export interface InboundChannelEvent {
     /** Which channel delivered it. */
     channel: AgentInboundChannelKind;
@@ -469,6 +512,10 @@ export interface AgentInboundChannel {
     secret: string | ((env: Record<string, unknown>) => string | undefined);
 }
 
+/**
+ * `AgentConfig` is part of the experimental `@lunora/agent` API and may change without a major version bump.
+ * @experimental
+ */
 export interface AgentConfig {
     /** Restrict the tools the model may call, by name. Default: all tools. */
     activeTools?: ReadonlyArray<string>;
@@ -640,6 +687,7 @@ export interface AgentConfig {
  * and get NO Workflow tool-loop — tool calls are deferred. All fields are
  * optional; the defaults target Workers AI (`@cf/openai/whisper-large-v3-turbo`
  * for STT, `@cf/deepgram/aura-1` for TTS).
+ * @experimental
  */
 export interface AgentVoiceConfig {
     /**
@@ -677,13 +725,19 @@ export interface AgentVoiceConfig {
     tts?: string;
 }
 
-/** The input the parent model provides when delegating to a sub-agent tool. */
+/**
+ * The input the parent model provides when delegating to a sub-agent tool.
+ * @experimental
+ */
 export interface AgentSubToolInput {
     /** The task or question to hand to the sub-agent. */
     prompt: string;
 }
 
-/** Options for {@link AgentDefinition.asTool} (`agent.asTool(...)`). */
+/**
+ * Options for {@link AgentDefinition.asTool} (`agent.asTool(...)`).
+ * @experimental
+ */
 export interface AgentAsToolOptions {
     /** What the sub-agent does — shown to the parent's model (it decides from it). */
     description: string;
@@ -708,7 +762,10 @@ export interface AgentAsToolOptions {
     wait?: (ms: number) => Promise<void>;
 }
 
-/** A `defineAgent` result — config plus the brand codegen discovers. */
+/**
+ * A `defineAgent` result — config plus the brand codegen discovers.
+ * @experimental
+ */
 export interface AgentDefinition extends AgentConfig {
     /**
      * Adapt this agent into a tool a PARENT agent can call: the returned tool's
@@ -732,7 +789,10 @@ export interface AgentDefinition extends AgentConfig {
     memorySources?: ReadonlyArray<AgentMemorySource>;
 }
 
-/** Params of one agent run (the compiled workflow's payload). */
+/**
+ * Params of one agent run (the compiled workflow's payload).
+ * @experimental
+ */
 export interface AgentRunInput {
     /** The user message that starts (or continues) the thread. */
     input: string;
@@ -752,7 +812,10 @@ export interface AgentRunInput {
     title?: string;
 }
 
-/** Output of one agent run (the compiled workflow's return value). */
+/**
+ * Output of one agent run (the compiled workflow's return value).
+ * @experimental
+ */
 export interface AgentRunResult {
     /** The parsed structured answer, when {@link AgentConfig.output} is set. */
     output?: unknown;
@@ -774,6 +837,7 @@ export interface AgentRunResult {
  * Function paths of the agent runtime functions (the `agentComponent()`
  * functions the app re-exports from `lunora/agents.ts`, so codegen registers
  * them under the `agents:` namespace).
+ * @experimental
  */
 export interface AgentFunctionPaths {
     appendMessage: string;
@@ -806,10 +870,14 @@ export interface AgentFunctionPaths {
  * placeholder written while a run pauses on a gated tool, then `"approved"` /
  * `"rejected"` on the tool result once a client resolves it. Absent on ordinary
  * messages. `"awaiting_approval"` rows are filtered out of the model prompt.
+ * @experimental
  */
 export type AgentMessageStatus = "approved" | "awaiting_approval" | "rejected";
 
-/** One persisted thread message, as the loop reads it back. */
+/**
+ * One persisted thread message, as the loop reads it back.
+ * @experimental
+ */
 export interface AgentMessageRow {
     content: string;
     role: "assistant" | "system" | "tool" | "user";
@@ -821,14 +889,20 @@ export interface AgentMessageRow {
     toolName?: string;
 }
 
-/** One model-issued tool call. */
+/**
+ * One model-issued tool call.
+ * @experimental
+ */
 export interface AgentToolCall {
     id: string;
     input: unknown;
     name: string;
 }
 
-/** Normalized result of one LLM turn (the `generate` seam's return value). */
+/**
+ * Normalized result of one LLM turn (the `generate` seam's return value).
+ * @experimental
+ */
 export interface AgentGenerateResult {
     /** The parsed structured answer, when {@link AgentConfig.output} is set. */
     output?: unknown;
@@ -838,7 +912,10 @@ export interface AgentGenerateResult {
     usage?: AgentUsage;
 }
 
-/** Options passed to the {@link AgentGenerate} seam for one LLM turn. */
+/**
+ * Options passed to the {@link AgentGenerate} seam for one LLM turn.
+ * @experimental
+ */
 export interface AgentGenerateOptions {
     /** Restrict the tools exposed to the model this turn (by name). */
     activeTools?: ReadonlyArray<string>;
@@ -861,6 +938,7 @@ export interface AgentGenerateOptions {
 /**
  * The LLM-turn seam: given the assembled conversation, return the model's
  * decision. Production wires AI SDK `generateText`; tests inject a script.
+ * @experimental
  */
 export type AgentGenerate = (options: AgentGenerateOptions) => Promise<AgentGenerateResult>;
 
@@ -941,6 +1019,7 @@ export type AgentEpisodeExtract = (input: {
  * persisted assistant message is the single source of truth). Keyed by
  * `threadKey` + the zero-based `turn` so a client can correlate a delta to the
  * in-flight turn.
+ * @experimental
  */
 export interface AgentTokenDelta {
     /**
@@ -965,6 +1044,7 @@ export interface AgentTokenDelta {
  * replayed. Correlated to the in-flight tool call (and its persisted tool row)
  * by `toolCallId` rather than a turn index, since a single turn can fan out many
  * tool calls.
+ * @experimental
  */
 export interface AgentProgressEvent {
     /** The arbitrary, JSON-serializable payload the tool reported. */
@@ -983,6 +1063,7 @@ export interface AgentProgressEvent {
  * (`toolCallId`-keyed). Both are ephemeral and never replayed — the persisted
  * thread messages remain the single source of truth. Discriminate on `kind`
  * (`"progress"` for the progress arm; token deltas leave it unset).
+ * @experimental
  */
 export type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
 
@@ -1000,6 +1081,7 @@ export type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
  * of a completed turn. Consumers should therefore reset/dedupe accumulated text
  * per `threadKey`+`turn` boundary so a step retry cannot visually double-append;
  * the persisted assistant message remains the single source of truth.
+ * @experimental
  */
 export type AgentTokenSink = (event: AgentLiveEvent) => void;
 
@@ -1010,10 +1092,14 @@ export type AgentTokenSink = (event: AgentLiveEvent) => void;
  * durable `llm:turn:N` step memoizes (and persists) is identical whether the
  * turn streamed or not. Production wires AI SDK `streamText`; tests inject a
  * script. Deltas are live-only — a workflow replay never re-invokes the seam.
+ * @experimental
  */
 export type AgentStreamGenerate = (options: AgentGenerateOptions, onDelta: (text: string) => void) => Promise<AgentGenerateResult>;
 
-/** Spec entry codegen emits per agent: `{ binding: "AGENT_SUPPORT", exportName: "support" }`. */
+/**
+ * Spec entry codegen emits per agent: `{ binding: "AGENT_SUPPORT", exportName: "support" }`.
+ * @experimental
+ */
 export interface AgentBindingSpec {
     binding: string;
     exportName: string;
@@ -1035,10 +1121,14 @@ export interface AgentBindingSpec {
  * {@link AgentHandle.cancel}, and `"awaiting_input"` while the run is paused on
  * a human-in-the-loop tool approval. Mirrored by the `status` `v.union` in
  * `component.ts`.
+ * @experimental
  */
 export type AgentThreadStatus = "awaiting_input" | "cancelled" | "error" | "idle" | "running";
 
-/** Structural subset of a Cloudflare Workflow instance the producer surface needs. */
+/**
+ * Structural subset of a Cloudflare Workflow instance the producer surface needs.
+ * @experimental
+ */
 export interface AgentWorkflowInstanceLike {
     /** Deliver an external event to the running instance (resumes a `waitForEvent`). */
     sendEvent: (event: { payload: unknown; type: string }) => Promise<void>;
@@ -1046,19 +1136,28 @@ export interface AgentWorkflowInstanceLike {
     terminate: () => Promise<void>;
 }
 
-/** Structural subset of a Cloudflare Workflow binding the producer surface needs. */
+/**
+ * Structural subset of a Cloudflare Workflow binding the producer surface needs.
+ * @experimental
+ */
 export interface AgentWorkflowBindingLike {
     create: (options?: { id?: string; params?: unknown }) => Promise<{ id: string }>;
     get: (id: string) => Promise<AgentWorkflowInstanceLike>;
 }
 
-/** A started agent run (a workflow instance). */
+/**
+ * A started agent run (a workflow instance).
+ * @experimental
+ */
 export interface AgentRunHandle {
     /** The workflow instance id. */
     id: string;
 }
 
-/** The `ctx.agents.&lt;name>` producer handle. */
+/**
+ * The `ctx.agents.&lt;name>` producer handle.
+ * @experimental
+ */
 export interface AgentHandle {
     /**
      * Cancel a run by its workflow instance id: terminate the instance and mark

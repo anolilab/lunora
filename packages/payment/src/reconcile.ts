@@ -17,6 +17,10 @@ import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import type { PaymentSession, PaymentState, Subscription } from "./types";
 
+/**
+ * `ReconcileInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 interface ReconcileInput {
     readonly adapter: PaymentAdapter;
     /** Optional telemetry sink — fired per drifted row and once on completion. */
@@ -26,6 +30,10 @@ interface ReconcileInput {
     readonly subscriptionIds?: ReadonlyArray<string>;
 }
 
+/**
+ * `ReconcileResult` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 interface ReconcileResult {
     readonly checkedPayments: number;
     readonly checkedSubscriptions: number;
@@ -140,6 +148,10 @@ const sweep = async (
     return { failed, updated };
 };
 
+/**
+ * `reconcile` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 const reconcile = async (input: ReconcileInput): Promise<ReconcileResult> => {
     const { adapter, observability, store } = input;
     const subscriptionIds = input.subscriptionIds ?? [];

@@ -37,11 +37,13 @@ import type { SnapshotStore } from "./snapshot-store";
  *
  * Pure functions are strongly encouraged: given the same event and state,
  * they must produce the same next state for deterministic replay.
+ * @experimental
  */
 type MaterializerReducer<S> = (state: S, entry: EventLogEntry) => S;
 
 /**
  * Options for defining a single materializer.
+ * @experimental
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API type name
 interface MaterializerDef<S> {
@@ -61,6 +63,7 @@ interface MaterializerDef<S> {
 
 /**
  * A constructed materializer ready to be used with a {@link MaterializerRuntime}.
+ * @experimental
  */
 interface Materializer<S> {
     /** Apply a single event entry through the reducer. */
@@ -81,6 +84,7 @@ interface Materializer<S> {
  *
  * The returned {@link Materializer} object can be used standalone or passed
  * to a {@link MaterializerRuntime} for automatic log subscription.
+ * @experimental
  */
 const defineMaterializer = <S>(definition: MaterializerDef<S>): Materializer<S> => {
     let state = definition.initial();
@@ -117,6 +121,7 @@ type AnyMaterializer = Materializer<any>;
 
 /**
  * Options for constructing a {@link MaterializerRuntime}.
+ * @experimental
  */
 interface MaterializerRuntimeOptions {
     /**
@@ -145,6 +150,7 @@ interface MaterializerRuntimeOptions {
  * - Applying new events as they arrive
  * - Periodic snapshot persistence
  * - Recovery from snapshots (replay only what's missing)
+ * @experimental
  */
 class MaterializerRuntime {
     readonly #materializers: AnyMaterializer[];

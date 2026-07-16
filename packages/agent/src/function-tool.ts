@@ -4,7 +4,10 @@ import type { FlexibleSchema } from "ai";
 import { toFunctionReference } from "./paths";
 import type { AgentFunctionReference, AgentToolDefinition } from "./types";
 
-/** Author-supplied config for {@link functionTool}. */
+/**
+ * Author-supplied config for {@link functionTool}.
+ * @experimental
+ */
 interface FunctionToolOptions<Input> {
     /** What the tool does — shown to the model (the model decides from it). */
     description: string;
@@ -37,6 +40,7 @@ interface FunctionToolOptions<Input> {
  * The function reference may be a typed `api.*` reference or a `"module:name"`
  * path. The model-provided input is passed verbatim as the function's args, so
  * `inputSchema` should mirror the referenced function's argument validator.
+ * @experimental
  */
 const functionTool = <Input extends Record<string, unknown> = Record<string, unknown>, Output = unknown>(
     reference: AgentFunctionReference | string,

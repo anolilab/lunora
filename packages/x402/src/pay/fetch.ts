@@ -19,10 +19,16 @@ import { assertBoundedPolicy, buildPaymentGuard, buildSpendPolicy, createSpendSt
 import type { WalletDeps } from "./wallet";
 import { registerWallet } from "./wallet";
 
-/** A payment-enabled `fetch`: same signature as the platform `fetch`. */
+/**
+ * A payment-enabled `fetch`: same signature as the platform `fetch`.
+ * @experimental
+ */
 export type PayFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-/** Dependencies for building a pay-rail fetch: secret access, plus an optional base `fetch` to wrap. */
+/**
+ * Dependencies for building a pay-rail fetch: secret access, plus an optional base `fetch` to wrap.
+ * @experimental
+ */
 export interface X402PayDeps extends WalletDeps {
     /** The `fetch` to wrap (defaults to `globalThis.fetch`). Inject to test or to chain transports. */
     readonly fetch?: typeof globalThis.fetch;
@@ -32,6 +38,7 @@ export interface X402PayDeps extends WalletDeps {
  * Build a payment-enabled `fetch` for `config`. Throws (before resolving a
  * signer) when `config.policy` is unbounded — an agent wallet is never built
  * with unlimited spend authority.
+ * @experimental
  */
 export const createPayFetch = async (config: X402PayConfig, deps: X402PayDeps): Promise<PayFetch> => {
     assertBoundedPolicy(config.policy);

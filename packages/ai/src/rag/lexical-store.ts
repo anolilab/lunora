@@ -55,6 +55,7 @@ const filterWarned = new WeakSet<object>();
  * than risk surfacing a row the filter would exclude. If your RLS is
  * metadata-based (not namespace-based) and you want a lexical leg, fold the RLS
  * dimension into the `namespace` or plug a filter-aware store.
+ * @experimental
  */
 const bm25LexicalStore = (): RagLexicalStore => {
     const namespaces = new Map<string, NamespaceState>();

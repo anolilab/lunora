@@ -55,6 +55,7 @@ import stateToEventType from "./subscription-event";
  * The `autumn-js` SDK surface the adapter uses, as a structural type — a real `Autumn` instance
  * satisfies it without a cast. Resources/methods are `unknown` (the adapter re-types the client as
  * the real `Autumn` internally); this keeps the SDK's full type out of the published declarations.
+ * @experimental
  */
 interface AutumnClientLike {
     readonly billing: unknown;
@@ -63,6 +64,10 @@ interface AutumnClientLike {
     readonly track: unknown;
 }
 
+/**
+ * `AutumnAdapterOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 interface AutumnAdapterOptions {
     readonly client: AutumnClientLike;
     readonly webhookSecret: string;
@@ -312,6 +317,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 /** Read a hosted checkout / payment URL from an `attach` response across SDK generations. */
 const checkoutUrlFrom = (result: Record<string, unknown>): string => readAny(result, "checkout_url", "checkoutUrl", "payment_url", "paymentUrl", "url") ?? "";
 
+/**
+ * `createAutumnAdapter` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
     // Use the injected client as the real `Autumn` internally so every call is checked against the SDK.

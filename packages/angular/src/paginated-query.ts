@@ -294,6 +294,10 @@ const usePaginatedCore = <F extends FunctionReference>(
 
 // ── Paginated query options & result ────────────────────────────────────────
 
+/**
+ * Options for the paginated query — part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface PaginatedQueryOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
@@ -308,6 +312,10 @@ export interface PaginatedQueryOptions {
     shardKey?: string;
 }
 
+/**
+ * `PaginatedQueryResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface PaginatedQueryResult<T> {
     /** `true` while the first page or a `loadMore` page is in flight. */
     isLoading: Signal<boolean>;
@@ -322,6 +330,10 @@ export interface PaginatedQueryResult<T> {
     status: Signal<PaginationStatus>;
 }
 
+/**
+ * `InfiniteQueryResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface InfiniteQueryResult<T> {
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
     fetchNextPage: (numberItems?: number) => void;
@@ -359,6 +371,7 @@ export interface InfiniteQueryResult<T> {
  * ```ts
  * readonly messages = paginatedQuery(api.messages.list, {}, { initialNumItems: 20 });
  * ```
+ * @experimental
  */
 export const paginatedQuery = <F extends FunctionReference>(
     reference: F,
@@ -404,6 +417,7 @@ export const paginatedQuery = <F extends FunctionReference>(
  * ```ts
  * readonly feed = infiniteQuery(api.messages.list, {}, { initialNumItems: 20 });
  * ```
+ * @experimental
  */
 export const infiniteQuery = <F extends FunctionReference>(
     reference: F,

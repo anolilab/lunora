@@ -12,6 +12,7 @@
  * `@lunora/agent`'s `VoiceServerFrame` `ready.audioFormat` — re-declared (not
  * imported) so this Angular package never pulls in the server-only `@lunora/agent`
  * module graph.
+ * @experimental
  */
 type VoiceAudioFormat = "mp3" | "wav";
 

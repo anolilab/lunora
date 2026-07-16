@@ -32,7 +32,10 @@ import {
     wrapResourceSpans,
 } from "../../../shared/otlp";
 
-/** An attribute value carried on a span or log. */
+/**
+ * An attribute value carried on a span or log.
+ * @experimental
+ */
 type ContainerAttributeValue = boolean | number | string;
 
 /**
@@ -41,13 +44,17 @@ type ContainerAttributeValue = boolean | number | string;
  * cancels the response `body` so Node/undici can release the socket for
  * keep-alive reuse instead of leaving it occupied by an unread stream. It reads
  * `ok`/`status` to detect a rejected export and nothing else from the response.
+ * @experimental
  */
 type OtelFetchLike = (
     input: string,
     init: { body: string; headers: Record<string, string>; method: string; signal?: AbortSignal },
 ) => Promise<{ body?: { cancel: () => Promise<void> } | null; ok: boolean; status: number }>;
 
-/** A single span the container process asks the exporter to record. */
+/**
+ * A single span the container process asks the exporter to record.
+ * @experimental
+ */
 interface ContainerSpanInput {
     /** Attributes attached to the span (rendered under the OTLP `attributes` list). */
     attributes?: Record<string, ContainerAttributeValue>;
@@ -61,7 +68,10 @@ interface ContainerSpanInput {
     startMs: number;
 }
 
-/** A single log line the container process asks the exporter to record. */
+/**
+ * A single log line the container process asks the exporter to record.
+ * @experimental
+ */
 interface ContainerLogInput {
     /** Attributes attached to the log record. */
     attributes?: Record<string, ContainerAttributeValue>;
@@ -73,7 +83,10 @@ interface ContainerLogInput {
     ts?: number;
 }
 
-/** Options for {@link createContainerTelemetry}. */
+/**
+ * Options for {@link createContainerTelemetry}.
+ * @experimental
+ */
 interface ContainerTelemetryOptions {
     /** Base OTLP collector endpoint; defaults to the `LUNORA_OTLP_ENDPOINT` env var. */
     endpoint?: string;
@@ -118,7 +131,10 @@ interface ContainerTelemetryOptions {
 /** Default {@link ContainerTelemetryOptions.timeoutMs} — the OTLP-exporter-conventional 10s. */
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-/** The exporter handle {@link createContainerTelemetry} returns. */
+/**
+ * The exporter handle {@link createContainerTelemetry} returns.
+ * @experimental
+ */
 interface ContainerTelemetry {
     /** Record one log line (no-op when disabled). */
     emitLog: (log: ContainerLogInput) => void;
@@ -213,6 +229,7 @@ const logBody = (log: ContainerLogInput, serviceName: string, nowMs: number): un
  * false`): `emitSpan`/`emitLog` no-op and `trace` still runs its work but records
  * nothing — so the same code runs unchanged locally and in the cloud.
  * @param options Exporter options; every field falls back to a `LUNORA_*` env var.
+ * @experimental
  */
 const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): ContainerTelemetry => {
     const endpoint = options.endpoint ?? readEnv("LUNORA_OTLP_ENDPOINT");

@@ -20,6 +20,7 @@ import { resolveFacilitatorUrl } from "./config";
  * `supported`), so the same header map is handed to each. With no config the
  * client points at the public {@link resolveFacilitatorUrl default} and sends no
  * auth headers.
+ * @experimental
  */
 export const createFacilitatorClient = (config?: FacilitatorConfig): HTTPFacilitatorClient => {
     const url = resolveFacilitatorUrl(config);

@@ -8,6 +8,7 @@
  * emitter.on("userCreated", (payload) => console.log(payload.name));
  * emitter.emit("userCreated", { id: "1", name: "alice" });
  * ```
+ * @experimental
  */
 export class EventEmitter<EventMap extends Record<string, unknown>> {
     readonly #listeners = new Map<keyof EventMap, Set<(payload: unknown) => void>>();

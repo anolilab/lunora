@@ -174,6 +174,7 @@ const resolveEmbeddingModel = (input: RagConfig["embeddingModel"], ai: RagContex
  * direct AI SDK `EmbeddingModel` object (`@ai-sdk/openai`, …) and the helper
  * embeds through it without `ctx.ai` — so a bring-your-own-embeddings index
  * needs no `env.AI` binding (bind any context carrying just `vectors`).
+ * @experimental
  */
 const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     if (typeof config.index !== "string" || config.index.length === 0) {

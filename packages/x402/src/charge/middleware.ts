@@ -53,10 +53,16 @@ export const reportReceipt = (sink: X402ReceiptSink | undefined, settlement: Pro
     }
 };
 
-/** Runs the protected resource handler, producing the Response to gate. */
+/**
+ * Runs the protected resource handler, producing the Response to gate.
+ * @experimental
+ */
 export type ChargeHandler = () => Promise<Response> | Response;
 
-/** A prepared, initialised paywall. Build once (it fetches facilitator support), reuse per request. */
+/**
+ * A prepared, initialised paywall. Build once (it fetches facilitator support), reuse per request.
+ * @experimental
+ */
 export interface ChargeMiddleware {
     /** Gate `request`: challenge / verify / settle around `runHandler`. */
     handle: (request: Request, runHandler: ChargeHandler) => Promise<Response>;
@@ -164,6 +170,7 @@ export const withHeaders = (response: Response, extra: Record<string, string>): 
  * names the paid function (x402 core falls back to the request URL otherwise —
  * every RPC POSTs to the same `/_lunora/rpc`, so the URL can't tell two paid
  * procedures apart).
+ * @experimental
  */
 export type ChargeRouteOverrides = Pick<RouteConfig, "description" | "resource">;
 
@@ -172,6 +179,7 @@ export type ChargeRouteOverrides = Pick<RouteConfig, "description" | "resource">
  * facilitator support once (via `initialize()`), so call this once per config
  * and reuse the result across requests. `routeOverrides` layers extra route
  * metadata (e.g. `resource`) onto the generated catch-all route.
+ * @experimental
  */
 export const createChargeMiddleware = async (config: X402ChargeConfig, routeOverrides?: ChargeRouteOverrides): Promise<ChargeMiddleware> => {
     const server = await buildResourceServer(config);

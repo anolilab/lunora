@@ -11,6 +11,7 @@ import { subscription } from "./subscription";
  * so this Angular entry never pulls in the server-only `@lunora/agent` module graph
  * (the adapter stays Angular + `@lunora/client` only). Keep in sync with
  * `packages/agent/src/types.ts`.
+ * @experimental
  */
 type AgentThreadStatus = "awaiting_input" | "cancelled" | "error" | "idle" | "running";
 
@@ -19,6 +20,7 @@ type AgentThreadStatus = "awaiting_input" | "cancelled" | "error" | "idle" | "ru
  * subset of the persisted thread row — every field beyond `status` is optional so
  * the shape stays forgiving as the server schema grows. Keep in sync with the
  * `agent_threads` table in `packages/agent/src/component.ts`.
+ * @experimental
  */
 interface AgentThreadRecord {
     createdAt?: number;
@@ -40,6 +42,7 @@ interface AgentThreadRecord {
  * re-declared here (rather than imported) so this Angular entry never pulls in the
  * server-only `@lunora/agent` module graph. Keep in sync with the
  * `agent_messages` table in `packages/agent/src/component.ts`.
+ * @experimental
  */
 interface AgentChatMessage {
     content: string;
@@ -64,6 +67,7 @@ interface AgentChatMessage {
  * `@lunora/agent`'s `AgentTokenDelta`. Ephemeral — deltas feed the chat surface's
  * streaming text live and are never replayed; the persisted assistant message
  * stays the single source of truth.
+ * @experimental
  */
 interface AgentTokenDelta {
     /** Discriminates the token arm of {@link AgentLiveEvent}; unset on the wire (token is the default). */
@@ -80,6 +84,7 @@ interface AgentTokenDelta {
  * A live tool-progress event streamed via `ctx.reportProgress(...)`. Client-safe
  * mirror of `@lunora/agent`'s `AgentProgressEvent`. Ephemeral and `toolCallId`-keyed;
  * surfaced by `agentToolEvents`, ignored by the chat surface's streaming text.
+ * @experimental
  */
 interface AgentProgressEvent {
     /** The arbitrary, JSON-serializable payload the tool reported. */
@@ -97,6 +102,7 @@ interface AgentProgressEvent {
  * tool progress event. Client-safe mirror of `@lunora/agent`'s `AgentLiveEvent`.
  * Discriminate on `kind` (`"progress"` for the progress arm; token deltas leave
  * it unset).
+ * @experimental
  */
 type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
 
@@ -105,6 +111,7 @@ type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
  * state (status + the in-flight `instanceId`). A structural subset of the
  * generated `api.agents` surface, so the whole generated `api` object is
  * assignable.
+ * @experimental
  */
 interface AgentApi {
     agents: {
@@ -112,6 +119,10 @@ interface AgentApi {
     };
 }
 
+/**
+ * `AgentOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 interface AgentOptions {
     /** The generated `api` — its `agents.agentThread` query drives live thread state. */
     api: AgentApi;
@@ -144,6 +155,10 @@ interface AgentOptions {
     threadKey: string;
 }
 
+/**
+ * `AgentResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 interface AgentResult {
     /**
      * Terminate the in-flight run and mark its thread `"cancelled"`. Resolves as a
@@ -173,6 +188,7 @@ interface AgentResult {
  *
  * Call from an injection context (component/service field or constructor); pass an
  * explicit `client` / `destroyRef` to drive it outside one (e.g. in a test).
+ * @experimental
  */
 const agent = (options: AgentOptions): AgentResult => {
     const { api, cancel: cancelReference, run: runReference, runArgs, threadKey } = options;

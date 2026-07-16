@@ -67,6 +67,7 @@ import type { TableDiff } from "./table-diff";
 
 /**
  * Options for constructing an {@link EventsSync}.
+ * @experimental
  */
 export interface EventsSyncOptions {
     /**
@@ -141,6 +142,7 @@ export interface EventsSyncOptions {
  *
  * The current watermark is exposed via `watermark` and advances
  * monotonically as events are applied.
+ * @experimental
  */
 export class EventsSync {
     readonly #options: EventsSyncOptions;

@@ -3,6 +3,7 @@
  *
  * Each change represents one row that was inserted, updated, or deleted on
  * the server since the last sync tick.
+ * @experimental
  */
 type RowChange =
     { data: Record<string, unknown>; type: "insert" } | { data: Record<string, unknown>; id: string; type: "update" } | { id: string; type: "delete" };
@@ -13,6 +14,7 @@ type RowChange =
  * `TableDiff` is the unit of replication between the server and the local
  * SQLite mirror. The server pushes diffs over the poke protocol; the
  * client applies them via `applyDiff`.
+ * @experimental
  */
 interface TableDiff {
     /** Ordered row changes — insert/update/delete, earliest first. */
@@ -27,6 +29,7 @@ interface TableDiff {
 
 /**
  * Create a {@link TableDiff} with a snapshot of the current time.
+ * @experimental
  */
 const createTableDiff = (table: string, changes: ReadonlyArray<RowChange>, timestamp?: number): TableDiff => {
     return {
@@ -38,16 +41,19 @@ const createTableDiff = (table: string, changes: ReadonlyArray<RowChange>, times
 
 /**
  * Return `true` when the diff contains no row changes.
+ * @experimental
  */
 const isDiffEmpty = (diff: TableDiff): boolean => diff.changes.length === 0;
 
 /**
  * Return the number of rows touched by the diff (inserts + updates + deletes).
+ * @experimental
  */
 const diffSize = (diff: TableDiff): number => diff.changes.length;
 
 /**
  * Partition a {@link TableDiff} into three categories for batch processing.
+ * @experimental
  */
 const classifyChanges = (diff: TableDiff): { deletes: RowChange[]; inserts: RowChange[]; updates: RowChange[] } => {
     const inserts: RowChange[] = [];
@@ -71,6 +77,7 @@ const classifyChanges = (diff: TableDiff): { deletes: RowChange[]; inserts: RowC
  * Merge several diffs for the same table into one (ordering preserved).
  *
  * Returns `null` when the input list is empty.
+ * @experimental
  */
 const mergeDiffs = (diffs: ReadonlyArray<TableDiff>): TableDiff | null => {
     if (diffs.length === 0) {

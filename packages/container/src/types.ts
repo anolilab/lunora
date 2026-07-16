@@ -6,13 +6,17 @@
  * as from worker code.
  */
 
-/** Named instance types Cloudflare Containers provides. */
+/**
+ * Named instance types Cloudflare Containers provides.
+ * @experimental
+ */
 type NamedContainerInstanceType = "basic" | "lite" | "standard-1" | "standard-2" | "standard-3" | "standard-4";
 
 /**
  * A custom instance type. Cloudflare's bounds at the time of writing: up to
  * 4 vCPU, 12 GiB memory, 20 GB disk, ≥ 3 GiB memory per vCPU and ≤ 2 GB disk
  * per GiB memory. The config-layer validator enforces the documented ranges.
+ * @experimental
  */
 interface CustomContainerInstanceType {
     /** Disk in MB. Cloudflare's default is 2000 (2 GB). */
@@ -23,9 +27,16 @@ interface CustomContainerInstanceType {
     vcpu?: number;
 }
 
+/**
+ * `ContainerInstanceType` is part of the experimental `@lunora/container` API and may change without a major version bump.
+ * @experimental
+ */
 type ContainerInstanceType = CustomContainerInstanceType | NamedContainerInstanceType;
 
-/** Rolling-deploy tuning for a container. */
+/**
+ * Rolling-deploy tuning for a container.
+ * @experimental
+ */
 interface ContainerRollout {
     /** Seconds an active instance runs before it's eligible for update (wrangler `rollout_active_grace_period`). */
     gracePeriodSeconds?: number;
@@ -37,6 +48,7 @@ interface ContainerRollout {
  * A pre-built image pulled from a registry — the Cloudflare Registry, Docker
  * Hub, or Amazon ECR (the registries `wrangler deploy` supports). The
  * reference must be fully qualified, e.g. `docker.io/acme/transcoder:1.4`.
+ * @experimental
  */
 interface RegistryImageSource {
     registry: string;
@@ -47,6 +59,7 @@ interface RegistryImageSource {
  * source directory and `lunora deploy` builds an OCI image with Railpack
  * (needs a BuildKit instance) and pushes it to the Cloudflare Registry before
  * wrangler runs. Opt-in — the Dockerfile path is the zero-extra-deps default.
+ * @experimental
  */
 interface BuildImageSource {
     build: string;
@@ -57,6 +70,7 @@ interface BuildImageSource {
  * either a directory containing a `Dockerfile` (normalized to
  * `&lt;dir>/Dockerfile` with the directory as the build context) or a path to
  * the Dockerfile itself — while `{ registry }` is a pre-built image reference.
+ * @experimental
  */
 type ContainerImageSource = BuildImageSource | RegistryImageSource | string;
 
@@ -70,6 +84,7 @@ type ContainerImageSource = BuildImageSource | RegistryImageSource | string;
  * functions), so codegen and the config layer can read it without evaluating
  * code. (Upstream cloudflare/containers#188 expresses the same idea as handler
  * functions; the Lunora config is data-only, so it's modelled as descriptors.)
+ * @experimental
  */
 interface ContainerReadinessCheck {
     /** HTTP path probed on the container, e.g. `"/ready"` (a leading slash is optional). */
@@ -80,6 +95,10 @@ interface ContainerReadinessCheck {
     status?: number;
 }
 
+/**
+ * `ContainerConfig` is part of the experimental `@lunora/container` API and may change without a major version bump.
+ * @experimental
+ */
 interface ContainerConfig {
     /**
      * Hostnames the container may reach **even when {@link ContainerConfig.enableInternet}
@@ -257,13 +276,17 @@ interface ContainerConfig {
 /**
  * The value `defineContainer` returns: the validated config plus a brand the
  * codegen discovery and the generated Container DO class key on.
+ * @experimental
  */
 interface ContainerDefinition extends ContainerConfig {
     /** Brand marking a value as a Lunora container definition. */
     readonly isLunoraContainer: true;
 }
 
-/** A normalized image source, as written into `wrangler.jsonc`. */
+/**
+ * A normalized image source, as written into `wrangler.jsonc`.
+ * @experimental
+ */
 type NormalizedContainerImage =
     | {
           /** Build context directory (wrangler `image_build_context`). */

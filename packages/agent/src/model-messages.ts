@@ -39,6 +39,7 @@ const toolMessage = (row: AgentMessageRow): ModelMessage => {
  * retrieved memory context (when any), then the persisted thread history with
  * tool calls/results correlated the way providers expect (assistant tool-call
  * parts answered by tool-result parts sharing the `toolCallId`).
+ * @experimental
  */
 const buildModelMessages = (options: {
     history: ReadonlyArray<AgentMessageRow>;

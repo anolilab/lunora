@@ -21,6 +21,7 @@ const asRowArray = (data: unknown): unknown[] => {
  * A dependency-light subscription sink interface that mirrors what
  * `LunoraClient.subscribe` expects, so the mirror helper doesn't
  * need to import `@lunora/client`.
+ * @experimental
  */
 // eslint-disable-next-line import/exports-last -- used as param type before end of file
 export interface SubscriptionClient {
@@ -57,6 +58,7 @@ export interface SubscriptionClient {
  * // Later:
  * unsub();
  * ```
+ * @experimental
  */
 const subscribeToMirror = (
     client: SubscriptionClient,

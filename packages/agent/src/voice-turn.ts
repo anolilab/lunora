@@ -25,6 +25,7 @@ const SENTENCE_BOUNDARY = /[^.!?]*[.!?]+\s+/u;
  * connect; `user_transcript` carries the STT result; `assistant_delta` streams
  * the live LLM text; `assistant_done` is the final turn text; `interrupted`
  * acks a barge-in; `error` reports a non-fatal turn failure.
+ * @experimental
  */
 type VoiceServerFrame =
     | { audioFormat: "mp3" | "wav"; type: "ready" }
@@ -34,25 +35,46 @@ type VoiceServerFrame =
     | { text: string; type: "user_transcript" }
     | { type: "interrupted" };
 
-/** A control frame the client sends the server (audio rides separate binary frames). */
+/**
+ * A control frame the client sends the server (audio rides separate binary frames).
+ * @experimental
+ */
 type VoiceClientFrame = { text: string; type: "text" } | { type: "commit" } | { type: "interrupt" };
 
-/** A synthesized-audio source the TTS seam yields — normalized to bytes by {@link toByteIterable}. */
+/**
+ * A synthesized-audio source the TTS seam yields — normalized to bytes by {@link toByteIterable}.
+ * @experimental
+ */
 type VoiceAudioSource = AsyncIterable<Uint8Array> | ReadableStream<Uint8Array> | Uint8Array;
 
-/** Transcribe one buffered utterance (16kHz mono 16-bit PCM) to text. */
+/**
+ * Transcribe one buffered utterance (16kHz mono 16-bit PCM) to text.
+ * @experimental
+ */
 type VoiceTranscribe = (pcm: Uint8Array) => Promise<string>;
 
-/** Synthesize one sentence to an audio byte stream; honors `signal` for barge-in. */
+/**
+ * Synthesize one sentence to an audio byte stream; honors `signal` for barge-in.
+ * @experimental
+ */
 type VoiceSynthesize = (text: string, signal: AbortSignal) => Promise<VoiceAudioSource>;
 
-/** Send a JSON control frame to the client. */
+/**
+ * Send a JSON control frame to the client.
+ * @experimental
+ */
 type VoiceSend = (frame: VoiceServerFrame) => void;
 
-/** Send a binary audio frame to the client. */
+/**
+ * Send a binary audio frame to the client.
+ * @experimental
+ */
 type VoiceSendAudio = (bytes: Uint8Array) => void;
 
-/** The outcome of one voice turn. */
+/**
+ * The outcome of one voice turn.
+ * @experimental
+ */
 interface VoiceTurnResult {
     /** The final assistant text (may be partial if `interrupted`). */
     assistantText: string;
@@ -62,7 +84,10 @@ interface VoiceTurnResult {
     userText: string;
 }
 
-/** Options for one {@link runVoiceTurn}. */
+/**
+ * Options for one {@link runVoiceTurn}.
+ * @experimental
+ */
 interface RunVoiceTurnOptions {
     /** The agent whose thread + models back this session. */
     agent: AgentDefinition;
@@ -212,6 +237,7 @@ const takeSentences = (buffer: string): { rest: string; sentences: string[] } =>
  * frame never duplicates a row; the thread tables are the same ones the durable
  * agent loop and `useAgentChat` read, so a voice session and a text session on
  * the same `threadKey` share one history.
+ * @experimental
  */
 const runVoiceTurn = async (options: RunVoiceTurnOptions): Promise<VoiceTurnResult> => {
     const {

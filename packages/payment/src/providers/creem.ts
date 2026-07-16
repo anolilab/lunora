@@ -41,6 +41,7 @@ import stateToEventType from "./subscription-event";
  * The `creem` SDK surface the adapter uses, as a structural type — a real `Creem` instance satisfies
  * it without a cast. Resources are `unknown` (the adapter re-types the client as the real `Creem`
  * internally); this keeps the SDK's full type out of the published declarations.
+ * @experimental
  */
 interface CreemClientLike {
     readonly checkouts: unknown;
@@ -48,6 +49,10 @@ interface CreemClientLike {
     readonly subscriptions: unknown;
 }
 
+/**
+ * `CreemAdapterOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 interface CreemAdapterOptions {
     readonly client: CreemClientLike;
     readonly webhookSecret: string;
@@ -207,6 +212,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     }
 };
 
+/**
+ * `createCreemAdapter` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
     // Use the injected client as the real `Creem` internally so every call is checked against the SDK.

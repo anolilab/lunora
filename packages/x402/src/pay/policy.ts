@@ -35,6 +35,7 @@ const normaliseAddress = (address: string, network: string): string => (network.
  * USDC — and every asset in `@x402/evm` / `@x402/svm`'s `DEFAULT_STABLECOINS` —
  * uses 6 decimals, so a USD price converts to atomic base units at `10 ** 6`.
  * Override per {@link SpendPolicy.decimals} only for a custom, non-6-decimal asset.
+ * @experimental
  */
 export const DEFAULT_STABLECOIN_DECIMALS = 6;
 
@@ -44,6 +45,7 @@ export const DEFAULT_STABLECOIN_DECIMALS = 6;
  *
  * Caps are denominated in USD (the stablecoin's dollar value); addresses and
  * networks are matched against the requirement the server offers.
+ * @experimental
  */
 export interface SpendPolicy {
     /** Network allowlist. When set, only these networks may be paid on. */
@@ -65,7 +67,10 @@ export interface SpendPolicy {
     readonly onPaymentRequired?: (requirement: PaymentRequirements) => Promise<boolean> | boolean;
 }
 
-/** A running spend ledger the per-run cap is measured against; the guard reads it, the recorder adds to it. */
+/**
+ * A running spend ledger the per-run cap is measured against; the guard reads it, the recorder adds to it.
+ * @experimental
+ */
 export interface SpendState {
     /** Add a just-committed payment (atomic base units) to the total. */
     readonly add: (amount: bigint) => void;
@@ -73,7 +78,10 @@ export interface SpendState {
     readonly spentAtomic: bigint;
 }
 
-/** A fresh spend ledger. One per wallet instance; the guard + recorder share it. */
+/**
+ * A fresh spend ledger. One per wallet instance; the guard + recorder share it.
+ * @experimental
+ */
 export const createSpendState = (): SpendState => {
     let spent = 0n;
 
@@ -92,6 +100,7 @@ export const createSpendState = (): SpendState => {
  * stablecoin base units, exactly — parsed digit-by-digit so no binary-float drift
  * can round a cap the wrong way. Throws on a malformed amount (including
  * exponential notation like `"1e-7"`, which a decimal string never needs).
+ * @experimental
  */
 export const usdToAtomic = (usd: X402Price, decimals: number = DEFAULT_STABLECOIN_DECIMALS): bigint => {
     if (!Number.isInteger(decimals) || decimals < 0) {
@@ -115,6 +124,7 @@ export const usdToAtomic = (usd: X402Price, decimals: number = DEFAULT_STABLECOI
  * A `PaymentPolicy` that narrows the server's offered requirements to those a
  * bounded wallet may pay: within the per-call cap, to an allowed recipient, on an
  * allowed network. An empty result means the client cannot pay — fail-closed.
+ * @experimental
  */
 export const buildSpendPolicy = (policy: SpendPolicy): PaymentPolicy => {
     const decimals = policy.decimals ?? DEFAULT_STABLECOIN_DECIMALS;
@@ -146,6 +156,7 @@ export const buildSpendPolicy = (policy: SpendPolicy): PaymentPolicy => {
  * A `BeforePaymentCreationHook` enforcing the stateful bounds the stateless
  * {@link buildSpendPolicy} filter can't: the cumulative per-run cap and the async
  * confirmation gate. Aborts (no signature) when either would be violated.
+ * @experimental
  */
 export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): BeforePaymentCreationHook => {
     const decimals = policy.decimals ?? DEFAULT_STABLECOIN_DECIMALS;
@@ -177,6 +188,7 @@ export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): Befor
 /**
  * An `AfterPaymentCreationHook` that adds the just-created payment to `state`, so
  * the next {@link buildPaymentGuard} call measures the per-run cap against it.
+ * @experimental
  */
 export const recordSpend =
     (state: SpendState): AfterPaymentCreationHook =>
@@ -190,6 +202,7 @@ export const recordSpend =
  * Guard at wallet-build time: refuse a policy with no bound whatsoever. Signing
  * money on an agent's behalf with unlimited spend authority is never the intent,
  * so this fails loudly rather than defaulting to unbounded.
+ * @experimental
  */
 export const assertBoundedPolicy = (policy: SpendPolicy): void => {
     const bounded =

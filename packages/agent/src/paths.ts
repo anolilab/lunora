@@ -4,6 +4,7 @@ import type { AgentFunctionPaths, AgentFunctionReference } from "./types";
  * The namespace the agent runtime functions register under. Codegen
  * auto-registers `agentComponent().functions` here whenever `lunora/agents.ts`
  * declares an agent, so the loop's dispatch paths below hold by construction.
+ * @experimental
  */
 export const AGENT_MODULE = "agents";
 
@@ -12,13 +13,20 @@ export const AGENT_MODULE = "agents";
  * under. Codegen auto-registers `sandboxComponent().invoke` here whenever
  * `lunora/` imports a sandbox tool (`browserTool`/`containerTool`), so the
  * tools' `execute` can dispatch to it through the loop's `run` seam.
+ * @experimental
  */
 export const SANDBOX_MODULE = "sandbox";
 
-/** The dispatch path of the sandbox runtime action (an internal action). */
+/**
+ * The dispatch path of the sandbox runtime action (an internal action).
+ * @experimental
+ */
 export const SANDBOX_INVOKE_PATH: "sandbox:invoke" = `${SANDBOX_MODULE}:invoke`;
 
-/** Default dispatch paths of the agent runtime functions. */
+/**
+ * Default dispatch paths of the agent runtime functions.
+ * @experimental
+ */
 export const DEFAULT_AGENT_FUNCTION_PATHS: AgentFunctionPaths = {
     appendMessage: `${AGENT_MODULE}:agentAppendMessage`,
     ensureThread: `${AGENT_MODULE}:agentEnsureThread`,
@@ -33,7 +41,10 @@ export const DEFAULT_AGENT_FUNCTION_PATHS: AgentFunctionPaths = {
     state: `${AGENT_MODULE}:agentState`,
 };
 
-/** Mint a dispatchable function reference from a path (or pass one through). */
+/**
+ * Mint a dispatchable function reference from a path (or pass one through).
+ * @experimental
+ */
 export const toFunctionReference = (source: AgentFunctionReference | string): AgentFunctionReference => {
     if (typeof source === "string") {
         return { __lunoraRef: source };

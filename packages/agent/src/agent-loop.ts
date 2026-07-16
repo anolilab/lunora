@@ -33,6 +33,10 @@ import type {
     AnyAgentTool,
 } from "./types";
 
+/**
+ * `AgentLoopOptions` is part of the experimental `@lunora/agent` API and may change without a major version bump.
+ * @experimental
+ */
 interface AgentLoopOptions {
     agent: AgentDefinition;
 
@@ -343,6 +347,7 @@ const applyPrepareStepResult = (
  * `ceil(maxMessages / 2)`). Returns `undefined` when compaction is unset, the
  * history is short enough, or the tail would be the whole history — a PURE
  * decision (no I/O), unit-testable in isolation.
+ * @experimental
  */
 const splitForCompaction = (
     history: ReadonlyArray<AgentMessageRow>,
@@ -927,6 +932,7 @@ const runTurns = async (
  * Loop control derives ONLY from persisted step outputs (never fresh
  * `Date.now()`/`Math.random()` at the top level), so replays walk the same
  * step-name sequence.
+ * @experimental
  */
 const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> => {
     const { agent, compact, env, exportName, extractEpisode, extractGraph, generate, instanceId, onTokenDelta, params, paths, run, step, streamGenerate } =

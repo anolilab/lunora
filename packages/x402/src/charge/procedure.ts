@@ -24,10 +24,14 @@ import { createChargeMiddleware } from "./middleware";
  * Charge config for the procedure gate: the worker-level settlement vocabulary
  * (network, recipient, facilitator) minus `price` — price is per-procedure and
  * arrives with each {@link X402ProcedureSpec}.
+ * @experimental
  */
 export type X402ProcedureChargeConfig = Omit<X402ChargeConfig, "price">;
 
-/** The per-RPC charge spec the runtime passes the gate for each paid dispatch. */
+/**
+ * The per-RPC charge spec the runtime passes the gate for each paid dispatch.
+ * @experimental
+ */
 export interface X402ProcedureSpec {
     /** The `file:function` id of the paid procedure; becomes the x402 challenge `resource`. */
     readonly functionPath: string;
@@ -40,6 +44,7 @@ export interface X402ProcedureSpec {
  * request is unpaid, or the dispatched response (with `X-PAYMENT-RESPONSE`
  * attached) once the client's `X-PAYMENT` is verified and settled. `dispatch`
  * runs the actual shard forward — it is only invoked after payment is verified.
+ * @experimental
  */
 export type X402ProcedureChargeGate = (request: Request, spec: X402ProcedureSpec, dispatch: () => Promise<Response>) => Promise<Response>;
 
@@ -49,6 +54,7 @@ export type X402ProcedureChargeGate = (request: Request, spec: X402ProcedureSpec
  * function's price + `resource`), since `createChargeMiddleware` fetches
  * facilitator support on first use. A failed init is not cached, so a transient
  * facilitator outage retries on the next request.
+ * @experimental
  */
 export const createProcedureChargeGate = (config: X402ProcedureChargeConfig): X402ProcedureChargeGate => {
     const middlewareByFunction = new Map<string, Promise<ChargeMiddleware>>();

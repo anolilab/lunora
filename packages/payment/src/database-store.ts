@@ -11,12 +11,18 @@ import { money } from "./money";
 import type { PaymentStore } from "./store";
 import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
 
-/** A stored row, carrying Lunora's document id. */
+/**
+ * A stored row, carrying Lunora's document id.
+ * @experimental
+ */
 interface PaymentRow extends Record<string, unknown> {
     readonly _id: string;
 }
 
-/** Minimal write/read surface this store needs; `ctx.db` satisfies it structurally. */
+/**
+ * Minimal write/read surface this store needs; `ctx.db` satisfies it structurally.
+ * @experimental
+ */
 interface PaymentDatabase {
     delete: (id: string) => Promise<void>;
     findFirst: (table: string, where: Record<string, unknown>) => Promise<PaymentRow | null>;
@@ -140,6 +146,10 @@ const usageEventToRow = (event: UsageEvent): Record<string, unknown> => {
     };
 };
 
+/**
+ * `createDatabasePaymentStore` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentStore => {
     const upsert = async (table: string, where: Record<string, unknown>, row: Record<string, unknown>): Promise<void> => {
         const existing = await database.findFirst(table, where);

@@ -4,6 +4,7 @@
  * Each runtime (browser via sql.js, React Native via expo-sqlite,
  * Node via better-sqlite3) provides its own adapter implementing this
  * interface so the rest of `@lunora/replica` stays platform-agnostic.
+ * @experimental
  */
 export interface SqliteAdapter {
     /** Close the database connection. */

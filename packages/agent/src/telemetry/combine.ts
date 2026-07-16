@@ -70,6 +70,7 @@ const composeWrappers = <W extends ExecuteWrapperLike>(wrappers: ReadonlyArray<W
  * parallel. The wrappers (`executeLanguageModelCall`, `executeTool`) are
  * composed by nesting right-to-left; integrations without a wrapper are skipped,
  * and with none defined the plain `execute` still runs.
+ * @experimental
  */
 // eslint-disable-next-line import/prefer-default-export -- named export: the package barrel re-exports by name, per the repo's no-default-mixing convention
 export const combineTelemetry = (...integrations: Telemetry[]): Telemetry => {

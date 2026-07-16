@@ -48,6 +48,7 @@ const HARD_TIMEOUT_GENERATION_KEY = "__lunoraHardTimeoutGeneration";
  *     }
  * }
  * ```
+ * @experimental
  */
 class LunoraContainer<Env = unknown> extends Container<Env> {
     /**
