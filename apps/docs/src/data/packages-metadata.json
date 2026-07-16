@@ -89,6 +89,11 @@
         "description": "Unified error layer: one LunoraError + a central catalog of codes, statuses, and actionable hints, rendered across CLI, overlay, Studio, and the client.",
         "features": ["Central error catalog (code → status/hint/docsUrl)", "Structural isLunoraError guard + invariant helpers", "Hints surfaced in CLI, Studio, and the client SDK"]
     },
+    "fingerprint": {
+        "displayName": "Fingerprint",
+        "description": "Zero-dependency error fingerprinting: one stable grouping hash that collapses noisy errors into Issues.",
+        "features": ["Stable 16-char grouping hash", "Noise-stripping message bucketer", "Feeds the Studio Issues panel"]
+    },
     "flags": {
         "displayName": "Flags",
         "description": "OpenFeature feature flags: ctx.flags + useFlag, with a first-class Cloudflare Flagship provider and any OpenFeature provider pluggable.",
@@ -174,6 +179,11 @@
         "description": "Live queries, optimistic mutations, reactive loaders for SolidJS.",
         "features": ["Live queries", "Optimistic mutations", "Reactive loaders"]
     },
+    "sql-store": {
+        "displayName": "SQL Store",
+        "description": "Internal dialect-parameterized SQL store core behind the .global() backends — depend on @lunora/d1 or @lunora/hyperdrive instead.",
+        "features": ["Dialect-parameterized store core", "Shared by D1 & Hyperdrive", "Internal — use the adapters"]
+    },
     "storage": {
         "displayName": "Storage",
         "description": "R2 typed buckets and signed URLs.",
@@ -213,5 +223,10 @@
         "displayName": "Workflows",
         "description": "Durable, multi-step workflows wired into the worker entry.",
         "features": ["defineWorkflow", "Durable Cloudflare Workflows", "Step-scoped run context"]
+    },
+    "x402": {
+        "displayName": "x402",
+        "description": "Agentic payments over x402: charge agents per request and let your agents pay 402-gated resources.",
+        "features": ["Charge rail: routes, procedures & MCP tools", "Pay rail with mandatory spend policy", "Raw-key, CDP, or bring-your-own signer"]
     }
 }

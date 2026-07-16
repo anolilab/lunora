@@ -1,0 +1,192 @@
+---
+title: "@lunora/x402"
+description: Agentic payments over the x402 protocol — charge agents per request (charge rail) and let your agents pay 402-gated resources (pay rail).
+---
+
+[x402](https://x402.org) turns HTTP `402 Payment Required` into a
+machine-payable rail: no accounts, no API keys, no webhooks — an agent pays per
+request in stablecoin (USDC) and a third-party **facilitator** verifies and
+settles the payment on-chain.
+
+`@lunora/x402` gives a Lunora app both sides of that exchange, as two
+independently tree-shakeable subpaths:
+
+| Subpath               | Rail       | Who uses it                                                                                        |
+| --------------------- | ---------- | -------------------------------------------------------------------------------------------------- |
+| `@lunora/x402/charge` | **charge** | Your deployment **sells** — gate an HTTP-action route, a procedure, or an MCP tool behind a price. |
+| `@lunora/x402/pay`    | **pay**    | Your action/agent **buys** — pay an x402-gated resource on the way out.                            |
+
+The root export (`@lunora/x402`) carries only the shared config/types
+(`X402Network`, `FacilitatorConfig`, price helpers).
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
+pnpm add @lunora/x402
+```
+
+```bash tab="npm"
+npm install @lunora/x402
+```
+
+```bash tab="yarn"
+yarn add @lunora/x402
+```
+
+```bash tab="bun"
+bun add @lunora/x402
+```
+
+</Tabs>
+
+**Networks.** EVM chains (Base, Arbitrum, Ethereum, Polygon, …) are signed via
+`@x402/evm` + viem — pass a raw CAIP-2 id for chains without a friendly alias.
+Solana is signed via `@x402/svm`. The facilitator defaults to the public,
+Coinbase-operated `https://x402.org/facilitator` (no key required); override it
+via `facilitator: { url, headers }` for a self-hosted or keyed CDP facilitator.
+
+## The charge rail — sell a resource
+
+The server side needs only a **recipient address** — no private key — because
+the facilitator performs settlement. Every gated surface runs the same
+four-step flow: unpaid request → `402` + `PAYMENT-REQUIRED` challenge; the
+client's `X-PAYMENT` payload is verified (via the facilitator); the handler
+runs; the payment settles and `X-PAYMENT-RESPONSE` is attached.
+
+### Gate an HTTP action
+
+`withX402` wraps a `(ctx, request) => Response` handler behind a paywall:
+
+```ts
+import { httpAction } from "@lunora/server";
+import { withX402 } from "@lunora/x402/charge";
+
+export const report = httpAction(
+    withX402({ network: "base", price: "$0.05", recipient: { evm: env.PAYOUT } }, async (ctx, request) => {
+        return Response.json(await ctx.runQuery(api.reports.latest, {}));
+    }),
+);
+```
+
+### Gate a procedure
+
+Tag a **public** query/mutation/action as paid with the `.x402({ price })`
+builder modifier; the origin worker challenges before dispatch. The
+worker-level settlement vocabulary (network, recipient, facilitator) is
+injected once via `createProcedureChargeGate`, so `@lunora/runtime` never
+imports `@lunora/x402` (keeping viem/solana out of unpaid worker bundles):
+
+```ts
+import { createProcedureChargeGate } from "@lunora/x402/charge";
+
+const gate = createProcedureChargeGate({ network: "base", recipient: { evm: env.PAYOUT } });
+// handed to createWorker({ x402Charge: gate })
+```
+
+Each paid function bakes its own price and its `functionPath` as the challenge
+`resource`. Internal functions have no `.x402` — they are server-to-server and
+never client-reachable, so there is nothing to charge.
+
+### Paid MCP tools
+
+`@lunora/mcp`'s `createPaidMcpServer` lets free `tool()` and `paidTool()`
+registrations coexist on one MCP server, served over Streamable HTTP (an HTTP
+request can carry `X-PAYMENT`; stdio cannot). Each `tools/call` for a paid tool
+runs the same charge middleware:
+
+```ts
+const mcp = createPaidMcpServer({ charge: { network: "base", recipient: { evm: env.PAYOUT } } });
+mcp.paidTool({ name: "premium_report", description: "the paid report", inputSchema: { properties: {}, type: "object" }, price: "$0.05" }, async () =>
+    text(await buildReport()),
+);
+```
+
+### Receipts
+
+`onReceipt` is an opt-in, one-way telemetry sink fired once per settled
+payment — best-effort, never blocking the paid response. Use it (with
+`toPaymentEventRow`) to mirror x402 revenue into a durable table or
+`@lunora/payment`'s `events` table so it surfaces in Studio.
+
+## The pay rail — buy a resource
+
+The pay rail spends real money autonomously, so it is **ActionCtx-only** (the
+only ctx with outbound network + secret access) and **fail-closed**: the
+`policy` field is required, and an unbounded policy is refused at runtime
+before any signer is resolved. Codegen wires `ctx.x402` (a lazily-built,
+per-ctx rail) when the app configures the `x402` capability; the direct API is:
+
+```ts
+import { createX402Pay } from "@lunora/x402/pay";
+
+const pay = await createX402Pay(
+    {
+        network: "base",
+        signer: { type: "raw-key", secretName: "AGENT_WALLET_KEY" },
+        policy: { maxPerCall: "$0.10", maxPerRun: "$5.00" },
+    },
+    { getSecret: (name) => ctx.secrets.get(name) },
+);
+
+const res = await pay.fetch("https://api.example/paid-report");
+```
+
+The returned `fetch` transparently answers `402` challenges — sign, retry,
+done — within the policy.
+
+### Wallet custody
+
+The `signer` config selects who holds the key, with three shapes:
+
+- **`{ type: "raw-key", secretName }`** — a self-custodied 32-byte private key
+  read from `ctx.secrets` (viem on EVM, a `@solana/kit` keypair on Solana).
+  Works on **EVM and Solana**. Simplest.
+- **`{ type: "cdp", account }`** — a Coinbase-managed
+  [CDP](https://docs.cdp.coinbase.com) server wallet via the optional
+  `@coinbase/cdp-sdk` peer. The SDK gets-or-creates the named account and
+  signs the EIP-712 authorization, so the key never leaves Coinbase. The three
+  CDP credentials are read from `ctx.secrets` (`CDP_API_KEY_ID` /
+  `CDP_API_KEY_SECRET` / `CDP_WALLET_SECRET` by default, each overridable).
+  **EVM only today**: CDP-managed Solana custody throws `NOT_IMPLEMENTED` — a
+  CDP Solana account is not a `@solana/kit` signer. Build a `@solana/kit`
+  signer around your CDP account and pass it via the `"signer"` escape hatch,
+  or use `"raw-key"`.
+- **`{ type: "signer", signer }`** — the **escape hatch**: hand in a signer
+  you built yourself. Any custody provider (Turnkey, Privy, Fireblocks, an
+  AWS/GCP KMS `toAccount`, CDP's viem adapter, …) works once adapted to the
+  structural `ClientEvmSigner` (EVM) or `ClientSvmSigner` (Solana) shape —
+  `@lunora/x402` takes no dependency on any provider's SDK, and no secret is
+  read.
+
+> `@coinbase/x402` is a **facilitator-auth** helper, not a custody provider;
+> first-party Coinbase custody is `@coinbase/cdp-sdk`.
+
+### The spend policy
+
+`SpendPolicy` is the security seam that keeps an autonomous wallet from
+overspending. At least one bound must be set or the rail refuses to build:
+
+| Field               | Meaning                                                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `maxPerCall`        | Hard ceiling on a single payment, in USD.                                                                                      |
+| `maxPerRun`         | Hard ceiling on cumulative spend across the wallet's lifetime (the ctx, for `ctx.x402`).                                       |
+| `allowedRecipients` | Only these `payTo` addresses may be paid.                                                                                      |
+| `allowedNetworks`   | Only these networks may be paid on.                                                                                            |
+| `onPaymentRequired` | Async approval gate called with the selected requirement before signing — return `false` to refuse. Use for human-in-the-loop. |
+| `decimals`          | Stablecoin decimals for USD→atomic conversion (default 6, USDC).                                                               |
+
+Enforcement is fail-closed at every step: requirement selection filters the
+server's offers down to those within the per-call cap and on the allowlists
+(nothing survives → nothing is signed); a pre-signature guard enforces the
+stateful per-run cap and the confirmation gate; a post-signature recorder adds
+the committed amount to the running ledger. USD amounts are converted to
+atomic units digit-by-digit — no float drift can round a cap the wrong way.
+
+## Safety notes
+
+- The pay rail is deliberately unavailable on queries and mutations — only
+  actions can spend.
+- A failed rail build (e.g. an unbounded policy) is memoised, so a misconfigured
+  wallet stays deterministically closed instead of retrying into a signature.
+- Prices are USD-denominated decimals (`"0.01"`, `"$0.01"`, or `0.01`);
+  exponential notation is rejected.
