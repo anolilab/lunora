@@ -79,10 +79,15 @@ sandbox — GitHub-hosted runners are unaffected by that sandbox limitation).
       runtime verification comes from the first CI run on GitHub._
 - [ ] Extend workerd smoke to packages that ship DO/worker code but have no
       workerd suite today (`queue`, `workflow`, `container`, `x402` boot-smoke).
-- [ ] **Coverage thresholds**: add vitest `coverage.thresholds` to the shared
+- [x] **Coverage thresholds**: add vitest `coverage.thresholds` to the shared
       config (`tools/get-vitest-config.ts`) — start at current levels per
       package, ratchet up; flip Codecov `patch` coverage from `"off"` to a
       real target so new code can't land untested (`codecov.yml`).
+      _Done 2026-07-16: default floor 80% lines/statements/functions + 70%
+      branches in `getVitestConfig` (per-package override param; 12 packages
+      below the floor carry explicit `// ratchet:` overrides; workerd-gated
+      inline configs stay threshold-free); Codecov patch gate on at 75%,
+      `informational: false`._
 - [ ] **Close the worst unit-coverage gaps** (test files vs src files):
       `lunorash` umbrella (1 test / 22 src — it IS the recommended install),
       `errors` (1/6, everything depends on it), `fingerprint` (1/4),

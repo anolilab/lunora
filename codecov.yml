@@ -14,7 +14,10 @@
 # Require a minimum coverage for the codecov/project PR check
 "coverage":
     "status":
-        "patch": "off" # yamllint disable-line rule:truthy
+        "patch":
+            "default":
+                "target": "75%" # new/changed lines in a PR must be covered
+                "informational": false # fail the check, don't just annotate
         "project":
             "default":
                 "target": "75%" # overall project/ repo coverage
