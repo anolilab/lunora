@@ -121,8 +121,13 @@ Nothing tagged stable may throw on an advertised path.
       callers get a compile-time error instead of a runtime throw; the
       discovery/advisor seam is kept for the post-1.0 return, scoped in
       `plans/136-incremental-table-mode.md` (P3, demand-gated).
-- [ ] **Plan 052**: typed SSE consumer for `httpRoute.<verb>().stream()` —
-      finish the client half or de-advertise `.stream()` for 1.0.
+- [x] **Plan 052** — SHIPPED (2026-07-16): codegen emits a typed
+      `httpStreams.*` registry (`HttpStreamRef<Chunk, SearchParams, Params>`
+      with the `.stream()` handler's yielded chunk type inferred),
+      `client.httpStream()` consumes the SSE framing with coded errors +
+      abort/cancel, and React ships `useHttpStream`. Vue/Solid/Svelte ports and
+      reconnect/POST-body/OpenAPI follow-ups are recorded in
+      `plans/052-streaming-hook-design.md`.
 - [x] **Next.js template** — SHIPPED (2026-07-16): `templates/next/` (App
       Router on the OpenNext Cloudflare adapter, two-worker split like nuxt,
       RSC preload via `@lunora/react/server` + `usePreloadedQuery` hydration);
