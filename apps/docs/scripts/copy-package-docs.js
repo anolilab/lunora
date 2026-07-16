@@ -3,6 +3,8 @@ import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CATEGORY_TITLES, categorySlugForPackageDir, categoryTitleForSlug, orderPackagesInCategory } from "./package-categories.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -20,46 +22,6 @@ const KNOWN_ROUTES_PATTERN = [...KNOWN_ROUTES].join("|");
  * Lunora keeps all its docs in-repo, so there are none.
  */
 const EXTERNAL_DOCS = [];
-
-/**
- * Category display names and order for the packages sidebar.
- * Mirrors the `category:*` tags on each package's project.json.
- */
-const CATEGORY_CONFIG = {
-    runtime: {
-        title: "Core Runtime",
-        packages: ["lunorash", "server", "values", "runtime", "do", "d1"],
-    },
-    client: {
-        title: "Client & UI",
-        packages: ["client", "react", "react-native", "vue", "solid", "svelte", "db", "studio"],
-    },
-    "vite-plugin": { title: "Build & Tooling", packages: ["vite", "astro"] },
-    codegen: { title: "Codegen", packages: ["codegen"] },
-    cli: { title: "CLI", packages: ["cli"] },
-    "dev-tools": { title: "Dev Tools", packages: ["config", "testing"] },
-    advisor: { title: "Advisor", packages: ["advisor"] },
-    "add-on": {
-        title: "Add-ons",
-        packages: [
-            "auth",
-            "mail",
-            "storage",
-            "scheduler",
-            "queue",
-            "container",
-            "ai",
-            "bindings",
-            "ratelimit",
-            "mcp",
-            "hyperdrive",
-            "payment",
-            "browser",
-            "seed",
-            "workflow",
-        ],
-    },
-};
 
 /**
  * Derives the docs/showcase slug from an npm name — kept in sync with
@@ -616,6 +578,11 @@ async function main() {
     // Scan flat packages/{package}/docs (Lunora has no category sub-folders)
     const packages = await fs.readdir(PACKAGES_DIR, { withFileTypes: true });
 
+    // Docs slug → category slug (from the package's project.json `category:*`
+    // tag), collected while copying so the sidebar below is derived from the
+    // filesystem instead of a hard-coded package list.
+    const categoryBySlug = new Map();
+
     let copied = 0;
 
     for (const pkg of packages) {
@@ -643,6 +610,8 @@ async function main() {
         // slug generate-packages.js emits and the packages index links to.
         const slug = await slugForPackageDir(pkg.name);
         const destPath = path.join(DEST_DIR, slug);
+
+        categoryBySlug.set(slug, categorySlugForPackageDir(path.join(PACKAGES_DIR, pkg.name)));
 
         await copyDirectory(docsPath, destPath);
         console.log(`  ${pkg.name}/docs → packages/${slug}`);
@@ -708,31 +677,42 @@ async function main() {
     await fixBrokenDocsLinks(DEST_DIR);
     console.log("Validated internal doc links (broken links converted to plain text)");
 
-    // Generate root packages/meta.json with categorized sidebar navigation
+    // Generate root packages/meta.json with categorized sidebar navigation.
+    // Membership comes from each package's project.json `category:*` tag
+    // (collected above), so every copied docs folder surfaces — packages with
+    // an unknown category get a humanized section after the known ones, and
+    // anything without a tag (e.g. external docs) lands under "Other".
     const copiedPackages = await fs.readdir(DEST_DIR, { withFileTypes: true });
     const availablePackages = new Set(copiedPackages.filter((d) => d.isDirectory()).map((d) => d.name));
 
-    const pages = [];
+    const slugsByCategory = new Map();
 
-    for (const config of Object.values(CATEGORY_CONFIG)) {
-        const categoryPackages = config.packages.filter((pkg) => availablePackages.has(pkg));
+    for (const slug of availablePackages) {
+        const categorySlug = categoryBySlug.get(slug) ?? null;
+        const bucket = slugsByCategory.get(categorySlug) ?? [];
 
-        if (categoryPackages.length === 0) {
-            continue;
-        }
-
-        pages.push(`---${config.title}---`, ...categoryPackages);
-
-        // Remove from available set to track uncategorized packages
-        for (const pkg of categoryPackages) {
-            availablePackages.delete(pkg);
-        }
+        bucket.push(slug);
+        slugsByCategory.set(categorySlug, bucket);
     }
 
-    // Add any uncategorized packages at the end
-    if (availablePackages.size > 0) {
+    // Known categories in declared order, then any unknown category slugs.
+    const orderedCategorySlugs = [
+        ...Object.keys(CATEGORY_TITLES).filter((slug) => slugsByCategory.has(slug)),
+        ...[...slugsByCategory.keys()].filter((slug) => slug !== null && !(slug in CATEGORY_TITLES)).sort((a, b) => a.localeCompare(b)),
+    ];
+
+    const pages = [];
+
+    for (const categorySlug of orderedCategorySlugs) {
+        pages.push(`---${categoryTitleForSlug(categorySlug)}---`, ...orderPackagesInCategory(categorySlug, slugsByCategory.get(categorySlug)));
+    }
+
+    // Packages without a category tag at the end
+    const uncategorized = slugsByCategory.get(null);
+
+    if (uncategorized && uncategorized.length > 0) {
         pages.push("---Other---");
-        pages.push(...[...availablePackages].sort());
+        pages.push(...uncategorized.sort((a, b) => a.localeCompare(b)));
     }
 
     const rootMeta = {

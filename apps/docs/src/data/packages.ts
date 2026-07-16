@@ -15,7 +15,7 @@ export interface PackageInfo {
     slug: string;
 }
 
-export const categories = ["All", "Add-ons", "Advisor", "Build & Tooling", "CLI", "Client & UI", "Codegen", "Core Runtime", "Dev Tools"] as const;
+export const categories = ["All", "Add-ons", "Advisor", "Build & Tooling", "CLI", "Client & UI", "Codegen", "Core Runtime", "Dev Tools", "Web3"] as const;
 
 export type Category = (typeof categories)[number];
 
@@ -28,6 +28,7 @@ const categoryColors: Record<string, AccentColor> = {
     "Dev Tools": "sky-sapphire",
     Advisor: "crimson-energy",
     "Add-ons": "crimson-energy",
+    Web3: "crimson-energy",
 };
 
 export const packages: PackageInfo[] = [
@@ -65,6 +66,16 @@ export const packages: PackageInfo[] = [
         name: "Errors",
         npmName: "@lunora/errors",
         slug: "errors",
+    },
+    {
+        accentColor: categoryColors["Core Runtime"]!,
+        category: "Core Runtime",
+        description:
+            "Zero-dependency, cross-runtime error fingerprinting for Lunora: a stable grouping hash that collapses noisy errors into Issues across the local Studio and the Cloud",
+        features: [],
+        name: "Fingerprint",
+        npmName: "@lunora/fingerprint",
+        slug: "fingerprint",
     },
     {
         accentColor: categoryColors["Core Runtime"]!,
@@ -118,9 +129,9 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Client & UI"]!,
         category: "Client & UI",
-        description: "Angular reactive adapter for Lunora — signal-based live queries and mutations",
+        description: "Angular adapter: signal-based live queries and mutations over the shared client core.",
         docsPath: "/docs/packages/angular",
-        features: [],
+        features: ["Signal-based liveQuery", "provideLunora / injectLunoraClient", "connectionStatus signal"],
         name: "Angular",
         npmName: "@lunora/angular",
         slug: "angular",
@@ -148,9 +159,9 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Client & UI"]!,
         category: "Client & UI",
-        description: "Nuxt module for Lunora — single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers",
+        description: "Nuxt module: single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers.",
         docsPath: "/docs/packages/nuxt",
-        features: [],
+        features: ["Single-worker Nitro composition", "#lunora/app alias", "Reactive-loader server helpers"],
         name: "Nuxt",
         npmName: "@lunora/nuxt",
         slug: "nuxt",
@@ -288,6 +299,16 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Add-ons"]!,
         category: "Add-ons",
+        description: "Durable AI agents on Cloudflare Workflows: defineAgent tool-loops with approvals, memory, and streaming.",
+        docsPath: "/docs/packages/agent",
+        features: ["Replay-safe durable tool-loop", "Human-in-the-loop approvals", "Streaming useAgent / useAgentChat hooks"],
+        name: "Agent",
+        npmName: "@lunora/agent",
+        slug: "agent",
+    },
+    {
+        accentColor: categoryColors["Add-ons"]!,
+        category: "Add-ons",
         description: "Workers AI helper on the Vercel AI SDK — ctx.ai with generateText / streamText / embed.",
         docsPath: "/docs/packages/ai",
         features: ["Workers AI on the Vercel AI SDK", "generateText / streamText", "Embeddings & tools"],
@@ -328,10 +349,9 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Add-ons"]!,
         category: "Add-ons",
-        description:
-            "Cloudflare Access (Zero Trust) identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth / RLS via a resolveIdentity adapter",
+        description: "Cloudflare Access (Zero Trust) identity: verify the Cf-Access-Jwt-Assertion JWT and feed ctx.auth / RLS.",
         docsPath: "/docs/packages/cloudflare-access",
-        features: [],
+        features: ["JWKS-verified Access JWTs", "resolveIdentity adapter", "Feeds ctx.auth & RLS"],
         name: "Cloudflare Access",
         npmName: "@lunora/cloudflare-access",
         slug: "cloudflare-access",
@@ -419,6 +439,16 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Add-ons"]!,
         category: "Add-ons",
+        description: "Local-first replica runtime: event sourcing, a pluggable SQLite LocalMirror, and EventsSync catch-up.",
+        docsPath: "/docs/packages/replica",
+        features: ["Event-sourcing runtime", "Pluggable SQLite LocalMirror", "EventsSync client catch-up"],
+        name: "Replica",
+        npmName: "@lunora/replica",
+        slug: "replica",
+    },
+    {
+        accentColor: categoryColors["Add-ons"]!,
+        category: "Add-ons",
         description: "runAfter / runAt plus Cron Triggers via SchedulerDO.",
         docsPath: "/docs/packages/scheduler",
         features: ["runAfter / runAt scheduling", "Cron Triggers", "SchedulerDO"],
@@ -455,6 +485,15 @@ export const packages: PackageInfo[] = [
         name: "Workflows",
         npmName: "@lunora/workflow",
         slug: "workflow",
+    },
+    {
+        accentColor: categoryColors["Web3"]!,
+        category: "Web3",
+        description: "Agentic payments (x402) for Lunora: charge agents per request (charge rail) and let your agents pay x402-gated resources (pay rail)",
+        features: [],
+        name: "X402",
+        npmName: "@lunora/x402",
+        slug: "x402",
     },
 ];
 

@@ -4,10 +4,20 @@
         "description": "Schema & query lints (splinter-style advisors) feeding the Studio Advisors table.",
         "features": ["Schema & query lints", "Unindexed-FK detection", "Surfaced in Studio advisors"]
     },
+    "agent": {
+        "displayName": "Agent",
+        "description": "Durable AI agents on Cloudflare Workflows: defineAgent tool-loops with approvals, memory, and streaming.",
+        "features": ["Replay-safe durable tool-loop", "Human-in-the-loop approvals", "Streaming useAgent / useAgentChat hooks"]
+    },
     "ai": {
         "displayName": "AI",
         "description": "Workers AI helper on the Vercel AI SDK — ctx.ai with generateText / streamText / embed.",
         "features": ["Workers AI on the Vercel AI SDK", "generateText / streamText", "Embeddings & tools"]
+    },
+    "angular": {
+        "displayName": "Angular",
+        "description": "Angular adapter: signal-based live queries and mutations over the shared client core.",
+        "features": ["Signal-based liveQuery", "provideLunora / injectLunoraClient", "connectionStatus signal"]
     },
     "astro": {
         "displayName": "Astro",
@@ -38,6 +48,11 @@
         "displayName": "Client",
         "description": "Browser SDK: WebSocket transport, optimistic updates, offline queue.",
         "features": ["Live subscriptions", "Optimistic updates", "Offline queue"]
+    },
+    "cloudflare-access": {
+        "displayName": "Cloudflare Access",
+        "description": "Cloudflare Access (Zero Trust) identity: verify the Cf-Access-Jwt-Assertion JWT and feed ctx.auth / RLS.",
+        "features": ["JWKS-verified Access JWTs", "resolveIdentity adapter", "Feeds ctx.auth & RLS"]
     },
     "codegen": {
         "displayName": "Codegen",
@@ -99,6 +114,11 @@
         "description": "Model Context Protocol server exposing a Lunora deployment to AI agents.",
         "features": ["MCP server for AI agents", "List functions & tables", "Run query / mutation / action"]
     },
+    "nuxt": {
+        "displayName": "Nuxt",
+        "description": "Nuxt module: single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers.",
+        "features": ["Single-worker Nitro composition", "#lunora/app alias", "Reactive-loader server helpers"]
+    },
     "payment": {
         "displayName": "Payment",
         "description": "Payment provider integration (Stripe) with typed actions and webhooks.",
@@ -123,6 +143,11 @@
         "displayName": "React Native",
         "description": "React Native / Expo integration: the React hooks plus an AsyncStorage client factory and a better-auth Expo bridge.",
         "features": ["AsyncStorage offline queue", "Credentialed fetch + WebSocket", "better-auth Expo bridge"]
+    },
+    "replica": {
+        "displayName": "Replica",
+        "description": "Local-first replica runtime: event sourcing, a pluggable SQLite LocalMirror, and EventsSync catch-up.",
+        "features": ["Event-sourcing runtime", "Pluggable SQLite LocalMirror", "EventsSync client catch-up"]
     },
     "runtime": {
         "displayName": "Runtime",
