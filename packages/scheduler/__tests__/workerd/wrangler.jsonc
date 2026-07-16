@@ -7,5 +7,10 @@
     "durable_objects": {
         "bindings": [{ "name": "SCHEDULER", "class_name": "TestSchedulerDO" }],
     },
+    // `handleSchedule()` refuses to enqueue (500 ORIGIN_NOT_CONFIGURED) unless
+    // the dispatch origin is bound — it is read from env, never from the request
+    // body (SSRF hardening). The test DO overrides `dispatch()`, so the value is
+    // never fetched; it only has to be present.
+    "vars": { "LUNORA_ORIGIN_URL": "https://app.test" },
     "migrations": [{ "tag": "v1", "new_classes": ["TestSchedulerDO"] }],
 }
