@@ -142,9 +142,61 @@ sandbox — GitHub-hosted runners are unaffected by that sandbox limitation).
       drivers through an `env.HYPERDRIVE`-shaped binding over real wire protocols
       (pglite behind `@electric-sql/pglite-socket`; mysql-memory-server, auto-
       skipping with reason where the binary download is blocked)._
-- [ ] **Dependency hygiene**: triage the open Dependabot alerts on the default
+- [x] **Dependency hygiene**: triage the open Dependabot alerts on the default
       branch (13 at 2026-07-16: 4 high / 7 moderate / 2 low) — resolve or
       formally dismiss each before the stable cut, and keep Renovate green.
+      _Done 2026-07-16 (see "Dependency triage (2026-07-16)" below): all 13
+      resolved by an in-range refresh of `.deepsec/pnpm-lock.yaml`; the main
+      workspace lockfile audits clean. Caveat: triage worked from `pnpm audit`
+      (npm advisory DB), which may not match the GitHub Dependabot list 1:1 —
+      a maintainer must cross-check the alerts page and dismiss/confirm there._
+
+## Dependency triage (2026-07-16)
+
+Where the alerts actually live: the **main workspace lockfile
+(`pnpm-lock.yaml`) audits clean** — verified twice, via `pnpm audit`
+(0 advisories, dev + prod) and via a direct bulk query of all 3,556 resolved
+versions against the npm advisory DB. The 13 findings (4 high / 7 moderate /
+2 low — the same severity split GitHub reports) all sit in
+**`.deepsec/pnpm-lock.yaml`**, the standalone deepsec scanning workspace,
+under its single dependency `deepsec@2.0.12`. Nothing shipped by any
+`@lunora/*` / `lunorash` package was affected.
+
+Fix applied: all three vulnerable packages had patched releases inside the
+ranges already declared by their dependents (`tar ^7.5.13`, `hono ^4.11.4`
+via `@modelcontextprotocol/sdk`, `undici ^7.16.0` via `@vercel/sandbox`), so
+no catalog change and no `pnpm.overrides` entry was needed — a targeted
+transitive refresh (`pnpm update --depth Infinity tar hono undici` in
+`.deepsec/`) resolved everything: `tar` 7.5.15 → 7.5.20, `hono` 4.12.23 →
+4.12.30, `undici` 7.26.0 → 7.28.0. `pnpm audit` in `.deepsec/` is now clean;
+`deepsec` stays pinned at 2.0.12 (2.2.1 exists — separate, deliberate bump).
+
+| Advisory            | Severity | Package (found → fixed) | Path                                                   | Action taken                         | Residual risk                                                       |
+| ------------------- | -------- | ----------------------- | ------------------------------------------------------ | ------------------------------------ | ------------------------------------------------------------------- |
+| GHSA-88fw-hqm2-52qc | high     | hono 4.12.23 → 4.12.30  | .deepsec > deepsec > claude-agent-sdk > MCP SDK > hono | in-range lockfile refresh (≥4.12.25) | none — dev-only scanning workspace, never deployed                  |
+| GHSA-wwfh-h76j-fc44 | moderate | hono 4.12.23 → 4.12.30  | same as above                                          | same refresh                         | none (Windows serve-static path traversal; unused code path anyway) |
+| GHSA-j6c9-x7qj-28xf | moderate | hono 4.12.23 → 4.12.30  | same as above                                          | same refresh                         | none (AWS Lambda adapter; not used)                                 |
+| GHSA-rv63-4mwf-qqc2 | moderate | hono 4.12.23 → 4.12.30  | same as above                                          | same refresh                         | none (AWS Lambda body-limit bypass; not used)                       |
+| GHSA-wgpf-jwqj-8h8p | moderate | hono 4.12.23 → 4.12.30  | same as above                                          | same refresh                         | none (Lambda@Edge adapter; not used)                                |
+| GHSA-vmh5-mc38-953g | high     | undici 7.26.0 → 7.28.0  | .deepsec > deepsec > @vercel/sandbox > undici          | in-range lockfile refresh (≥7.28.0)  | none — dev-only scanning workspace                                  |
+| GHSA-vxpw-j846-p89q | high     | undici 7.26.0 → 7.28.0  | same as above                                          | same refresh                         | none (WS fragment-count DoS)                                        |
+| GHSA-hm92-r4w5-c3mj | high     | undici 7.26.0 → 7.28.0  | same as above                                          | same refresh                         | none (SOCKS5 pool reuse; no SOCKS5 proxy in use)                    |
+| GHSA-p88m-4jfj-68fv | moderate | undici 7.26.0 → 7.28.0  | same as above                                          | same refresh                         | none (Set-Cookie header injection)                                  |
+| GHSA-pr7r-676h-xcf6 | moderate | undici 7.26.0 → 7.28.0  | same as above                                          | same refresh                         | none (shared-cache info disclosure)                                 |
+| GHSA-35p6-xmwp-9g52 | low      | undici 7.26.0 → 7.28.0  | same as above                                          | same refresh                         | none (response-queue poisoning)                                     |
+| GHSA-g8m3-5g58-fq7m | low      | undici 7.26.0 → 7.28.0  | same as above                                          | same refresh                         | none (SameSite downgrade)                                           |
+| GHSA-vmf3-w455-68vh | moderate | tar 7.5.15 → 7.5.20     | .deepsec > deepsec > tar                               | in-range lockfile refresh (≥7.5.16)  | none (tar parser differential / file smuggling)                     |
+
+Verification: root `pnpm install --frozen-lockfile` clean (root lockfile
+untouched), `pnpm run build:packages` green, `.deepsec` reinstalls frozen and
+`deepsec --version` still runs (2.0.12); no `@lunora/*` package's dependency
+graph changed, so no per-package test/lint reruns were required. Pre-existing
+(not introduced): the `.deepsec` zod@3.24.4 peer-range warning. Follow-ups
+for a maintainer: (1) cross-check + close the alerts on the GitHub
+Dependabot page — this triage worked from the npm advisory DB, which may not
+be a 1:1 mirror; (2) optionally bump `deepsec` 2.0.12 → 2.2.1; (3) template
+manifests (`templates/*/package.json`) carry no lockfiles and audited clean
+by count-match, but Renovate should keep them fresh.
 
 ## Phase 2 — Close runtime gaps and the open security item
 
