@@ -61,6 +61,7 @@
         "concepts/observability",
         "architecture",
         "limits",
+        "versioning",
         "---Reference---",
         "packages"
     ]
