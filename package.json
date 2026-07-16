@@ -18,6 +18,8 @@
     "type": "module",
     "sideEffects": false,
     "scripts": {
+        "api:check": "node scripts/api-snapshot.js check",
+        "api:update": "node scripts/api-snapshot.js update",
         "build": "vis run build",
         "build:affected": "vis affected build --fail-fast",
         "build:affected:packages": "vis affected build --fail-fast --query \"tag=type:package\"",
