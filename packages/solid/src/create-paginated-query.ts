@@ -4,7 +4,7 @@ import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "
 import type { Accessor } from "solid-js";
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 
-import { stableStringify } from "../../../shared/stable-key";
+import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./context";
 
 /** The args a paginated query exposes minus the framework-supplied page cursor. */
@@ -56,11 +56,12 @@ const buildPageArgs = (page: Page, baseArgs: Record<string, unknown>): Record<st
     };
 };
 
-// Key pages with the repo's canonical `stableStringify` (keys sorted at every
-// depth) rather than raw `JSON.stringify`, so two structurally-equal arg records
-// built with a different key order collapse to one key instead of opening a
-// duplicate subscription — matching the client's own `SubscriptionRegistry.key`.
-const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${stableStringify(pageArgs)}`;
+// Key pages with the repo's canonical `stableWireKey` (keys sorted at every
+// depth, wire-typed args tokenized) rather than raw `JSON.stringify`, so two
+// structurally-equal arg records built with a different key order collapse to
+// one key instead of opening a duplicate subscription — matching the client's
+// own `SubscriptionRegistry.key`.
+const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${stableWireKey(pageArgs)}`;
 
 /**
  * SolidJS-native pagination engine shared by `createPaginatedQuery` and

@@ -112,10 +112,13 @@ Nothing tagged stable may throw on an advertised path.
       enforcement (`requireEphemeralWsToken` /
       `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`) rejects the raw master token in
       `?token=`. Plan file removed (shipped).
-- [ ] **Ship plan 090**: subscription/cache-key arg wire fidelity — `bigint` /
-      `Date` / `Map` / `Set` / `URL` / bytes args currently fail loud in
-      `stableStringify` on the reactive hot path. Implement, or document the
-      supported arg domain and keep the loud failure as the contract.
+- [x] **Ship plan 090** — SHIPPED (2026-07-16): cache keys ride
+      `stableWireKey` (`shared/wire-key.ts`, identity for pure JSON),
+      subscribe/shape frames `encodeWire` their args, and the shard decodes at
+      its two subscribe entry points, so `bigint` / `Date` / `Map` / `Set` /
+      bytes args work end-to-end (`RegExp`/class instances still fail loud;
+      `URL` args can't survive the hibernation attachment). Verified through a
+      real workerd round-trip. Plan file removed (shipped).
 - [x] **`mode: "incremental"` on tables** — CUT from the 1.0 surface
       (2026-07-16): `ExternalSourceMode` narrowed to `"full-pull"` so typed
       callers get a compile-time error instead of a runtime throw; the

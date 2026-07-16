@@ -4,10 +4,10 @@ import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "
 import type { MaybeRefOrGetter, ShallowRef } from "vue";
 import { onScopeDispose, shallowRef, toValue, watch } from "vue";
 
-import { stableStringify } from "../../../shared/stable-key";
+import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./lunora-provider";
 
-const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${stableStringify(pageArgs)}`;
+const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${stableWireKey(pageArgs)}`;
 
 const buildPageArgs = (page: Page, baseArgs: Record<string, unknown>): Record<string, unknown> => {
     return {
@@ -218,7 +218,7 @@ const usePaginatedCore = <T>(
     // content — never tears down and collapses a multi-page loaded feed back to
     // page one. The live args are re-read inside the callback (matching use-flag).
     watch(
-        () => stableStringify(toValue(args)),
+        () => stableWireKey(toValue(args)),
         () => {
             const current = toValue(args);
 

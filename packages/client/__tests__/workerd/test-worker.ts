@@ -9,7 +9,7 @@
  * lets the test trigger a broadcast — that's the contract `LunoraClient`
  * actually depends on (function dispatch + delta fan-out).
  */
-import type { MutationDelta, ShardDOState } from "@lunora/do";
+import type { MutationDelta, ShardDOState, SubscriptionOutcome } from "@lunora/do";
 import { ShardDO } from "@lunora/do";
 import { createWorker } from "@lunora/runtime";
 import { DurableObject } from "cloudflare:workers";
@@ -36,12 +36,34 @@ class ConcreteShard extends ShardDO {
     public override broadcastDelta(delta: MutationDelta): void {
         super["broadcastDelta"](delta);
     }
+
+    /**
+     * Echo-back subscription executor (plan 090 verification): records the args
+     * the seed / re-execution actually ran with (post decode-at-entry, so a
+     * wire-typed arg must arrive as a REAL `bigint`/`Date`) and returns them as
+     * the result, so the test can assert the full client → workerd → client
+     * round-trip on the values themselves.
+     */
+    protected override executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+        // Scoped to the one wire-fidelity path so the legacy broadcast-delta test
+        // (which relies on the base "no seed push" behavior) is unaffected.
+        if (functionPath !== "counters:since") {
+            return Promise.resolve(null);
+        }
+
+        this.outer.lastSubscribeArgs = args;
+
+        return Promise.resolve({ result: { args, functionPath }, tables: new Set(["counters"]) });
+    }
 }
 
 class TestShardDO extends DurableObject<Env> {
     public rpcResult: unknown = null;
 
     public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
+
+    /** Args the most recent `executeSubscription` (seed or re-execution) ran with. */
+    public lastSubscribeArgs: Record<string, unknown> | undefined;
 
     private readonly shard: ConcreteShard;
 

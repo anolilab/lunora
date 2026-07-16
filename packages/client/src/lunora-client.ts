@@ -2,8 +2,8 @@ import { LunoraError } from "@lunora/errors";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
-import { stableStringify } from "../../../shared/stable-key";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { stableWireKey } from "../../../shared/wire-key";
 import createInMemoryBookmarkStorage from "./bookmark";
 import type { ClientQueryRef } from "./client-query-store";
 import { ClientQueryStore } from "./client-query-store";
@@ -489,6 +489,15 @@ interface ShapeSubscriptionState {
     serverCursor?: number;
     serverEpoch?: string;
     shardKey: string | undefined;
+
+    /**
+     * The wire-encoded form of `args`, computed once at `subscribeShape` time (so
+     * an unsupported value fails loud at the call site, not inside a reconnect's
+     * open handler). Sent on every `shape_subscribe` frame — identical to `args`
+     * for pure JSON, tagged tokens for `bigint`/`Date`/bytes/… (the shard
+     * `decodeWire`s them before resolving the shape).
+     */
+    wireArgs: Record<string, unknown> | undefined;
 }
 
 /** A poke being assembled between `pokeStart` and `pokeEnd` — parts buffered per shape, applied atomically at end. */
@@ -1519,7 +1528,7 @@ class LunoraClient {
      */
     public snapshotPrecondition(functionRef: FunctionReference, args: Record<string, unknown>, shardKey?: string): () => boolean {
         const snapshot = this.peekActiveQueryValue(functionRef.__lunoraRef, args, shardKey);
-        const snapshotKey = snapshot === undefined ? undefined : stableStringify(snapshot);
+        const snapshotKey = snapshot === undefined ? undefined : stableWireKey(snapshot);
 
         return (): boolean => {
             const current = this.peekActiveQueryValue(functionRef.__lunoraRef, args, shardKey);
@@ -1534,7 +1543,7 @@ class LunoraClient {
                 return false;
             }
 
-            return stableStringify(current) === snapshotKey;
+            return stableWireKey(current) === snapshotKey;
         };
     }
 
@@ -1581,7 +1590,7 @@ class LunoraClient {
             return undefined;
         }
 
-        const argsKey = stableStringify(args);
+        const argsKey = stableWireKey(args);
         const key = queryCacheKey(functionPath, argsKey, shardKey);
         const entry = this.hydratedQueryCache.get(key);
 
@@ -2858,7 +2867,7 @@ class LunoraClient {
         if (!state) {
             this.nextSubId += 1;
             const id = `sub_${this.nextSubId.toString()}`;
-            const argsKey = stableStringify(argsRecord);
+            const argsKey = stableWireKey(argsRecord);
             const cached = this.takeHydratedCache(function_.__lunoraRef, argsKey, options.shardKey);
 
             state = {
@@ -2964,6 +2973,9 @@ class LunoraClient {
             onCheckpoint: options.onCheckpoint,
             rows: new Map(),
             shardKey: options.shardKey,
+            // Encode ONCE, here, so an unsupported arg value throws at this call
+            // site instead of inside a reconnect's open handler.
+            wireArgs: shape.args === undefined ? undefined : (encodeCallArgs(shape.args, `shape args for '${shape.name}'`) as Record<string, unknown>),
         };
 
         this.shapeSubscriptions.set(id, state);
@@ -4259,7 +4271,12 @@ class LunoraClient {
             // sub (a hydrated read or an earlier frame), so the server can
             // resume instead of re-snapshotting. Omitted on a cold sub.
             query: {
-                args: state.args,
+                // Wire-encode so a `bigint`/`Date`/bytes arg survives the frame's
+                // `JSON.stringify` (the shard `decodeWire`s at its subscribe entry
+                // point). Identity for pure-JSON args. Cannot throw here: the
+                // registry key (`stableWireKey`) already encoded these args at
+                // subscribe() time, so reconnect resends stay safe.
+                args: encodeWire(state.args) as Record<string, unknown>,
                 functionPath: state.fn.__lunoraRef,
                 table,
                 ...(state.serverCursor === undefined ? {} : { sinceSeq: state.serverCursor }),
@@ -4278,7 +4295,11 @@ class LunoraClient {
 
         sendOn(conn, {
             id: state.id,
-            shape: { name: state.name, ...(state.args === undefined ? {} : { args: state.args }) },
+            // `wireArgs` is the pre-encoded form of `args` (computed at
+            // `subscribeShape` time) so a `bigint`/`Date`/bytes arg survives the
+            // frame's `JSON.stringify`; the shard `decodeWire`s it at its
+            // `shape_subscribe` entry point. Identity for pure-JSON args.
+            shape: { name: state.name, ...(state.wireArgs === undefined ? {} : { args: state.wireArgs }) },
             type: "shape_subscribe",
             // Resume from the last applied checkpoint when we hold one; a cold
             // subscribe omits it and the server seeds the full membership.

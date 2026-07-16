@@ -1,4 +1,4 @@
-import { stableStringify } from "../../../shared/stable-key";
+import { stableWireKey } from "../../../shared/wire-key";
 import type { LunoraClient } from "./lunora-client";
 import type { FunctionReference } from "./types";
 
@@ -24,7 +24,7 @@ const createSnapshotPrecondition = (
     shardKey?: string,
 ): (() => boolean) => {
     const snapshot = client.peekActiveQueryValue(functionRef.__lunoraRef, args, shardKey);
-    const snapshotKey = snapshot === undefined ? undefined : stableStringify(snapshot);
+    const snapshotKey = snapshot === undefined ? undefined : stableWireKey(snapshot);
 
     return (): boolean => {
         const current = client.peekActiveQueryValue(functionRef.__lunoraRef, args, shardKey);
@@ -39,7 +39,7 @@ const createSnapshotPrecondition = (
             return false;
         }
 
-        return stableStringify(current) === snapshotKey;
+        return stableWireKey(current) === snapshotKey;
     };
 };
 

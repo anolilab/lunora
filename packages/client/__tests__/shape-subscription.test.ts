@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import { LunoraClient } from "../src/lunora-client";
 
 /**
@@ -242,5 +243,40 @@ describe("lunoraClient subscribeShape", () => {
         const resume = frames(second).find((frame) => frame.type === "shape_subscribe");
 
         expect(resume).toMatchObject({ sinceCheckpoint: 7, sinceEpoch: "e1" });
+    });
+
+    it("wire-encodes bigint/Date shape args on the shape_subscribe frame (and on reconnect resends)", () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const client = makeClient();
+
+        // Pre-change the frame's JSON.stringify threw on the bigint. Now the
+        // args ride in tagged wire form; the shard decodes them at entry.
+        client.subscribeShape({ args: { at: new Date(5000), since: 123n }, name: "messagesSince" }, () => undefined);
+
+        const socket = latestSocket();
+
+        socket.open();
+
+        const subscribe = frames(socket).find((frame) => frame.type === "shape_subscribe");
+
+        expect(decodeWire((subscribe?.shape as { args: unknown }).args)).toStrictEqual({ at: new Date(5000), since: 123n });
+
+        // Reconnect: the resend reuses the pre-encoded args (no throw in the
+        // open handler) and stays decodable.
+        socket.triggerClose();
+        vi.runOnlyPendingTimers();
+        const second = latestSocket();
+
+        second.open();
+
+        const resent = frames(second).find((frame) => frame.type === "shape_subscribe");
+
+        expect(decodeWire((resent?.shape as { args: unknown }).args)).toStrictEqual({ at: new Date(5000), since: 123n });
+
+        // A shape arg the wire refuses fails loud at the subscribeShape call site.
+        expect(() => client.subscribeShape({ args: { pattern: /abc/ }, name: "bad" }, () => undefined)).toThrow(TypeError);
     });
 });

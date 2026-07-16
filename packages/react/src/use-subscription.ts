@@ -5,7 +5,7 @@ import { createQuerySubscription } from "@lunora/client/query";
 import { useEffect, useRef, useState } from "react";
 
 import { useLunora } from "./lunora-provider";
-import { stableStringify } from "./query-key";
+import { stableWireKey } from "./query-key";
 import type { UseQueryOptions, UseSubscriptionResult } from "./types";
 
 /**
@@ -22,7 +22,7 @@ const useSubscription = <F extends FunctionReference>(
     const [state, setState] = useState<UseSubscriptionResult<ReturnOf<F>>>({ data: undefined, error: undefined });
 
     const skipped = args === "skip";
-    const serialized = skipped ? "skip" : stableStringify(args);
+    const serialized = skipped ? "skip" : stableWireKey(args);
 
     // Latest subscribe inputs. The dependency array keys off `fn.__lunoraRef`
     // and the serialized args, which already capture every meaningful change;

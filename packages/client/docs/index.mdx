@@ -47,12 +47,17 @@ back-compatible. A value a stable form can't represent is **rejected with a clea
 `TypeError` at the send site** (never silently corrupted) — `RegExp`, `Headers`, a
 class instance, an over-long `bigint`, or anything nested deeper than 64 levels.
 
-> **Cache-keyed args are the exception.** A subscription / `useQuery` / shape arg
-> doubles as the reactive **cache key**, which must be a stable string — so
-> `bigint`, bytes, and `Date` **can't** appear there yet (you get a `TypeError`
-> telling you to pass a string / number / epoch-ms instead). Mutation and action
-> args, and all results, have no such limit. (Full support is a tracked reactive-
-> engine change — see `plans/090-subscription-arg-wire-fidelity.md`.)
+> **Cache-keyed args included.** A subscription / `useQuery` / shape arg doubles
+> as the reactive **cache key**: it is keyed on its _wire form_
+> (`stableWireKey`), so `bigint`, bytes, `Date`, `Map`, `Set`, and `URL` args
+> subscribe, dedup, and re-execute with their real values — and two
+> subscriptions whose args differ only by such a value get distinct keys. Two
+> caveats: `Map`/`Set` args key by **insertion order** (two equal Maps built in
+> different orders open separate subscriptions — prefer plain objects), and a
+> `URL` arg can't survive the server's hibernation attachment (you'll get a
+> structured `SUBSCRIPTION_PERSIST_FAILED` error — pass `url.href` instead).
+> Values the wire refuses (`RegExp`, class instances, …) still fail loud with a
+> `TypeError` at the call site.
 
 ## Reconnect & bookmarks
 

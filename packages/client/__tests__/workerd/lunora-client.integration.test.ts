@@ -272,4 +272,42 @@ describe("lunoraClient (workerd integration)", () => {
             client.close();
         }
     });
+
+    it("subscribes with bigint/Date args end-to-end: decode-at-entry, real-value seed, attachment fidelity (plan 090)", async () => {
+        expect.assertions(3);
+
+        const client = makeClient();
+        const received: unknown[] = [];
+        const args = { at: new Date(5000), since: 123n };
+
+        try {
+            // Pre-change this threw client-side at the registry key; the frame's
+            // JSON.stringify would have thrown on the bigint anyway.
+            client.subscribe(ref("counters:since"), args, (value) => {
+                received.push(value);
+            });
+
+            // The seed (executeSubscription echo) ships the DECODED args back as
+            // the subscription's first value — the full client → workerd → client
+            // round-trip preserves the real bigint/Date.
+            await waitFor(() => received.length > 0);
+
+            expect(received[0]).toStrictEqual({ args: { at: new Date(5000), since: 123n }, functionPath: "counters:since" });
+
+            await runInDurableObject(rootStub(), async (instance, state) => {
+                // The DO's executeSubscription ran with REAL values (not tagged arrays).
+                expect(instance.lastSubscribeArgs).toStrictEqual({ at: new Date(5000), since: 123n });
+
+                // The hibernation attachment (real workerd structured clone) carries
+                // the decoded args, so a post-hibernation re-execution sees them too.
+                const [socket] = state.getWebSockets();
+                const attachment = socket?.deserializeAttachment() as { subs: Record<string, { args?: Record<string, unknown> }> };
+                const stored = Object.values(attachment.subs).find((sub) => sub.args?.["since"] !== undefined);
+
+                expect(stored?.args).toStrictEqual({ at: new Date(5000), since: 123n });
+            });
+        } finally {
+            client.close();
+        }
+    });
 });

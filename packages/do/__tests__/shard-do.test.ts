@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "../src/shard-do";
 import type { MutationDelta, SocketAttachment, SubscriptionEnvelope } from "../src/types";
@@ -127,6 +128,9 @@ class ReexecShard extends ShardDO {
     /** userId visible inside the most recent `executeSubscription` call. */
     public userIdDuringExec: string | undefined;
 
+    /** args visible inside the most recent `executeSubscription` call. */
+    public argsDuringExec: Record<string, unknown> | undefined;
+
     /** When set, `handleRpc` records this table as changed (simulates a write). */
     public changedTableOnRpc: string | undefined;
 
@@ -161,10 +165,11 @@ class ReexecShard extends ShardDO {
 
     protected override executeSubscription(
         functionPath: string,
-        _args: Record<string, unknown>,
+        args: Record<string, unknown>,
         identity?: { identity?: Record<string, unknown>; userId?: string },
     ): Promise<SubscriptionOutcome | null> {
         this.execCount += 1;
+        this.argsDuringExec = args;
         // Identity is now threaded EXPLICITLY by the caller (mirrors the codegen
         // `buildCtx`, which reads `options.identity` for subscriptions instead of
         // the shared per-request field). The subscription bridge always passes an
@@ -905,6 +910,96 @@ describe("shardDO subscription re-execution", () => {
 
         expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [{ sessionId: "a", x: 0, y: 0 }], id: "sub-1", type: "data" });
         expect(ws.sent.length).toBeGreaterThan(sentBefore);
+    });
+});
+
+describe("shardDO wire-typed subscription args (decode-at-entry)", () => {
+    let state: ReturnType<typeof createFakeState>;
+
+    beforeEach(() => {
+        state = createFakeState();
+    });
+
+    it("decodes wire-encoded args ONCE at the subscribe entry point: attachment, seed, and re-execution all see real values", async () => {
+        expect.assertions(5);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:since", { result: [], tables: new Set(["messages"]) });
+
+        // The frame carries the client's `encodeWire` form of `{ at: Date(5000), since: 123n }`.
+        await shard.driveMessage(ws, {
+            id: "sub-1",
+            query: {
+                args: encodeWire({ at: new Date(5000), since: 123n }) as Record<string, unknown>,
+                functionPath: "messages:since",
+                table: "messages",
+            },
+            type: "subscribe",
+        });
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual({ id: "sub-1", type: "ack" });
+        // The seed executed with the DECODED args, not the tagged arrays.
+        expect(shard.argsDuringExec).toStrictEqual({ at: new Date(5000), since: 123n });
+        // The attachment stores decoded args, so hibernation (structured clone)
+        // and every later consumer (re-execution, reactiveCacheKey, RLS) see them.
+        expect(ws.attachment?.subs["sub-1"]?.args).toStrictEqual({ at: new Date(5000), since: 123n });
+
+        // A write to a read table re-executes from the ATTACHMENT's stored args.
+        shard.argsDuringExec = undefined;
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(2);
+        expect(shard.argsDuringExec).toStrictEqual({ at: new Date(5000), since: 123n });
+    });
+
+    it("keeps pure-JSON subscribe envelopes byte-compatible (identity decode)", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: [], tables: new Set(["messages"]) });
+
+        await shard.driveMessage(ws, {
+            id: "sub-1",
+            query: { args: { channel: "general", limit: 10 }, functionPath: "messages:list", table: "messages" },
+            type: "subscribe",
+        });
+
+        expect(shard.argsDuringExec).toStrictEqual({ channel: "general", limit: 10 });
+        expect(ws.attachment?.subs["sub-1"]?.args).toStrictEqual({ channel: "general", limit: 10 });
+    });
+
+    it("answers a malformed tagged payload with a structured error frame instead of throwing out of webSocketMessage", async () => {
+        expect.assertions(3);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+
+        // An over-long bigint digit string fails `decodeWire`'s DoS bound.
+        await expect(
+            shard.driveMessage(ws, {
+                id: "sub-1",
+                query: { args: { since: ["$lunora.wire$", "bigint", "9".repeat(2000)] }, functionPath: "messages:since", table: "messages" },
+                type: "subscribe",
+            }),
+        ).resolves.toBeUndefined();
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual({
+            code: "BAD_SUBSCRIPTION_ARGS",
+            error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
+            id: "sub-1",
+            type: "error",
+        });
+        // Nothing was registered on the socket.
+        expect(ws.attachment?.subs["sub-1"]).toBeUndefined();
     });
 });
 

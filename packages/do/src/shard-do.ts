@@ -2352,7 +2352,40 @@ abstract class ShardDO {
                 return;
             }
 
-            const status = this.subscribe(ws, envelope.id, envelope.query);
+            // Decode the wire-encoded subscription args ONCE, at the entry point —
+            // BEFORE the attachment store and the seed — so every downstream
+            // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
+            // eval) sees REAL values (`bigint`/`Date`/bytes), and the
+            // structured-clone attachment carries them through hibernation.
+            // `decodeWire` is identity for pure-JSON args (legacy frames included).
+            let query: SubscriptionQuery;
+
+            try {
+                query =
+                    envelope.query.args === undefined
+                        ? envelope.query
+                        : { ...envelope.query, args: decodeWire(envelope.query.args) as Record<string, unknown> };
+            } catch {
+                // A malformed tagged payload (over-long bigint, over-deep nesting)
+                // must not throw out of `webSocketMessage` — surface a structured
+                // error frame instead, mirroring the persist-failure path.
+                try {
+                    ws.send(
+                        JSON.stringify({
+                            code: "BAD_SUBSCRIPTION_ARGS",
+                            error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
+                            id: envelope.id,
+                            type: "error",
+                        }),
+                    );
+                } catch {
+                    // Socket may already be closed; never throw out of webSocketMessage.
+                }
+
+                return;
+            }
+
+            const status = this.subscribe(ws, envelope.id, query);
 
             if (status !== "ok") {
                 const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
@@ -2378,15 +2411,27 @@ abstract class ShardDO {
             // subclass doesn't support re-execution (base default), this is a
             // no-op and the subscriber relies on its initial HTTP query.
             if (functionPath) {
-                await this.seedSubscription(ws, envelope.id, envelope.query, functionPath, isAdmin);
+                await this.seedSubscription(ws, envelope.id, query, functionPath, isAdmin);
             }
 
             return;
         }
 
         if (envelope.type === "shape_subscribe" && envelope.shape) {
+            // Decode-at-entry, mirroring the `subscribe` branch above: the stored
+            // descriptor and every `resolveShape` see real values.
+            let shapeArgs: Record<string, unknown> | undefined;
+
+            try {
+                shapeArgs = envelope.shape.args === undefined ? undefined : (decodeWire(envelope.shape.args) as Record<string, unknown>);
+            } catch {
+                this.sendShapeSubscribeError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
+
+                return;
+            }
+
             await this.handleShapeSubscribe(ws, envelope.id, {
-                args: envelope.shape.args,
+                args: shapeArgs,
                 name: envelope.shape.name,
                 sinceEpoch: envelope.sinceEpoch,
                 sinceSeq: envelope.sinceCheckpoint,

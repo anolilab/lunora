@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import { isConflictError } from "../src/errors";
 import type { OptimisticUpdate } from "../src/local-store";
 import { LunoraClient } from "../src/lunora-client";
@@ -454,6 +455,83 @@ describe("lunoraClient", () => {
             const last = JSON.parse(socket.sent.at(-1)!);
 
             expect(last).toEqual({ id: sub.id, type: "unsubscribe" });
+        });
+
+        it("wire-encodes bigint/Date subscription args on the subscribe frame (and dedups/distinguishes by value)", async () => {
+            expect.assertions(6);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // Pre-change this threw at the registry key; now it must key, send,
+            // and JSON-serialize cleanly (the raw frame stringify would throw on
+            // a real bigint).
+            client.subscribe(fnRef("messages:list"), { at: new Date(5000), since: 123n }, () => {});
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            expect(wireFrames(socket)).toHaveLength(1);
+
+            const sub = firstSub(socket);
+
+            expect(sub.type).toBe("subscribe");
+            // The frame carries the TAGGED wire form; the shard's decode-at-entry
+            // revives the real values before storing/executing.
+            expect(decodeWire(sub.query.args)).toStrictEqual({ at: new Date(5000), since: 123n });
+
+            socket.receive({ id: sub.id, type: "ack" });
+
+            // Same wire-typed args → deduped onto the existing (acked) registration…
+            client.subscribe(fnRef("messages:list"), { at: new Date(5000), since: 123n }, () => {});
+
+            expect(wireFrames(socket)).toHaveLength(1);
+
+            // …while args differing ONLY by the bigint open a distinct subscription.
+            client.subscribe(fnRef("messages:list"), { at: new Date(5000), since: 124n }, () => {});
+
+            expect(wireFrames(socket)).toHaveLength(2);
+            expect(wireFrames(socket)[1].id).not.toBe(sub.id);
+
+            client.close();
+        });
+
+        it("keeps pure-JSON subscribe frames byte-identical (no wire tags)", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), { channel: "general", limit: 10 }, () => {});
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            expect(firstSub(socket).query.args).toStrictEqual({ channel: "general", limit: 10 });
+
+            client.close();
+        });
+
+        it("rejects a subscription arg the wire refuses with a TypeError at the call site", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            expect(() => client.subscribe(fnRef("messages:list"), { pattern: /abc/ }, () => {})).toThrow(TypeError);
+
+            client.close();
         });
 
         it("forwards a settled frame's watermark to onCheckpoint without firing the data callback", () => {

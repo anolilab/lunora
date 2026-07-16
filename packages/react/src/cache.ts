@@ -144,4 +144,4 @@ const getSubscriptionRegistry = (client: LunoraClient): LunoraSubscriptionRegist
 };
 
 export { getSubscriptionRegistry, LunoraSubscriptionRegistry };
-export { lunoraQueryKey, serializeQueryKey, stableStringify } from "./query-key";
+export { lunoraQueryKey, serializeQueryKey, stableStringify, stableWireKey } from "./query-key";
