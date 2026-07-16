@@ -6,7 +6,6 @@ export type {
     AuthCapabilities,
     AuthConfigInfo,
     AuthImpersonation,
-    AuthIntrospector,
     AuthPage,
     AuthSession,
     AuthUser,

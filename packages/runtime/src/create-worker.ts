@@ -6,7 +6,7 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
-import type { AuthAdmin, AuthIntrospector } from "./auth-admin-routes";
+import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
@@ -551,14 +551,6 @@ interface WorkerOptions {
      * signal is then absent but auth behaves identically.
      */
     authHandler?: (request: Request) => Promise<Response | undefined>;
-
-    /**
-     * @deprecated Use {@link WorkerOptions.authAdmin} (an {@link AuthAdmin}),
-     * which also lights up the user-management mutation endpoints. Still honored
-     * as a read-only fallback for the browse endpoints.
-     */
-
-    authIntrospector?: AuthIntrospector;
 
     /**
      * Optional table-level authorization callback for fan-out RPC envelopes.
@@ -3428,8 +3420,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
         ...buildAuthAdminRoutes({
             assertAdmin: assertAdminAuthorized,
-            // eslint-disable-next-line sonarjs/deprecation -- `authIntrospector` is the intentional read-only fallback
-            getAuthAdmin: () => options.authAdmin ?? options.authIntrospector,
+            getAuthAdmin: () => options.authAdmin,
             parsePaging,
             queryParameter,
             readJsonBody: readJsonBodyWithLimit,
@@ -3807,7 +3798,6 @@ export type {
     AuthCapabilities,
     AuthConfigInfo,
     AuthImpersonation,
-    AuthIntrospector,
     AuthPage,
     AuthSession,
     AuthUser,

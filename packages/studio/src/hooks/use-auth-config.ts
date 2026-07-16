@@ -31,7 +31,7 @@ export const DEFAULT_AUTH_CONFIG: AuthConfigInfo = {
  * one in-flight request and one cache entry.
  *
  * Returns the conservative {@link DEFAULT_AUTH_CONFIG} until the fetch settles
- * (or if it fails, e.g. a read-only `authIntrospector` with no `config` op),
+ * (or if it fails, e.g. a read-only `authAdmin` plane with no `config` op),
  * with `ready` flipping true once it has (`retry: 0` on the query client means
  * an error settles immediately rather than retrying). The richer sibling of
  * `useAuthCapabilities`: panels that only gate on a plugin flag use that; panels

@@ -140,8 +140,7 @@ interface AuthAdmin {
     listOrgRoles?: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listPasskeys?: (input: { userId: string }) => Promise<Record<string, unknown>[]>;
     // `listUsers`/`listSessions` are the only required members: they're the
-    // read-only browse surface that even a deprecated `authIntrospector`
-    // (`Pick<AuthAdmin, "listUsers" | "listSessions">`) must provide. Every other
+    // read-only browse surface every implementation must provide. Every other
     // op is optional and guarded at dispatch (`AUTH_OP_NOT_SUPPORTED`).
     listSessions: (options: { limit?: number; offset?: number; userId?: string }) => Promise<AuthPage<AuthSession>>;
     listTeamMembers?: (options: { limit?: number; offset?: number; teamId: string }) => Promise<AuthPage<Record<string, unknown>>>;
@@ -170,19 +169,11 @@ interface AuthAdmin {
     updateUser?: (input: { data: Record<string, unknown>; userId: string }) => Promise<AuthUser>;
 }
 
-/**
- * Read-only subset of {@link AuthAdmin}, kept as an alias for the former
- * `authIntrospector` option (which the worker still honours as a browse-only
- * fallback). Prefer wiring `authAdmin` with `@lunora/auth`'s `createAuthAdmin`
- * so the mutation endpoints light up too.
- */
-type AuthIntrospector = Pick<AuthAdmin, "listSessions" | "listUsers">;
-
 /** Closure-scoped worker helpers the auth routes borrow (so this module stays out of the worker's god-closure). */
 interface AuthAdminRouteDeps {
     /** Throw 403 unless the request carries a valid admin bearer. */
     assertAdmin: (request: Request) => void;
-    /** The configured auth plane (new `authAdmin`, else the deprecated `authIntrospector`), or undefined. */
+    /** The configured auth plane (`authAdmin`), or undefined. */
     getAuthAdmin: () => AuthAdmin | undefined;
     /** Parse the shared `limit`/`offset` paging params off a GET request. */
     parsePaging: (request: Request) => { limit?: number; offset?: number };
@@ -751,7 +742,6 @@ export type {
     AuthCapabilities,
     AuthConfigInfo,
     AuthImpersonation,
-    AuthIntrospector,
     AuthPage,
     AuthSession,
     AuthTimestamp,

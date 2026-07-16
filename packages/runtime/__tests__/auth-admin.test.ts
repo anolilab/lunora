@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AuthAdmin, AuthIntrospector, ExecutionContextLike } from "../src/create-worker";
+import type { AuthAdmin, ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
@@ -24,10 +24,11 @@ const ADMIN_TOKEN = "admin-bear";
 const USERS = { rows: [{ email: "a@example.com", id: "u1" }], total: 1 };
 const SESSIONS = { rows: [{ id: "s1", userId: "u1" }], total: 1 };
 
-const introspector = (): AuthIntrospector => {
+/** A minimal read-only auth plane — just the required browse ops, no mutations. */
+const readOnlyAuthAdmin = (): Pick<AuthAdmin, "listSessions" | "listUsers"> => {
     return {
-        listSessions: vi.fn<AuthIntrospector["listSessions"]>(async () => SESSIONS),
-        listUsers: vi.fn<AuthIntrospector["listUsers"]>(async () => USERS),
+        listSessions: vi.fn<AuthAdmin["listSessions"]>(async () => SESSIONS),
+        listUsers: vi.fn<AuthAdmin["listUsers"]>(async () => USERS),
     };
 };
 
@@ -37,14 +38,14 @@ describe("createWorker — auth introspection endpoints", () => {
     it("users rejects without a valid admin bearer (403)", async () => {
         expect.assertions(1);
 
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: readOnlyAuthAdmin(), shardDO: noopNamespace });
 
         const response = await worker.fetch(new Request("https://app.example/_lunora/admin/auth/users", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
 
-    it("users reports AUTH_NOT_CONFIGURED when no introspector is bound (400)", async () => {
+    it("users reports AUTH_NOT_CONFIGURED when no auth plane is bound (400)", async () => {
         expect.assertions(2);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
@@ -58,11 +59,11 @@ describe("createWorker — auth introspection endpoints", () => {
         expect(body.error.code).toBe("AUTH_NOT_CONFIGURED");
     });
 
-    it("users returns the introspector's page and forwards paging", async () => {
+    it("users returns the auth plane's page and forwards paging", async () => {
         expect.assertions(3);
 
-        const intro = introspector();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
+        const intro = readOnlyAuthAdmin();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: intro, shardDO: noopNamespace });
 
         const response = await worker.fetch(authed("https://app.example/_lunora/admin/auth/users?limit=10&offset=5"), {}, fakeContext);
 
@@ -74,8 +75,8 @@ describe("createWorker — auth introspection endpoints", () => {
     it("sessions forwards userId + paging and returns the page", async () => {
         expect.assertions(3);
 
-        const intro = introspector();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
+        const intro = readOnlyAuthAdmin();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: intro, shardDO: noopNamespace });
 
         const response = await worker.fetch(authed("https://app.example/_lunora/admin/auth/sessions?userId=u1&limit=20"), {}, fakeContext);
 
@@ -87,8 +88,8 @@ describe("createWorker — auth introspection endpoints", () => {
     it("sessions without a userId passes undefined", async () => {
         expect.assertions(1);
 
-        const intro = introspector();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
+        const intro = readOnlyAuthAdmin();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: intro, shardDO: noopNamespace });
 
         await worker.fetch(authed("https://app.example/_lunora/admin/auth/sessions"), {}, fakeContext);
 
@@ -98,7 +99,7 @@ describe("createWorker — auth introspection endpoints", () => {
     it("users rejects non-GET (405)", async () => {
         expect.assertions(1);
 
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: readOnlyAuthAdmin(), shardDO: noopNamespace });
 
         const response = await worker.fetch(
             new Request("https://app.example/_lunora/admin/auth/users", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
@@ -240,8 +241,8 @@ describe("createWorker — auth admin mutation endpoints", () => {
     it("reports AUTH_OP_NOT_SUPPORTED when the plane omits the mutation", async () => {
         expect.assertions(2);
 
-        // A read-only introspector satisfies the reads but has no `banUser`.
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });
+        // A read-only auth plane satisfies the reads but has no `banUser`.
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: readOnlyAuthAdmin(), shardDO: noopNamespace });
 
         const response = await worker.fetch(post("https://app.example/_lunora/admin/auth/users/ban", { userId: "u1" }), {}, fakeContext);
         const body: { error: { code: string } } = await response.json();
