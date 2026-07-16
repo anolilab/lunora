@@ -4,9 +4,8 @@
 # in test.yml, so unchanged packages can go stale between merges — this
 # scheduled workflow re-verifies the WHOLE matrix daily: the full unit-test
 # suite for every package (no `affected` filter), all workerd integration
-# suites, and the e2e suite unconditionally (no paths-filter / CI_E2E_SKIP
-# escape hatch). NOT a required check — a nightly failure is a canary, it
-# must never block a PR.
+# suites, and the e2e suite unconditionally (no paths-filter). NOT a
+# required check — a nightly failure is a canary, it must never block a PR.
 
 "name": "Nightly"
 
@@ -115,8 +114,8 @@
               "run": |
                   pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
 
-    # Same job as test.yml's `e2e`, minus the paths-filter gate and the
-    # `vars.CI_E2E_SKIP` escape hatch — the nightly always runs it.
+    # Same job as test.yml's `e2e`, minus the paths-filter gate — the
+    # nightly always runs it.
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
         "runs-on": "ubuntu-latest"

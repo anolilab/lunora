@@ -179,7 +179,7 @@
 
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
-        "if": "needs.files-changed.outputs.e2e == 'true' && vars.CI_E2E_SKIP != 'true'"
+        "if": "needs.files-changed.outputs.e2e == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
