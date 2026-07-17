@@ -746,8 +746,8 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(calls.some((url) => url.startsWith("https://old.example.com") && url.includes("/_lunora/admin/export"))).toBe(true);
-        expect(calls.some((url) => url.startsWith("https://new.example.com") && url.includes("/_lunora/admin/import"))).toBe(true);
+        expect(calls.some((url) => new URL(url).origin === "https://old.example.com" && new URL(url).pathname.includes("/_lunora/admin/export"))).toBe(true);
+        expect(calls.some((url) => new URL(url).origin === "https://new.example.com" && new URL(url).pathname.includes("/_lunora/admin/import"))).toBe(true);
         expect(infos.some((line) => line.includes("counts match"))).toBe(true);
     });
 

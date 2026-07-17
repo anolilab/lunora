@@ -33,13 +33,63 @@ const READONLY_LEAD = /^(?:explain\s+(?:query\s+plan\s+)?)?(?:select|with)\b/iu;
  */
 const FORBIDDEN_KEYWORD = /\b(?:alter|attach|create|delete|detach|drop|insert|pragma|reindex|replace|truncate|update|vacuum)\b/iu;
 
-/** Leading whitespace + SQL comments, so the read-verb check sees the real first token. */
-const LEADING_NOISE = /^(?:\s|--[^\n]*\n?|\/\*[\s\S]*?\*\/)+/u;
 /** A single trailing semicolon (allowed); any other `;` marks a multi-statement batch. */
 const TRAILING_SEMICOLON = /;\s*$/u;
 
-/** Strip leading whitespace and SQL comments so the read-verb check sees the real first token. */
-const stripLeading = (sql: string): string => sql.replace(LEADING_NOISE, "");
+/** Unicode whitespace, tested one code point at a time (no backtracking). */
+const WHITESPACE = /\s/u;
+
+/** Index just past a `-- …` line comment at `from` (skips to the newline, left as whitespace). */
+const skipLineComment = (sql: string, from: number): number => {
+    let index = from + 2;
+
+    while (index < sql.length && sql[index] !== "\n") {
+        index += 1;
+    }
+
+    return index;
+};
+
+/** Index just past a block comment at `from`, or `-1` when it never closes. */
+const skipBlockComment = (sql: string, from: number): number => {
+    const close = sql.indexOf("*/", from + 2);
+
+    return close === -1 ? -1 : close + 2;
+};
+
+/**
+ * Strip leading whitespace and SQL comments so the read-verb check sees the real
+ * first token. A single linear scan rather than one alternation regex: an
+ * alternation over whitespace, line comments, and block comments backtracks
+ * polynomially against admin-supplied SQL on long runs of unterminated
+ * block-comment openers. An unterminated block comment is left in place so the
+ * read-verb check rejects it.
+ */
+const stripLeading = (sql: string): string => {
+    let index = 0;
+
+    while (index < sql.length) {
+        const char = sql[index];
+
+        if (char !== undefined && WHITESPACE.test(char)) {
+            index += 1;
+        } else if (char === "-" && sql[index + 1] === "-") {
+            index = skipLineComment(sql, index);
+        } else if (char === "/" && sql[index + 1] === "*") {
+            const next = skipBlockComment(sql, index);
+
+            if (next === -1) {
+                break;
+            }
+
+            index = next;
+        } else {
+            break;
+        }
+    }
+
+    return sql.slice(index);
+};
 
 /** Build a tagged LunoraError the runtime serializes with its `status`. */
 const sqlError = (message: string, code: string): Error => new LunoraError(code, message, { status: 400 });

@@ -299,7 +299,7 @@ const registryBase = (): string => {
 const resolveTagVersion = async (packageName: string, tag: string): Promise<string | undefined> => {
     try {
         // Scoped names (`@lunora/vite`) encode only the `/`; the registry path is `/@lunora%2Fvite`.
-        const response = await fetch(`${registryBase()}/${packageName.replace("/", "%2F")}`, {
+        const response = await fetch(`${registryBase()}/${packageName.replaceAll("/", "%2F")}`, {
             headers: { accept: "application/vnd.npm.install-v1+json" },
             signal: AbortSignal.timeout(10_000),
         });
