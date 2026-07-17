@@ -122,6 +122,7 @@ const useSqlAutocomplete = (
     // the derived session is unchanged — without that bail, a refresh from an
     // effect would loop forever: fresh state object → re-render → effect →
     // refresh → fresh state object … (the studio's SQL-editor render-loop hang).
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `refresh` is a dependency of the probe-refresh effect; a stable identity is what stops that effect firing every render (the render-loop hang described above). React Compiler would memoize it in the build, but the vitest suite runs the JSX through esbuild without the compiler transform, so the explicit useCallback is what holds the identity stable in the tests that now gate CI.
     const refresh = useCallback(
         (value: string, caret: number): void => {
             const suggestions = suggestionsFor(value, caret, schema);
