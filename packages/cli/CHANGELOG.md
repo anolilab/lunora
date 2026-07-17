@@ -1,3 +1,15 @@
+## @lunora/cli [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/%40lunora%2Fcli%401.0.0-alpha.86...%40lunora%2Fcli%401.0.0-alpha.87) (2026-07-17)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.44
+* **@lunora/config:** upgraded to 1.0.0-alpha.68
+* **@lunora/container:** upgraded to 1.0.0-alpha.12
+* **@lunora/d1:** upgraded to 1.0.0-alpha.30
+* **@lunora/errors:** upgraded to 1.0.0-alpha.5
+* **@lunora/seed:** upgraded to 1.0.0-alpha.24
+
 ## @lunora/cli [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/%40lunora%2Fcli%401.0.0-alpha.85...%40lunora%2Fcli%401.0.0-alpha.86) (2026-07-13)
 
 
