@@ -8,6 +8,7 @@ import type { SqliteAdapter } from "./types";
  * @param database.run Execute a parameterised SQL statement (no results).
  * @param database.exec Execute SQL and return result rows.
  * @param database.close Tear down the database connection.
+ * @experimental
  */
 export const createSqlJsAdapter = (database: {
     close: () => void;

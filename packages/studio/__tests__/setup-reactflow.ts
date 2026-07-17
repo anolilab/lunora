@@ -10,7 +10,16 @@
 // Referenced from `vitest.config.ts` `setupFiles`, so it runs once per test file
 // before any test. Adapted from React Flow's documented testing setup.
 
+import { configure } from "@testing-library/react";
+
 /* eslint-disable vitest/require-hook -- a setupFile installs global stubs at module scope before any test runs; there is no hook context */
+
+// Lazy-loaded Studio panels (advisors, migrations, …) can take longer than
+// Testing Library's 1s default to mount under CI's parallel-test contention
+// (and v8-coverage instrumentation), so give `findBy`/`waitFor` more headroom
+// there — mirroring the repo's CI vitest-timeout bump. Local runs keep the
+// snappy default for fast feedback.
+configure({ asyncUtilTimeout: process.env["CI"] === "true" ? 5000 : 1000 });
 
 /* eslint-disable class-methods-use-this -- no-op DOM stub: ResizeObserver methods intentionally do nothing */
 class ResizeObserverStub {

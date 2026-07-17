@@ -273,6 +273,36 @@ describe("lunora init", () => {
             expect(pkg.devDependencies.wrangler).toBe("^4.74.0");
         });
 
+        it("pins a STABLE published version exactly when the channel tag resolves to it (1.0 promotion)", async () => {
+            expect.assertions(4);
+
+            // After the 1.0 promotion the channel tag resolves to a stable
+            // version; the scaffold must pin that exact version — never the
+            // `^0.0.0` placeholder and never a floating `alpha` tag.
+            stubRegistry("1.0.0");
+
+            await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "stable-stamped",
+                templateType: "tanstack-start-react",
+            });
+
+            const pkg = JSON.parse(readFileSync(join(workdir, "stable-stamped", "package.json"), "utf8")) as {
+                dependencies: Record<string, string>;
+                devDependencies: Record<string, string>;
+            };
+
+            expect(pkg.dependencies.lunorash).toBe("1.0.0");
+            expect(pkg.dependencies["@lunora/react"]).toBe("1.0.0");
+            expect(pkg.devDependencies["@lunora/vite"]).toBe("1.0.0");
+
+            const raw = readFileSync(join(workdir, "stable-stamped", "package.json"), "utf8");
+
+            expect(raw).not.toContain("^0.0.0");
+        });
+
         it("falls back to the channel dist-tag when the registry lookup fails (offline)", async () => {
             expect.assertions(2);
 
@@ -381,21 +411,36 @@ describe("lunora init", () => {
             expect(pkg).toContain('"name": "starter"');
         });
 
-        it("next template is not yet available", async () => {
-            expect.assertions(2);
-
-            const warnings: string[] = [];
+        it("next template scaffolds app router + two-worker entries", async () => {
+            expect.assertions(12);
 
             const result = await runInitCommand({
                 cwd: workdir,
                 from: templatesRoot,
-                logger: { ...silentLogger(), warn: (message) => warnings.push(message) },
-                name: "soon",
+                logger: silentLogger(),
+                name: "next-app",
                 templateType: "next",
             });
 
-            expect(result.code).toBe(1);
-            expect(warnings.join("\n")).toContain("not yet available");
+            expect(result.code).toBe(0);
+
+            const target = join(workdir, "next-app");
+
+            expect(existsSync(join(target, "next.config.ts"))).toBe(true);
+            expect(existsSync(join(target, "open-next.config.ts"))).toBe(true);
+            expect(existsSync(join(target, "app", "layout.tsx"))).toBe(true);
+            expect(existsSync(join(target, "app", "page.tsx"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
+            // Two-worker split: Next SSR worker config + standalone Lunora worker.
+            expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
+            expect(existsSync(join(target, "wrangler.lunora.jsonc"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "server.ts"))).toBe(true);
+
+            const pkg = readFileSync(join(target, "package.json"), "utf8");
+
+            expect(pkg).toContain('"next"');
+            expect(pkg).toContain("@lunora/react");
+            expect(pkg).toContain('"name": "next-app"');
         });
 
         it("refuses to scaffold into a non-empty target", async () => {

@@ -21,6 +21,7 @@ import type { ProcessSettleSuccessResponse } from "@x402/core/http";
  * as its exact on-chain atomic-unit string (USDC has 6 decimals) — never coerced
  * to a fractional-dollar number — so no precision is lost crossing the reporting
  * seam.
+ * @experimental
  */
 export interface X402Receipt {
     /** Settled amount in the asset's atomic base units (USDC: 6 decimals), as an exact string. */
@@ -47,6 +48,7 @@ export interface X402Receipt {
  * settlement, does not block the paid response on it, and swallows any error it
  * throws — so a sink must never rely on being awaited or on its failures
  * surfacing.
+ * @experimental
  */
 export type X402ReceiptSink = (receipt: X402Receipt) => Promise<void> | void;
 
@@ -56,6 +58,7 @@ export type X402ReceiptSink = (receipt: X402Receipt) => Promise<void> | void;
  * the settlement result carries neither. Prefers the actual settled `amount`
  * (present for `upto`-scheme partial settlements) and falls back to the route's
  * required amount for `exact`.
+ * @experimental
  */
 export const toReceipt = (settlement: ProcessSettleSuccessResponse, context: { readonly resource: string; readonly ts: number }): X402Receipt => {
     return {
@@ -74,6 +77,7 @@ export const toReceipt = (settlement: ProcessSettleSuccessResponse, context: { r
  * A row for `@lunora/payment`'s durable `events` table. Deliberately a plain
  * structural type — building one imports nothing from `@lunora/payment`, so the
  * rails stay decoupled.
+ * @experimental
  */
 export interface PaymentEventRow {
     /** Epoch milliseconds the settlement was recorded. */
@@ -102,6 +106,7 @@ export interface PaymentEventRow {
  * table (`packages/payment/src/schema.ts`). Amount / from / to / resource are
  * intentionally not on this row — that card renders none of them; read them off
  * the {@link X402Receipt} (e.g. into your own revenue table) if you need them.
+ * @experimental
  */
 export const toPaymentEventRow = (receipt: X402Receipt): PaymentEventRow => {
     return {

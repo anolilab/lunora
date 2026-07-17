@@ -6,7 +6,7 @@ import { defineSchema, defineTable, v } from "../src/index";
  * `.source(...)` — external-source ingest declaration (plan 077). Orthogonal to
  * `.shardBy()`/`.global()`, implies `.externallyManaged()`, and fails fast on the
  * order-independent guards (`binding`/`query`). The tenant-scope + global
- * contradiction + unimplemented-mode checks need the fully-assembled table, so they
+ * contradiction + unknown-mode checks need the fully-assembled table, so they
  * are enforced (and asserted) at `defineSchema` time, not on the builder.
  */
 
@@ -48,9 +48,8 @@ describe("defineTable().source", () => {
             columns: ["title"],
             idColumn: "uuid",
             map,
-            mode: "incremental",
+            mode: "full-pull",
             query: "select uuid, title from documents",
-            reconcileEveryMs: 60_000,
             refresh: { everyMs: 5000 },
         });
 
@@ -59,9 +58,8 @@ describe("defineTable().source", () => {
             columns: ["title"],
             idColumn: "uuid",
             map,
-            mode: "incremental",
+            mode: "full-pull",
             query: "select uuid, title from documents",
-            reconcileEveryMs: 60_000,
             refresh: { everyMs: 5000 },
         });
     });
@@ -128,13 +126,28 @@ describe("defineSchema external-source validation", () => {
         ).toThrow(/cannot be both \.source\(\) and \.global\(\)/u);
     });
 
-    it("throws on mode: incremental (not yet implemented)", () => {
+    it("accepts the explicit default mode: full-pull", () => {
         expect.assertions(1);
 
         expect(() =>
             defineSchema({
-                documents: defineTable({ title: v.string() }).source({ binding: "HD", mode: "incremental", query: "select id, title from documents" }),
+                documents: defineTable({ title: v.string() }).source({ binding: "HD", mode: "full-pull", query: "select id, title from documents" }),
             }),
-        ).toThrow(/mode: "incremental"/u);
+        ).not.toThrow();
+    });
+
+    it("throws when an untyped caller passes an unknown mode", () => {
+        expect.assertions(1);
+
+        // `"incremental"` no longer typechecks (`ExternalSourceMode` is the single
+        // literal "full-pull" — a compile-time error); the runtime guard stays for
+        // untyped JS callers.
+        const source = { binding: "HD", mode: "incremental", query: "select id, title from documents" };
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source(source as unknown as Parameters<ReturnType<typeof defineTable>["source"]>[0]),
+            }),
+        ).toThrow(/only "full-pull" \(the default\) is supported/u);
     });
 });

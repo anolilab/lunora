@@ -4,6 +4,7 @@ import type { LocalMirror } from "./local-mirror";
 
 /**
  * Options for the {@link useLocalQuery} hook.
+ * @experimental
  */
 export interface UseLocalQueryOptions {
     /**
@@ -63,6 +64,7 @@ export interface UseLocalQueryOptions {
  *   return <ul>{users.map(u => <li key={u.id}>{u.name}</li>)}</ul>;
  * }
  * ```
+ * @experimental
  */
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- public `<T>` row-type generic kept for caller ergonomics (specifies the returned row shape, like `useState<T>`)
 export const useLocalQuery = <T = Record<string, unknown>>(

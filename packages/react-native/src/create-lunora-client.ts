@@ -72,6 +72,7 @@ export const withAuthWebSocket = (WebSocketImpl: typeof WebSocket, getAuthHeader
  * explicit `persistence`, `fetch`, or `WebSocket` takes precedence over the
  * convenience derived from `storage` / `getAuthHeaders`. See the package README
  * for a full setup example.
+ * @experimental
  */
 export const createLunoraClient = (options: CreateLunoraClientOptions): LunoraClient => {
     const { getAuthHeaders, storage, ...rest } = options;

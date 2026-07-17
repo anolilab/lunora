@@ -1,5 +1,5 @@
 import type { ReactElement, RefObject } from "react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import { cn } from "../../lib/utils";
@@ -116,20 +116,44 @@ const useSqlAutocomplete = (
 ): SqlAutocomplete & { move: (delta: number) => void } => {
     const [state, setState] = useState<AutocompleteState | null>(null);
 
-    const refresh = (value: string, caret: number): void => {
-        const suggestions = suggestionsFor(value, caret, schema);
+    // Stable across renders (only re-created when the schema data changes) so the
+    // panel's "re-derive once a probe resolves" effect keys off it without firing
+    // after every render. The functional setState bails to the CURRENT state when
+    // the derived session is unchanged — without that bail, a refresh from an
+    // effect would loop forever: fresh state object → re-render → effect →
+    // refresh → fresh state object … (the studio's SQL-editor render-loop hang).
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `refresh` is a dependency of the probe-refresh effect; a stable identity is what stops that effect firing every render (the render-loop hang described above). React Compiler would memoize it in the build, but the vitest suite runs the JSX through esbuild without the compiler transform, so the explicit useCallback is what holds the identity stable in the tests that now gate CI.
+    const refresh = useCallback(
+        (value: string, caret: number): void => {
+            const suggestions = suggestionsFor(value, caret, schema);
 
-        if (suggestions.length === 0) {
-            setState(null);
+            if (suggestions.length === 0) {
+                setState(null);
 
-            return;
-        }
+                return;
+            }
 
-        const node = textareaRef.current;
-        const { left, top } = node === null ? { left: 0, top: 0 } : caretOffset(node, caret);
+            const node = textareaRef.current;
+            const { left, top } = node === null ? { left: 0, top: 0 } : caretOffset(node, caret);
 
-        setState({ active: 0, left, suggestions, top });
-    };
+            setState((current) => {
+                const unchanged =
+                    current !== null &&
+                    current.active === 0 &&
+                    current.left === left &&
+                    current.top === top &&
+                    current.suggestions.length === suggestions.length &&
+                    current.suggestions.every((existing, index) => {
+                        const next = suggestions.at(index);
+
+                        return existing.kind === next?.kind && existing.label === next.label && existing.detail === next.detail;
+                    });
+
+                return unchanged ? current : { active: 0, left, suggestions, top };
+            });
+        },
+        [schema, textareaRef],
+    );
 
     const close = (): void => {
         setState(null);

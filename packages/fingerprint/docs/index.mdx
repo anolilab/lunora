@@ -1,0 +1,94 @@
+---
+title: "@lunora/fingerprint"
+description: Zero-dependency error fingerprinting — one stable grouping hash that collapses noisy errors into Issues for Studio and the Cloud.
+---
+
+`@lunora/fingerprint` is Lunora's deterministic error-grouping core: it folds
+every occurrence of "the same" error onto one stable 16-character hash — an
+**Issue** — no matter where the error was observed. A live observability sink
+event and a request-log row persisted hours earlier compute the same hash, so
+the local Studio Issues panel and a Lunora Cloud incident describe the same
+object.
+
+The core algorithm is vendored from Superlog Labs' `@superlog/fingerprint`
+(Apache-2.0, see the package `NOTICE`), with the Node-only crypto backend
+replaced by a portable synchronous SHA-256 — the package is **zero-dependency**
+and runs unchanged in the browser (Studio), the Cloudflare Workers (workerd)
+runtime, and Node.
+
+```ts
+import { fingerprintError } from "@lunora/fingerprint";
+
+const fp = fingerprintError({
+    functionPath: "messages:list",
+    message: "User 12345 not found",
+    code: "NOT_FOUND", // metadata only — never part of the hash
+});
+// → { hash: "168d714cba85f1c8", title: "User 12345 not found",
+//     culprit: "messages:list", bucket: "user <n> not found", code: "NOT_FOUND" }
+```
+
+## The hash contract
+
+`fingerprintError({ functionPath, message, code? })` hashes over exactly
+
+```
+sha256("lunora::" + functionPath + "::" + bucket(message))
+```
+
+truncated to 16 hex characters. Two things follow from that:
+
+- **`functionPath` + normalized message is the whole identity.** That pair is
+  the one thing every Lunora error source can supply: an in-flight
+  observability event carries `{ code, message, status }`, while the durable
+  request log (`__lunora_reqlog__`) persists only `outcome` + `error_message`
+  — with no stored code. Hashing anything more would split a live Issue from
+  one recomputed from history.
+- **`code` is display metadata, never hashed.** It rides along on the result
+  (`fp.code`) for badges and filtering, but changing it does not create a new
+  Issue.
+
+The result also carries a `title` (first message line, capped at 120 chars),
+the `culprit` (the function path, or `container:<name>` for container
+lifecycle errors, which flow through the same seam), and the `bucket` the hash
+was built from — useful when inspecting why two errors did or didn't group.
+
+`fingerprintError` is pure and synchronous, so it is safe to call per row when
+grouping a request-log page client-side.
+
+## The message bucketer
+
+Raw messages embed per-occurrence noise — a route scanner probing 5,000 paths
+or a per-user id in the message must not explode one bug into 5,000 Issues.
+`messageBucketFor(message)` normalizes the message before hashing by
+stripping/tokenizing:
+
+- URLs and request paths
+- UUIDs, long ids, and hex blobs
+- IP addresses and timestamps
+- bare numbers (`"User 12345 not found"` → `"user <n> not found"`)
+
+so a sweep of `GET /wp-admin/...` 404s folds into a single Issue. The bucketer
+(and `normalizeMessage`, its heavier sibling) are exported for inspection and
+tests.
+
+## Stack-aware variants
+
+For OTLP-sourced telemetry that carries a real `exception.stacktrace`, the
+stack-aware `fingerprint` / `fingerprintLog` exports add top-5 user-frame
+normalization on top of the message bucket — the vendored superlog behavior.
+Inside a Lunora deployment you almost always want `fingerprintError`: Lunora
+errors carry no stack frames on the wire.
+
+## Where it feeds
+
+- **`@lunora/do`** computes fingerprints over the bounded request-log readout
+  behind the `getIssues` admin RPC.
+- **Studio** renders the grouped result in the Issues panel — one row per
+  hash, with occurrence counts, first/last seen, and the `code` badge.
+- **Lunora Cloud** computes the same hash over durable OTLP telemetry, so a
+  local Issue and a cloud incident share an identity.
+
+You normally don't install this package directly — it arrives as a dependency
+of `@lunora/do` and the Studio. Reach for it yourself only to group errors in
+your own tooling with the same identity Lunora uses.

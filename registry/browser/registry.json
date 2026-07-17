@@ -12,7 +12,7 @@
     "bindings": [
         {
             "path": ["browser"],
-            "value": [{ "binding": "BROWSER" }]
+            "value": { "binding": "BROWSER" }
         }
     ],
     "files": [{ "from": "browser.ts", "to": "lunora/browser/index.ts", "merge": "create-or-skip" }]

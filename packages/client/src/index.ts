@@ -8,6 +8,8 @@ export type { MutationDelta } from "./delta-merge";
 export { applyDelta, isMutationDelta } from "./delta-merge";
 export type { LunoraErrorCode } from "./errors";
 export { CONFLICT_ERROR_CODE, getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRateLimitedError, isUnauthorizedError } from "./errors";
+export type { HttpStreamOptions } from "./http-stream";
+export { httpStream } from "./http-stream";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
 export type { BatchSlot, ConnectionStatus, LunoraClientError, MutationCallOptions, MutationSettledEvent, SyncWatermark } from "./lunora-client";
@@ -57,6 +59,10 @@ export type {
     GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
+    HttpStreamArgsOf,
+    HttpStreamCallArgs,
+    HttpStreamChunkOf,
+    HttpStreamRef,
     KvKeyEntry,
     KvKeyListResult,
     KvNamespaceSummary,
@@ -95,4 +101,5 @@ export type {
     WorkflowInstanceStatus,
     WorkflowInstanceSummary,
     WorkflowStepDetail,
+    WsTokenProvider,
 } from "./types";

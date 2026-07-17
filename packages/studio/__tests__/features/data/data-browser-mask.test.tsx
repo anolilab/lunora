@@ -1,6 +1,7 @@
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { useState } from "react";
 import { describe, expect, it } from "vitest";
 
 import { DataBrowser } from "../../../src/features/data/data-browser";
@@ -46,9 +47,20 @@ const createMaskedClient = (policies: unknown = MASK_POLICIES): MockClientHooks 
         },
     });
 
+/**
+ * Test host emulating the studio's URL-controlled wiring: the browser's open
+ * table is derived from `tableParam`, so a standalone mount needs selection
+ * state fed back through `onSelectTable` (see data-browser.test.tsx).
+ */
+const ControlledDataBrowser = (): ReactElement => {
+    const [table, setTable] = useState<string | undefined>(undefined);
+
+    return <DataBrowser onSelectTable={setTable} tableParam={table} />;
+};
+
 const renderBrowser = (mock: MockClientHooks): ReactElement => (
     <LunoraProvider client={mock.asClient}>
-        <DataBrowser />
+        <ControlledDataBrowser />
     </LunoraProvider>
 );
 

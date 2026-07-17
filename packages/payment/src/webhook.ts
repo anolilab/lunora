@@ -23,7 +23,10 @@ const hmacSha256Base64 = async (keyBytes: BufferSource, payload: string): Promis
     return bytesToBase64(signature);
 };
 
-/** Constant-time string comparison to avoid leaking byte positions via timing. */
+/**
+ * Constant-time string comparison to avoid leaking byte positions via timing.
+ * @experimental
+ */
 export const constantTimeEqual = (a: string, b: string): boolean => {
     if (a.length !== b.length) {
         return false;
@@ -39,6 +42,10 @@ export const constantTimeEqual = (a: string, b: string): boolean => {
     return mismatch === 0;
 };
 
+/**
+ * `hmacSha256Hex` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const hmacSha256Hex = async (secret: string, payload: string): Promise<string> => {
     const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
     const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
@@ -67,6 +74,7 @@ export interface VerifyStandardWebhookInput {
  * Verify a Standard Webhooks signature (the scheme Polar and svix use):
  * `base64(HMAC_SHA256(key, "{id}.{timestamp}.{payload}"))` compared against the header's `v1`
  * entries, with a replay-window check. Throws a {@link LunoraPaymentError} on any failure.
+ * @experimental
  */
 export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): Promise<void> => {
     // Fail closed on an empty/missing secret: a zero-length HMAC key is attacker-known and forgeable.
@@ -126,6 +134,7 @@ export interface VerifyCreemSignatureInput {
  * Verify a Creem webhook signature: `hex(HMAC_SHA256(secret, rawBody))` compared against the
  * `creem-signature` header. Creem's scheme signs the raw body with no timestamp, so there is no
  * replay-window check. Throws a {@link LunoraPaymentError} on any failure.
+ * @experimental
  */
 export const verifyCreemSignature = async (input: VerifyCreemSignatureInput): Promise<void> => {
     // Fail closed on an empty/missing secret: a zero-length HMAC key is attacker-known and forgeable.

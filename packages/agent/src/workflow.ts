@@ -26,6 +26,7 @@ import type { AgentDefinition, AgentFunctionPaths, AgentRunInput, AgentRunResult
  *
  * The workflow ctx supplies durability (`step.do`) and the Lunora dispatcher
  * (`run`); the loop supplies determinism (step naming + idempotent persists).
+ * @experimental
  */
 const compileAgentWorkflow = (
     agent: AgentDefinition,

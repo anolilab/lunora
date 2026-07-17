@@ -7,6 +7,7 @@ import type { TableDiff } from "./table-diff";
  * Entries are immutable once appended; the `seq` field is assigned
  * monotonically by the log and doubles as a watermark for catch-up
  * replication between tabs or service-worker instances.
+ * @experimental
  */
 export interface EventLogEntry {
     /**
@@ -50,6 +51,7 @@ export interface EventLogEntry {
 
 /**
  * Serialised snapshot of the log — used for persistence and transfer.
+ * @experimental
  */
 export interface EventLogSnapshot {
     readonly entries: ReadonlyArray<EventLogEntry>;
@@ -62,6 +64,7 @@ export interface EventLogSnapshot {
 
 /**
  * Optional metadata that can accompany an appended event.
+ * @experimental
  */
 export interface AppendOptions {
     /** Globally-unique client identifier. */
@@ -85,6 +88,7 @@ export interface AppendOptions {
  * @remarks This class is intentionally **not** a full SQLite-backed log.
  * Persistence is the caller's responsibility (write the snapshot
  * to IndexedDB / OPFS via {@link EventLog#snapshot}).
+ * @experimental
  */
 export class EventLog {
     #entries: EventLogEntry[] = [];

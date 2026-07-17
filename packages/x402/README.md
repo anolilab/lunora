@@ -1,5 +1,7 @@
 # @lunora/x402
 
+> **Experimental** — this package is outside the Lunora 1.0 stability promise: its API may change in any release, without a major version bump.
+
 > Agentic payments over the [x402](https://x402.org) protocol for [Lunora](https://lunora.sh).
 
 x402 turns HTTP `402 Payment Required` into a machine-payable rail: no accounts,

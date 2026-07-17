@@ -22,6 +22,7 @@ import type {
     CronJobIR,
     EnvIR,
     FunctionIR,
+    HttpRouteIR,
     IdentityIR,
     IndexIR,
     JurisdictionIR,
@@ -883,6 +884,76 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
 };
 
 /**
+ * Render the `httpStreams.*` typed-reference block for `_generated/api.ts` —
+ * one entry per `httpRoute.&lt;verb>(path).stream()` SSE route, grouped by source
+ * file the way `api.*` is. Each reference carries the verb + path at runtime
+ * (what the client needs to open the endpoint) and the chunk / searchParams /
+ * params types via `HttpStreamRef`'s phantom parameter, so
+ * `client.httpStream(httpStreams.http.tokens, …)` and the framework hooks
+ * infer the chunk type end-to-end. Returns empty strings when the project
+ * declares no streaming routes; `body` is the rendered type members (fed into
+ * the `Doc`/`Id` import detection alongside the api bodies).
+ */
+const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: string; body: string } => {
+    const streams = httpRoutes.filter((route) => route.stream);
+
+    if (streams.length === 0) {
+        return { block: "", body: "" };
+    }
+
+    const namespaces = new Map<string, HttpRouteIR[]>();
+
+    for (const route of streams) {
+        const list = namespaces.get(route.filePath) ?? [];
+
+        list.push(route);
+        namespaces.set(route.filePath, list);
+    }
+
+    const sortedNamespaces = [...namespaces.entries()].toSorted(([a], [b]) => a.localeCompare(b));
+
+    const typeBody = sortedNamespaces
+        .map(([file, list]) => {
+            const members = list
+                .map((route) => {
+                    const chunkType = relocateGeneratedImports(route.chunkType ?? "unknown");
+
+                    return `        ${renderPropertyKey(route.exportName)}: HttpStreamRef<${chunkType}, ${renderArgsType(route.searchParams)}, ${renderArgsType(route.params)}>;`;
+                })
+                .join("\n");
+
+            return `    ${renderPropertyKey(sanitizeNamespace(file))}: {\n${members}\n    };`;
+        })
+        .join("\n");
+
+    const valueBody = sortedNamespaces
+        .map(([file, list]) => {
+            const members = list
+                .map(
+                    (route) =>
+                        `        ${renderPropertyKey(route.exportName)}: { method: ${JSON.stringify(route.method)}, path: ${JSON.stringify(route.path)} },`,
+                )
+                .join("\n");
+
+            return `    ${renderPropertyKey(sanitizeNamespace(file))}: {\n${members}\n    },`;
+        })
+        .join("\n");
+
+    const block = `
+/** This project's HTTP-SSE stream routes (\`httpRoute.<verb>(path).stream()\`), addressable as typed references for \`client.httpStream\` / \`useHttpStream\`. */
+export interface HttpStreamsRef {
+${typeBody}
+}
+
+export const httpStreams: HttpStreamsRef = {
+${valueBody}
+};
+`;
+
+    return { block, body: typeBody };
+};
+
+/**
  * Emit `_generated/api.ts` — the typed `api.*` registry (public functions), the
  * `internal.*` registry, and (when the project declares them) the typed
  * `workflows.*` / `agents.*` scheduler-target reference objects. `api`/`internal` are the same `anyApi` proxy
@@ -893,12 +964,14 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
 interface EmitApiOptions {
     agents?: ReadonlyArray<AgentIR>;
     functions: ReadonlyArray<FunctionIR>;
+    /** Typed REST routes; only `.stream()` (SSE) routes emit a `httpStreams.*` reference. */
+    httpRoutes?: ReadonlyArray<HttpRouteIR>;
     useUmbrella?: boolean;
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
 const emitApi = (options: EmitApiOptions): string => {
-    const { agents = [], functions, useUmbrella = false, workflows = [] } = options;
+    const { agents = [], functions, httpRoutes = [], useUmbrella = false, workflows = [] } = options;
     const base = baseSpecifiers(useUmbrella);
     const publicFunctions = [...functions.filter((definition) => definition.visibility !== "internal"), ...syntheticAgentApiFunctions(agents, functions)];
     const internalFunctions = functions.filter((definition) => definition.visibility === "internal");
@@ -906,10 +979,12 @@ const emitApi = (options: EmitApiOptions): string => {
     const publicBody = renderApiBody(publicFunctions);
     const internalBody = renderApiBody(internalFunctions);
 
+    const httpStreamsRef = renderHttpStreamsRef(httpRoutes);
+
     // Import only the dataModel helpers the rendered arg/return types actually
     // reference: `Doc` appears when a function returns documents, `Id` when it
     // takes or returns an id. Importing an unused one trips noUnusedLocals.
-    const combinedBody = `${publicBody}\n${internalBody}`;
+    const combinedBody = `${publicBody}\n${internalBody}\n${httpStreamsRef.body}`;
     const dataModelImports = referencedDataModelImports(combinedBody);
     const dataModelImportLine = dataModelImports.length > 0 ? `\nimport type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
 
@@ -918,8 +993,12 @@ const emitApi = (options: EmitApiOptions): string => {
 
     const schedulerReferences = renderSchedulerReferences(workflows, agents);
 
+    // `HttpStreamRef` is only imported when a streaming route exists, so a
+    // stream-free project's generated api never references the type.
+    const clientImports = httpStreamsRef.block === "" ? "FunctionReference" : "FunctionReference, HttpStreamRef";
+
     return `${GENERATED_HEADER}import { anyApi } from "${base.serverTypes}";
-import type { FunctionReference } from "${base.client}";
+import type { ${clientImports} } from "${base.client}";
 ${schedulerReferences.importLine}${dataModelImportLine}
 export interface ApiTypes {${apiBlock}}
 
@@ -929,7 +1008,7 @@ export const api = anyApi as unknown as ApiTypes;
 export interface InternalApiTypes {${internalBlock}}
 
 export const internal = anyApi as unknown as InternalApiTypes;
-${schedulerReferences.block}`;
+${schedulerReferences.block}${httpStreamsRef.block}`;
 };
 
 /**

@@ -7,13 +7,28 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApi, emitFunctions } from "../src/emit";
-import type { AgentIR, FunctionIR, WorkflowIR } from "../src/ir";
+import type { AgentIR, FunctionIR, HttpRouteIR, WorkflowIR } from "../src/ir";
 
 const SUPPORT_AGENT: AgentIR = {
     bindingName: "AGENT_SUPPORT",
     className: "SupportAgentWorkflow",
     exportName: "support",
     name: "agent-support",
+};
+
+/** A minimal `HttpRouteIR` with overridable fields, mirroring `openapi.test.ts`'s helper. */
+const makeStreamRoute = (overrides: Partial<HttpRouteIR> = {}): HttpRouteIR => {
+    return {
+        body: {},
+        exportName: "streamTokens",
+        filePath: "http",
+        method: "GET",
+        params: {},
+        path: "/api/tokens",
+        searchParams: {},
+        stream: true,
+        ...overrides,
+    };
 };
 
 describe("emitApi", () => {
@@ -212,6 +227,67 @@ describe("emitApi", () => {
         expect(rendered).toContain('verify: FunctionReference<"mutation"');
         // Never emit `2fa` as a bare (invalid) object key.
         expect(rendered).not.toContain("    2fa: {");
+    });
+
+    it("emits a typed `httpStreams.*` reference block for `.stream()` routes", () => {
+        expect.assertions(6);
+
+        const httpRoutes: ReadonlyArray<HttpRouteIR> = [
+            makeStreamRoute({
+                chunkType: "{ text: string }",
+                searchParams: { prompt: { kind: "string" } },
+            }),
+        ];
+
+        const rendered = emitApi({ functions: [], httpRoutes });
+
+        // The reference type comes from the client package (same source as FunctionReference).
+        expect(rendered).toContain('import type { FunctionReference, HttpStreamRef } from "@lunora/client";');
+        // Namespaced like `api.*`: file `http.ts` → `httpStreams.http.streamTokens`.
+        expect(rendered).toContain("export interface HttpStreamsRef {");
+        expect(rendered).toContain("streamTokens: HttpStreamRef<{ text: string }, { prompt: string }, {}>;");
+        // The runtime object carries the verb + path the consumer opens.
+        expect(rendered).toContain("export const httpStreams: HttpStreamsRef = {");
+        expect(rendered).toContain('streamTokens: { method: "GET", path: "/api/tokens" },');
+        expect(rendered).toContain("    http: {");
+    });
+
+    it("excludes non-stream routes and omits the block entirely when no `.stream()` route exists", () => {
+        expect.assertions(3);
+
+        const rendered = emitApi({ functions: [], httpRoutes: [makeStreamRoute({ stream: false })] });
+
+        expect(rendered).not.toContain("HttpStreamsRef");
+        expect(rendered).not.toContain("HttpStreamRef");
+        expect(rendered).toContain('import type { FunctionReference } from "@lunora/client";');
+    });
+
+    it("renders a chunkType-less stream route as `unknown` and defaults empty validator maps to `{}`", () => {
+        expect.assertions(1);
+
+        const rendered = emitApi({ functions: [], httpRoutes: [makeStreamRoute()] });
+
+        expect(rendered).toContain("streamTokens: HttpStreamRef<unknown, {}, {}>;");
+    });
+
+    it("relocates `_generated/` import qualifiers inside a stream chunk type", () => {
+        expect.assertions(2);
+
+        const rendered = emitApi({
+            functions: [],
+            httpRoutes: [makeStreamRoute({ chunkType: 'import("./_generated/dataModel.js").Doc_messages' })],
+        });
+
+        expect(rendered).toContain('import("./dataModel.js").Doc_messages');
+        expect(rendered).not.toContain('import("./_generated/dataModel.js")');
+    });
+
+    it("imports the umbrella client specifier for httpStreams when useUmbrella is set", () => {
+        expect.assertions(1);
+
+        const rendered = emitApi({ functions: [], httpRoutes: [makeStreamRoute()], useUmbrella: true });
+
+        expect(rendered).toContain('import type { FunctionReference, HttpStreamRef } from "lunorash/client";');
     });
 
     it("rewrites deeply nested `../../_generated/X` qualifiers", () => {

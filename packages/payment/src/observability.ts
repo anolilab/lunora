@@ -8,6 +8,10 @@
  */
 import type { ApplyResult, ProviderId, WebhookActionType } from "./types";
 
+/**
+ * `PaymentEvent` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export type PaymentEvent =
     | { action: WebhookActionType; eventId: string; provider: ProviderId; reason: ApplyResult["reason"]; type: "webhook.applied" }
     | { eventId: string; provider: ProviderId; type: "webhook.duplicate" }
@@ -25,6 +29,10 @@ export type PaymentEvent =
       }
     | { featureId: string; provider: ProviderId; referenceId: string; type: "usage.report_failed" };
 
+/**
+ * `PaymentObserver` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export type PaymentObserver = (event: PaymentEvent) => void;
 
 /** Invoke an observer without ever letting telemetry break the payment flow. */

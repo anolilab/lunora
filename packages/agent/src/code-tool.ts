@@ -29,7 +29,10 @@ const capOutput = (output: unknown): unknown => {
     return `${serialized.slice(0, MAX_STEP_OUTPUT_CHARS)}… [truncated]`;
 };
 
-/** One step of a tool-composition script — call `tool` with `input`, bind the result to `id`. */
+/**
+ * One step of a tool-composition script — call `tool` with `input`, bind the result to `id`.
+ * @experimental
+ */
 interface ToolScriptStep {
     /** A stable name later steps reference the output by. */
     id: string;
@@ -39,18 +42,27 @@ interface ToolScriptStep {
     tool: string;
 }
 
-/** The model-provided input to a {@link codeTool} call. */
+/**
+ * The model-provided input to a {@link codeTool} call.
+ * @experimental
+ */
 interface ToolScript {
     steps: ToolScriptStep[];
 }
 
-/** The result of running a {@link ToolScript}: each step's output plus the last one. */
+/**
+ * The result of running a {@link ToolScript}: each step's output plus the last one.
+ * @experimental
+ */
 interface ToolScriptResult {
     final: unknown;
     results: ReadonlyArray<{ id: string; output: unknown }>;
 }
 
-/** Author-supplied config for {@link codeTool}. */
+/**
+ * Author-supplied config for {@link codeTool}.
+ * @experimental
+ */
 interface CodeToolOptions {
     /** Override the model-facing description (the default lists the available tools). */
     description?: string;
@@ -245,6 +257,7 @@ const CODE_TOOL_SCHEMA = jsonSchema<ToolScript>({
  * });
  * // The model can now, in one turn, `findUser` then feed `{ "$from": "u", "$path": "id" }` into `recentOrders`.
  * ```
+ * @experimental
  */
 const codeTool = (tools: Record<string, AnyAgentTool>, options: CodeToolOptions = {}): AgentToolDefinition<ToolScript, ToolScriptResult> => {
     // Widen for the plain-JS guard — the type forbids it, but a caller can still

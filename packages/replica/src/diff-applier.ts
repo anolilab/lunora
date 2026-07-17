@@ -80,6 +80,7 @@ const applySingleDiff = (database: SqliteAdapter, diff: TableDiff, pkColumn: str
  * @param database SQLite adapter the statements run against.
  * @param diff The table diff to apply.
  * @param pkColumn Primary key column for DELETE/UPDATE (default `"id"`).
+ * @experimental
  */
 const applyDiffToDatabase = (database: SqliteAdapter, diff: TableDiff, pkColumn?: string): void => {
     database.transaction(() => {
@@ -92,6 +93,7 @@ const applyDiffToDatabase = (database: SqliteAdapter, diff: TableDiff, pkColumn?
  *
  * Each diff uses `"id"` as the primary key column. For tables with a custom
  * PK, use {@link applyDiffToDatabase} per-diff and pass the PK explicitly.
+ * @experimental
  */
 const applyDiffsToDatabase = (database: SqliteAdapter, diffs: ReadonlyArray<TableDiff>): void => {
     if (diffs.length === 0) {

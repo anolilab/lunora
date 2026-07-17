@@ -71,13 +71,13 @@ const promptSelect = async <T extends string>(message: string, options: Readonly
     const lines = options.map(
         (option, index) => `  ${String(index + 1)}) ${option.label}${option.description === undefined ? "" : ` — ${option.description}`}`,
     );
-    const promptText = `${message}\n${lines.join("\n")}\n> ${defaultIndex >= 0 ? `[${String(defaultIndex + 1)}] ` : ""}`;
+    const promptMessage = `${message}\n${lines.join("\n")}\n> ${defaultIndex >= 0 ? `[${String(defaultIndex + 1)}] ` : ""}`;
 
     const rl = createInterface({ input: process.stdin, output: process.stdout });
 
     try {
         const answer = await new Promise<string>((resolve) => {
-            rl.question(promptText, (input) => {
+            rl.question(promptMessage, (input) => {
                 resolve(input);
             });
         });
@@ -98,6 +98,35 @@ const promptSelect = async <T extends string>(message: string, options: Readonly
         const byText = options.find((option) => option.value === trimmed || option.label.toLowerCase() === trimmed.toLowerCase());
 
         return byText?.value ?? settings?.default;
+    } finally {
+        rl.close();
+    }
+};
+
+/**
+ * Ask a free-text question on stdin, returning the trimmed answer. An empty
+ * answer (just Enter) takes `settings.default`. In a non-interactive context
+ * (CI / piped — no TTY) it never reads and returns `settings.default` (or
+ * `undefined`), mirroring {@link promptSelect}'s "non-interactive ⇒ fall back"
+ * policy so automation never blocks.
+ */
+const promptText = async (message: string, settings?: { default?: string }): Promise<string | undefined> => {
+    if (!isInteractive()) {
+        return settings?.default;
+    }
+
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+    try {
+        const answer = await new Promise<string>((resolve) => {
+            rl.question(message, (input) => {
+                resolve(input);
+            });
+        });
+
+        const trimmed = answer.trim();
+
+        return trimmed === "" ? settings?.default : trimmed;
     } finally {
         rl.close();
     }
@@ -131,13 +160,13 @@ const promptMultiSelect = async <T extends string>(
         (option, index) => `  ${String(index + 1)}) ${option.label}${option.description === undefined ? "" : ` — ${option.description}`}`,
     );
     const defaultHint = defaults.length === 0 ? "" : `[${defaults.join(", ")}] `;
-    const promptText = `${message} (comma-separated; Enter for default)\n${lines.join("\n")}\n> ${defaultHint}`;
+    const promptMessage = `${message} (comma-separated; Enter for default)\n${lines.join("\n")}\n> ${defaultHint}`;
 
     const rl = createInterface({ input: process.stdin, output: process.stdout });
 
     try {
         const answer = await new Promise<string>((resolve) => {
-            rl.question(promptText, (input) => {
+            rl.question(promptMessage, (input) => {
                 resolve(input);
             });
         });
@@ -182,5 +211,5 @@ const promptMultiSelect = async <T extends string>(
     }
 };
 
-export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptYesNo };
+export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo };
 export type { MultiSelectOption, SelectOption };

@@ -47,6 +47,8 @@ const memoryBackupStore = (): BackupStore & { objects: Map<string, string> } => 
 
         if (typeof body === "string") {
             text = body;
+        } else if (body instanceof Blob) {
+            text = await body.text();
         } else if (body instanceof ReadableStream) {
             text = await new Response(body).text();
         } else {

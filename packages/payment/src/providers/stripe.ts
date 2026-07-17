@@ -38,6 +38,7 @@ import stateToEventType from "./subscription-event";
  * The Stripe SDK surface the adapter uses, as a structural type — a real `Stripe` instance satisfies
  * it without a cast. Resources are `unknown` here (the adapter re-types the client as the real
  * `Stripe` internally); this keeps the SDK's full type out of the published declaration files.
+ * @experimental
  */
 interface StripeClientLike {
     readonly billing: unknown;
@@ -50,6 +51,10 @@ interface StripeClientLike {
     readonly webhooks: unknown;
 }
 
+/**
+ * `StripeAdapterOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 interface StripeAdapterOptions {
     readonly client: StripeClientLike;
     readonly webhookSecret: string;
@@ -256,6 +261,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     }
 };
 
+/**
+ * `createStripeAdapter` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
     // Use the injected client as the real `Stripe` internally so every call below is checked against

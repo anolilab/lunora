@@ -4,10 +4,20 @@
         "description": "Schema & query lints (splinter-style advisors) feeding the Studio Advisors table.",
         "features": ["Schema & query lints", "Unindexed-FK detection", "Surfaced in Studio advisors"]
     },
+    "agent": {
+        "displayName": "Agent",
+        "description": "Durable AI agents on Cloudflare Workflows: defineAgent tool-loops with approvals, memory, and streaming.",
+        "features": ["Replay-safe durable tool-loop", "Human-in-the-loop approvals", "Streaming useAgent / useAgentChat hooks"]
+    },
     "ai": {
         "displayName": "AI",
         "description": "Workers AI helper on the Vercel AI SDK — ctx.ai with generateText / streamText / embed.",
         "features": ["Workers AI on the Vercel AI SDK", "generateText / streamText", "Embeddings & tools"]
+    },
+    "angular": {
+        "displayName": "Angular",
+        "description": "Angular adapter: signal-based live queries and mutations over the shared client core.",
+        "features": ["Signal-based liveQuery", "provideLunora / injectLunoraClient", "connectionStatus signal"]
     },
     "astro": {
         "displayName": "Astro",
@@ -38,6 +48,11 @@
         "displayName": "Client",
         "description": "Browser SDK: WebSocket transport, optimistic updates, offline queue.",
         "features": ["Live subscriptions", "Optimistic updates", "Offline queue"]
+    },
+    "cloudflare-access": {
+        "displayName": "Cloudflare Access",
+        "description": "Cloudflare Access (Zero Trust) identity: verify the Cf-Access-Jwt-Assertion JWT and feed ctx.auth / RLS.",
+        "features": ["JWKS-verified Access JWTs", "resolveIdentity adapter", "Feeds ctx.auth & RLS"]
     },
     "codegen": {
         "displayName": "Codegen",
@@ -74,6 +89,11 @@
         "description": "Unified error layer: one LunoraError + a central catalog of codes, statuses, and actionable hints, rendered across CLI, overlay, Studio, and the client.",
         "features": ["Central error catalog (code → status/hint/docsUrl)", "Structural isLunoraError guard + invariant helpers", "Hints surfaced in CLI, Studio, and the client SDK"]
     },
+    "fingerprint": {
+        "displayName": "Fingerprint",
+        "description": "Zero-dependency error fingerprinting: one stable grouping hash that collapses noisy errors into Issues.",
+        "features": ["Stable 16-char grouping hash", "Noise-stripping message bucketer", "Feeds the Studio Issues panel"]
+    },
     "flags": {
         "displayName": "Flags",
         "description": "OpenFeature feature flags: ctx.flags + useFlag, with a first-class Cloudflare Flagship provider and any OpenFeature provider pluggable.",
@@ -98,6 +118,11 @@
         "displayName": "MCP",
         "description": "Model Context Protocol server exposing a Lunora deployment to AI agents.",
         "features": ["MCP server for AI agents", "List functions & tables", "Run query / mutation / action"]
+    },
+    "nuxt": {
+        "displayName": "Nuxt",
+        "description": "Nuxt module: single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers.",
+        "features": ["Single-worker Nitro composition", "#lunora/app alias", "Reactive-loader server helpers"]
     },
     "payment": {
         "displayName": "Payment",
@@ -124,6 +149,11 @@
         "description": "React Native / Expo integration: the React hooks plus an AsyncStorage client factory and a better-auth Expo bridge.",
         "features": ["AsyncStorage offline queue", "Credentialed fetch + WebSocket", "better-auth Expo bridge"]
     },
+    "replica": {
+        "displayName": "Replica",
+        "description": "Local-first replica runtime: event sourcing, a pluggable SQLite LocalMirror, and EventsSync catch-up.",
+        "features": ["Event-sourcing runtime", "Pluggable SQLite LocalMirror", "EventsSync client catch-up"]
+    },
     "runtime": {
         "displayName": "Runtime",
         "description": "Worker entry: RPC router, shard resolver, query coordinator.",
@@ -148,6 +178,11 @@
         "displayName": "Solid",
         "description": "Live queries, optimistic mutations, reactive loaders for SolidJS.",
         "features": ["Live queries", "Optimistic mutations", "Reactive loaders"]
+    },
+    "sql-store": {
+        "displayName": "SQL Store",
+        "description": "Internal dialect-parameterized SQL store core behind the .global() backends — depend on @lunora/d1 or @lunora/hyperdrive instead.",
+        "features": ["Dialect-parameterized store core", "Shared by D1 & Hyperdrive", "Internal — use the adapters"]
     },
     "storage": {
         "displayName": "Storage",
@@ -188,5 +223,10 @@
         "displayName": "Workflows",
         "description": "Durable, multi-step workflows wired into the worker entry.",
         "features": ["defineWorkflow", "Durable Cloudflare Workflows", "Step-scoped run context"]
+    },
+    "x402": {
+        "displayName": "x402",
+        "description": "Agentic payments over x402: charge agents per request and let your agents pay 402-gated resources.",
+        "features": ["Charge rail: routes, procedures & MCP tools", "Pay rail with mandatory spend policy", "Raw-key, CDP, or bring-your-own signer"]
     }
 }

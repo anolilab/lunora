@@ -13,6 +13,7 @@ import type { InputEvent } from "./seq";
  * - `"fail"` — throw an error, halting the apply / replay cycle.
  * - A **callback** — invoked with the entry; return truthy to mark it as
  * handled (no warning), falsy to fall through to the configured fallback.
+ * @experimental
  */
 export type UnknownEventHandling = "warn" | "ignore" | "fail" | ((entry: EventLogEntry) => boolean);
 
@@ -24,6 +25,7 @@ export type UnknownEventHandling = "warn" | "ignore" | "fail" | ((entry: EventLo
  * A `type` (not `interface`) so it satisfies `EventEmitter`'s
  * `Record&lt;string, unknown>` constraint — interfaces have no implicit index
  * signature and aren't assignable to `Record&lt;string, unknown>`.
+ * @experimental
  */
 export type EventSourceEvents = {
     /** Fired (once) after the initial replay completes. */
@@ -39,11 +41,13 @@ export type EventSourceEvents = {
  *
  * Pure functions are strongly encouraged: given the same event payload
  * and state, they must produce the same next state.
+ * @experimental
  */
 export type EventReducer<S> = (state: S, entry: EventLogEntry) => S;
 
 /**
  * Options for constructing an {@link EventSource}.
+ * @experimental
  */
 export interface EventSourceOptions {
     /**
@@ -66,6 +70,7 @@ export interface EventSourceOptions {
  * const entry = source.applyEvent("user-created", { id: "1", name: "alice" });
  * console.log(source.state); // updated state
  * ```
+ * @experimental
  */
 export class EventSource<S extends Record<string, unknown> = Record<string, unknown>> {
     // eslint-disable-next-line unicorn/prefer-event-target -- EventEmitter is the library's typed public API

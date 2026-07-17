@@ -3,9 +3,10 @@ import { configDefaults } from "vitest/config";
 import { getVitestConfig } from "../../tools/get-vitest-config";
 
 // Pure-logic tests: no React render, no browser storage globals. These run
-// under plain `node` (fast, no jsdom polyfills) so the root test* scripts can
-// execute them without hitting studio's jsdom-component hang (see the
-// `component` project below). Verified DOM-free by running each file under
+// under plain `node` (fast, no jsdom polyfills) so they stay cheap to run in
+// isolation (`test:unit`) — e.g. on the coverage CI leg, where the jsdom
+// `component` project is excluded (see the ratchet note at the bottom).
+// Verified DOM-free by running each file under
 // `--environment node` with no setupFiles — a file belongs here only if it
 // neither renders a component nor touches `localStorage`/`sessionStorage`/
 // `window`/`document` (three originally-considered files — browser-storage,
@@ -29,49 +30,56 @@ const unitTestFiles = [
     "__tests__/lib/data-view-params.test.ts",
     "__tests__/lib/internal.test.ts",
     "__tests__/lib/mask-preview-heuristic.test.ts",
+    "__tests__/lib/ws-token-provider.test.ts",
 ];
 
-export default getVitestConfig({
-    test: {
-        // Expose afterEach as a global so @testing-library/react registers its
-        // automatic post-test cleanup (replaces the old manual cleanup() setup file).
-        globals: true,
-        // getVitestConfig spreads vitest's `configDefaults` onto this root test
-        // config, which sets an explicit root `include` (the default test glob).
-        // With `projects` present, an explicit *root* `include` — even that
-        // default glob — makes Vitest ignore each project's own `include`
-        // override and run every project against every matching file (verified
-        // by bisection: without this line, `--project unit` still picks up and
-        // executes the jsdom-only `.tsx` specs, crashing on "document is not
-        // defined" — and running ~90 files' worth of React-render tests under
-        // the `node` environment is what looked like a hang in `test:unit`).
-        // Clearing it here makes each project's own `include` below the sole
-        // file-selection source.
-        include: [],
-        projects: [
-            {
-                extends: true,
-                test: { name: "unit", environment: "node", include: unitTestFiles },
-            },
-            {
-                extends: true,
-                test: {
-                    name: "component",
-                    environment: "jsdom",
-                    // Explicit include required: with the root `include: []` above,
-                    // an inline project that declares none inherits the EMPTY
-                    // selector and silently matches zero files (verified via
-                    // `vitest list --project component`). Restore vitest's default
-                    // glob here; the `exclude` below carves the unit files out.
-                    include: [...configDefaults.include],
-                    // React Flow (the schema diagram) needs DOM-measurement APIs jsdom lacks.
-                    setupFiles: ["./__tests__/setup-reactflow.ts"],
-                    // Rebuild the base exclude list (see tools/get-vitest-config.ts) plus the
-                    // unit files above — an inline project's own `exclude` replaces the
-                    // extended base's, it does not merge with it.
-                    exclude: [...configDefaults.exclude, "__fixtures__/**", ...unitTestFiles],
+export default getVitestConfig(
+    {
+        test: {
+            // Expose afterEach as a global so @testing-library/react registers its
+            // automatic post-test cleanup (replaces the old manual cleanup() setup file).
+            globals: true,
+            // getVitestConfig spreads vitest's `configDefaults` onto this root test
+            // config, which sets an explicit root `include` (the default test glob).
+            // With `projects` present, an explicit *root* `include` — even that
+            // default glob — makes Vitest ignore each project's own `include`
+            // override and run every project against every matching file (verified
+            // by bisection: without this line, `--project unit` still picks up and
+            // executes the jsdom-only `.tsx` specs, crashing on "document is not
+            // defined"). Clearing it here makes each project's own `include`
+            // below the sole file-selection source.
+            include: [],
+            projects: [
+                {
+                    extends: true,
+                    test: { name: "unit", environment: "node", include: unitTestFiles },
                 },
-            },
-        ],
+                {
+                    extends: true,
+                    test: {
+                        name: "component",
+                        environment: "jsdom",
+                        // Explicit include required: with the root `include: []` above,
+                        // an inline project that declares none inherits the EMPTY
+                        // selector and silently matches zero files (verified via
+                        // `vitest list --project component`). Restore vitest's default
+                        // glob here; the `exclude` below carves the unit files out.
+                        include: [...configDefaults.include],
+                        // React Flow (the schema diagram) needs DOM-measurement APIs jsdom lacks.
+                        setupFiles: ["./__tests__/setup-reactflow.ts"],
+                        // Rebuild the base exclude list (see tools/get-vitest-config.ts) plus the
+                        // unit files above — an inline project's own `exclude` replaces the
+                        // extended base's, it does not merge with it.
+                        exclude: [...configDefaults.exclude, "__fixtures__/**", ...unitTestFiles],
+                    },
+                },
+            ],
+        },
     },
-});
+    // ratchet: studio is excluded from the coverage vis queries
+    // (`project!=studio` in `test:coverage` / `test:affected:coverage`; the
+    // plain `test` scripts run it), because a full component run under v8
+    // coverage stalls. The suite is green and fast without coverage. Zeroed
+    // until it can finish under coverage.
+    { branches: 0, functions: 0, lines: 0, statements: 0 },
+);

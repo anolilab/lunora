@@ -140,7 +140,7 @@ describe("metricsPanel", () => {
     });
 
     it("renders a sparkline once at least two live samples accumulate", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const mock = createClient();
 
@@ -154,12 +154,23 @@ describe("metricsPanel", () => {
         });
 
         // Mount seeded `requests: 10`; two climbing pushes → two deltas → spark.
+        // Each push lands in its own act + settle: a real WS delivers them in
+        // separate tasks, and two synchronous emits would coalesce into a single
+        // cache notification (one data transition → one delta, no sparkline).
         act(() => {
             mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 15 });
+        });
+        await waitFor(() => {
+            expect(screen.getByTestId("mt-requests").textContent).toBe("15");
+        });
+        act(() => {
             mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 20 });
         });
 
-        expect(screen.getByTestId("mt-sparkline").dataset.testid).toBe("mt-sparkline");
+        await waitFor(() => {
+            expect(screen.getByTestId("mt-sparkline").dataset.testid).toBe("mt-sparkline");
+        });
+
         expect(screen.queryByTestId("mt-sparkline-empty")).toBeNull();
     });
 
@@ -215,7 +226,7 @@ describe("metricsPanel", () => {
     });
 
     it("live pushes update the snapshot without any interaction", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const mock = createClient();
 
@@ -230,12 +241,16 @@ describe("metricsPanel", () => {
 
         expect(screen.getByTestId("mt-requests").textContent).toBe("10");
 
-        // No toggle: a server push lands and updates the panel on its own.
+        // No toggle: a server push lands and updates the panel on its own. The
+        // push flows through the query cache, whose observer notification lands
+        // asynchronously — poll for the re-render instead of asserting sync.
         act(() => {
             mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 42 });
         });
 
-        expect(screen.getByTestId("mt-requests").textContent).toBe("42");
+        await waitFor(() => {
+            expect(screen.getByTestId("mt-requests").textContent).toBe("42");
+        });
     });
 
     it("all shards aggregates getMetrics across the known shards", async () => {

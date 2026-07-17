@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHyperdriveGlobalCtxDb } from "../src/global";
 import { mysqlDialect } from "../src/global-dialect";
 import type { MysqlHarness } from "./_helpers/mysql-mem";
-import createMysqlHarness from "./_helpers/mysql-mem";
+import { tryCreateMysqlHarness } from "./_helpers/mysql-mem";
 
 /**
  * The store core (`createSqlCtxDb`) driven by the MySQL dialect against a **real
@@ -17,6 +17,11 @@ import createMysqlHarness from "./_helpers/mysql-mem";
  *
  * mysqld download/start is slow, so the server is shared across the suite and
  * tables are dropped per test.
+ *
+ * `mysql-memory-server` downloads the MySQL binary on first use; in sandboxes
+ * where that download is blocked (e.g. an egress proxy answering 403) the whole
+ * suite skips — with the captured reason — instead of failing on an environment
+ * limitation.
  */
 const FIXED_CLOCK = 1_700_000_000_000;
 const STARTUP_TIMEOUT = 180_000;
@@ -45,6 +50,7 @@ const todosSchema: SchemaLike = {
 };
 
 let harness: MysqlHarness;
+let mysqlUnavailable: string | undefined;
 
 const writerFor = (schema: SchemaLike): DatabaseWriterLike =>
     createHyperdriveGlobalCtxDb({ clock: () => FIXED_CLOCK, engine: "mysql", exec: harness.exec, schema });
@@ -67,10 +73,20 @@ const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((document_)
 
 describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => {
     beforeAll(async () => {
-        harness = await createMysqlHarness();
+        const result = await tryCreateMysqlHarness();
+
+        if (result.harness) {
+            harness = result.harness;
+        } else {
+            mysqlUnavailable = result.unavailable;
+        }
     }, STARTUP_TIMEOUT);
 
-    beforeEach(async () => {
+    beforeEach(async (context) => {
+        if (mysqlUnavailable !== undefined) {
+            context.skip(mysqlUnavailable);
+        }
+
         await harness.query("DROP TABLE IF EXISTS `todos`");
         await harness.query("DROP TABLE IF EXISTS `things`");
         await harness.query("DROP TABLE IF EXISTS `__agg_todos_sumSeqByProject`");

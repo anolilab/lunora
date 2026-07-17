@@ -94,6 +94,7 @@ interface SandboxInvokeArgs {
  * Loose structural view of the registered sandbox action — wide enough for the
  * concrete `RegisteredAction`, narrow enough for re-export + dispatch. Codegen
  * registers the runtime value; it never needs the precise generics.
+ * @experimental
  */
 interface SandboxRegisteredFunction {
     readonly args: unknown;
@@ -102,6 +103,10 @@ interface SandboxRegisteredFunction {
     readonly visibility?: "internal" | "public";
 }
 
+/**
+ * `SandboxComponent` is part of the experimental `@lunora/agent` API and may change without a major version bump.
+ * @experimental
+ */
 interface SandboxComponent {
     invoke: SandboxRegisteredFunction;
 }
@@ -311,6 +316,7 @@ const runFsOp = async (bucket: R2BucketLike, root: string, request: SandboxInvok
  * tool. It runs as an **action** because that is the only ctx codegen attaches
  * `ctx.browser` to (and `ctx.containers` rides every ctx once a container is
  * declared) — the durable tool step itself has neither.
+ * @experimental
  */
 const sandboxComponent = (): SandboxComponent => {
     const invoke = internalAction

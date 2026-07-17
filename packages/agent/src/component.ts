@@ -30,6 +30,7 @@ const MESSAGES_TABLE: "agent_messages" = `${AGENT_EXTENSION_KEY}_${MESSAGES_BARE
  * allocation is O(1) inside the serialized mutation), and `messageKey` is the
  * deterministic idempotency key — a workflow replay that re-persists the same
  * message is a no-op instead of a duplicate.
+ * @experimental
  */
 const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KEY, {
     tables: {
@@ -134,6 +135,10 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
 // generated server inside a package), same as the presence component.
 const { mutation, query } = initLunora.dataModel().create();
 
+/**
+ * `AgentComponent` is part of the experimental `@lunora/agent` API and may change without a major version bump.
+ * @experimental
+ */
 export interface AgentComponent {
     extension: SchemaExtension;
     functions: {
@@ -165,6 +170,7 @@ export interface AgentComponent {
  * to `agents:agentMessages` for a live thread view. Two mutations are public:
  * `agentResolveApproval` (a client resolves a HITL approval) and `agentRun`
  * (an HTTP client starts a durable run) — both owner-gated.
+ * @experimental
  */
 export const agentComponent = (): AgentComponent => {
     const agentEnsureThread = mutation

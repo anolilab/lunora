@@ -11,6 +11,7 @@ const stringOr = (value: unknown, fallback: string): string => (typeof value ===
  * intentionally **not** a dependency — the app passes its own already-initialized
  * Sentry namespace, so this package stays dependency-free and works with any
  * compatible Sentry SDK version.
+ * @experimental
  */
 export interface SentryLike {
     /** Capture a thrown value / exception. */
@@ -22,7 +23,10 @@ export interface SentryLike {
     ) => T;
 }
 
-/** Options for {@link sentryTelemetry}. */
+/**
+ * Options for {@link sentryTelemetry}.
+ * @experimental
+ */
 export interface SentryTelemetryOptions extends CommonOptions {
     /** Span-name prefix for the language-model call (e.g. the agent name). */
     functionId?: string;
@@ -44,6 +48,7 @@ export interface SentryTelemetryOptions extends CommonOptions {
  * set, in which case prompts / tool arguments are attached too.
  *
  * The app owns Sentry initialization; pass the namespace in as `Sentry`.
+ * @experimental
  */
 export const sentryTelemetry = (options: SentryTelemetryOptions): Telemetry => {
     const { functionId, recordInputs = false, Sentry: sentry } = options;

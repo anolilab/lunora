@@ -14,7 +14,10 @@ const DEFAULT_SNIPPET_CHARS = 240;
  */
 const MAX_SEARCH_TOPK = 50;
 
-/** Input the model provides to a minted `searchMemory` tool. */
+/**
+ * Input the model provides to a minted `searchMemory` tool.
+ * @experimental
+ */
 interface AgentMemorySearchInput {
     /** The natural-language query. */
     query: string;
@@ -22,13 +25,19 @@ interface AgentMemorySearchInput {
     topK?: number;
 }
 
-/** Input the model provides to a minted `readMemory` tool. */
+/**
+ * Input the model provides to a minted `readMemory` tool.
+ * @experimental
+ */
 interface AgentMemoryReadInput {
     /** The chunk/document id from a `searchMemory` hit. */
     id: string;
 }
 
-/** One ranked hit in a {@link AgentMemorySearchResult}. */
+/**
+ * One ranked hit in a {@link AgentMemorySearchResult}.
+ * @experimental
+ */
 interface AgentMemorySearchHit {
     id: string;
     score: number;
@@ -42,6 +51,7 @@ interface AgentMemorySearchHit {
  * hits plus deduped source refs, with the giant joined `.context` string
  * DROPPED — the model reads snippets and decides what (if anything) to pull with
  * `readMemory`, which is the whole point of agentic (vs inject) retrieval.
+ * @experimental
  */
 interface AgentMemorySearchResult {
     results: AgentMemorySearchHit[];
@@ -78,6 +88,7 @@ const clampSearchTopK = (value: number | undefined): number | undefined => {
  * {@link AgentMemorySearchResult} a minted `searchMemory` tool returns. Defensive
  * against a source action that returns a differently-shaped value (the dispatch
  * boundary is untyped): a missing `chunks`/`sources` degrades to empty.
+ * @experimental
  */
 const toSearchResults = (retrieved: unknown, snippetChars: number): AgentMemorySearchResult => {
     const raw = (retrieved ?? {}) as { chunks?: unknown; sources?: unknown };
@@ -171,6 +182,7 @@ const buildReadTool = (readReference: NonNullable<AgentMemorySource["read"]>): A
  * Walks the same two source origins as `collectMemorySources` so the two stay in
  * lockstep; the split is deliberate — inject sources feed retrieval, agentic
  * sources feed tools, and no source is ever on both paths.
+ * @experimental
  */
 const collectAgenticMemoryTools = (config: AgentConfig, skills: ReadonlyArray<SkillDefinition>): Record<string, AnyAgentTool> => {
     const sources: AgentMemorySource[] = [];

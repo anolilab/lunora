@@ -3,14 +3,20 @@ import { jsonSchema } from "ai";
 
 import type { AgentToolDefinition } from "./types";
 
-/** One text/image/… content part of an MCP `CallToolResult`. */
+/**
+ * One text/image/… content part of an MCP `CallToolResult`.
+ * @experimental
+ */
 interface McpContentPart {
     [key: string]: unknown;
     text?: string;
     type: string;
 }
 
-/** The result of an MCP `tools/call` — the structural subset the adapter reads. */
+/**
+ * The result of an MCP `tools/call` — the structural subset the adapter reads.
+ * @experimental
+ */
 interface McpCallResult {
     [key: string]: unknown;
     content?: ReadonlyArray<McpContentPart>;
@@ -18,7 +24,10 @@ interface McpCallResult {
     structuredContent?: unknown;
 }
 
-/** One entry of an MCP `tools/list` — the structural subset the adapter reads. */
+/**
+ * One entry of an MCP `tools/list` — the structural subset the adapter reads.
+ * @experimental
+ */
 interface McpToolInfo {
     description?: string;
     inputSchema: { [key: string]: unknown; properties?: Record<string, object>; required?: string[]; type: "object" };
@@ -29,6 +38,7 @@ interface McpToolInfo {
  * Structural subset of `@modelcontextprotocol/sdk`'s `Client` the adapter uses.
  * Declaring it locally lets tests inject a mock without the real SDK (and its
  * transport) and keeps the heavy dependency behind a lazy dynamic import.
+ * @experimental
  */
 interface McpClientLike {
     callTool: (params: { arguments?: Record<string, unknown>; name: string }) => Promise<McpCallResult>;
@@ -37,7 +47,10 @@ interface McpClientLike {
     listTools: (params?: unknown) => Promise<{ tools: ReadonlyArray<McpToolInfo> }>;
 }
 
-/** Options for {@link mcpTools}. */
+/**
+ * Options for {@link mcpTools}.
+ * @experimental
+ */
 interface McpToolsOptions {
     /**
      * A pre-built (already-connected) MCP client. Takes precedence over `url` —
@@ -76,6 +89,7 @@ interface McpToolsOptions {
  * server's `structuredContent` is returned as-is; otherwise the text parts are
  * joined. An `isError` result is returned as an error STRING (not thrown) so
  * the next LLM turn can recover, consistent with the loop's unknown-tool path.
+ * @experimental
  */
 const adaptMcpResult = (result: McpCallResult): unknown => {
     if (result.structuredContent !== undefined) {
@@ -171,6 +185,7 @@ const connectClient = async (options: McpToolsOptions): Promise<McpClientLike> =
  * every call. In the Workers runtime only the HTTP/SSE transports run (stdio
  * does not) — pass `url`, or inject an already-connected `client` for a custom
  * transport (also the test seam).
+ * @experimental
  */
 const mcpTools = async (options: McpToolsOptions): Promise<Record<string, AgentToolDefinition<Record<string, unknown>>>> => {
     const client = options.client ?? (await connectClient(options));

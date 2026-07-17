@@ -182,7 +182,7 @@ export type {
 } from "./rank";
 export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
-export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
+export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
 export { serveRelationFanout } from "./relation-fanout";
 export type { ResolveRelationPredicatesOptions } from "./relation-predicates";
 export {

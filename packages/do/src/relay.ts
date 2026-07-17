@@ -18,7 +18,7 @@
 
 import { LunoraError } from "@lunora/errors";
 
-import { stableStringify } from "./reactive-cache";
+import { stableWireKey } from "./reactive-cache";
 import type { ShapeRowOp } from "./shape-global-diff";
 
 /**
@@ -29,8 +29,11 @@ import type { ShapeRowOp } from "./shape-global-diff";
  * with already-defaulted args while a relay matches against the live attachment's
  * possibly-undefined `args`, so any per-site disagreement on the empty-args
  * default would silently break cohort matching (dropped or double-applied deltas).
+ * `stableWireKey` (byte-identical to `stableStringify` for pure-JSON args) keeps
+ * every site keying DECODED args, so a wire-typed arg (`bigint`, `Date`, bytes)
+ * routes deterministically instead of throwing mid-flush.
  */
-const shapeRoutingKey = (name: string, args?: Record<string, unknown>): string => stableStringify({ args: args ?? {}, name });
+const shapeRoutingKey = (name: string, args?: Record<string, unknown>): string => stableWireKey({ args: args ?? {}, name });
 
 /** Whether a fan-out key is owner-served (the default) or has been promoted to a relay set. */
 type PromotionState = "owned" | "promoted";

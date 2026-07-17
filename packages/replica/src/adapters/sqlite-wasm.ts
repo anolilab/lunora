@@ -11,6 +11,7 @@ import type { SqliteAdapter } from "./types";
  * @param database.close Tear down the database connection.
  * @param database.exec Execute SQL with optional bind params and return rows
  * as `{ columns, values }` result objects.
+ * @experimental
  */
 export const createSqliteWasmAdapter = (database: {
     close: () => void;

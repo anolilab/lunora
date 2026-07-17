@@ -1,4 +1,6 @@
-import { defineConfig, devices } from "@playwright/test";
+import { existsSync } from "node:fs";
+
+import { defineConfig, devices, firefox } from "@playwright/test";
 
 /**
  * Playwright config for the Lunora E2E suite.
@@ -8,21 +10,40 @@ import { defineConfig, devices } from "@playwright/test";
  * + the Vite dev server; `globalTeardown.ts` tears them down.
  *
  * Stability tactics:
- *   - `workers: 1` — DO state is shared per-namespace; parallel workers would
- *     race on channel ids, message ordering, and the `/test/reset` route.
- *   - Each test calls `await resetServer(page)` (see fixtures) to clear DO
- *     state before exercising new behaviour.
- *   - We rely on Playwright `auto-wait` selectors; explicit `waitForTimeout`
- *     calls are forbidden by lint and only appear in the scheduler test where
- *     cron timing is the point.
- *
- * Skip gate:
- *   - Set `LUNORA_E2E=skip` to short-circuit the entire run (used by CI when
- *     the suite is flaky on a given runner).
+ *   - `workers: 1` / `fullyParallel: false` — every spec talks to ONE shared
+ *     backend (one Vite worker, one D1, shared DO namespaces) and each test
+ *     starts with `/test/reset` wiping that shared state. Parallel workers
+ *     would race each other's resets and channel lists; this is the stability
+ *     boundary, not a workaround.
+ *   - Each test calls `await resetServer()` (see fixtures) to clear DO state
+ *     before exercising new behaviour, so tests stay order-independent.
+ *   - We rely on Playwright auto-wait selectors; explicit `waitForTimeout`
+ *     calls are forbidden by convention and only appear where wall-clock time
+ *     is itself under test (scheduler delay, signed-URL expiry).
  */
 const baseURL = process.env.LUNORA_E2E_BASE_URL ?? "http://localhost:5173";
 
 const isCI = process.env.CI === "true";
+
+/**
+ * Firefox is part of the CI matrix (`playwright install chromium firefox` in
+ * the workflow), but plenty of dev machines/runners only provision Chromium.
+ * A missing browser binary used to hard-fail every Firefox test at launch —
+ * one of the "suite flakes on some runners" modes the old skip hatch papered
+ * over. Detect the executable and drop the project (loudly) instead.
+ */
+const firefoxAvailable = ((): boolean => {
+    try {
+        return existsSync(firefox.executablePath());
+    } catch {
+        return false;
+    }
+})();
+
+if (!firefoxAvailable) {
+    // eslint-disable-next-line no-console
+    console.warn("[e2e] Firefox is not installed — running Chromium only. Run `playwright install firefox` for the full matrix (CI does).");
+}
 
 export default defineConfig({
     expect: {
@@ -38,10 +59,14 @@ export default defineConfig({
             name: "chromium",
             use: { ...devices["Desktop Chrome"] },
         },
-        {
-            name: "firefox",
-            use: { ...devices["Desktop Firefox"] },
-        },
+        ...(firefoxAvailable
+            ? [
+                  {
+                      name: "firefox",
+                      use: { ...devices["Desktop Firefox"] },
+                  },
+              ]
+            : []),
     ],
     reporter: isCI
         ? [["github"], ["html", { open: "never", outputFolder: "./playwright-report" }]]

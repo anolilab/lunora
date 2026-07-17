@@ -1,5 +1,7 @@
 # @lunora/agent
 
+> **Experimental** — this package is outside the Lunora 1.0 stability promise: its API may change in any release, without a major version bump.
+
 Durable AI agents for [Lunora](https://lunora.sh): `defineAgent` compiles a replay-safe tool-loop onto Cloudflare Workflows — each LLM turn and each tool call is a named durable step, thread messages persist idempotently in DO SQLite, and clients watch the conversation live over Lunora's reactive subscriptions.
 
 ```ts

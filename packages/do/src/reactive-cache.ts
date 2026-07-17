@@ -46,7 +46,7 @@
  * surface (see `ctx-db.ts`).
  */
 
-import { stableStringify } from "../../../shared/stable-key";
+import { stableWireKey } from "../../../shared/wire-key";
 import { depKey, SCAN_DEP } from "./dependency-tracker";
 
 /** A single memoized result, the deps it read, and any active subscribers. */
@@ -403,9 +403,10 @@ class ReactiveCache {
  * userId alone, is what keeps those contexts isolated.
  */
 const reactiveCacheKey = (functionPath: string, args: Record<string, unknown>, identity: null | string): string =>
-    `${identity ?? " anon"} ${functionPath}:${stableStringify(args)}`;
+    `${identity ?? " anon"} ${functionPath}:${stableWireKey(args)}`;
 
 export { ReactiveCache, reactiveCacheKey };
 export type { CacheEntry, ReactiveCacheOptions };
 
 export { stableStringify } from "../../../shared/stable-key";
+export { stableWireKey } from "../../../shared/wire-key";

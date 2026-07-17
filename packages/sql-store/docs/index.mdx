@@ -1,0 +1,29 @@
+---
+title: "@lunora/sql-store"
+description: Internal dialect-parameterized SQL store core behind the .global() table backends — depend on @lunora/d1 or @lunora/hyperdrive, not this.
+---
+
+<Callout type="warn">
+    **Internal package.** `@lunora/sql-store` is published for transparency and version alignment, but it is not a public API surface. Depend on the adapters —
+    [`@lunora/d1`](/docs/packages/d1) or [`@lunora/hyperdrive`](/docs/packages/hyperdrive) — and let them call into it. Its exports may change shape between
+    minor versions without a deprecation cycle.
+</Callout>
+
+`@lunora/sql-store` is the shared core behind Lunora's `.global()` table
+backends: one store implementation (`createSqlCtxDb`) that drives any SQL
+engine through a `SqlDialect` parameter.
+
+- **SQLite** — assembled by [`@lunora/d1`](/docs/packages/d1) for Cloudflare D1.
+- **Postgres / MySQL** — assembled by
+  [`@lunora/hyperdrive`](/docs/packages/hyperdrive) for PlanetScale, Neon, or
+  any Hyperdrive-reachable database.
+
+The adapters own the concrete dialect (placeholder style, type mapping,
+migration SQL) and wrap this core; reactivity is unaffected either way — the
+global writer is injected into the shard's ctx-db, whose broadcast hook drives
+live queries regardless of engine.
+
+Besides the store itself, the package carries the shared migration runners for
+global tables, aggregates, ranks, search, and CDC, plus the value codec that
+round-trips Lunora values through SQL column types. All of it is reached
+through the adapter you actually install.

@@ -36,6 +36,7 @@ import stateToEventType from "./subscription-event";
  * The `@polar-sh/sdk` surface the adapter uses, as a structural type — a real `Polar` instance
  * satisfies it without a cast. Resources are `unknown` (the adapter re-types the client as the real
  * `Polar` internally); this keeps the SDK's full type out of the published declarations.
+ * @experimental
  */
 interface PolarClientLike {
     readonly checkouts: unknown;
@@ -47,6 +48,10 @@ interface PolarClientLike {
     readonly subscriptions: unknown;
 }
 
+/**
+ * `PolarAdapterOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 interface PolarAdapterOptions {
     readonly client: PolarClientLike;
     readonly webhookSecret: string;
@@ -194,6 +199,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     }
 };
 
+/**
+ * `createPolarAdapter` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
     // Use the injected client as the real `Polar` internally so every call is checked against the SDK.

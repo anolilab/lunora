@@ -33,7 +33,10 @@ import { createInboundEmailHandler, parseInboundEmail } from "@lunora/mail/inbou
 
 import type { AgentDefinition, AgentWorkflowBindingLike } from "./types";
 
-/** One agent wired into the inbound `email()` handler. */
+/**
+ * One agent wired into the inbound `email()` handler.
+ * @experimental
+ */
 interface AgentEmailTarget {
     /**
      * The agent definition — only its `onEmail` mapper is read, deciding whether
@@ -48,6 +51,7 @@ interface AgentEmailTarget {
  * The worker `email(message, env, ctx)` callback. Typed with `unknown`
  * parameters so it drops straight onto the generated `composed.email` slot
  * without a cast.
+ * @experimental
  */
 type InboundAgentEmailHandler = (message: unknown, env: unknown, context: unknown) => Promise<void>;
 
@@ -58,6 +62,7 @@ type InboundAgentEmailHandler = (message: unknown, env: unknown, context: unknow
  * matched agent's Workflow binding is missing from `env` (run codegen/dev so
  * `wrangler.jsonc` declares it) the dispatch throws, and the inbound handler's
  * `onError` rejects (bounces) the message.
+ * @experimental
  */
 const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAgentEmailHandler => {
     const handler = createInboundEmailHandler({

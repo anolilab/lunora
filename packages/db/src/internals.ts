@@ -1,5 +1,7 @@
 /* eslint-disable import/exports-last -- a helpers module: public constants/types are declared next to the code they support */
 import type { OutboxMutation, OutboxSink } from "@lunora/client";
+import type { Collection } from "@tanstack/db";
+import { createCollection, safeRandomUUID } from "@tanstack/db";
 import type { OnlineDetector } from "@tanstack/offline-transactions";
 import { NonRetriableError } from "@tanstack/offline-transactions";
 
@@ -30,6 +32,7 @@ export interface OutboxMutationMetadata extends Record<string, unknown> {
 
 /** A committable outbox transaction handle (the `OfflineTransaction` the executor mints). */
 interface OutboxTransaction {
+    commit?: () => Promise<unknown>;
     mutate: (callback: () => void) => unknown;
 }
 
@@ -47,6 +50,55 @@ export interface OutboxExecutor {
     }) => OutboxTransaction;
     getPendingCount: () => number;
 }
+
+/**
+ * Executor → its transport-carrier collection (see {@link createOutboxCarrier}).
+ * Populated by `defineCollections` at wiring time; read by
+ * {@link createExecutorOutboxSink} when it persists a raw write.
+ */
+const outboxCarriers = new WeakMap<OutboxExecutor, Collection<Row, string>>();
+
+/**
+ * Create the internal "carrier" collection outbox-routed transactions ride on.
+ *
+ * TanStack's `Transaction.commit()` short-circuits a transaction with zero
+ * collection mutations — it completes WITHOUT invoking the mutationFn, so a
+ * metadata-only "pure transport" transaction would never be persisted and never
+ * replayed (the offline write silently vanishes). The sink therefore records one
+ * synthetic row per raw write on this collection, which makes the transaction
+ * real for the executor while staying invisible to the app: the row is
+ * optimistic-only and is dropped as soon as the transaction settles (there is no
+ * synced row to supersede it), and the collection is registered under the
+ * reserved {@link OUTBOX_MUTATION_FN_NAME} key so persisted transactions
+ * serialize/deserialize across reloads.
+ *
+ * The collection id carries a per-instance suffix (multiple data layers may
+ * coexist in one process); the executor's registry key — what the serializer
+ * persists — stays the stable reserved name.
+ */
+export const createOutboxCarrier = (): Collection<Row, string> =>
+    createCollection<Row, string>({
+        // eslint-disable-next-line no-underscore-dangle -- `_id` is the Lunora document-id field
+        getKey: (row) => row._id,
+        id: `${OUTBOX_MUTATION_FN_NAME}:${safeRandomUUID()}`,
+        startSync: true,
+        sync: {
+            // Nothing syncs into the carrier — mark it ready immediately.
+            sync: (writer) => {
+                writer.markReady();
+
+                return () => undefined;
+            },
+        },
+    });
+
+/** Associate an executor with its transport carrier (called by `defineCollections`). */
+export const registerOutboxCarrier = (executor: OutboxExecutor, carrier: Collection<Row, string>): void => {
+    outboxCarriers.set(executor, carrier);
+};
+
+/** One-time dev signal when the sink runs against an executor without a carrier. */
+let warnedMissingCarrier = false;
 
 /** Tuning for {@link createExecutorOutboxSink}. */
 export interface ExecutorOutboxSinkOptions {
@@ -99,17 +151,42 @@ export const createExecutorOutboxSink = (executor: OutboxExecutor, options: Exec
                 shardKey: mutation.shardKey,
             };
 
-            // Persist + schedule replay. `autoCommit` flushes on `mutate`, and the
-            // empty callback means no collection row is touched — the optimistic
-            // update already applied client-side; this transaction is pure transport.
+            const carrier = outboxCarriers.get(executor);
+
+            if (!carrier && !warnedMissingCarrier) {
+                warnedMissingCarrier = true;
+
+                // eslint-disable-next-line no-console
+                console.warn(
+                    "[@lunora/db] createExecutorOutboxSink: no outbox carrier is registered for this executor. " +
+                        "On a TanStack OfflineExecutor a zero-mutation transaction is silently dropped, so offline " +
+                        "writes may be lost — wire the sink to the executor returned by defineCollections().",
+                );
+            }
+
+            // Persist + schedule replay. The transaction is pure transport — the
+            // optimistic update already applied client-side — but it must not be
+            // EMPTY: TanStack's `Transaction.commit()` completes a zero-mutation
+            // transaction without ever invoking its mutationFn, which would drop
+            // the write. The synthetic carrier row keeps the transaction real; it
+            // is optimistic-only and vanishes once the transaction settles.
             const transaction = executor.createOfflineTransaction({
-                autoCommit: true,
+                autoCommit: false,
                 idempotencyKey: mutation.idempotencyKey,
                 metadata,
                 mutationFnName: mutationFunctionName,
             });
 
-            transaction.mutate(() => undefined);
+            transaction.mutate(() => {
+                carrier?.insert({ _id: mutation.idempotencyKey });
+            });
+
+            // Commit explicitly (not via `autoCommit`, whose upstream failure
+            // handler rethrows inside its own .catch — every terminal verdict
+            // would surface as an unhandled rejection) and swallow the outcome:
+            // retries are the executor's job and permanent drops are reported
+            // through the replay handler / `onWriteRejected`, not this promise.
+            transaction.commit?.().catch(() => undefined);
 
             return Promise.resolve();
         },

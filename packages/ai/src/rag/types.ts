@@ -6,20 +6,33 @@ import type { EmbeddingModelInput, LunoraAi } from "../types";
  * `(text) => vector` — the embedder shape `ctx.vectors` accepts on both its
  * write (`upsert`) and read (`query`) inputs. Matches `@lunora/server`'s
  * `VectorEmbedder` and `@lunora/bindings/vectors`' `EmbedFunction&lt;string>`.
+ * @experimental
  */
 export type RagEmbedder = (input: string) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
 
+/**
+ * `RagVectorMatch` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RagVectorMatch {
     id: string;
     metadata?: Record<string, unknown>;
     score: number;
 }
 
+/**
+ * `RagVectorMatches` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RagVectorMatches {
     count: number;
     matches: ReadonlyArray<RagVectorMatch>;
 }
 
+/**
+ * `RagVectorQueryInput` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RagVectorQueryInput {
     /** Embedder used to vectorize `input`. */
     embed?: RagEmbedder;
@@ -37,11 +50,19 @@ export interface RagVectorQueryInput {
     topK?: number;
 }
 
+/**
+ * `RagVectorRecord` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RagVectorRecord {
     id: string;
     metadata?: Record<string, unknown>;
 }
 
+/**
+ * `RagVectorUpsertInput` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RagVectorUpsertInput {
     /** Embedder used to vectorize `input`. Optional — omitted for text-search indexes. */
     embed?: RagEmbedder;
@@ -56,6 +77,7 @@ export interface RagVectorUpsertInput {
  * `ctx.vectors` facade on Mutation/Action ctx (`@lunora/server`'s
  * `VectorSearch`) and the raw `@lunora/bindings/vectors` `LunoraVectors`
  * satisfy it — declared here so `@lunora/ai` depends on neither package.
+ * @experimental
  */
 export interface RagVectors {
     deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
@@ -68,6 +90,7 @@ export interface RagVectors {
  * The two facades `defineRag` binds. An `ActionCtx` satisfies this directly
  * (`ctx.ai` is action-only, so RAG methods run inside actions); any object
  * carrying the two facades works in tests.
+ * @experimental
  */
 export interface RagContext {
     /**
@@ -99,6 +122,7 @@ export interface RagContext {
  * metadata must stay under the ~10 KiB Vectorize cap. Supplying a text store
  * (a DO table, KV, …) moves the text out of metadata: retrieval queries with
  * `returnMetadata: "indexed"` (topK up to 100) and hydrates text by chunk id.
+ * @experimental
  */
 export interface RagTextStore {
     /** Fetch chunk texts by id, aligned with the input order; `undefined` for misses. */
@@ -109,7 +133,10 @@ export interface RagTextStore {
     remove?: (ids: ReadonlyArray<string>, options: { namespace?: string }) => Promise<void>;
 }
 
-/** A chunk handed to {@link RagTextStore.put} / {@link RagLexicalStore.index}. */
+/**
+ * A chunk handed to {@link RagTextStore.put} / {@link RagLexicalStore.index}.
+ * @experimental
+ */
 export interface StoredRagChunk {
     chunkIndex: number;
     id: string;
@@ -117,7 +144,10 @@ export interface StoredRagChunk {
     text: string;
 }
 
-/** One lexical (BM25) hit returned by {@link RagLexicalStore.search}. */
+/**
+ * One lexical (BM25) hit returned by {@link RagLexicalStore.search}.
+ * @experimental
+ */
 export interface LexicalMatch {
     /** The chunk vector id — the same id scheme the vector leg uses, so RRF can fuse the two. */
     id: string;
@@ -137,6 +167,7 @@ export interface LexicalMatch {
  * `@lunora/ai/rag` ships `bm25LexicalStore()`, an in-memory reference adapter;
  * production deployments plug a durable one (DO SQLite inverted index, D1,
  * Vectorize-adjacent search service, …) behind this same interface.
+ * @experimental
  */
 export interface RagLexicalStore {
     /** Index chunk texts for keyword search. Must be idempotent by chunk `id` (re-index re-puts). */
@@ -169,6 +200,7 @@ export interface RagLexicalStore {
  * // Later — reference by name:
  * docs(ctx).retrieve("query", { filter: "published" });
  * ```
+ * @experimental
  */
 export interface RagNamedFilter {
     /** Optional human-readable description for observability / Studio display. */
@@ -177,6 +209,10 @@ export interface RagNamedFilter {
     filter: Record<string, unknown>;
 }
 
+/**
+ * `RagConfig` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RagConfig {
     /**
      * Suppress the one-time dev warning emitted when `index`/`retrieve` run
@@ -270,6 +306,10 @@ export interface RagConfig {
     topK?: number;
 }
 
+/**
+ * `IndexInput` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface IndexInput {
     /**
      * When `false`, throws if the source text produces zero chunks (e.g. empty
@@ -300,6 +340,10 @@ export interface IndexInput {
     text: string;
 }
 
+/**
+ * `IndexResult` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface IndexResult {
     /** Number of chunks the source is indexed into. */
     chunks: number;
@@ -313,12 +357,20 @@ export interface IndexResult {
     unchanged: boolean;
 }
 
+/**
+ * `RemoveInput` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RemoveInput {
     /** The source document id whose chunks are removed. */
     id: string;
     namespace?: string;
 }
 
+/**
+ * `RetrieveOptions` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RetrieveOptions {
     /**
      * Also return this many neighbouring chunks around each match (fetched by
@@ -346,6 +398,10 @@ export interface RetrieveOptions {
     topK?: number;
 }
 
+/**
+ * `RetrievedChunk` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RetrievedChunk {
     chunkIndex: number;
     id: string;
@@ -363,6 +419,10 @@ export interface RetrievedChunk {
     text: string;
 }
 
+/**
+ * `RagSource` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RagSource {
     id: string;
     /** Caller metadata from the source's first-seen chunk (internal keys stripped). */
@@ -376,7 +436,10 @@ export interface RagSource {
     weight?: number;
 }
 
-/** The retrieve return shape — designed so an agent memory step consumes it directly. */
+/**
+ * The retrieve return shape — designed so an agent memory step consumes it directly.
+ * @experimental
+ */
 export interface RetrieveResult {
     /** Ranked chunks (best first). */
     chunks: ReadonlyArray<RetrievedChunk>;
@@ -386,6 +449,10 @@ export interface RetrieveResult {
     sources: ReadonlyArray<RagSource>;
 }
 
+/**
+ * `RagToolOptions` is part of the experimental `@lunora/ai` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RagToolOptions {
     /** Tool description shown to the model. Defaults to a search description naming the index. */
     description?: string;
@@ -395,7 +462,10 @@ export interface RagToolOptions {
     topK?: number;
 }
 
-/** The per-request RAG surface returned by binding a ctx: `docs(ctx)`. */
+/**
+ * The per-request RAG surface returned by binding a ctx: `docs(ctx)`.
+ * @experimental
+ */
 export interface Rag {
     /**
      * Expose `retrieve` as an AI SDK tool (for `generateText`/`streamText`

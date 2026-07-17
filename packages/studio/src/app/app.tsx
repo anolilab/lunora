@@ -13,6 +13,7 @@ import { resolveOrigin } from "../lib/internal";
 import STUDIO_ROOT_CLASS from "../lib/theme-constants";
 import { loadToken, saveToken } from "../lib/token-storage";
 import { cn } from "../lib/utils";
+import { createAdminWsTokenProvider } from "../lib/ws-token-provider";
 import type { StudioChrome, StudioProps } from "./studio";
 import { Studio } from "./studio";
 import { StudioLogin } from "./studio-login";
@@ -173,13 +174,21 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
             return injectedClient;
         }
 
-        // The token doubles as the WS credential (`wsToken`) so live admin
-        // subscriptions clear the upgrade's admin gate, mirroring the bearer the
-        // HTTP admin RPCs already send.
-        const created = new LunoraClient({ url: resolveOrigin(baseUrl), ...(debouncedToken === "" ? {} : { wsToken: debouncedToken }) });
+        // The admin token authorizes the WS upgrade too, but never rides the URL
+        // itself: the client's `wsToken` is a provider that mints a short-lived
+        // HMAC-signed sub-token from the worker (master token in the
+        // Authorization HEADER) fresh on every (re)connect, so only the ephemeral
+        // token appears in `?token=`. Against a worker without the mint endpoint
+        // (404s) the provider falls back to the master token. A 4001
+        // token-expired drop invalidates the provider's cache so the reconnect
+        // re-mints even when the cached token still looks fresh.
+        const origin = resolveOrigin(baseUrl);
+        const provider = debouncedToken === "" ? undefined : createAdminWsTokenProvider({ adminToken: debouncedToken, baseUrl: origin });
+        const created = new LunoraClient({ url: origin, ...(provider === undefined ? {} : { wsToken: provider.getToken }) });
 
-        if (debouncedToken !== "") {
+        if (provider !== undefined) {
             created.setAuthToken(debouncedToken);
+            created.onTokenExpired(provider.invalidate);
         }
 
         return created;

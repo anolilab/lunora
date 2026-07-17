@@ -6,7 +6,8 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
-import type { AuthAdmin, AuthIntrospector } from "./auth-admin-routes";
+import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
@@ -553,14 +554,6 @@ interface WorkerOptions {
     authHandler?: (request: Request) => Promise<Response | undefined>;
 
     /**
-     * @deprecated Use {@link WorkerOptions.authAdmin} (an {@link AuthAdmin}),
-     * which also lights up the user-management mutation endpoints. Still honored
-     * as a read-only fallback for the browse endpoints.
-     */
-
-    authIntrospector?: AuthIntrospector;
-
-    /**
      * Optional table-level authorization callback for fan-out RPC envelopes.
      * Called after `resolveIdentity` and before `coordinator.fanOut` walks
      * the registry. Returning `false` rejects the request with 403
@@ -809,6 +802,21 @@ interface WorkerOptions {
     queue?: QueueConsumerHandler;
 
     /**
+     * Enforce the ephemeral WS admin token: when `true`,
+     * the worker's WS admin gate rejects the raw master admin token in the
+     * `?token=` query parameter — only a short-lived sub-token minted by
+     * `POST /_lunora/admin/ws-token` (or the master token in the
+     * `Authorization` HEADER, which never leaks via URLs) authorizes. Off by
+     * default (the master token in `?token=` keeps working); also settable per
+     * deployment via `env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`
+     * (`1`/`true`/`on`/`yes`/`enabled`), which the shard/relay Durable Objects
+     * honor for their own upgrade gate too. Flipping it on is the step that
+     * actually closes the URL/log leak — do so once every studio the
+     * deployment uses mints ephemeral tokens.
+     */
+    requireEphemeralWsToken?: boolean;
+
+    /**
      * Resolve the calling identity from the inbound RPC request. Called once
      * per RPC (and per fan-out) before the request is forwarded to the
      * shard. The returned `userId` becomes `ctx.auth.userId` on the shard
@@ -977,6 +985,15 @@ const VOICE_PATH_PREFIX = "/_lunora/voice/";
 const SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
 /** Admin-gated POST that manually fires one code-defined cron job by name (studio "Run now"). */
 const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
+
+/**
+ * Admin-gated POST minting a short-lived HMAC-signed WS admin sub-token (plan
+ * 095). Authenticated by the master admin bearer in the `Authorization` header;
+ * returns `{ token, expiresAtMs }`. The studio sends the minted token — never
+ * the master token — in the WS `?token=` query string, so the master credential
+ * stays out of URLs/logs.
+ */
+const ADMIN_WS_TOKEN_PATH = "/_lunora/admin/ws-token";
 /** Prefix shared by every Studio admin route (`/_lunora/admin/*`). */
 const ADMIN_PATH_PREFIX = "/_lunora/admin/";
 /** The lone cross-shard admin route that sits outside {@link ADMIN_PATH_PREFIX}. */
@@ -994,6 +1011,13 @@ const STATUS_PATH = "/_lunora/status";
 
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
+
+/**
+ * Env values that read as "on" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`. Mirrors
+ * `security-headers.ts`' `ENABLED_ENV_VALUES` and the shard DO's copy — the two
+ * isolates don't import from each other.
+ */
+const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
 
 /**
  * Read the optional caller identity a server-initiated dispatch may forward on
@@ -1560,17 +1584,36 @@ const checkAdminAuth = (request: Request, expected: string | undefined): boolean
 /**
  * Admin check for a browser WebSocket upgrade, which can't set an
  * `Authorization` header — so the token rides in the `?token=` query parameter
- * instead (the studio sends it there as the client's `wsToken`). It ends up
- * in server logs, so a short-lived rotating token is preferable in production.
+ * instead (the studio sends it there as the client's `wsToken`). Accepts either
+ * the master admin token (backward compatible) or a short-lived sub-token
+ * minted by `POST /_lunora/admin/ws-token` — the studio sends the ephemeral
+ * token so the master credential never lands in URLs/logs.
  */
-const checkAdminWsToken = (request: Request, expected: string | undefined): boolean => {
+const checkAdminWsToken = async (request: Request, expected: string | undefined, requireEphemeral: boolean): Promise<boolean> => {
     if (!expected || expected.length === 0) {
         return false;
     }
 
     const supplied = new URL(request.url).searchParams.get("token");
 
-    return supplied !== null && constantTimeEqual(expected, supplied);
+    if (supplied === null) {
+        return false;
+    }
+
+    if (await verifyWsAdminToken(expected, supplied)) {
+        return true;
+    }
+
+    // Enforcement: with `requireEphemeralWsToken` on, a raw master token in the
+    // URL is rejected — the query string is exactly where it leaks (logs /
+    // history / Referer). The header bearer path (`requestIsAdmin`) is
+    // unaffected; browsers can't set it on a WS upgrade,
+    // so it never rides a URL.
+    if (requireEphemeral) {
+        return false;
+    }
+
+    return constantTimeEqual(expected, supplied);
 };
 
 /**
@@ -1649,12 +1692,30 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // and the worker read the same `LUNORA_ADMIN_TOKEN` from `.dev.vars`.
     let envAdminToken: string | undefined;
     const effectiveAdminToken = (): string | undefined => options.adminToken ?? envAdminToken;
+
+    // Ephemeral-WS-token enforcement: the explicit worker option, or — when
+    // unset — the `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` env knob (resolved once
+    // per isolate alongside the admin token, same env-is-constant reasoning).
+    // Default off: the master token in `?token=` keeps authorizing until the
+    // operator opts in.
+    let envRequireEphemeralWsToken: boolean | undefined;
+    const effectiveRequireEphemeralWsToken = (): boolean => options.requireEphemeralWsToken ?? envRequireEphemeralWsToken ?? false;
     const resolveAdminTokenFromEnv = (env: unknown): void => {
+        const record = (env ?? {}) as Record<string, unknown>;
+
+        if (envRequireEphemeralWsToken === undefined && options.requireEphemeralWsToken === undefined) {
+            const raw = record["LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN"];
+
+            if (typeof raw === "string" && raw.length > 0) {
+                envRequireEphemeralWsToken = REQUIRE_EPHEMERAL_ENV_VALUES.has(raw.trim().toLowerCase());
+            }
+        }
+
         if (envAdminToken !== undefined || options.adminToken !== undefined) {
             return;
         }
 
-        const value = ((env ?? {}) as Record<string, unknown>)["LUNORA_ADMIN_TOKEN"];
+        const value = record["LUNORA_ADMIN_TOKEN"];
 
         if (typeof value === "string" && value.length > 0) {
             envAdminToken = value;
@@ -2158,7 +2219,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the admin gate, scheduler-namespace requirement, and resolved stub through
     // injected deps (mirroring the other extracted clusters below).
     const scheduledAdminRoutes = buildScheduledAdminRoutes({
-        checkWsAdmin: (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
+        checkWsAdmin: async (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken(), effectiveRequireEphemeralWsToken()),
         requireSchedulerNamespace,
         resolveSchedulerStub,
         schedulerInstanceName: options.schedulerInstanceName ?? "default",
@@ -3215,29 +3276,24 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // streaming bounds the response bytes, not the source data.
         let rows = 0;
         let bytes = 0;
-        let streamError: Error | undefined;
+        const parts: string[] = [];
 
-        const stream = new ReadableStream<Uint8Array>({
-            async pull(streamController) {
-                const writeRow = (row: ExportRow): void => {
-                    const encoded = NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`);
+        const writeRow = (row: ExportRow): void => {
+            const line = `${JSON.stringify(row)}\n`;
 
-                    rows += 1;
-                    bytes += encoded.byteLength;
-                    streamController.enqueue(encoded);
-                };
+            rows += 1;
+            // Count real UTF-8 bytes for the manifest, not UTF-16 string length.
+            bytes += NDJSON_ENCODER.encode(line).byteLength;
+            parts.push(line);
+        };
 
-                try {
-                    await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow, shardDO);
-                    streamController.close();
-                } catch (error: unknown) {
-                    // Capture the failure so it propagates past `put` — a stream
-                    // error alone would leave a truncated object with no signal.
-                    streamError = error instanceof Error ? error : new Error(String(error));
-                    streamController.error(error);
-                }
-            },
-        });
+        // Collect the NDJSON before writing it. R2 `put` requires a known-length
+        // body (a raw ReadableStream of unknown length is rejected by workerd),
+        // and the per-shard fan-out already materialises every row in memory
+        // before the export drains, so a Blob here adds no meaningful peak-memory
+        // cost over the source data. An error from the export propagates
+        // directly, so no partial object is ever written.
+        await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow, shardDO);
 
         const prefix = options.backupPrefix ?? "backups/";
         const timestamp = new Date(controller.scheduledTime).toISOString();
@@ -3245,11 +3301,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const fileKey = `${prefix}lunora-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
         const manifestKey = `${fileKey}.manifest.json`;
 
-        await store.put(fileKey, stream, { httpMetadata: { contentType: "application/x-ndjson" } });
-
-        if (streamError !== undefined) {
-            throw streamError;
-        }
+        await store.put(fileKey, new Blob(parts, { type: "application/x-ndjson" }), {
+            httpMetadata: { contentType: "application/x-ndjson" },
+        });
 
         const manifest: BackupManifest = {
             bytes,
@@ -3411,6 +3465,31 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
         [CRON_JOBS_RUN_PATH]: (request, env) => handleRunCronJob(request, env),
+        // Mint a short-lived HMAC-signed WS admin sub-token. Gated by the master
+        // admin bearer (header) / `adminGate`; the studio then sends the minted
+        // token — not the master credential — in the WS `?token=`
+        // query string. Signed with the master token itself, so both isolates
+        // verify statelessly and rotating `LUNORA_ADMIN_TOKEN` invalidates every
+        // outstanding sub-token. `no-store` keeps the token out of caches.
+        [ADMIN_WS_TOKEN_PATH]: async (request) => {
+            if (request.method !== "POST") {
+                throw new LunoraError("ws-token endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            }
+
+            assertAdminAuthorized(request);
+
+            const signingSecret = effectiveAdminToken();
+
+            if (signingSecret === undefined) {
+                // Reachable only via an `adminGate` grant with no static token
+                // configured — there is no key to sign with, so minting is off.
+                throw new LunoraError("ws-token minting requires a configured admin token", { code: "ADMIN_TOKEN_NOT_CONFIGURED", status: 400 });
+            }
+
+            const minted = await mintWsAdminToken(signingSecret);
+
+            return Response.json(minted, { headers: { "cache-control": "no-store" } });
+        },
         // Extracted handler clusters built above, merged in (mirroring the auth
         // plane below): orchestration (migrate / rank / rankpage / shard-traffic /
         // pitr), data-movement (export / import / sync / connector-sync / apply),
@@ -3428,8 +3507,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
         ...buildAuthAdminRoutes({
             assertAdmin: assertAdminAuthorized,
-            // eslint-disable-next-line sonarjs/deprecation -- `authIntrospector` is the intentional read-only fallback
-            getAuthAdmin: () => options.authAdmin ?? options.authIntrospector,
+            getAuthAdmin: () => options.authAdmin,
             parsePaging,
             queryParameter,
             readJsonBody: readJsonBodyWithLimit,
@@ -3807,7 +3885,6 @@ export type {
     AuthCapabilities,
     AuthConfigInfo,
     AuthImpersonation,
-    AuthIntrospector,
     AuthPage,
     AuthSession,
     AuthUser,

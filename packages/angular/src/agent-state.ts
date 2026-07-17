@@ -11,6 +11,7 @@ import { subscription } from "./subscription";
  * assignable. Client-safe: no `@lunora/agent` import — the per-agent state type is
  * mirrored by the primitive's generic `T`, since codegen pins the reference return
  * as an optional record (it never evaluates agent config).
+ * @experimental
  */
 interface AgentStateApi {
     agents: {
@@ -18,6 +19,10 @@ interface AgentStateApi {
     };
 }
 
+/**
+ * `AgentStateOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 interface AgentStateOptions {
     /** The generated `api` — its `agents.agentState` query drives live thread state. */
     api: AgentStateApi;
@@ -34,6 +39,10 @@ interface AgentStateOptions {
     threadKey: string;
 }
 
+/**
+ * `AgentStateResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 interface AgentStateResult<T> {
     /** The subscription error, if the live channel reported one. */
     error: Signal<SubscriptionError | undefined>;
@@ -58,6 +67,7 @@ interface AgentStateResult<T> {
  *
  * Call from an injection context (component/service field or constructor); pass an
  * explicit `client` / `destroyRef` to drive it outside one (e.g. in a test).
+ * @experimental
  */
 const agentState = <T extends Record<string, unknown> = Record<string, unknown>>(options: AgentStateOptions): AgentStateResult<T> => {
     const { data, error } = subscription(options.api.agents.agentState, { key: options.threadKey }, { client: options.client, destroyRef: options.destroyRef });

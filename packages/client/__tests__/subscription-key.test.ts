@@ -8,10 +8,12 @@ const makeState = (id: string, fn: string, args: Record<string, unknown>, shardK
     ({ args, fn: { __lunoraRef: fn }, id, shardKey }) as unknown as SubscriptionState;
 
 /**
- * `SubscriptionRegistry.key` routes `args` through the shared `stableStringify`
- * encoder (`shared/stable-key.ts`) so duplicate subscriptions collapse to one
- * server-side registration. These tests pin the now-shared semantics — key-order
- * stability and `undefined`-field skipping — so they can't silently drift from
+ * `SubscriptionRegistry.key` routes `args` through the shared `stableWireKey`
+ * encoder (`shared/wire-key.ts`) so duplicate subscriptions collapse to one
+ * server-side registration — byte-identical to the old `stableStringify` keys
+ * for pure-JSON args, distinct stable tokens for wire-typed args. These tests
+ * pin the now-shared semantics — key-order stability, `undefined`-field
+ * skipping, and wire-typed distinctness — so they can't silently drift from
  * the encoder's contract (mirrors `@lunora/do`'s reactive-cache assertions).
  */
 describe("subscriptionRegistry.key", () => {
@@ -49,6 +51,31 @@ describe("subscriptionRegistry.key", () => {
 
         expect(SubscriptionRegistry.key("other", { limit: 10 })).not.toBe(base);
         expect(SubscriptionRegistry.key("q", { limit: 10 }, "shard-1")).not.toBe(base);
+    });
+
+    it("keeps the exact key format for pure-JSON args (no cache/dedup invalidation)", () => {
+        expect.assertions(1);
+
+        // The registry moved from `stableStringify` to `stableWireKey`, which is
+        // byte-identical for pure JSON — pinned literally so a drift is loud.
+        expect(SubscriptionRegistry.key("messages:list", { channel: "general", limit: 10 }, "s1")).toBe('messages:list::{"channel":"general","limit":10}::s1');
+    });
+
+    it("keys wire-typed args (bigint / Date / bytes) without throwing, distinct per value", () => {
+        expect.assertions(4);
+
+        expect(() => SubscriptionRegistry.key("q", { since: 123n })).not.toThrow();
+        expect(SubscriptionRegistry.key("q", { since: 123n })).not.toBe(SubscriptionRegistry.key("q", { since: 124n }));
+        expect(SubscriptionRegistry.key("q", { at: new Date(1000) })).not.toBe(SubscriptionRegistry.key("q", { at: new Date(2000) }));
+        expect(SubscriptionRegistry.key("q", { blob: new Uint8Array([1]).buffer })).not.toBe(
+            SubscriptionRegistry.key("q", { blob: new Uint8Array([2]).buffer }),
+        );
+    });
+
+    it("still fails loud on args the wire refuses (RegExp)", () => {
+        expect.assertions(1);
+
+        expect(() => SubscriptionRegistry.key("q", { pattern: /abc/ })).toThrow(TypeError);
     });
 });
 

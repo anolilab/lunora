@@ -285,10 +285,10 @@ export const schema = defineSchema({
     const migrationsFile = (): string => join(workdir, "lunora", "migrations.ts");
 
     describe("lunora migrate create", () => {
-        it("scaffolds lunora/migrations.ts with a defineMigration block", () => {
+        it("scaffolds lunora/migrations.ts with a defineMigration block", async () => {
             expect.assertions(7);
 
-            const result = runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "Backfill Read By", table: "messages" });
+            const result = await runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "Backfill Read By", table: "messages" });
 
             expect(result.code).toBe(0);
             expect(result.file).toBe(migrationsFile());
@@ -302,11 +302,11 @@ export const schema = defineSchema({
             expect(content).toContain("up: (document) => document,");
         });
 
-        it("appends a second migration without duplicating the import", () => {
+        it("appends a second migration without duplicating the import", async () => {
             expect.hasAssertions();
 
-            runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "first", table: "a" });
-            const result = runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "second", table: "b" });
+            await runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "first", table: "a" });
+            const result = await runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "second", table: "b" });
 
             expect(result.code).toBe(0);
 
@@ -317,47 +317,134 @@ export const schema = defineSchema({
             expect(content).toContain("export const second = defineMigration({");
         });
 
-        it("refuses to clobber an existing migration of the same id", () => {
+        it("refuses to clobber an existing migration of the same id", async () => {
             expect.assertions(2);
 
-            runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "dupe", table: "a" });
+            await runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "dupe", table: "a" });
 
             const errors: string[] = [];
-            const result = runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, name: "dupe", table: "a" });
+            const result = await runMigrateCreateCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), error: (m) => errors.push(m) },
+                name: "dupe",
+                table: "a",
+            });
 
             expect(result.code).toBe(1);
             expect(errors.join("\n")).toContain("already exists");
         });
 
-        it("rejects a name with no alphanumeric characters", () => {
+        it("rejects a name with no alphanumeric characters", async () => {
             expect.assertions(2);
 
             const errors: string[] = [];
-            const result = runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, name: "---" });
+            const result = await runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, name: "---" });
 
             expect(result.code).toBe(1);
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
-        it.each(["123 backfill", "999", "class", "default"])("rejects %s whose export identifier would be uncompilable", (name) => {
+        it.each(["123 backfill", "999", "class", "default"])("rejects %s whose export identifier would be uncompilable", async (name) => {
             expect.assertions(2);
 
             const errors: string[] = [];
-            const result = runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, name, table: "messages" });
+            const result = await runMigrateCreateCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), error: (m) => errors.push(m) },
+                name,
+                table: "messages",
+            });
 
             expect(result.code).toBe(1);
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
-        it("warns and writes a TODO placeholder when --table is omitted", () => {
+        it("fails without --table when not running interactively", async () => {
             expect.assertions(3);
 
-            const warnings: string[] = [];
-            const result = runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), warn: (m) => warnings.push(m) }, name: "needs_table" });
+            // Force the non-interactive path even when the runner has a TTY.
+            const originalIsTty = process.stdin.isTTY;
+
+            Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+
+            const errors: string[] = [];
+
+            try {
+                const result = await runMigrateCreateCommand({
+                    cwd: workdir,
+                    logger: { ...silentLogger(), error: (m) => errors.push(m) },
+                    name: "needs_table",
+                });
+
+                expect(result.code).toBe(1);
+            } finally {
+                Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: originalIsTty });
+            }
+
+            expect(errors.join("\n")).toContain("--table");
+            expect(existsSync(migrationsFile())).toBe(false);
+        });
+
+        it("prompts for the table when --table is omitted, offering the schema's tables", async () => {
+            expect.assertions(4);
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    messages: defineTable({ text: v.string() }).shardBy("text"),
+    users: defineTable({ email: v.string() }).global(),
+});
+`,
+            );
+
+            const seen: string[][] = [];
+            const result = await runMigrateCreateCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                name: "backfill",
+                promptTable: async (tables) => {
+                    seen.push([...tables]);
+
+                    return "messages";
+                },
+            });
 
             expect(result.code).toBe(0);
-            expect(readFileSync(result.file, "utf8")).toContain('table: "TODO_table",');
-            expect(warnings.join("\n")).toContain("set the `table` field");
+            expect(seen).toHaveLength(1);
+            expect(seen[0]).toEqual(["messages", "users"]);
+            expect(readFileSync(result.file, "utf8")).toContain('table: "messages",');
+        });
+
+        it("errors when the table prompt is aborted", async () => {
+            expect.assertions(3);
+
+            const errors: string[] = [];
+            const result = await runMigrateCreateCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), error: (m) => errors.push(m) },
+                name: "aborted",
+                promptTable: async () => undefined,
+            });
+
+            expect(result.code).toBe(1);
+            expect(errors.join("\n")).toContain("no table selected");
+            expect(existsSync(migrationsFile())).toBe(false);
+        });
+
+        it("rejects a prompted table that is not a bare identifier", async () => {
+            expect.assertions(2);
+
+            const errors: string[] = [];
+            const result = await runMigrateCreateCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), error: (m) => errors.push(m) },
+                name: "injected",
+                promptTable: async () => 'x", evil: "y',
+            });
+
+            expect(result.code).toBe(1);
+            expect(errors.join("\n")).toContain("invalid table");
         });
     });
 
@@ -659,8 +746,8 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(calls.some((url) => url.startsWith("https://old.example.com") && url.includes("/_lunora/admin/export"))).toBe(true);
-        expect(calls.some((url) => url.startsWith("https://new.example.com") && url.includes("/_lunora/admin/import"))).toBe(true);
+        expect(calls.some((url) => new URL(url).origin === "https://old.example.com" && new URL(url).pathname.includes("/_lunora/admin/export"))).toBe(true);
+        expect(calls.some((url) => new URL(url).origin === "https://new.example.com" && new URL(url).pathname.includes("/_lunora/admin/import"))).toBe(true);
         expect(infos.some((line) => line.includes("counts match"))).toBe(true);
     });
 

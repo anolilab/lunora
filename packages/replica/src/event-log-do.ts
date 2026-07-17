@@ -92,6 +92,10 @@ const rowsToEntries = (cursor: SqlCursor): EventLogEntry[] => {
 
 // ── DO Class ───────────────────────────────────────────────────────────
 
+/**
+ * `EventLogDO` is part of the experimental `@lunora/replica` API and may change without a major version bump.
+ * @experimental
+ */
 export class EventLogDO {
     protected state: EventLogDOState;
     protected env: unknown;

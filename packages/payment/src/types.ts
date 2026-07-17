@@ -5,7 +5,10 @@
  * provider-agnostic vocabulary every adapter normalizes onto.
  */
 
-/** ISO-4217 currency code (uppercase, 3 letters). Not enumerated — provider coverage varies. */
+/**
+ * ISO-4217 currency code (uppercase, 3 letters). Not enumerated — provider coverage varies.
+ * @experimental
+ */
 // eslint-disable-next-line sonarjs/redundant-type-aliases -- a documented semantic alias, intentional
 export type CurrencyCode = string;
 
@@ -14,16 +17,23 @@ export type CurrencyCode = string;
  *
  * `minorUnits` is a `bigint`, which is **not** JSON-serializable — cross the RPC/wire boundary
  * with the `toMoneyJSON` / `fromMoneyJSON` helpers (see `./money`).
+ * @experimental
  */
 export interface Money {
     readonly currency: CurrencyCode;
     readonly minorUnits: bigint;
 }
 
-/** Stable provider identifier (Medusa-style). Ships Stripe/Polar/Autumn/Dodo plus Creem, an EU-friendly MoR. */
+/**
+ * Stable provider identifier (Medusa-style). Ships Stripe/Polar/Autumn/Dodo plus Creem, an EU-friendly MoR.
+ * @experimental
+ */
 export type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe";
 
-/** What a provider can do — encoded in types so tax/UX assumptions aren't tribal knowledge. */
+/**
+ * What a provider can do — encoded in types so tax/UX assumptions aren't tribal knowledge.
+ * @experimental
+ */
 export interface ProviderCapabilities {
     /** True for Polar / Lemon Squeezy / Paddle; false for Stripe (PSP) and Autumn (runs on your own Stripe). Drives tax/invoice ownership. */
     readonly merchantOfRecord: boolean;
@@ -33,12 +43,22 @@ export interface ProviderCapabilities {
     readonly usageMetering: boolean;
 }
 
-/** Lifecycle state of a one-time payment session. */
+/**
+ * Lifecycle state of a one-time payment session.
+ * @experimental
+ */
 export type PaymentState = "authorized" | "canceled" | "captured" | "failed" | "initiated" | "partially_refunded" | "refunded";
 
-/** Lifecycle state of a subscription. */
+/**
+ * Lifecycle state of a subscription.
+ * @experimental
+ */
 export type SubscriptionState = "active" | "canceled" | "past_due" | "paused" | "trialing";
 
+/**
+ * `Customer` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface Customer {
     readonly createdAt: number;
     readonly email?: string;
@@ -49,6 +69,10 @@ export interface Customer {
     readonly referenceId: string;
 }
 
+/**
+ * `PaymentSession` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface PaymentSession {
     readonly amount: Money;
     readonly capturedAmount: Money;
@@ -62,6 +86,10 @@ export interface PaymentSession {
     readonly updatedAt: number;
 }
 
+/**
+ * `Subscription` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface Subscription {
     readonly cancelAtPeriodEnd: boolean;
     readonly createdAt: number;
@@ -77,12 +105,20 @@ export interface Subscription {
     readonly updatedAt: number;
 }
 
+/**
+ * `CustomerRef` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface CustomerRef {
     readonly email?: string;
     readonly metadata?: Record<string, string>;
     readonly referenceId: string;
 }
 
+/**
+ * `CheckoutInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface CheckoutInput {
     readonly cancelUrl: string;
 
@@ -108,6 +144,10 @@ export interface CheckoutInput {
     readonly successUrl: string;
 }
 
+/**
+ * `CheckoutResult` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface CheckoutResult {
     readonly id: string;
     readonly provider: ProviderId;
@@ -118,17 +158,25 @@ export interface CheckoutResult {
  * `attach` input — subscribe a reference to a plan. A thin, plan-oriented skin over
  * {@link CheckoutInput}: `mode` defaults to `"subscription"` (the common case), so callers pass
  * just `{ referenceId, priceId, successUrl, cancelUrl }`.
+ * @experimental
  */
 export interface AttachInput extends Omit<CheckoutInput, "mode"> {
     readonly mode?: CheckoutInput["mode"];
 }
 
+/**
+ * `PortalInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface PortalInput {
     readonly customerId: string;
     readonly returnUrl: string;
 }
 
-/** A single durable usage record — one metered event for a `(referenceId, featureId)` pair. */
+/**
+ * A single durable usage record — one metered event for a `(referenceId, featureId)` pair.
+ * @experimental
+ */
 export interface UsageEvent {
     readonly createdAt: number;
     readonly featureId: string;
@@ -141,7 +189,10 @@ export interface UsageEvent {
     readonly reportedToProvider: boolean;
 }
 
-/** `track` input — record metered usage for a reference's feature. */
+/**
+ * `track` input — record metered usage for a reference's feature.
+ * @experimental
+ */
 export interface TrackInput {
     readonly featureId: string;
     /** Caller-supplied dedupe key; a fresh one is generated when omitted (so each call records). */
@@ -159,7 +210,10 @@ export interface TrackInput {
     readonly referenceId: string;
 }
 
-/** Result of a `track` call. */
+/**
+ * Result of a `track` call.
+ * @experimental
+ */
 export interface TrackResult {
     /** True when this call inserted a new usage event; false when deduplicated by idempotency key. */
     readonly recorded: boolean;
@@ -170,6 +224,7 @@ export interface TrackResult {
 /**
  * `check` input — is a reference allowed something right now? Pass `featureId` to check a feature
  * grant/allowance, or `priceId` to check active access to a product (one of the two is required).
+ * @experimental
  */
 export interface CheckInput {
     /** Feature to check a grant/allowance for. Provide this **or** `priceId`. */
@@ -181,7 +236,10 @@ export interface CheckInput {
     readonly referenceId: string;
 }
 
-/** Result of a `check` call. */
+/**
+ * Result of a `check` call.
+ * @experimental
+ */
 export interface CheckResult {
     /** Whether the reference may consume `quantity` units of the feature right now. */
     readonly allowed: boolean;
@@ -195,12 +253,18 @@ export interface CheckResult {
     readonly used?: number;
 }
 
-/** One feature's resolved allowance for a reference — a {@link CheckResult} tagged with its feature. */
+/**
+ * One feature's resolved allowance for a reference — a {@link CheckResult} tagged with its feature.
+ * @experimental
+ */
 export interface FeatureBalance extends CheckResult {
     readonly featureId: string;
 }
 
-/** Input the adapter forwards to the provider's metering API (Stripe Meter Events / Polar ingestion). */
+/**
+ * Input the adapter forwards to the provider's metering API (Stripe Meter Events / Polar ingestion).
+ * @experimental
+ */
 export interface ReportUsageInput {
     /** Provider customer id, when known (Stripe meter events key on it). */
     readonly customerId?: string;
@@ -212,6 +276,10 @@ export interface ReportUsageInput {
     readonly timestamp?: number;
 }
 
+/**
+ * `CaptureInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface CaptureInput {
     /** Partial capture amount; full capture when omitted. */
     readonly amount?: Money;
@@ -219,6 +287,10 @@ export interface CaptureInput {
     readonly sessionId: string;
 }
 
+/**
+ * `RefundInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface RefundInput {
     /** Partial refund amount; full refund when omitted. */
     readonly amount?: Money;
@@ -227,18 +299,29 @@ export interface RefundInput {
     readonly sessionId: string;
 }
 
+/**
+ * `CancelSubscriptionOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface CancelSubscriptionOptions {
     /** Cancel at period end instead of immediately. */
     readonly atPeriodEnd?: boolean;
     readonly idempotencyKey?: string;
 }
 
+/**
+ * `SubscriptionPatch` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface SubscriptionPatch {
     readonly priceId?: string;
     readonly quantity?: number;
 }
 
-/** Normalized webhook outcome — the *core state transition* a provider event implies. */
+/**
+ * Normalized webhook outcome — the *core state transition* a provider event implies.
+ * @experimental
+ */
 export type WebhookActionType =
     | "payment.authorized"
     | "payment.captured"
@@ -261,9 +344,14 @@ export type WebhookActionType =
  * rather than adding, so repeated partial-refund events do not over-count.
  *
  * Omitted means `"delta"`, preserving the original behavior for callers that predate this field.
+ * @experimental
  */
 export type RefundAmountKind = "absolute" | "delta";
 
+/**
+ * `WebhookAction` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface WebhookAction {
     readonly amount?: Money;
 
@@ -289,7 +377,10 @@ export interface WebhookAction {
     readonly type: WebhookActionType;
 }
 
-/** Result of applying a webhook action to the store. */
+/**
+ * Result of applying a webhook action to the store.
+ * @experimental
+ */
 export interface ApplyResult {
     readonly applied: boolean;
     readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "unhandled";

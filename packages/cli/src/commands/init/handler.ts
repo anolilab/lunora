@@ -1257,14 +1257,14 @@ const DEFAULT_FRAMEWORK = "react";
  * The frameworks offered in the interactive picker. The create-vite frameworks
  * (`react` / `vue` / `solid` / `svelte`) scaffold via the overlay engine — the
  * official create-vite base plus the Lunora layer — while the rest are bespoke
- * Lunora templates. (`vanilla` is overlay-only via `--vite`; `next` is hidden
- * until available.)
+ * Lunora templates. (`vanilla` is overlay-only via `--vite`.)
  */
 const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; value: string }> = [
     { description: "React SPA — official create-vite base + the Lunora layer (the default)", label: "React", value: "react" },
     { description: "Vue SPA — create-vite base + Lunora", label: "Vue", value: "vue" },
     { description: "Solid SPA — create-vite base + Lunora", label: "Solid", value: "solid" },
     { description: "Svelte SPA — create-vite base + Lunora", label: "Svelte", value: "svelte" },
+    { description: "Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker", label: "Next.js", value: "next" },
     { description: "TanStack Start (React) — SSR with live-loader routes", label: "TanStack Start · React", value: "tanstack-start-react" },
     { description: "TanStack Start (Solid)", label: "TanStack Start · Solid", value: "tanstack-start-solid" },
     { description: "React Router (v7, framework mode) — SSR composed into the Lunora worker", label: "React Router", value: "react-router" },
@@ -1371,12 +1371,6 @@ const scaffoldOverlayPath = async (options: InitCommandOptions, framework: strin
  * `--ref`/`--source` or being offline fails fast and clean.
  */
 const scaffoldTemplatePath = async (options: InitCommandOptions, templateType: Template, name: string, target: string): Promise<InitCommandResult> => {
-    if (templateType === "next") {
-        options.logger.warn('template "next" is not yet available — re-run with `--vite react` or `-t standalone`.');
-
-        return { code: 1, files: [], target };
-    }
-
     if (options.from !== undefined) {
         return await scaffoldFromLocal(options.from, templateType, target, name, options.logger);
     }

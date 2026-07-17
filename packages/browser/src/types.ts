@@ -12,6 +12,7 @@
  * always has one) so the marker actually excludes an arbitrary value like `{}` —
  * a bare object fails to type-check where a binding is required, catching the
  * misuse at the call site instead of deferring to an opaque launch error.
+ * @experimental
  */
 export interface BrowserBindingLike {
     readonly fetch: (...args: never[]) => unknown;
@@ -36,6 +37,7 @@ export interface RouteLike {
  * Minimal projection of a Playwright `Page` — just the methods the helpers drive.
  * Declared structurally so a test can inject a plain stub instead of a real
  * headless page (which needs workerd + the Browser Rendering binding).
+ * @experimental
  */
 export interface PageLike {
     /** Return the page's serialized HTML after the navigation settles. */
@@ -64,6 +66,7 @@ export interface PageLike {
 /**
  * Minimal projection of a Playwright `BrowserContext`. Only `newPage` is used;
  * declared structurally for the same test-double reason as {@link PageLike}.
+ * @experimental
  */
 export interface BrowserContextLike {
     newPage: () => Promise<PageLike>;
@@ -73,6 +76,7 @@ export interface BrowserContextLike {
  * Minimal projection of a Playwright `Browser` (the value `launch` resolves to).
  * Only `newContext`/`close` are used; declared structurally for the same
  * test-double reason as {@link PageLike}.
+ * @experimental
  */
 export interface BrowserLike {
     close: () => Promise<void>;
@@ -88,10 +92,14 @@ export interface BrowserLike {
  * `@cloudflare/playwright` at module top — that keeps the heavy optional peer
  * dep out of the bundle for apps that never screenshot, and lets tests pass a
  * fake. Calling it with the Browser Rendering binding resolves a {@link BrowserLike}.
+ * @experimental
  */
 export type BrowserLaunchLike = (binding: BrowserBindingLike, options?: Record<string, unknown>) => Promise<BrowserLike>;
 
-/** Options shared by the page-driving helpers ({@link Browser.screenshot} etc.). */
+/**
+ * Options shared by the page-driving helpers ({@link Browser.screenshot} etc.).
+ * @experimental
+ */
 export interface NavigateOptions {
     /**
      * Hard timeout in milliseconds for the navigation + operation. Clamped to a
@@ -107,7 +115,10 @@ export interface NavigateOptions {
     waitUntil?: "commit" | "domcontentloaded" | "load" | "networkidle";
 }
 
-/** Options for {@link Browser.screenshot}. */
+/**
+ * Options for {@link Browser.screenshot}.
+ * @experimental
+ */
 export interface ScreenshotOptions extends NavigateOptions {
     /** Capture the full scrollable page rather than just the viewport. */
     fullPage?: boolean;
@@ -121,7 +132,10 @@ export interface ScreenshotOptions extends NavigateOptions {
     viewport?: { height: number; width: number };
 }
 
-/** Options for {@link Browser.pdf}. */
+/**
+ * Options for {@link Browser.pdf}.
+ * @experimental
+ */
 export interface PdfOptions extends NavigateOptions {
     /** Paper format (`A4`, `Letter`, …) forwarded to Playwright. */
     format?: string;
@@ -135,6 +149,10 @@ export interface PdfOptions extends NavigateOptions {
     viewport?: { height: number; width: number };
 }
 
+/**
+ * `LunoraBrowserOptions` is part of the experimental `@lunora/browser` API and may change without a major version bump.
+ * @experimental
+ */
 export interface LunoraBrowserOptions {
     /**
      * Strict host allowlist. When set (non-empty), a navigation URL is refused
@@ -201,6 +219,7 @@ export interface LunoraBrowserOptions {
  * browser, opens a context + page, navigates, performs the op, and always
  * closes the browser in a `finally` (a leaked session is billed and
  * rate-limited).
+ * @experimental
  */
 export interface Browser {
     /** Serialized HTML of `url` after navigation settles. */

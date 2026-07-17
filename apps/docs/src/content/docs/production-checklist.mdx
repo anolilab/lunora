@@ -1,0 +1,147 @@
+---
+title: Production checklist
+description: Everything to verify before a Lunora app takes real traffic — bindings, secrets, admin tokens, rate limits, RLS, migrations, observability.
+---
+
+A pre-deploy checklist for taking a Lunora app to production. Each section
+links to the page that covers the topic in depth — this page is the gate, not
+the manual. The mechanics of deploying (wrangler config, the deploy flow,
+containers, log drains) live in [Deployment](/docs/deployment).
+
+## Bindings and wrangler config
+
+- [ ] `wrangler.jsonc` declares the Durable Object bindings (`SHARD`, and
+      `SCHEDULER` if you schedule work), the D1 database for `.global()`
+      tables, and the R2 bucket for file storage — see the reference config in
+      [Deployment](/docs/deployment).
+- [ ] The `migrations` block lists your DO classes under `new_sqlite_classes`
+      (Durable Object class migrations are wrangler config, not SQL).
+- [ ] `lunora verify` passes. It validates `wrangler.jsonc`, dry-runs codegen,
+      and runs `tsc --noEmit` without writing files — a stale `_generated/` or
+      a mistyped binding fails here instead of at runtime.
+- [ ] `lunora doctor` is clean: it preflights the project's wrangler bindings,
+      placeholder values, and dev secrets.
+
+## Secrets
+
+Local secrets live in `.dev.vars` (gitignored); production secrets are
+Cloudflare Worker secrets, set per environment. `wrangler deploy` never pushes
+`.dev.vars` values. Full flow in
+[Deployment → Secrets](/docs/deployment#secrets).
+
+- [ ] Every key in `.dev.vars.example` has a production value:
+      `wrangler secret put NAME --env production`, or push in bulk with
+      `lunora env push --prod`.
+- [ ] Generated secrets are strong. `lunora env generate` mints 32-byte-hex
+      values for everything locally generatable; provider keys (Resend,
+      Stripe, …) come from the provider dashboard.
+- [ ] `lunora env doctor` exits zero — it checks `.dev.vars` against the
+      example for missing keys, still-unset placeholders, and stray extras,
+      and works as a CI gate.
+- [ ] If you use Cloudflare Secrets Store bindings, functions read them with
+      `ctx.secrets.get(name)` — confirm the store binding exists in the target
+      environment.
+- [ ] CI deploys rely on the built-in guard: a non-interactive `lunora deploy`
+      **aborts** when a required secret is missing on the target worker.
+
+## `LUNORA_ADMIN_TOKEN` and the admin plane
+
+The admin token gates every `/_lunora/admin/*` route plus `/_lunora/migrate` —
+data export/import, migrations, the Studio, scheduled-job admin.
+
+- [ ] `LUNORA_ADMIN_TOKEN` is set as a production secret and is **at least 24
+      characters** (the `admin-token-weak` security advisor flags shorter
+      ones; see [Security](/docs/concepts/security)).
+- [ ] It is stored only in your secret manager/CI — never in `wrangler.jsonc`
+      `vars` or the repo. Rotating it also invalidates every outstanding
+      ephemeral WS sub-token, so rotation is your kill switch.
+- [ ] **Enforce ephemeral WS tokens.** A browser WebSocket cannot set an
+      `Authorization` header, so admin sockets authenticate via `?token=` —
+      which lands in access logs and browser history. Instead of the raw
+      master token, the worker mints a short-lived (60s) HMAC-signed sub-token
+      via `POST /_lunora/admin/ws-token` (itself gated by the master token in
+      the `Authorization` header). Turn enforcement on with the
+      `requireEphemeralWsToken: true` worker option, or per deployment with
+      the `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` env var (`1` / `true` / `on` /
+      `yes` / `enabled`). Once on, the WS admin gate — worker and Durable
+      Objects both — rejects the raw master token in `?token=`; only minted
+      sub-tokens (or the master token in the `Authorization` header, which
+      never leaks via URLs) authorize. The Studio mints sub-tokens itself, so
+      enable this once every studio your deployment uses is current.
+
+## Rate limiting and abuse
+
+- [ ] Public mutations that create users, send mail, or consume credits are
+      wrapped in [`@lunora/ratelimit`](/docs/packages/ratelimit) middleware —
+      the `public_mutation_without_ratelimit` advisor lint finds the gaps.
+- [ ] Consider `protectPublic({ rateLimit, captcha })` from `@lunora/server`
+      to chain a rate limit and a CAPTCHA check onto a public procedure in one
+      `.use()` — see [Middleware](/docs/concepts/middleware).
+
+## Auth and row-level security
+
+- [ ] Identity is wired: `resolveIdentity` (or `@lunora/auth`'s handler)
+      stamps `ctx.auth` on every call — see
+      [Authentication](/docs/concepts/authentication).
+- [ ] `authAdmin` is set if you use the Studio's auth panel (the deprecated
+      `authIntrospector` option is gone — see the
+      [upgrade guide](/docs/migrating/from-alpha)).
+- [ ] Tables holding user data have [RLS](/docs/concepts/rls) policies, and
+      fields that must never reach other users are
+      [masked](/docs/concepts/masking).
+- [ ] The secure-by-default edge (CORS allowlist, CSRF guard, security
+      headers) is not switched off in production — the deployment-level
+      security advisors (`cors-wildcard-credentials`,
+      `security-headers-disabled`, `csrf-disabled`, …) audit the live worker.
+      See [Security](/docs/concepts/security).
+
+## Migrations
+
+Lunora has two migration surfaces — see [Migrations](/docs/concepts/migrations).
+
+- [ ] **D1 schema migrations** for `.global()` tables are generated
+      (`lunora migrate generate`) and committed. `lunora deploy` runs the D1
+      migration runner before `wrangler deploy`.
+- [ ] **Data migrations** (`lunora migrate create --table …`, run with
+      `lunora migrate up`) have been dry-run against a copy where the change
+      is destructive. Runs are admin-gated: set `LUNORA_ADMIN_TOKEN` or pass
+      `--token`.
+- [ ] **DO class changes** are reflected in the `migrations` block of
+      `wrangler.jsonc`.
+
+## Observability
+
+- [ ] An observability sink is configured on `createWorker` — `otlpSink` to a
+      collector, `sentrySink`, `analyticsEngineSink`, or several via
+      `combineSinks`. Without one, a deployed worker's telemetry goes nowhere.
+      See [Observability](/docs/concepts/observability).
+- [ ] You know where errors surface: the Studio groups error events into
+      **Issues** — deterministic fingerprinting collapses the same error
+      across live events and request-log rows into one issue.
+- [ ] Log access is sorted: `lunora logs` tails a deployed worker live;
+      durable retention needs a `tail_consumers` Worker or `"logpush": true` —
+      see [Deployment → Streaming logs](/docs/deployment#streaming-logs).
+
+## Limits
+
+- [ ] You've read [Limits](/docs/limits) and know which Cloudflare ceiling
+      you'll hit first — DO SQLite size and per-DO request rate are the usual
+      sharding signals, subrequest counts bound fan-out reads.
+
+## Advisors as the final gate
+
+- [ ] Codegen's static advisories are clean — they run on every `lunora dev`
+      save and on deploy, and catch unindexed foreign keys, filters without
+      indexes, unguarded admin routes, and more before they ship.
+- [ ] The Studio's **Advisors** panels (Security, RLS, Insights) show no
+      unaddressed `ERROR`-level findings against a staging deployment — the
+      runtime lints (hot shards, index utilization, constraint violations)
+      need observed traffic. See [Advisors](/docs/concepts/advisors).
+
+## See also
+
+- [Deployment](/docs/deployment) — the deploy flow this page gates.
+- [Security](/docs/concepts/security) — the secure-by-default posture in
+  detail.
+- [Versioning & stability](/docs/versioning) — what you're pinning when you
+  pin a version.

@@ -97,6 +97,7 @@ const EXTENSION_MIME_MAP: Record<string, string> = {
  * document-processing context — images, video, audio, office docs, PDF, text,
  * archives, and source code. Follows the same approach as Convex's
  * `guessMimeType` helper.
+ * @experimental
  */
 const guessMimeTypeFromExtension = (extension: string): string => {
     const normalizedExtension = extension.replace(DOT_PREFIX_RE, "").toLowerCase();
@@ -108,6 +109,7 @@ const guessMimeTypeFromExtension = (extension: string): string => {
  * SHA-256 hex digest of binary data. Accepts a `BufferSource` (`ArrayBuffer` or
  * `ArrayBufferView` such as `Uint8Array`). Useful for content-addressable
  * storage — pair with `IndexInput.text` to detect duplicates across re-indexes.
+ * @experimental
  */
 const contentHash = async (data: BufferSource): Promise<string> => {
     const digest = await crypto.subtle.digest("SHA-256", data);

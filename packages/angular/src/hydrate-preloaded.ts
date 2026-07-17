@@ -5,6 +5,10 @@ import type { FunctionReference, LunoraClient, Preloaded, SubscriptionError } fr
 import { resolveLunoraClient } from "./client";
 import { shouldOpenSubscription } from "./platform";
 
+/**
+ * `HydratePreloadedOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface HydratePreloadedOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
@@ -13,6 +17,10 @@ export interface HydratePreloadedOptions {
     destroyRef?: DestroyRef;
 }
 
+/**
+ * `HydratePreloadedResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface HydratePreloadedResult<T> {
     /** The latest value pushed by the server. Seeded synchronously from the preloaded value. */
     data: Signal<T | undefined>;
@@ -38,6 +46,7 @@ export interface HydratePreloadedResult<T> {
  * ```ts
  * readonly { data, error } = hydratePreloaded(preloadedMessages);
  * ```
+ * @experimental
  */
 export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: HydratePreloadedOptions = {}): HydratePreloadedResult<T> => {
     const client = resolveLunoraClient(options.client);

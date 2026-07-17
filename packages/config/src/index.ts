@@ -55,7 +55,7 @@ export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
 export { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference } from "./project-config";
 export type { MultiSelectOption, SelectOption } from "./prompt";
-export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptYesNo } from "./prompt";
+export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { reconcileWranglerBindings } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";

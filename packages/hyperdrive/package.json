@@ -72,13 +72,17 @@
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@electric-sql/pglite": "0.5.4",
+        "@electric-sql/pglite-socket": "0.2.7",
         "@types/node": "catalog:types",
+        "@types/pg": "^8.20.0",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "mysql-memory-server": "1.14.1",
         "mysql2": "^3.22.5",
+        "pg": "^8.21.0",
+        "postgres": "^3.4.9",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },

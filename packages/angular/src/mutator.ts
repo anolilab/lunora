@@ -3,6 +3,10 @@ import { computed, signal } from "@angular/core";
 import type { MutatorHandle } from "@lunora/client";
 import { createMutatorRunner } from "@lunora/client";
 
+/**
+ * `MutatorResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface MutatorResult<TArgs> {
     /** The latest invocation's error, or `undefined`. */
     error: Signal<Error | undefined>;
@@ -36,6 +40,7 @@ export interface MutatorResult<TArgs> {
  * private readonly collection = bindMutators(collections);
  * readonly mutator = mutator(this.collection.insert);
  * ```
+ * @experimental
  */
 export const mutator = <TArgs = Record<string, unknown>>(handle: MutatorHandle<TArgs>): MutatorResult<TArgs> => {
     const error = signal<Error | undefined>(undefined);

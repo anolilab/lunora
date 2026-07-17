@@ -264,8 +264,9 @@ Tenant scoping is enforced two ways: `defineSchema` **throws** at load if a sour
 pass `refresh: { everyMs }` to throttle a large slice to at most one pull per
 interval. `refresh: "manual"` tells Lunora **not** to auto-poll — use it when you
 drive the refresh yourself (the manual `pullSourceRows` → `materializeExternalRows`
-bridge above, on your own schedule). `mode: "incremental"` is reserved for a future
-release; `defineSchema` rejects it today (only the default full-pull is implemented).
+bridge above, on your own schedule). Full-pull is the only delete-detection mode —
+an incremental mode (pull only changed rows, for slices past the ~10k full-pull
+sweet spot) is deferred to a post-1.0 release and no longer typechecks.
 
 ## Reactive `.global()` over Hyperdrive
 

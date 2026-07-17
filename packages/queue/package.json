@@ -61,6 +61,7 @@
         "@lunora/errors": "1.0.0-alpha.4"
     },
     "devDependencies": {
+        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/dispatch": "workspace:*",
         "@types/node": "catalog:types",
@@ -69,7 +70,8 @@
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

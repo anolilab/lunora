@@ -21,6 +21,7 @@ type AgentLiveStreamReference = FunctionReference<"stream", { key: string }, Age
  * The `agents.*` reference surface the tool-events primitive reads. A structural
  * subset of the generated `api.agents`, so the whole generated `api` object is
  * assignable.
+ * @experimental
  */
 interface AgentToolEventsApi {
     agents: {
@@ -28,6 +29,10 @@ interface AgentToolEventsApi {
     };
 }
 
+/**
+ * `AgentToolEventsOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 interface AgentToolEventsOptions {
     /** The generated `api` — its `agents.agentMessages` query provides the durable tool lifecycle. */
     api: AgentToolEventsApi;
@@ -59,6 +64,7 @@ interface AgentToolEventsOptions {
  * (`call`/`result`/`awaiting-approval`) are derived from `agents:agentMessages`
  * and carry the persisted `seq`; the ephemeral `progress` arm comes live off the
  * stream and has no `seq`. Discriminate on `type`.
+ * @experimental
  */
 type AgentToolEvent =
     | { data: unknown; toolCallId: string; type: "progress" }
@@ -66,6 +72,10 @@ type AgentToolEvent =
     | { output: string; seq: number; status?: "approved" | "rejected"; toolCallId?: string; toolName?: string; type: "result" }
     | { seq: number; toolCallId?: string; toolName?: string; type: "awaiting-approval" };
 
+/**
+ * `AgentToolEventsResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 interface AgentToolEventsResult {
     /**
      * The thread's tool events: the durable lifecycle (oldest first, by `seq`)
@@ -138,6 +148,7 @@ const toDurableEvent = (message: AgentChatMessage): AgentToolEvent[] | undefined
  *
  * Call from an injection context (component/service field or constructor); pass an
  * explicit `client` / `destroyRef` to drive it outside one (e.g. in a test).
+ * @experimental
  */
 const agentToolEvents = (options: AgentToolEventsOptions): AgentToolEventsResult => {
     const { api, limit, stream: streamReference, threadKey } = options;

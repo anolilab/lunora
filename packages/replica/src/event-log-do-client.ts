@@ -26,6 +26,7 @@ import type { InputEvent, Seq } from "./seq";
  *
  * Like {@link InputEvent} but with `timestamp` optional — omit it to
  * let the server assign the timestamp.
+ * @experimental
  */
 export interface AppendEventInput {
     /** Globally-unique client identifier (for offline/optimistic support). */
@@ -42,7 +43,10 @@ export interface AppendEventInput {
     readonly type: string;
 }
 
-/** Options for constructing an {@link EventLogDOClient}. */
+/**
+ * Options for constructing an {@link EventLogDOClient}.
+ * @experimental
+ */
 export interface EventLogDOClientOptions {
     /**
      * A function that dispatches an HTTP request to the target EventLogDO
@@ -62,6 +66,7 @@ export interface EventLogDOClientOptions {
  *
  * Each method maps to one of the DO's endpoints, throws on non-OK status,
  * and returns the parsed response body.
+ * @experimental
  */
 export class EventLogDOClient {
     readonly #fetch: (request: Request) => Promise<Response>;

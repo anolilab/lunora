@@ -24,9 +24,10 @@
 import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { SqlExec } from "./ctx-db";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
-import { stableStringify } from "./reactive-cache";
+import { stableWireKey } from "./reactive-cache";
 import type { OwnerRelayFrame, PromotionState, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
 import { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, relayName, shapeRoutingKey } from "./relay";
 import type { ShapeRowOp } from "./shape-global-diff";
@@ -240,17 +241,24 @@ abstract class RelayLink {
             }
             case "relay_shape_poke": {
                 // Deliver to this relay's cohort sockets, recording the fan-out so a
-                // relay's metrics reflect the delivery work it actually does.
+                // relay's metrics reflect the delivery work it actually does. Decode
+                // ONLY the wire-encoded `args` (they cross the hub's JSON hop encoded
+                // so a `bigint`/`Date`/bytes arg survives) — the routing match keys
+                // decoded args on both sides. `rowsPatch` stays encoded on purpose:
+                // the relay re-frames it verbatim (`preEncoded`).
                 const iterated = this.host.getWebSockets().length;
                 const startMs = Date.now();
-                const delivered = this.onShapePoke(message);
+                const delivered = this.onShapePoke({ ...message, args: decodeWire(message.args) as Record<string, unknown> });
 
                 this.host.recordShapePokeFanout(iterated, delivered, Date.now() - startMs);
 
                 return noContent();
             }
             case "relay_shape_subscribe": {
-                return jsonRelayResponse(this.onShapeSubscribe(message));
+                // Decode the wire-encoded shape args (see `seedRelayShape`, the
+                // sending side) so the owner resolves/registers under REAL values —
+                // mirroring the shard's own `shape_subscribe` decode-at-entry.
+                return jsonRelayResponse(this.onShapeSubscribe({ ...message, args: decodeWire(message.args) as Record<string, unknown> }));
             }
             default: {
                 return assertNeverFrame(message);
@@ -559,7 +567,9 @@ class OwnerRelay extends RelayLink {
 
             entry.cursor = frameCursor;
             const poke: RelayShapePoke = {
-                args: entry.args,
+                // `args` wire-encoded for the same reason as `rowsPatch` below; the
+                // relay decodes them at `handleControl` before the routing match.
+                args: encodeWire(entry.args) as Record<string, unknown>,
                 checkpoint: frameCursor,
                 epoch,
                 fromCursor,
@@ -616,7 +626,9 @@ class OwnerRelay extends RelayLink {
 
             entry.cursor = frameCursor;
             const poke: RelayShapePoke = {
-                args: entry.args,
+                // `args` wire-encoded like `rowsPatch`; decoded relay-side at
+                // `handleControl` before the routing match.
+                args: encodeWire(entry.args) as Record<string, unknown>,
                 checkpoint: frameCursor,
                 epoch,
                 fromCursor,
@@ -796,8 +808,11 @@ class OwnerRelay extends RelayLink {
             return false;
         }
 
-        const baseWhere = stableStringify(base.effectiveWhere);
-        const baseColumns = stableStringify(base.columns);
+        // `stableWireKey`, not `stableStringify`: a shape `where` predicate can
+        // carry a wire-typed literal (a `bigint` arg folded into the predicate),
+        // which must compare deterministically rather than throw mid-probe.
+        const baseWhere = stableWireKey(base.effectiveWhere);
+        const baseColumns = stableWireKey(base.columns);
 
         let enumerated = false;
         const populate = (side: string): SubscriptionIdentity => {
@@ -841,8 +856,8 @@ class OwnerRelay extends RelayLink {
                 resolved !== undefined &&
                 resolved.global !== true &&
                 resolved.table === base.table &&
-                stableStringify(resolved.effectiveWhere) === baseWhere &&
-                stableStringify(resolved.columns) === baseColumns
+                stableWireKey(resolved.effectiveWhere) === baseWhere &&
+                stableWireKey(resolved.columns) === baseColumns
             );
         });
 
@@ -915,7 +930,10 @@ class RelayMember extends RelayLink {
         await this.announce();
 
         const request: RelayShapeSubscribe = {
-            args: shape.args ?? {},
+            // Wire-encode before the relay->owner `JSON.stringify` hop: the shard
+            // decoded these args at its `shape_subscribe` entry point, so a
+            // `bigint`/`Date`/bytes arg would otherwise throw (or corrupt) here.
+            args: encodeWire(shape.args ?? {}) as Record<string, unknown>,
             connectionId: this.host.readAttachment(ws).connectionId,
             identity: identity.identity,
             name: shape.name,

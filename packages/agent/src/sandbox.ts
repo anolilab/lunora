@@ -16,6 +16,7 @@ const SANDBOX_REF = toFunctionReference(SANDBOX_INVOKE_PATH);
 /**
  * The model-provided input to a {@link browserTool} call — a discriminated
  * union on `op` so one tool exposes every headless-browser capability.
+ * @experimental
  */
 type BrowserToolInput =
     | { fullPage?: boolean; op: "screenshot"; type?: "jpeg" | "png"; url: string }
@@ -28,10 +29,14 @@ type BrowserToolInput =
  * union on `op`. `fetch` sends an HTTP request to the container; `exec` asks it
  * to run a command (routed as a POST to `/exec`, since the container surface
  * exposes no first-class exec RPC — the container app must serve that route).
+ * @experimental
  */
 type ContainerToolInput = { args?: string[]; command?: string; op: "exec" } | { body?: string; method?: string; op: "fetch"; path: string };
 
-/** Author-supplied config for `browserTool`. */
+/**
+ * Author-supplied config for `browserTool`.
+ * @experimental
+ */
 interface BrowserToolOptions {
     /** Override the model-facing description (what the tool does). */
     description?: string;
@@ -51,6 +56,7 @@ interface BrowserToolOptions {
  * The model-provided input to a {@link fsTool} call — a discriminated union on
  * `op` over an R2-backed virtual filesystem. Paths are relative to the tool's
  * pinned `root`; a `..` that escapes the root is rejected server-side.
+ * @experimental
  */
 type FsToolInput =
     | { op: "ls"; path?: string }
@@ -59,7 +65,10 @@ type FsToolInput =
     | { op: "stat"; path: string }
     | { content: string; op: "write"; path: string };
 
-/** Author-supplied config for `fsTool`. */
+/**
+ * Author-supplied config for `fsTool`.
+ * @experimental
+ */
 interface FsToolOptions {
     /** Override the model-facing description (what the tool does). */
     description?: string;
@@ -83,7 +92,10 @@ interface FsToolOptions {
     root?: ((context: AgentToolContext) => string) | string;
 }
 
-/** Author-supplied config for `containerTool`. */
+/**
+ * Author-supplied config for `containerTool`.
+ * @experimental
+ */
 interface ContainerToolOptions {
     /** Override the model-facing description (what the tool does). */
     description?: string;
@@ -221,6 +233,7 @@ const CONTAINER_TOOL_SCHEMA = jsonSchema<ContainerToolInput>({
  *     tools: { browser: browserTool() },
  * });
  * ```
+ * @experimental
  */
 const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<BrowserToolInput, string> => {
     return {
@@ -256,6 +269,7 @@ const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<Brow
  *     tools: { sandbox: containerTool("sandbox") },
  * });
  * ```
+ * @experimental
  */
 const containerTool = (name: string, options: ContainerToolOptions = {}): AgentToolDefinition<ContainerToolInput, string> => {
     if (typeof name !== "string" || name.length === 0) {
@@ -300,6 +314,7 @@ const containerTool = (name: string, options: ContainerToolOptions = {}): AgentT
  *     tools: { fs: fsTool("SANDBOX_BUCKET", { root: "agents/coder" }) },
  * });
  * ```
+ * @experimental
  */
 const fsTool = (bucket: string, options: FsToolOptions = {}): AgentToolDefinition<FsToolInput> => {
     if (typeof bucket !== "string" || bucket.length === 0) {

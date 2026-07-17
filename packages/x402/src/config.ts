@@ -20,10 +20,14 @@ import type { SpendPolicy } from "./pay/policy";
 /**
  * The public, Coinbase-operated facilitator (verify + settle). It needs no API
  * key. Override with a self-hosted or CDP facilitator via {@link FacilitatorConfig}.
+ * @experimental
  */
 export const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
 
-/** How to reach a facilitator's `/verify` + `/settle` endpoints. */
+/**
+ * How to reach a facilitator's `/verify` + `/settle` endpoints.
+ * @experimental
+ */
 export interface FacilitatorConfig {
     /** Extra headers for a private facilitator (e.g. a CDP bearer token). */
     readonly headers?: Record<string, string>;
@@ -37,13 +41,20 @@ export interface FacilitatorConfig {
  * to the network's stablecoin base units (USDC has 6 decimals) at challenge
  * time. (Kept `number | string` rather than a `` `$${string}` `` template
  * member — the template is subsumed by `string`, so it only adds noise.)
+ * @experimental
  */
 export type X402Price = number | string;
 
-/** An EVM recipient address (the merchant wallet that receives settlement). */
+/**
+ * An EVM recipient address (the merchant wallet that receives settlement).
+ * @experimental
+ */
 export type EvmAddress = `0x${string}`;
 
-/** Recipient wallet the facilitator settles payments to, per network family. */
+/**
+ * Recipient wallet the facilitator settles payments to, per network family.
+ * @experimental
+ */
 export interface X402Recipient {
     /** EVM payout address (required for EVM networks). */
     readonly evm?: EvmAddress;
@@ -54,6 +65,7 @@ export interface X402Recipient {
 /**
  * Server-side (charge rail) config. The server needs only a **recipient
  * address** — no private key — because the facilitator performs settlement.
+ * @experimental
  */
 export interface X402ChargeConfig {
     readonly facilitator?: FacilitatorConfig;
@@ -77,6 +89,7 @@ export interface X402ChargeConfig {
  * Client-side (pay rail) config. The signer holds spending authority, so the
  * pay rail is ActionCtx-only and MUST be paired with a spend `policy` — the pay
  * rail refuses to build if the policy is unbounded.
+ * @experimental
  */
 export interface X402PayConfig {
     /** Network to transact on. Determines the signer family (EVM vs SVM). */
@@ -97,6 +110,7 @@ export interface X402PayConfig {
  * custody is `@coinbase/cdp-sdk`.) EVM only today; for CDP on Solana, build a
  * `@solana/kit` signer around your CDP account and pass it via the `"signer"`
  * escape hatch.
+ * @experimental
  */
 export interface X402CdpSignerConfig {
     /** CDP account name to get-or-create and sign with. */
@@ -129,6 +143,7 @@ export interface X402CdpSignerConfig {
  * Wired today: raw-key (EVM + SVM), the user-supplied signer (both families),
  * and CDP-managed EVM custody. CDP on Solana is not yet wired — use the escape
  * hatch.
+ * @experimental
  */
 export type X402SignerConfig =
     | X402CdpSignerConfig
@@ -147,5 +162,8 @@ export type X402SignerConfig =
           readonly type: "signer";
       };
 
-/** Resolve a facilitator's base URL, applying the public default. */
+/**
+ * Resolve a facilitator's base URL, applying the public default.
+ * @experimental
+ */
 export const resolveFacilitatorUrl = (facilitator?: FacilitatorConfig): string => facilitator?.url ?? DEFAULT_FACILITATOR_URL;

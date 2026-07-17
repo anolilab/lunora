@@ -94,7 +94,10 @@ describe("d1 (workerd)", () => {
     });
 
     it("migrationRunner applies separate single-statement migrations in order", async () => {
-        expect.assertions(5);
+        // 3 assertions: applied versions + the two sqlite_master presence checks.
+        // (Was 5 from a pre-security-audit draft that split one multi-statement
+        // migration and asserted per-statement — stale after the rewrite below.)
+        expect.assertions(3);
 
         // Each migration must be a single SQL statement (multi-statement
         // migrations were rejected after the security audit — semicolon-split

@@ -31,12 +31,14 @@ type ShardMode = { backend?: GlobalBackend; kind: "global" } | { field: string; 
 type ExternalSourceRefresh = "manual" | { everyMs: number };
 
 /**
- * Delete-detection mode for external-source ingest. `"full-pull"` (default) reads
- * the whole tenant membership each tick and diffs it, so it observes upstream
- * deletes; `"incremental"` pulls only changed rows (cheap) and is blind to deletes
- * unless paired with a soft-delete column or a `reconcileEveryMs` full-pull sweep.
+ * Delete-detection mode for external-source ingest. `"full-pull"` (the default and
+ * currently the only mode) reads the whole tenant membership each tick and diffs
+ * it, so it observes upstream deletes. An `"incremental"` mode (pull only changed
+ * rows above the ~10k full-pull cap) is not implemented yet — it needs durable
+ * cursor/watermark machinery that does not exist; this alias is the seam it
+ * returns through.
  */
-type ExternalSourceMode = "full-pull" | "incremental";
+type ExternalSourceMode = "full-pull";
 
 /**
  * Config for `.source(...)` (plan 077): declares a table as **materialized from an
@@ -60,14 +62,11 @@ interface ExternalSourceDefinition {
     /** Transform an external row into the stored document body. Omit ⇒ every selected column except `idColumn` is copied. */
     map?: (row: Record<string, unknown>) => Record<string, unknown>;
 
-    /** Delete-detection mode. Defaults to `"full-pull"`. */
+    /** Delete-detection mode. `"full-pull"` (the default) is the only mode today. */
     mode?: ExternalSourceMode;
 
     /** The full tenant-membership query, with driver-native placeholders (`$1` / `?`). `tenantBy` binds its params. */
     query: string;
-
-    /** `"incremental"` only: run a full-pull reconcile this often to garbage-collect tombstones the incremental path can't see. */
-    reconcileEveryMs?: number;
 
     /** Poll cadence, or `"manual"`. Omit ⇒ the runtime's size-scaled default. */
     refresh?: ExternalSourceRefresh;

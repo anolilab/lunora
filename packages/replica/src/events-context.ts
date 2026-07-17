@@ -34,6 +34,7 @@ import type { EventLogDOClient } from "./event-log-do-client";
  *
  * Each method delegates to the corresponding {@link EventLogDOClient} method,
  * so handlers never need to import or reference the DO client directly.
+ * @experimental
  */
 export interface EventsFacade {
     /**
@@ -65,6 +66,7 @@ export interface EventsFacade {
 
 /**
  * The context shape produced by {@link eventsContext}.
+ * @experimental
  */
 export interface EventsContextOutput {
     /** Typed event log facade backed by an {@link EventLogDOClient}. */
@@ -98,6 +100,7 @@ export interface EventsContextOutput {
  * return entry;
  * });
  * ```
+ * @experimental
  */
 export const eventsContext = <Context>(client: EventLogDOClient): Middleware<Context, Context & EventsContextOutput> => {
     const facade: EventsFacade = client;

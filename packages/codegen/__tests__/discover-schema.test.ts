@@ -46,6 +46,10 @@ describe("discoverSchema", () => {
     it("captures `.source()` into the table IR (presence of functions only) and implies externallyManaged", () => {
         expect.assertions(3);
 
+        // The fixture deliberately writes `mode: "incremental"` + `reconcileEveryMs`
+        // even though neither is on the typed `.source()` surface: discovery is
+        // AST-level and must capture what the source text says verbatim.
+
         const { project, schemaPath } = projectWith(`
             import { defineSchema, defineTable, v } from "@lunora/server";
 

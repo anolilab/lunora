@@ -8,6 +8,7 @@ import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { jsonResponse } from "../../../shared/json-response";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
 import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
@@ -146,6 +147,14 @@ import type {
 const WS_KEEPALIVE_PING = "lunora-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
 const WS_KEEPALIVE_PONG = "lunora-pong";
+
+/**
+ * Env values that read as "on" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` (see
+ * {@link ShardDO.isAdminSocket}). Mirrors the runtime's
+ * `REQUIRE_EPHEMERAL_ENV_VALUES` — the two packages don't import from each
+ * other to avoid a circular dep.
+ */
+const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
 
 /**
  * Optional programmatic log sink, resolved from `createShardDO({ observability })`.
@@ -2343,7 +2352,40 @@ abstract class ShardDO {
                 return;
             }
 
-            const status = this.subscribe(ws, envelope.id, envelope.query);
+            // Decode the wire-encoded subscription args ONCE, at the entry point —
+            // BEFORE the attachment store and the seed — so every downstream
+            // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
+            // eval) sees REAL values (`bigint`/`Date`/bytes), and the
+            // structured-clone attachment carries them through hibernation.
+            // `decodeWire` is identity for pure-JSON args (legacy frames included).
+            let query: SubscriptionQuery;
+
+            try {
+                query =
+                    envelope.query.args === undefined
+                        ? envelope.query
+                        : { ...envelope.query, args: decodeWire(envelope.query.args) as Record<string, unknown> };
+            } catch {
+                // A malformed tagged payload (over-long bigint, over-deep nesting)
+                // must not throw out of `webSocketMessage` — surface a structured
+                // error frame instead, mirroring the persist-failure path.
+                try {
+                    ws.send(
+                        JSON.stringify({
+                            code: "BAD_SUBSCRIPTION_ARGS",
+                            error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
+                            id: envelope.id,
+                            type: "error",
+                        }),
+                    );
+                } catch {
+                    // Socket may already be closed; never throw out of webSocketMessage.
+                }
+
+                return;
+            }
+
+            const status = this.subscribe(ws, envelope.id, query);
 
             if (status !== "ok") {
                 const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
@@ -2369,15 +2411,27 @@ abstract class ShardDO {
             // subclass doesn't support re-execution (base default), this is a
             // no-op and the subscriber relies on its initial HTTP query.
             if (functionPath) {
-                await this.seedSubscription(ws, envelope.id, envelope.query, functionPath, isAdmin);
+                await this.seedSubscription(ws, envelope.id, query, functionPath, isAdmin);
             }
 
             return;
         }
 
         if (envelope.type === "shape_subscribe" && envelope.shape) {
+            // Decode-at-entry, mirroring the `subscribe` branch above: the stored
+            // descriptor and every `resolveShape` see real values.
+            let shapeArgs: Record<string, unknown> | undefined;
+
+            try {
+                shapeArgs = envelope.shape.args === undefined ? undefined : (decodeWire(envelope.shape.args) as Record<string, unknown>);
+            } catch {
+                this.sendShapeSubscribeError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
+
+                return;
+            }
+
             await this.handleShapeSubscribe(ws, envelope.id, {
-                args: envelope.shape.args,
+                args: shapeArgs,
                 name: envelope.shape.name,
                 sinceEpoch: envelope.sinceEpoch,
                 sinceSeq: envelope.sinceCheckpoint,
@@ -7600,9 +7654,14 @@ abstract class ShardDO {
      * server logs, browser history, and `Referer` headers on any
      * subresource the upgrade page loads after the handshake. Use a
      * short-lived rotating token in production rather than a long-lived
-     * secret.
+     * secret — for the ADMIN credential specifically, the worker mints one
+     * (`POST /_lunora/admin/ws-token`) and {@link isAdminSocket} accepts it, so
+     * the master `LUNORA_ADMIN_TOKEN` never rides the URL.
+     *
+     * Async because the admin fallback ({@link isAdminSocket}) verifies the
+     * ephemeral sub-token with WebCrypto HMAC.
      */
-    private isUpgradeAllowed(request: Request): boolean {
+    private async isUpgradeAllowed(request: Request): Promise<boolean> {
         const env = (this.env ?? {}) as { LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
         const allowedOrigins = env.LUNORA_ALLOWED_ORIGINS;
 
@@ -7628,11 +7687,12 @@ abstract class ShardDO {
         if (expectedBearer && expectedBearer.length > 0) {
             const supplied = this.suppliedWsToken(request);
 
-            // The admin token is accepted as an alternate credential so a
-            // studio can open its socket even when `LUNORA_WS_BEARER` gates
-            // ordinary subscribers. The socket is flagged admin separately (see
-            // `isAdminSocket`); matching the bearer alone never grants it.
-            if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !this.isAdminSocket(request))) {
+            // The admin credential (master token or minted ephemeral sub-token)
+            // is accepted as an alternate so a studio can open its socket even
+            // when `LUNORA_WS_BEARER` gates ordinary subscribers. The socket is
+            // flagged admin separately (see `isAdminSocket`); matching the
+            // bearer alone never grants it.
+            if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
                 return false;
             }
         }
@@ -7658,13 +7718,23 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether the upgrade presented a token matching `LUNORA_ADMIN_TOKEN`,
-     * constant-time compared. Closed (returns `false`) when the admin token is
-     * unset, mirroring `isAdminAuthorized` for the HTTP path so admin
-     * streaming is opt-in rather than exposed by default.
+     * Whether the upgrade presented an admin credential: the master
+     * `LUNORA_ADMIN_TOKEN` (constant-time compared) or a short-lived sub-token
+     * the worker minted with it (`POST /_lunora/admin/ws-token` —
+     * HMAC-verified statelessly here, since both isolates hold the master token
+     * in `env`). The ephemeral token is what the studio sends in `?token=`, so
+     * the master credential stays out of URLs/logs. Closed (resolves `false`)
+     * when the admin token is unset, mirroring `isAdminAuthorized` for the HTTP
+     * path so admin streaming is opt-in rather than exposed by default.
+     *
+     * Enforcement: with `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` set
+     * (`1`/`true`/`on`/`yes`/`enabled`), a raw master token in the
+     * `?token=` query parameter is rejected — the query string is exactly
+     * where it leaks. The `Authorization` header path still takes the master
+     * token: browsers can't set it on a WS upgrade, so it never rides a URL.
      */
-    private isAdminSocket(request: Request): boolean {
-        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string };
+    private async isAdminSocket(request: Request): Promise<boolean> {
+        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN?: string };
         const adminToken = env.LUNORA_ADMIN_TOKEN;
 
         if (!adminToken || adminToken.length === 0) {
@@ -7673,7 +7743,24 @@ abstract class ShardDO {
 
         const supplied = this.suppliedWsToken(request);
 
-        return supplied !== undefined && constantTimeEqual(supplied, adminToken);
+        if (supplied === undefined) {
+            return false;
+        }
+
+        if (await verifyWsAdminToken(adminToken, supplied)) {
+            return true;
+        }
+
+        // `suppliedWsToken` prefers the header; the token came from the query
+        // string only when no bearer header was present.
+        const fromQuery = extractBearerToken(request.headers.get("authorization")) === undefined;
+        const requireEphemeral = REQUIRE_EPHEMERAL_ENV_VALUES.has((env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN ?? "").trim().toLowerCase());
+
+        if (fromQuery && requireEphemeral) {
+            return false;
+        }
+
+        return constantTimeEqual(supplied, adminToken);
     }
 
     /**
@@ -7732,10 +7819,15 @@ abstract class ShardDO {
         return undefined;
     }
 
-    private handleWebSocketUpgrade(request: Request): Response {
-        if (!this.isUpgradeAllowed(request)) {
+    private async handleWebSocketUpgrade(request: Request): Promise<Response> {
+        if (!(await this.isUpgradeAllowed(request))) {
             return new Response("Forbidden", { status: 403 });
         }
+
+        // Resolve the admin flag BEFORE accepting the socket: the (async)
+        // sub-token HMAC verify must not sit between `acceptWebSocket` and the
+        // attachment stamp, or an early frame could race an unstamped socket.
+        const admin = await this.isAdminSocket(request);
 
         const pair = new WebSocketPair();
         const client = pair[0];
@@ -7760,7 +7852,7 @@ abstract class ShardDO {
         // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
         // their own) can be gated without re-checking a token per message.
         (server as HibernatableWebSocket).serializeAttachment?.({
-            admin: this.isAdminSocket(request),
+            admin,
             connectionId: crypto.randomUUID(),
             subs: {},
             ...(expiresAt === undefined ? {} : { expiresAt }),

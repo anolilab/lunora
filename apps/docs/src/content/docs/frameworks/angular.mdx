@@ -1,0 +1,143 @@
+---
+title: Angular
+description: Use Lunora with Angular — provideLunora in your app config, signal-based liveQuery, imperative mutate, and a connectionStatus signal.
+---
+
+`@lunora/angular` is the Angular adapter, a thin, idiomatic layer over
+[`@lunora/client`](/docs/packages/client) — which owns the WebSocket transport,
+subscription registry, offline queue, and delta-merge. Angular signals map
+directly onto Lunora's per-subscription deltas, so a live query is just a
+`signal` the WebSocket writes to.
+
+This page is the task-oriented guide; for the full reference see
+[`@lunora/angular`](/docs/packages/angular).
+
+<Callout type="warn">
+    **Deliberately small surface.** The Angular adapter ships the core four — DI wiring, `liveQuery`, `mutate`, `connectionStatus`. Parity extras the other
+    adapters have (paginated queries, bound optimistic-mutation handles, presence, reactive loaders) aren't here yet. See [Bring your
+    framework](/docs/frameworks/bring-your-framework).
+</Callout>
+
+## Install
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```sh tab="pnpm"
+pnpm add @lunora/angular
+```
+
+```sh tab="npm"
+npm install @lunora/angular
+```
+
+```sh tab="yarn"
+yarn add @lunora/angular
+```
+
+```sh tab="bun"
+bun add @lunora/angular
+```
+
+</Tabs>
+
+`@angular/core` is a peer dependency — the host app supplies the Angular
+runtime.
+
+## Provide the client
+
+Add `provideLunora` to your application config. It defaults to the page origin
+(the single-worker deploy where `/_lunora/ws` loops back into the app's own
+worker); pass options to point at a remote URL, or hand it an
+already-constructed `LunoraClient` to share one instance.
+
+```ts title="src/app/app.config.ts"
+import type { ApplicationConfig } from "@angular/core";
+import { provideLunora } from "@lunora/angular";
+
+export const appConfig: ApplicationConfig = {
+    providers: [provideLunora(/* { url: "https://api.example.com" } */)],
+};
+```
+
+Every reactive primitive resolves the client from the `LUNORA_CLIENT` injection
+token, which has a root-scoped default (a lazily-built same-origin browser
+client) — so things work even without `provideLunora`. Call
+`injectLunoraClient()` inside an injection context (a component/service field
+initializer or constructor) when you need the client for imperative calls.
+
+## Live queries
+
+`liveQuery(fn, args)` opens a subscription and mirrors every server delta into
+a `Signal`. It reads `undefined` until the first frame lands, and tears down
+automatically when the owning component is destroyed (`DestroyRef.onDestroy`).
+Call it from an injection context — a field initializer or constructor.
+
+```ts
+import { Component } from "@angular/core";
+import { liveQuery } from "@lunora/angular";
+
+import { api } from "../lunora/_generated/api";
+
+@Component({
+    selector: "app-messages",
+    standalone: true,
+    template: `@for (m of messages()?.messages ?? []; track m.id) {
+        <p>{{ m.text }}</p>
+    }`,
+})
+export class MessagesComponent {
+    readonly messages = liveQuery(api.messages.list, { channelId: "general" });
+}
+```
+
+Pass `"skip"` as the args to short-circuit — no network call, no socket; the
+signal stays `undefined`:
+
+```ts
+readonly profile = liveQuery(api.users.me, signedIn ? {} : "skip");
+```
+
+Unlike the Vue/Solid adapters, `args` is a plain value here, not a reactive
+source — changing it after the fact does not re-subscribe.
+
+## Mutations
+
+`mutate(fn, args, options)` runs a mutation and resolves with the server
+result. Capture the client in a field first: mutations usually fire from event
+handlers, which run _outside_ an injection context.
+
+```ts
+import { Component } from "@angular/core";
+import { injectLunoraClient, mutate } from "@lunora/angular";
+
+import { api } from "../lunora/_generated/api";
+
+@Component({/* … */})
+export class Composer {
+    private readonly client = injectLunoraClient();
+
+    send(text: string) {
+        return mutate(api.messages.send, { text }, { client: this.client });
+    }
+}
+```
+
+Optimistic updates (`optimistic` / `optimisticUpdate`) and the offline queue
+pass straight through to `client.mutation`.
+
+## Connection status
+
+```ts
+import { connectionStatus } from "@lunora/angular";
+
+readonly status = connectionStatus(); // Signal<"idle" | "connecting" | "connected" | "offline">
+```
+
+The aggregate live-socket status across all shard connections — render it in a
+header badge or gate a "reconnecting…" banner.
+
+## See also
+
+- [@lunora/angular](/docs/packages/angular) — the full adapter reference
+- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
+- [Real-time](/docs/concepts/realtime) — how subscriptions and deltas work

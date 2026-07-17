@@ -44,19 +44,32 @@ const assertSameCurrency = (a: Money, b: Money): void => {
     }
 };
 
-/** True when the currency has no minor unit (e.g. JPY). */
+/**
+ * True when the currency has no minor unit (e.g. JPY).
+ * @experimental
+ */
 export const isZeroDecimalCurrency = (currency: CurrencyCode): boolean => exponentFor(currency.toUpperCase()) === 0n;
 
-/** Construct money. Currency is normalized to uppercase; never use floats for amounts. */
+/**
+ * Construct money. Currency is normalized to uppercase; never use floats for amounts.
+ * @experimental
+ */
 export const money = (minorUnits: bigint | number, currency: CurrencyCode): Money => {
     const units = typeof minorUnits === "bigint" ? minorUnits : BigInt(Math.trunc(minorUnits));
 
     return { currency: currency.toUpperCase(), minorUnits: units };
 };
 
+/**
+ * `zeroMoney` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const zeroMoney = (currency: CurrencyCode): Money => money(0n, currency);
 
-/** Localized currency string for display (e.g. `$19.99`). For UI only — never for arithmetic. */
+/**
+ * Localized currency string for display (e.g. `$19.99`). For UI only — never for arithmetic.
+ * @experimental
+ */
 export const formatMoney = (value: Money, locale = "en-US"): string => {
     const exponent = Number(exponentFor(value.currency.toUpperCase()));
     const amount = Number(value.minorUnits) / 10 ** exponent;
@@ -69,19 +82,30 @@ export const formatMoney = (value: Money, locale = "en-US"): string => {
     }
 };
 
+/**
+ * `addMoney` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const addMoney = (a: Money, b: Money): Money => {
     assertSameCurrency(a, b);
 
     return fromDinero(add(toDinero(a), toDinero(b)));
 };
 
+/**
+ * `subtractMoney` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const subtractMoney = (a: Money, b: Money): Money => {
     assertSameCurrency(a, b);
 
     return fromDinero(subtract(toDinero(a), toDinero(b)));
 };
 
-/** Compares two same-currency amounts, returning -1, 0, or 1. */
+/**
+ * Compares two same-currency amounts, returning -1, 0, or 1.
+ * @experimental
+ */
 export const compareMoney = (a: Money, b: Money): -1 | 0 | 1 => {
     assertSameCurrency(a, b);
 
@@ -91,19 +115,35 @@ export const compareMoney = (a: Money, b: Money): -1 | 0 | 1 => {
 /**
  * Split an amount across integer ratios, distributing the remainder to the smallest unit so the
  * parts always sum back to the original. The basis for seat/proration math.
+ * @experimental
  */
 export const allocateMoney = (amount: Money, ratios: ReadonlyArray<bigint>): Money[] => allocate(toDinero(amount), [...ratios]).map((part) => fromDinero(part));
 
+/**
+ * `isZeroMoney` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const isZeroMoney = (a: Money): boolean => a.minorUnits === 0n;
 
-/** JSON-safe wire form of money (bigint encoded as a decimal string). */
+/**
+ * JSON-safe wire form of money (bigint encoded as a decimal string).
+ * @experimental
+ */
 export interface MoneyJSON {
     readonly currency: CurrencyCode;
     readonly minorUnits: string;
 }
 
+/**
+ * `toMoneyJSON` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const toMoneyJSON = (m: Money): MoneyJSON => {
     return { currency: m.currency, minorUnits: m.minorUnits.toString() };
 };
 
+/**
+ * `fromMoneyJSON` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const fromMoneyJSON = (json: MoneyJSON): Money => money(BigInt(json.minorUnits), json.currency);

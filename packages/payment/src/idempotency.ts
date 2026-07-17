@@ -11,7 +11,10 @@ const encoder = new TextEncoder();
 const sha256Hex = async (value: string): Promise<string> =>
     [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
-/** Build a deterministic idempotency key from an operation name and stable parts. */
+/**
+ * Build a deterministic idempotency key from an operation name and stable parts.
+ * @experimental
+ */
 export const idempotencyKey = (operation: string, ...parts: ReadonlyArray<number | string>): string => [operation, ...parts.map(String)].join(":");
 
 /**

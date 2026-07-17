@@ -4,8 +4,35 @@ import { defineConfig, configDefaults, coverageConfigDefaults } from "vitest/con
 
 const VITEST_SEQUENCE_SEED = Date.now();
 
+export interface CoverageThresholds {
+    branches?: number;
+    functions?: number;
+    lines?: number;
+    statements?: number;
+}
+
+/**
+ * Default coverage floor for every package on the shared config. Packages that
+ * sit below it get an explicit lower override at their call site (with a
+ * `// ratchet:` comment) and raise it over time instead of blocking.
+ *
+ * Thresholds only apply when coverage is enabled (`vitest run --coverage`, the
+ * `test:coverage` scripts); plain `vitest run` is unaffected. The workerd-gated
+ * packages (client, d1, do, runtime, scheduler, storage) use inline
+ * `defineConfig` configs — not this helper — and stay threshold-free: their
+ * workerd projects run without coverage (v8/`node:inspector` is unsupported in
+ * `@cloudflare/vitest-pool-workers`), so a floor there would gate on a
+ * structurally incomplete number.
+ */
+export const DEFAULT_COVERAGE_THRESHOLDS: Required<CoverageThresholds> = {
+    branches: 70,
+    functions: 80,
+    lines: 80,
+    statements: 80,
+};
+
 // https://vitejs.dev/config/
-export const getVitestConfig = (options: ViteUserConfig = {}) => {
+export const getVitestConfig = (options: ViteUserConfig = {}, coverageThresholds: CoverageThresholds = {}) => {
     console.log("VITEST_SEQUENCE_SEED", VITEST_SEQUENCE_SEED);
 
     return defineConfig({
@@ -29,6 +56,10 @@ export const getVitestConfig = (options: ViteUserConfig = {}) => {
                     "**/node_modules/**",
                     "**/dist/**",
                 ],
+                thresholds: {
+                    ...DEFAULT_COVERAGE_THRESHOLDS,
+                    ...coverageThresholds,
+                },
             },
             environment: "node",
             hideSkippedTests: true,

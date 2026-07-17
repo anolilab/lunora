@@ -4,6 +4,10 @@ import { applyDiffToDb as applyDiffToDatabase, escapeIdentifier as escapeIdentif
 import { EventLog } from "./event-log";
 import type { TableDiff } from "./table-diff";
 
+/**
+ * `MirrorTableDef` is part of the experimental `@lunora/replica` API and may change without a major version bump.
+ * @experimental
+ */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API type name
 interface MirrorTableDef {
     /** Primary key column name (defaults to `"id"`). */
@@ -12,6 +16,7 @@ interface MirrorTableDef {
 
 /**
  * Options for constructing a {@link LocalMirror}.
+ * @experimental
  */
 interface LocalMirrorOptions {
     /** Platform-specific SQLite adapter. */
@@ -69,6 +74,10 @@ const ensureMetaTable = (database: SqliteAdapter): void => {
  */
 type ChangeSubscriber = () => void;
 
+/**
+ * `LocalMirror` is part of the experimental `@lunora/replica` API and may change without a major version bump.
+ * @experimental
+ */
 class LocalMirror {
     readonly #db: SqliteAdapter;
     readonly #tables: Record<string, MirrorTableDef>;

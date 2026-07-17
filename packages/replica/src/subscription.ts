@@ -2,11 +2,13 @@ import type { EventLogEntry } from "./event-log";
 
 /**
  * Callback signature for state-change subscriptions.
+ * @experimental
  */
 type StateChangeCallback = (state: Readonly<Record<string, unknown>>) => void;
 
 /**
  * Callback signature for event-type subscriptions.
+ * @experimental
  */
 type EventCallback = (entry: EventLogEntry) => void;
 
@@ -54,6 +56,7 @@ type Subscription = StateSub | EventSub;
  * unsub1();
  * unsub2();
  * ```
+ * @experimental
  */
 class SubscriptionManager {
     readonly #subscriptions = new Map<string, Subscription>();

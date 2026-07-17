@@ -41,6 +41,7 @@ const RESERVED_SKILL_NAME = "default";
  * ordering, per-skill knowledge retrieval) happens in `defineAgent` — a skill
  * only validates its own `name`; tool-name validation is deferred to the merge,
  * which owns the flat model-facing namespace.
+ * @experimental
  */
 const defineSkill = (config: SkillConfig): SkillDefinition => {
     // The type forbids it, but a plain-JS caller can still omit/misname `name` —
@@ -62,7 +63,10 @@ const defineSkill = (config: SkillConfig): SkillDefinition => {
     return { ...config, isLunoraSkill: true };
 };
 
-/** Runtime brand check for a {@link SkillDefinition}. */
+/**
+ * Runtime brand check for a {@link SkillDefinition}.
+ * @experimental
+ */
 const isSkillDefinition = (value: unknown): value is SkillDefinition =>
     typeof value === "object" && value !== null && (value as { isLunoraSkill?: unknown }).isLunoraSkill === true;
 

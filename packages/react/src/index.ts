@@ -20,6 +20,9 @@ export { lunoraQueryOptions } from "./query-options";
 export type {
     ArgsOf,
     FunctionReference,
+    HttpStreamArgsOf,
+    HttpStreamChunkOf,
+    HttpStreamRef,
     LunoraClient,
     OptimisticLocalStore,
     OptimisticUpdate,
@@ -58,6 +61,8 @@ export { default as useClientQuery } from "./use-client-query";
 export { default as useConnectionStatus } from "./use-connection-status";
 export type { FlagContext, FlagValue } from "./use-flag";
 export { useFlag, useFlags } from "./use-flag";
+export type { UseHttpStreamOptions, UseHttpStreamResult } from "./use-http-stream";
+export { useHttpStream } from "./use-http-stream";
 export { default as useInfiniteQuery } from "./use-infinite-query";
 export type { MutationHook } from "./use-mutation";
 export { useMutation } from "./use-mutation";

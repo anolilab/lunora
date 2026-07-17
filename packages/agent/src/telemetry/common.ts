@@ -6,6 +6,7 @@
  * to a downstream tracer — only structural metadata (model id, finish reason,
  * token counts, tool name, timing, success/failure) is recorded. This is the
  * privacy-safe default: turn recording on deliberately, per integration.
+ * @experimental
  */
 export interface CommonOptions {
     /**

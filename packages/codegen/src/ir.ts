@@ -123,13 +123,13 @@ export interface ExternalSourceIR {
     binding: string;
     /** Whether a `columns` projection allow-list was given. */
     columns?: ReadonlyArray<string>;
-    /** `true` when a `reconcileEveryMs` was given (the incremental-mode delete-visibility companion). */
+    /** `true` when a `reconcileEveryMs` was given — reserved for a future incremental mode's delete-visibility lint; not on the typed `.source()` surface today. */
     hasReconcile?: boolean;
     /** `true` when a `tenantBy` mapper was given — the tenant-isolation boundary the `external_source_unscoped` lint checks. */
     hasTenantBy: boolean;
     /** The `idColumn` literal, when given (defaults to `"id"` at runtime). */
     idColumn?: string;
-    /** Delete-detection mode literal, when given (`"full-pull"` | `"incremental"`). */
+    /** Delete-detection mode literal, when given (`"full-pull"` today). */
     mode?: string;
     /** The membership query literal, when statically knowable. */
     query?: string;
@@ -902,6 +902,16 @@ export interface StorageRulesMetadataIR {
 export interface HttpRouteIR {
     /** `v.*` validators decoding the JSON request body (`.body({...})`), keyed by field. */
     body: Record<string, ValidatorIR>;
+
+    /**
+     * Rendered TS type of one SSE chunk — the `R` the `.stream(handler)`
+     * handler yields — inferred from the handler via the type checker. Present
+     * only when {@link HttpRouteIR.stream} is `true`; `"unknown"` when the
+     * checker can't resolve enough context. Feeds the emitted
+     * `HttpStreamRef&lt;Chunk, …>` so the chunk type flows to the client.
+     * @experimental Part of the HTTP-SSE stream surface (the `httpStreams.*` emission).
+     */
+    chunkType?: string;
     /** Export binding name of the route handler (used only for diagnostics / dedupe). */
     exportName: string;
     /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "http". */

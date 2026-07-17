@@ -2,14 +2,15 @@ import { LunoraError } from "@lunora/errors";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
-import { stableStringify } from "../../../shared/stable-key";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { stableWireKey } from "../../../shared/wire-key";
 import createInMemoryBookmarkStorage from "./bookmark";
 import type { ClientQueryRef } from "./client-query-store";
 import { ClientQueryStore } from "./client-query-store";
 import { TabCoordinator } from "./cross-tab";
 import { applyDelta, isMutationDelta } from "./delta-merge";
 import type { LunoraErrorCode } from "./errors";
+import { httpStream } from "./http-stream";
 import Listeners from "./listeners";
 import type { OptimisticUpdate } from "./local-store";
 import { createLocalStore } from "./local-store";
@@ -44,6 +45,9 @@ import type {
     GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
+    HttpStreamArgsOf,
+    HttpStreamChunkOf,
+    HttpStreamRef,
     KvKeyListResult,
     KvNamespaceSummary,
     KvValueResult,
@@ -78,6 +82,7 @@ import type {
     WorkflowInstanceDetail,
     WorkflowInstancePage,
     WorkflowInstanceStatus,
+    WsTokenProvider,
 } from "./types";
 
 const RPC_PATH = "/_lunora/rpc";
@@ -484,6 +489,15 @@ interface ShapeSubscriptionState {
     serverCursor?: number;
     serverEpoch?: string;
     shardKey: string | undefined;
+
+    /**
+     * The wire-encoded form of `args`, computed once at `subscribeShape` time (so
+     * an unsupported value fails loud at the call site, not inside a reconnect's
+     * open handler). Sent on every `shape_subscribe` frame — identical to `args`
+     * for pure JSON, tagged tokens for `bigint`/`Date`/bytes/… (the shard
+     * `decodeWire`s them before resolving the shape).
+     */
+    wireArgs: Record<string, unknown> | undefined;
 }
 
 /** A poke being assembled between `pokeStart` and `pokeEnd` — parts buffered per shape, applied atomically at end. */
@@ -617,7 +631,7 @@ class LunoraClient {
     /** Local reactive store for {@link ClientQueryRef} values — no server round-trip. Private; reach it via `getClientQuery` / `setClientQuery` / `subscribeClientQuery`. */
     private readonly clientQueryStore: ClientQueryStore;
 
-    private wsToken: string | undefined;
+    private wsToken: string | undefined | WsTokenProvider;
 
     /** Better-auth base path (trailing slash stripped) for the `get-session` lookup. */
     private readonly authBasePath: string;
@@ -1174,10 +1188,12 @@ class LunoraClient {
      * Replace the token appended to WS upgrade URLs as `?token=…` and close
      * every open shard socket so the reconnect picks up the new value. Call
      * this whenever the user's WS credential changes (rotating the admin token
-     * in the studio, switching workspaces, etc.). Bearer tokens for HTTP
-     * RPC are independent — see {@link setAuthToken}.
+     * in the studio, switching workspaces, etc.). Accepts a static string or a
+     * {@link WsTokenProvider} resolved fresh at every (re)connect — the channel
+     * for short-lived credentials like the minted ephemeral admin sub-token.
+     * Bearer tokens for HTTP RPC are independent — see {@link setAuthToken}.
      */
-    public setWsToken(token: string | undefined): void {
+    public setWsToken(token: string | undefined | WsTokenProvider): void {
         if (this.wsToken === token) {
             return;
         }
@@ -1512,7 +1528,7 @@ class LunoraClient {
      */
     public snapshotPrecondition(functionRef: FunctionReference, args: Record<string, unknown>, shardKey?: string): () => boolean {
         const snapshot = this.peekActiveQueryValue(functionRef.__lunoraRef, args, shardKey);
-        const snapshotKey = snapshot === undefined ? undefined : stableStringify(snapshot);
+        const snapshotKey = snapshot === undefined ? undefined : stableWireKey(snapshot);
 
         return (): boolean => {
             const current = this.peekActiveQueryValue(functionRef.__lunoraRef, args, shardKey);
@@ -1527,7 +1543,7 @@ class LunoraClient {
                 return false;
             }
 
-            return stableStringify(current) === snapshotKey;
+            return stableWireKey(current) === snapshotKey;
         };
     }
 
@@ -1574,7 +1590,7 @@ class LunoraClient {
             return undefined;
         }
 
-        const argsKey = stableStringify(args);
+        const argsKey = stableWireKey(args);
         const key = queryCacheKey(functionPath, argsKey, shardKey);
         const entry = this.hydratedQueryCache.get(key);
 
@@ -2000,8 +2016,10 @@ class LunoraClient {
      * Subscribe to the live scheduled-jobs list over the SchedulerDO's admin
      * WebSocket. `onJobs` fires with the full list on connect and on every
      * change (schedule / cancel / alarm-fire). Reconnects with the client's
-     * configured backoff. Requires `wsToken` to be set to the admin token (the
-     * browser can't send an `Authorization` header on a WS). Returns an
+     * configured backoff. Requires `wsToken` to be set to an admin credential
+     * (the browser can't send an `Authorization` header on a WS) — the master
+     * token, or preferably a {@link WsTokenProvider} minting the ephemeral
+     * sub-token so the master credential stays out of the URL. Returns an
      * unsubscribe function that closes the socket and stops reconnecting.
      */
     public subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe {
@@ -2020,16 +2038,12 @@ class LunoraClient {
         let timer: ReturnType<typeof setTimeout> | undefined;
         let closed = false;
 
-        const connect = (): void => {
+        const openWith = (token: string | undefined): void => {
             if (closed || this.WebSocketImpl === undefined) {
                 return;
             }
 
-            // Read `this.wsToken` at connect time (not once at subscribe time) so a
-            // post-subscribe `setWsToken()` rotation is picked up on the next
-            // reconnect attempt instead of looping forever with a stale token the
-            // admin gate rejects.
-            const url = this.wsToken === undefined ? base : `${base}?token=${encodeURIComponent(this.wsToken)}`;
+            const url = token === undefined ? base : `${base}?token=${encodeURIComponent(token)}`;
 
             socket = new this.WebSocketImpl(url);
 
@@ -2053,6 +2067,7 @@ class LunoraClient {
                 socket = undefined;
 
                 if (!closed) {
+                    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the reconnect re-enters `connect`, declared just below with `openWith` in scope
                     timer = setTimeout(connect, reconnect.next());
                 }
             });
@@ -2060,6 +2075,49 @@ class LunoraClient {
             socket.addEventListener("error", () => {
                 /* the runtime follows up with close; reconnect handles it there */
             });
+        };
+
+        /** Resolve the provider-shaped token, then open; a failed mint re-arms the reconnect timer. */
+        const connectWithProvider = async (provider: WsTokenProvider): Promise<void> => {
+            let token: string | undefined;
+
+            try {
+                token = await provider();
+            } catch {
+                if (!closed) {
+                    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the retry re-enters `connect`, declared just below
+                    timer = setTimeout(connect, reconnect.next());
+                }
+
+                return;
+            }
+
+            openWith(token);
+        };
+
+        // Read `this.wsToken` at connect time (not once at subscribe time) so a
+        // post-subscribe `setWsToken()` rotation is picked up on the next
+        // reconnect attempt instead of looping forever with a stale token the
+        // admin gate rejects. A provider-shaped token is resolved fresh per
+        // attempt (re-minting the ephemeral admin sub-token); a provider failure
+        // re-arms the reconnect timer so a broken mint endpoint degrades to
+        // backoff retries.
+        const connect = (): void => {
+            if (closed || this.WebSocketImpl === undefined) {
+                return;
+            }
+
+            const { wsToken } = this;
+
+            if (typeof wsToken === "function") {
+                // `connectWithProvider` never rejects (its awaits are try/caught),
+                // so the fire-and-forget catch is belt-and-braces.
+                connectWithProvider(wsToken).catch(() => undefined);
+
+                return;
+            }
+
+            openWith(wsToken);
         };
 
         connect();
@@ -2809,7 +2867,7 @@ class LunoraClient {
         if (!state) {
             this.nextSubId += 1;
             const id = `sub_${this.nextSubId.toString()}`;
-            const argsKey = stableStringify(argsRecord);
+            const argsKey = stableWireKey(argsRecord);
             const cached = this.takeHydratedCache(function_.__lunoraRef, argsKey, options.shardKey);
 
             state = {
@@ -2915,6 +2973,9 @@ class LunoraClient {
             onCheckpoint: options.onCheckpoint,
             rows: new Map(),
             shardKey: options.shardKey,
+            // Encode ONCE, here, so an unsupported arg value throws at this call
+            // site instead of inside a reconnect's open handler.
+            wireArgs: shape.args === undefined ? undefined : (encodeCallArgs(shape.args, `shape args for '${shape.name}'`) as Record<string, unknown>),
         };
 
         this.shapeSubscriptions.set(id, state);
@@ -3035,6 +3096,47 @@ class LunoraClient {
         }
 
         return iterable;
+    }
+
+    /**
+     * Open a typed **HTTP-SSE route stream** (`httpRoute.&lt;verb>(path).stream()`).
+     * Distinct from {@link LunoraClient.stream}, which consumes the WS procedure
+     * stream (`kind: "stream"`): this one opens the route's own URL with `fetch`
+     * and parses the Server-Sent Events framing the route pump writes (`data:`
+     * chunks, a final `event: complete`, an `event: error` on throw).
+     *
+     * The reference comes from the generated `httpStreams.*` registry, so the
+     * yielded chunk type is the route handler's yielded type. Cancelling the
+     * returned iterable (or aborting `options.signal`) aborts the fetch, which
+     * the server handler observes via its `signal`. The client's bearer token
+     * (when set) rides as an `authorization` header.
+     * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
+     */
+    public httpStream<Ref extends HttpStreamRef>(
+        route: Ref,
+        args?: HttpStreamArgsOf<Ref>,
+        options: { headers?: Record<string, string>; maxBuffer?: number; signal?: AbortSignal } = {},
+    ): StreamIterable<HttpStreamChunkOf<Ref>> {
+        if (this.closed) {
+            throw new LunoraError("CLIENT_CLOSED", "LunoraClient is closed");
+        }
+
+        if (!this.fetchImpl) {
+            throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
+        }
+
+        const headers: Record<string, string> = {
+            ...(this.authToken ? { authorization: `Bearer ${this.authToken}` } : {}),
+            ...options.headers,
+        };
+
+        return httpStream(route, args, {
+            baseUrl: this.url,
+            fetch: this.fetchImpl,
+            headers,
+            maxBuffer: options.maxBuffer,
+            signal: options.signal,
+        });
     }
 
     public close(): void {
@@ -3550,15 +3652,15 @@ class LunoraClient {
         return conn;
     }
 
-    private wsUrlFor(shardKey: string | undefined): string {
+    private wsUrlFor(shardKey: string | undefined, token: string | undefined): string {
         const params: string[] = [];
 
         if (shardKey !== undefined) {
             params.push(`shard=${encodeURIComponent(shardKey)}`);
         }
 
-        if (this.wsToken !== undefined) {
-            params.push(`token=${encodeURIComponent(this.wsToken)}`);
+        if (token !== undefined) {
+            params.push(`token=${encodeURIComponent(token)}`);
         }
 
         if (params.length === 0) {
@@ -3844,7 +3946,59 @@ class LunoraClient {
         conn.wsState = "connecting";
         this.emitConnectionStatus();
 
-        const socket = new this.WebSocketImpl(this.wsUrlFor(shardKey));
+        // A provider-shaped `wsToken` is resolved fresh per connect attempt (so a
+        // short-lived credential is re-minted on every reconnect, including the
+        // one after a 4001 token-expired drop); a static string keeps the fully
+        // synchronous connect path callers and tests rely on.
+        if (typeof this.wsToken === "function") {
+            // `openSocketWithProvidedToken` never rejects (its awaits are
+            // try/caught), so the fire-and-forget catch is belt-and-braces.
+            this.openSocketWithProvidedToken(conn, shardKey, this.wsToken).catch(() => undefined);
+
+            return;
+        }
+
+        this.openSocket(conn, shardKey, this.wsToken);
+    }
+
+    /**
+     * Resolve the {@link WsTokenProvider} and open the shard socket with the
+     * minted token. The connection is already in the `connecting` state, so the
+     * async gap is race-guarded: a client `close()`, a `setWsToken` bounce, or a
+     * competing connect that landed first all abandon this attempt. A provider
+     * failure fails the attempt through {@link handleDisconnect}, which arms the
+     * normal reconnect backoff — a broken mint endpoint degrades to retries, not
+     * a silent tokenless socket the admin gate would reject.
+     */
+    private async openSocketWithProvidedToken(conn: ShardConnection, shardKey: string | undefined, provider: WsTokenProvider): Promise<void> {
+        let token: string | undefined;
+
+        try {
+            token = await provider();
+        } catch {
+            this.handleDisconnect(conn);
+
+            return;
+        }
+
+        if (this.closed || this.WebSocketImpl === undefined || conn.wsState !== "connecting" || conn.socket !== undefined) {
+            return;
+        }
+
+        this.openSocket(conn, shardKey, token);
+    }
+
+    /** Construct the shard socket and wire its lifecycle handlers. The connection must already be in the `connecting` state. */
+    private openSocket(conn: ShardConnection, shardKey: string | undefined, token: string | undefined): void {
+        if (this.WebSocketImpl === undefined) {
+            return;
+        }
+
+        // Intentional mutation of the shared, long-lived connection record so
+        // the open/close/error handlers all observe the same state machine
+        // (mirrors `handleDisconnect`).
+        /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
+        const socket = new this.WebSocketImpl(this.wsUrlFor(shardKey, token));
 
         conn.socket = socket;
 
@@ -3990,6 +4144,7 @@ class LunoraClient {
                 this.handleDisconnect(conn);
             }
         });
+        /* eslint-enable no-param-reassign */
     }
 
     private handleDisconnect(conn: ShardConnection): void {
@@ -4117,7 +4272,12 @@ class LunoraClient {
             // sub (a hydrated read or an earlier frame), so the server can
             // resume instead of re-snapshotting. Omitted on a cold sub.
             query: {
-                args: state.args,
+                // Wire-encode so a `bigint`/`Date`/bytes arg survives the frame's
+                // `JSON.stringify` (the shard `decodeWire`s at its subscribe entry
+                // point). Identity for pure-JSON args. Cannot throw here: the
+                // registry key (`stableWireKey`) already encoded these args at
+                // subscribe() time, so reconnect resends stay safe.
+                args: encodeWire(state.args) as Record<string, unknown>,
                 functionPath: state.fn.__lunoraRef,
                 table,
                 ...(state.serverCursor === undefined ? {} : { sinceSeq: state.serverCursor }),
@@ -4136,7 +4296,11 @@ class LunoraClient {
 
         sendOn(conn, {
             id: state.id,
-            shape: { name: state.name, ...(state.args === undefined ? {} : { args: state.args }) },
+            // `wireArgs` is the pre-encoded form of `args` (computed at
+            // `subscribeShape` time) so a `bigint`/`Date`/bytes arg survives the
+            // frame's `JSON.stringify`; the shard `decodeWire`s it at its
+            // `shape_subscribe` entry point. Identity for pure-JSON args.
+            shape: { name: state.name, ...(state.wireArgs === undefined ? {} : { args: state.wireArgs }) },
             type: "shape_subscribe",
             // Resume from the last applied checkpoint when we hold one; a cold
             // subscribe omits it and the server seeds the full membership.
