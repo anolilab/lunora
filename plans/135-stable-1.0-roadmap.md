@@ -269,14 +269,33 @@ Nothing tagged stable may throw on an advertised path.
       `"override"` was the clobberer — it rewrote replica's original range to an
       exact pin on release), and `scripts/check-sibling-peer-ranges.js` guards
       both in `postinstall`.
-- [ ] **Rehearse the release train**: dry-run multi-semantic-release for the
+- [x] **Rehearse the release train**: dry-run multi-semantic-release for the
       `main` merge (all ~46 publishable packages promoting together), including
       the `lunorash` umbrella whose deps must resolve to the stable versions.
-- [ ] Verify `lunora init` version-rewrite injects the stable dist-tag once
+      **Done (2026-07-17, sandbox rehearsal — see `plans/137`)**: local-`main`
+      dry run computed `1.0.0` on the default channel for all 46 packages
+      (incl. `lunorash`; exact dep pins rewrite to `1.0.0`, peer ranges
+      survive `deps.bump: "satisfy"`). _Caveat_: `verifyConditions` needs real
+      tokens even under `--dry-run`, so a maintainer should repeat the dry run
+      with real read-scoped tokens through the shipped config (runbook §4.4);
+      note `origin/main`'s workflow still gates out stable releases and
+      `main`/`alpha` have diverged — the merge must keep alpha's workflow.
+- [x] Verify `lunora init` version-rewrite injects the stable dist-tag once
       `latest` exists (`packages/cli/src/commands/init/handler.ts:252,424`) —
       templates ship `^0.0.0` placeholders by design.
-- [ ] Confirm npm `latest` dist-tag semantics for first stable publish of each
+      **Done (2026-07-17)**: logic already correct — stable CLI derives
+      dist-tag `latest` + template ref `main` (`src/util/source-ref.ts`); no
+      hardcoded `alpha` outside the unpublished-`0.0.0` fallback. Now covered
+      by unit tests (`resolveDistTag` per-version + init-level stable-pin
+      test). _Caveat_: live `npx lunora@latest init` against the real
+      registry remains a post-release check (Phase 5 step 5).
+- [x] Confirm npm `latest` dist-tag semantics for first stable publish of each
       package (provenance/OIDC already configured).
+      **Done (2026-07-17)**: preset `with-pnpm.json` makes `main` a plain
+      release branch (default channel) and `@anolilab/semantic-release-pnpm`
+      maps the default channel → `latest` (`getChannel`); `alpha` keeps its
+      `alpha` dist-tag. Dry run confirmed 46× "default channel". _Caveat_:
+      `npm dist-tag ls` end-state only observable after the real publish.
 
 ## Phase 4 — Docs & onboarding completeness
 
