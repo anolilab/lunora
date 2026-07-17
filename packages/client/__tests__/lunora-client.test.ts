@@ -3007,7 +3007,18 @@ describe("lunoraClient", () => {
 
             await flushMicrotasks();
 
-            expect(latestSocket().url).toContain("token=eph-token");
+            // Select the token-bearing socket rather than `latestSocket()`: under
+            // full-suite load a stray reconnect socket from an earlier test can be
+            // the newest entry, so `.at(-1)` is not reliably the minted one.
+            let tokened = sockets.find((socket) => socket.url.includes("token=eph-token"));
+
+            for (let attempt = 0; attempt < 30 && tokened === undefined; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- drain macrotasks until the provider-minted socket opens
+                await flushMicrotasks();
+                tokened = sockets.find((socket) => socket.url.includes("token=eph-token"));
+            }
+
+            expect(tokened?.url).toContain("token=eph-token");
             expect(provider).toHaveBeenCalledTimes(1);
         });
 
