@@ -2949,32 +2949,39 @@ describe("lunoraClient", () => {
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
 
-            // The socket is only built AFTER the async provider resolves, which
-            // can span a couple of microtask hops; under load a single advance
-            // can leave the build pending. Drain until the first socket appears.
-            for (let attempt = 0; attempt < 20 && sockets.length === 0; attempt += 1) {
-                // eslint-disable-next-line no-await-in-loop -- sequential drain: each advance flushes one more microtask hop until the socket is built
+            // The scheduled socket is built only AFTER the async provider
+            // resolves (a few microtask hops). Drain until the socket carrying
+            // the minted token appears, and pick it by path + token — reading
+            // `latestSocket()` could otherwise grab a stray socket (e.g. a prior
+            // test's pending reconnect) that raced in during the advance.
+            const findScheduled = (needle: string): MockSocket | undefined =>
+                sockets.find((socket) => socket.url.includes("/_lunora/admin/scheduled/ws") && socket.url.includes(needle));
+
+            let first: MockSocket | undefined;
+
+            for (let attempt = 0; attempt < 30 && first === undefined; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential drain until the minted socket appears
                 await vi.advanceTimersByTimeAsync(0);
+                first = findScheduled("token=eph-1");
             }
 
-            const first = latestSocket();
+            expect(first?.url).toContain("token=eph-1");
 
-            expect(first.url).toContain("token=eph-1");
-
-            first.open();
-            first.triggerClose();
+            first?.open();
+            first?.triggerClose();
 
             // The reconnect (10ms) re-resolves the provider — a fresh short-lived
             // token per attempt, never a reused stale one. Drain until it lands.
-            for (let attempt = 0; attempt < 20 && sockets.length < 2; attempt += 1) {
+            let second: MockSocket | undefined;
+
+            for (let attempt = 0; attempt < 30 && second === undefined; attempt += 1) {
                 // eslint-disable-next-line no-await-in-loop -- sequential drain: fire the 10ms reconnect timer then flush the re-mint hops
                 await vi.advanceTimersByTimeAsync(10);
+                second = findScheduled("token=eph-2");
             }
 
-            const second = latestSocket();
-
             expect(second).not.toBe(first);
-            expect(second.url).toContain("token=eph-2");
+            expect(second?.url).toContain("token=eph-2");
 
             unsubscribe();
             vi.useRealTimers();
