@@ -100,6 +100,29 @@ describe("shipped registry items", () => {
         expect(wrangler).toContain("BACKUP_BUCKET");
     });
 
+    it("self-describing bindings (ai/browser/images) are single objects, not arrays", () => {
+        expect.assertions(1);
+
+        // Cloudflare's `ai`/`browser`/`images` bindings are single objects
+        // (`{ "binding": "NAME" }`), unlike list bindings such as `r2_buckets`.
+        // Wrapping one in an array writes a wrangler.jsonc wrangler rejects on
+        // dev/deploy — guard every shipped item against that shape.
+        const selfDescribing = new Set(["ai", "browser", "images"]);
+        const offenders: string[] = [];
+
+        for (const name of itemNames) {
+            const manifest = parseManifest(JSON.parse(readFileSync(join(registryRoot, name, "registry.json"), "utf8")), name);
+
+            for (const binding of manifest.bindings ?? []) {
+                if (selfDescribing.has(binding.path[0] ?? "") && Array.isArray(binding.value)) {
+                    offenders.push(`${name}:${binding.path.join(".")}`);
+                }
+            }
+        }
+
+        expect(offenders).toStrictEqual([]);
+    });
+
     it("`list` reads the catalog and reports every item", async () => {
         // eslint-disable-next-line vitest/prefer-expect-assertions -- one assertion per discovered item; data-driven, so not a literal
         expect.assertions(itemNames.length);
