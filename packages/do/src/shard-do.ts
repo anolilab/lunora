@@ -149,8 +149,8 @@ const WS_KEEPALIVE_PING = "lunora-ping";
 const WS_KEEPALIVE_PONG = "lunora-pong";
 
 /**
- * Env values that read as "on" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` (plan
- * 095 Phase 3 — see {@link ShardDO.isAdminSocket}). Mirrors the runtime's
+ * Env values that read as "on" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` (see
+ * {@link ShardDO.isAdminSocket}). Mirrors the runtime's
  * `REQUIRE_EPHEMERAL_ENV_VALUES` — the two packages don't import from each
  * other to avoid a circular dep.
  */
@@ -7655,8 +7655,8 @@ abstract class ShardDO {
      * subresource the upgrade page loads after the handshake. Use a
      * short-lived rotating token in production rather than a long-lived
      * secret — for the ADMIN credential specifically, the worker mints one
-     * (`POST /_lunora/admin/ws-token`, plan 095) and {@link isAdminSocket}
-     * accepts it, so the master `LUNORA_ADMIN_TOKEN` never rides the URL.
+     * (`POST /_lunora/admin/ws-token`) and {@link isAdminSocket} accepts it, so
+     * the master `LUNORA_ADMIN_TOKEN` never rides the URL.
      *
      * Async because the admin fallback ({@link isAdminSocket}) verifies the
      * ephemeral sub-token with WebCrypto HMAC.
@@ -7720,15 +7720,15 @@ abstract class ShardDO {
     /**
      * Whether the upgrade presented an admin credential: the master
      * `LUNORA_ADMIN_TOKEN` (constant-time compared) or a short-lived sub-token
-     * the worker minted with it (`POST /_lunora/admin/ws-token`, plan 095 —
+     * the worker minted with it (`POST /_lunora/admin/ws-token` —
      * HMAC-verified statelessly here, since both isolates hold the master token
      * in `env`). The ephemeral token is what the studio sends in `?token=`, so
      * the master credential stays out of URLs/logs. Closed (resolves `false`)
      * when the admin token is unset, mirroring `isAdminAuthorized` for the HTTP
      * path so admin streaming is opt-in rather than exposed by default.
      *
-     * Enforcement (plan 095 Phase 3): with `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`
-     * set (`1`/`true`/`on`/`yes`/`enabled`), a raw master token in the
+     * Enforcement: with `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` set
+     * (`1`/`true`/`on`/`yes`/`enabled`), a raw master token in the
      * `?token=` query parameter is rejected — the query string is exactly
      * where it leaks. The `Authorization` header path still takes the master
      * token: browsers can't set it on a WS upgrade, so it never rides a URL.

@@ -1,5 +1,5 @@
 /**
- * Real-workerd boot smoke for `@lunora/queue` (plan 135, Phase 1).
+ * Real-workerd boot smoke for `@lunora/queue`.
  *
  * The Node unit suite exercises the producer/dispatcher against plain-object
  * doubles; this suite proves the same code boots and runs against the real

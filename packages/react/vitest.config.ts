@@ -7,7 +7,6 @@ export default getVitestConfig(
             setupFiles: ["./__tests__/setup.ts"],
         },
     },
-    // ratchet: measured 2026-07-16 at 68.46% branches (lines/stmts/funcs clear
-    // the default floor) — raise toward the 70% default branches floor.
+    // ratchet: branches below the default floor; raise as coverage improves.
     { branches: 65 },
 );

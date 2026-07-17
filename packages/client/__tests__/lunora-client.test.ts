@@ -2973,7 +2973,7 @@ describe("lunoraClient", () => {
         });
     });
 
-    describe("lunoraClient — wsToken provider (ephemeral admin token, plan 095)", () => {
+    describe("lunoraClient — wsToken provider (ephemeral admin token)", () => {
         it("resolves the provider before the shard socket connects and appends the minted token", async () => {
             expect.assertions(3);
 

@@ -76,12 +76,10 @@ export default getVitestConfig(
             ],
         },
     },
-    // ratchet: no reliable measurement — studio is excluded from the root
-    // COVERAGE vis queries (`project!=studio` in `test:coverage` /
-    // `test:affected:coverage`; the plain `test` scripts run it), because a
-    // full component-run under v8 coverage stalls (2026-07-16 attempt). The
-    // component suite itself is green and fast without coverage (73 files /
-    // 544 tests, ~60s) since the SQL-editor render-loop hang was fixed. Real
-    // floors need the component suite to finish under coverage first.
+    // ratchet: studio is excluded from the coverage vis queries
+    // (`project!=studio` in `test:coverage` / `test:affected:coverage`; the
+    // plain `test` scripts run it), because a full component run under v8
+    // coverage stalls. The suite is green and fast without coverage. Zeroed
+    // until it can finish under coverage.
     { branches: 0, functions: 0, lines: 0, statements: 0 },
 );

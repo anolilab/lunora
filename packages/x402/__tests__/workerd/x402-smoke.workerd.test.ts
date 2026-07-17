@@ -1,6 +1,5 @@
 /**
- * Real-workerd boot smoke for `@lunora/x402` (plan 135, Phase 1; deferred from
- * plan 134).
+ * Real-workerd boot smoke for `@lunora/x402`.
  *
  * The Node unit suite covers the protocol flow against fetch stubs; this suite
  * proves the charge rail actually boots in workerd — `@x402/core` + the lazily

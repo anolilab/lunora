@@ -5,9 +5,9 @@
  *
  * An exact sibling peer pin breaks the moment the sibling publishes any other
  * version — most catastrophically the `1.0.0-alpha.N → 1.0.0` stable promotion,
- * where every published consumer of the pinned package becomes uninstallable
- * (plan 135, Phase 3). A `>=<floor> <2.0.0-0` range matches newer same-tuple
- * prereleases (`1.0.0-alpha.30`), the stable `1.0.0`, and every later `1.x`.
+ * where every published consumer of the pinned package becomes uninstallable.
+ * A `>=<floor> <2.0.0-0` range matches newer same-tuple prereleases
+ * (`1.0.0-alpha.30`), the stable `1.0.0`, and every later `1.x`.
  *
  * Two mechanisms interact here:
  *
@@ -68,7 +68,7 @@ for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
 
         console.error(`❌ packages/${entry.name}'s peerDependency "${name}" is an exact pin (${specifier}).`);
         console.error(`   Exact sibling peers break on the next release of ${name} (and on 1.0 promotion).`);
-        console.error(`   Use a range instead, e.g. ">=${specifier} <2.0.0-0" (see plan 135, Phase 3).`);
+        console.error(`   Use a range instead, e.g. ">=${specifier} <2.0.0-0".`);
     }
 }
 

@@ -113,11 +113,11 @@ export interface AdvisorIndex {
 
 /** The statically-knowable `.source(...)` bits the `external_source_*` lints read. */
 export interface AdvisorExternalSource {
-    /** `true` when a `reconcileEveryMs` was given — reserved for the post-1.0 incremental mode's delete-visibility lint (plan 136; the knob was cut from the 1.0 `.source()` surface). */
+    /** `true` when a `reconcileEveryMs` was given — reserved for a future incremental mode's delete-visibility lint; not on the typed `.source()` surface today. */
     hasReconcile?: boolean;
     /** `true` when a `tenantBy` mapper was given — the tenant-isolation boundary. */
     hasTenantBy: boolean;
-    /** Delete-detection mode literal, when given (`"full-pull"` today; `"incremental"` is deferred post-1.0, plan 136). */
+    /** Delete-detection mode literal, when given (`"full-pull"` today). */
     mode?: string;
 
     /**
@@ -195,10 +195,10 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 externallyManaged: table.isExternallyManaged ?? false,
                 externalSource: table.externalSource
                     ? {
-                          // `reconcileEveryMs` was cut from the typed 1.0 `.source()`
-                          // surface (post-1.0 incremental seam, plan 136); read it
-                          // through a widening cast so an untyped JS schema that still
-                          // carries the key feeds the IR the same way the AST feeder does.
+                          // `reconcileEveryMs` is not on the typed `.source()`
+                          // surface today; read it through a widening cast so an
+                          // untyped JS schema that still carries the key feeds the IR
+                          // the same way the AST feeder does.
                           hasReconcile: (table.externalSource as { reconcileEveryMs?: number }).reconcileEveryMs !== undefined,
                           hasTenantBy: table.externalSource.tenantBy !== undefined,
                           mode: table.externalSource.mode,

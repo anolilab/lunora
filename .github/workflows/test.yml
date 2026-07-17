@@ -131,8 +131,8 @@
                   "token": "${{ secrets.CODECOV_TOKEN }}"
                   "fail_ci_if_error": false
 
-    # Workerd integration suites (plan 122): the `workerd` vitest projects run
-    # against real workerd via @cloudflare/vitest-pool-workers, gated behind
+    # Workerd integration suites: the `workerd` vitest projects run against real
+    # workerd via @cloudflare/vitest-pool-workers, gated behind
     # LUNORA_WORKERD_TESTS=1. Coverage MUST stay off — the v8 provider collects
     # via node:inspector, which workerd does not implement, and with coverage on
     # these suites hang the runner. So this job uses the plain `test` script
@@ -171,7 +171,7 @@
             # `vis run build` walks upstream deps via dependsOn (`^build`), so
             # the package's dist plus everything it imports exists for workerd.
             # (The `pnpm --filter "pkg..."` graph-walk does not build deps
-            # reliably — see plan 121's notes.)
+            # reliably.)
             - "name": "Build package and dependencies"
               "run": |
                   pnpm exec vis run build --query "project=${{ matrix.package }}"

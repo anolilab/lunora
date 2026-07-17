@@ -316,7 +316,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
         expect(attachment).toEqual({ admin: true, connectionId: expect.any(String), subs: {} });
     });
 
-    it("stamps admin:true when the upgrade presents a minted ephemeral token via ?token (plan 095)", async () => {
+    it("stamps admin:true when the upgrade presents a minted ephemeral token via ?token", async () => {
         expect.assertions(1);
 
         const minted = await mintWsAdminToken(ADMIN_TOKEN);
@@ -380,7 +380,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
         expect(attachment).toBeUndefined();
     });
 
-    describe("enforcement via LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN (plan 095 phase 3)", () => {
+    describe("enforcement via LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN", () => {
         const ENFORCED = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN: "1" };
 
         it("stamps admin:false for the raw master token in ?token=", async () => {

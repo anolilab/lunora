@@ -136,12 +136,12 @@ describe("defineSchema external-source validation", () => {
         ).not.toThrow();
     });
 
-    it("throws when an untyped caller passes an unknown mode (incremental was cut from the 1.0 surface)", () => {
+    it("throws when an untyped caller passes an unknown mode", () => {
         expect.assertions(1);
 
         // `"incremental"` no longer typechecks (`ExternalSourceMode` is the single
-        // literal "full-pull" — a compile-time error, deferred post-1.0 per plan
-        // 136); the runtime guard stays for untyped JS callers.
+        // literal "full-pull" — a compile-time error); the runtime guard stays for
+        // untyped JS callers.
         const source = { binding: "HD", mode: "incremental", query: "select id, title from documents" };
 
         expect(() =>

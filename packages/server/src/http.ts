@@ -106,7 +106,7 @@ interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Body exten
  * handler receives. There is no parsed `body` — streams are typically GET, and
  * the raw `request` is exposed if a handler needs to read the body itself.
  * `signal` is tripped when the client disconnects.
- * @experimental Part of the plan-052 HTTP-SSE stream surface; reconnect/POST-body design questions are still open.
+ * @experimental Part of the HTTP-SSE stream surface; reconnect/POST-body design questions are still open.
  */
 interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params extends ArgsValidator> {
     ctx: HttpActionCtx;
@@ -159,7 +159,7 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
      * throw, an `event: error` frame is written with `{code, message}` before
      * the stream closes. The chunks are JSON-encoded; `R` is inferred from the
      * handler's yielded type.
-     * @experimental Shipped with plan 052; reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
+     * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
      */
     stream: <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler;
 

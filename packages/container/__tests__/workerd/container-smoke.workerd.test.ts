@@ -1,8 +1,8 @@
 /**
- * Real-workerd boot smoke for `@lunora/container` (plan 135, Phase 1).
+ * Real-workerd boot smoke for `@lunora/container`.
  *
- * Boundary (documented per the plan): a real container runtime is NOT
- * available here — Miniflare's container support requires a Docker engine,
+ * Boundary: a real container runtime is NOT available here — Miniflare's
+ * container support requires a Docker engine,
  * which CI sandboxes don't have, so the wrangler config declares the Container
  * DO class WITHOUT a `containers` section. That makes the deepest runnable
  * smoke: the `LunoraContainer` module graph (`@cloudflare/containers` +

@@ -16,8 +16,6 @@ export default getVitestConfig(
             setupFiles: ["./__tests__/setup.ts"],
         },
     },
-    // ratchet: measured 2026-07-16 at 80.4% lines / 80.29% stmts / 62.24%
-    // branches — too little headroom over the 80/80 default; raise toward the
-    // 80/80/80/70 default floor.
+    // ratchet: below the default floor; raise as coverage improves.
     { branches: 60, lines: 78, statements: 78 },
 );

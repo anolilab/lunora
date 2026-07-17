@@ -16,8 +16,8 @@ packages: &packages
     - "vis.config.ts"
 
 # Lintable source (eslint + tsc).
-# Public-API snapshot guard (plan 135, Phase 3): anything that can change a
-# covered package's built .d.ts surface, plus the snapshots and the tool itself.
+# Public-API snapshot guard: anything that can change a covered package's built
+# .d.ts surface, plus the snapshots and the tool itself.
 api_surface:
     - "packages/**"
     - "api-snapshots/**"

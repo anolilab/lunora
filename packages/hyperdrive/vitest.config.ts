@@ -4,7 +4,6 @@ import { getVitestConfig } from "../../tools/get-vitest-config";
 // connection string, so the unit tests feed plain-object binding/driver doubles
 // and never need workerd. Any real-binding test is CI-only (see __tests__).
 //
-// ratchet: measured 2026-07-16 at 73.52% funcs (83.8% lines, 81.8% branches;
-// mysql-memory-server suite excluded in the sandbox) — raise toward the 80%
-// default functions floor.
+// ratchet: functions below the default floor (the mysql-memory-server suite is
+// skipped where the binary is unobtainable); raise as coverage improves.
 export default getVitestConfig({ test: { environment: "node" } }, { functions: 70 });

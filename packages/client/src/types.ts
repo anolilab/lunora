@@ -34,7 +34,7 @@ export type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer 
  * and the route path; the phantom marker carries the chunk / searchParams /
  * params types so `httpStream` (and the framework hooks over it) infer the
  * chunk type end-to-end.
- * @experimental Shipped with plan 052; reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
+ * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
  */
 export interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params = unknown> {
     /**
@@ -52,7 +52,7 @@ export interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params =
 
 /**
  * The call-side args of an HTTP-SSE stream route: `:name` path params plus URL query params.
- * @experimental Part of the plan-052 HTTP-SSE stream surface.
+ * @experimental Part of the HTTP-SSE stream surface.
  */
 export interface HttpStreamCallArgs<SearchParams = unknown, Params = unknown> {
     /** Values for the route path's `:name` segments. */
@@ -63,13 +63,13 @@ export interface HttpStreamCallArgs<SearchParams = unknown, Params = unknown> {
 
 /**
  * Extract the chunk type from a {@link HttpStreamRef}.
- * @experimental Part of the plan-052 HTTP-SSE stream surface.
+ * @experimental Part of the HTTP-SSE stream surface.
  */
 export type HttpStreamChunkOf<R> = R extends HttpStreamRef<infer Chunk, infer _S, infer _P> ? Chunk : never;
 
 /**
  * Extract the call-side args type from a {@link HttpStreamRef}.
- * @experimental Part of the plan-052 HTTP-SSE stream surface.
+ * @experimental Part of the HTTP-SSE stream surface.
  */
 export type HttpStreamArgsOf<R> = R extends HttpStreamRef<infer _C, infer S, infer P> ? HttpStreamCallArgs<S, P> : never;
 
@@ -429,10 +429,9 @@ export interface LunoraClientOptions {
      *
      * Pass a {@link WsTokenProvider} function to resolve the token fresh at
      * every (re)connect — the channel for short-lived credentials such as the
-     * ephemeral admin sub-token minted by `POST /_lunora/admin/ws-token`
-     * (plan 095): the provider re-mints on each reconnect, including the one
-     * following a `4001` token-expired drop, so a static master token never
-     * has to ride the URL.
+     * ephemeral admin sub-token minted by `POST /_lunora/admin/ws-token`: the
+     * provider re-mints on each reconnect, including the one following a `4001`
+     * token-expired drop, so a static master token never has to ride the URL.
      */
     wsToken?: string | WsTokenProvider;
     wsUrl?: string;

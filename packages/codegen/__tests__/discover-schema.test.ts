@@ -47,9 +47,8 @@ describe("discoverSchema", () => {
         expect.assertions(3);
 
         // The fixture deliberately writes `mode: "incremental"` + `reconcileEveryMs`
-        // even though both were cut from the typed 1.0 `.source()` surface (deferred
-        // post-1.0, plan 136): discovery is AST-level and must capture what the
-        // source text says verbatim — that IR seam is how the mode returns later.
+        // even though neither is on the typed `.source()` surface: discovery is
+        // AST-level and must capture what the source text says verbatim.
 
         const { project, schemaPath } = projectWith(`
             import { defineSchema, defineTable, v } from "@lunora/server";

@@ -175,13 +175,11 @@
               "continue-on-error": true
               "run": "pnpm run fallow:affected:health"
 
-    # Public-API snapshot guard (plan 135, Phase 3): rebuild every package's dist
-    # and re-extract the Tier-1/2 public API surface, failing on any drift from
-    # the committed api-snapshots/*.api.md. A breaking change to a covered
-    # package's exports must land with an explicit, reviewable snapshot update
-    # (`pnpm run api:update`) — it cannot ship on a reviewer's memory. Builds
-    # ALL packages (not affected-only) because the check deterministically
-    # covers the full Tier-1/2 set on every run.
+    # Public-API snapshot guard: rebuild every package's dist and re-extract the
+    # covered public API surface, failing on any drift from the committed
+    # api-snapshots/*.api.md. A breaking change to a covered package's exports
+    # must land with an explicit snapshot update (`pnpm run api:update`). Builds
+    # all packages (not affected-only) so the check runs deterministically.
     "api-surface":
         "name": "Lint (api surface)"
         "if": "needs.files-changed.outputs.api_surface == 'true'"

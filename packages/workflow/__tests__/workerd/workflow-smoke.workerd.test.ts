@@ -1,5 +1,5 @@
 /**
- * Real-workerd boot smoke for `@lunora/workflow` (plan 135, Phase 1).
+ * Real-workerd boot smoke for `@lunora/workflow`.
  *
  * The Node unit suite exercises the context/dispatch glue against doubles;
  * this suite proves the generated-entrypoint shape actually runs on the real

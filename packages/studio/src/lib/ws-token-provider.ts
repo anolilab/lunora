@@ -1,5 +1,5 @@
 /**
- * Ephemeral WS admin-token provider (plan 095, audit finding L4). A browser
+ * Ephemeral WS admin-token provider. A browser
  * `WebSocket` can't set an `Authorization` header, so the studio's live admin
  * subscriptions must send their credential in the `?token=` query string —
  * which lands in access logs and browser history. Instead of putting the

@@ -1,5 +1,5 @@
 /**
- * Ephemeral admin WebSocket sub-token (plan 095, audit finding L4). A browser
+ * Ephemeral admin WebSocket sub-token. A browser
  * `WebSocket` can't set an `Authorization` header, so the studio's admin socket
  * credential has to ride the `?token=` query string — which lands in access
  * logs, browser history, and `Referer` headers. Instead of leaking the master

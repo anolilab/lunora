@@ -187,7 +187,7 @@ function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, 
  * The admin RPCs are intercepted inside the Durable Object and gated by the
  * server's `LUNORA_ADMIN_TOKEN` (sent as the client's bearer; the WS leg rides
  * the client's `wsToken` provider, which mints a short-lived sub-token so the
- * master credential never appears in the socket URL — plan 095); this hook
+ * master credential never appears in the socket URL); this hook
  * issues no credentials of its own. The `QueryClient` it uses is the one
  * `@lunora/react`'s `LunoraProvider` already mounts above the studio.
  *

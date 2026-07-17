@@ -12,10 +12,9 @@ export interface CoverageThresholds {
 }
 
 /**
- * Default coverage floor for every package on the shared config. Chosen from a
- * 2026-07-16 full-repo measurement so every package clears it with headroom;
- * packages measurably below get an explicit lower override at their call site
- * (with a `// ratchet:` comment) and ratchet up over time instead of blocking.
+ * Default coverage floor for every package on the shared config. Packages that
+ * sit below it get an explicit lower override at their call site (with a
+ * `// ratchet:` comment) and raise it over time instead of blocking.
  *
  * Thresholds only apply when coverage is enabled (`vitest run --coverage`, the
  * `test:coverage` scripts); plain `vitest run` is unaffected. The workerd-gated

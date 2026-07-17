@@ -1,11 +1,11 @@
 # https://help.github.com/en/categories/automating-your-workflow-with-github-actions
 
-# Nightly full-suite verification (plan 135, Phase 1). PRs run `vis affected`
-# in test.yml, so unchanged packages can go stale between merges — this
-# scheduled workflow re-verifies the WHOLE matrix daily: the full unit-test
-# suite for every package (no `affected` filter), all workerd integration
-# suites, and the e2e suite unconditionally (no paths-filter). NOT a
-# required check — a nightly failure is a canary, it must never block a PR.
+# Nightly full-suite verification. PRs run `vis affected` in test.yml, so
+# unchanged packages can go stale between merges — this scheduled workflow
+# re-verifies the whole matrix daily: the full unit-test suite for every
+# package (no `affected` filter), all workerd integration suites, and the e2e
+# suite unconditionally (no paths-filter). Not a required check — a nightly
+# failure is a canary, it must never block a PR.
 
 "name": "Nightly"
 

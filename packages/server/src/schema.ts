@@ -667,8 +667,7 @@ const validateExternalSources = (tables: Record<string, TableDefinition>): void 
         }
 
         // `ExternalSourceMode` is the single literal "full-pull", so a typed caller
-        // cannot reach this — an incremental mode was cut from the 1.0 surface
-        // (deferred post-1.0, plan 136) and is a compile-time error, not a runtime
+        // cannot reach this — any other mode is a compile-time error, not a runtime
         // throw. This guard only catches untyped JS callers passing a stray mode.
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `mode` is typed `"full-pull" | undefined` but untyped JS callers can pass anything
         if (source.mode !== undefined && source.mode !== "full-pull") {

@@ -3110,7 +3110,7 @@ class LunoraClient {
      * returned iterable (or aborting `options.signal`) aborts the fetch, which
      * the server handler observes via its `signal`. The client's bearer token
      * (when set) rides as an `authorization` header.
-     * @experimental Shipped with plan 052; reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
+     * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
      */
     public httpStream<Ref extends HttpStreamRef>(
         route: Ref,

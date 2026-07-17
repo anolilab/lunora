@@ -1,12 +1,11 @@
 /**
- * Public-API snapshot guard (plan 135, Phase 3).
+ * Public-API snapshot guard.
  *
- * Extracts every Tier-1 (core) and Tier-2 (stable adapter) package's public API
- * surface — export names, kinds, and normalized declaration text per exports-map
- * subpath — from the built `dist/*.d.ts` entries, and pins it in committed
- * `api-snapshots/<package>.api.md` files. A breaking change to a covered surface
- * must land together with an explicit, reviewable snapshot update — it cannot
- * ship on a reviewer's memory.
+ * Extracts every covered package's public API surface — export names, kinds, and
+ * normalized declaration text per exports-map subpath — from the built
+ * `dist/*.d.ts` entries, and pins it in committed `api-snapshots/<package>.api.md`
+ * files. A breaking change to a covered surface must land together with an
+ * explicit, reviewable snapshot update — it cannot ship on a reviewer's memory.
  *
  *   node scripts/api-snapshot.js check    # (default) fail if the surface drifted
  *   node scripts/api-snapshot.js update   # regenerate the snapshots
@@ -47,9 +46,9 @@ const packagesDir = join(rootDir, "packages");
 const snapshotsDir = join(rootDir, "api-snapshots");
 
 /**
- * Plan 135 Phase 0 tier table, by package DIRECTORY name (`packages/<dir>`).
- * The experimental tier (agent, replica, x402, react-native, angular, ai,
- * browser, container, payment) is deliberately NOT covered.
+ * Packages covered by the guard, by DIRECTORY name (`packages/<dir>`). The
+ * experimental packages (agent, replica, x402, react-native, angular, ai,
+ * browser, container, payment) are deliberately NOT covered.
  */
 const TIER_1 = ["server", "values", "errors", "runtime", "do", "client", "codegen", "cli", "vite", "config", "d1", "react", "testing", "lunora"];
 
@@ -505,7 +504,7 @@ if (drifted.length > 0) {
     console.error("");
     console.error(`Public API surface drifted in ${drifted.length} snapshot(s).`);
     console.error("If this change is intentional, run `pnpm run api:update` and commit the");
-    console.error("snapshot diff — reviewers gate the API change through that diff (plan 135).");
+    console.error("snapshot diff — reviewers gate the API change through that diff.");
     process.exit(1);
 }
 

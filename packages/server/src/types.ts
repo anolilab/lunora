@@ -34,10 +34,9 @@ type ExternalSourceRefresh = "manual" | { everyMs: number };
  * Delete-detection mode for external-source ingest. `"full-pull"` (the default and
  * currently the only mode) reads the whole tenant membership each tick and diffs
  * it, so it observes upstream deletes. An `"incremental"` mode (pull only changed
- * rows above the ~10k full-pull cap) is deferred post-1.0 — it needs durable
- * cursor/watermark machinery that does not exist yet (see
- * `plans/136-incremental-table-mode.md`); this alias is the seam it returns
- * through.
+ * rows above the ~10k full-pull cap) is not implemented yet — it needs durable
+ * cursor/watermark machinery that does not exist; this alias is the seam it
+ * returns through.
  */
 type ExternalSourceMode = "full-pull";
 
@@ -63,7 +62,7 @@ interface ExternalSourceDefinition {
     /** Transform an external row into the stored document body. Omit ⇒ every selected column except `idColumn` is copied. */
     map?: (row: Record<string, unknown>) => Record<string, unknown>;
 
-    /** Delete-detection mode. `"full-pull"` (the default) is the only mode; an incremental mode is deferred post-1.0 (plan 136). */
+    /** Delete-detection mode. `"full-pull"` (the default) is the only mode today. */
     mode?: ExternalSourceMode;
 
     /** The full tenant-membership query, with driver-native placeholders (`$1` / `?`). `tenantBy` binds its params. */

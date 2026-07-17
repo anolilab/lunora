@@ -28,8 +28,8 @@ const coverage = {
  *  - `mocks`   — Node unit suite over the x402 protocol glue (charge middleware
  *                + pay wallet/policy) against in-memory facilitator/account
  *                doubles — no real chain, no network. Always on.
- *  - `workerd` — real workerd via `@cloudflare/vitest-pool-workers` (plan 135
- *                Phase 1, deferred from plan 134): boots `@x402/core` +
+ *  - `workerd` — real workerd via `@cloudflare/vitest-pool-workers`: boots
+ *                `@x402/core` +
  *                `@x402/evm` in the pool and drives the `withX402` charge
  *                middleware + the `.x402({ price })` procedure seam to a real
  *                402 challenge, with the facilitator mocked at the fetch

@@ -34,7 +34,7 @@ const mintFetch = (responses: Response[]): { calls: { headers: Headers; method: 
 
 const mintedResponse = (token: string, expiresAtMs: number): Response => Response.json({ expiresAtMs, token });
 
-describe("createAdminWsTokenProvider (plan 095)", () => {
+describe("createAdminWsTokenProvider", () => {
     it("mints via POST with the master token in the Authorization header — never in the URL", async () => {
         expect.assertions(4);
 

@@ -4,6 +4,5 @@ import { getVitestConfig } from "../../tools/get-vitest-config";
 // injected SqlExec, so the unit tests feed plain-object exec/dialect doubles
 // (and a node:sqlite-backed exec) and never need workerd.
 //
-// ratchet: measured 2026-07-16 at 68.13% lines / 68.65% stmts / 72.37% funcs /
-// 51% branches — raise toward the 80/80/80/70 default floor.
+// ratchet: below the default floor; raise as coverage improves.
 export default getVitestConfig({ test: { environment: "node" } }, { branches: 48, functions: 70, lines: 65, statements: 65 });
