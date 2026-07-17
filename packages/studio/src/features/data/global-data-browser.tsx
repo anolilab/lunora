@@ -243,7 +243,13 @@ export const GlobalDataBrowser = ({
     // stale `initialTable` then reverted the selection to the previous table.
     const selectTableRef = useRef(selectTable);
 
-    selectTableRef.current = selectTable;
+    // Keep the ref pointing at the latest `selectTable` from an effect, not
+    // during render — a render-phase ref write is impure (React can replay or
+    // discard the render). This effect runs after every commit, so the ref is
+    // fresh before the `[initialTable]` effect's deferred `queueMicrotask` fires.
+    useEffect(() => {
+        selectTableRef.current = selectTable;
+    });
 
     useEffect(() => {
         /* eslint-disable react-you-might-not-need-an-effect/no-event-handler -- URL → selection sync: open the global table named in the URL (cross-tier jump / deep link / back-forward). A given value applies at most once (ref-guarded); there is no user event to hook into. */
