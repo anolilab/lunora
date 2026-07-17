@@ -176,7 +176,6 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         mirror.applyDiff(createTableDiff("todos", [{ data: { done: "yes", id: "2", title: "new row" }, type: "insert" }]));
 
         expect(mirror.query("SELECT id, done FROM todos ORDER BY id")).toStrictEqual([
-             
             { done: null, id: "1" },
             { done: "yes", id: "2" },
         ]);

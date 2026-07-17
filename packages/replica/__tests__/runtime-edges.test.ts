@@ -88,7 +88,7 @@ describe("seq guards", () => {
         expect(isInputEvent({ payload: { x: 1 }, timestamp: 100, type: "chat.messageSent" })).toBe(true);
 
         expect(isInputEvent(undefined)).toBe(false);
-         
+
         expect(isInputEvent(null)).toBe(false);
         expect(isInputEvent("chat.messageSent")).toBe(false);
         expect(isInputEvent({ payload: {}, timestamp: 100 })).toBe(false); // no type

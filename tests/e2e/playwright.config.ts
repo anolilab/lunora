@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 
-import { defineConfig, devices } from "@playwright/test";
-import { firefox } from "playwright";
+import { defineConfig, devices, firefox } from "@playwright/test";
 
 /**
  * Playwright config for the Lunora E2E suite.
