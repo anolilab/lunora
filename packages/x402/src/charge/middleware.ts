@@ -22,7 +22,9 @@ const PAYMENT_HEADER = "X-PAYMENT";
 
 /** Snapshot a `Headers` into a plain record (for the settlement transport context). */
 const headerRecord = (headers: Headers): Record<string, string> => {
-    const record: Record<string, string> = {};
+    // Prototype-less so a header literally named `__proto__`/`constructor` is
+    // stored as a plain data key instead of tripping the prototype setter.
+    const record: Record<string, string> = Object.create(null) as Record<string, string>;
 
     for (const [key, value] of headers) {
         record[key] = value;
@@ -113,7 +115,9 @@ export const createRequestAdapter = (request: Request, url: URL): HTTPAdapter =>
             return values.length === 1 ? values[0] : values;
         },
         getQueryParams: () => {
-            const params: Record<string, string | string[]> = {};
+            // Prototype-less so an attacker-supplied `?__proto__=…` query key is
+            // stored as a plain data field, never the prototype setter.
+            const params: Record<string, string | string[]> = Object.create(null) as Record<string, string | string[]>;
 
             for (const key of new Set(url.searchParams.keys())) {
                 const values = url.searchParams.getAll(key);
