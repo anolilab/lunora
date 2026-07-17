@@ -139,15 +139,91 @@ describe("defineSchema external-source validation", () => {
     it("throws when an untyped caller passes an unknown mode", () => {
         expect.assertions(1);
 
-        // `"incremental"` no longer typechecks (`ExternalSourceMode` is the single
-        // literal "full-pull" — a compile-time error); the runtime guard stays for
-        // untyped JS callers.
-        const source = { binding: "HD", mode: "incremental", query: "select id, title from documents" };
+        // A stray mode literal (`"incremental"` and `"full-pull"` are the only
+        // valid ones) is a compile-time error for typed callers; the runtime guard
+        // stays for untyped JS callers.
+        const source = { binding: "HD", mode: "delta", query: "select id, title from documents" };
 
         expect(() =>
             defineSchema({
                 documents: defineTable({ title: v.string() }).source(source as unknown as Parameters<ReturnType<typeof defineTable>["source"]>[0]),
             }),
-        ).toThrow(/only "full-pull" \(the default\) is supported/u);
+        ).toThrow(/supported modes are "full-pull" \(default\) and "incremental"/u);
+    });
+
+    it("accepts mode: incremental with a cursor and a reconcile sweep", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source({
+                    binding: "HD",
+                    cursor: { column: "updated_at", query: "select id, title, updated_at from documents where updated_at >= $1" },
+                    mode: "incremental",
+                    query: "select id, title, updated_at from documents",
+                    reconcileEveryMs: 3_600_000,
+                }),
+            }),
+        ).not.toThrow();
+    });
+
+    it("accepts mode: incremental with a cursor and a soft-delete column", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source({
+                    binding: "HD",
+                    cursor: { column: "updated_at", query: "select id, title, updated_at, deleted_at from documents where updated_at >= $1" },
+                    mode: "incremental",
+                    query: "select id, title, updated_at from documents where deleted_at is null",
+                    softDeleteColumn: "deleted_at",
+                }),
+            }),
+        ).not.toThrow();
+    });
+
+    it("throws on mode: incremental without a cursor", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source({
+                    binding: "HD",
+                    mode: "incremental",
+                    query: "select id, title from documents",
+                    reconcileEveryMs: 3_600_000,
+                }),
+            }),
+        ).toThrow(/is `mode: "incremental"` but has no `cursor`/u);
+    });
+
+    it("throws on mode: incremental with no delete-visibility path", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source({
+                    binding: "HD",
+                    cursor: { column: "updated_at", query: "select id, title, updated_at from documents where updated_at >= $1" },
+                    mode: "incremental",
+                    query: "select id, title, updated_at from documents",
+                }),
+            }),
+        ).toThrow(/no delete-visibility path/u);
+    });
+
+    it("throws when an incremental-only knob is set on a full-pull source", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source({
+                    binding: "HD",
+                    query: "select id, title from documents",
+                    reconcileEveryMs: 1000,
+                }),
+            }),
+        ).toThrow(/only applies to incremental ingest/u);
     });
 });

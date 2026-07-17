@@ -77,6 +77,7 @@ describe("discoverSchema", () => {
             binding: "HD",
             columns: ["title"],
             hasReconcile: true,
+            hasSoftDelete: false,
             hasTenantBy: true,
             idColumn: "uuid",
             mode: "incremental",

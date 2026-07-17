@@ -637,6 +637,79 @@ const attachStandaloneIndexes = (
     }
 };
 
+/** The first incremental-only knob set on a `.source()` config, or `undefined` when none are (used to reject them on a full-pull source). */
+const strayIncrementalKnob = (source: ExternalSourceDefinition): string | undefined => {
+    if (source.cursor) {
+        return "cursor";
+    }
+
+    if (source.reconcileEveryMs !== undefined) {
+        return "reconcileEveryMs";
+    }
+
+    if (source.softDeleteColumn !== undefined) {
+        return "softDeleteColumn";
+    }
+
+    return undefined;
+};
+
+/**
+ * Validate the `mode` + incremental knobs of one `.source()` (plan 077 / 136):
+ * reject an unknown mode; require `cursor` + a delete-visibility path
+ * (`reconcileEveryMs`/`softDeleteColumn`) for incremental; reject those knobs on a
+ * full-pull source. Throws so a misconfigured source never loads.
+ */
+const validateExternalSourceMode = (name: string, source: ExternalSourceDefinition): void => {
+    const isIncremental = source.mode === "incremental";
+
+    // Reject an unknown mode from untyped JS callers (the typed union is
+    // `"full-pull" | "incremental" | undefined`, a compile-time error otherwise).
+    if (source.mode !== undefined && source.mode !== "full-pull" && !isIncremental) {
+        throw new LunoraError(
+            "INTERNAL",
+            `defineSchema: table "${name}" uses \`mode: ${JSON.stringify(source.mode)}\` — supported modes are "full-pull" (default) and "incremental".`,
+        );
+    }
+
+    if (!isIncremental) {
+        // The incremental-only knobs are meaningless (and misleading) on a full-pull
+        // source — reject them so a mislaid `mode` fails loudly rather than silently
+        // ignoring a cursor/reconcile/soft-delete config.
+        const strayKnob = strayIncrementalKnob(source);
+
+        if (strayKnob) {
+            throw new LunoraError(
+                "INTERNAL",
+                `defineSchema: table "${name}" sets \`${strayKnob}\` but is not \`mode: "incremental"\` — that knob only applies to incremental ingest. Set \`mode: "incremental"\` or remove \`${strayKnob}\`.`,
+            );
+        }
+
+        return;
+    }
+
+    // Incremental needs a durable watermark: the cursor column + the
+    // watermark-parameterized pull query. Without it there is nothing to page from
+    // (plan 136 §"No cursor declaration").
+    if (!source.cursor?.column || !source.cursor.query) {
+        throw new LunoraError(
+            "INTERNAL",
+            `defineSchema: table "${name}" is \`mode: "incremental"\` but has no \`cursor\` — add \`cursor: { column: "updated_at", query: "… WHERE … > $N" }\` binding the watermark as the trailing parameter.`,
+        );
+    }
+
+    // Delete visibility: an incremental slice can't observe upstream deletes (absent
+    // ≠ deleted), so it MUST declare either a reconcile sweep or a soft-delete
+    // tombstone column, else it silently accumulates phantom rows (the
+    // `external_source_incremental_no_delete_path` STOP lint mirrors this).
+    if (source.reconcileEveryMs === undefined && source.softDeleteColumn === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            `defineSchema: table "${name}" is \`mode: "incremental"\` with no delete-visibility path — an incremental pull never sees upstream deletes, so it would accumulate phantom rows. Add \`reconcileEveryMs\` (a periodic full-pull sweep) or \`softDeleteColumn\` (an upstream tombstone column).`,
+        );
+    }
+};
+
 /**
  * Hard-enforce the `.source(...)` invariants at schema-definition time (plan 077).
  * Chain order is arbitrary, so the builder can't see the final `shardMode` when
@@ -666,16 +739,7 @@ const validateExternalSources = (tables: Record<string, TableDefinition>): void 
             );
         }
 
-        // `ExternalSourceMode` is the single literal "full-pull", so a typed caller
-        // cannot reach this — any other mode is a compile-time error, not a runtime
-        // throw. This guard only catches untyped JS callers passing a stray mode.
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `mode` is typed `"full-pull" | undefined` but untyped JS callers can pass anything
-        if (source.mode !== undefined && source.mode !== "full-pull") {
-            throw new LunoraError(
-                "INTERNAL",
-                `defineSchema: table "${name}" uses \`mode: ${JSON.stringify(source.mode)}\` — only "full-pull" (the default) is supported. Remove \`mode\` or set it to "full-pull".`,
-            );
-        }
+        validateExternalSourceMode(name, source);
     }
 };
 

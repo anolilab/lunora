@@ -222,8 +222,13 @@ Nothing tagged stable may throw on an advertised path.
 - [x] **`mode: "incremental"` on tables** — CUT from the 1.0 surface
       (2026-07-16): `ExternalSourceMode` narrowed to `"full-pull"` so typed
       callers get a compile-time error instead of a runtime throw; the
-      discovery/advisor seam is kept for the post-1.0 return, scoped in
-      `plans/136-incremental-table-mode.md` (P3, demand-gated).
+      discovery/advisor seam is kept for the post-1.0 return, scoped in plan 136
+      (P3, demand-gated at the time).
+      _Update 2026-07-17: subsequently **shipped** on request (plan 136 DONE) —
+      re-widened union + `cursor`/`reconcileEveryMs`/`softDeleteColumn`, durable
+      `__lunora_source_cursor` watermark, upsert-only apply, and the
+      `external_source_incremental_no_delete_path` STOP lint. Not a 1.0 gate
+      either way._
 - [x] **Plan 052** — SHIPPED (2026-07-16): codegen emits a typed
       `httpStreams.*` registry (`HttpStreamRef<Chunk, SearchParams, Params>`
       with the `.stream()` handler's yielded chunk type inferred),

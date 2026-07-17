@@ -264,9 +264,57 @@ Tenant scoping is enforced two ways: `defineSchema` **throws** at load if a sour
 pass `refresh: { everyMs }` to throttle a large slice to at most one pull per
 interval. `refresh: "manual"` tells Lunora **not** to auto-poll — use it when you
 drive the refresh yourself (the manual `pullSourceRows` → `materializeExternalRows`
-bridge above, on your own schedule). Full-pull is the only delete-detection mode —
-an incremental mode (pull only changed rows, for slices past the ~10k full-pull
-sweet spot) is deferred to a post-1.0 release and no longer typechecks.
+bridge above, on your own schedule).
+
+**Delete detection: `mode`.** The default `mode: "full-pull"` reads the whole tenant
+slice each tick and diffs it, so upstream deletes are observed for free — but it
+costs a full read per tick (bench ceiling ~10k rows). For a large, low-churn slice
+past that cap, `mode: "incremental"` pulls **only rows changed since a durable
+watermark**:
+
+```ts
+documents: defineTable({ title: v.string(), body: v.string(), orgId: v.string(), updatedAt: v.number() })
+    .shardBy("orgId")
+    .source({
+        binding: "HYPERDRIVE_DOCS",
+        mode: "incremental",
+        query: 'select id, title, body, org_id as "orgId", updated_at as "updatedAt" from documents where org_id = $1',
+        // cursor.query pulls only rows past the watermark — tenantBy params bind first ($1), the watermark last ($2).
+        cursor: {
+            column: "updatedAt",
+            query: 'select id, title, body, org_id as "orgId", updated_at as "updatedAt" from documents where org_id = $1 and updated_at >= $2 order by updated_at',
+        },
+        // Delete visibility — REQUIRED for incremental (pick one):
+        reconcileEveryMs: 3_600_000, // periodic full-pull sweep GCs upstream deletes, OR:
+        // softDeleteColumn: "deletedAt", // upstream tombstone column the cursor query returns
+        tenantBy: (shardKey) => [shardKey],
+    }),
+```
+
+How it runs: the first poll (and every `reconcileEveryMs` sweep) does a full-pull to
+seed membership + the watermark and GC deletes; every other tick binds the stored
+watermark as the cursor query's trailing param and **upserts** the returned slice.
+The watermark (the max `cursor.column` value seen) and the last-reconcile time persist
+per `(table, shard)` in the DO's reserved `__lunora_source_cursor` table, so they
+survive hibernation. Use `>=` in the cursor query (rows sharing a boundary timestamp
+re-pull idempotently rather than being skipped).
+
+Because an incremental slice can't see a delete (an absent row means "unchanged", not
+"deleted"), incremental **requires** a delete-visibility path: `reconcileEveryMs` (a
+periodic full-pull sweep) or `softDeleteColumn` (an upstream tombstone column the
+cursor query returns, turned into a local delete — don't filter it out of the query).
+`defineSchema` throws, and the `external_source_incremental_no_delete_path` advisor
+lint fails the build, if an incremental source declares neither.
+
+The cursor column must be **strictly commit-monotonic** — a value that only ever
+increases as rows become visible, never assigned below the current max after a later
+commit. A plain `updated_at` set from wall-clock time can violate this under clock
+skew or a long transaction (a row commits with a timestamp below a watermark already
+advanced past it), and an incremental slice would then miss it permanently. A
+`reconcileEveryMs` sweep is the backstop that re-establishes such rows; **`softDeleteColumn`
+alone does not** (it only catches deletes, not missed inserts), so prefer
+`reconcileEveryMs` unless your cursor is provably monotonic (e.g. a gapless sequence
+or a logical replication LSN).
 
 ## Reactive `.global()` over Hyperdrive
 

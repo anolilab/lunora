@@ -113,11 +113,13 @@ export interface AdvisorIndex {
 
 /** The statically-knowable `.source(...)` bits the `external_source_*` lints read. */
 export interface AdvisorExternalSource {
-    /** `true` when a `reconcileEveryMs` was given — reserved for a future incremental mode's delete-visibility lint; not on the typed `.source()` surface today. */
+    /** `true` when a `reconcileEveryMs` was given — one incremental delete-visibility path the `external_source_incremental_no_delete_path` lint accepts. */
     hasReconcile?: boolean;
+    /** `true` when a `softDeleteColumn` was given — the other incremental delete-visibility path. */
+    hasSoftDelete?: boolean;
     /** `true` when a `tenantBy` mapper was given — the tenant-isolation boundary. */
     hasTenantBy: boolean;
-    /** Delete-detection mode literal, when given (`"full-pull"` today). */
+    /** Delete-detection mode literal, when given (`"full-pull"` or `"incremental"`). */
     mode?: string;
 
     /**
@@ -195,11 +197,8 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 externallyManaged: table.isExternallyManaged ?? false,
                 externalSource: table.externalSource
                     ? {
-                          // `reconcileEveryMs` is not on the typed `.source()`
-                          // surface today; read it through a widening cast so an
-                          // untyped JS schema that still carries the key feeds the IR
-                          // the same way the AST feeder does.
-                          hasReconcile: (table.externalSource as { reconcileEveryMs?: number }).reconcileEveryMs !== undefined,
+                          hasReconcile: table.externalSource.reconcileEveryMs !== undefined,
+                          hasSoftDelete: table.externalSource.softDeleteColumn !== undefined,
                           hasTenantBy: table.externalSource.tenantBy !== undefined,
                           mode: table.externalSource.mode,
                       }

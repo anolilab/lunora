@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations } from "../src/ctx-db";
-import { materializeExternalRows, runExternalSourceTick } from "../src/external-source-materialize";
+import { materializeExternalRows, materializeExternalRowsIncremental, runExternalSourceTick } from "../src/external-source-materialize";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -103,6 +103,74 @@ describe("materializeExternalRows", () => {
 
         expect(applied).toBe(0);
         expect([...nextBaseline]).toStrictEqual([...baseline]);
+    });
+});
+
+describe("materializeExternalRowsIncremental (upsert-only, plan 136)", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("upserts the slice (insert new, replace existing) and never deletes an absent row", async () => {
+        expect.assertions(4);
+
+        const writer = setupWriter();
+
+        await writer.insert("documents", { _id: "d1", orgId: "org_1", title: "one" }, { allowExplicitId: true });
+        await writer.insert("documents", { _id: "d2", orgId: "org_1", title: "two" }, { allowExplicitId: true });
+
+        // Incremental slice: d2 changed + d3 new. d1 is absent but must remain.
+        const pulled = [
+            { _id: "d2", orgId: "org_1", title: "two-edited" },
+            { _id: "d3", orgId: "org_1", title: "three" },
+        ];
+
+        const { applied } = await materializeExternalRowsIncremental(writer, pulled, { table: "documents" });
+
+        expect(applied).toBe(2);
+        await expect(writer.get("d1")).resolves.toMatchObject({ _id: "d1", title: "one" });
+        await expect(writer.get("d2")).resolves.toMatchObject({ _id: "d2", title: "two-edited" });
+        await expect(writer.get("d3")).resolves.toMatchObject({ _id: "d3", title: "three" });
+    });
+
+    it("skips a re-pulled boundary row whose content is unchanged (no spurious update/CDC)", async () => {
+        expect.assertions(3);
+
+        const writer = setupWriter();
+
+        await writer.insert("documents", { _id: "d1", orgId: "org_1", title: "one" }, { allowExplicitId: true });
+
+        const cdcBefore = readCdcChanges(harness.sql).changes.length;
+
+        // The `>= watermark` slice re-pulls d1 unchanged; it must NOT be re-applied.
+        const { applied } = await materializeExternalRowsIncremental(writer, [{ _id: "d1", orgId: "org_1", title: "one" }], { table: "documents" });
+
+        expect(applied).toBe(0);
+        await expect(writer.get("d1")).resolves.toMatchObject({ _id: "d1", title: "one" });
+        // No new CDC entry ⇒ no broadcast / re-embed for the unchanged row.
+        expect(readCdcChanges(harness.sql).changes).toHaveLength(cdcBefore);
+    });
+
+    it("turns a `deletedIds` entry into a delete while upserting the rest", async () => {
+        expect.assertions(2);
+
+        const writer = setupWriter();
+
+        await writer.insert("documents", { _id: "d1", orgId: "org_1", title: "one" }, { allowExplicitId: true });
+
+        const pulled = [
+            { _id: "d1", orgId: "org_1", title: "one" },
+            { _id: "d2", orgId: "org_1", title: "two" },
+        ];
+
+        await materializeExternalRowsIncremental(writer, pulled, { deletedIds: new Set(["d1"]), table: "documents" });
+
+        await expect(writer.get("d1")).resolves.toBeNull();
+        await expect(writer.get("d2")).resolves.toMatchObject({ _id: "d2", title: "two" });
     });
 });
 

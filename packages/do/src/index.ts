@@ -92,12 +92,16 @@ export type { DependencyTracker } from "./dependency-tracker";
 export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker";
 export type { RenderedSql, SqlEngine } from "./drizzle";
 export { renderSql } from "./drizzle";
+// `external-source-cursor` is an internal ingest detail (the durable watermark
+// codec + reserved-table helpers), consumed only by `external-source-pull` and its
+// own tests — not re-exported, mirroring `external-source-diff`'s module-private
+// `projectExternalSourceRow`.
 export type { ExternalSourceDiffResult } from "./external-source-diff";
 export { diffExternalSource } from "./external-source-diff";
-export type { MaterializeResult } from "./external-source-materialize";
-export { materializeExternalRows, readExternalSourceBaseline, runExternalSourceTick } from "./external-source-materialize";
-export type { ExternalSourceLike, SourceClientLike, SourceRefresh } from "./external-source-pull";
-export { isSourceDue, liftSourceId, pullExternalSourceTick } from "./external-source-pull";
+export type { IncrementalMaterializeResult, MaterializeResult } from "./external-source-materialize";
+export { materializeExternalRows, materializeExternalRowsIncremental, readExternalSourceBaseline, runExternalSourceTick } from "./external-source-materialize";
+export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh } from "./external-source-pull";
+export { isSoftDeleted, isSourceDue, liftSourceId, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "./external-source-pull";
 export type { FunctionMetricBucket, FunctionMetricIndexHit, RecordFunctionMetricInput } from "./function-metrics";
 export {
     ensureFunctionMetricsTables,

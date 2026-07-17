@@ -377,8 +377,9 @@ const stringArrayPropertyOf = (object: ObjectLiteralExpression, property: string
 /**
  * Parse a `.source({ ... })` call into {@link ExternalSourceIR} — the
  * statically-knowable bits only. `map`/`tenantBy` are functions, so only their
- * presence is recorded (`hasTenantBy`/`hasReconcile`); `binding`/`query`/`idColumn`/
- * `mode`/`columns` are read when they are string (or string-array) literals.
+ * presence is recorded (`hasTenantBy`/`hasReconcile`/`hasSoftDelete`);
+ * `binding`/`query`/`idColumn`/`mode`/`columns` are read when they are string (or
+ * string-array) literals.
  *
  * When the argument is **not** a static object literal (e.g. `.source(buildConfig())`),
  * the fields can't be read — but the source still exists, so we return an
@@ -398,6 +399,7 @@ const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR => {
         binding: stringPropertyOf(first, "binding") ?? "",
         columns: stringArrayPropertyOf(first, "columns"),
         hasReconcile: first.getProperty("reconcileEveryMs") !== undefined,
+        hasSoftDelete: first.getProperty("softDeleteColumn") !== undefined,
         hasTenantBy: first.getProperty("tenantBy") !== undefined,
         idColumn: stringPropertyOf(first, "idColumn"),
         mode: stringPropertyOf(first, "mode"),

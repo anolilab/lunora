@@ -14,8 +14,9 @@
 import { LunoraError } from "@lunora/errors";
 
 import type { DatabaseWriterLike, SqlExec } from "./ctx-db";
+import { deserializeCursor, maxCursorValue, migrateSourceCursor, readSourceCursor, writeSourceCursor } from "./external-source-cursor";
 import type { MaterializeResult } from "./external-source-materialize";
-import { runExternalSourceTick } from "./external-source-materialize";
+import { materializeExternalRowsIncremental, runExternalSourceTick } from "./external-source-materialize";
 
 /** The minimal SqlClient surface the poll loop calls (mirrors `@lunora/hyperdrive`'s `SqlClient`). */
 interface SourceClientLike {
@@ -25,14 +26,24 @@ interface SourceClientLike {
 /** Poll cadence: `"manual"` (never auto-poll) or a minimum interval between polls. */
 type SourceRefresh = "manual" | { everyMs: number };
 
+/** The incremental cursor config (plan 136): the watermark column + the watermark-parameterized pull query. */
+interface SourceCursorLike {
+    column: string;
+    query: string;
+}
+
 /** The runtime `.source(...)` config the poll loop reads — a structural mirror of `@lunora/server`'s `ExternalSourceDefinition` (only the fields the tick uses). */
 interface ExternalSourceLike {
     binding: string;
     columns?: ReadonlyArray<string>;
+    cursor?: SourceCursorLike;
     idColumn?: string;
     map?: (row: Record<string, unknown>) => Record<string, unknown>;
+    mode?: string;
     query: string;
+    reconcileEveryMs?: number;
     refresh?: SourceRefresh;
+    softDeleteColumn?: string;
     tenantBy?: (shardKey: string) => ReadonlyArray<unknown>;
 }
 
@@ -94,6 +105,27 @@ const isSourceDue = (refresh: SourceRefresh | undefined, lastPolledMs: number | 
     return nowMs - lastPolledMs >= refresh.everyMs;
 };
 
+/** The raw driver rows plus their lifted Lunora documents (index-aligned), the shared output of every source query. */
+interface PulledSlice {
+    /** Lifted Lunora documents (`liftSourceId` per row), index-aligned to {@link PulledSlice.rows}. */
+    documents: Record<string, unknown>[];
+    /** The raw external rows as the driver returned them — kept for watermark / soft-delete reads the id-lift may drop. */
+    rows: Record<string, unknown>[];
+}
+
+/**
+ * Run `query` with `parameters` and lift every row to a Lunora document. Returns
+ * both the raw rows (the cursor/soft-delete columns are read from these, before the
+ * id-lift may project them away) and the index-aligned lifted documents, so the
+ * per-tick paths never lift a row twice.
+ */
+const pullAndLift = async (client: SourceClientLike, query: string, parameters: ReadonlyArray<unknown>, source: ExternalSourceLike): Promise<PulledSlice> => {
+    const rows = await client.query(query, parameters);
+    const documents = rows.map((row) => liftSourceId(row, { idColumn: source.idColumn, map: source.map }));
+
+    return { documents, rows };
+};
+
 /**
  * Pull a sourced table's tenant slice from `client`, project each row through
  * {@link liftSourceId}, and materialize it via {@link runExternalSourceTick}
@@ -109,11 +141,119 @@ const pullExternalSourceTick = async (
     shardKey: string,
 ): Promise<MaterializeResult> => {
     const parameters = source.tenantBy ? source.tenantBy(shardKey) : [];
-    const rows = await client.query(source.query, parameters);
-    const documents = rows.map((row) => liftSourceId(row, { idColumn: source.idColumn, map: source.map }));
+    const { documents } = await pullAndLift(client, source.query, parameters, source);
 
     return runExternalSourceTick(sql, writer, documents, { columns: source.columns, table });
 };
 
-export { isSourceDue, liftSourceId, pullExternalSourceTick };
-export type { ExternalSourceLike, SourceClientLike, SourceRefresh };
+/**
+ * Whether an upstream row is a soft-delete tombstone under `column`. A set
+ * `deleted_at` (any non-null value, e.g. a timestamp), an `is_deleted = true`, or a
+ * non-zero flag all read as deleted; `null` / `undefined` / `false` / `0` mean
+ * live. Note an **empty string** reads as deleted (`"" !== 0`), so an upstream that
+ * clears the column to `""` rather than `NULL` for a live row would mis-signal —
+ * use `NULL` for live rows. The incremental query MUST return tombstoned rows
+ * (don't filter `WHERE deleted_at IS NULL`) or the delete is never observed.
+ */
+const isSoftDeleted = (row: Record<string, unknown>, column: string): boolean => {
+    const value = row[column];
+
+    return value !== null && value !== undefined && value !== false && value !== 0;
+};
+
+/**
+ * Run one **incremental** tick (plan 136). Reads the durable watermark for
+ * `(table, shardKey)`; on the first ever poll or when the `reconcileEveryMs` sweep
+ * is due it runs a **full-pull** (seed/GC: {@link runExternalSourceTick} observes
+ * deletes and re-establishes membership), otherwise it pulls only rows past the
+ * watermark via `cursor.query` and upserts them ({@link materializeExternalRowsIncremental},
+ * tombstones → deletes). Either way it advances the watermark to the max cursor
+ * value seen and persists it (and the reconcile timestamp).
+ *
+ * **Crash safety** is by ordering + idempotency, NOT an atomic transaction across
+ * the two write channels (the apply goes through the `writer`; the watermark write
+ * is a raw `sql` write): the watermark advances only AFTER a fully-applied slice,
+ * so a crash between the apply and the watermark write leaves the watermark behind
+ * and the next tick re-pulls the same `>= watermark` slice — which the upsert
+ * short-circuits (unchanged rows) or re-applies idempotently. It only ever replays,
+ * never skips (same self-healing argument as `advanceClientWatermark`).
+ *
+ * Requires `source.cursor` (validated at `defineSchema` for incremental mode); a
+ * missing cursor throws rather than silently degrading to a stuck watermark.
+ */
+const pullExternalSourceIncrementalTick = async (
+    sql: SqlExec,
+    writer: DatabaseWriterLike,
+    client: SourceClientLike,
+    table: string,
+    source: ExternalSourceLike,
+    shardKey: string,
+    nowMs: number,
+): Promise<{ applied: number }> => {
+    const { cursor } = source;
+
+    if (!cursor) {
+        throw new LunoraError(
+            "INTERNAL",
+            `external-source: table "${table}" is mode "incremental" but has no \`cursor\` — this should have been rejected at defineSchema`,
+        );
+    }
+
+    migrateSourceCursor(sql);
+
+    const state = readSourceCursor(sql, table, shardKey);
+    const tenantParameters = source.tenantBy ? source.tenantBy(shardKey) : [];
+    const reconcileDue = source.reconcileEveryMs !== undefined && (state.lastReconcileMs === null || nowMs - state.lastReconcileMs >= source.reconcileEveryMs);
+    // First ever poll (no watermark) or a due reconcile ⇒ full-pull: seed the
+    // membership + watermark, and GC any upstream deletes the incremental slices
+    // couldn't see (absent-from-slice ≠ deleted).
+    const fullPull = state.watermark === null || reconcileDue;
+
+    let slice: PulledSlice;
+    let applied: number;
+
+    // The condition is inlined (not `if (fullPull)`) so TS narrows `state.watermark`
+    // to a non-null string in the `else` branch — no cast on `deserializeCursor`.
+    if (state.watermark === null || reconcileDue) {
+        slice = await pullAndLift(client, source.query, tenantParameters, source);
+        ({ applied } = await runExternalSourceTick(sql, writer, slice.documents, { columns: source.columns, table }));
+    } else {
+        slice = await pullAndLift(client, cursor.query, [...tenantParameters, deserializeCursor(state.watermark)], source);
+
+        const { softDeleteColumn } = source;
+        // Resolve tombstone ids by index off the already-lifted documents (no second
+        // lift); `rows[index]` is index-aligned to `documents[index]` (same slice).
+        const deletedIds = softDeleteColumn
+            ? new Set(
+                  slice.documents.flatMap((document, index) => {
+                      const row = slice.rows[index];
+
+                      return row && isSoftDeleted(row, softDeleteColumn) ? [String(document._id)] : [];
+                  }),
+              )
+            : undefined;
+
+        ({ applied } = await materializeExternalRowsIncremental(writer, slice.documents, { columns: source.columns, deletedIds, table }));
+    }
+
+    // Advance from the RAW rows' cursor column (read before the id-lift may drop it).
+    const watermark = maxCursorValue(slice.rows, cursor.column, state.watermark);
+
+    // A full-pull that returned rows but couldn't advance the watermark means the
+    // seed `query` doesn't project `cursor.column` (or aliases it differently than
+    // `cursor.query` does) — otherwise every tick would full-pull forever, silently.
+    // Fail loud instead (surfaced in the Logs panel via the poll loop's catch).
+    if (fullPull && watermark === null && slice.rows.length > 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            `external-source: table "${table}" (mode "incremental") pulled ${String(slice.rows.length)} rows but none carry the cursor column "${cursor.column}" — the seed \`query\` must project it (matching \`cursor.query\`'s alias), or the watermark can never advance.`,
+        );
+    }
+
+    writeSourceCursor(sql, table, shardKey, { lastReconcileMs: fullPull ? nowMs : state.lastReconcileMs, watermark });
+
+    return { applied };
+};
+
+export { isSoftDeleted, isSourceDue, liftSourceId, pullExternalSourceIncrementalTick, pullExternalSourceTick };
+export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh };

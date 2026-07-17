@@ -3663,7 +3663,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, ${shapeGuardImport}createShardCtxDb, ${hasSourcedTables ? "isSourceDue, pullExternalSourceTick, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${shapeGuardImport}createShardCtxDb, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         ...(hasSourcedTables ? [`import type { ExternalSourceLike, SourceClientLike } from "${base.do}";`] : []),
         // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
         // `createSecrets` (the `ctx.secrets` core built-in) live in
@@ -3962,6 +3962,7 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
     // `pullExternalSourceTick` in @lunora/do (query under `tenantBy(shardKey)` →
     // id-lift → diff → apply through the validated CDC writer). System-owned (alarm
     // tier, no request identity), so it never loosens `ctx.sql`'s action-only contract.
+    /* eslint-disable no-secrets/no-secrets -- the emitted `pullExternalSourceIncrementalTick(this.sql …)` poll-loop call is a dense generated identifier, not a credential */
     const externalSourceOverride = hasSourcedTables
         ? `
         protected override async pollExternalSources(): Promise<number> {
@@ -4037,8 +4038,16 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
                         continue;
                     }
 
-                    // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; slices are independent but small and sequential keeps the writer transaction simple
-                    await pullExternalSourceTick(this.sql as SqlExec, writer, client, table, source, shardKey);
+                    if (source.mode === "incremental") {
+                        // Incremental (plan 136): pull only rows past the durable
+                        // watermark (or a full-pull seed/reconcile), upsert-only.
+                        // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; sequential keeps the writer transaction simple
+                        await pullExternalSourceIncrementalTick(this.sql as SqlExec, writer, client, table, source, shardKey, now);
+                    } else {
+                        // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; slices are independent but small and sequential keeps the writer transaction simple
+                        await pullExternalSourceTick(this.sql as SqlExec, writer, client, table, source, shardKey);
+                    }
+
                     polledAt.set(table, now);
                 } catch (error) {
                     this.recordExternalSourceError(table, error);
@@ -4052,6 +4061,7 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
         }
 `
         : "";
+    /* eslint-enable no-secrets/no-secrets */
 
     // Arm the shared poll alarm on construction so a sourced DO starts ingesting —
     // but only when at least one source is non-manual (a \`refresh: "manual"\`-only

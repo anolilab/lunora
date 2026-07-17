@@ -41,22 +41,24 @@ const PLAIN = `
 
 describe("emitShard — external-source ingest", () => {
     it("emits the poll override, arming constructor, client memo, import and config seam for a sourced schema", () => {
-        expect.assertions(8);
+        expect.assertions(9);
 
         const shard = emitShard({ schema: discover(SOURCED) });
 
         expect(shard).toContain("protected override async pollExternalSources()");
         // The per-table work delegates to the tested @lunora/do helper, not an inline projection.
         expect(shard).toContain("pullExternalSourceTick(this.sql as SqlExec, writer, client");
+        // Incremental mode (plan 136) branches to the durable-watermark helper.
+        expect(shard).toContain('source.mode === "incremental"');
+        // eslint-disable-next-line no-secrets/no-secrets -- the emitted poll-loop identifier, not a credential
+        expect(shard).toContain("pullExternalSourceIncrementalTick(this.sql as SqlExec, writer, client");
         expect(shard).toContain("isSourceDue(source.refresh, polledAt.get(table), now)");
         // The constructor only arms the alarm when a non-manual source exists (refresh: "manual" must not spin it).
         expect(shard).toContain('source.refresh !== "manual"');
         expect(shard).toContain("void this.scheduleSourcePoll();");
         expect(shard).toContain("const sourceClientCache = new WeakMap");
-        // The host-supplied resolver seam on the config interface.
-        expect(shard).toContain("sourceClient?: (env: Record<string, unknown>, binding: string)");
         // The poll helpers are imported from the base DO package.
-        expect(shard).toContain("isSourceDue, pullExternalSourceTick,");
+        expect(shard).toContain("isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick,");
     });
 
     it("stays byte-identical (none of the ingest surface) for a non-sourced schema", () => {

@@ -17,7 +17,7 @@
  * next tick retries (design §3.4).
  */
 
-import type { DatabaseWriterLike, SqlExec } from "./ctx-db";
+import type { CdcChange, DatabaseWriterLike, SqlExec } from "./ctx-db";
 import { applyCdcChanges } from "./ctx-db-cdc";
 import { selectShapeRows } from "./ctx-db-shapes";
 import { diffExternalSource, projectExternalSourceRow } from "./external-source-diff";
@@ -29,6 +29,12 @@ interface MaterializeResult {
     applied: number;
     /** `id → projected-value JSON` — the post-tick membership, to feed back as `baseline` next tick. */
     nextBaseline: Map<string, string>;
+}
+
+/** The outcome of one incremental materialize pass. No baseline: incremental applies only the pulled slice, never a full-membership diff. */
+interface IncrementalMaterializeResult {
+    /** Number of `CdcChange`s applied (upserts + tombstone deletes) for the pulled slice. */
+    applied: number;
 }
 
 /**
@@ -47,6 +53,66 @@ const materializeExternalRows = async (
     await applyCdcChanges(writer, changes);
 
     return { applied: changes.length, nextBaseline };
+};
+
+/**
+ * Apply an **incremental** slice (plan 136): the freshly-pulled rows changed since
+ * the watermark, upsert-only. Unlike {@link materializeExternalRows} this reads no
+ * baseline and never diffs the full membership — an absent row means "unchanged
+ * since the watermark", NOT "deleted". Each pulled row is projected with the SAME
+ * {@link projectExternalSourceRow} full-pull uses, so an incrementally-upserted row
+ * is byte-identical to how the next reconcile sweep's full-pull would store it (no
+ * spurious update on reconcile).
+ *
+ * Delete visibility comes from `deletedIds` — the ids the caller resolved from the
+ * source's soft-delete tombstone column. Every other pulled row is an `insert`,
+ * which {@link applyCdcChanges} upserts (insert, or replace on conflict), so a
+ * changed existing row is updated and a genuinely new row is inserted without the
+ * caller tracking which is which.
+ *
+ * **Content short-circuit.** An incremental cursor query uses `>= watermark` (so
+ * rows sharing the boundary value are never skipped), which means a steady-state
+ * tick re-pulls the boundary row(s) unchanged. Blindly upserting them would append
+ * a `__cdc_log` entry, broadcast a spurious `update` to every `defineShape`
+ * subscriber, re-run search/aggregate/rank sync, and fire `onWrite` (a Vectorize
+ * re-embed = real cost) on every tick — and `replace` would reset `_creationTime`.
+ * So each row is diffed against its stored projection (the SAME
+ * {@link projectExternalSourceRow} + {@link stableStringify} full-pull uses) and
+ * skipped when byte-identical — mirroring the full-pull diff's steady-state no-op.
+ */
+const materializeExternalRowsIncremental = async (
+    writer: DatabaseWriterLike,
+    pulled: ReadonlyArray<Record<string, unknown>>,
+    options: { columns?: ReadonlyArray<string>; deletedIds?: ReadonlySet<string>; table: string },
+): Promise<IncrementalMaterializeResult> => {
+    const { columns, deletedIds, table } = options;
+    const changes: CdcChange[] = [];
+
+    for (const source of pulled) {
+        const value = projectExternalSourceRow(source, columns);
+        const id = String(value._id);
+
+        if (deletedIds?.has(id)) {
+            changes.push({ id, op: "delete", seq: 0, table, ts: 0 });
+
+            continue;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- one point read per pulled row; the slice is small and the read gates the far more expensive upsert/broadcast below.
+        const stored = await writer.get(id, table);
+
+        // Skip a re-pulled boundary row whose stored content is byte-identical (no
+        // change since the watermark) — avoids the spurious broadcast/CDC/re-embed.
+        if (stored && stableStringify(projectExternalSourceRow({ ...stored, _id: id }, columns)) === stableStringify(value)) {
+            continue;
+        }
+
+        changes.push({ doc: value, id, op: "insert", seq: 0, table, ts: 0 });
+    }
+
+    await applyCdcChanges(writer, changes);
+
+    return { applied: changes.length };
 };
 
 /**
@@ -86,5 +152,5 @@ const runExternalSourceTick = async (
     return materializeExternalRows(writer, pulled, baseline, options);
 };
 
-export { materializeExternalRows, readExternalSourceBaseline, runExternalSourceTick };
-export type { MaterializeResult };
+export { materializeExternalRows, materializeExternalRowsIncremental, readExternalSourceBaseline, runExternalSourceTick };
+export type { IncrementalMaterializeResult, MaterializeResult };

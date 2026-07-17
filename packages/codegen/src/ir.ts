@@ -123,8 +123,10 @@ export interface ExternalSourceIR {
     binding: string;
     /** Whether a `columns` projection allow-list was given. */
     columns?: ReadonlyArray<string>;
-    /** `true` when a `reconcileEveryMs` was given — reserved for a future incremental mode's delete-visibility lint; not on the typed `.source()` surface today. */
+    /** `true` when a `reconcileEveryMs` was given — one of the two incremental delete-visibility paths the `external_source_incremental_no_delete_path` lint checks. */
     hasReconcile?: boolean;
+    /** `true` when a `softDeleteColumn` was given — the other incremental delete-visibility path. */
+    hasSoftDelete?: boolean;
     /** `true` when a `tenantBy` mapper was given — the tenant-isolation boundary the `external_source_unscoped` lint checks. */
     hasTenantBy: boolean;
     /** The `idColumn` literal, when given (defaults to `"id"` at runtime). */

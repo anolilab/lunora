@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AdvisorSchema, AdvisorTable } from "../src";
+import externalSourceIncrementalNoDeletePath from "../src/lints/static/external-source-incremental-no-delete-path";
 import externalSourceOnGlobal from "../src/lints/static/external-source-on-global";
 import externalSourceUnscoped from "../src/lints/static/external-source-unscoped";
 
@@ -106,5 +107,57 @@ describe("external_source_on_global", () => {
         expect(
             externalSourceOnGlobal.run({ schema: schema([table({ externalSource: { hasTenantBy: true }, name: "scoped", shardKind: "shardBy" })]) }),
         ).toHaveLength(0);
+    });
+});
+
+describe("external_source_incremental_no_delete_path", () => {
+    it("flags an incremental source with neither reconcile nor soft-delete", () => {
+        expect.assertions(2);
+
+        const findings = externalSourceIncrementalNoDeletePath.run({
+            schema: schema([table({ externalSource: { hasTenantBy: true, mode: "incremental" }, name: "leaky", shardKind: "shardBy" })]),
+        });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            cacheKey: "external_source_incremental_no_delete_path:leaky",
+            level: "ERROR",
+            metadata: { table: "leaky" },
+            name: "external_source_incremental_no_delete_path",
+        });
+    });
+
+    it("does not flag an incremental source with a reconcile sweep or a soft-delete column", () => {
+        expect.assertions(1);
+
+        expect(
+            externalSourceIncrementalNoDeletePath.run({
+                schema: schema([
+                    table({ externalSource: { hasReconcile: true, hasTenantBy: true, mode: "incremental" }, name: "reconciled", shardKind: "shardBy" }),
+                    table({ externalSource: { hasSoftDelete: true, hasTenantBy: true, mode: "incremental" }, name: "tombstoned", shardKind: "shardBy" }),
+                ]),
+            }),
+        ).toHaveLength(0);
+    });
+
+    it("does not flag a full-pull source (it observes deletes natively)", () => {
+        expect.assertions(1);
+
+        expect(
+            externalSourceIncrementalNoDeletePath.run({
+                schema: schema([table({ externalSource: { hasTenantBy: true, mode: "full-pull" }, name: "fullpull", shardKind: "shardBy" })]),
+            }),
+        ).toHaveLength(0);
+    });
+
+    it("wARNs on an unanalyzable incremental config", () => {
+        expect.assertions(2);
+
+        const findings = externalSourceIncrementalNoDeletePath.run({
+            schema: schema([table({ externalSource: { hasTenantBy: true, unanalyzable: true }, name: "dynamic", shardKind: "shardBy" })]),
+        });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ level: "WARN", name: "external_source_incremental_no_delete_path" });
     });
 });
