@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Logger } from "../../src/util/logger";
-import { isImmutableRef, resolvePinnedSourceRef, resolveSourceRef, resolveVersionRef } from "../../src/util/source-ref";
+import { isImmutableRef, resolveDistTag, resolvePinnedSourceRef, resolveSourceRef, resolveVersionRef } from "../../src/util/source-ref";
 
 /** A recording logger so the pin / warn provenance lines can be asserted. */
 const recordingLogger = (): { infos: string[]; logger: Logger; warnings: string[] } => {
@@ -61,6 +61,67 @@ describe("resolveVersionRef", () => {
         expect(resolveVersionRef("1.0.0-alpha.1+build.7")).toBe("alpha");
         // A `-` that lives only in the build metadata must not be read as a channel.
         expect(resolveVersionRef("1.0.0+build-alpha")).toBe("main");
+    });
+});
+
+describe("resolveDistTag", () => {
+    it("maps a STABLE version to the latest dist-tag (never a pre-release channel)", () => {
+        expect.assertions(3);
+
+        // The 1.0 promotion contract: a CLI published as a stable version must
+        // pin scaffolded `@lunora/*` deps to `latest`, not `@alpha`.
+        expect(resolveDistTag("1.0.0")).toBe("latest");
+        expect(resolveDistTag("1.2.3")).toBe("latest");
+        expect(resolveDistTag("10.0.0")).toBe("latest");
+    });
+
+    it("maps a pre-release channel version to its channel dist-tag", () => {
+        expect.assertions(3);
+
+        expect(resolveDistTag("1.0.0-alpha.86")).toBe("alpha");
+        expect(resolveDistTag("2.0.0-beta.1")).toBe("beta");
+        expect(resolveDistTag("1.1.0-next.3")).toBe("next");
+    });
+
+    it("maps the unpublished (0.0.0) version to alpha (its latest is a placeholder)", () => {
+        expect.assertions(1);
+
+        expect(resolveDistTag("0.0.0")).toBe("alpha");
+    });
+
+    it("maps a pre-release on an unrecognized channel to latest", () => {
+        expect.assertions(2);
+
+        // No `rc` dist-tag is published; these versions come off `main`, so
+        // `latest` is the only channel whose tag resolves to real code.
+        expect(resolveDistTag("1.0.0-rc.1")).toBe("latest");
+        expect(resolveDistTag("1.0.0-canary.3")).toBe("latest");
+    });
+
+    it("ignores SemVer build metadata when detecting the channel", () => {
+        expect.assertions(1);
+
+        expect(resolveDistTag("1.0.0+build-alpha")).toBe("latest");
+    });
+
+    it("derives from the running CLI's own version when no version is given", () => {
+        expect.assertions(1);
+
+        // The checked-out CLI is either unpublished (0.0.0) or on a release
+        // channel; both derive a known dist-tag, never the empty string.
+        expect(["alpha", "beta", "next", "latest"]).toContain(resolveDistTag());
+    });
+});
+
+describe("stable 1.0 template-ref derivation (resolveSourceRef + resolveVersionRef)", () => {
+    it("a stable CLI fetches templates from the main branch, a channel CLI from its branch", () => {
+        expect.assertions(2);
+
+        // `lunora init` derives its default `--ref` from the CLI version: the
+        // stable 1.0.0 CLI must fetch `gh:anolilab/lunora/templates/*#main`
+        // (templates on `main` match the released code), NOT `#alpha`.
+        expect(resolveVersionRef("1.0.0")).toBe("main");
+        expect(resolveVersionRef("1.0.0-alpha.86")).toBe("alpha");
     });
 });
 

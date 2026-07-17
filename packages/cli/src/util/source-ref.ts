@@ -260,9 +260,13 @@ const STABLE_DIST_TAG = "latest";
  *
  * Mirrors {@link resolveVersionRef} but collapses its `main` (stable branch)
  * result to the `latest` dist-tag, since npm has no `main` channel.
+ *
+ * `version` defaults to the running CLI's own version; tests inject a version
+ * to verify the mapping for channels the checked-out CLI isn't currently on
+ * (e.g. that a stable `1.0.0` CLI pins scaffolds to `latest`, not `alpha`).
  */
-const resolveDistTag = (): string => {
-    const ref = resolveVersionRef(resolveCliVersion());
+const resolveDistTag = (version: string = resolveCliVersion()): string => {
+    const ref = resolveVersionRef(version);
 
     return ref === STABLE_BRANCH ? STABLE_DIST_TAG : ref;
 };

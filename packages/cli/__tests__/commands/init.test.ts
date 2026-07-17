@@ -273,6 +273,36 @@ describe("lunora init", () => {
             expect(pkg.devDependencies.wrangler).toBe("^4.74.0");
         });
 
+        it("pins a STABLE published version exactly when the channel tag resolves to it (1.0 promotion)", async () => {
+            expect.assertions(4);
+
+            // After the 1.0 promotion the channel tag resolves to a stable
+            // version; the scaffold must pin that exact version — never the
+            // `^0.0.0` placeholder and never a floating `alpha` tag.
+            stubRegistry("1.0.0");
+
+            await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "stable-stamped",
+                templateType: "tanstack-start-react",
+            });
+
+            const pkg = JSON.parse(readFileSync(join(workdir, "stable-stamped", "package.json"), "utf8")) as {
+                dependencies: Record<string, string>;
+                devDependencies: Record<string, string>;
+            };
+
+            expect(pkg.dependencies.lunorash).toBe("1.0.0");
+            expect(pkg.dependencies["@lunora/react"]).toBe("1.0.0");
+            expect(pkg.devDependencies["@lunora/vite"]).toBe("1.0.0");
+
+            const raw = readFileSync(join(workdir, "stable-stamped", "package.json"), "utf8");
+
+            expect(raw).not.toContain("^0.0.0");
+        });
+
         it("falls back to the channel dist-tag when the registry lookup fails (offline)", async () => {
             expect.assertions(2);
 
