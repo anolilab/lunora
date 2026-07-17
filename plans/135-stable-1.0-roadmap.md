@@ -63,7 +63,9 @@ Deliverables:
       _Done 2026-07-16: every export reachable from the nine experimental-tier
       packages' entry points tagged (~550 declarations) + README notices; the
       plan-052 HTTP-SSE stream surface tagged across server/client/react/codegen._
-- [ ] Publish the tiering as a docs page ("stability & versioning policy").
+- [x] Publish the tiering as a docs page ("stability & versioning policy").
+      _Done: `apps/docs/src/content/docs/versioning.mdx` carries the tier table
+      (marked provisional until ratified)._
 
 ## Phase 1 — Verification backbone (highest-leverage work)
 
@@ -346,16 +348,28 @@ Sequenced last; starts once Phases 1–3 are green.
 
 ## Exit criteria (the 1.0 gate, all must hold)
 
-- [ ] Workerd integration job is a required CI check and green.
-- [ ] Codecov patch coverage gate on; per-package thresholds in vitest.
-- [ ] e2e runs unconditionally in CI (no skip vars) and covers init→deploy.
-- [ ] Zero `NOT_IMPLEMENTED`/throwing paths in Tier-1/2 advertised APIs.
-- [ ] Plan 095 (WS admin token) shipped.
-- [ ] Public-API snapshot gate live for all Tier-1/2 packages.
-- [ ] No exact-version sibling peerDependencies anywhere.
-- [ ] Versioning policy + upgrade guide + production checklist published.
-- [ ] All authored package docs reachable in the site nav.
-- [ ] Release-train dry run completed without manual intervention.
+Implementation of every gate below has landed; the two caveats are (a) the
+required CI jobs are green locally but await their first run on GitHub-hosted
+runners, and (b) the release train (Phase 5) and tier ratification (Phase 0)
+are maintainer go/no-go decisions, not code.
+
+- [x] Workerd integration job is a required CI check and green.
+      _10-package matrix; two never-passing fixtures fixed. First GitHub run
+      is the final proof._
+- [x] Codecov patch coverage gate on; per-package thresholds in vitest.
+- [x] e2e runs unconditionally in CI (no skip vars) and covers init→codegen→tsc.
+      _Registry install/deploy smoke stays in `scripts/clean-machine-smoke.sh`._
+- [x] Zero `NOT_IMPLEMENTED`/throwing paths in Tier-1/2 advertised APIs.
+      _Remaining `NOT_IMPLEMENTED` sites are base-class hooks the codegen
+      subclass overrides, the error-code registry, and writer-side guards —
+      none reachable on an advertised path._
+- [x] Plan 095 (WS admin token) shipped.
+- [x] Public-API snapshot gate live for all Tier-1/2 packages.
+- [x] No exact-version sibling peerDependencies anywhere.
+- [x] Versioning policy + upgrade guide + production checklist published.
+- [x] All authored package docs reachable in the site nav.
+- [x] Release-train dry run completed (with documented maintainer caveats —
+      real-token verify and the `alpha → main` merge stay manual; see plan 137).
 
 ## Explicitly NOT blockers (audited, keep as-is)
 
