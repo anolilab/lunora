@@ -324,8 +324,17 @@ Nothing tagged stable may throw on an advertised path.
       (living upgrade guide over the landed breaking changes), and
       `docs/production-checklist.mdx` (bindings, secrets, admin/WS tokens,
       ratelimit, RLS, migrations, observability, limits, advisors), all in the nav.
-- [ ] Migration guides: `from-convex.mdx` exists; add at least a generic
+- [x] Migration guides: `from-convex.mdx` exists; add at least a generic
       "from REST/Express" or "from Firebase" path if 1.0 marketing targets them.
+      _Done 2026-07-17: `migrating/from-firebase.mdx` (Firestore→schema/tables,
+      `onSnapshot`→`useQuery`, client `setDoc`→server `mutation`, Security
+      Rules→`ctx.auth`+RLS, Cloud Functions→actions, Auth→`@lunora/auth`, Cloud
+      Storage→`ctx.storage`) and `migrating/from-supabase.mdx` (Postgres
+      `CREATE TABLE`→`defineSchema`, `supabase.from().select()`→`query`+
+      `useQuery`, `.insert()`→`mutation`, SQL RLS policies→Lunora RLS, Edge
+      Functions→actions) — both side-by-side + porting checklist + caveats,
+      wired into the docs nav (`meta.json`) and cross-linked from
+      `from-alpha.mdx`. Convex guide already existed._
 
 ## Phase 5 — Beta → RC → 1.0.0 train
 

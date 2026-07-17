@@ -52,6 +52,8 @@
         "tutorial/realtime-chat",
         "---Migrating---",
         "migrating/from-convex",
+        "migrating/from-supabase",
+        "migrating/from-firebase",
         "migrating/from-alpha",
         "---Tooling---",
         "concepts/generated-code",
