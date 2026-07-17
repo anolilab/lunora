@@ -2949,8 +2949,13 @@ describe("lunoraClient", () => {
 
             const unsubscribe = client.subscribeScheduledJobs(() => undefined);
 
-            // The provider resolves asynchronously before the socket is built.
-            await vi.advanceTimersByTimeAsync(0);
+            // The socket is only built AFTER the async provider resolves, which
+            // can span a couple of microtask hops; under load a single advance
+            // can leave the build pending. Drain until the first socket appears.
+            for (let attempt = 0; attempt < 20 && sockets.length === 0; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential drain: each advance flushes one more microtask hop until the socket is built
+                await vi.advanceTimersByTimeAsync(0);
+            }
 
             const first = latestSocket();
 
@@ -2959,9 +2964,12 @@ describe("lunoraClient", () => {
             first.open();
             first.triggerClose();
 
-            // The reconnect resolves the provider AGAIN — a fresh short-lived
-            // token per attempt, never a reused stale one.
-            await vi.advanceTimersByTimeAsync(15);
+            // The reconnect (10ms) re-resolves the provider — a fresh short-lived
+            // token per attempt, never a reused stale one. Drain until it lands.
+            for (let attempt = 0; attempt < 20 && sockets.length < 2; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential drain: fire the 10ms reconnect timer then flush the re-mint hops
+                await vi.advanceTimersByTimeAsync(10);
+            }
 
             const second = latestSocket();
 
