@@ -3276,29 +3276,24 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // streaming bounds the response bytes, not the source data.
         let rows = 0;
         let bytes = 0;
-        let streamError: Error | undefined;
+        const parts: string[] = [];
 
-        const stream = new ReadableStream<Uint8Array>({
-            async pull(streamController) {
-                const writeRow = (row: ExportRow): void => {
-                    const encoded = NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`);
+        const writeRow = (row: ExportRow): void => {
+            const line = `${JSON.stringify(row)}\n`;
 
-                    rows += 1;
-                    bytes += encoded.byteLength;
-                    streamController.enqueue(encoded);
-                };
+            rows += 1;
+            // Count real UTF-8 bytes for the manifest, not UTF-16 string length.
+            bytes += NDJSON_ENCODER.encode(line).byteLength;
+            parts.push(line);
+        };
 
-                try {
-                    await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow, shardDO);
-                    streamController.close();
-                } catch (error: unknown) {
-                    // Capture the failure so it propagates past `put` — a stream
-                    // error alone would leave a truncated object with no signal.
-                    streamError = error instanceof Error ? error : new Error(String(error));
-                    streamController.error(error);
-                }
-            },
-        });
+        // Collect the NDJSON before writing it. R2 `put` requires a known-length
+        // body (a raw ReadableStream of unknown length is rejected by workerd),
+        // and the per-shard fan-out already materialises every row in memory
+        // before the export drains, so a Blob here adds no meaningful peak-memory
+        // cost over the source data. An error from the export propagates
+        // directly, so no partial object is ever written.
+        await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow, shardDO);
 
         const prefix = options.backupPrefix ?? "backups/";
         const timestamp = new Date(controller.scheduledTime).toISOString();
@@ -3306,11 +3301,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const fileKey = `${prefix}lunora-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
         const manifestKey = `${fileKey}.manifest.json`;
 
-        await store.put(fileKey, stream, { httpMetadata: { contentType: "application/x-ndjson" } });
-
-        if (streamError !== undefined) {
-            throw streamError;
-        }
+        await store.put(fileKey, new Blob(parts, { type: "application/x-ndjson" }), {
+            httpMetadata: { contentType: "application/x-ndjson" },
+        });
 
         const manifest: BackupManifest = {
             bytes,
