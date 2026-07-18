@@ -346,18 +346,24 @@ export class EventLog {
      * entries exist beyond the requested page.
      */
     public getFrom(fromSeq: number, limit: number = 50): { entries: ReadonlyArray<EventLogEntry>; hasMore: boolean } {
-        const live = this.#liveEntries();
-        const first = live.findIndex((entry) => entry.seq >= fromSeq);
+        // Locate the first live entry at/after `fromSeq` by scanning the backing
+        // array from `#headOffset` — never materialize the whole retained log
+        // (an uncapped log would make each page O(total history)); copy only the
+        // requested page. The `index >= #headOffset` guard skips already-evicted
+        // entries still awaiting compaction.
+        const entries = this.#entries;
+        const start = this.#headOffset;
+        const first = entries.findIndex((entry, index) => index >= start && entry.seq >= fromSeq);
 
         if (first === -1) {
             return { entries: [], hasMore: false };
         }
 
-        const slice = live.slice(first, first + limit);
+        const end = Math.min(first + limit, entries.length);
 
         return {
-            entries: slice,
-            hasMore: first + limit < live.length,
+            entries: entries.slice(first, end),
+            hasMore: end < entries.length,
         };
     }
 

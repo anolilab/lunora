@@ -104,10 +104,18 @@ const mergeDiffs = (diffs: ReadonlyArray<TableDiff>): TableDiff | null => {
     const first = diffs[0] as TableDiff;
     const last = diffs[diffs.length - 1] as TableDiff;
 
+    // Derive the merged diff's identity deterministically from its ordered
+    // children's identities (each child's `id`, or its `timestamp` as the same
+    // fallback `deriveInsertId` uses) — replaying the SAME sequence of diffs
+    // must mint the SAME merged id so id-less inserts stay stable across
+    // retries, while a different child sequence yields a different id.
+    const mergedId = `merge:${diffs.map((d) => d.id ?? String(d.timestamp)).join("|")}`;
+
     return createTableDiff(
         first.table,
         diffs.flatMap((d) => d.changes),
         last.timestamp,
+        mergedId,
     );
 };
 

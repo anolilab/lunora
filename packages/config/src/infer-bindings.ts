@@ -538,7 +538,12 @@ interface ClassExportable {
  * flagging `exported: true` — otherwise a binding could reference a class
  * wrangler can't find at deploy.
  */
-const isTypeOnlyClassExport = (code: string, className: string): boolean => new RegExp(String.raw`\btype\s+${className}\b`).test(code);
+const isTypeOnlyClassExport = (code: string, className: string): boolean =>
+    // `export type Foo` / `export type { … Foo … }` / `export { type Foo }` — all
+    // three type-only forms list the name via the lexer but compile away.
+    new RegExp(String.raw`\bexport\s+type\s+${className}\b`).test(code) ||
+    new RegExp(String.raw`\bexport\s+type\s*\{[^}]*\b${className}\b`).test(code) ||
+    new RegExp(String.raw`\bexport\s+\{[^}]*\btype\s+${className}\b`).test(code);
 
 /**
  * Whether the worker entry exports each definition's generated class: a named
