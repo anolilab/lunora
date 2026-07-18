@@ -325,26 +325,29 @@ describe(EventsSync, () => {
             mirror,
         });
 
-        // First sync → events seq 0-1 → watermark 2
+        // First sync → events seq 0-1 → watermark 2. Each event now runs the
+        // full apply→diff→mirror pipeline atomically (REPLICA-08 atomicity
+        // fix), so `getTableDiffs`/`mirror.applyDiff` fire once PER EVENT
+        // (2 diffs for this 2-event batch), not once for the whole batch.
         const count1 = await sync.sync();
 
         expect(count1).toBe(2);
         expect(sync.watermark).toBe(2);
-        expect(applied).toHaveLength(1);
+        expect(applied).toHaveLength(2);
 
-        // Second sync → event seq 2 → watermark 3
+        // Second sync → event seq 2 → watermark 3 → one more diff.
         const count2 = await sync.sync();
 
         expect(count2).toBe(1);
         expect(sync.watermark).toBe(3);
-        expect(applied).toHaveLength(2);
+        expect(applied).toHaveLength(3);
 
         // Third sync → no new events
         const count3 = await sync.sync();
 
         expect(count3).toBe(0);
         expect(sync.watermark).toBe(3);
-        expect(applied).toHaveLength(2);
+        expect(applied).toHaveLength(3);
     });
 
     // REPLICA-08 ──────────────────────────────────────────────────────────
@@ -392,6 +395,65 @@ describe(EventsSync, () => {
         expect(count2).toBe(0);
         expect(sync.watermark).toBe(2);
         expect(appliedPayloads).toStrictEqual(["a", "b"]); // unchanged — no re-application of a/b
+    });
+
+    it("does not advance the watermark past an event whose mirror.applyDiff throws", async () => {
+        const { fetchEventsSince } = createMockLog([
+            { seq: 0, type: "ok", payload: "a", timestamp: 10 },
+            { seq: 1, type: "ok", payload: "b", timestamp: 20 },
+        ]);
+
+        let diffCallCount = 0;
+        let hasFailedOnce = false;
+
+        const mirror = {
+            applyDiff: vi.fn((diff: TableDiff) => {
+                if (diff.table === "boom") {
+                    throw new Error("mirror write failed");
+                }
+            }),
+            onChange: vi.fn(),
+            get eventLog(): EventLog {
+                return new EventLog();
+            },
+        } as unknown as LocalMirror;
+
+        const sync = new EventsSync({
+            fetchEventsSince,
+            applyEvents: () => {},
+            // seq 0's diff mirrors fine; seq 1's diff throws in the mirror
+            // the FIRST time it's attempted, then succeeds on retry.
+            getTableDiffs: () => {
+                diffCallCount += 1;
+
+                if (diffCallCount === 2 && !hasFailedOnce) {
+                    hasFailedOnce = true;
+
+                    return [createTableDiff("boom", [{ type: "insert", data: { id: "1" } }])];
+                }
+
+                return [createTableDiff("ok", [{ type: "insert", data: { id: "1" } }])];
+            },
+            mirror,
+            onError: () => {},
+        });
+
+        const count = await sync.sync();
+
+        // Only seq 0 made it through the FULL pipeline (apply → diff →
+        // mirror) before seq 1's mirror write threw, so the watermark must
+        // stop right after seq 0 — not past seq 1, whose mirror delivery
+        // never happened (REPLICA-08 atomicity).
+        expect(count).toBe(1);
+        expect(sync.watermark).toBe(1);
+
+        // Retrying re-fetches exactly the failed event — not a
+        // permanently-skipped one — and it succeeds this time (3rd
+        // `getTableDiffs` call, which the mock resolves to "ok").
+        const count2 = await sync.sync();
+
+        expect(count2).toBe(1);
+        expect(sync.watermark).toBe(2);
     });
 
     it("sync() awaits an in-flight poll instead of no-op'ing for a concurrent call", async () => {

@@ -193,21 +193,52 @@ export class EventSource<S extends Record<string, unknown> = Record<string, unkn
         try {
             reduced = this.#reducer(this.#state, candidate);
         } catch (error) {
+            const normalizedError = error instanceof Error ? error : new Error(String(error));
+
             this.emitter.emit("replay-error", {
                 entry: candidate,
-                error: error instanceof Error ? error : new Error(String(error)),
+                error: normalizedError,
             });
 
             // A throwing reducer must not leave a logged entry that state
-            // never reflected — do NOT commit to the log.
-            return candidate;
+            // never reflected — do NOT commit to the log, and do NOT report
+            // the uncommitted candidate as a successful (persisted) entry:
+            // its `seq` is free to be reused by the next event.
+            throw normalizedError;
+        }
+
+        // Preflight UNHANDLED handling against the UNCOMMITTED candidate
+        // BEFORE appending to the log: the "fail" strategy (or a throwing
+        // callback) must abort here, or a retry after the thrown error would
+        // duplicate the logical event against an already-advanced log.
+        let handledByCallback = true;
+
+        if (reduced === UNHANDLED) {
+            handledByCallback = this.#handleUnknown(candidate);
         }
 
         // The reducer succeeded (whether it handled the event or returned
-        // UNHANDLED) — commit to the log now.
-        const entry = this.log.append(type, pl, undefined, resolvedOptions);
+        // UNHANDLED, and unknown-event handling didn't throw) — commit to
+        // the log now. `timestamp` is pinned to the candidate's so the
+        // reducer and the persisted entry are byte-for-byte identical
+        // (REPLICA-07): a second, independently-drawn `Date.now()` here
+        // would make a timestamp-dependent reducer's output unreproducible
+        // on replay.
+        const entry = this.log.append(type, pl, undefined, { ...resolvedOptions, timestamp: candidate.timestamp });
 
-        this.#finish(entry, reduced);
+        if (reduced === UNHANDLED) {
+            if (handledByCallback) {
+                // The callback returned true ("handled"), but state didn't
+                // change. Emit state-changed anyway (consumer may still want
+                // to know the entry was processed).
+                this.emitter.emit("state-changed", { state: this.#state, entry });
+            }
+
+            return entry;
+        }
+
+        this.#state = reduced;
+        this.emitter.emit("state-changed", { state: this.#state, entry });
 
         return entry;
     }
@@ -346,33 +377,11 @@ export class EventSource<S extends Record<string, unknown> = Record<string, unkn
     // ── Internal ──────────────────────────────────────────────────────
 
     /**
-     * Finish applying an already-reduced entry: assign state (unless the
-     * reducer returned {@link UNHANDLED}, in which case the configured
-     * unknown-event strategy runs instead) and emit `state-changed`.
-     *
      * Explicit-sentinel detection (not `state === stateBefore` reference
      * equality) is what lets a reducer legitimately return `state` unchanged
      * for a type it DOES recognise without being misclassified as unhandled
      * (REPLICA-07).
      */
-    #finish(entry: EventLogEntry, reduced: S | typeof UNHANDLED): void {
-        if (reduced === UNHANDLED) {
-            if (!this.#handleUnknown(entry)) {
-                return;
-            }
-
-            // The callback returned true ("handled"), but state didn't change.
-            // Fall through to emit state-changed anyway (consumer may still
-            // want to know the entry was processed).
-            this.emitter.emit("state-changed", { state: this.#state, entry });
-
-            return;
-        }
-
-        this.#state = reduced;
-        this.emitter.emit("state-changed", { state: this.#state, entry });
-    }
-
     #handleUnknown(entry: EventLogEntry): boolean {
         const strategy = this.#unknownEventHandling;
 

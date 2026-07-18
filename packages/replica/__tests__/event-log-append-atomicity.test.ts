@@ -11,6 +11,7 @@ import { EventLogDO } from "../src/event-log-do";
 
 interface StoredBatchRow {
     batch_id: string;
+    fingerprint: string;
     first_seq: number;
     last_seq: number;
 }
@@ -44,6 +45,7 @@ const createMockState = (): EventLogDO["state"] => {
                 batch_id: params[0] as string,
                 first_seq: params[1] as number,
                 last_seq: params[2] as number,
+                fingerprint: params[3] as string,
             });
 
             return { toArray: () => [] };
@@ -247,5 +249,30 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
         const res = await doFetch(do_, "POST", "/append", { batchId: "", events: [{ type: "a", payload: {} }] });
 
         expect(res.status).toBe(400);
+    });
+
+    it("reusing a batchId with a DIFFERENT event batch is rejected as a conflict, not silently dropped", async () => {
+        const do_ = new EventLogDO(createMockState(), {});
+
+        const first = await doFetch(do_, "POST", "/append", { batchId: "reused-key", events: [{ type: "a", payload: { n: 1 } }] });
+
+        expect(first.status).toBe(200);
+
+        // Same idempotency key, but genuinely different event contents —
+        // `#findBatch` must not just match on `batchId` and hand back the
+        // unrelated original entries.
+        const second = await doFetch(do_, "POST", "/append", { batchId: "reused-key", events: [{ type: "b", payload: { n: 2 } }] });
+
+        expect(second.status).toBe(409);
+
+        const body = (await second.json()) as { error: { code: string } };
+
+        expect(body.error.code).toBe("CONFLICT");
+
+        // The second (conflicting) batch must not have been persisted either.
+        const sizeRes = await doFetch(do_, "GET", "/size");
+        const size = (await sizeRes.json()) as { count: number };
+
+        expect(size.count).toBe(1);
     });
 });

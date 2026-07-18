@@ -19,6 +19,72 @@
 
 import type { EventLogEntry } from "./event-log";
 
+// ── Idempotency fingerprint ─────────────────────────────────────────────
+
+/**
+ * Marks an `Error` as an idempotency conflict: a retried `/append` reused a
+ * `batchId` whose persisted fingerprint doesn't match the incoming request —
+ * i.e. the caller reused an idempotency key for a DIFFERENT event batch.
+ * Caught in `#handleAppend` and surfaced as an HTTP 409, instead of silently
+ * dropping the new events and returning the unrelated originally-persisted
+ * entries.
+ *
+ * A tagged plain `Error` (not a subclass) — `EventLogDO` is the file's only
+ * class; a second `class IdempotencyConflictError` would trip
+ * `max-classes-per-file`.
+ */
+const IDEMPOTENCY_CONFLICT: unique symbol = Symbol("lunora.replica.event-log-do.idempotency-conflict");
+
+const createIdempotencyConflictError = (message: string): Error => {
+    const error = new Error(message);
+
+    Object.defineProperty(error, IDEMPOTENCY_CONFLICT, { value: true });
+
+    return error;
+};
+
+const isIdempotencyConflictError = (error: unknown): error is Error => error instanceof Error && IDEMPOTENCY_CONFLICT in error;
+
+/**
+ * Recursively canonicalize a JSON-serialisable value so structurally
+ * identical data always encodes identically regardless of object-key
+ * insertion order at ANY nesting depth. Arrays keep their order — only
+ * object keys are sorted.
+ */
+const canonicalizeForFingerprint = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+        return value.map((item) => canonicalizeForFingerprint(item));
+    }
+
+    if (value !== null && typeof value === "object") {
+        const record = value as Record<string, unknown>;
+        const sortedKeys = Object.keys(record).toSorted((a, b) => a.localeCompare(b));
+        const result: Record<string, unknown> = {};
+
+        for (const key of sortedKeys) {
+            result[key] = canonicalizeForFingerprint(record[key]);
+        }
+
+        return result;
+    }
+
+    return value;
+};
+
+/**
+ * Deterministic SHA-256 fingerprint (hex) of a batch's ORIGINAL request
+ * contents — binds an idempotency key to what was actually sent, so
+ * reusing `batchId` with a different event batch is detected instead of
+ * silently returning unrelated, previously-persisted entries.
+ */
+const fingerprintBatch = async (events: AppendRequestEvent[]): Promise<string> => {
+    const canonical = JSON.stringify(canonicalizeForFingerprint(events));
+    const bytes = new TextEncoder().encode(canonical);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+};
+
 // ── Types ──────────────────────────────────────────────────────────────
 
 interface EventLogDOState {
@@ -209,49 +275,7 @@ export class EventLogDO {
 
         const { sql } = this.state.storage;
         const { batchId } = body;
-
-        // Idempotent replay: a batch already persisted under this `batchId`
-        // returns the originally-persisted entries instead of inserting a
-        // duplicate copy. Both the lookup and the (possible) insert happen
-        // inside the same transaction as the rest of the batch below.
-        const runBatch = (): EventLogEntry[] => {
-            if (typeof batchId === "string") {
-                const existing = EventLogDO.#findBatch(sql, batchId);
-
-                if (existing) {
-                    return existing;
-                }
-            }
-
-            const now = Date.now();
-            const entries: EventLogEntry[] = [];
-
-            for (const eventRecord of body.events) {
-                const seq = EventLogDO.#nextSeq(sql);
-                const entry: EventLogEntry = {
-                    seq,
-                    type: eventRecord.type,
-                    payload: eventRecord.payload,
-                    timestamp: eventRecord.timestamp ?? now,
-                    clientId: eventRecord.clientId,
-                    sessionId: eventRecord.sessionId,
-                    parentSeqNum: eventRecord.parentSeqNum,
-                };
-                EventLogDO.#insertEvent(sql, entry);
-                entries.push(entry);
-            }
-
-            if (typeof batchId === "string") {
-                const firstSeq = entries[0]?.seq;
-                const lastSeq = entries.at(-1)?.seq;
-
-                if (firstSeq !== undefined && lastSeq !== undefined) {
-                    EventLogDO.#recordBatch(sql, batchId, firstSeq, lastSeq);
-                }
-            }
-
-            return entries;
-        };
+        const runBatch = (): Promise<EventLogEntry[]> => EventLogDO.#runAppendBatch(sql, body, batchId);
 
         // Run the whole batch (lookup + inserts) inside the DO's native
         // transaction primitive so a mid-batch failure persists nothing —
@@ -261,13 +285,90 @@ export class EventLogDO {
         // carry no transactional semantics anyway (see ShardDO.runInTransaction
         // in `@lunora/do` for the same convention).
         const { transaction } = this.state.storage;
-        const entries = typeof transaction === "function" ? await transaction(runBatch) : runBatch();
+        let entries: EventLogEntry[];
+
+        try {
+            entries = typeof transaction === "function" ? await transaction(runBatch) : await runBatch();
+        } catch (error) {
+            if (isIdempotencyConflictError(error)) {
+                return Response.json(
+                    { error: { code: "CONFLICT", message: error.message } },
+                    { status: 409, headers: { "content-type": "application/json" } },
+                );
+            }
+
+            throw error;
+        }
 
         const response: AppendResponse = { entries };
         return Response.json(response, {
             status: 200,
             headers: { "content-type": "application/json" },
         });
+    }
+
+    /**
+     * Execute one `/append` batch: idempotent lookup (fingerprint-checked) or
+     * insert + record. Extracted out of `#handleAppend` (which only wires up
+     * the HTTP request/response and the transaction wrapper) to keep that
+     * method's cognitive complexity within budget.
+     *
+     * Idempotent replay: a batch already persisted under `batchId` returns
+     * the originally-persisted entries instead of inserting a duplicate copy
+     * — but ONLY when the incoming request's fingerprint matches what was
+     * persisted under that key. A `batchId` reused for a genuinely different
+     * event batch throws an idempotency-conflict error instead of silently
+     * dropping the new events and returning unrelated entries.
+     */
+    static async #runAppendBatch(
+        sql: { exec: (query: string, ...params: unknown[]) => unknown },
+        body: AppendRequest,
+        batchId: string | undefined,
+    ): Promise<EventLogEntry[]> {
+        let fingerprint: string | undefined;
+
+        if (typeof batchId === "string") {
+            fingerprint = await fingerprintBatch(body.events);
+
+            const existing = EventLogDO.#findBatch(sql, batchId);
+
+            if (existing) {
+                if (existing.fingerprint !== fingerprint) {
+                    throw createIdempotencyConflictError(`batchId "${batchId}" was already used for a different event batch`);
+                }
+
+                return existing.entries;
+            }
+        }
+
+        const now = Date.now();
+        const entries: EventLogEntry[] = [];
+
+        for (const eventRecord of body.events) {
+            const seq = EventLogDO.#nextSeq(sql);
+            const entry: EventLogEntry = {
+                seq,
+                type: eventRecord.type,
+                payload: eventRecord.payload,
+                timestamp: eventRecord.timestamp ?? now,
+                clientId: eventRecord.clientId,
+                sessionId: eventRecord.sessionId,
+                parentSeqNum: eventRecord.parentSeqNum,
+            };
+            EventLogDO.#insertEvent(sql, entry);
+            entries.push(entry);
+        }
+
+        if (typeof batchId === "string" && fingerprint !== undefined) {
+            const firstSeq = entries[0]?.seq;
+            const lastSeq = entries.at(-1)?.seq;
+
+            if (firstSeq !== undefined && lastSeq !== undefined) {
+                EventLogDO.#recordBatch(sql, batchId, firstSeq, lastSeq, fingerprint);
+            }
+        }
+
+        return entries;
     }
 
     /**
@@ -433,21 +534,28 @@ export class EventLogDO {
         // batch, `batch_id` UNIQUE so a concurrent double-insert of the same
         // batch (belt-and-suspenders alongside the `#findBatch` pre-check
         // inside the same transaction) fails loudly instead of duplicating.
+        // `fingerprint` binds the key to the ORIGINAL request contents so a
+        // reused `batchId` with different events is detected as a conflict
+        // instead of silently returning the earlier, unrelated batch.
         sql.exec(
             "CREATE TABLE IF NOT EXISTS event_batches (" +
                 "batch_id TEXT PRIMARY KEY, " +
                 "first_seq INTEGER NOT NULL, " +
-                "last_seq INTEGER NOT NULL" +
+                "last_seq INTEGER NOT NULL, " +
+                "fingerprint TEXT NOT NULL" +
                 ")",
         );
         this.#initialized = true;
     }
 
     /** Look up a previously-persisted batch by its idempotency key. */
-    static #findBatch(sql: { exec: (query: string, ...params: unknown[]) => unknown }, batchId: string): EventLogEntry[] | undefined {
-        const batchCursor = sql.exec("SELECT first_seq, last_seq FROM event_batches WHERE batch_id = ?", batchId) as SqlCursor;
+    static #findBatch(
+        sql: { exec: (query: string, ...params: unknown[]) => unknown },
+        batchId: string,
+    ): { entries: EventLogEntry[]; fingerprint: string } | undefined {
+        const batchCursor = sql.exec("SELECT first_seq, last_seq, fingerprint FROM event_batches WHERE batch_id = ?", batchId) as SqlCursor;
         const batchRows = toArray(batchCursor);
-        const batchRow = batchRows[0] as { first_seq: number; last_seq: number } | undefined;
+        const batchRow = batchRows[0] as { fingerprint: string; first_seq: number; last_seq: number } | undefined;
 
         if (!batchRow) {
             return undefined;
@@ -459,12 +567,24 @@ export class EventLogDO {
             batchRow.last_seq,
         ) as SqlCursor;
 
-        return rowsToEntries(cursor);
+        return { entries: rowsToEntries(cursor), fingerprint: batchRow.fingerprint };
     }
 
-    /** Record a persisted batch's seq range under its idempotency key. */
-    static #recordBatch(sql: { exec: (query: string, ...params: unknown[]) => unknown }, batchId: string, firstSeq: number, lastSeq: number): void {
-        sql.exec("INSERT INTO event_batches (batch_id, first_seq, last_seq) VALUES (?, ?, ?)", batchId, firstSeq, lastSeq);
+    /** Record a persisted batch's seq range and request fingerprint under its idempotency key. */
+    static #recordBatch(
+        sql: { exec: (query: string, ...params: unknown[]) => unknown },
+        batchId: string,
+        firstSeq: number,
+        lastSeq: number,
+        fingerprint: string,
+    ): void {
+        sql.exec(
+            "INSERT INTO event_batches (batch_id, first_seq, last_seq, fingerprint) VALUES (?, ?, ?, ?)",
+            batchId,
+            firstSeq,
+            lastSeq,
+            fingerprint,
+        );
     }
 
     /** Get the next available sequence number. */

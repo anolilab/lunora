@@ -77,6 +77,18 @@ export interface AppendOptions {
     readonly parentSeqNum?: Seq;
     /** Session identifier within the client. */
     readonly sessionId?: string;
+
+    /**
+     * Override the entry's `timestamp` instead of stamping `Date.now()` at
+     * append time.
+     *
+     * Used by callers (e.g. {@link import("./event-source").EventSource | EventSource})
+     * that must commit the EXACT entry a reducer already observed — a
+     * second, independently-drawn `Date.now()` at append time could produce
+     * a persisted entry a timestamp-dependent reducer cannot reproduce on
+     * replay.
+     */
+    readonly timestamp?: number;
 }
 
 /**
@@ -113,32 +125,82 @@ export interface EventLogOptions {
  */
 export class EventLog {
     #entries: EventLogEntry[] = [];
+
+    /**
+     * Logical index of the first LIVE entry within `#entries` (REPLICA-06
+     * perf): entries at `[0, #headOffset)` have already been evicted by the
+     * cap but are not yet physically removed from the backing array. Bumping
+     * this offset is O(1), so a capped append never pays the O(n) cost of
+     * shifting the retained array — see `#enforceCap`.
+     */
+    #headOffset = 0;
     #nextSeq = 0;
     // eslint-disable-next-line unicorn/no-null -- public contract uses `null` for an empty log head
     #headSeq: GlobalSeq | null = null;
     readonly #maxEntries: number | undefined;
 
     public constructor(options?: EventLogOptions) {
-        this.#maxEntries = options?.maxEntries;
+        this.#maxEntries = EventLog.#validateMaxEntries(options?.maxEntries);
+    }
+
+    /**
+     * Validate `maxEntries` as an invariant: `undefined` (uncapped) or a
+     * non-negative safe integer. Negative values would evict everything,
+     * fractional/NaN/Infinity values would leave the log over capacity or
+     * effectively disable the cap.
+     */
+    static #validateMaxEntries(maxEntries: number | undefined): number | undefined {
+        if (maxEntries === undefined) {
+            return undefined;
+        }
+
+        if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) {
+            throw new RangeError("maxEntries must be a non-negative safe integer");
+        }
+
+        return maxEntries;
+    }
+
+    /**
+     * Entries currently considered live (excludes the evicted-but-not-yet-
+     * compacted prefix). ALWAYS returns a fresh copy — never the internal
+     * `#entries` array by reference — so a caller iterating the result (e.g.
+     * `EventSource.replayFromLog` replaying a log into itself) can't observe
+     * later appends made to `#entries` while iterating.
+     */
+    #liveEntries(): EventLogEntry[] {
+        return this.#entries.slice(this.#headOffset);
     }
 
     // ── Mutators ──────────────────────────────────────────────────────
 
     /**
-     * Evict the oldest entries so `#entries.length` never exceeds
+     * Evict the oldest entries so the LIVE entry count never exceeds
      * `#maxEntries`. `headSeq`/`nextSeq` are untouched — they're independent
      * counters, not derived from the entries array — so appends after an
      * eviction continue the same sequence.
+     *
+     * Eviction itself is O(1) (bump `#headOffset`) rather than an O(n)
+     * `splice(0, n)` on every capped append. The dead prefix is compacted
+     * away in one pass once it reaches half the backing array, which bounds
+     * memory growth while keeping the amortized cost of both append and
+     * compaction O(1) per entry.
      */
     #enforceCap(): void {
         if (this.#maxEntries === undefined) {
             return;
         }
 
-        const overflow = this.#entries.length - this.#maxEntries;
+        const liveCount = this.#entries.length - this.#headOffset;
+        const overflow = liveCount - this.#maxEntries;
 
         if (overflow > 0) {
-            this.#entries.splice(0, overflow);
+            this.#headOffset += overflow;
+        }
+
+        if (this.#headOffset > 0 && this.#headOffset >= this.#entries.length - this.#headOffset) {
+            this.#entries = this.#entries.slice(this.#headOffset);
+            this.#headOffset = 0;
         }
     }
 
@@ -183,7 +245,7 @@ export class EventLog {
             seq,
             type,
             payload: pl,
-            timestamp: Date.now(),
+            timestamp: resolvedOptions?.timestamp ?? Date.now(),
             tableDiffs: diffs,
             clientId: resolvedOptions?.clientId,
             sessionId: resolvedOptions?.sessionId,
@@ -247,11 +309,17 @@ export class EventLog {
      * This is the restore counterpart of {@link EventLog#snapshot}.
      * Restores `headSeq` from the snapshot so auto-parenting continues
      * after restore.
+     *
+     * Runs `#enforceCap()` after restoring so a snapshot captured under a
+     * different (or no) `maxEntries` can never leave this log over its
+     * configured capacity.
      */
     public load(snapshot: EventLogSnapshot): void {
         this.#entries = [...snapshot.entries];
+        this.#headOffset = 0;
         this.#nextSeq = snapshot.nextSeq;
         this.#headSeq = snapshot.headSeq;
+        this.#enforceCap();
     }
 
     // ── Queries ───────────────────────────────────────────────────────
@@ -261,13 +329,15 @@ export class EventLog {
      * Useful for catch-up: "give me everything since my last watermark".
      */
     public getSince(sinceSeq: number): ReadonlyArray<EventLogEntry> {
+        const live = this.#liveEntries();
+
         if (sinceSeq <= 0) {
-            return [...this.#entries];
+            return live;
         }
 
-        const first = this.#entries.findIndex((entry) => entry.seq >= sinceSeq);
+        const first = live.findIndex((entry) => entry.seq >= sinceSeq);
 
-        return first === -1 ? [] : this.#entries.slice(first);
+        return first === -1 ? [] : live.slice(first);
     }
 
     /**
@@ -276,17 +346,18 @@ export class EventLog {
      * entries exist beyond the requested page.
      */
     public getFrom(fromSeq: number, limit: number = 50): { entries: ReadonlyArray<EventLogEntry>; hasMore: boolean } {
-        const first = this.#entries.findIndex((entry) => entry.seq >= fromSeq);
+        const live = this.#liveEntries();
+        const first = live.findIndex((entry) => entry.seq >= fromSeq);
 
         if (first === -1) {
             return { entries: [], hasMore: false };
         }
 
-        const slice = this.#entries.slice(first, first + limit);
+        const slice = live.slice(first, first + limit);
 
         return {
             entries: slice,
-            hasMore: first + limit < this.#entries.length,
+            hasMore: first + limit < live.length,
         };
     }
 
@@ -295,7 +366,7 @@ export class EventLog {
      */
     public snapshot(): EventLogSnapshot {
         return {
-            entries: [...this.#entries],
+            entries: this.#liveEntries(),
             nextSeq: this.#nextSeq,
             headSeq: this.#headSeq,
         };
@@ -303,7 +374,7 @@ export class EventLog {
 
     /** Number of entries currently in the log. */
     public get size(): number {
-        return this.#entries.length;
+        return this.#entries.length - this.#headOffset;
     }
 
     /** The next sequence number that will be assigned. */
@@ -313,7 +384,7 @@ export class EventLog {
 
     /** Return `true` when there are no entries. */
     public get isEmpty(): boolean {
-        return this.#entries.length === 0;
+        return this.size === 0;
     }
 
     /**
@@ -328,6 +399,7 @@ export class EventLog {
     /** Remove all entries (primarily for testing). */
     public clear(): void {
         this.#entries = [];
+        this.#headOffset = 0;
         this.#nextSeq = 0;
         // eslint-disable-next-line unicorn/no-null -- null is the public contract for empty log
         this.#headSeq = null;
@@ -346,15 +418,20 @@ export class EventLog {
      * watermark below `floorSeq` silently miss the discarded entries. This is
      * the hook the caller ties to snapshot persistence; the log itself has no
      * concept of "already durably persisted".
+     *
+     * `floorSeq` must be a non-negative safe integer — `NaN` would make
+     * every comparison false and silently clear the entire log.
      */
     public truncateBelow(floorSeq: number): void {
-        const cutoff = this.#entries.findIndex((entry) => entry.seq >= floorSeq);
-
-        if (cutoff === -1) {
-            this.#entries = [];
-        } else if (cutoff > 0) {
-            this.#entries = this.#entries.slice(cutoff);
+        if (!Number.isSafeInteger(floorSeq) || floorSeq < 0) {
+            throw new RangeError("floorSeq must be a non-negative safe integer");
         }
+
+        const live = this.#liveEntries();
+        const cutoff = live.findIndex((entry) => entry.seq >= floorSeq);
+
+        this.#entries = cutoff === -1 ? [] : live.slice(cutoff);
+        this.#headOffset = 0;
     }
 
     /**

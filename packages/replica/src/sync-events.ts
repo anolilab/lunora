@@ -239,16 +239,18 @@ export class EventsSync {
     }
 
     /**
-     * One poll cycle: fetch → apply (per event) → diff → mirror.
+     * One poll cycle: fetch → (apply → diff → mirror) per event.
      *
-     * `applyEvents` is called ONE EVENT AT A TIME, advancing the watermark
-     * after each successful call, instead of once for the whole batch
-     * (REPLICA-08). `applyEvents` is the non-idempotent step; if it throws
-     * partway through a batch (e.g. its internal state machine already
-     * mutated for events before the one that threw), advancing the watermark
-     * only up to the LAST successful event means the next poll re-fetches
-     * exactly the unapplied remainder — never re-applying the successful
-     * prefix a second time.
+     * Each event is driven through the FULL pipeline — `applyEvents`,
+     * `getTableDiffs`, and `mirror.applyDiff` — atomically before the
+     * watermark advances past it (REPLICA-08). Advancing the watermark any
+     * earlier (e.g. right after `applyEvents`) would let a later throw from
+     * `getTableDiffs`/`mirror.applyDiff` skip mirror delivery for that event
+     * PERMANENTLY, since the next poll would never re-fetch it. Keeping the
+     * watermark pinned to the last event whose entire pipeline succeeded
+     * means the next poll re-fetches exactly the unapplied remainder — never
+     * re-applying a fully-succeeded event, never silently dropping one that
+     * partially failed.
      */
     async #pollOnce(): Promise<number> {
         try {
@@ -264,6 +266,18 @@ export class EventsSync {
                 for (const event of events) {
                     this.#options.applyEvents([event]);
 
+                    const diffs = this.#options.getTableDiffs();
+
+                    for (const diff of diffs) {
+                        this.#options.mirror.applyDiff(diff);
+                    }
+
+                    // Only advance the watermark once state, diff generation,
+                    // AND mirror persistence have all succeeded for this
+                    // event — a throw at any stage above leaves the
+                    // watermark where it was, so the next poll retries this
+                    // event (and only this event) instead of permanently
+                    // skipping it.
                     this.#watermark = event.seq + 1;
                     appliedCount += 1;
                 }
@@ -271,24 +285,6 @@ export class EventsSync {
                 const onError = this.#options.onError ?? console.error;
 
                 onError(error);
-            }
-
-            // Push whatever succeeded before a mid-batch failure, if anything.
-            //
-            // Trade-off: a throw in the diff/mirror phase below is swallowed
-            // with the watermark already advanced, so those diffs are NOT
-            // retried. If `getTableDiffs()` is delta/consuming (diffs against a
-            // cached baseline it advances), a transient `mirror.applyDiff`
-            // failure can leave the mirror desynced until a later event
-            // rewrites those rows. Prefer a `getTableDiffs()` that recomputes a
-            // full diff from current state, or make `mirror.applyDiff` durable,
-            // if you need at-least-once mirror delivery.
-            if (appliedCount > 0) {
-                const diffs = this.#options.getTableDiffs();
-
-                for (const diff of diffs) {
-                    this.#options.mirror.applyDiff(diff);
-                }
             }
 
             return appliedCount;
