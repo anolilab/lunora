@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
-import { fireAndForget, formatCell } from "../../lib/internal";
+import { errorMessage, fireAndForget, formatCell } from "../../lib/internal";
 import {
     ConfirmDialog,
     MemberAddDialog,
@@ -121,6 +121,8 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
 
     const [dialog, setDialog] = useState<DialogState>(null);
     const [selectedTeam, setSelectedTeam] = useState<null | string>(null);
+    const [actionBusy, setActionBusy] = useState<boolean>(false);
+    const [actionError, setActionError] = useState<null | string>(null);
 
     const membersQuery = useClientQuery(["lunora-auth-org-members", organizationId], () => client.listAuthOrgMembers({ limit: 200, organizationId }));
     const invitationsQuery = useClientQuery(["lunora-auth-org-invitations", organizationId], () =>
@@ -169,12 +171,25 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
         setDialog(null);
     };
 
-    /** Run a fire-and-forget mutation, then refetch (used by the direct row actions that don't need a form). */
+    /**
+     * Run a mutation under a busy/error model (used by the direct row actions that
+     * don't need a form). On success it refetches every list; on rejection it
+     * surfaces the error via `actionError` instead of silently discarding it.
+     */
     const runAction = (action: () => Promise<void>): void => {
         fireAndForget(
             (async (): Promise<void> => {
-                await action();
-                refetchAll();
+                setActionBusy(true);
+                setActionError(null);
+
+                try {
+                    await action();
+                    refetchAll();
+                } catch (error) {
+                    setActionError(errorMessage(error));
+                } finally {
+                    setActionBusy(false);
+                }
             })(),
         );
     };
@@ -222,6 +237,12 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="org-detail-error" role="alert">
                     {error}
+                </p>
+            )}
+
+            {actionError !== null && (
+                <p className="text-sm text-destructive" data-testid="org-action-error" role="alert">
+                    {actionError}
                 </p>
             )}
 
@@ -277,6 +298,7 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
                                 </Button>
                                 <Button
                                     data-testid={`org-remove-member-${formatCell(row["id"])}`}
+                                    disabled={actionBusy}
                                     onClick={() => {
                                         runAction(() => client.removeAuthOrgMember({ memberId: formatCell(row["id"]) }));
                                     }}
@@ -301,6 +323,7 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
                         rowActions={(row) => (
                             <Button
                                 data-testid={`org-cancel-invitation-${formatCell(row["id"])}`}
+                                disabled={actionBusy}
                                 onClick={() => {
                                     runAction(() => client.cancelAuthOrgInvitation({ invitationId: formatCell(row["id"]) }));
                                 }}
@@ -415,6 +438,7 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
                             rowActions={(row) => (
                                 <Button
                                     data-testid={`org-team-remove-member-${formatCell(row["id"])}`}
+                                    disabled={actionBusy}
                                     onClick={() => {
                                         runAction(() => client.removeAuthOrgTeamMember({ teamMemberId: formatCell(row["id"]) }));
                                     }}
