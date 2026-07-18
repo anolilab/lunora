@@ -55,7 +55,7 @@ class SourcedShapeShard extends ShardDO {
         return Promise.resolve({ ok: true });
     }
 
-    protected override async pollExternalSources(): Promise<number> {
+    protected override async pollExternalSources(): Promise<number | undefined> {
         const writer: DatabaseWriterLike = createShardContextDatabase({
             broadcast: (delta) => {
                 this.recordChangedTable(delta.table);
@@ -68,7 +68,10 @@ class SourcedShapeShard extends ShardDO {
 
         await runExternalSourceTick(this.sql as SqlExec, writer, this.pulled, { table: "documents" });
 
-        return 1;
+        // Report a plausible next-due time (plan 148: the alarm re-arms at this
+        // value, not a bare active count) — the exact number is irrelevant here
+        // since this test only asserts on the poke fan-out, not the alarm target.
+        return Date.now() + 1000;
     }
 
     // eslint-disable-next-line class-methods-use-this -- test stub: resolves the one local shape by name.
