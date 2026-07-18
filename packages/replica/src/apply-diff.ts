@@ -1,6 +1,39 @@
 import type { TableDiff } from "./table-diff";
 
 /**
+ * Derive a deterministic id for an id-less insert.
+ *
+ * A random `crypto.randomUUID()` here would make replay non-deterministic:
+ * re-applying the exact same {@link TableDiff} twice (e.g. once live, once on
+ * catch-up replay from the event log) would mint two DIFFERENT row keys for
+ * the same logical row, leaving duplicate rows / divergent replicas
+ * (REPLICA-05). Hashing the diff's own content instead means the SAME diff
+ * always derives the SAME id — the property required for safe replay.
+ *
+ * The hash is over the table name, the diff's `timestamp`, the change's
+ * position within the diff (so two id-less inserts carrying identical `data`
+ * in one diff still get distinct ids), and a stable (sorted-key) encoding of
+ * `data` — never the wall clock or any other apply-time-only value.
+ */
+const deriveInsertId = (diff: Pick<TableDiff, "table" | "timestamp">, changeIndex: number, data: Record<string, unknown>): string => {
+    const sortedKeys = Object.keys(data).toSorted((a, b) => a.localeCompare(b));
+    const input = `${diff.table}::${String(diff.timestamp)}::${String(changeIndex)}::${JSON.stringify(data, sortedKeys)}`;
+
+    // Portable, dependency-free FNV-1a 32-bit hash — determinism (not
+    // cryptographic strength) is the only requirement here.
+    /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and unsigned shift; the bit ops ARE the algorithm */
+    let hash = 0x81_1c_9d_c5;
+
+    for (let index = 0; index < input.length; index += 1) {
+        hash ^= input.codePointAt(index) ?? 0;
+        hash = Math.imul(hash, 0x01_00_01_93);
+    }
+
+    return `row-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+    /* eslint-enable no-bitwise */
+};
+
+/**
  * Apply a single {@link TableDiff} to an in-memory row map and return
  * the updated map.
  *
@@ -25,7 +58,7 @@ import type { TableDiff } from "./table-diff";
 const applyDiff = (current: ReadonlyMap<string, Record<string, unknown>>, diff: TableDiff): Map<string, Record<string, unknown>> => {
     const next = new Map(current);
 
-    for (const change of diff.changes) {
+    for (const [changeIndex, change] of diff.changes.entries()) {
         switch (change.type) {
             case "delete": {
                 next.delete(change.id);
@@ -34,7 +67,7 @@ const applyDiff = (current: ReadonlyMap<string, Record<string, unknown>>, diff: 
             case "insert": {
                 // Insert uses the row data itself (id may or may not be inside data)
                 const rawId = (change.data as { id?: unknown }).id;
-                const id = typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : crypto.randomUUID();
+                const id = typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : deriveInsertId(diff, changeIndex, change.data);
 
                 next.set(id, { ...change.data, id });
                 break;

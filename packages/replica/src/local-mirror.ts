@@ -23,6 +23,19 @@ interface LocalMirrorOptions {
     readonly db: SqliteAdapter;
 
     /**
+     * Cap the mirror's internal {@link EventLog} to this many entries
+     * (REPLICA-06). Every applied diff is recorded in the log — with no cap,
+     * a long-running client accumulates one entry per diff forever.
+     *
+     * `undefined` (the default) preserves unbounded retention. Set this when
+     * catch-up replication only ever needs a bounded recent window; older
+     * entries are silently evicted (oldest-first) once the cap is exceeded.
+     * See {@link EventLog#truncateBelow} for caller-driven truncation tied to
+     * a snapshot instead.
+     */
+    readonly maxEventLogEntries?: number;
+
+    /**
      * Table schemas the mirror should manage.
      *
      * On first use the mirror creates any missing tables automatically
@@ -81,8 +94,17 @@ type ChangeSubscriber = () => void;
 class LocalMirror {
     readonly #db: SqliteAdapter;
     readonly #tables: Record<string, MirrorTableDef>;
-    readonly #eventLog = new EventLog();
+    readonly #eventLog: EventLog;
     readonly #changeListeners = new Set<ChangeSubscriber>();
+
+    /**
+     * Monotonically increasing counter bumped on every state-changing
+     * operation (`applyDiff`, `clearData`) — independent of `eventLog.size`.
+     * `clearData` doesn't grow the log (REPLICA-09), so a consumer that used
+     * `eventLog.size` as its `useSyncExternalStore` snapshot would never
+     * re-render after a clear; `version` changes on both operations.
+     */
+    #version = 0;
 
     /**
      * Convenience factory that creates a {@link LocalMirror} backed by a
@@ -117,6 +139,7 @@ class LocalMirror {
     public constructor(options: LocalMirrorOptions) {
         this.#db = options.db;
         this.#tables = { ...options.tables };
+        this.#eventLog = new EventLog({ maxEntries: options.maxEventLogEntries });
 
         ensureMetaTable(this.#db);
     }
@@ -153,6 +176,16 @@ class LocalMirror {
     }
 
     /**
+     * Monotonically increasing version counter, bumped on every operation
+     * that changes mirrored data (`applyDiff`, `clearData`). Use this — not
+     * `eventLog.size` — as a `useSyncExternalStore` snapshot so operations
+     * that don't append to the log still trigger a re-render.
+     */
+    public get version(): number {
+        return this.#version;
+    }
+
+    /**
      * Apply a server-side diff to the local SQLite mirror.
      *
      * The diff is applied in a transaction and recorded in the event log
@@ -170,6 +203,7 @@ class LocalMirror {
         applyDiffToDatabase(this.#db, diff, pkColumn);
 
         this.#eventLog.append("table-diff", diff, [diff]);
+        this.#version += 1;
 
         // Notify change listeners (e.g. React hook subscriptions)
         for (const listener of this.#changeListeners) {
@@ -199,10 +233,20 @@ class LocalMirror {
     /**
      * Delete every row from all known tables (preserves the event log
      * and schema). Useful when re-syncing from scratch.
+     *
+     * Notifies `onChange` subscribers and bumps {@link LocalMirror.version}
+     * (REPLICA-09) even though nothing is appended to the event log — a
+     * consumer keyed only on `eventLog.size` would otherwise never learn the
+     * mirror was cleared and keep rendering deleted rows.
      */
     public clearData(): void {
+        // The `_` wildcard in a LIKE pattern matches any single character, so
+        // an unescaped `'__lunora_%'` / `'sqlite_%'` also matches unrelated
+        // tables that merely happen to contain "lunora"/"sqlite" at the right
+        // offset (e.g. "AAlunoraBdata"), wrongly skipping them from the clear.
+        // `ESCAPE '\'` makes the `\_` sequences literal underscores.
         const tables = this.#db.query<{ name: string }>(
-            `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '__lunora_%' AND name NOT LIKE 'sqlite_%'`,
+            String.raw`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '\_\_lunora\_%' ESCAPE '\' AND name NOT LIKE 'sqlite\_%' ESCAPE '\'`,
         );
 
         this.#db.transaction(() => {
@@ -210,6 +254,16 @@ class LocalMirror {
                 this.#db.exec(`DELETE FROM ${escapeIdentifier_(name)}`);
             }
         });
+
+        this.#version += 1;
+
+        for (const listener of this.#changeListeners) {
+            try {
+                listener();
+            } catch {
+                // Listener threw — keep notifying others.
+            }
+        }
     }
 
     /**

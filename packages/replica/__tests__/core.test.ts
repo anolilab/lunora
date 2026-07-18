@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { EventEmitter, EventLog, EventSource, InMemorySnapshotStore, SubscriptionManager } from "../src/index";
+import { EventEmitter, EventLog, EventSource, InMemorySnapshotStore, SubscriptionManager, UNHANDLED } from "../src/index";
 
 // ─── EventEmitter ─────────────────────────────────────────────────────
 
@@ -308,6 +308,19 @@ describe(EventSource, () => {
         expect(entry.clientId).toBe("client-z");
         expect(entry.type).toBe("inc");
     });
+
+    // REPLICA-06: maxLogEntries bounds `source.log` over a long run.
+    it("maxLogEntries caps the internal log over a long run", () => {
+        const source = new EventSource({ count: 0 }, (state) => ({ count: state.count + 1 }), { maxLogEntries: 5 });
+
+        for (let index = 0; index < 100; index += 1) {
+            source.applyEvent("inc", null);
+        }
+
+        expect(source.log.size).toBe(5);
+        // The derived state itself is unaffected by the log cap.
+        expect(source.state).toStrictEqual({ count: 100 });
+    });
 });
 
 // ─── EventSource — events() async iterator ─────────────────────────────
@@ -366,7 +379,7 @@ describe("eventSource unknownEventHandling", () => {
     it("warn logs and skips unknown events (default)", () => {
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-        const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
+        const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : UNHANDLED));
 
         source.applyEvent("inc", null);
         source.applyEvent("unknown", 42);
@@ -380,7 +393,7 @@ describe("eventSource unknownEventHandling", () => {
     it("ignore silently skips unknown events", () => {
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-        const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state), {
+        const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : UNHANDLED), {
             unknownEventHandling: "ignore",
         });
 
@@ -394,7 +407,7 @@ describe("eventSource unknownEventHandling", () => {
     });
 
     it("fail throws on unknown events", () => {
-        const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state), {
+        const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : UNHANDLED), {
             unknownEventHandling: "fail",
         });
 
@@ -407,7 +420,7 @@ describe("eventSource unknownEventHandling", () => {
     it("custom handler is called with the entry", () => {
         const handler = vi.fn();
 
-        const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state), {
+        const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : UNHANDLED), {
             unknownEventHandling: handler,
         });
 
@@ -416,6 +429,44 @@ describe("eventSource unknownEventHandling", () => {
 
         expect(source.state).toEqual({ count: 1 });
         expect(handler).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: "unknown", payload: 42 }));
+    });
+
+    // REPLICA-07: a reducer that recognises a type but legitimately returns
+    // `state` unchanged (an idempotent no-op) must NOT be misclassified as
+    // "unhandled" via reference equality — only an explicit UNHANDLED return
+    // should trigger the unknown-event strategy.
+    it("a recognised, idempotent no-op reducer does not warn or invoke the unknown strategy", () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        // eslint-disable-next-line sonarjs/function-return-type -- reducer contract is `S | typeof UNHANDLED`; the object/state/symbol arms trip the heuristic
+        const source = new EventSource({ count: 0 }, (state, entry) => {
+            if (entry.type === "inc") {
+                return { count: state.count + 1 };
+            }
+
+            if (entry.type === "noop") {
+                // Recognised type — the reducer decided nothing changes.
+                // Returning `state` by reference must still count as "handled".
+                return state;
+            }
+
+            return UNHANDLED;
+        });
+
+        const stateChanges: unknown[] = [];
+
+        source.emitter.on("state-changed", ({ state }) => stateChanges.push(state));
+
+        source.applyEvent("inc", null);
+        source.applyEvent("noop", null);
+
+        expect(source.state).toEqual({ count: 1 });
+        expect(warn).not.toHaveBeenCalled();
+        // Both events — including the no-op — are recognised as handled and
+        // emit state-changed.
+        expect(stateChanges).toHaveLength(2);
+
+        warn.mockRestore();
     });
 });
 

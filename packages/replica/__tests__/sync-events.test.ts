@@ -346,4 +346,87 @@ describe(EventsSync, () => {
         expect(sync.watermark).toBe(3);
         expect(applied).toHaveLength(2);
     });
+
+    // REPLICA-08 ──────────────────────────────────────────────────────────
+
+    it("a mid-batch applyEvents failure advances the watermark only past the successful prefix — no double-apply on the next poll", async () => {
+        const { mirror } = createMockMirror();
+        const { fetchEventsSince } = createMockLog([
+            { seq: 0, type: "ok", payload: "a", timestamp: 10 },
+            { seq: 1, type: "ok", payload: "b", timestamp: 20 },
+            { seq: 2, type: "boom", payload: "c", timestamp: 30 },
+            { seq: 3, type: "ok", payload: "d", timestamp: 40 },
+        ]);
+
+        const appliedPayloads: unknown[] = [];
+
+        const sync = new EventsSync({
+            fetchEventsSince,
+            applyEvents: (events) => {
+                for (const event of events) {
+                    if (event.type === "boom") {
+                        throw new Error("apply failed mid-batch");
+                    }
+
+                    appliedPayloads.push(event.payload);
+                }
+            },
+            getTableDiffs: () => [],
+            mirror,
+            onError: () => {},
+        });
+
+        // First poll: applies seq 0, 1, then throws on seq 2. seq 3 is never
+        // reached this cycle (loop stops at the first failure).
+        const count1 = await sync.sync();
+
+        expect(count1).toBe(2);
+        expect(sync.watermark).toBe(2); // stopped right after the last successful event
+        expect(appliedPayloads).toStrictEqual(["a", "b"]);
+
+        // Second poll re-fetches from watermark 2 — seq 0/1 must NOT be
+        // re-applied (that would be the double-apply bug). It hits "boom"
+        // again immediately (seq 2), so nothing new applies this cycle either.
+        const count2 = await sync.sync();
+
+        expect(count2).toBe(0);
+        expect(sync.watermark).toBe(2);
+        expect(appliedPayloads).toStrictEqual(["a", "b"]); // unchanged — no re-application of a/b
+    });
+
+    it("sync() awaits an in-flight poll instead of no-op'ing for a concurrent call", async () => {
+        const { mirror } = createMockMirror();
+        let resolveFetch: ((entries: EventLogEntry[]) => void) | undefined;
+        let fetchCalls = 0;
+
+        const sync = new EventsSync({
+            fetchEventsSince: async () => {
+                fetchCalls += 1;
+
+                return new Promise<EventLogEntry[]>((resolve) => {
+                    resolveFetch = resolve;
+                });
+            },
+            applyEvents: () => {},
+            getTableDiffs: () => [],
+            mirror,
+        });
+
+        const first = sync.sync();
+        const second = sync.sync();
+
+        // The second call must not start its own fetch cycle — it awaits the
+        // one already in flight (REPLICA-08), not return 0 immediately.
+        expect(fetchCalls).toBe(1);
+
+        resolveFetch?.([{ seq: 0, type: "a", payload: null, timestamp: 10 }]);
+
+        const [firstCount, secondCount] = await Promise.all([first, second]);
+
+        expect(firstCount).toBe(1);
+        // Both callers observe the SAME outcome — the real result of the one
+        // cycle that ran — not a synthetic `0`.
+        expect(secondCount).toBe(1);
+        expect(fetchCalls).toBe(1);
+    });
 });

@@ -80,6 +80,27 @@ export interface AppendOptions {
 }
 
 /**
+ * Options for constructing an {@link EventLog}.
+ * @experimental
+ */
+export interface EventLogOptions {
+    /**
+     * Cap the number of entries retained in memory (REPLICA-06). When an
+     * append would exceed the cap, the OLDEST entries are evicted (ring
+     * buffer) — a `getSince`/`getFrom` call for a watermark below the oldest
+     * retained `seq` then returns only what's left, silently missing
+     * anything evicted.
+     *
+     * `undefined` (the default) preserves the original unbounded behavior.
+     * Set this only when you have another durable source of truth for
+     * anything older than the cap (a snapshot, a server-side `EventLogDO`) —
+     * see {@link EventLog#truncateBelow} for the caller-driven equivalent
+     * tied to snapshot persistence.
+     */
+    readonly maxEntries?: number;
+}
+
+/**
  * An append-only, in-memory event log for local event sourcing.
  *
  * The log is the single source of truth for "what happened" and drives
@@ -95,8 +116,31 @@ export class EventLog {
     #nextSeq = 0;
     // eslint-disable-next-line unicorn/no-null -- public contract uses `null` for an empty log head
     #headSeq: GlobalSeq | null = null;
+    readonly #maxEntries: number | undefined;
+
+    public constructor(options?: EventLogOptions) {
+        this.#maxEntries = options?.maxEntries;
+    }
 
     // ── Mutators ──────────────────────────────────────────────────────
+
+    /**
+     * Evict the oldest entries so `#entries.length` never exceeds
+     * `#maxEntries`. `headSeq`/`nextSeq` are untouched — they're independent
+     * counters, not derived from the entries array — so appends after an
+     * eviction continue the same sequence.
+     */
+    #enforceCap(): void {
+        if (this.#maxEntries === undefined) {
+            return;
+        }
+
+        const overflow = this.#entries.length - this.#maxEntries;
+
+        if (overflow > 0) {
+            this.#entries.splice(0, overflow);
+        }
+    }
 
     /**
      * Append a new entry to the log.
@@ -148,6 +192,7 @@ export class EventLog {
 
         this.#entries.push(entry);
         this.#headSeq = entry.seq;
+        this.#enforceCap();
 
         return entry;
     }
@@ -192,6 +237,7 @@ export class EventLog {
         }
 
         this.#headSeq = entries.at(-1)?.seq ?? this.#headSeq;
+        this.#enforceCap();
 
         return entries;
     }
@@ -285,6 +331,30 @@ export class EventLog {
         this.#nextSeq = 0;
         // eslint-disable-next-line unicorn/no-null -- null is the public contract for empty log
         this.#headSeq = null;
+    }
+
+    /**
+     * Discard all entries with `seq < floorSeq` (REPLICA-06).
+     *
+     * `headSeq`/`nextSeq` are untouched (they're independent counters), so
+     * appends after a truncation continue the same sequence uninterrupted.
+     *
+     * **Caller-driven, not automatic**: only call this after the truncated
+     * range has already been durably captured elsewhere (a snapshot, a
+     * server-side `EventLogDO`) — truncating without such a floor makes any
+     * future `getSince`/`getFrom`/`EventSource.replayFromLog` call for a
+     * watermark below `floorSeq` silently miss the discarded entries. This is
+     * the hook the caller ties to snapshot persistence; the log itself has no
+     * concept of "already durably persisted".
+     */
+    public truncateBelow(floorSeq: number): void {
+        const cutoff = this.#entries.findIndex((entry) => entry.seq >= floorSeq);
+
+        if (cutoff === -1) {
+            this.#entries = [];
+        } else if (cutoff > 0) {
+            this.#entries = this.#entries.slice(cutoff);
+        }
     }
 
     /**

@@ -28,19 +28,61 @@ const makeBetterSqlite3 = (): SqliteAdapter => createBetterSqlite3Adapter(new Da
 
 /**
  * The official `@sqlite.org/sqlite-wasm` bundle cannot initialise in plain Node
- * (`self is not defined`), so the wasm adapter runs against a structural double
- * that satisfies the exact `oo1.DB` projection it declares — backed by a REAL
- * sql.js engine, whose `exec` natively returns the same `{ columns, values }[]`
- * result shape, so every statement is still parsed and executed by SQLite.
+ * (`self is not defined` outside a browser/worker global), so the wasm adapter
+ * runs against a structural double instead.
+ *
+ * REPLICA-01 STOP: this fixture matches the DOCUMENTED real `oo1.DB` wire
+ * shape — `exec({ returnValue: "resultRows", rowMode: "object" })` returns
+ * rows directly (`Record&lt;string, unknown>[]`, NOT sql.js's
+ * `{ columns, values }[]`), and `selectValue()` returns a single scalar — but
+ * it is backed by a REAL sql.js engine underneath (every statement is still
+ * parsed/executed by real SQLite), with a thin re-shaping layer translating
+ * sql.js's native result shape into the oo1 shape. This closes the adapter's
+ * API-SHAPE gap the bug was about, but — since the real driver could not be
+ * installed/initialised in this Node test environment — it is NOT a
+ * substitute for an integration test against the actual
+ * `@sqlite.org/sqlite-wasm` package.
  */
 const makeSqliteWasm = (): SqliteAdapter => {
     const engine = new SQL.Database();
+
+    const toRowObjects = (result: { columns: string[]; values: unknown[][] }[]): Record<string, unknown>[] => {
+        const first = result[0];
+
+        if (!first) {
+            return [];
+        }
+
+        return first.values.map((row) => {
+            const object: Record<string, unknown> = {};
+
+            for (const [i, column] of first.columns.entries()) {
+                object[column] = row[i];
+            }
+
+            return object;
+        });
+    };
 
     return createSqliteWasmAdapter({
         close: () => {
             engine.close();
         },
-        exec: (sql, options) => engine.exec(sql, options?.bind),
+        exec: (sql, options) => {
+            if (options?.returnValue === "resultRows" && options.rowMode === "object") {
+                return toRowObjects(engine.exec(sql, options.bind));
+            }
+
+            engine.run(sql, options?.bind);
+
+            return undefined;
+        },
+        selectValue: (sql, bind) => {
+            const result = engine.exec(sql, bind);
+            const first = result[0];
+
+            return first?.values[0]?.[0];
+        },
     });
 };
 
@@ -258,6 +300,41 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         expect(mirror.query("SELECT id FROM todos")).toStrictEqual([{ id: "9" }]);
     });
 
+    // REPLICA-09: clearData must notify subscribers and bump a version
+    // independent of eventLog.size (which clearData never grows).
+    it("clearData notifies onChange subscribers and bumps mirror.version without growing the event log", () => {
+        const mirror = new LocalMirror({ db: makeAdapter() });
+
+        mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1" }, type: "insert" }]));
+
+        const versionAfterApply = mirror.version;
+        const eventLogSizeAfterApply = mirror.eventLog.size;
+
+        const listener = vi.fn();
+
+        mirror.onChange(listener);
+        mirror.clearData();
+
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(mirror.version).toBeGreaterThan(versionAfterApply);
+        expect(mirror.eventLog.size).toBe(eventLogSizeAfterApply);
+    });
+
+    // REPLICA-09: an unescaped `_` in the `__lunora_%` / `sqlite_%` LIKE
+    // patterns is a wildcard, so a table that merely CONTAINS "lunora" at the
+    // right offset (not one of the reserved internal tables) was wrongly
+    // excluded from clearData. With the pattern escaped, only the literal
+    // reserved-prefix tables are skipped.
+    it("clearData does not wrongly skip tables that merely contain 'lunora' via the LIKE wildcard bug", () => {
+        const mirror = new LocalMirror({ db: makeAdapter() });
+
+        mirror.applyDiff(createTableDiff("AAlunoraZextra", [{ data: { id: "1" }, type: "insert" }]));
+
+        mirror.clearData();
+
+        expect(mirror.query("SELECT * FROM AAlunoraZextra")).toStrictEqual([]);
+    });
+
     it("registerTable and mirroredTables reflect the registry", () => {
         const mirror = new LocalMirror({ db: makeAdapter(), tables: { one: {} } });
 
@@ -277,16 +354,41 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         expect(mirror.eventLog.size).toBe(0);
         expect(() => mirror.query("SELECT 1 AS one")).toThrow();
     });
+
+    // REPLICA-06: maxEventLogEntries bounds the mirror's internal event log
+    // — a long run of applied diffs does not grow it unboundedly.
+    it("maxEventLogEntries caps the mirror's event log over a long run", () => {
+        const mirror = new LocalMirror({ db: makeAdapter(), maxEventLogEntries: 5 });
+
+        for (let index = 0; index < 50; index += 1) {
+            mirror.applyDiff(createTableDiff("todos", [{ data: { id: String(index) }, type: "insert" }]));
+        }
+
+        expect(mirror.eventLog.size).toBe(5);
+        // The mirrored rows themselves are unaffected by the log cap.
+        expect(mirror.query("SELECT id FROM todos")).toHaveLength(50);
+    });
 });
 
 describe(createSqliteWasmAdapter, () => {
     it("falls back to -1 when the engine returns no rowid result", () => {
         const adapter = createSqliteWasmAdapter({
             close: () => undefined,
-            exec: () => [],
+            exec: () => undefined,
+            selectValue: () => undefined,
         });
 
         expect(adapter.lastInsertRowId()).toBe(-1);
+    });
+
+    it("returns a bigint rowid as a number", () => {
+        const adapter = createSqliteWasmAdapter({
+            close: () => undefined,
+            exec: () => undefined,
+            selectValue: () => 42n,
+        });
+
+        expect(adapter.lastInsertRowId()).toBe(42);
     });
 });
 

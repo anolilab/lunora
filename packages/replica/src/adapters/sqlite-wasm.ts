@@ -7,10 +7,22 @@ import type { SqliteAdapter } from "./types";
  * The adapter takes a structural projection of the OO API (`sqlite3.oo1.DB`) so
  * the package never imports from `@sqlite.org/sqlite-wasm` directly — consumers
  * install it themselves and pass in their database instance.
+ *
+ * IMPORTANT (REPLICA-01): the real `oo1.DB.exec()` does NOT return sql.js's
+ * `{ columns, values }[]` result shape — with `rowMode: "object"` and
+ * `returnValue: "resultRows"` it returns the rows directly, as
+ * `Record&lt;string, unknown>[]`. This adapter is written against that real
+ * shape; `lastInsertRowId` uses the driver's `selectValue()` convenience
+ * method (a single-scalar query helper) rather than parsing a result-row
+ * array.
  * @param database An already-initialised `sqlite3.oo1.DB` instance.
  * @param database.close Tear down the database connection.
- * @param database.exec Execute SQL with optional bind params and return rows
- * as `{ columns, values }` result objects.
+ * @param database.exec Execute SQL with optional bind params. With
+ * `{ returnValue: "resultRows", rowMode: "object" }` it returns the matched
+ * rows directly (`Record&lt;string, unknown>[]`); otherwise (DDL/DML/BEGIN/
+ * COMMIT/ROLLBACK) its return value is unused here.
+ * @param database.selectValue Run a query and return the first column of the
+ * first row as a single scalar — used for `SELECT last_insert_rowid()`.
  * @experimental
  */
 export const createSqliteWasmAdapter = (database: {
@@ -19,10 +31,11 @@ export const createSqliteWasmAdapter = (database: {
         sql: string,
         options?: {
             bind?: unknown[];
-            returnValue?: "resultRows" | "simple";
-            rowMode?: "array" | "object";
+            returnValue?: "resultRows";
+            rowMode?: "object";
         },
-    ) => { columns: string[]; values: unknown[][] }[];
+    ) => Record<string, unknown>[] | undefined;
+    selectValue: (sql: string, bind?: unknown[]) => unknown;
 }): SqliteAdapter => {
     return {
         exec(sql: string, params?: ReadonlyArray<unknown>): void {
@@ -34,26 +47,13 @@ export const createSqliteWasmAdapter = (database: {
         },
 
         query<T = Record<string, unknown>>(sql: string, params?: ReadonlyArray<unknown>): T[] {
-            const options = params && params.length > 0 ? { bind: [...params], returnValue: "resultRows" as const } : { returnValue: "resultRows" as const };
-            const result = database.exec(sql, options);
-            const first = result[0];
+            const rows = database.exec(sql, {
+                bind: params && params.length > 0 ? [...params] : undefined,
+                returnValue: "resultRows",
+                rowMode: "object",
+            });
 
-            if (!first) {
-                return [];
-            }
-
-            const colNames = first.columns;
-            const rows: T[] = [];
-
-            for (const row of first.values) {
-                const object: Record<string, unknown> = {};
-                for (const [i, column] of colNames.entries()) {
-                    object[column] = row[i];
-                }
-                rows.push(object as T);
-            }
-
-            return rows;
+            return (rows ?? []) as T[];
         },
 
         transaction(function_: () => void): void {
@@ -68,16 +68,17 @@ export const createSqliteWasmAdapter = (database: {
         },
 
         lastInsertRowId(): number {
-            const result = database.exec("SELECT last_insert_rowid() AS id", { returnValue: "resultRows" });
-            const firstRow = result[0];
-            if (result.length === 0 || !firstRow || firstRow.values.length === 0) {
-                return -1;
+            const value = database.selectValue("SELECT last_insert_rowid()");
+
+            if (typeof value === "number") {
+                return value;
             }
-            const value = firstRow.values[0];
-            if (!value || value.length === 0) {
-                return -1;
+
+            if (typeof value === "bigint") {
+                return Number(value);
             }
-            return Number(value[0]);
+
+            return -1;
         },
 
         close(): void {
