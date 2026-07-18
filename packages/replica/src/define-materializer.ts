@@ -159,13 +159,17 @@ class MaterializerRuntime {
     readonly #unknownEventHandling: UnknownEventHandling;
 
     /**
-     * The highest event seq that has been applied to all materializers.
-     * Starts at `0` and advances monotonically.
+     * Per-materializer watermark: the seq of the next event each materializer
+     * (by index, parallel to `#materializers`) has NOT yet applied. Starts at
+     * `0` for every materializer and advances independently — a materializer
+     * with no snapshot stays at `0` even when a sibling has recovered to a
+     * much higher watermark, so catch-up never skips events for it (REPLICA-04).
      */
-    #appliedSeq = 0;
+    #watermarks: number[];
 
     public constructor(materializers: AnyMaterializer[], options: MaterializerRuntimeOptions = {}) {
         this.#materializers = [...materializers];
+        this.#watermarks = this.#materializers.map(() => 0);
         this.#snapshotStore = options.snapshotStore;
         this.#doClient = options.doClient;
         this.#unknownEventHandling = options.unknownEventHandling ?? "warn";
@@ -174,46 +178,57 @@ class MaterializerRuntime {
     // ── Public API ──────────────────────────────────────────────────────
 
     /**
-     * The sequence number of the last event applied to all materializers.
+     * The lowest per-materializer watermark — the seq of the next event that
+     * at least one materializer has not yet applied. `0` when there are no
+     * materializers.
      */
     public get appliedSeq(): number {
-        return this.#appliedSeq;
+        return this.#watermarks.length > 0 ? Math.min(...this.#watermarks) : 0;
     }
 
     /**
-     * Replay a batch of entries through all materializers.
-     *
-     * Entries with `seq < this.appliedSeq` are silently skipped (idempotent).
-     * @returns The number of entries actually applied.
+     * Replay a batch of entries, applying each entry only to the
+     * materializers whose own watermark is behind it — a materializer at or
+     * past an entry's seq (e.g. recovered from a snapshot, or already caught
+     * up) skips it, so no materializer ever double-applies an event.
+     * @returns The number of entries applied to at least one materializer.
      */
     public applyEntries(entries: ReadonlyArray<EventLogEntry>): number {
         let count = 0;
 
         for (const entry of entries) {
-            if (entry.seq < this.#appliedSeq) {
+            let appliedToAny = false;
+            let anyChanged = false;
+
+            for (let i = 0; i < this.#materializers.length; i += 1) {
+                const watermark = this.#watermarks[i] ?? 0;
+
+                if (entry.seq < watermark) {
+                    continue;
+                }
+
+                const materializer = this.#materializers[i]!;
+                const stateBefore = materializer.state;
+
+                materializer.apply(entry);
+                appliedToAny = true;
+
+                if (materializer.state !== stateBefore) {
+                    anyChanged = true;
+                }
+
+                this.#watermarks[i] = entry.seq + 1;
+            }
+
+            if (!appliedToAny) {
+                // Every materializer was already at or past this seq.
                 continue;
             }
 
-            const statesBefore = this.#materializers.map((m) => m.state);
-
-            let stateChanged = false;
-
-            for (const m of this.#materializers) {
-                m.apply(entry);
-            }
-
-            for (let i = 0; i < this.#materializers.length; i += 1) {
-                if (this.#materializers[i]?.state !== statesBefore[i]) {
-                    stateChanged = true;
-                    break;
-                }
-            }
-
-            if (!stateChanged) {
+            if (!anyChanged) {
                 this.#handleUnknownEvent(entry);
             }
 
-            this.#appliedSeq = entry.seq + 1;
             count += 1;
         }
 
@@ -255,10 +270,17 @@ class MaterializerRuntime {
     /**
      * Attempt to recover materialized state from a snapshot store.
      *
-     * When a snapshot is found for a materializer, its state is restored
-     * and the snapshot's watermark (`appliedSeq`) is returned so the caller
-     * can skip replaying entries up to that point.
-     * @returns The highest `appliedSeq` across all recovered snapshots, or `0`.
+     * When a snapshot is found for a materializer, its state AND its own
+     * watermark are restored from that snapshot. A materializer with no
+     * snapshot keeps its current watermark (`0` for a fresh runtime) — it
+     * does NOT inherit another materializer's watermark, so it still catches
+     * up from the very beginning (REPLICA-04: previously a shared watermark
+     * was bumped to the MAX across snapshots, permanently skipping events 0..N
+     * for any un-snapshotted or lagging materializer).
+     * @returns The highest snapshot `appliedSeq` across all materializers, or
+     * `0` — kept for backward compatibility; callers that need the fetch
+     * watermark for catch-up should use the per-materializer minimum instead
+     * (see `initialize`).
      */
     public async recoverFromSnapshots(): Promise<number> {
         if (!this.#snapshotStore) {
@@ -267,16 +289,19 @@ class MaterializerRuntime {
 
         let maxSeq = 0;
 
-        for (const m of this.#materializers) {
+        for (let i = 0; i < this.#materializers.length; i += 1) {
+            const materializer = this.#materializers[i]!;
             // eslint-disable-next-line no-await-in-loop -- sequential snapshot loads are intentional
-            const raw = await this.#snapshotStore.load(m.def.name);
+            const raw = await this.#snapshotStore.load(materializer.def.name);
 
             if (raw !== null && typeof raw === "object") {
                 const snapshot = raw as { appliedSeq: number; state: unknown };
 
                 if (snapshot.state !== undefined) {
-                    m.setState(snapshot.state);
+                    materializer.setState(snapshot.state);
                 }
+
+                this.#watermarks[i] = snapshot.appliedSeq;
 
                 if (snapshot.appliedSeq > maxSeq) {
                     maxSeq = snapshot.appliedSeq;
@@ -284,27 +309,25 @@ class MaterializerRuntime {
             }
         }
 
-        // Set the watermark so subsequent applyEntries skips already-applied events
-        if (maxSeq > this.#appliedSeq) {
-            this.#appliedSeq = maxSeq;
-        }
-
         return maxSeq;
     }
 
     /**
-     * Persist the current state of all materializers as snapshots.
+     * Persist the current state of all materializers as snapshots, each
+     * tagged with ITS OWN watermark (not a shared one).
      */
     public async persistSnapshots(): Promise<void> {
         if (!this.#snapshotStore) {
             return;
         }
 
-        for (const m of this.#materializers) {
+        for (let i = 0; i < this.#materializers.length; i += 1) {
+            const materializer = this.#materializers[i]!;
+
             // eslint-disable-next-line no-await-in-loop -- sequential snapshot saves are intentional
-            await this.#snapshotStore.save(m.def.name, {
-                appliedSeq: this.#appliedSeq,
-                state: m.state,
+            await this.#snapshotStore.save(materializer.def.name, {
+                appliedSeq: this.#watermarks[i] ?? 0,
+                state: materializer.state,
             });
         }
     }
@@ -316,8 +339,11 @@ class MaterializerRuntime {
      *
      * 1. Recover materialized state from snapshots (if a snapshotStore is
      * configured).
-     * 2. Fetch all entries since the recovered watermark from the DO.
-     * 3. Apply them through the materializers.
+     * 2. Fetch all entries since the MINIMUM per-materializer watermark from
+     * the DO — not the maximum — so a materializer with no snapshot (or a
+     * lower one) still receives every event it hasn't seen (REPLICA-04).
+     * 3. Apply them through the materializers; `applyEntries` skips each
+     * entry for any materializer already past it, so nothing is double-applied.
      *
      * Call this once on startup / after the DO binding is available.
      * @returns The number of entries applied during catch-up.
@@ -327,11 +353,12 @@ class MaterializerRuntime {
             return 0;
         }
 
-        // 1. Recover from snapshots to get a watermark
-        const snapshotSeq = await this.recoverFromSnapshots();
+        // 1. Recover from snapshots — sets each materializer's own watermark.
+        await this.recoverFromSnapshots();
 
-        // 2. Fetch entries since watermark
-        const entries = await this.#doClient.getSince(snapshotSeq);
+        // 2. Fetch entries since the LOWEST watermark across materializers.
+        const minWatermark = this.#watermarks.length > 0 ? Math.min(...this.#watermarks) : 0;
+        const entries = await this.#doClient.getSince(minWatermark);
 
         if (entries.length === 0) {
             return 0;
@@ -371,10 +398,9 @@ class MaterializerRuntime {
      * Reset all materializers to their initial state and clear snapshots.
      */
     public reset(): void {
-        this.#appliedSeq = 0;
-
-        for (const m of this.#materializers) {
-            m.reset();
+        for (let i = 0; i < this.#materializers.length; i += 1) {
+            this.#watermarks[i] = 0;
+            this.#materializers[i]!.reset();
         }
     }
 
