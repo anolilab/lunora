@@ -4,7 +4,14 @@ import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { readSourceCursor } from "../src/external-source-cursor";
 import type { ExternalSourceLike, SourceClientLike } from "../src/external-source-pull";
-import { isSoftDeleted, isSourceDue, liftSourceId, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "../src/external-source-pull";
+import {
+    isSoftDeleted,
+    isSourceDue,
+    liftSourceId,
+    normalizeSourceValue,
+    pullExternalSourceIncrementalTick,
+    pullExternalSourceTick,
+} from "../src/external-source-pull";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -53,6 +60,45 @@ describe("liftSourceId", () => {
         expect.assertions(1);
 
         expect(() => liftSourceId({ id: { nested: true }, title: "Doc" })).toThrow("must be a string or number");
+    });
+
+    it("normalizes a Date to its ISO string and a bigint to its decimal string (DO-01)", () => {
+        expect.assertions(1);
+
+        expect(
+            liftSourceId({
+                created_at: new Date("2026-07-17T12:00:00.000Z"),
+                id: "d1",
+                seq: 42n,
+                title: "Doc",
+            }),
+        ).toStrictEqual({ _id: "d1", created_at: "2026-07-17T12:00:00.000Z", seq: "42", title: "Doc" });
+    });
+
+    it("normalizes a map's returned Date/bigint values too, not just verbatim-copied columns", () => {
+        expect.assertions(1);
+
+        expect(
+            liftSourceId(
+                { id: "d1", raw_count: 7n, raw_date: new Date("2026-01-01T00:00:00.000Z") },
+                {
+                    map: (row) => {
+                        return { count: row.raw_count, seenAt: row.raw_date };
+                    },
+                },
+            ),
+        ).toStrictEqual({ _id: "d1", count: "7", seenAt: "2026-01-01T00:00:00.000Z" });
+    });
+});
+
+describe("normalizeSourceValue", () => {
+    it("passes through JSON-safe primitives and plain objects/arrays unchanged", () => {
+        expect.assertions(4);
+
+        expect(normalizeSourceValue("x")).toBe("x");
+        expect(normalizeSourceValue(1)).toBe(1);
+        expect(normalizeSourceValue(null)).toBeNull();
+        expect(normalizeSourceValue({ a: 1 })).toStrictEqual({ a: 1 });
     });
 });
 
@@ -136,6 +182,39 @@ describe("pullExternalSourceTick", () => {
         const ids = (harness.sql.exec("SELECT id FROM documents ORDER BY id").toArray() as { id: string }[]).map((row) => row.id);
 
         expect(ids).toStrictEqual(["d1", "d2"]);
+    });
+
+    it("ingests a Date/bigint-bearing row without throwing out of stableStringify (DO-01)", async () => {
+        expect.assertions(3);
+
+        const writer = setupWriter();
+        const client: SourceClientLike = {
+            query: (async () => [
+                { id: "d1", org_id: "tenant-a", seq: 42n, title: "One", updated_at: new Date("2026-07-17T12:00:00.000Z") },
+            ]) as SourceClientLike["query"],
+        };
+
+        const source: ExternalSourceLike = {
+            binding: "HD",
+            query: "select id, org_id, title, updated_at, seq from documents where org_id = $1",
+            tenantBy: (shardKey) => [shardKey],
+        };
+
+        // Previously threw a TypeError out of `stableStringify` (Date/bigint
+        // aren't JSON-safe) before the watermark/membership could ever be
+        // established — bricking ingest for this table on the very first tick.
+        const result = await pullExternalSourceTick(harness.sql, writer, client, "documents", source, "tenant-a");
+
+        expect(result.applied).toBe(1);
+        await expect(writer.get("d1")).resolves.toMatchObject({ seq: "42", updated_at: "2026-07-17T12:00:00.000Z" });
+
+        // A repeat tick with the identical Date/bigint values is a steady-state
+        // no-op — proves the normalized values also compare byte-identical
+        // across ticks (the diff's canonical-JSON short-circuit), not merely
+        // that the first tick didn't throw.
+        const second = await pullExternalSourceTick(harness.sql, writer, client, "documents", source, "tenant-a");
+
+        expect(second.applied).toBe(0);
     });
 
     it("aborts the whole tick on a row with a missing id (no partial corruption under `undefined`)", async () => {
@@ -398,5 +477,74 @@ describe("pullExternalSourceIncrementalTick", () => {
         await expect(pullExternalSourceIncrementalTick(harness.sql, writer, client, "documents", source, "__root__", 5000)).rejects.toThrow(
             /none carry the cursor column "updatedAt"/u,
         );
+    });
+
+    it("throws when an incremental cursor.query strands the watermark (misaligned cursor column, DO-03)", async () => {
+        expect.assertions(1);
+
+        const writer = setupWriter();
+        const { client } = scriptedClient([
+            // seed → watermark 250
+            [
+                { id: "d1", title: "One", updatedAt: 100 },
+                { id: "d2", title: "Two", updatedAt: 250 },
+            ],
+            // incremental: cursor.query never projects `updatedAt` at all (a
+            // misaliased column, not the legitimate re-pulled-boundary case).
+            [{ id: "d3", title: "Three" }],
+        ]);
+        const source = incrementalSource();
+
+        await pullExternalSourceIncrementalTick(harness.sql, writer, client, "documents", source, "__root__", 5000);
+
+        await expect(pullExternalSourceIncrementalTick(harness.sql, writer, client, "documents", source, "__root__", 8000)).rejects.toThrow(
+            /none carry the cursor column "updatedAt"/u,
+        );
+    });
+
+    it("does NOT throw when the incremental slice legitimately re-pulls the boundary row unchanged (not a DO-03 misconfig)", async () => {
+        expect.assertions(1);
+
+        const writer = setupWriter();
+        const { client } = scriptedClient([
+            [
+                { id: "d1", title: "One", updatedAt: 100 },
+                { id: "d2", title: "Two", updatedAt: 250 },
+            ],
+            // `>= 250` re-pulls d2 carrying its actual (unchanged) cursor value —
+            // this must NOT be mistaken for a stranded/misaligned cursor.
+            [{ id: "d2", title: "Two", updatedAt: 250 }],
+        ]);
+        const source = incrementalSource();
+
+        await pullExternalSourceIncrementalTick(harness.sql, writer, client, "documents", source, "__root__", 5000);
+
+        await expect(pullExternalSourceIncrementalTick(harness.sql, writer, client, "documents", source, "__root__", 8000)).resolves.toStrictEqual({
+            applied: 0,
+        });
+    });
+
+    it("excludes a tombstoned row from full-pull/reconcile membership when softDeleteColumn is set (DO-04)", async () => {
+        expect.assertions(2);
+
+        const writer = setupWriter();
+        const { client } = scriptedClient([
+            // First-ever poll is a full-pull seed: d1 is ALREADY tombstoned
+            // upstream, d2 is live.
+            [
+                { deleted_at: "2026-07-17T00:00:00Z", id: "d1", title: "One", updatedAt: 100 },
+                { id: "d2", title: "Two", updatedAt: 250 },
+            ],
+        ]);
+        const source = incrementalSource({ softDeleteColumn: "deleted_at" });
+
+        await pullExternalSourceIncrementalTick(harness.sql, writer, client, "documents", source, "__root__", 5000);
+
+        // d1 must never be materialized as live — the full-pull seed excludes
+        // tombstoned rows from membership, same as the incremental branch does.
+        expect(rows()).toStrictEqual([{ id: "d2", title: "Two" }]);
+        // The watermark still advances off the RAW rows (including d1's), so a
+        // resurrected-then-re-tombstoned row wouldn't strand the cursor.
+        expect(readSourceCursor(harness.sql, "documents", "__root__").watermark).toBe("n:250");
     });
 });
