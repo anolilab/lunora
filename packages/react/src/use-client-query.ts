@@ -34,17 +34,19 @@ type Setter<T> = (value: T) => void;
 const useClientQuery = <T extends unknown>(ref: ClientQueryRef<T>): [T, Setter<T>] => {
     const client = useLunora();
 
-    const value = useSyncExternalStore(
-        (onStoreChange) => {
-            const unsubscribe: Unsubscribe = client.subscribeClientQuery(ref, () => {
+    // Stable across renders (keyed on the ref's semantic identity, `ref.key`, not
+    // just `ref` object identity) so `useSyncExternalStore` doesn't tear down and
+    // re-open the store subscription on every render — an inline arrow here would
+    // churn the subscription every render, amplifying re-render storms in lists.
+    const subscribe = useCallback(
+        (onStoreChange: () => void): Unsubscribe =>
+            client.subscribeClientQuery(ref, () => {
                 onStoreChange();
-            });
-
-            return unsubscribe;
-        },
-        () => client.getClientQuery(ref),
-        () => client.getClientQuery(ref),
+            }),
+        [client, ref.key],
     );
+
+    const value = useSyncExternalStore(subscribe, () => client.getClientQuery(ref), () => client.getClientQuery(ref));
 
     const setter = useCallback<Setter<T>>(
         (next: T) => {

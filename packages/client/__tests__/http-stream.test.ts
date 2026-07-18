@@ -234,6 +234,53 @@ describe("httpStream", () => {
         await expect(collect(stream)).resolves.toStrictEqual([]);
     });
 
+    it("removes the external abort listener on normal completion (no leaked listener, CLIENT-05 regression)", async () => {
+        expect.assertions(1);
+
+        const ac = new AbortController();
+        const addSpy = vi.spyOn(ac.signal, "addEventListener");
+        const removeSpy = vi.spyOn(ac.signal, "removeEventListener");
+
+        const { fetchImpl } = fetchReturning(["event: complete\ndata: {}\n\n"]);
+
+        await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, signal: ac.signal }));
+
+        // `collect()` resolves as soon as the iterator reports `done` — that
+        // happens on `handle.complete()`, a separate microtask chain from the
+        // stream's own `.catch().finally()` that detaches the listener. Cross a
+        // macrotask boundary so every queued microtask (however many `.then`s
+        // deep) has run before asserting.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        // The listener attached to the (potentially long-lived) external signal
+        // must be detached once the stream finishes normally — otherwise it stays
+        // registered, and its closure, for the signal's entire remaining lifetime.
+        const [, handler] = addSpy.mock.calls[0] ?? [];
+
+        expect(removeSpy).toHaveBeenCalledWith("abort", handler);
+    });
+
+    it("cancels a non-OK response's body instead of leaving it unread (CLIENT-05 regression)", async () => {
+        expect.assertions(1);
+
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                controller.close();
+            },
+        });
+        const cancelSpy = vi.spyOn(body, "cancel");
+
+        const fetchImpl = vi.fn<() => Promise<Response>>(async (): Promise<Response> => {
+            return new Response(body, { status: 503 });
+        }) as unknown as typeof fetch;
+
+        await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch(() => undefined);
+
+        expect(cancelSpy).toHaveBeenCalledTimes(1);
+    });
+
     it("rejects transport failures with HTTP_STREAM_TRANSPORT", async () => {
         expect.assertions(1);
 

@@ -311,6 +311,58 @@ describe(useVoiceAgent, () => {
         expect(socketClose).toHaveBeenCalledTimes(1);
     });
 
+    it("defaults the socket to the client's configured WebSocket implementation, not a raw global (RN-01 regression)", async () => {
+        expect.hasAssertions();
+
+        const client = buildClient();
+
+        // A `WebSocket`-shaped constructor standing in for the client's configured
+        // impl (on React Native this would be the auth-headers-injecting subclass).
+        const openedUrls: string[] = [];
+        const FakeWebSocketImpl = vi.fn(function FakeWebSocketImpl(this: FakeSocket, url: string) {
+            openedUrls.push(url);
+            this.binaryType = "blob";
+            this.close = vi.fn<() => void>();
+            this.onclose = null;
+            this.onerror = null;
+            this.onmessage = null;
+            this.onopen = null;
+            this.readyState = 1;
+            this.send = vi.fn<(data: unknown) => void>();
+        }) as unknown as new (url: string) => FakeSocket;
+
+        (client as unknown as { getWebSocketImpl: () => unknown }).getWebSocketImpl = () => FakeWebSocketImpl;
+
+        const createMicrophone: NonNullable<UseVoiceAgentOptions["createMicrophone"]> = async () => {
+            return { setMuted: vi.fn<(muted: boolean) => void>(), stop: vi.fn<() => void>() };
+        };
+        const createSpeaker: NonNullable<UseVoiceAgentOptions["createSpeaker"]> = () => {
+            return { enqueue: vi.fn<(audio: Uint8Array) => void>(), interrupt: vi.fn<() => void>(), stop: vi.fn<() => void>() };
+        };
+
+        const result = { current: undefined as unknown as UseVoiceAgentResult };
+
+        const Probe = (): ReactElement => {
+            // No `createSocket` — the hook must fall back to `client.getWebSocketImpl()`.
+            result.current = useVoiceAgent({ createMicrophone, createSpeaker, threadKey: "t1", voice: makeVoiceRef("agents:supportVoice") });
+
+            return <div />;
+        };
+
+        render(
+            <LunoraProvider client={client}>
+                <Probe />
+            </LunoraProvider>,
+        );
+
+        await act(async () => {
+            await result.current.startCall();
+        });
+
+        expect(FakeWebSocketImpl).toHaveBeenCalledTimes(1);
+        expect(openedUrls[0]).toContain("t1");
+    });
+
     it("derives the agent name from a non-prefixed reference", async () => {
         expect.hasAssertions();
 
