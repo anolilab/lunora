@@ -165,6 +165,13 @@ interface CreateAgentChatResult {
 /** A local optimistic user turn awaiting server acknowledgement. */
 interface OptimisticMessage {
     content: string;
+    /**
+     * Count of durable `user` rows present when this row was sent — the reconcile
+     * baseline. Only a durable user row at or after this position can retire it,
+     * so a durable row that predates the send (e.g. an identical earlier prompt
+     * already acknowledged) can never satisfy it.
+     */
+    durableUserCountAtSend: number;
     id: number;
 }
 
@@ -176,21 +183,27 @@ interface OptimisticMessage {
 const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
 
 /**
- * Drop the optimistic user turns the durable history has now caught up on:
- * consume one durable `user` message per matching optimistic content, hiding
- * those that have been acknowledged. One-to-one consumption keeps repeated
- * identical prompts from all collapsing onto a single durable row.
+ * Drop the optimistic user turns the durable history has now caught up on: a
+ * pending row is only retired by a durable `user` row at or after the count of
+ * durable user rows present when it was sent (`durableUserCountAtSend`) — so a
+ * durable row that predates the send (e.g. an identical earlier prompt already
+ * acknowledged) can never satisfy it. One-to-one consumption (lowest eligible
+ * index first) still keeps repeated identical prompts sent back-to-back from
+ * collapsing onto a single durable row.
  */
 const reconcileOptimistic = (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<AgentChatMessage>): OptimisticMessage[] => {
-    const pool = durable.filter((message) => message.role === "user").map((message) => message.content);
+    const durableUserRows = durable.filter((message) => message.role === "user");
+    const consumed = new Set<number>();
 
     return optimistic.filter((pending) => {
-        const index = pool.indexOf(pending.content);
+        for (let index = pending.durableUserCountAtSend; index < durableUserRows.length; index += 1) {
+            const row = durableUserRows[index];
 
-        if (index !== -1) {
-            pool.splice(index, 1);
+            if (row !== undefined && !consumed.has(index) && row.content === pending.content) {
+                consumed.add(index);
 
-            return false;
+                return false;
+            }
         }
 
         return true;
@@ -262,6 +275,11 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
             return rows;
         }
 
+        // Base synthetic seqs above the highest real durable seq (not just
+        // `rows.length`, which can under-count when durable rows have gaps) so an
+        // optimistic row's placeholder seq never collides with a real one.
+        const maxDurableSeq = rows.reduce((max, message) => Math.max(max, message.seq), -1);
+
         return [
             ...rows,
             ...visible.map<AgentChatMessage>((pending, index) => {
@@ -269,7 +287,7 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
                     content: pending.content,
                     optimistic: true,
                     role: "user",
-                    seq: rows.length + index,
+                    seq: maxDurableSeq + 1 + index,
                 };
             }),
         ];
@@ -299,7 +317,9 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
 
         // Prune already-acknowledged optimistic rows as we add the new one, so the
         // list stays bounded without a history-dependent effect.
-        setOptimistic((previous) => [...reconcileOptimistic(previous, durable()), { content: input, id }]);
+        const durableUserCountAtSend = durable().filter((message) => message.role === "user").length;
+
+        setOptimistic((previous) => [...reconcileOptimistic(previous, durable()), { content: input, durableUserCountAtSend, id }]);
 
         await sendMutation.mutate({ input, threadKey: resolveMaybe(threadKey), ...sendArgs, ...arguments_ });
     };
