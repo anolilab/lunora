@@ -524,21 +524,45 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 };
             });
 
-        /** Hydrate chunk texts from the text store — drops chunks whose text is missing. */
+        /**
+         * Hydrate chunk texts from the text store — drops chunks whose text is
+         * missing. Also recovers `importance` (the source's `__ragImportance`)
+         * and caller `metadata` via a `getByIds` round-trip: `retrieve()`'s
+         * `query()` call uses `returnMetadata: "indexed"` in text-store mode,
+         * which returns only Vectorize-indexed fields, and neither
+         * `__ragImportance` nor caller metadata are indexed — so on `query()`
+         * alone they come back as `undefined`/default-1, and importance never
+         * actually weights the score. `getByIds` returns full metadata
+         * regardless of indexing, so reusing it here recovers both, matching
+         * metadata-mode behaviour.
+         */
         const hydrateFromStore = async (chunks: RetrievedChunk[], namespace: string | undefined): Promise<RetrievedChunk[]> => {
             if (!textStore) {
                 return chunks;
             }
 
-            const texts = await textsByIds(
-                chunks.map((chunk) => chunk.id),
-                namespace,
-            );
+            const ids = chunks.map((chunk) => chunk.id);
+            const [texts, records] = await Promise.all([textsByIds(ids, namespace), context.vectors.getByIds(config.index, ids, namespace)]);
+            const fullMetadataById = new Map(records.map((record) => [record.id, record.metadata]));
 
             return chunks.flatMap((chunk) => {
                 const text = texts.get(chunk.id);
 
-                return text === undefined ? [] : [{ ...chunk, text }];
+                if (text === undefined) {
+                    return [];
+                }
+
+                const fullMetadata = fullMetadataById.get(chunk.id);
+                const rawImportance = fullMetadata?.[IMPORTANCE_KEY];
+                const importance = typeof rawImportance === "number" && rawImportance >= 0 && rawImportance <= 1 ? rawImportance : chunk.importance;
+
+                // `chunk.score` was computed against `chunk.importance` (always
+                // 1 here — text-store `query()` never sees `__ragImportance`);
+                // rescale it to the recovered importance so weighting actually
+                // takes effect.
+                const score = (chunk.score / chunk.importance) * importance;
+
+                return [{ ...chunk, importance, metadata: userMetadataOf(fullMetadata) ?? chunk.metadata, score, text }];
             });
         };
 
@@ -566,6 +590,25 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             });
 
             let chunks = await hydrateFromStore(parseMatches(vectorResult, effectiveNamespace), effectiveNamespace);
+
+            const minScore = options?.minScore;
+
+            // Apply `minScore` to the vector leg here, before any hybrid
+            // fusion — its score is the cosine (importance-adjusted) scale the
+            // option is documented against. When a lexical (BM25) leg is also
+            // configured, this is the ONLY place `minScore` is applied: after
+            // fusion the chunk set mixes this cosine-scale score with the
+            // lexical leg's raw, unbounded BM25 score for lexical-only hits
+            // (scores that, per `hybridRank`'s own docs, "are not comparable
+            // across different search methods"), so filtering that mixed set
+            // against one cosine-scale threshold would arbitrarily keep/drop
+            // chunks depending on which leg happened to surface them. Non-
+            // hybrid retrieval is unaffected: it never reaches the fusion
+            // branch below, and filtering here selects the exact same set as
+            // filtering after the later re-sort would.
+            if (minScore !== undefined) {
+                chunks = chunks.filter((chunk) => chunk.score >= minScore);
+            }
 
             // Hybrid search: also rank via the lexical (BM25) leg and fuse the
             // two rankings with RRF — recovering exact-term matches the embedding
@@ -595,15 +638,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 chunks = [...hybridRank(chunks, lexicalChunks)];
             }
 
-            // Importance weighting can reorder; re-rank on the adjusted score
-            // before applying the threshold.
+            // Importance weighting can reorder; re-rank on the adjusted score.
             chunks.sort((a, b) => b.score - a.score);
-
-            const minScore = options?.minScore;
-
-            if (minScore !== undefined) {
-                chunks = chunks.filter((chunk) => chunk.score >= minScore);
-            }
 
             chunks = [...(await expandChunks(chunks, options, effectiveNamespace))];
 

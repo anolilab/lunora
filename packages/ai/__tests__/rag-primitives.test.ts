@@ -138,10 +138,13 @@ describe(concurrentMap, () => {
         await expect(concurrentMap([], 4, async () => "unreachable")).resolves.toStrictEqual([]);
     });
 
-    it("rejects on failure but does not cancel other in-flight work", async () => {
+    it("stops pulling new items after the first rejection, but lets in-flight calls settle", async () => {
+        const started: number[] = [];
         const processed: number[] = [];
 
-        const run = concurrentMap([0, 1, 2, 3], 2, async (item) => {
+        const run = concurrentMap([0, 1, 2, 3, 4, 5], 2, async (item) => {
+            started.push(item);
+
             if (item === 0) {
                 throw new Error("boom");
             }
@@ -155,13 +158,14 @@ describe(concurrentMap, () => {
 
         await expect(run).rejects.toThrow("boom");
 
-        // The surviving workers drain the remaining items — a failed index()
-        // leaves a partial-but-convergent vector set, not a torn cancellation.
-        await new Promise((resolve) => {
-            setTimeout(resolve, 30);
-        });
-
-        expect(processed.toSorted((a, b) => a - b)).toStrictEqual([1, 2, 3]);
+        // Item 1 was already in flight (claimed alongside item 0, the two
+        // workers' first pulls) when item 0 rejected, so it's allowed to
+        // settle — quiescing in-flight work, not cancelling it. Items 2-5 must
+        // never start: unlike `@lunora/bindings/vectors`' reference this used
+        // to keep pulling and burning embedder + Vectorize calls for every
+        // remaining chunk after the caller's `catch` ran.
+        expect(started.toSorted((a, b) => a - b)).toStrictEqual([0, 1]);
+        expect(processed).toStrictEqual([1]);
     });
 
     it("rejects an invalid limit", async () => {
