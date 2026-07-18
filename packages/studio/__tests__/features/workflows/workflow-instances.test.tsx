@@ -38,7 +38,7 @@ describe("workflowInstanceHistory", () => {
     });
 
     it("reloads with a status filter when the dropdown changes", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         const loadInstances = vi.fn<(args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>>(async () => INSTANCES);
         render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="orders" />));
@@ -81,7 +81,7 @@ describe("workflowInstanceHistory", () => {
     });
 
     it("runs a lifecycle action and reloads when a handler is supplied", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const loadInstances = vi.fn<(args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>>(async () => INSTANCES);
         const runAction = vi.fn<(args: { action: WorkflowInstanceAction; id: string; name: string }) => Promise<{ status: WorkflowInstanceStatus }>>(

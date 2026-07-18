@@ -285,7 +285,7 @@ describe("cascadePreviewDialog", () => {
     });
 
     it("flags restrict nodes with a restrict badge when rows exist", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         renderDialog({ readPage: makeReadPage(2), schema: RESTRICT_SCHEMA, table: "orders" });
 

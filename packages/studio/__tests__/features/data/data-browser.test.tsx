@@ -860,7 +860,7 @@ describe("dataBrowser — editable", () => {
     });
 
     it("keeps the live subscription bound to the loaded page, ignoring shard-input keystrokes", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const mock = createBrowserClient();
 

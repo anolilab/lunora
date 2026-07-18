@@ -466,7 +466,7 @@ describe("fileBrowser", () => {
         });
 
         it("shows the picker and re-lists the selected bucket", async () => {
-            expect.assertions(2);
+            expect.hasAssertions();
 
             const mock = createMockClient({
                 listStorageBuckets: () => ["default", "media"],

@@ -36,7 +36,7 @@ describe("organizationDetail row actions", () => {
     });
 
     it("surfaces a rejected invitation-cancel", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         const mock = createMockClient();
 

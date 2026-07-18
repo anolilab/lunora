@@ -129,7 +129,7 @@ describe("generateRowsDialog", () => {
     });
 
     it("shows success message after successful insert", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         renderDialog({ onInsertRows: makeInsertRows() });
 
@@ -141,7 +141,7 @@ describe("generateRowsDialog", () => {
     });
 
     it("shows error message when onInsertRows returns an error string", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         const onInsertRows = makeInsertRows("Insert failed");
 
@@ -155,7 +155,7 @@ describe("generateRowsDialog", () => {
     });
 
     it("shows error message when the seed endpoint fails", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         vi.stubGlobal(
             "fetch",
@@ -193,7 +193,7 @@ describe("generateRowsDialog", () => {
     });
 
     it("disables generate button while inserting", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         // Use a slow insert to observe the disabled state.
         let settle!: () => void;

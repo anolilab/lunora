@@ -125,7 +125,7 @@ describe("workflowsPanel", () => {
     });
 
     it("rejects invalid JSON params before starting", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const mock = createMockClient({
             query: (reference): unknown => {
@@ -153,7 +153,7 @@ describe("workflowsPanel", () => {
     });
 
     it("surfaces an admin error", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         const mock = createMockClient({
             query: (): unknown => {
