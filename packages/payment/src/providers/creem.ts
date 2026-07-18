@@ -96,6 +96,28 @@ const readCheckoutUrl = (checkout: Record<string, unknown>): string => readAny(c
 const isCanceling = (subscription: Record<string, unknown>): boolean =>
     readAny(subscription, "canceled_at", "canceledAt") !== undefined || readString(subscription, "status") === "scheduled_cancel";
 
+/**
+ * Whether a `customers.create` rejection is Creem's known duplicate-email conflict (safe to recover
+ * from via an email lookup) as opposed to a network/quota/auth failure (which must propagate). The
+ * real SDK's `CreemError` carries a `statusCode`, but `CreemClientLike` is a structural, injected type
+ * with no guaranteed error shape — so a present `statusCode` outside Creem's documented 400/409
+ * conflict range is trusted to rule the error out, and otherwise this falls back to matching the
+ * "already exists" message text Creem's API is documented to return for the conflict.
+ */
+const isDuplicateCustomerError = (error: unknown): boolean => {
+    if (!(error instanceof Error)) {
+        return false;
+    }
+
+    const statusCode = (error as { statusCode?: unknown }).statusCode;
+
+    if (typeof statusCode === "number" && statusCode !== 400 && statusCode !== 409) {
+        return false;
+    }
+
+    return /already exists/iu.test(error.message);
+};
+
 const subscriptionFromCreem = (input: unknown): Subscription => {
     const subscription = asRecord(input);
     const now = Date.now();
@@ -270,10 +292,40 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
             // the existing customer up by email (Creem's `retrieve(customerId?, email?)` is positional).
             // The facade also gates this behind a store lookup first.
             try {
-                return toCustomer(asRecord(await client.customers.create({ email: ref.email ?? "", name: ref.metadata?.name ?? ref.referenceId })));
+                return toCustomer(
+                    asRecord(
+                        await client.customers.create({
+                            email: ref.email ?? "",
+                            // Pin the framework-controlled `referenceId` LAST so caller metadata can never
+                            // override it (same pattern as `createCheckout`) — this is the only thing Creem
+                            // lets us key a customer on (no `externalId`-style create, unlike Polar/Dodo), so
+                            // the recovery path below can verify it before ever adopting a retrieved customer.
+                            metadata: { ...ref.metadata, referenceId: ref.referenceId },
+                            name: ref.metadata?.name ?? ref.referenceId,
+                        }),
+                    ),
+                );
             } catch (error) {
-                if (ref.email !== undefined) {
-                    return toCustomer(asRecord(await client.customers.retrieve(undefined, ref.email)));
+                // Only the known duplicate-email conflict is recoverable by an email lookup — a network
+                // blip, quota error, or auth failure must propagate, not get reinterpreted as "go find the
+                // existing customer" (which could silently adopt an unrelated one).
+                if (ref.email !== undefined && isDuplicateCustomerError(error)) {
+                    const existing = asRecord(await client.customers.retrieve(undefined, ref.email));
+                    const existingReferenceId = referenceFromMetadata(existing);
+
+                    // SECURITY: never bind this reference to a Creem customer minted for a DIFFERENT
+                    // reference just because they share an email (two orgs/users can legitimately share
+                    // one inbox). `createPortalSession` builds the hosted billing link from `customerId`
+                    // alone, so adopting the wrong customer here would let one reference's portal expose
+                    // another's subscriptions, invoices, and payment methods. Only the same-reference retry
+                    // (the case this recovery path exists for) is adopted; anything else fails closed.
+                    if (existingReferenceId !== ref.referenceId) {
+                        throw new Error(
+                            `Creem customer for email "${ref.email}" already belongs to a different reference; refusing to bind it to "${ref.referenceId}".`,
+                        );
+                    }
+
+                    return toCustomer(existing);
                 }
 
                 throw error;

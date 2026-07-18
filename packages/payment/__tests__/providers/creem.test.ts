@@ -255,7 +255,20 @@ describe("creem adapter", () => {
         expect(action.amount?.minorUnits).toBe(2501n);
     });
 
-    it("reuses the existing customer when create fails on a duplicate email (regression)", async () => {
+    it("pins the reference into the new customer's metadata", async () => {
+        expect.assertions(1);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+
+        await adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" });
+
+        const body = calls.find((call) => call.name === "customer")?.args[0] as Record<string, unknown>;
+
+        expect((body.metadata as { referenceId?: string }).referenceId).toBe("user_1");
+    });
+
+    it("reuses the existing customer on a same-reference retry after a duplicate-email conflict (regression)", async () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
@@ -274,7 +287,8 @@ describe("creem adapter", () => {
                 retrieve: async (customerId?: string, email?: string) => {
                     calls.push({ args: [customerId, email], name: "retrieve" });
 
-                    return { email: "a@b.test", id: "cust_existing" };
+                    // The existing customer was minted for the SAME reference (an idempotent retry).
+                    return { email: "a@b.test", id: "cust_existing", metadata: { referenceId: "user_1" } };
                 },
             },
         };
@@ -286,6 +300,65 @@ describe("creem adapter", () => {
         expect(calls.some((call) => call.name === "create")).toBe(true);
         // Creem's retrieve is positional `(customerId?, email?)` — the email lands in the second arg.
         expect(calls.find((call) => call.name === "retrieve")?.args[1]).toBe("a@b.test");
+    });
+
+    it("refuses to bind a foreign reference's Creem customer on a shared-email conflict (security regression)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const client: CreemClientLike = {
+            ...makeClient(),
+            customers: {
+                create: async () => {
+                    throw new Error("A resource with this identifier already exists");
+                },
+                generateBillingLinks: async () => {
+                    return {};
+                },
+                retrieve: async (customerId?: string, email?: string) => {
+                    calls.push({ args: [customerId, email], name: "retrieve" });
+
+                    // The email already belongs to a DIFFERENT reference (e.g. a second org/user
+                    // sharing an inbox). Adopting this customer would leak org_a's billing portal
+                    // (subscriptions/invoices/payment methods) to org_b via createPortalSession.
+                    return { email: "shared@b.test", id: "cust_org_a", metadata: { referenceId: "org_a" } };
+                },
+            },
+        };
+        const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
+
+        await expect(adapter.getOrCreateCustomer({ email: "shared@b.test", referenceId: "org_b" })).rejects.toThrow(/different reference/);
+
+        // The lookup must still happen (to check the reference), but its result is never adopted.
+        expect(calls.some((call) => call.name === "retrieve")).toBe(true);
+    });
+
+    it("rethrows a non-conflict create error instead of falling into the email lookup (regression)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const client: CreemClientLike = {
+            ...makeClient(),
+            customers: {
+                create: async () => {
+                    throw new Error("upstream request timed out");
+                },
+                generateBillingLinks: async () => {
+                    return {};
+                },
+                retrieve: async (customerId?: string, email?: string) => {
+                    calls.push({ args: [customerId, email], name: "retrieve" });
+
+                    return { email: "a@b.test", id: "cust_existing" };
+                },
+            },
+        };
+        const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
+
+        await expect(adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" })).rejects.toThrow(/timed out/);
+
+        // A network/timeout failure must propagate — never reinterpreted as "go find the customer".
+        expect(calls.some((call) => call.name === "retrieve")).toBe(false);
     });
 
     it("rejects a bad signature", async () => {
