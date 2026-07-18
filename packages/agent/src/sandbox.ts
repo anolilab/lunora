@@ -183,18 +183,36 @@ const normalizeContainerPath = (path: string | undefined): string => {
 };
 
 /**
+ * HTTP methods considered non-idempotent — a `fetch` using one of these is
+ * gated by default even off the `/exec` route, since it can mutate container
+ * state. An omitted `method` defaults to GET (idempotent, unattended), per
+ * `CONTAINER_TOOL_SCHEMA`'s own documented default.
+ */
+const NON_IDEMPOTENT_METHODS = new Set(["DELETE", "PATCH", "POST", "PUT"]);
+
+/**
  * The default human-in-the-loop gate for `containerTool`. Gates command
  * execution — an `exec`, AND a `fetch` whose path resolves to the privileged
  * `/exec` route, since both reach the same command-execution path in the
- * container. A plain `fetch` to any other route runs unattended.
+ * container — AND, more broadly, any `fetch` using a non-idempotent HTTP
+ * method (POST/PUT/PATCH/DELETE), since a prompt-injected model could
+ * otherwise reach an arbitrary *other* privileged/mutating container route
+ * unattended just by avoiding the literal `/exec` path. A GET/HEAD/OPTIONS (or
+ * method-omitted, defaulting to GET) `fetch` to any route still runs
+ * unattended — scope the container's read routes accordingly.
  */
 const defaultContainerGate = (input: ContainerToolInput): boolean => {
     if (input.op === "exec") {
         return true;
     }
 
-    // Narrowed to the `fetch` variant: gate it iff its path resolves to `/exec`.
-    return normalizeContainerPath(input.path) === CONTAINER_EXEC_ROUTE;
+    // Narrowed to the `fetch` variant: gate it iff its path resolves to
+    // `/exec`, or its method is non-idempotent.
+    if (normalizeContainerPath(input.path) === CONTAINER_EXEC_ROUTE) {
+        return true;
+    }
+
+    return NON_IDEMPOTENT_METHODS.has((input.method ?? "GET").toUpperCase());
 };
 
 const CONTAINER_TOOL_SCHEMA = jsonSchema<ContainerToolInput>({
@@ -253,13 +271,17 @@ const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<Brow
  * the model picks via `op`. The call dispatches to the auto-registered
  * `sandbox:invoke` action, which carries `ctx.containers`.
  *
- * By default a `fetch` runs unattended while command execution is gated behind a
- * human approval — an `exec`, AND a `fetch` whose path resolves to the privileged
- * `/exec` route (both reach the same command-execution path in the container, so
- * gating on the `op` name alone would let a `fetch` to `/exec` run a command
- * unattended). Note a `fetch` can still reach any *other* container route
- * unattended, so scope the container's routes accordingly. Pass
- * `opts.needsApproval` to widen or disable the gate.
+ * By default a read-only (GET/HEAD/OPTIONS, or method-omitted) `fetch` runs
+ * unattended while everything else is gated behind a human approval — an
+ * `exec`; a `fetch` whose path resolves to the privileged `/exec` route (both
+ * reach the same command-execution path in the container, so gating on the
+ * `op` name alone would let a `fetch` to `/exec` run a command unattended);
+ * and a `fetch` using a non-idempotent method (POST/PUT/PATCH/DELETE) to ANY
+ * route, since a prompt-injected model could otherwise mutate container state
+ * through some other privileged route just by avoiding the literal `/exec`
+ * path. A `fetch` can still reach any *other read* route unattended, so scope
+ * the container's GET routes accordingly. Pass `opts.needsApproval` to widen
+ * or disable the gate.
  *
  * ```ts
  * import { containerTool, defineAgent } from "@lunora/agent/sandbox";
@@ -276,10 +298,10 @@ const containerTool = (name: string, options: ContainerToolOptions = {}): AgentT
         throw new LunoraError("INTERNAL", "@lunora/agent: containerTool requires a container `name` (the ctx.containers.<name> key from lunora/containers.ts)");
     }
 
-    // Default gate: any command execution. A fetch to a non-exec route is a
-    // read/RPC that runs unattended; an exec — or a fetch that resolves to the
-    // `/exec` route — runs arbitrary commands, so it pauses for approval unless
-    // overridden.
+    // Default gate: any command execution, plus any state-mutating fetch. A
+    // read-only fetch (GET/HEAD/OPTIONS) runs unattended; an exec — or a fetch
+    // that resolves to the `/exec` route, or uses a non-idempotent method —
+    // pauses for approval unless overridden. See `defaultContainerGate`.
     const needsApproval: ((input: ContainerToolInput) => boolean) | boolean = options.needsApproval ?? defaultContainerGate;
 
     return {

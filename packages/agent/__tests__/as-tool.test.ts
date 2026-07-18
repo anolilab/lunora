@@ -15,6 +15,7 @@ const DID_NOT_FINISH = /did not finish within/u;
 const NO_WORKFLOW_BINDING = /no Workflow binding "AGENT_RESEARCH"/u;
 const REQUIRES_NAME = /requires a `name`/u;
 const NON_EMPTY_DESCRIPTION = /non-empty `description`/u;
+const QUOTA_EXCEEDED = /quota exceeded/u;
 
 /**
  * A mock `AGENT_&lt;NAME>` Workflow binding: `create` records the params + id, and
@@ -40,6 +41,28 @@ const mockAgentBinding = (statuses: ReadonlyArray<string>): AgentWorkflowBinding
             created.push({ id: options?.id, params: options?.params });
 
             return { id: options?.id ?? "generated-id" };
+        },
+        get: async () => instance,
+    };
+};
+
+/**
+ * A mock `AGENT_&lt;NAME>` Workflow binding whose `create` always rejects with the
+ * given error (a duplicate-instance-id rejection, or any other failure); `get`
+ * still resolves to a normal instance walking the scripted status sequence.
+ */
+const mockRejectingBinding = (createError: unknown, statuses: ReadonlyArray<string>): AgentWorkflowBindingLike => {
+    const instance: AgentWorkflowInstanceLike = {
+        sendEvent: async () => {},
+        status: async () => {
+            return { status: statuses[0] };
+        },
+        terminate: async () => {},
+    };
+
+    return {
+        create: async () => {
+            throw createError;
         },
         get: async () => instance,
     };
@@ -127,6 +150,27 @@ describe(agentAsTool, () => {
         const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
 
         await expect(tool.execute({ prompt: "go" }, context({}, run))).rejects.toThrow(NO_WORKFLOW_BINDING);
+    });
+
+    it("rethrows a non-duplicate create error instead of silently taking over an unrelated instance", async () => {
+        const { run } = runWithChildThread([{ content: "unrelated instance's answer", role: "assistant", seq: 0 }]);
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+        const binding = mockRejectingBinding(new Error("Workflow creation quota exceeded"), ["complete"]);
+
+        // A real create failure (quota/config/service error) must surface, not
+        // fall through to `binding.get()` and return some other instance's
+        // (possibly stale/empty) answer.
+        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).rejects.toThrow(QUOTA_EXCEEDED);
+    });
+
+    it("takes over the existing instance on a genuine duplicate-instance-id error", async () => {
+        const { run } = runWithChildThread([{ content: "already running answer", role: "assistant", seq: 0 }]);
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+        const binding = mockRejectingBinding(new Error("instance already exists"), ["complete"]);
+
+        // A duplicate-instance-id rejection means a prior attempt already
+        // created this child run — take it over rather than failing.
+        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toBe("already running answer");
     });
 
     it("is exposed as `agent.asTool` and drives a durable sub-run inside the loop", async () => {

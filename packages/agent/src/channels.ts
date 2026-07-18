@@ -372,4 +372,6 @@ const dispatchAgentChannel =
 
 export type { AgentChannelTarget, InboundChannelHandler };
 export type { InboundChannelEvent } from "./types";
-export { dispatchAgentChannel, verifyDiscord, verifyGithub, verifySlack };
+// `isDuplicateInstanceError` is re-exported for `as-tool.ts`, which mirrors
+// this same idempotency check for `agentAsTool`'s child-run create.
+export { dispatchAgentChannel, isDuplicateInstanceError, verifyDiscord, verifyGithub, verifySlack };

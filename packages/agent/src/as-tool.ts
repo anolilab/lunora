@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { jsonSchema } from "ai";
 
+import { isDuplicateInstanceError } from "./channels";
 import { agentBindingName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import type {
@@ -137,8 +138,18 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
             const handle = await binding.create({ id: childInstanceId, params });
 
             instance = await binding.get(handle.id);
-        } catch {
-            // The instance id already exists — a prior attempt created it; take it over.
+        } catch (error) {
+            // Only a genuine duplicate-instance-id rejection means a prior
+            // attempt already created this child run — take it over. Any other
+            // failure (Workflows service error, quota, bad params) must
+            // surface so the durable step retries or fails visibly, rather
+            // than silently attaching to (and returning the stale/empty
+            // answer of) an unrelated instance that errored on its own first
+            // attempt. Mirrors the channel path's same idempotency check.
+            if (!isDuplicateInstanceError(error)) {
+                throw error;
+            }
+
             instance = await binding.get(childInstanceId);
         }
 
