@@ -15,6 +15,7 @@ import {
     readWranglerJsonc,
     reconcileWranglerBindings,
     reconcileWranglerCompatibilityDate,
+    reconcileWranglerCrons,
     requiredSecrets,
 } from "@lunora/config";
 import { join } from "@visulima/path";
@@ -337,7 +338,7 @@ const buildContainerImages = async (cwd: string, options: DeployCommandOptions):
  * best-effort: a failure here must not abort the deploy, since the validator
  * still reports any genuinely missing requirement.
  */
-const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => {
+const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> = []): Promise<void> => {
     try {
         const inferred = await inferLunoraBindings({ projectRoot: cwd });
         const reconciled = reconcileWranglerBindings(cwd, inferred);
@@ -367,6 +368,18 @@ const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => 
         const message = error instanceof Error ? error.message : String(error);
 
         logger.warn(`compatibility date sync skipped: ${message}`);
+    }
+
+    try {
+        const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
+
+        if (reconciled.changed) {
+            logger.success(`synced ${cronTriggers.length} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        }
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.warn(`cron trigger sync skipped: ${message}`);
     }
 };
 
@@ -959,7 +972,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         reblessSchemaBaseline = gate.rebless;
     }
 
-    await provisionBindings(cwd, options.logger);
+    await provisionBindings(cwd, options.logger, codegen?.cronTriggers ?? []);
 
     const migratePreflightError = validateMigrateDeployPreflight(options);
 
