@@ -380,7 +380,7 @@ interface ReplaySub {
     unsubscribed: boolean;
 }
 
-const createReplayFake = (): { client: LunoraClient; cache: Map<string, unknown>; subs: ReplaySub[] } => {
+const createReplayFake = (): { cache: Map<string, unknown>; client: LunoraClient; subs: ReplaySub[] } => {
     const subs: ReplaySub[] = [];
     const cache = new Map<string, unknown>();
 

@@ -92,6 +92,7 @@ interface EventLogDOState {
         sql: {
             exec: (query: string, ...params: unknown[]) => unknown;
         };
+
         /**
          * The DO platform's native atomic-transaction primitive (async;
          * commits on resolve, rolls back on throw/reject). Test doubles that
@@ -388,28 +389,44 @@ export class EventLogDO {
         }
 
         for (const eventRecord of body.events) {
-            if (typeof eventRecord.type !== "string" || eventRecord.type.length === 0) {
-                return "events[] with a non-empty string `type` required";
-            }
+            const error = EventLogDO.#validateEventRecord(eventRecord);
 
-            if (eventRecord.timestamp !== undefined && !Number.isFinite(eventRecord.timestamp)) {
-                return "events[].timestamp must be a finite number";
+            if (error !== undefined) {
+                return error;
             }
+        }
 
-            if (eventRecord.clientId !== undefined && typeof eventRecord.clientId !== "string") {
-                return "events[].clientId must be a string";
-            }
+        return undefined;
+    }
 
-            if (eventRecord.sessionId !== undefined && typeof eventRecord.sessionId !== "string") {
-                return "events[].sessionId must be a string";
-            }
+    /**
+     * Validate a single `/append` event record — split out of
+     * {@link EventLogDO.#validateAppendRequest} to keep each function's
+     * cognitive complexity down.
+     * @returns An error message, or `undefined` when the record is valid.
+     */
+    static #validateEventRecord(eventRecord: AppendRequestEvent): string | undefined {
+        if (typeof eventRecord.type !== "string" || eventRecord.type.length === 0) {
+            return "events[] with a non-empty string `type` required";
+        }
 
-            if (
-                eventRecord.parentSeqNum !== undefined &&
-                (typeof eventRecord.parentSeqNum !== "number" || !Number.isInteger(eventRecord.parentSeqNum) || eventRecord.parentSeqNum < 0)
-            ) {
-                return "events[].parentSeqNum must be a non-negative integer";
-            }
+        if (eventRecord.timestamp !== undefined && !Number.isFinite(eventRecord.timestamp)) {
+            return "events[].timestamp must be a finite number";
+        }
+
+        if (eventRecord.clientId !== undefined && typeof eventRecord.clientId !== "string") {
+            return "events[].clientId must be a string";
+        }
+
+        if (eventRecord.sessionId !== undefined && typeof eventRecord.sessionId !== "string") {
+            return "events[].sessionId must be a string";
+        }
+
+        if (
+            eventRecord.parentSeqNum !== undefined &&
+            (typeof eventRecord.parentSeqNum !== "number" || !Number.isInteger(eventRecord.parentSeqNum) || eventRecord.parentSeqNum < 0)
+        ) {
+            return "events[].parentSeqNum must be a non-negative integer";
         }
 
         return undefined;

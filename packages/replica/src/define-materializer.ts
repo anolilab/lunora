@@ -200,14 +200,13 @@ class MaterializerRuntime {
             let appliedToAny = false;
             let anyChanged = false;
 
-            for (let i = 0; i < this.#materializers.length; i += 1) {
+            for (const [i, materializer] of this.#materializers.entries()) {
                 const watermark = this.#watermarks[i] ?? 0;
 
                 if (entry.seq < watermark) {
                     continue;
                 }
 
-                const materializer = this.#materializers[i]!;
                 const stateBefore = materializer.state;
 
                 materializer.apply(entry);
@@ -289,8 +288,7 @@ class MaterializerRuntime {
 
         let maxSeq = 0;
 
-        for (let i = 0; i < this.#materializers.length; i += 1) {
-            const materializer = this.#materializers[i]!;
+        for (const [i, materializer] of this.#materializers.entries()) {
             // eslint-disable-next-line no-await-in-loop -- sequential snapshot loads are intentional
             const raw = await this.#snapshotStore.load(materializer.def.name);
 
@@ -321,9 +319,7 @@ class MaterializerRuntime {
             return;
         }
 
-        for (let i = 0; i < this.#materializers.length; i += 1) {
-            const materializer = this.#materializers[i]!;
-
+        for (const [i, materializer] of this.#materializers.entries()) {
             // eslint-disable-next-line no-await-in-loop -- sequential snapshot saves are intentional
             await this.#snapshotStore.save(materializer.def.name, {
                 appliedSeq: this.#watermarks[i] ?? 0,
@@ -398,9 +394,9 @@ class MaterializerRuntime {
      * Reset all materializers to their initial state and clear snapshots.
      */
     public reset(): void {
-        for (let i = 0; i < this.#materializers.length; i += 1) {
+        for (const [i, materializer] of this.#materializers.entries()) {
             this.#watermarks[i] = 0;
-            this.#materializers[i]!.reset();
+            materializer.reset();
         }
     }
 

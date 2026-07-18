@@ -272,9 +272,7 @@ describe("httpStream", () => {
         });
         const cancelSpy = vi.spyOn(body, "cancel");
 
-        const fetchImpl = vi.fn<() => Promise<Response>>(async (): Promise<Response> => {
-            return new Response(body, { status: 503 });
-        }) as unknown as typeof fetch;
+        const fetchImpl = vi.fn<() => Promise<Response>>(async (): Promise<Response> => new Response(body, { status: 503 })) as unknown as typeof fetch;
 
         await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch(() => undefined);
 

@@ -303,57 +303,57 @@ const httpStream = <Ref extends HttpStreamRef>(
     });
 
     (async () => {
-        const response = await fetchImpl(url, {
-            headers: { accept: "text/event-stream", ...options.headers },
-            method: route.method,
-            signal: ac.signal,
-        });
-
-        if (!response.ok) {
-            // Release the (possibly still-open) response body before failing —
-            // otherwise an unread non-OK body keeps its underlying connection
-            // occupied until the runtime garbage-collects the response.
-            await response.body?.cancel().catch(() => {
-                /* body already closed/unusable — nothing to release */
+        try {
+            const response = await fetchImpl(url, {
+                headers: { accept: "text/event-stream", ...options.headers },
+                method: route.method,
+                signal: ac.signal,
             });
 
-            handle.fail(
-                new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${response.status.toString()})`, {
-                    status: response.status,
-                }),
-            );
+            if (!response.ok) {
+                // Release the (possibly still-open) response body before failing —
+                // otherwise an unread non-OK body keeps its underlying connection
+                // occupied until the runtime garbage-collects the response.
+                await response.body?.cancel().catch(() => {
+                    /* body already closed/unusable — nothing to release */
+                });
 
-            return;
-        }
-
-        if (!response.body) {
-            handle.fail(new LunoraError("HTTP_STREAM_NO_BODY", "httpStream: response has no body"));
-
-            return;
-        }
-
-        await pumpSseBody(response.body, handle as UntypedHandle);
-    })()
-        .catch((error: unknown) => {
-            // A consumer cancel (or external abort) rejects the in-flight read
-            // with an AbortError — the iterator is already closing, stay silent.
-            if (ac.signal.aborted) {
-                handle.complete();
+                handle.fail(
+                    new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${response.status.toString()})`, {
+                        status: response.status,
+                    }),
+                );
 
                 return;
             }
 
-            if (error instanceof Error && "code" in error) {
-                handle.fail(error);
+            if (!response.body) {
+                handle.fail(new LunoraError("HTTP_STREAM_NO_BODY", "httpStream: response has no body"));
 
                 return;
             }
 
-            handle.fail(new LunoraError("HTTP_STREAM_TRANSPORT", error instanceof Error ? error.message : String(error), { cause: error }));
-        })
-        .finally(() => {
+            await pumpSseBody(response.body, handle as UntypedHandle);
+        } finally {
             detachExternalAbort();
-        });
+        }
+    })().catch((error: unknown) => {
+        // A consumer cancel (or external abort) rejects the in-flight read
+        // with an AbortError — the iterator is already closing, stay silent.
+        if (ac.signal.aborted) {
+            handle.complete();
+
+            return;
+        }
+
+        if (error instanceof Error && "code" in error) {
+            handle.fail(error);
+
+            return;
+        }
+
+        handle.fail(new LunoraError("HTTP_STREAM_TRANSPORT", error instanceof Error ? error.message : String(error), { cause: error }));
+    });
 
     return iterable;
 };

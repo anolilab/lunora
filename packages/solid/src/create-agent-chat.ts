@@ -165,6 +165,7 @@ interface CreateAgentChatResult {
 /** A local optimistic user turn awaiting server acknowledgement. */
 interface OptimisticMessage {
     content: string;
+
     /**
      * Count of durable `user` rows present when this row was sent — the reconcile
      * baseline. Only a durable user row at or after this position can retire it,
@@ -278,7 +279,13 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
         // Base synthetic seqs above the highest real durable seq (not just
         // `rows.length`, which can under-count when durable rows have gaps) so an
         // optimistic row's placeholder seq never collides with a real one.
-        const maxDurableSeq = rows.reduce((max, message) => Math.max(max, message.seq), -1);
+        let maxDurableSeq = -1;
+
+        for (const message of rows) {
+            if (message.seq > maxDurableSeq) {
+                maxDurableSeq = message.seq;
+            }
+        }
 
         return [
             ...rows,

@@ -80,6 +80,7 @@ export class EventLogDOClient {
     /**
      * Append one or more events to the log.
      * @param events The events to append.
+     * @param options Idempotency controls for the batch.
      * @param options.batchId Optional idempotency key for the whole batch — a
      * retried `append` call with the same `batchId` (e.g. after a network
      * timeout that hid a successful response) returns the originally-persisted

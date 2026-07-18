@@ -32,7 +32,7 @@ describe("ClientQueryStore reset semantics (CLIENT-04 regression)", () => {
     });
 
     it("set(ref, undefined) still notifies subscribers with the default value", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const store = new ClientQueryStore();
         const ref = createClientQuery("selectedId", "none");
@@ -43,13 +43,16 @@ describe("ClientQueryStore reset semantics (CLIENT-04 regression)", () => {
         });
 
         store.set(ref, "abc");
+
+        expect(store.get(ref)).toBe("abc");
+
         store.set(ref, undefined as unknown as string);
 
         expect(seen).toStrictEqual(["abc", "none"]);
     });
 
     it("reset(ref) and set(ref, undefined) are equivalent", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const store = new ClientQueryStore();
         const ref = createClientQuery("count", 0);
@@ -60,6 +63,9 @@ describe("ClientQueryStore reset semantics (CLIENT-04 regression)", () => {
         const afterReset = store.get(ref);
 
         store.set(ref, 5);
+
+        expect(store.get(ref)).toBe(5);
+
         store.set(ref, undefined as unknown as number);
 
         const afterSetUndefined = store.get(ref);

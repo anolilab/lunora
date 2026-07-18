@@ -321,14 +321,16 @@ describe(useVoiceAgent, () => {
         const openedUrls: string[] = [];
         const FakeWebSocketImpl = vi.fn(function FakeWebSocketImpl(this: FakeSocket, url: string) {
             openedUrls.push(url);
-            this.binaryType = "blob";
-            this.close = vi.fn<() => void>();
-            this.onclose = null;
-            this.onerror = null;
-            this.onmessage = null;
-            this.onopen = null;
-            this.readyState = 1;
-            this.send = vi.fn<(data: unknown) => void>();
+            Object.assign(this, {
+                binaryType: "blob",
+                close: vi.fn<() => void>(),
+                onclose: null,
+                onerror: null,
+                onmessage: null,
+                onopen: null,
+                readyState: 1,
+                send: vi.fn<(data: unknown) => void>(),
+            });
         }) as unknown as new (url: string) => FakeSocket;
 
         (client as unknown as { getWebSocketImpl: () => unknown }).getWebSocketImpl = () => FakeWebSocketImpl;
