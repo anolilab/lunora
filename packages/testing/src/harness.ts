@@ -613,6 +613,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 
     let scheduledDispatchRef: ScheduledDispatch | undefined;
     let mutationContextRef: unknown;
+    let actionContextRef: unknown;
 
     // `ctx.now` for every context: captured once so a harness sees one stable
     // instant (production captures it per execution). Overridable via `options.now`.
@@ -642,6 +643,16 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             }
 
             return mutationContextRef;
+        },
+        () => {
+            if (actionContextRef === undefined) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    "[fake-scheduler] actionContext not yet available — scheduler.advance called before harness construction completed",
+                );
+            }
+
+            return actionContextRef;
         },
         () => functionRegistryMap,
         harnessNow,
@@ -710,6 +721,12 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             vectors: stubProxy("vectors") as ActionCtx["vectors"],
             workflows: stubProxy("workflows") as ActionCtx["workflows"],
         };
+
+        // Wire the action-context reference for the fake scheduler thunk (mirrors
+        // mutationContextRef above): only set on the first call (the base harness);
+        // withIdentity views share the same scheduler so the base actionContext is
+        // the canonical one.
+        actionContextRef ??= actionContext;
 
         const runRegistered = (
             expected: "action" | "mutation" | "query",

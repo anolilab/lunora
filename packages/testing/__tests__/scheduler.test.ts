@@ -1,9 +1,9 @@
 import { defineSchema, defineTable, initLunora, v } from "@lunora/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraTest } from "../src/index";
 
-const { internalMutation, mutation, query } = initLunora.dataModel().create();
+const { internalAction, internalMutation, mutation, query } = initLunora.dataModel().create();
 
 const schema = defineSchema({
     log: defineTable({
@@ -47,6 +47,24 @@ const cancelPendingAppends = internalMutation.mutation(async ({ ctx }) => {
 /** Mutation that schedules the throwing batch via ctx.scheduler.runAfter. */
 const scheduleThrow = mutation.mutation(({ ctx }) => ctx.scheduler.runAfter(0, "log:appendThenThrow", {}));
 
+/**
+ * Internal action that calls `ctx.fetch` and then writes the response status via
+ * `ctx.runMutation` — used as a scheduled target to prove the fake scheduler
+ * dispatches a scheduled **action** with a real `ActionCtx` (`ctx.fetch` and
+ * `ctx.runMutation` both available), not the `MutationCtx` it used to hand every
+ * scheduled job regardless of kind.
+ */
+const pingViaFetch = internalAction.input({ url: v.string() }).action(async ({ args, ctx }) => {
+    const response = await ctx.fetch(args.url);
+
+    await ctx.runMutation(appendLog, { message: `status:${String(response.status)}` });
+});
+
+/** Mutation that schedules `pingViaFetch` via ctx.scheduler.runAfter. */
+const scheduleFetchPing = mutation
+    .input({ delayMs: v.number(), url: v.string() })
+    .mutation(({ args, ctx }) => ctx.scheduler.runAfter(args.delayMs, "log:pingViaFetch", { url: args.url }));
+
 /** Mutation that cancels a job by id. */
 const cancelJob = mutation.input({ id: v.string() }).mutation(({ args, ctx }) => ctx.scheduler.cancel(args.id));
 
@@ -88,12 +106,22 @@ const functions = {
     "log:appendOrThrow": appendOrThrow,
     "log:appendThenThrow": appendThenThrow,
     "log:cancelPendingAppends": cancelPendingAppends,
+    "log:pingViaFetch": pingViaFetch,
 };
 
 const open: ReturnType<typeof lunoraTest>[] = [];
 
 const start = (): ReturnType<typeof lunoraTest> => {
     const t = lunoraTest(schema, { functions });
+
+    open.push(t);
+
+    return t;
+};
+
+/** Same as {@link start}, but injects `options.fetch` for scheduled-action tests. */
+const startWithFetch = (fetchImpl: typeof globalThis.fetch): ReturnType<typeof lunoraTest> => {
+    const t = lunoraTest(schema, { fetch: fetchImpl, functions });
 
     open.push(t);
 
@@ -440,6 +468,28 @@ describe("fake scheduler", () => {
 
         expect(failures).toHaveLength(2);
         expect(failures.map((f) => (f.error as Error).message).toSorted((a, b) => a.localeCompare(b))).toEqual(["boom:boom-a", "boom:boom-b"]);
+    });
+
+    it("dispatches a scheduled action with a real ActionCtx — ctx.fetch (injected via options.fetch) is reachable, not a MutationCtx", async () => {
+        expect.assertions(3);
+
+        const fakeFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ ok: true }, { status: 200 }));
+
+        const t = startWithFetch(fakeFetch as unknown as typeof globalThis.fetch);
+
+        await t.mutation(scheduleFetchPing, { delayMs: 0, url: "https://example.test/scheduled-ping" });
+
+        // Before the fix, dispatchJob always handed the fake scheduler's
+        // mutationContext to the handler — a scheduled action calling ctx.fetch
+        // would throw `ctx.fetch is not a function` here.
+        const executed = await t.scheduler.runPending();
+
+        expect(executed).toBe(1);
+        expect(fakeFetch).toHaveBeenCalledWith("https://example.test/scheduled-ping");
+
+        const log = await t.query(readLog, {});
+
+        expect(log).toMatchObject([{ message: "status:200" }]);
     });
 
     it("with throwOnError: false the sweep resolves and failures are observable via failures()", async () => {
