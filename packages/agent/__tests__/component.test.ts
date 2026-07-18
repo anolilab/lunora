@@ -680,7 +680,7 @@ describe("episodic memory", () => {
 });
 
 describe("approval resolution", () => {
-    it("delivers the decision to the run's workflow instance via ctx.agents", async () => {
+    it("delivers the decision to the run's workflow instance via ctx.agents, scoped to the tool call", async () => {
         const { functions } = agentComponent();
         const owner = fakeDatabase({ userId: "user-a" });
         const { agents, sent } = fakeAgents();
@@ -697,7 +697,9 @@ describe("approval resolution", () => {
         });
 
         expect(result).toStrictEqual({ resolved: true });
-        expect(sent).toStrictEqual([{ event: { payload: { decision: "approve", note: "looks good" }, type: "agent-approval" }, id: "wf-1" }]);
+        expect(sent).toStrictEqual([
+            { event: { payload: { decision: "approve", note: "looks good", toolCallId: "call_1" }, type: "agent-approval:call_1" }, id: "wf-1" },
+        ]);
     });
 
     it("owner-gates the mutation: a foreign caller cannot approve", async () => {
@@ -727,6 +729,54 @@ describe("approval resolution", () => {
         await expect(
             callMutation(functions.agentResolveApproval, ctx, { decision: "reject", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
         ).rejects.toThrow(NO_PRODUCER_PATTERN);
+    });
+
+    it("(AGENT-01a) rejects an instanceId that does not own the thread, even for a readable (ownerless) thread", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+        const { agents, sent } = fakeAgents();
+
+        // An ownerless thread is readable by anyone who knows its key — but the
+        // caller must still name the instance actually bound to it.
+        await callMutation(functions.agentEnsureThread, { ...ctx, agents }, { agent: "support", instanceId: "wf-real", key: "t-1" });
+
+        await expect(
+            callMutation(functions.agentResolveApproval, { ...ctx, agents }, {
+                decision: "approve",
+                instanceId: "wf-attacker-guessed",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+            }),
+        ).rejects.toThrow(/does not own thread/u);
+
+        // Never reached the workflow binding for the wrong instance.
+        expect(sent).toStrictEqual([]);
+    });
+
+    it("(AGENT-01b) scopes the event type per tool call, so a decision for one call cannot resolve another", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+        const { agents, sent } = fakeAgents();
+
+        await callMutation(functions.agentEnsureThread, { ...ctx, agents }, { agent: "support", instanceId: "wf-1", key: "t-1" });
+
+        await callMutation(functions.agentResolveApproval, { ...ctx, agents }, {
+            decision: "approve",
+            instanceId: "wf-1",
+            threadKey: "t-1",
+            toolCallId: "call_A",
+        });
+        await callMutation(functions.agentResolveApproval, { ...ctx, agents }, {
+            decision: "reject",
+            instanceId: "wf-1",
+            threadKey: "t-1",
+            toolCallId: "call_B",
+        });
+
+        // Each decision's event type is scoped to ITS OWN call id — never the same
+        // type twice, so a `step.waitForEvent` pending on one call.id's type can
+        // never be woken by an event meant for a different call.
+        expect(sent.map((entry) => entry.event.type)).toStrictEqual(["agent-approval:call_A", "agent-approval:call_B"]);
     });
 });
 
@@ -936,6 +986,45 @@ describe("concurrency guard", () => {
         await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-b", key: "t-1" })).resolves.toStrictEqual({
             created: false,
         });
+    });
+
+    it("(AGENT-02) rejects an id-less dispatch onto a thread paused for approval under a live prior instance", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+        await callMutation(functions.agentPatchThread, ctx, { instanceId: "wf-a", status: "awaiting_input" });
+
+        // The inbound-email/inbound-channel paths dispatch with NO instanceId at
+        // all. Before the fix this fell through as an "idempotent reset",
+        // silently flipping `awaiting_input` back to "running" out from under
+        // the still-hibernating "wf-a" run — now it must hit the concurrency
+        // policy like any other genuine second run.
+        await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" })).rejects.toThrow(IN_FLIGHT_PATTERN);
+    });
+
+    it("(AGENT-02) rejects an id-less dispatch onto a running thread under a live prior instance", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+
+        await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" })).rejects.toThrow(IN_FLIGHT_PATTERN);
+    });
+
+    it("(AGENT-02) an id-less dispatch can still 'replace' a live run when explicitly configured to", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-old", key: "t-1" });
+
+        const result = await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1", onConcurrentRun: "replace" });
+
+        expect(result).toStrictEqual({ created: false, priorInstanceId: "wf-old", replaced: true });
+        // No new instance id was supplied to record — the column is left as-is
+        // rather than explicitly cleared (which the validators would reject).
+        expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-old");
+        expect(rows.get("agent_threads")?.[0]?.["status"]).toBe("running");
     });
 
     it("replaces: takes the thread over and reports the prior instance", async () => {
