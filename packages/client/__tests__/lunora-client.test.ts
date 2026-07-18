@@ -3049,12 +3049,21 @@ describe("lunoraClient", () => {
             first.open();
             first.triggerClose();
 
-            await vi.advanceTimersByTimeAsync(15);
+            // The reconnect re-invokes the async provider (minting eph-2) before
+            // opening the new socket. `latestSocket()` is unreliable here — under
+            // full-suite load a stray reconnect socket can be the newest entry (see
+            // the sibling test above) — so drain the reconnect backoff + async mint
+            // and select the token-bearing reconnect socket explicitly.
+            let second = sockets.find((socket) => socket !== first && socket.url.includes("token=eph-2"));
 
-            const second = latestSocket();
+            for (let attempt = 0; attempt < 30 && second === undefined; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- drain fake timers + microtasks until the minted reconnect socket opens
+                await vi.advanceTimersByTimeAsync(15);
+                second = sockets.find((socket) => socket !== first && socket.url.includes("token=eph-2"));
+            }
 
             expect(second).not.toBe(first);
-            expect(second.url).toContain("token=eph-2");
+            expect(second?.url).toContain("token=eph-2");
 
             vi.useRealTimers();
         });
