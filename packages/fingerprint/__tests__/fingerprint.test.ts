@@ -199,4 +199,44 @@ describe("fingerprintError (Lunora adapter)", () => {
         expect(fp.title.length).toBeLessThanOrEqual(120);
         expect(fp.title.endsWith("…")).toBe(true);
     });
+
+    // FP-02: outputs must be NUL-free (they flow straight into an Issues upsert)
+    // and the title must never split a surrogate pair.
+    it("strips NUL bytes from every returned field (title, bucket, culprit)", () => {
+        expect.assertions(4);
+
+        const fp = fingerprintError({ functionPath: `messages${NUL}:list`, message: `boom${NUL} happened` });
+
+        expect(fp.title).not.toContain(NUL);
+        expect(fp.bucket).not.toContain(NUL);
+        expect(fp.culprit).not.toContain(NUL);
+        expect(fp.hash).toMatch(/^[0-9a-f]{16}$/);
+    });
+
+    it("keeps the hash unchanged for an existing non-NUL input (regression)", () => {
+        expect.assertions(1);
+
+        // Same fixture as the "produces the exact hash upstream sha256 would" case
+        // above — locks that the NUL-stripping fix is a no-op for clean input.
+        const fp = fingerprintError({ functionPath: "messages:list", message: "User 12345 not found", code: "NOT_FOUND" });
+
+        expect(fp.hash).toBe("168d714cba85f1c8");
+    });
+
+    it("truncates a runaway title without splitting a surrogate pair (emoji)", () => {
+        expect.assertions(2);
+
+        // An emoji (`😀`, U+1F600) is a surrogate pair in UTF-16. Pad it right at
+        // the TITLE_MAX boundary so the naive `slice(0, TITLE_MAX - 1)` would cut
+        // between the high and low surrogate, leaving a lone (invalid) one.
+        const message = `${"a".repeat(118)}😀${"b".repeat(20)}`;
+        const fp = fingerprintError({ functionPath: "a:b", message });
+
+        expect(fp.title.endsWith("…")).toBe(true);
+
+        const lastCodeUnit = fp.title.codePointAt(fp.title.length - 2) ?? 0;
+
+        // The char immediately before the ellipsis must not be a lone high surrogate.
+        expect(lastCodeUnit >= 0xd8_00 && lastCodeUnit <= 0xdb_ff).toBe(false);
+    });
 });
