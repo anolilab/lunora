@@ -292,10 +292,7 @@ export class EventLogDO {
             entries = typeof transaction === "function" ? await transaction(runBatch) : await runBatch();
         } catch (error) {
             if (isIdempotencyConflictError(error)) {
-                return Response.json(
-                    { error: { code: "CONFLICT", message: error.message } },
-                    { status: 409, headers: { "content-type": "application/json" } },
-                );
+                return Response.json({ error: { code: "CONFLICT", message: error.message } }, { status: 409, headers: { "content-type": "application/json" } });
             }
 
             throw error;
@@ -595,13 +592,7 @@ export class EventLogDO {
         lastSeq: number,
         fingerprint: string,
     ): void {
-        sql.exec(
-            "INSERT INTO event_batches (batch_id, first_seq, last_seq, fingerprint) VALUES (?, ?, ?, ?)",
-            batchId,
-            firstSeq,
-            lastSeq,
-            fingerprint,
-        );
+        sql.exec("INSERT INTO event_batches (batch_id, first_seq, last_seq, fingerprint) VALUES (?, ?, ?, ?)", batchId, firstSeq, lastSeq, fingerprint);
     }
 
     /** Get the next available sequence number. */

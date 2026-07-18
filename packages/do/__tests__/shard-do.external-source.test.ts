@@ -115,7 +115,11 @@ class SourcedAndGlobalShard extends ShardDO {
     }
 
     protected override readGlobalShapeRows(): Promise<{ doc: Record<string, unknown>; id: string }[]> {
-        return Promise.resolve(this.globalRows.map((row) => {return { doc: { ...row.doc }, id: row.id }}));
+        return Promise.resolve(
+            this.globalRows.map((row) => {
+                return { doc: { ...row.doc }, id: row.id };
+            }),
+        );
     }
 }
 

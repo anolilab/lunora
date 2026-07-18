@@ -107,13 +107,7 @@ interface PlanViteRemoteOptions {
 
 ### `ReconcileResult` (interface)
 
-```ts
-interface ReconcileResult {
-    changed: boolean;
-    reason?: string;
-    wranglerPath?: string;
-}
-```
+Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `ResolvedLunoraPluginOptions` (interface)
 
@@ -281,9 +275,7 @@ const planViteRemoteBindings: (options: PlanViteRemoteOptions) => ViteRemotePlan
 
 ### `reconcileWranglerCrons` (const)
 
-```ts
-const reconcileWranglerCrons: (projectRoot: string, cronTriggers: ReadonlyArray<string>) => ReconcileResult;
-```
+Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `remoteBindingsCleanupPlugin` (const)
 

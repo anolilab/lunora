@@ -19,19 +19,19 @@
 ## Why this matters
 
 `@lunora/x402`'s pay rail signs stablecoin payments on an agent's behalf under a
-`SpendPolicy`. Three holes let a policy that *looks* bounded authorize far more
+`SpendPolicy`. Three holes let a policy that _looks_ bounded authorize far more
 than intended:
 
 1. **Unverified asset (X402-01).** `buildSpendPolicy` compares `requirement.amount`
    (atomic units) against a USD cap converted at a fixed `decimals` (default 6),
    assuming a $1-pegged 6-decimal stablecoin — but it never checks
    `requirement.asset`. The EVM/SVM schemes sign a transfer against whatever token
-   contract the *server* names. A malicious 402 server can name any token the agent
+   contract the _server_ names. A malicious 402 server can name any token the agent
    wallet holds; the atomic-unit comparison then mis-prices it (a higher-value-per-unit
    token passes a tiny cap at full face value). `recordSpend` also sums atomic units
    across possibly-different assets into one ledger, corrupting `maxPerRun`.
-2. **Per-run check-then-act race (X402-02).** The per-run cap is *read* in the
-   before-hook (`buildPaymentGuard`) and only *added* in the after-hook
+2. **Per-run check-then-act race (X402-02).** The per-run cap is _read_ in the
+   before-hook (`buildPaymentGuard`) and only _added_ in the after-hook
    (`recordSpend`), with `await`s in between (the optional `onPaymentRequired` and
    the async signing). N concurrent paid fetches through one `PayFetch` each pass
    the guard against the same `spentAtomic`, then all record — cumulative spend
@@ -40,7 +40,7 @@ than intended:
 3. **Allowlist-only "bounded" (X402-03).** `assertBoundedPolicy` treats a policy
    with only `allowedNetworks` or only `allowedRecipients` as bounded — but neither
    caps spend. `policy: { allowedNetworks: ["base"] }` builds a wallet with
-   *unlimited* spend to *any* recipient on Base — the exact outcome the guard's own
+   _unlimited_ spend to _any_ recipient on Base — the exact outcome the guard's own
    docstring calls "never the intent".
 
 ## Current state
@@ -63,6 +63,7 @@ than intended:
   is set.
 
 `packages/x402/src/pay/fetch.ts` (44–54) wires them on one shared state:
+
 ```ts
 assertBoundedPolicy(config.policy);
 const state = createSpendState();
@@ -77,20 +78,22 @@ Conventions: ESM, no `.js` extensions; named exports only.
 
 ## Commands you will need
 
-| Purpose   | Command                                            | Expected |
-|-----------|----------------------------------------------------|----------|
-| Build deps| `pnpm run build:packages`                          | exit 0   |
-| Typecheck | `pnpm --filter "@lunora/x402" run lint:types`      | exit 0   |
-| Tests     | `pnpm --filter "@lunora/x402" run test`            | all pass (workerd project is gated behind `LUNORA_WORKERD_TESTS=1`; the default node run is what must pass) |
+| Purpose    | Command                                       | Expected                                                                                                    |
+| ---------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Build deps | `pnpm run build:packages`                     | exit 0                                                                                                      |
+| Typecheck  | `pnpm --filter "@lunora/x402" run lint:types` | exit 0                                                                                                      |
+| Tests      | `pnpm --filter "@lunora/x402" run test`       | all pass (workerd project is gated behind `LUNORA_WORKERD_TESTS=1`; the default node run is what must pass) |
 
 ## Scope
 
 **In scope**:
+
 - `packages/x402/src/pay/policy.ts`
 - `packages/x402/src/pay/fetch.ts` (only if the failure-hook wiring for X402-02 requires it)
 - `packages/x402/__tests__/pay-policy.test.ts`
 
 **Out of scope**:
+
 - The signer/wallet code (`wallet.ts`) — private-key handling was audited clean.
 - `@x402/*` vendored dist — do not modify node_modules.
 - The charge rail (`charge/middleware.ts`) — that's plan 146.
@@ -105,14 +108,11 @@ Conventions: ESM, no `.js` extensions; named exports only.
 ### Step 1 (X402-03): require a real monetary bound
 
 In `assertBoundedPolicy`, drop `allowedRecipients`/`allowedNetworks` from the
-`bounded` test — treat allowlists as *narrowing*, not *bounding*. A policy is
+`bounded` test — treat allowlists as _narrowing_, not _bounding_. A policy is
 bounded iff at least one of `maxPerCall`, `maxPerRun`, `onPaymentRequired` is set:
 
 ```ts
-const bounded =
-    policy.maxPerCall !== undefined ||
-    policy.maxPerRun !== undefined ||
-    policy.onPaymentRequired !== undefined;
+const bounded = policy.maxPerCall !== undefined || policy.maxPerRun !== undefined || policy.onPaymentRequired !== undefined;
 ```
 
 Update the throw message to list only those three as sufficient bounds (remove the
@@ -124,6 +124,7 @@ misleading `allowedRecipients`/`allowedNetworks` mentions).
 
 > **REVISED after a 2026-07-18 execution attempt** — the original premise below was
 > FALSIFIED during execution and must not be used:
+>
 > - `@x402/evm`'s real `DEFAULT_STABLECOINS` is **not** uniformly 6-decimal — it
 >   contains at least one non-6-decimal entry (`eip155:4326` "MegaUSD", `decimals: 18`),
 >   so gating on that map does NOT guarantee the fixed-6-decimal amount comparison is
@@ -159,7 +160,7 @@ sits between the check and the debit:
 1. Add a `release(delta: bigint)` (or `subtract`) method to `SpendState`
    (mirror `add`), clamping at 0.
 2. In `buildPaymentGuard`, after the `maxPerRun` check passes, **reserve**
-   immediately: `state.add(amount)` *before* the `await policy.onPaymentRequired`.
+   immediately: `state.add(amount)` _before_ the `await policy.onPaymentRequired`.
    If `onPaymentRequired` declines (or throws), `state.release(amount)` before
    returning the abort.
 3. Delete the `recordSpend` after-hook wiring (the reserve now IS the record). If
@@ -176,6 +177,7 @@ sits between the check and the debit:
 ### Step 4: tests
 
 In `pay-policy.test.ts` add:
+
 - **X402-03**: `assertBoundedPolicy({ allowedNetworks: ["base"] })` throws;
   `assertBoundedPolicy({ maxPerCall: … })` does not.
 - **X402-01**: a requirement naming an asset not in `allowedAssets` (or not a known
@@ -207,7 +209,7 @@ In `pay-policy.test.ts` add:
   don't just delete the assertion; if unsure, report.
 - The `@x402/core` client has no way to register the before/failure hooks the plan
   assumes (the `fetch.ts` wiring changed) — report.
-- Any change would make a *legitimate* single stablecoin payment under the cap fail
+- Any change would make a _legitimate_ single stablecoin payment under the cap fail
   — that's a regression in the wrong direction; report.
 
 ## Maintenance notes

@@ -101,7 +101,7 @@ export const fingerprintError = (input: FingerprintErrorInput): ErrorFingerprint
     // an unsanitized NUL-bearing code could still poison persistence downstream.
     const code = stripNullBytes(input.code) ?? undefined;
     // `||` not `??` on purpose — matches the pre-existing empty-string fallthrough.
-     
+
     const culprit = stripNullBytes(input.functionPath) || "unknown";
     const bucket = messageBucketFor(message);
     const canonical = `lunora::${culprit}::${bucket}`;

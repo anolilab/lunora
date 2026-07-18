@@ -250,7 +250,6 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
 
         if (priorClass !== undefined) {
             throw new LunoraError(
-                 
                 "DUPLICATE_WORKFLOW_CLASS",
                 `Duplicate generated class "${agent.className}": produced by both ${priorClass} and agent "${agent.exportName}". Workflow and agent export names must yield unique generated class names.`,
                 { status: 500 },

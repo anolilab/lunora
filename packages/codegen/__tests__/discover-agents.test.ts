@@ -39,9 +39,7 @@ const sourceReturnTypeOf = (constantName: string): string => {
     // statements — `agentMessages` et al. are declared inside the
     // `agentComponent()` function body, so the declaration must be found by
     // walking every descendant instead.
-    const declaration = source
-        .getDescendantsOfKind(SyntaxKind.VariableDeclaration)
-        .find((candidate) => candidate.getName() === constantName);
+    const declaration = source.getDescendantsOfKind(SyntaxKind.VariableDeclaration).find((candidate) => candidate.getName() === constantName);
 
     if (!declaration) {
         throw new Error(`test: expected to find a variable declaration named "${constantName}" in component.ts`);
@@ -56,9 +54,7 @@ const sourceReturnTypeOf = (constantName: string): string => {
     const returnTypeText = typedArrows[0]!.getReturnTypeNodeOrThrow().getText();
     const promisePrefix = "Promise<";
 
-    return returnTypeText.startsWith(promisePrefix) && returnTypeText.endsWith(">")
-        ? returnTypeText.slice(promisePrefix.length, -1)
-        : returnTypeText;
+    return returnTypeText.startsWith(promisePrefix) && returnTypeText.endsWith(">") ? returnTypeText.slice(promisePrefix.length, -1) : returnTypeText;
 };
 
 const writeAgents = (source: string): void => {

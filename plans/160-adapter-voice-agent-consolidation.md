@@ -45,11 +45,11 @@ core the adapters depend on.
 
 ## Commands you will need
 
-| Purpose   | Command                                                                                  | Expected |
-|-----------|------------------------------------------------------------------------------------------|----------|
-| Build deps| `pnpm run build:packages`                                                                | exit 0   |
-| Typecheck | `pnpm --filter "@lunora/client" --filter "@lunora/react" --filter "@lunora/vue" --filter "@lunora/solid" --filter "@lunora/svelte" --filter "@lunora/angular" run lint:types` | exit 0 |
-| Tests     | each adapter's `run test`                                                                | all pass |
+| Purpose    | Command                                                                                                                                                                       | Expected |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| Build deps | `pnpm run build:packages`                                                                                                                                                     | exit 0   |
+| Typecheck  | `pnpm --filter "@lunora/client" --filter "@lunora/react" --filter "@lunora/vue" --filter "@lunora/solid" --filter "@lunora/svelte" --filter "@lunora/angular" run lint:types` | exit 0   |
+| Tests      | each adapter's `run test`                                                                                                                                                     | all pass |
 
 ## Scope
 
@@ -58,24 +58,29 @@ voice/agent/pagination files + tests. **Out of scope**: changing the public hook
 adapters expose (they stay; only their internals move to shared cores).
 
 ## Git workflow
+
 - Branch: `advisor/160-adapter-consolidation`; commit per extraction, e.g.
   `refactor(client): ship shared voice-audio; adapters re-export`.
 
 ## Steps
 
 ### Step 1 (S, do first): move `voice-audio.ts` into `@lunora/client`
+
 It's framework-free with zero imports — move it wholesale to `@lunora/client` (a
 `@lunora/client/voice-audio` subpath or internal module), and have all five adapters import
 it instead of holding a copy. Byte-identical behavior. **Verify**: all five adapters typecheck
-+ their voice tests pass; `git` shows five deletions + one addition.
+
+- their voice tests pass; `git` shows five deletions + one addition.
 
 ### Step 2 (M): shared pagination sync engine
+
 Extract a single pagination sync engine (WITH the Angular reentrancy guard from plan 150) into
 `@lunora/client/pagination`, and make vue/solid/svelte/angular bind to it reactively instead of
 hand-rolling. Preserves each adapter's reactive wrapper. **Verify**: pagination tests pass in
 all four; the reentrancy guard now protects all of them (folds in plan 150).
 
 ### Step 3 (L): framework-agnostic agent-chat + voice-agent cores
+
 Extract `createAgentChatCore` and `createVoiceAgentCore` (callbacks-in, state-events-out — the
 pattern `createQuerySubscription` uses) into `@lunora/client`, carrying the FIXED
 `reconcileOptimistic` (plan 149) and the credentialed-socket default (RN-01, plan 158). Adapters
@@ -83,11 +88,13 @@ become thin reactive bindings. **Verify**: agent-chat/voice tests pass in all fi
 repeated-prompt echo bug is fixed once, in the core.
 
 ### Step 4: delete the duplicates + tests
+
 Remove the per-adapter copies superseded by the cores; keep/adjust adapter tests to exercise the
 thin bindings. **Verify**: each adapter's test suite passes; `grep` shows the duplicated logic is
 gone.
 
 ## Done criteria
+
 - [ ] `lint:types` passes for client + all five adapters
 - [ ] All five adapter test suites pass
 - [ ] `voice-audio.ts` exists once (in `@lunora/client`); the five copies are deleted
@@ -96,6 +103,7 @@ gone.
 - [ ] No out-of-scope files modified; `plans/README.md` row updated
 
 ## STOP conditions
+
 - An adapter's copy has a genuine framework-specific divergence that can't live in a shared core
   (not just comments) — report which; extract only the truly shared parts.
 - Plans 149/150/158 have NOT landed and their fixes would be lost in the extraction — coordinate:
@@ -103,6 +111,7 @@ gone.
   state, run the drift check and report.
 
 ## Maintenance notes
+
 - After this, a bug in optimistic reconcile / pagination / voice is fixed once. This plan is the
   structural fix for the whole "one bug × five copies" class; 149/150/158 are the point-fixes it
   subsumes if it lands after them.

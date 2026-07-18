@@ -112,7 +112,7 @@ const isDuplicateCustomerError = (error: unknown): boolean => {
         return false;
     }
 
-    const {statusCode} = (error as { statusCode?: unknown });
+    const { statusCode } = error as { statusCode?: unknown };
 
     if (typeof statusCode === "number" && statusCode !== 400 && statusCode !== 409) {
         return false;

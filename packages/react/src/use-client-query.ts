@@ -46,7 +46,11 @@ const useClientQuery = <T extends unknown>(ref: ClientQueryRef<T>): [T, Setter<T
         [client, ref.key],
     );
 
-    const value = useSyncExternalStore(subscribe, () => client.getClientQuery(ref), () => client.getClientQuery(ref));
+    const value = useSyncExternalStore(
+        subscribe,
+        () => client.getClientQuery(ref),
+        () => client.getClientQuery(ref),
+    );
 
     const setter = useCallback<Setter<T>>(
         (next: T) => {

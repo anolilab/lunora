@@ -736,7 +736,7 @@ Plans initiated by direct user request rather than an advisor wave.
 | Plan | Title                                                          | Category          | Pri | Effort | Risk     | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ---- | -------------------------------------------------------------- | ----------------- | --- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 134  | `@lunora/x402` — agentic payments (charge + pay)               | direction         | P2  | L      | MED–HIGH | ALL PHASES SHIPPED (0–6) on `feat/x402-agentic-payments`. **Charge rail**: HTTP-action `withX402` (Phase 1, `3ab9af42d`) + per-procedure `.x402({ price })` with a fail-closed origin-worker 402 seam on `/_lunora/rpc` (Phase 2: 2a `dbcd94a84`, 2b `ab3a10d3`) + **paid MCP tools** — remote Streamable-HTTP transport for `@lunora/mcp` then `createPaidMcpServer`/`paidTool` reusing the Phase-1 charge middleware at the HTTP boundary (Phase 3: 3a `84e4ae642`, 3b `3ffd7717c`) + settlement receipts & opt-in one-way reporting bridge (Phase 6, `34b29c24`). **Pay rail**: three pluggable custody modes — raw-key signer on both families (EVM Phase 4 `8ed00cf2e`, SVM/Solana via `@solana/kit` follow-up `aa196ae98`), **CDP-managed** EVM custody via the optional `@coinbase/cdp-sdk` peer (`c204237dd`), and a **`{ type: "signer" }` escape hatch** taking any provider-built structural signer (`3c9899afc`) — all under a security-critical spend policy (Phase 5, `8ed00cf2e`). **DX wiring**: `@lunora/config` x402 capability inference + binding hints (`1cae1cb62`), codegen `ctx.x402` pay rail on ActionCtx (`49ffa1573`). Reuses `@x402/core` + `@x402/evm` + `@x402/svm` (+ `@x402/fetch`), all Apache-2.0. **Follow-ups resolved (2026-07-10)**: SVM pay custody shipped (`aa196ae98`); user-supplied-signer escape hatch shipped (`3c9899afc`, unlocks Turnkey/Privy/Fireblocks/KMS with no per-provider SDK dep); CDP-managed EVM custody shipped (`c204237dd`, `@coinbase/cdp-sdk@1.51.2` optional peer); advisor lint for unbounded pay policy **obviated** (Phase 5 made `policy` required+non-nullable → compile error + `assertBoundedPolicy` FORBIDDEN, and config lives outside procedure bodies). **Still deferred**: workerd boot-smoke (re-probed 2026-07-10 — pool still hangs on connect-timeout in-sandbox; gated `LUNORA_WORKERD_TESTS=1`); CDP-managed custody **on Solana** (a CDP Solana account is not a `@solana/kit` signer → fails loudly with `NOT_IMPLEMENTED` pointing at the escape hatch; CDP-EVM is shipped). |
-| 136  | Incremental external-source table mode (`mode: "incremental"`) | architecture/data | P3  | L      | HIGH     | **DONE & REMOVED** — shipped 2026-07-17 end-to-end: re-widened `ExternalSourceMode` union + `cursor`/`reconcileEveryMs`/`softDeleteColumn` on `ExternalSourceDefinition` (+ `defineSchema` validation) in `@lunora/server`; durable `__lunora_source_cursor` per-(table, shard) watermark table, `materializeExternalRowsIncremental` upsert-only apply, and `pullExternalSourceIncrementalTick` (first-poll/reconcile → full-pull seed+GC, else watermark-bound slice) in `@lunora/do`; codegen poll-loop `mode` branch + IR `hasSoftDelete`; the `external_source_incremental_no_delete_path` STOP lint in `@lunora/advisor`; and the `@lunora/hyperdrive` docs recipe. All four packages build/typecheck/test green (thermos-reviewed: numeric-string cursor compare + unchanged-row content short-circuit fixed). Plan file removed; record in git history.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 136  | Incremental external-source table mode (`mode: "incremental"`) | architecture/data | P3  | L      | HIGH     | **DONE & REMOVED** — shipped 2026-07-17 end-to-end: re-widened `ExternalSourceMode` union + `cursor`/`reconcileEveryMs`/`softDeleteColumn` on `ExternalSourceDefinition` (+ `defineSchema` validation) in `@lunora/server`; durable `__lunora_source_cursor` per-(table, shard) watermark table, `materializeExternalRowsIncremental` upsert-only apply, and `pullExternalSourceIncrementalTick` (first-poll/reconcile → full-pull seed+GC, else watermark-bound slice) in `@lunora/do`; codegen poll-loop `mode` branch + IR `hasSoftDelete`; the `external_source_incremental_no_delete_path` STOP lint in `@lunora/advisor`; and the `@lunora/hyperdrive` docs recipe. All four packages build/typecheck/test green (thermos-reviewed: numeric-string cursor compare + unchanged-row content short-circuit fixed). Plan file removed; record in git history.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 | 135 | Road to stable 1.0.0 (umbrella roadmap) | direction | P1 | XL | LOW | TODO — phase/exit-criteria tracker for promoting the alpha channel to a coordinated stable `1.0.0` on `main`. Synthesizes the 2026-07-16 three-track audit (code gaps, test/CI health, docs/release readiness). Key gates: workerd CI job (unblocks 122), plan 095 security fix, plan 090 wire fidelity, exact-alpha sibling peer re-pins, public-API snapshot tooling, docs-nav orphans. See [135-stable-1.0-roadmap.md](135-stable-1.0-roadmap.md). |
 
@@ -762,33 +762,33 @@ parameterization.
 
 ### Plans
 
-| Plan | Title | Findings | Category | Pkg | Pri | Effort | Risk | Status |
-| ---- | ----- | -------- | -------- | --- | --- | ------ | ---- | ------ |
-| 138 | Close mask() oracle on where-batch-writes + `baseWhere` reads | SERVER-01/02 | security | server | P1 | S | LOW | TODO |
-| 139 | Fail RAG lexical store closed on all non-empty filters | AI-01 | security | ai | P1 | S | LOW | TODO |
-| 140 | Harden x402 spend policy (asset, per-run race, unbounded allowlist) | X402-01/02/03 | security | x402 | P1 | S–M | MED | TODO |
-| 141 | Bind agent tool-approval to thread+call; close id-less concurrency bypass | AGENT-01/02 | security | agent | P1 | S | LOW | TODO |
-| 142 | Reconcile `triggers.crons` on deploy/prepare (crons never fire in prod) | CLI-01 | bug | cli | P1 | M | MED | TODO |
-| 143 | External-source ingest correctness (Date/bigint brick + edges) | DO-01…05 | bug | do | P1/P3 | M | LOW–MED | TODO |
-| 144 | Scheduled actions get an ActionCtx in the harness | TESTING-01 | tests | testing | P2 | S | LOW | TODO |
-| 145 | x402 charge: settle before committing paid mutations; deliver receipt sink | X402-04/05 | security/bug | x402 | P2 | M | MED | TODO |
-| 146 | Replica event-log: atomic/idempotent append, per-materializer watermark | REPLICA-02/03/04 | bug | replica | P2 | M | MED | TODO |
-| 147 | Bound agent memory hot-path `.collect()`s (graph seeds, thread messages) | AGENT-03/04 | perf | agent | P2 | M | LOW–MED | TODO |
-| 148 | Sourced-DO alarm re-arms at next-due, not the 2 s floor | DO-06 | perf | do/codegen | P3 | S–M | MED | TODO |
-| 149 | Agent-chat optimistic echo for repeated prompts (5 adapters) | REACT-01 | bug | react+4 | P2 | S–M | LOW | TODO |
-| 150 | Port pagination reentrancy guard to Svelte/Solid (sub leak) | SVELTE-01/SOLID-01 | bug | svelte/solid | P2 | S | LOW | TODO |
-| 151 | Surface failures on Studio org-admin row actions | STUDIO-01 | bug | studio | P2 | S | LOW | TODO |
-| 152 | Sanitize `fingerprintError` outputs (NUL/surrogate) + bucketer | FP-02/03 | bug | fingerprint | P3 | S | LOW–MED | TODO |
-| 153 | Codegen agent-discovery guards (uniqueness/wrapped/cron/shadow) | CODEGEN-01…04 | bug | codegen | P3 | S–M | LOW–MED | TODO |
-| 154 | CLI correctness cluster (env-set dup, entry probe, loopback, PM cast) | CLI-02…05 | bug | cli | P3 | S | LOW | TODO |
-| 155 | Dedup detectors/constants across config & codegen | CONFIG-01/02/03, CODEGEN-05 | tech-debt | config/codegen | P3 | S–M | LOW–MED | TODO |
-| 156 | Fix Creem email-recovery cross-tenant customer binding | PAY-01 | security | payment | P2 | S | LOW | TODO |
-| 157 | RAG hybrid-scoring cliff, inert text-store importance, fail-fast index | AI-02/03/04 | bug/perf | ai | P3 | S–M | LOW | TODO |
-| 158 | Small client/react/rn fixes (reset, stream leak, resubscribe, native voice) | CLIENT-04/05, REACT-02, RN-01 | bug/perf | client/react/rn | P3 | S | LOW | TODO |
-| 159 | Replica remaining correctness (adapter/replay/growth/EventSource/sync) | REPLICA-01/05/06/07/08/09 | bug | replica | P3 | S–M | LOW–MED | TODO |
-| 160 | Consolidate the ~2k-line voice/agent surface across 5 adapters | CLIENT-06 | tech-debt | client+5 | P3 | M–L | LOW–MED | TODO |
-| 161 | Agent misc: discriminate as-tool create errors; container-gate scope | AGENT-05/06 | bug/docs | agent | P3 | S | LOW | TODO |
-| 162 | crossTabSync leader demotion + offline-queue FIFO; relay design | CLIENT-01/02/03 | bug/design | client | P3 | M–L | MED | TODO |
+| Plan | Title                                                                       | Findings                      | Category     | Pkg             | Pri   | Effort | Risk    | Status |
+| ---- | --------------------------------------------------------------------------- | ----------------------------- | ------------ | --------------- | ----- | ------ | ------- | ------ |
+| 138  | Close mask() oracle on where-batch-writes + `baseWhere` reads               | SERVER-01/02                  | security     | server          | P1    | S      | LOW     | TODO   |
+| 139  | Fail RAG lexical store closed on all non-empty filters                      | AI-01                         | security     | ai              | P1    | S      | LOW     | TODO   |
+| 140  | Harden x402 spend policy (asset, per-run race, unbounded allowlist)         | X402-01/02/03                 | security     | x402            | P1    | S–M    | MED     | TODO   |
+| 141  | Bind agent tool-approval to thread+call; close id-less concurrency bypass   | AGENT-01/02                   | security     | agent           | P1    | S      | LOW     | TODO   |
+| 142  | Reconcile `triggers.crons` on deploy/prepare (crons never fire in prod)     | CLI-01                        | bug          | cli             | P1    | M      | MED     | TODO   |
+| 143  | External-source ingest correctness (Date/bigint brick + edges)              | DO-01…05                      | bug          | do              | P1/P3 | M      | LOW–MED | TODO   |
+| 144  | Scheduled actions get an ActionCtx in the harness                           | TESTING-01                    | tests        | testing         | P2    | S      | LOW     | TODO   |
+| 145  | x402 charge: settle before committing paid mutations; deliver receipt sink  | X402-04/05                    | security/bug | x402            | P2    | M      | MED     | TODO   |
+| 146  | Replica event-log: atomic/idempotent append, per-materializer watermark     | REPLICA-02/03/04              | bug          | replica         | P2    | M      | MED     | TODO   |
+| 147  | Bound agent memory hot-path `.collect()`s (graph seeds, thread messages)    | AGENT-03/04                   | perf         | agent           | P2    | M      | LOW–MED | TODO   |
+| 148  | Sourced-DO alarm re-arms at next-due, not the 2 s floor                     | DO-06                         | perf         | do/codegen      | P3    | S–M    | MED     | TODO   |
+| 149  | Agent-chat optimistic echo for repeated prompts (5 adapters)                | REACT-01                      | bug          | react+4         | P2    | S–M    | LOW     | TODO   |
+| 150  | Port pagination reentrancy guard to Svelte/Solid (sub leak)                 | SVELTE-01/SOLID-01            | bug          | svelte/solid    | P2    | S      | LOW     | TODO   |
+| 151  | Surface failures on Studio org-admin row actions                            | STUDIO-01                     | bug          | studio          | P2    | S      | LOW     | TODO   |
+| 152  | Sanitize `fingerprintError` outputs (NUL/surrogate) + bucketer              | FP-02/03                      | bug          | fingerprint     | P3    | S      | LOW–MED | TODO   |
+| 153  | Codegen agent-discovery guards (uniqueness/wrapped/cron/shadow)             | CODEGEN-01…04                 | bug          | codegen         | P3    | S–M    | LOW–MED | TODO   |
+| 154  | CLI correctness cluster (env-set dup, entry probe, loopback, PM cast)       | CLI-02…05                     | bug          | cli             | P3    | S      | LOW     | TODO   |
+| 155  | Dedup detectors/constants across config & codegen                           | CONFIG-01/02/03, CODEGEN-05   | tech-debt    | config/codegen  | P3    | S–M    | LOW–MED | TODO   |
+| 156  | Fix Creem email-recovery cross-tenant customer binding                      | PAY-01                        | security     | payment         | P2    | S      | LOW     | TODO   |
+| 157  | RAG hybrid-scoring cliff, inert text-store importance, fail-fast index      | AI-02/03/04                   | bug/perf     | ai              | P3    | S–M    | LOW     | TODO   |
+| 158  | Small client/react/rn fixes (reset, stream leak, resubscribe, native voice) | CLIENT-04/05, REACT-02, RN-01 | bug/perf     | client/react/rn | P3    | S      | LOW     | TODO   |
+| 159  | Replica remaining correctness (adapter/replay/growth/EventSource/sync)      | REPLICA-01/05/06/07/08/09     | bug          | replica         | P3    | S–M    | LOW–MED | TODO   |
+| 160  | Consolidate the ~2k-line voice/agent surface across 5 adapters              | CLIENT-06                     | tech-debt    | client+5        | P3    | M–L    | LOW–MED | TODO   |
+| 161  | Agent misc: discriminate as-tool create errors; container-gate scope        | AGENT-05/06                   | bug/docs     | agent           | P3    | S      | LOW     | TODO   |
+| 162  | crossTabSync leader demotion + offline-queue FIFO; relay design             | CLIENT-01/02/03               | bug/design   | client          | P3    | M–L    | MED     | TODO   |
 
 ### Recommended execution order & dependencies
 
@@ -799,14 +799,14 @@ parameterization.
 - **Then perf + user-visible:** 147, 148, 149, 150, 151, 152.
 - **DX/tooling + tail:** 153, 154, 155, 157, 158, 159.
 - **Dependencies / interactions:**
-  - **149 (REACT-01), 150 (SVELTE/SOLID-01), 158 (RN-01) are point-fixes subsumed by
-    160 (CLIENT-06 consolidation).** If 160 lands *after* them, fold the fixes into
-    the shared cores; if 160 lands *first*, apply the point-fixes in the single shared
-    copy. Each plan's STOP conditions call this out — check the tree state first.
-  - **148 pairs with 143** (both external-source, different concerns — cadence vs.
-    content) but is independent; land in either order.
-  - **146 complements 159** (both replica; 146 = write/recovery path, 159 = the rest).
-  - 153, 148, 155 touch codegen goldens — regenerate and keep the diff intended-only.
+    - **149 (REACT-01), 150 (SVELTE/SOLID-01), 158 (RN-01) are point-fixes subsumed by
+      160 (CLIENT-06 consolidation).** If 160 lands _after_ them, fold the fixes into
+      the shared cores; if 160 lands _first_, apply the point-fixes in the single shared
+      copy. Each plan's STOP conditions call this out — check the tree state first.
+    - **148 pairs with 143** (both external-source, different concerns — cadence vs.
+      content) but is independent; land in either order.
+    - **146 complements 159** (both replica; 146 = write/recovery path, 159 = the rest).
+    - 153, 148, 155 touch codegen goldens — regenerate and keep the diff intended-only.
 
 ### Findings considered and rejected / by-design (Wave 13)
 
@@ -851,35 +851,36 @@ which was reliable. Every diff was reviewer-verified (scope, correctness, re-run
 commit on `alpha`, stripped of the stray local `chore(release)` version-bump stack that
 `multi-semantic-release` generated inside worktree builds.
 
-| Plan | Status | Branch (`advisor/…`) | Gate result |
-| ---- | ------ | -------------------- | ----------- |
-| 138 | ✅ DONE | `138-mask-oracle` | server 419/419 |
-| 139 | ✅ DONE | `139-rag-lexical-rls` | ai 90/90 |
-| 140 | 🔶 PARTIAL | `140-x402-spend-policy` | x402 80/80 — X402-02/03 done; **X402-01 STOP** (premise wrong, plan revised) |
-| 141 | ✅ DONE | `141-agent-approval-concurrency` | agent 269/269 |
-| 142 | ✅ DONE | `142-cron-reconcile` | config 443 / cli 671 / vite 178 |
-| 143 | ✅ DONE | `143-external-source` | do 1102/1102 |
-| 144 | ✅ DONE | `144-harness-scheduled-action-ctx` | testing (lint-verified) |
-| 145 | ✅ DONE | `145-x402-charge-settlement-receipt` | x402 81/81 |
-| 146 | ✅ DONE | `146-replica-event-log` | replica 233/233 — ⚠ source carries pre-existing ESLint errors (lint:types+tests green) |
-| 147 | ✅ DONE | `147-agent-memory-hotpath` | agent 266/266 |
-| 148 | ✅ DONE | `148-sourced-do-alarm-nextdue` | do 1095 / codegen 829 |
-| 149 | ✅ DONE | `149-optimistic-echo` | react 132 / vue 90 / solid 79 / svelte 85 / angular 88 |
-| 150 | ✅ DONE | `150-pagination-guard` | svelte 85 / solid 79 (solid = safe hardening) |
-| 151 | ✅ DONE | `151-studio-org-admin-errors` | studio (lint-verified) |
-| 152 | ✅ DONE | `152-fingerprint-sanitize` | fingerprint (lint-verified) |
-| 153 | ✅ DONE | `153-codegen-guards` | codegen 838/838 |
-| 154 | ✅ DONE | `154-cli-correctness` | cli 676/676 |
-| 155 | ✅ DONE | `155-config-codegen-dedup` | config 453 / codegen 829 |
-| 156 | ✅ DONE | `156-creem-cross-tenant` | payment (lint-verified) |
-| 157 | ✅ DONE | `157-rag-scoring-indexing` | ai 91/91 — AI-02 diagnosis corrected in-flight |
-| 158 | ✅ DONE | `158-client-small` | client 392 / react 134 |
-| 159 | ✅ DONE | `159-replica` | replica 246/246 — REPLICA-01 fixture not run vs real sqlite-wasm; REPLICA-06 partial per STOP |
-| 161 | ✅ DONE | `161-agent-misc` | agent 267/267 |
-| 162 | ✅ DONE | `162-crosstabsync` | client 391/391 — CLIENT-01 = design doc (`162-phase0-crosstabsync-design.md`) |
-| 160 | ⏸ DEFERRED | — | L consolidation; subsumes 149/150/158 — run after those merge |
+| Plan | Status     | Branch (`advisor/…`)                 | Gate result                                                                                   |
+| ---- | ---------- | ------------------------------------ | --------------------------------------------------------------------------------------------- |
+| 138  | ✅ DONE    | `138-mask-oracle`                    | server 419/419                                                                                |
+| 139  | ✅ DONE    | `139-rag-lexical-rls`                | ai 90/90                                                                                      |
+| 140  | 🔶 PARTIAL | `140-x402-spend-policy`              | x402 80/80 — X402-02/03 done; **X402-01 STOP** (premise wrong, plan revised)                  |
+| 141  | ✅ DONE    | `141-agent-approval-concurrency`     | agent 269/269                                                                                 |
+| 142  | ✅ DONE    | `142-cron-reconcile`                 | config 443 / cli 671 / vite 178                                                               |
+| 143  | ✅ DONE    | `143-external-source`                | do 1102/1102                                                                                  |
+| 144  | ✅ DONE    | `144-harness-scheduled-action-ctx`   | testing (lint-verified)                                                                       |
+| 145  | ✅ DONE    | `145-x402-charge-settlement-receipt` | x402 81/81                                                                                    |
+| 146  | ✅ DONE    | `146-replica-event-log`              | replica 233/233 — ⚠ source carries pre-existing ESLint errors (lint:types+tests green)        |
+| 147  | ✅ DONE    | `147-agent-memory-hotpath`           | agent 266/266                                                                                 |
+| 148  | ✅ DONE    | `148-sourced-do-alarm-nextdue`       | do 1095 / codegen 829                                                                         |
+| 149  | ✅ DONE    | `149-optimistic-echo`                | react 132 / vue 90 / solid 79 / svelte 85 / angular 88                                        |
+| 150  | ✅ DONE    | `150-pagination-guard`               | svelte 85 / solid 79 (solid = safe hardening)                                                 |
+| 151  | ✅ DONE    | `151-studio-org-admin-errors`        | studio (lint-verified)                                                                        |
+| 152  | ✅ DONE    | `152-fingerprint-sanitize`           | fingerprint (lint-verified)                                                                   |
+| 153  | ✅ DONE    | `153-codegen-guards`                 | codegen 838/838                                                                               |
+| 154  | ✅ DONE    | `154-cli-correctness`                | cli 676/676                                                                                   |
+| 155  | ✅ DONE    | `155-config-codegen-dedup`           | config 453 / codegen 829                                                                      |
+| 156  | ✅ DONE    | `156-creem-cross-tenant`             | payment (lint-verified)                                                                       |
+| 157  | ✅ DONE    | `157-rag-scoring-indexing`           | ai 91/91 — AI-02 diagnosis corrected in-flight                                                |
+| 158  | ✅ DONE    | `158-client-small`                   | client 392 / react 134                                                                        |
+| 159  | ✅ DONE    | `159-replica`                        | replica 246/246 — REPLICA-01 fixture not run vs real sqlite-wasm; REPLICA-06 partial per STOP |
+| 161  | ✅ DONE    | `161-agent-misc`                     | agent 267/267                                                                                 |
+| 162  | ✅ DONE    | `162-crosstabsync`                   | client 391/391 — CLIENT-01 = design doc (`162-phase0-crosstabsync-design.md`)                 |
+| 160  | ⏸ DEFERRED | —                                    | L consolidation; subsumes 149/150/158 — run after those merge                                 |
 
 **Notes for the maintainer merging these:**
+
 - All 24 branches are independent single-commit deltas on `alpha`; merge in any order.
   Same-package branches will textually conflict (e.g. agent: 141/147/161; ai: 139/157;
   x402: 140/145; replica: 146/159; client: 158/162 + 149/150) — sequence those.

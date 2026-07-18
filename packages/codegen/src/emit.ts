@@ -752,9 +752,7 @@ const renderAgentFunctionRegistry = (
 
     const taken = takenAgentFunctionNames(functions);
     const internal = internalAgentRuntimeFunctionNames();
-    const shadowedInternal = functions.find(
-        (definition) => sanitizeNamespace(definition.filePath) === "agents" && internal.has(definition.exportName),
-    );
+    const shadowedInternal = functions.find((definition) => sanitizeNamespace(definition.filePath) === "agents" && internal.has(definition.exportName));
 
     if (shadowedInternal) {
         throw new LunoraError(

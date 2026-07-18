@@ -851,12 +851,16 @@ describe("approval resolution", () => {
         await callMutation(functions.agentEnsureThread, { ...ctx, agents }, { agent: "support", instanceId: "wf-real", key: "t-1" });
 
         await expect(
-            callMutation(functions.agentResolveApproval, { ...ctx, agents }, {
-                decision: "approve",
-                instanceId: "wf-attacker-guessed",
-                threadKey: "t-1",
-                toolCallId: "call_1",
-            }),
+            callMutation(
+                functions.agentResolveApproval,
+                { ...ctx, agents },
+                {
+                    decision: "approve",
+                    instanceId: "wf-attacker-guessed",
+                    threadKey: "t-1",
+                    toolCallId: "call_1",
+                },
+            ),
         ).rejects.toThrow(DOES_NOT_OWN_THREAD_PATTERN);
 
         // Never reached the workflow binding for the wrong instance.
@@ -870,18 +874,26 @@ describe("approval resolution", () => {
 
         await callMutation(functions.agentEnsureThread, { ...ctx, agents }, { agent: "support", instanceId: "wf-1", key: "t-1" });
 
-        await callMutation(functions.agentResolveApproval, { ...ctx, agents }, {
-            decision: "approve",
-            instanceId: "wf-1",
-            threadKey: "t-1",
-            toolCallId: "call_A",
-        });
-        await callMutation(functions.agentResolveApproval, { ...ctx, agents }, {
-            decision: "reject",
-            instanceId: "wf-1",
-            threadKey: "t-1",
-            toolCallId: "call_B",
-        });
+        await callMutation(
+            functions.agentResolveApproval,
+            { ...ctx, agents },
+            {
+                decision: "approve",
+                instanceId: "wf-1",
+                threadKey: "t-1",
+                toolCallId: "call_A",
+            },
+        );
+        await callMutation(
+            functions.agentResolveApproval,
+            { ...ctx, agents },
+            {
+                decision: "reject",
+                instanceId: "wf-1",
+                threadKey: "t-1",
+                toolCallId: "call_B",
+            },
+        );
 
         // Each decision's event type is scoped to ITS OWN call id — never the same
         // type twice, so a `step.waitForEvent` pending on one call.id's type can

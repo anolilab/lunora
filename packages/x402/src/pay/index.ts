@@ -29,7 +29,15 @@ export { isEvmNetwork, isSvmNetwork, toCaip2 } from "../networks";
 export type { PayFetch, X402PayDeps } from "./fetch";
 export { createPayFetch } from "./fetch";
 export type { SpendPolicy, SpendState } from "./policy";
-export { assertBoundedPolicy, buildPaymentGuard, buildSpendPolicy, createSpendState, DEFAULT_STABLECOIN_DECIMALS, releaseSpendOnFailure, usdToAtomic } from "./policy";
+export {
+    assertBoundedPolicy,
+    buildPaymentGuard,
+    buildSpendPolicy,
+    createSpendState,
+    DEFAULT_STABLECOIN_DECIMALS,
+    releaseSpendOnFailure,
+    usdToAtomic,
+} from "./policy";
 export type { WalletDeps } from "./wallet";
 export { registerWallet, resolveEvmAccount, resolveSvmSigner } from "./wallet";
 

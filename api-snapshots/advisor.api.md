@@ -1044,6 +1044,12 @@ const duplicateIndex: Lint;
 const emptyIndex: Lint;
 ```
 
+### `externalSourceIncrementalNoDeletePath` (const)
+
+```ts
+const externalSourceIncrementalNoDeletePath: Lint;
+```
+
 ### `externalSourceOnGlobal` (const)
 
 ```ts
