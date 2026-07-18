@@ -15,6 +15,16 @@ type PackageManager = "pnpm" | "npm" | "yarn" | "bun";
  */
 const INSTALL_PREFERENCE: ReadonlyArray<PackageManager> = ["pnpm", "bun", "yarn", "npm"];
 
+/** The full set of `PackageManager` names — used to validate an arbitrary agent-name string before it's trusted. */
+const KNOWN_PACKAGE_MANAGERS: ReadonlySet<string> = new Set<PackageManager>(["bun", "npm", "pnpm", "yarn"]);
+
+/**
+ * Narrow an arbitrary manager-name string (e.g. `identifyInitiatingPackageManager()`'s
+ * `name`, which `@visulima/package` types as `PackageManager | "cnpm" | (string & {})` —
+ * effectively any string) to the known `PackageManager` union.
+ */
+const isKnownPackageManager = (name: string): name is PackageManager => KNOWN_PACKAGE_MANAGERS.has(name);
+
 /** True when `manager` is on PATH — probed by running `&lt;manager> --version`. Injectable for tests. */
 type PackageManagerProbe = (manager: PackageManager) => boolean;
 
@@ -67,7 +77,15 @@ const detectPackageManager = (startDirectory: string): PackageManager => {
 
     if (initiating !== undefined) {
         // `cnpm` (npminstall) is npm-compatible for our exec/run purposes.
-        return initiating.name === "cnpm" ? "npm" : (initiating.name as PackageManager);
+        const name = initiating.name === "cnpm" ? "npm" : initiating.name;
+
+        // Validate rather than cast: an unrecognized agent string (a future or
+        // unknown package manager, or a malformed `npm_config_user_agent`) must
+        // not flow unvalidated into `execArgsFor`/spawn — fall through to the
+        // installed-manager probe below instead of trusting it.
+        if (isKnownPackageManager(name)) {
+            return name;
+        }
     }
 
     const [installed] = detectInstalledManagers();

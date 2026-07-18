@@ -8,6 +8,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
+import { findWranglerFile, readWranglerJsonc } from "@lunora/config";
 import { LunoraError } from "@lunora/errors";
 import { dirname, join, relative } from "@visulima/path";
 
@@ -209,36 +210,44 @@ const reconcileFile = (
 };
 
 /**
- * Conventional worker-entry locations probed when wrangler `main` doesn't resolve.
- * Mirrors `.vis/templates/_helpers/wire-worker-entry.ts`.
+ * Conventional worker-entry locations probed when wrangler `main` doesn't
+ * resolve. Mirrors `.vis/templates/_helpers/wire-worker-entry.ts` (the
+ * scaffolder's own candidate order) and, past that, the additional
+ * `src/server/index.tsx` candidate `@lunora/config`'s (binding-inference)
+ * `resolveWorkerEntry` also probes — kept in sync by hand since sharing a
+ * single exported constant would mean changing `@lunora/config`'s resolver
+ * surface, which is out of scope here.
  */
-const WORKER_ENTRY_FALLBACKS = ["src/server.ts", "src/server/index.ts", "src/index.ts", "src/worker.ts"];
+const WORKER_ENTRY_FALLBACKS = ["src/server.ts", "src/server/index.ts", "src/server/index.tsx", "src/index.ts", "src/worker.ts"];
 
-/** Regex to extract wrangler `main` field (tolerant of jsonc comments). */
-const WRANGLER_MAIN_RE = /"main"\s*:\s*"([^"]+)"/u;
-
-/** Read wrangler `main` field (regex-based, tolerant of jsonc comments). */
+/**
+ * Read wrangler `main` via `@lunora/config`'s comment-safe JSONC reader
+ * (`findWranglerFile` + `readWranglerJsonc`) — real JSONC parsing, so a
+ * commented-out `"main"` (or one inside a string) is correctly ignored,
+ * unlike a regex match against the raw file text.
+ */
 const readWranglerMain = (projectRoot: string): string | undefined => {
-    for (const file of ["wrangler.jsonc", "wrangler.json"]) {
-        const path = join(projectRoot, file);
+    const wranglerPath = findWranglerFile(projectRoot);
 
-        if (!existsSync(path)) {
-            continue;
-        }
-
-        const match = WRANGLER_MAIN_RE.exec(readFileSync(path, "utf8"));
-
-        if (match?.[1]) {
-            return match[1];
-        }
+    if (wranglerPath === undefined) {
+        return undefined;
     }
 
-    return undefined;
+    const { parsed } = readWranglerJsonc<{ main?: string }>(wranglerPath);
+
+    return typeof parsed?.main === "string" ? parsed.main : undefined;
 };
 
 /**
  * Find the class-B/C worker entry file (the file calling `createShardDO`).
  * Returns `{ entryPath, source }` or `undefined` when class-A / not found.
+ *
+ * Probes every candidate — a fallback guess lacking the marker just means
+ * "not the entry", so it must not stop the search (a marker-less
+ * `src/server.ts` existing alongside a real `src/index.ts` entry must still
+ * resolve to `src/index.ts`). Only the wrangler-*declared* `main` lacking the
+ * marker is a decisive signal (it names the actual worker entry, so a
+ * fallback guess can't override it) — that alone stops the search early.
  */
 const findWorkerEntry = (projectRoot: string): { entryPath: string; main: string; source: string } | undefined => {
     const main = readWranglerMain(projectRoot);
@@ -255,7 +264,11 @@ const findWorkerEntry = (projectRoot: string): { entryPath: string; main: string
 
         // Only touch class-B/C workers (contain `createShardDO(`).
         if (!content.includes("createShardDO(")) {
-            break;
+            if (candidate === main) {
+                break;
+            }
+
+            continue;
         }
 
         return { entryPath: absolute, main: candidate, source: content };
