@@ -85,17 +85,70 @@ const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 // mirroring the codegen feature probe.
 const CTX_PIPELINES_PATTERN = /\bctx\s*\.\s*pipelines\b/;
 const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
-// The batteries-included `browserTool` (from `@lunora/agent`, main entry or the
-// `/sandbox` subpath) drives `ctx.browser` inside the auto-registered sandbox
-// dispatcher, so importing it must provision the BROWSER binding just like a
-// direct `@lunora/browser` import does — even though the app never imports
-// `@lunora/browser` itself. Match a named *value* `browserTool` import from
-// either specifier (no leading `import type`, mirroring codegen's type-only
-// exclusion — a type-only import wires nothing, so it must not provision a
-// binding). Both specifiers must match, or the documented main-entry import
-// (`import { browserTool } from "@lunora/agent"`) would type-check yet skip
-// provisioning BROWSER, crashing only at run time.
-const SANDBOX_BROWSER_TOOL_PATTERN = /import\s+\{[^}]*\bbrowserTool\b[^}]*\}\s+from\s+["']@lunora\/agent(?:\/sandbox)?["']/;
+
+/**
+ * The specifiers the batteries-included `browserTool` sandbox detector treats
+ * as `@lunora/agent` — mirrors `discover-sandbox.ts`'s identical constant
+ * exactly (both the main entry and the `/sandbox` subpath re-export the tool).
+ */
+const SANDBOX_MODULE_SPECIFIERS = new Set(["@lunora/agent", "@lunora/agent/sandbox"]);
+
+/**
+ * A specifier-level `{ type browserTool }` inside an otherwise-value import —
+ * compiles away even though the import declaration itself is a value import
+ * (e.g. alongside `containerTool`). Mirrors `discover-sandbox.ts`'s
+ * `named.isTypeOnly()` guard.
+ */
+const BROWSER_TOOL_TYPE_SPECIFIER_PATTERN = /\{[^}]*\btype\s+browserTool\b[^}]*\}/;
+
+/** A named `browserTool` specifier appears anywhere in the import's brace list. */
+const BROWSER_TOOL_NAMED_PATTERN = /\{[^}]*\bbrowserTool\b[^}]*\}/;
+
+/**
+ * Whole-file regex fallback for `hasSandboxBrowserToolImport`, used ONLY when
+ * `es-module-lexer` can't parse the file (e.g. mid-edit) — same
+ * degrade-gracefully contract as `capabilitiesFromSource`'s
+ * `lexCapabilities`/`regexCapabilities` split. Being a blind text sweep, it
+ * shares the same comment-blindness every other capability's regex fallback
+ * already has; the primary (lexer-based) path below does not.
+ */
+const SANDBOX_BROWSER_TOOL_FALLBACK_PATTERN = /import\s+\{[^}]*\bbrowserTool\b[^}]*\}\s+from\s+["']@lunora\/agent(?:\/sandbox)?["']/;
+
+/**
+ * True when the sliced text of a SINGLE import declaration is a VALUE
+ * (non-type-only) named import of `browserTool` — mirrors
+ * `discover-sandbox.ts`'s `declaration.isTypeOnly()` (whole import) and
+ * `named.isTypeOnly()` (single specifier) guards exactly.
+ */
+const isValueBrowserToolImport = (statementText: string): boolean => {
+    if (TYPE_ONLY_IMPORT_PATTERN.test(statementText)) {
+        return false; // `import type { browserTool } from …` — the whole import compiles away.
+    }
+
+    return BROWSER_TOOL_NAMED_PATTERN.test(statementText) && !BROWSER_TOOL_TYPE_SPECIFIER_PATTERN.test(statementText);
+};
+
+/**
+ * Whether `code` contains a VALUE `browserTool` import from `@lunora/agent`
+ * (main entry or `/sandbox`). Unlike the old whole-file regex sweep, this
+ * walks `es-module-lexer`'s PARSED import records and tests only the sliced
+ * text of each matching declaration — a commented-out import (`// import {
+ * browserTool } from "@lunora/agent";`) is never parsed as a declaration at
+ * all, so it can never match, and a `type`-prefixed specifier is rejected by
+ * {@link isValueBrowserToolImport}. This is what makes the detector agree with
+ * `discover-sandbox.ts`'s AST-based one on the same fixture matrix.
+ */
+const hasSandboxBrowserToolImport = (code: string): boolean => {
+    try {
+        const [imports] = lexModule(code);
+
+        return imports.some(
+            (entry) => entry.n !== undefined && SANDBOX_MODULE_SPECIFIERS.has(entry.n) && isValueBrowserToolImport(code.slice(entry.ss, entry.se)),
+        );
+    } catch {
+        return SANDBOX_BROWSER_TOOL_FALLBACK_PATTERN.test(code);
+    }
+};
 
 /**
  * The single source of truth for import-driven capabilities: each capability
@@ -342,13 +395,15 @@ const capabilitiesFromSource = (code: string): Capabilities => {
         capabilities = regexCapabilities(code);
     }
 
+    // NOTE: `usesBrowser`'s sandbox-`browserTool` half is intentionally NOT
+    // folded in here — see `scanSandboxBrowserToolUsage` below. Unlike every
+    // other probe, it must be scoped to EXACTLY the `lunora/` file set
+    // `discover-sandbox.ts` scans (never `src/`), so it runs as a separate,
+    // lunora-only pass in `inferLunoraBindings` instead.
     return mergeCapabilities(capabilities, {
         ...NO_CAPABILITIES,
         needsD1: ENV_DB_PATTERN.test(code),
         usesAi: ENV_AI_PATTERN.test(code),
-        // A sandbox `browserTool` import provisions BROWSER even without a direct
-        // `@lunora/browser` import (the browser op runs on the dispatcher's ctx).
-        usesBrowser: SANDBOX_BROWSER_TOOL_PATTERN.test(code),
         usesPipelines: CTX_PIPELINES_PATTERN.test(code),
     });
 };
@@ -447,36 +502,44 @@ const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] =>
     });
 };
 
-/**
- * Matches an `export * from "…/_generated/containers"` (with or without the
- * `.js` extension) — the conventional way a worker entry re-exports every
- * generated container class at once. `es-module-lexer` lists the module
- * request but not the names a star re-export forwards, so the path itself is
- * the signal that all generated container classes are exported.
- */
-const CONTAINERS_STAR_REEXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*_generated\/containers(?:\.js)?["']/;
+/** A discovered definition whose generated class may or may not be exported by the worker entry. */
+interface ClassExportable {
+    className: string;
+}
 
 /**
- * Whether the worker entry exports each generated container class: a named
+ * Whether the worker entry exports each definition's generated class: a named
  * export of the class (covered by `es-module-lexer`'s export list) or the
- * conventional `export * from "./lunora/_generated/containers"` star
- * re-export. Mirrors `detectExportedDurableObjects` — exports are the only
- * safe provisioning signal, since wrangler validates `class_name` against the
- * worker's exports at deploy.
+ * conventional `export * from "./lunora/_generated/<generatedModule>"` star
+ * re-export — the way a worker entry re-exports every generated class of one
+ * kind at once. `es-module-lexer` lists the module request but not the names a
+ * star re-export forwards, so the path itself is the signal that every class
+ * from that module is exported.
+ *
+ * One generic replaces what were three near-identical copies
+ * (`detectContainerExports`/`detectWorkflowExports`/`detectAgentExports`,
+ * differing only in the star-reexport module name and the IR type) — exports
+ * are the only safe provisioning signal for all three kinds, since wrangler
+ * validates `class_name` against the worker's exports at deploy. Mirrors
+ * `detectExportedDurableObjects`'s same lexer-then-regex-fallback shape.
  */
-const detectContainerExports = (entryPath: string | undefined, containers: ReadonlyArray<ContainerIR>): InferredContainer[] => {
-    if (containers.length === 0) {
+const detectClassExports = <Definition extends ClassExportable>(
+    entryPath: string | undefined,
+    definitions: ReadonlyArray<Definition>,
+    generatedModule: string,
+): (Definition & { exported: boolean })[] => {
+    if (definitions.length === 0) {
         return [];
     }
 
     if (entryPath === undefined) {
-        return containers.map((container) => {
-            return { ...container, exported: false };
+        return definitions.map((definition) => {
+            return { ...definition, exported: false };
         });
     }
 
     const code = readFileSync(entryPath, "utf8");
-    const starReexport = CONTAINERS_STAR_REEXPORT_PATTERN.test(code);
+    const starReexport = new RegExp(String.raw`\bexport\s*\*\s*from\s*["'][^"']*_generated\/${generatedModule}(?:\.js)?["']`).test(code);
 
     let exportedNames: Set<string>;
 
@@ -486,109 +549,30 @@ const detectContainerExports = (entryPath: string | undefined, containers: Reado
         exportedNames = new Set(exports.map((entry) => entry.n));
     } catch {
         exportedNames = new Set(
-            containers.map((container) => container.className).filter((className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`).test(code)),
+            definitions.map((definition) => definition.className).filter((className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`).test(code)),
         );
     }
 
-    return containers.map((container) => {
-        return { ...container, exported: starReexport || exportedNames.has(container.className) };
+    return definitions.map((definition) => {
+        return { ...definition, exported: starReexport || exportedNames.has(definition.className) };
     });
 };
 
-/**
- * Matches an `export * from "…/_generated/workflows"` (with or without the
- * `.js` extension) — the conventional way a worker entry re-exports every
- * generated `WorkflowEntrypoint` class at once. `es-module-lexer` lists the
- * module request but not the names a star re-export forwards, so the path
- * itself is the signal that all generated workflow classes are exported.
- */
-const WORKFLOWS_STAR_REEXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*_generated\/workflows(?:\.js)?["']/;
+/** Whether the worker entry exports each declared container's generated DO class. */
+const detectContainerExports = (entryPath: string | undefined, containers: ReadonlyArray<ContainerIR>): InferredContainer[] =>
+    detectClassExports(entryPath, containers, "containers");
+
+/** Whether the worker entry exports each declared workflow's generated `WorkflowEntrypoint` class. */
+const detectWorkflowExports = (entryPath: string | undefined, workflows: ReadonlyArray<WorkflowIR>): InferredWorkflow[] =>
+    detectClassExports(entryPath, workflows, "workflows");
 
 /**
- * Whether the worker entry exports each generated `WorkflowEntrypoint` class: a
- * named export of the class or the conventional
- * `export * from "./lunora/_generated/workflows"` star re-export. Mirrors
- * {@link detectContainerExports} — exports are the only safe provisioning
- * signal, since wrangler validates `class_name` against the worker's exports.
+ * Whether the worker entry exports each declared agent's generated
+ * WorkflowEntrypoint class. An agent compiles onto a Cloudflare Workflow, so —
+ * exactly like {@link detectWorkflowExports} — only an exported class is safe
+ * to reconcile into `workflows[]`.
  */
-const detectWorkflowExports = (entryPath: string | undefined, workflows: ReadonlyArray<WorkflowIR>): InferredWorkflow[] => {
-    if (workflows.length === 0) {
-        return [];
-    }
-
-    if (entryPath === undefined) {
-        return workflows.map((workflow) => {
-            return { ...workflow, exported: false };
-        });
-    }
-
-    const code = readFileSync(entryPath, "utf8");
-    const starReexport = WORKFLOWS_STAR_REEXPORT_PATTERN.test(code);
-
-    let exportedNames: Set<string>;
-
-    try {
-        const [, exports] = lexModule(code);
-
-        exportedNames = new Set(exports.map((entry) => entry.n));
-    } catch {
-        exportedNames = new Set(
-            workflows.map((workflow) => workflow.className).filter((className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`).test(code)),
-        );
-    }
-
-    return workflows.map((workflow) => {
-        return { ...workflow, exported: starReexport || exportedNames.has(workflow.className) };
-    });
-};
-
-/**
- * Matches an `export * from "…/_generated/agents"` (with or without the `.js`
- * extension) — the conventional way a worker entry re-exports every generated
- * agent WorkflowEntrypoint class at once. `es-module-lexer` lists the module
- * request but not the names a star re-export forwards, so the path itself is
- * the signal that all generated agent classes are exported.
- */
-const AGENTS_STAR_REEXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*_generated\/agents(?:\.js)?["']/;
-
-/**
- * Whether the worker entry exports each generated agent WorkflowEntrypoint
- * class: a named export of the class or the conventional
- * `export * from "./lunora/_generated/agents"` star re-export. Mirrors
- * {@link detectWorkflowExports} — an agent compiles onto a Cloudflare Workflow,
- * so exports are the only safe provisioning signal (wrangler validates
- * `class_name` against the worker's exports at deploy).
- */
-const detectAgentExports = (entryPath: string | undefined, agents: ReadonlyArray<AgentIR>): InferredAgent[] => {
-    if (agents.length === 0) {
-        return [];
-    }
-
-    if (entryPath === undefined) {
-        return agents.map((agent) => {
-            return { ...agent, exported: false };
-        });
-    }
-
-    const code = readFileSync(entryPath, "utf8");
-    const starReexport = AGENTS_STAR_REEXPORT_PATTERN.test(code);
-
-    let exportedNames: Set<string>;
-
-    try {
-        const [, exports] = lexModule(code);
-
-        exportedNames = new Set(exports.map((entry) => entry.n));
-    } catch {
-        exportedNames = new Set(
-            agents.map((agent) => agent.className).filter((className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`).test(code)),
-        );
-    }
-
-    return agents.map((agent) => {
-        return { ...agent, exported: starReexport || exportedNames.has(agent.className) };
-    });
-};
+const detectAgentExports = (entryPath: string | undefined, agents: ReadonlyArray<AgentIR>): InferredAgent[] => detectClassExports(entryPath, agents, "agents");
 
 /**
  * The schema-derived signal: a `.global()` table needs the `DB` D1 binding.
@@ -619,6 +603,29 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
     }
 
     return merged;
+};
+
+/**
+ * Scan ONLY the `lunora/` tree (never `src/`) for a value `browserTool`
+ * import — mirrors `discover-sandbox.ts`'s `listLunoraSourceFiles` file set
+ * exactly. Kept as a separate pass from {@link scanCapabilities} (which also
+ * walks `src/`) so config never auto-writes a `BROWSER` binding codegen will
+ * never wire — a `src/`-only `browserTool` import never registers the
+ * `sandbox:invoke` dispatcher, since `discoverSandboxUsage` only reads
+ * `lunora/`.
+ */
+const scanSandboxBrowserToolUsage = (projectRoot: string, lunoraDirectory: string): boolean => {
+    const absolute = join(projectRoot, lunoraDirectory);
+
+    if (!existsSync(absolute) || !statSync(absolute).isDirectory()) {
+        return false;
+    }
+
+    const files: string[] = [];
+
+    collectSourceFiles(absolute, files);
+
+    return files.some((file) => hasSandboxBrowserToolImport(readFileSync(file, "utf8")));
 };
 
 /** Provenance lines for declared DO containers / workflows / agents. */
@@ -725,7 +732,18 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const schemaDirectory = options.schemaDir ?? "lunora";
     const scanDirectories = options.scanDirs ?? DEFAULT_SCAN_DIRECTORIES;
 
-    const capabilities = scanCapabilities(options.projectRoot, scanDirectories);
+    const scannedCapabilities = scanCapabilities(options.projectRoot, scanDirectories);
+    // A sandbox `browserTool` import provisions BROWSER even without a direct
+    // `@lunora/browser` import (the browser op runs on the dispatcher's ctx) —
+    // but ONLY when the import lives in `lunora/`, the exact file set
+    // `discover-sandbox.ts` scans; a `src/`-only import never registers the
+    // sandbox dispatcher, so it must not provision the binding either. Folded
+    // into `capabilities` here (not `scanCapabilities`) so both the returned
+    // `usesBrowser` flag AND the provenance signal line agree.
+    const capabilities: Capabilities = {
+        ...scannedCapabilities,
+        usesBrowser: scannedCapabilities.usesBrowser || scanSandboxBrowserToolUsage(options.projectRoot, schemaDirectory),
+    };
     const entryPath = resolveWorkerEntry(options.projectRoot);
     const durableObjects = entryPath ? detectExportedDurableObjects(entryPath) : [];
     const needsD1 = capabilities.needsD1 || schemaNeedsD1(options.projectRoot, schemaDirectory);

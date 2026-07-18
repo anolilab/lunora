@@ -133,6 +133,8 @@ export {
     paintBadge,
     STEP_BADGE_NAMES,
 } from "./tui-theme";
+export type { WranglerCacheShape } from "./workers-cache";
+export { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 export type { DiscoverWorkflowInfoResult, WorkflowIR } from "./workflow-info";
 export { discoverWorkflowInfo } from "./workflow-info";
 export type { ReadWranglerResult } from "./wrangler-path";
