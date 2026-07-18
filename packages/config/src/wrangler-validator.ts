@@ -17,8 +17,8 @@ import { dirname } from "node:path";
 import join from "./path";
 import type { SchemaInfo } from "./schema-info";
 import { discoverSchemaInfo } from "./schema-info";
-import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
+import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 const REQUIRED_COMPATIBILITY_DATE: string = "2026-04-07";
 

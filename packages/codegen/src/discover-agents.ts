@@ -212,7 +212,7 @@ const assertUniqueNames = (agents: ReadonlyArray<AgentIR>): void => {
 
         if (priorName !== undefined) {
             throw new LunoraError(
-                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
+                 
                 "DUPLICATE_AGENT_NAME",
                 `Duplicate agent name "${agent.name}": produced by both "${priorName}" and "${agent.exportName}". Deployed agent names must be unique across the project.`,
                 { status: 500 },
@@ -225,7 +225,7 @@ const assertUniqueNames = (agents: ReadonlyArray<AgentIR>): void => {
 
         if (priorBinding !== undefined) {
             throw new LunoraError(
-                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
+                 
                 "DUPLICATE_AGENT_BINDING",
                 `Duplicate agent binding "${agent.bindingName}": produced by both "${priorBinding}" and "${agent.exportName}". Agent export names must yield unique binding names.`,
                 { status: 500 },
@@ -238,7 +238,7 @@ const assertUniqueNames = (agents: ReadonlyArray<AgentIR>): void => {
 
         if (priorClass !== undefined) {
             throw new LunoraError(
-                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
+                 
                 "DUPLICATE_AGENT_CLASS",
                 `Duplicate agent class "${agent.className}": produced by both "${priorClass}" and "${agent.exportName}". Agent export names must yield unique generated class names.`,
                 { status: 500 },

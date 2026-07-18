@@ -26,9 +26,8 @@ const HASH_LEN = 16;
 /** Cap for the display title so a runaway message can't blow out the UI. */
 const TITLE_MAX = 120;
 
-/** High-surrogate code-unit range (UTF-16) — the first half of a surrogate pair. */
-const HIGH_SURROGATE_MIN = 0xd8_00;
-const HIGH_SURROGATE_MAX = 0xdb_ff;
+/** Above this, a code point came from combining a surrogate pair (UTF-16 astral char). */
+const MAX_BMP_CODE_POINT = 0xff_ff;
 
 const buildTitle = (message: string, code: string | null | undefined, culprit: string): string => {
     const firstLine = (message.split("\n", 1)[0] ?? "").trim();
@@ -43,12 +42,14 @@ const buildTitle = (message: string, code: string | null | undefined, culprit: s
 
     let end = TITLE_MAX - 1;
     // Don't cut between a surrogate pair: `slice(0, end)` keeps code units
-    // `[0, end)`, so if the last retained unit (index `end - 1`) is a lone high
-    // surrogate, its low-surrogate partner (index `end`) is dropped, leaving an
-    // invalid lone surrogate at the end of the title. Trim one more unit instead.
-    const lastCharCode = base.charCodeAt(end - 1);
+    // `[0, end)`, so if the last retained unit (index `end - 1`) combines with
+    // the one at index `end` into an astral code point, that partner is
+    // dropped, leaving an invalid lone surrogate at the end of the title.
+    // `codePointAt` returns a value above `MAX_BMP_CODE_POINT` exactly when
+    // that pairing happens; trim one more unit instead.
+    const lastCodePoint = base.codePointAt(end - 1) ?? 0;
 
-    if (lastCharCode >= HIGH_SURROGATE_MIN && lastCharCode <= HIGH_SURROGATE_MAX) {
+    if (lastCodePoint > MAX_BMP_CODE_POINT) {
         end -= 1;
     }
 
@@ -100,7 +101,7 @@ export const fingerprintError = (input: FingerprintErrorInput): ErrorFingerprint
     // an unsanitized NUL-bearing code could still poison persistence downstream.
     const code = stripNullBytes(input.code) ?? undefined;
     // `||` not `??` on purpose — matches the pre-existing empty-string fallthrough.
-    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- empty-string fallthrough is intended
+     
     const culprit = stripNullBytes(input.functionPath) || "unknown";
     const bucket = messageBucketFor(message);
     const canonical = `lunora::${culprit}::${bucket}`;

@@ -104,7 +104,7 @@ const parseDevVariables = (content: string): Map<string, ParsedLine> => {
  * `lastIndex`, which would make a subsequent `.replace()` on the same instance
  * silently start scanning mid-file.
  */
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+const escapeRegExp = (value: string): string => value.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 
 const devVariableLinePattern = (key: string, global: boolean): RegExp =>
     new RegExp(String.raw`^[ \t]*${escapeRegExp(key)}[ \t]*=.*(\r?\n|$)`, global ? "gmu" : "mu");

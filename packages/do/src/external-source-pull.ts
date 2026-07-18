@@ -76,6 +76,7 @@ const normalizeSourceValue = (value: unknown): unknown => {
     }
 
     if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a nested plain object is itself normalized field-by-field
         return normalizeSourceDocument(value as Record<string, unknown>);
     }
 

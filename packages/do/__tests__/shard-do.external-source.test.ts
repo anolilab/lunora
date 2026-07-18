@@ -59,6 +59,7 @@ class SourcedShard extends ShardDO {
     public pulled: Record<string, unknown>[] = [];
 
     /** The next-due timestamp `pollExternalSources` reports — defaults to "due now" (a short `everyMs`). */
+    // eslint-disable-next-line class-methods-use-this -- a per-instance overridable stub (tests reassign `shard.nextDueAt`), not a real method.
     public nextDueAt: () => number = () => Date.now() + 1000;
 
     // eslint-disable-next-line class-methods-use-this -- this shard exercises only the ingest/alarm path; RPC is unused.
@@ -96,6 +97,7 @@ class BareShard extends ShardDO {
 class SourcedAndGlobalShard extends ShardDO {
     public globalRows: { doc: Record<string, unknown>; id: string }[] = [];
 
+    // eslint-disable-next-line class-methods-use-this -- a per-instance overridable stub (tests reassign `shard.nextDueAt`), not a real method.
     public nextDueAt: () => number = () => Date.now() + 1000;
 
     // eslint-disable-next-line class-methods-use-this -- this shard exercises only the shape/ingest/alarm path; RPC is unused.
@@ -113,7 +115,7 @@ class SourcedAndGlobalShard extends ShardDO {
     }
 
     protected override readGlobalShapeRows(): Promise<{ doc: Record<string, unknown>; id: string }[]> {
-        return Promise.resolve(this.globalRows.map((row) => ({ doc: { ...row.doc }, id: row.id })));
+        return Promise.resolve(this.globalRows.map((row) => {return { doc: { ...row.doc }, id: row.id }}));
     }
 }
 

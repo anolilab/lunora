@@ -475,7 +475,7 @@ describe("fake scheduler", () => {
 
         const fakeFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ ok: true }, { status: 200 }));
 
-        const t = startWithFetch(fakeFetch as unknown as typeof globalThis.fetch);
+        const t = startWithFetch(fakeFetch);
 
         await t.mutation(scheduleFetchPing, { delayMs: 0, url: "https://example.test/scheduled-ping" });
 

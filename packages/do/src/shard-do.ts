@@ -1608,6 +1608,28 @@ abstract class ShardDO {
         ShardDO.rootSizeWarned = false;
     }
 
+    /**
+     * Compute the shared poll alarm's next wake time from both tiers' signals.
+     * Global shapes need the fixed `GLOBAL_SHAPE_POLL_INTERVAL_MS` floor whenever
+     * any are subscribed (a global table has no per-DO op-log, so it can only be
+     * polled). External-source ingest instead reports the earliest NEXT-DUE
+     * timestamp across its non-manual sources (or `undefined` when none exist) —
+     * a source with a large `refresh.everyMs` must sleep until it's actually due,
+     * not spin at the global-shape floor. Returns `undefined` when NEITHER tier
+     * has pending work, so the DO can go fully idle instead of re-arming for no
+     * reason; otherwise the earlier of the two candidate times (never later than
+     * `nowMs`, so a source that's already due arms essentially immediately).
+     */
+    private static nextPollAlarmTarget(globalShapesRemaining: number, nextSourceDueAt: number | undefined, nowMs: number): number | undefined {
+        const globalTarget = globalShapesRemaining > 0 ? nowMs + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS : undefined;
+
+        if (globalTarget === undefined) {
+            return nextSourceDueAt === undefined ? undefined : Math.max(nextSourceDueAt, nowMs);
+        }
+
+        return nextSourceDueAt === undefined ? globalTarget : Math.min(globalTarget, nextSourceDueAt);
+    }
+
     protected state: ShardDOState;
 
     protected env: unknown;
@@ -2573,28 +2595,6 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- Workers hibernation handler: the platform invokes it on the instance; the signature must stay an instance method
     public webSocketError(_ws: WebSocket, _error: unknown): void {
         // Subclasses can override with proper logging. Avoid throwing.
-    }
-
-    /**
-     * Compute the shared poll alarm's next wake time from both tiers' signals.
-     * Global shapes need the fixed `GLOBAL_SHAPE_POLL_INTERVAL_MS` floor whenever
-     * any are subscribed (a global table has no per-DO op-log, so it can only be
-     * polled). External-source ingest instead reports the earliest NEXT-DUE
-     * timestamp across its non-manual sources (or `undefined` when none exist) —
-     * a source with a large `refresh.everyMs` must sleep until it's actually due,
-     * not spin at the global-shape floor. Returns `undefined` when NEITHER tier
-     * has pending work, so the DO can go fully idle instead of re-arming for no
-     * reason; otherwise the earlier of the two candidate times (never later than
-     * `nowMs`, so a source that's already due arms essentially immediately).
-     */
-    private static nextPollAlarmTarget(globalShapesRemaining: number, nextSourceDueAt: number | undefined, nowMs: number): number | undefined {
-        const globalTarget = globalShapesRemaining > 0 ? nowMs + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS : undefined;
-
-        if (globalTarget === undefined) {
-            return nextSourceDueAt === undefined ? undefined : Math.max(nextSourceDueAt, nowMs);
-        }
-
-        return nextSourceDueAt === undefined ? globalTarget : Math.min(globalTarget, nextSourceDueAt);
     }
 
     /**

@@ -37,6 +37,9 @@ import { verifyCreemSignature } from "../webhook";
 import makeNotSupported from "./not-supported";
 import stateToEventType from "./subscription-event";
 
+/** The "already exists" message text Creem's API is documented to return for a duplicate-email conflict. */
+const ALREADY_EXISTS_PATTERN = /already exists/iu;
+
 /**
  * The `creem` SDK surface the adapter uses, as a structural type — a real `Creem` instance satisfies
  * it without a cast. Resources are `unknown` (the adapter re-types the client as the real `Creem`
@@ -109,13 +112,13 @@ const isDuplicateCustomerError = (error: unknown): boolean => {
         return false;
     }
 
-    const statusCode = (error as { statusCode?: unknown }).statusCode;
+    const {statusCode} = (error as { statusCode?: unknown });
 
     if (typeof statusCode === "number" && statusCode !== 400 && statusCode !== 409) {
         return false;
     }
 
-    return /already exists/iu.test(error.message);
+    return ALREADY_EXISTS_PATTERN.test(error.message);
 };
 
 const subscriptionFromCreem = (input: unknown): Subscription => {
@@ -322,6 +325,7 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
                     if (existingReferenceId !== ref.referenceId) {
                         throw new Error(
                             `Creem customer for email "${ref.email}" already belongs to a different reference; refusing to bind it to "${ref.referenceId}".`,
+                            { cause: error },
                         );
                     }
 

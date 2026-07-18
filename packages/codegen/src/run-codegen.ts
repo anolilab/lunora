@@ -250,7 +250,7 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
 
         if (priorClass !== undefined) {
             throw new LunoraError(
-                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
+                 
                 "DUPLICATE_WORKFLOW_CLASS",
                 `Duplicate generated class "${agent.className}": produced by both ${priorClass} and agent "${agent.exportName}". Workflow and agent export names must yield unique generated class names.`,
                 { status: 500 },

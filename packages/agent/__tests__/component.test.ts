@@ -8,6 +8,7 @@ const IN_FLIGHT_PATTERN = /already has a run in flight/u;
 const NOT_ALLOWED_PATTERN = /not allowed to resolve approvals/u;
 const NO_PRODUCER_PATTERN = /no ctx\.agents/u;
 const NOT_ENABLED_PATTERN = /not enabled for public runs/u;
+const DOES_NOT_OWN_THREAD_PATTERN = /does not own thread/u;
 
 /** A `ctx.agents` double recording the `sendEvent` calls the approval mutation makes. */
 const fakeAgents = (): {
@@ -856,7 +857,7 @@ describe("approval resolution", () => {
                 threadKey: "t-1",
                 toolCallId: "call_1",
             }),
-        ).rejects.toThrow(/does not own thread/u);
+        ).rejects.toThrow(DOES_NOT_OWN_THREAD_PATTERN);
 
         // Never reached the workflow binding for the wrong instance.
         expect(sent).toStrictEqual([]);

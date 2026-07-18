@@ -94,15 +94,35 @@ const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
 const SANDBOX_MODULE_SPECIFIERS = new Set(["@lunora/agent", "@lunora/agent/sandbox"]);
 
 /**
+ * Extracts the specifier list between the FIRST `{` and its matching `}` in
+ * an import declaration's sliced text via plain index scans (not a regex),
+ * so the two capability checks below each scan that single bounded slice
+ * once instead of two overlapping `[^}]*` quantifiers around a shared
+ * anchor — the super-linear-backtracking shape `sonarjs/slow-regex` flags.
+ */
+const extractImportSpecifierList = (statementText: string): string => {
+    const openBraceIndex = statementText.indexOf("{");
+
+    if (openBraceIndex === -1) {
+        return "";
+    }
+
+    const closeBraceIndex = statementText.indexOf("}", openBraceIndex + 1);
+
+    return closeBraceIndex === -1 ? statementText.slice(openBraceIndex + 1) : statementText.slice(openBraceIndex + 1, closeBraceIndex);
+};
+
+/**
  * A specifier-level `{ type browserTool }` inside an otherwise-value import —
  * compiles away even though the import declaration itself is a value import
  * (e.g. alongside `containerTool`). Mirrors `discover-sandbox.ts`'s
- * `named.isTypeOnly()` guard.
+ * `named.isTypeOnly()` guard. Tested against the extracted specifier list, not
+ * the whole statement.
  */
-const BROWSER_TOOL_TYPE_SPECIFIER_PATTERN = /\{[^}]*\btype\s+browserTool\b[^}]*\}/;
+const TYPE_BROWSER_TOOL_SPECIFIER_PATTERN = /\btype\s+browserTool\b/;
 
-/** A named `browserTool` specifier appears anywhere in the import's brace list. */
-const BROWSER_TOOL_NAMED_PATTERN = /\{[^}]*\bbrowserTool\b[^}]*\}/;
+/** A named `browserTool` specifier appears in the extracted specifier list. */
+const BROWSER_TOOL_NAME_PATTERN = /\bbrowserTool\b/;
 
 /**
  * Whole-file regex fallback for `hasSandboxBrowserToolImport`, used ONLY when
@@ -125,7 +145,9 @@ const isValueBrowserToolImport = (statementText: string): boolean => {
         return false; // `import type { browserTool } from …` — the whole import compiles away.
     }
 
-    return BROWSER_TOOL_NAMED_PATTERN.test(statementText) && !BROWSER_TOOL_TYPE_SPECIFIER_PATTERN.test(statementText);
+    const specifierList = extractImportSpecifierList(statementText);
+
+    return BROWSER_TOOL_NAME_PATTERN.test(specifierList) && !TYPE_BROWSER_TOOL_SPECIFIER_PATTERN.test(specifierList);
 };
 
 /**
@@ -521,7 +543,7 @@ const isTypeOnlyClassExport = (code: string, className: string): boolean => new 
 /**
  * Whether the worker entry exports each definition's generated class: a named
  * export of the class (covered by `es-module-lexer`'s export list) or the
- * conventional `export * from "./lunora/_generated/<generatedModule>"` star
+ * conventional `export * from "./lunora/_generated/&lt;generatedModule>"` star
  * re-export — the way a worker entry re-exports every generated class of one
  * kind at once. `es-module-lexer` lists the module request but not the names a
  * star re-export forwards, so the path itself is the signal that every class
@@ -531,8 +553,8 @@ const isTypeOnlyClassExport = (code: string, className: string): boolean => new 
  * (`detectContainerExports`/`detectWorkflowExports`/`detectAgentExports`,
  * differing only in the star-reexport module name and the IR type) — exports
  * are the only safe provisioning signal for all three kinds, since wrangler
- * validates `class_name` against the worker's exports at deploy. Mirrors
- * `detectExportedDurableObjects`'s same lexer-then-regex-fallback shape.
+ * validates `class_name` against the worker's exports at deploy. Mirrors the
+ * same lexer-then-regex-fallback shape as `detectExportedDurableObjects`.
  */
 const detectClassExports = <Definition extends ClassExportable>(
     entryPath: string | undefined,
@@ -568,7 +590,7 @@ const detectClassExports = <Definition extends ClassExportable>(
         // A candidate counts only when it is exported as a runtime value — an
         // inline `export { type Foo }` (or `export type Foo`) lists the name but
         // compiles away, and binding it would make `wrangler deploy` fail on the
-        // missing class. Mirrors `detectExportedDurableObjects`'s same guard.
+        // missing class. Mirrors the same guard as `detectExportedDurableObjects`.
         const exported = starReexport || (exportedNames.has(definition.className) && !isTypeOnlyClassExport(code, definition.className));
 
         return { ...definition, exported };

@@ -26,9 +26,9 @@ const newProject = (): Project => new Project({ skipAddingFilesFromTsConfig: tru
 const AGENT_COMPONENT_SOURCE_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "agent", "src", "component.ts");
 
 /**
- * Read `const <constantName> = query|mutation.input({...}).query|mutation(async (...): Promise<T> => ...)`'s
+ * Read `const &lt;constantName> = query|mutation.input({...}).query|mutation(async (...): Promise&lt;T> => ...)`'s
  * declared return-type text out of `component.ts`, unwrapped of its outer
- * `Promise<…>` — mirroring codegen's own Promise-unwrap convention
+ * `Promise&lt;…>` — mirroring codegen's own Promise-unwrap convention
  * (`unwrapHandlerReturn` in `discover-functions.ts`) so the comparison lines up
  * with what `syntheticAgentApiFunctions` hand-pins in `emit.ts`.
  */
@@ -50,7 +50,7 @@ const sourceReturnTypeOf = (constantName: string): string => {
     const typedArrows = declaration.getDescendantsOfKind(SyntaxKind.ArrowFunction).filter((arrow) => arrow.getReturnTypeNode() !== undefined);
 
     if (typedArrows.length !== 1) {
-        throw new Error(`test: expected exactly one typed handler arrow for "${constantName}", found ${typedArrows.length}`);
+        throw new Error(`test: expected exactly one typed handler arrow for "${constantName}", found ${String(typedArrows.length)}`);
     }
 
     const returnTypeText = typedArrows[0]!.getReturnTypeNodeOrThrow().getText();

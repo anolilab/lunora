@@ -128,7 +128,7 @@ describe("buildPaymentGuard", () => {
         // An async gate creates an await point between the cap check/reserve and the
         // guard's return, so both calls are in flight ("concurrent") at once —
         // exactly the shape of two parallel paid fetches sharing one PayFetch/state.
-        const guard = buildPaymentGuard({ maxPerRun: "$0.02", onPaymentRequired: async () => Promise.resolve(true) }, state);
+        const guard = buildPaymentGuard({ maxPerRun: "$0.02", onPaymentRequired: async () => true }, state);
 
         // Started back-to-back, not awaited individually: the first call's
         // synchronous check-and-reserve runs to completion (up to its first

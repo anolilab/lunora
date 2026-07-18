@@ -83,7 +83,7 @@ const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: Read
         const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
 
         if (reconciled.changed) {
-            logger.success(`synced ${cronTriggers.length} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+            logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
         }
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);

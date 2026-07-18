@@ -501,13 +501,13 @@ export const agentComponent = (): AgentComponent => {
      * enough — an ownerless thread is readable by anyone who knows its key,
      * and a benign client can simply pass the wrong ids):
      * - `args.instanceId` must match the thread's OWN stored instance. Without
-     *   this, a caller who passes the owner gate for one thread (including any
-     *   ownerless one) could deliver an approve/reject to an arbitrary
-     *   `instanceId` — a different, unrelated run entirely.
+     * this, a caller who passes the owner gate for one thread (including any
+     * ownerless one) could deliver an approve/reject to an arbitrary
+     * `instanceId` — a different, unrelated run entirely.
      * - The delivered event's `type` is scoped to `toolCallId`
-     *   (`agent-approval:<id>`) — the SAME format `agent-loop.ts`'s
-     *   `awaitApproval` matches on — so a decision meant for one pending tool
-     *   call cannot resolve a different one on the same instance.
+     * (`agent-approval:&lt;id>`) — the SAME format `agent-loop.ts`'s
+     * `awaitApproval` matches on — so a decision meant for one pending tool
+     * call cannot resolve a different one on the same instance.
      */
     const agentResolveApproval = mutation
         .input({

@@ -213,7 +213,7 @@ const resolveNeedsApproval = async (tool: AnyAgentTool, input: unknown, context:
  * decision without pausing (or re-persisting) again. Named ONLY from the
  * replay-stable `call.id`.
  *
- * The wait's match `type` is scoped to THIS call (`agent-approval:<call.id>`,
+ * The wait's match `type` is scoped to THIS call (`agent-approval:&lt;call.id>`,
  * the same format `component.ts`'s `agentResolveApproval` sends) — native CF
  * Workflows matches an incoming event against a waiter by `type`, not by the
  * durable step name, so without this an approval meant for a different
