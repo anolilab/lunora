@@ -50,8 +50,9 @@ via `facilitator: { url, headers }` for a self-hosted or keyed CDP facilitator.
 The server side needs only a **recipient address** — no private key — because
 the facilitator performs settlement. Every gated surface runs the same
 four-step flow: unpaid request → `402` + `PAYMENT-REQUIRED` challenge; the
-client's `X-PAYMENT` payload is verified (via the facilitator); the handler
-runs; the payment settles and `X-PAYMENT-RESPONSE` is attached.
+client's `X-PAYMENT` payload is verified (via the facilitator); then the
+handler and settlement run, in an order that depends on the rail (see below);
+finally `X-PAYMENT-RESPONSE` is attached to the returned resource.
 
 ### Gate an HTTP action
 
@@ -67,6 +68,14 @@ export const report = httpAction(
     }),
 );
 ```
+
+**Settlement order:** the HTTP-action rail settles **after** the handler runs
+(the handler's response is passed to settlement as transport context). A
+settlement failure on this path cannot undo a handler that already ran, so a
+handler gated with `withX402` **must be idempotent or compensatable** if it has
+side effects — a retried/duplicate charge attempt (or a settlement failure
+after the handler already committed something) must not double-apply that
+effect.
 
 ### Gate a procedure
 
@@ -87,6 +96,14 @@ Each paid function bakes its own price and its `functionPath` as the challenge
 `resource`. Internal functions have no `.x402` — they are server-to-server and
 never client-reachable, so there is nothing to charge.
 
+**Settlement order:** the procedure gate settles **before** dispatching the
+function (settle-first), because dispatch is what commits a paid mutation's
+writes. A settlement failure therefore means the function never runs at all —
+there is no window where a paid mutation's write commits without the payment
+having settled. Once settlement succeeds the payment is final (on-chain); a
+function failure after that point is a normal application error, not a payment
+to unwind.
+
 ### Paid MCP tools
 
 `@lunora/mcp`'s `createPaidMcpServer` lets free `tool()` and `paidTool()`
@@ -106,7 +123,12 @@ mcp.paidTool({ name: "premium_report", description: "the paid report", inputSche
 `onReceipt` is an opt-in, one-way telemetry sink fired once per settled
 payment — best-effort, never blocking the paid response. Use it (with
 `toPaymentEventRow`) to mirror x402 revenue into a durable table or
-`@lunora/payment`'s `events` table so it surfaces in Studio.
+`@lunora/payment`'s `events` table so it surfaces in Studio. On Workers, wire
+the request's `ctx.waitUntil` to the gate's `deps.waitUntil` (where the caller
+has one to give — e.g. `@lunora/runtime`'s `x402Charge` seam) so the sink is
+registered with `waitUntil` and survives past the response; otherwise
+workerd cancels the in-flight sink promise at isolate teardown once the
+response returns, before an async sink (e.g. a database insert) resolves.
 
 ## The pay rail — buy a resource
 

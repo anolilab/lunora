@@ -38,8 +38,22 @@ const headerRecord = (headers: Headers): Record<string, string> => {
  * payment already settled, so a sink failure must never withhold the paid
  * resource — a synchronous throw and a rejected promise are both swallowed, and
  * the sink is not awaited into the response path.
+ *
+ * When `waitUntil` is supplied (the request's `ctx.waitUntil`), the sink promise
+ * is registered with it so workerd keeps it alive past the response — otherwise
+ * work not awaited into the response and not registered via `ctx.waitUntil` is
+ * cancelled when the request ends, so an async sink (e.g. inserting into
+ * `@lunora/payment`'s durable `events` table) frequently never runs. When
+ * `waitUntil` is absent (e.g. a non-Workers test, or a rail with no platform
+ * execution context reaching the middleware), the promise floats exactly as
+ * before.
  */
-export const reportReceipt = (sink: X402ReceiptSink | undefined, settlement: ProcessSettleSuccessResponse, resource: string): void => {
+export const reportReceipt = (
+    sink: X402ReceiptSink | undefined,
+    settlement: ProcessSettleSuccessResponse,
+    resource: string,
+    waitUntil?: (promise: Promise<unknown>) => void,
+): void => {
     if (sink === undefined) {
         return;
     }
@@ -47,9 +61,11 @@ export const reportReceipt = (sink: X402ReceiptSink | undefined, settlement: Pro
     try {
         // A `.catch()`-terminated chain handles an async sink's rejection without
         // awaiting it (which would block the paid response).
-        Promise.resolve(sink(toReceipt(settlement, { resource, ts: Date.now() }))).catch(() => {
+        const sent = Promise.resolve(sink(toReceipt(settlement, { resource, ts: Date.now() }))).catch(() => {
             // best-effort: a reporting failure must not affect the paid response.
         });
+
+        waitUntil?.(sent);
     } catch {
         // a synchronous sink throw is likewise swallowed.
     }
@@ -62,12 +78,25 @@ export const reportReceipt = (sink: X402ReceiptSink | undefined, settlement: Pro
 export type ChargeHandler = () => Promise<Response> | Response;
 
 /**
+ * Per-request platform seams `handle` can use, beyond the request/handler pair.
+ * @experimental
+ */
+export interface ChargeHandlerDeps {
+    /**
+     * Keep background work (the receipt sink) alive past the response — the
+     * request's `ctx.waitUntil`. Absent on paths with no platform execution
+     * context reaching the middleware (e.g. today's HTTP-action rail).
+     */
+    readonly waitUntil?: (promise: Promise<unknown>) => void;
+}
+
+/**
  * A prepared, initialised paywall. Build once (it fetches facilitator support), reuse per request.
  * @experimental
  */
 export interface ChargeMiddleware {
     /** Gate `request`: challenge / verify / settle around `runHandler`. */
-    handle: (request: Request, runHandler: ChargeHandler) => Promise<Response>;
+    handle: (request: Request, runHandler: ChargeHandler, deps?: ChargeHandlerDeps) => Promise<Response>;
 }
 
 /**
@@ -179,19 +208,52 @@ export const withHeaders = (response: Response, extra: Record<string, string>): 
 export type ChargeRouteOverrides = Pick<RouteConfig, "description" | "resource">;
 
 /**
+ * Behaviour knobs for {@link createChargeMiddleware} beyond route metadata.
+ * @experimental
+ */
+export interface ChargeMiddlewareOptions {
+    /**
+     * Settle the verified payment **before** dispatching `runHandler`, instead
+     * of after. Use this for a mutation/procedure gate: a settlement failure
+     * then means the handler never runs at all, so a paid mutation's writes can
+     * never be committed without payment (the free-execution gap X402-04
+     * closes). Once settlement succeeds the payment is final (on-chain) — a
+     * handler failure after that point is a normal application error, not a
+     * payment to unwind: there is nothing left to cancel, so it is not caught
+     * here and simply propagates.
+     *
+     * Default `false` (settle-after, the historical behaviour): the handler's
+     * response is passed to settlement as transport context (`responseHeaders`
+     * — read by some schemes for settlement overrides), and a handler throw
+     * still releases the verified-but-unsettled payment via
+     * `cancellationDispatcher.cancel`. Because settlement can still fail after
+     * the handler already ran on this path, `.x402()` handlers gated this way
+     * MUST be idempotent or compensatable — see the `@lunora/x402` charge docs.
+     */
+    readonly settleBeforeHandler?: boolean;
+}
+
+/**
  * Build and initialise a {@link ChargeMiddleware} for `config`. Fetches
  * facilitator support once (via `initialize()`), so call this once per config
  * and reuse the result across requests. `routeOverrides` layers extra route
- * metadata (e.g. `resource`) onto the generated catch-all route.
+ * metadata (e.g. `resource`) onto the generated catch-all route; `options`
+ * controls settlement ordering (see {@link ChargeMiddlewareOptions}).
  * @experimental
  */
-export const createChargeMiddleware = async (config: X402ChargeConfig, routeOverrides?: ChargeRouteOverrides): Promise<ChargeMiddleware> => {
+export const createChargeMiddleware = async (
+    config: X402ChargeConfig,
+    routeOverrides?: ChargeRouteOverrides,
+    options?: ChargeMiddlewareOptions,
+): Promise<ChargeMiddleware> => {
     const server = await buildResourceServer(config);
     const http = new X402HTTPResourceServer(server, { ...buildRoute(config), ...routeOverrides });
 
     await http.initialize();
 
-    const handle = async (request: Request, runHandler: ChargeHandler): Promise<Response> => {
+    const settleBeforeHandler = options?.settleBeforeHandler ?? false;
+
+    const handle = async (request: Request, runHandler: ChargeHandler, deps?: ChargeHandlerDeps): Promise<Response> => {
         const url = new URL(request.url);
         const context: HTTPRequestContext = {
             adapter: createRequestAdapter(request, url),
@@ -210,7 +272,35 @@ export const createChargeMiddleware = async (config: X402ChargeConfig, routeOver
             return toResponse(result.response);
         }
 
-        // payment-verified: run the handler, then settle around its response.
+        // The route's `resource` override names the paid resource (a procedure's
+        // `functionPath`); the generic rail has none, so fall back to the URL.
+        const resource = routeOverrides?.resource ?? request.url;
+
+        if (settleBeforeHandler) {
+            // Settle-first: settle around the *verified* payment context alone
+            // (no `responseHeaders` — there is no response yet). A settlement
+            // failure here means `runHandler` never executes, so its effects
+            // (e.g. a mutation's writes) can never be committed unpaid.
+            const settlement = await http.processSettlement(result.paymentPayload, result.paymentRequirements, result.declaredExtensions, {
+                request: context,
+            });
+
+            if (!settlement.success) {
+                return toResponse(settlement.response);
+            }
+
+            // Settlement is final (on-chain) — report the receipt, then run the
+            // handler. A handler throw past this point is a normal error; the
+            // payment cannot be (and does not need to be) cancelled.
+            reportReceipt(config.onReceipt, settlement, resource, deps?.waitUntil);
+
+            const response = await runHandler();
+
+            return withHeaders(response, settlement.headers);
+        }
+
+        // Settle-after (the historical/default ordering): run the handler, then
+        // settle around its response.
         let response: Response;
 
         try {
@@ -237,15 +327,15 @@ export const createChargeMiddleware = async (config: X402ChargeConfig, routeOver
         });
 
         if (settlement.success) {
-            // The route's `resource` override names the paid resource (a procedure's
-            // `functionPath`); the generic rail has none, so fall back to the URL.
-            reportReceipt(config.onReceipt, settlement, routeOverrides?.resource ?? request.url);
+            reportReceipt(config.onReceipt, settlement, resource, deps?.waitUntil);
 
             return withHeaders(response, settlement.headers);
         }
 
         // Settlement failed after the handler ran: the client did not actually
-        // pay, so withhold the resource and surface the 402 failure instead.
+        // pay. This path's handler MUST therefore be idempotent/compensatable —
+        // its effects (if any) may already be committed. Withhold the resource
+        // and surface the 402 failure instead.
         return toResponse(settlement.response);
     };
 
