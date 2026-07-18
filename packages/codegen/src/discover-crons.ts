@@ -297,12 +297,28 @@ const resolveTarget = (
     // `defineAgent` export (e.g. `support` imported from `./agents`).
     if (argument && Node.isIdentifier(argument)) {
         const workflow = workflowsByName.get(argument.getText());
+        const agent = agentsByName.get(argument.getText());
+
+        // Both maps can hold the same export name (e.g. a `defineWorkflow` and a
+        // `defineAgent` both named `support`, imported into the same file under
+        // one local identifier). Blindly preferring the workflow lookup here would
+        // silently target the wrong definition when the identifier actually came
+        // from `agents.ts` — fail closed instead of guessing.
+        if (workflow && agent) {
+            throw diagnosticAt(
+                argument,
+                `Cron job "${jobName}" references "${argument.getText()}", which is ambiguous: a workflow and an agent are both declared under that name.`,
+                {
+                    code: "CRON_NON_STATIC_FN",
+                    name: "LunoraError",
+                    status: 500,
+                },
+            );
+        }
 
         if (workflow) {
             return workflowTarget(workflow);
         }
-
-        const agent = agentsByName.get(argument.getText());
 
         if (agent) {
             return agentTarget(agent);

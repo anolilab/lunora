@@ -4078,12 +4078,15 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
                             await pullExternalSourceTick(this.sql as SqlExec, writer, client, table, source, shardKey);
                         }
 
-                        polledAt.set(table, now);
+                        // Timestamp AFTER the poll finishes, not the batch-start \`now\` — a
+                        // poll that outruns \`everyMs\` must not make \`nextDueAt\` (below)
+                        // stale-immediate and re-arm the alarm in a hammering loop.
+                        polledAt.set(table, Date.now());
                     } catch (error) {
                         this.recordExternalSourceError(table, error);
                         // Stamp on failure too, so a persistently failing source throttles
                         // to \`refresh.everyMs\` rather than being hammered every tick.
-                        polledAt.set(table, now);
+                        polledAt.set(table, Date.now());
                     }
                 }
 

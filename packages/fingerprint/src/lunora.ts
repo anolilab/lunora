@@ -95,14 +95,17 @@ export const fingerprintError = (input: FingerprintErrorInput): ErrorFingerprint
     // input that couldn't be persisted anyway — so every existing non-NUL hash
     // is unaffected.
     const message = stripNullBytes(input.message);
+    // Same NUL-stripping applies to `code`: it feeds `buildTitle`'s fallback
+    // (when `message` is empty) and is returned verbatim as display metadata, so
+    // an unsanitized NUL-bearing code could still poison persistence downstream.
+    const code = stripNullBytes(input.code) ?? undefined;
     // `||` not `??` on purpose — matches the pre-existing empty-string fallthrough.
     // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- empty-string fallthrough is intended
     const culprit = stripNullBytes(input.functionPath) || "unknown";
     const bucket = messageBucketFor(message);
     const canonical = `lunora::${culprit}::${bucket}`;
     const hash = sha256Hex(canonical).slice(0, HASH_LEN);
-    const title = buildTitle(message, input.code, culprit);
-    const code = input.code ?? undefined;
+    const title = buildTitle(message, code, culprit);
 
     return code === undefined || code === "" ? { hash, title, culprit, bucket } : { hash, title, culprit, bucket, code };
 };

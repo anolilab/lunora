@@ -88,7 +88,9 @@ const parseDevVariables = (content: string): Map<string, ParsedLine> => {
  * `splitDevVariableLine`: optional leading whitespace, the key, optional
  * whitespace, then `=`). Comment (`#…`) and blank lines never match. Keys are
  * always validated against `DEV_VARS_KEY_PATTERN` before we build this, so they
- * hold only `[A-Za-z_]\w*` — no regex metacharacters to escape.
+ * hold only `[A-Za-z_]\w*` — no regex metacharacters to escape in practice —
+ * but `key` is escaped anyway as defense-in-depth against a future caller that
+ * skips validation.
  *
  * The trailing `(\r?\n|$)` capture consumes the line's own line terminator (or
  * matches the zero-width end-of-string when the line is the file's last, with
@@ -102,7 +104,10 @@ const parseDevVariables = (content: string): Map<string, ParsedLine> => {
  * `lastIndex`, which would make a subsequent `.replace()` on the same instance
  * silently start scanning mid-file.
  */
-const devVariableLinePattern = (key: string, global: boolean): RegExp => new RegExp(String.raw`^[ \t]*${key}[ \t]*=.*(\r?\n|$)`, global ? "gmu" : "mu");
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+
+const devVariableLinePattern = (key: string, global: boolean): RegExp =>
+    new RegExp(String.raw`^[ \t]*${escapeRegExp(key)}[ \t]*=.*(\r?\n|$)`, global ? "gmu" : "mu");
 
 /**
  * Surgically upsert a single `KEY="value"` line in raw `.dev.vars` content,

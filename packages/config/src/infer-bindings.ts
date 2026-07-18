@@ -508,6 +508,17 @@ interface ClassExportable {
 }
 
 /**
+ * Matches a *type-only* export of `className` — `export type Foo` or the
+ * inline `export { type Foo }` form. Generalizes {@link TYPE_ONLY_EXPORT_PATTERNS}
+ * (built for the fixed DO class set) to an arbitrary generated class name:
+ * `es-module-lexer` still lists the name as an export in both cases even
+ * though it compiles away, so `detectClassExports` must reject it before
+ * flagging `exported: true` — otherwise a binding could reference a class
+ * wrangler can't find at deploy.
+ */
+const isTypeOnlyClassExport = (code: string, className: string): boolean => new RegExp(String.raw`\btype\s+${className}\b`).test(code);
+
+/**
  * Whether the worker entry exports each definition's generated class: a named
  * export of the class (covered by `es-module-lexer`'s export list) or the
  * conventional `export * from "./lunora/_generated/<generatedModule>"` star
@@ -554,7 +565,13 @@ const detectClassExports = <Definition extends ClassExportable>(
     }
 
     return definitions.map((definition) => {
-        return { ...definition, exported: starReexport || exportedNames.has(definition.className) };
+        // A candidate counts only when it is exported as a runtime value — an
+        // inline `export { type Foo }` (or `export type Foo`) lists the name but
+        // compiles away, and binding it would make `wrangler deploy` fail on the
+        // missing class. Mirrors `detectExportedDurableObjects`'s same guard.
+        const exported = starReexport || (exportedNames.has(definition.className) && !isTypeOnlyClassExport(code, definition.className));
+
+        return { ...definition, exported };
     });
 };
 
