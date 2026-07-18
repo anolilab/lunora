@@ -148,7 +148,28 @@ const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR 
     return ir;
 };
 
-/** Collect exported `defineWorkflow` declarations from one source file. */
+/**
+ * Unwrap `as`/`satisfies`/parenthesized wrappers around a call expression —
+ * `defineWorkflow({...}) satisfies WorkflowDefinition`, `defineWorkflow({...}) as const`,
+ * or `(defineWorkflow({...}))` — down to the inner `CallExpression`. Mirrors the
+ * identical helper in `discover-agents.ts`. Returns `undefined` when the
+ * (possibly wrapped) node isn't ultimately a call.
+ */
+const unwrapToCallExpression = (node: Node | undefined): CallExpression | undefined => {
+    let current: Node | undefined = node;
+
+    while (current && (Node.isAsExpression(current) || Node.isSatisfiesExpression(current) || Node.isParenthesizedExpression(current))) {
+        current = current.getExpression();
+    }
+
+    return current && Node.isCallExpression(current) ? current : undefined;
+};
+
+/**
+ * Collect exported `defineWorkflow` declarations from one source file. A
+ * `defineWorkflow({...})` initializer may be wrapped in `as`/`satisfies`/parens
+ * — {@link unwrapToCallExpression} sees through those to the inner call.
+ */
 const workflowsFromSource = (source: SourceFile): WorkflowIR[] => {
     const workflows: WorkflowIR[] = [];
 
@@ -157,13 +178,12 @@ const workflowsFromSource = (source: SourceFile): WorkflowIR[] => {
             continue;
         }
 
-        const initializer = declaration.getInitializer();
+        const call = unwrapToCallExpression(declaration.getInitializer());
 
-        if (initializer?.getKind() !== SyntaxKind.CallExpression) {
+        if (!call) {
             continue;
         }
 
-        const call = initializer as CallExpression;
         const callee = call.getExpression();
 
         if (!Node.isIdentifier(callee) || !isDefineWorkflow(callee)) {

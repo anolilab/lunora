@@ -712,9 +712,33 @@ const takenAgentFunctionNames = (functions: ReadonlyArray<FunctionIR>): Readonly
     new Set(functions.filter((definition) => sanitizeNamespace(definition.filePath) === "agents").map((definition) => definition.exportName));
 
 /**
+ * Names of the `@lunora/agent` runtime functions the durable loop dispatches
+ * BY PATH internally (`agentAppendMessage`/`agentEnsureThread`/…) — as opposed
+ * to the public thread queries + the two client-facing mutations
+ * (`agentMessages`/`agentState`/`agentThread`/`agentRun`/`agentResolveApproval`),
+ * which an app is allowed to shadow (the app's own definition silently wins).
+ * Derived from the runtime component's own `visibility: "internal"` marker
+ * (mirroring the drift test in `discover-agents.test.ts`) rather than a
+ * hand-maintained list, so a newly added internal function is protected
+ * automatically.
+ */
+const internalAgentRuntimeFunctionNames = (): ReadonlySet<string> =>
+    new Set(
+        Object.entries(agentComponent().functions)
+            .filter(([, definition]) => definition.visibility === "internal")
+            .map(([name]) => name),
+    );
+
+/**
  * Dispatch-table fragment for the auto-registered agent runtime functions.
  * Every string is empty when the project declares no agents (or the app shadows
- * every name), keeping agent-free output byte-identical.
+ * every PUBLIC name), keeping agent-free output byte-identical.
+ *
+ * Shadowing a PUBLIC name (`agentMessages`/`agentState`/…) is a silent win for
+ * the app's own definition — unremarkable, since nothing but a client reference
+ * depends on it. Shadowing an INTERNAL name (`agentAppendMessage`/…) is instead
+ * rejected: the durable loop dispatches those by path unconditionally, so an
+ * app definition silently winning there would hijack the loop's own writes.
  */
 const renderAgentFunctionRegistry = (
     agents: ReadonlyArray<AgentIR>,
@@ -727,6 +751,18 @@ const renderAgentFunctionRegistry = (
     }
 
     const taken = takenAgentFunctionNames(functions);
+    const internal = internalAgentRuntimeFunctionNames();
+    const shadowedInternal = functions.find(
+        (definition) => sanitizeNamespace(definition.filePath) === "agents" && internal.has(definition.exportName),
+    );
+
+    if (shadowedInternal) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/codegen: "agents:${shadowedInternal.exportName}" is reserved for the durable agent loop's internal dispatch — rename the "${shadowedInternal.exportName}" export in ${shadowedInternal.filePath}`,
+        );
+    }
+
     const names = agentRuntimeFunctionNames().filter((name) => !taken.has(name));
 
     if (names.length === 0) {

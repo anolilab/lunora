@@ -84,7 +84,7 @@ const rootIdentifierOf = (node: Node): string | undefined => {
 const stringArgument = (call: CallExpression, index: number): string | undefined => {
     const argument = call.getArguments()[index];
 
-    return argument && Node.isStringLiteral(argument) ? argument.getLiteralValue() : undefined;
+    return argument && (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument)) ? argument.getLiteralValue() : undefined;
 };
 
 /** Evaluate a literal AST node into a plain JS value, or throw for unsupported forms. */
@@ -292,8 +292,9 @@ const resolveTarget = (
         return { functionPath: functionPathFromArgument(call, index, jobName) };
     }
 
-    // Workflow target via a bare identifier referencing a `defineWorkflow` export
-    // (e.g. `digestPipeline` imported from `./workflows`).
+    // Workflow/agent target via a bare identifier referencing a `defineWorkflow`
+    // export (e.g. `digestPipeline` imported from `./workflows`) or a
+    // `defineAgent` export (e.g. `support` imported from `./agents`).
     if (argument && Node.isIdentifier(argument)) {
         const workflow = workflowsByName.get(argument.getText());
 
@@ -301,9 +302,15 @@ const resolveTarget = (
             return workflowTarget(workflow);
         }
 
+        const agent = agentsByName.get(argument.getText());
+
+        if (agent) {
+            return agentTarget(agent);
+        }
+
         throw diagnosticAt(
             argument,
-            `Cron job "${jobName}" references "${argument.getText()}", which is neither a function (internal.file.fn / api.file.fn) nor a declared workflow in lunora/workflows.ts.`,
+            `Cron job "${jobName}" references "${argument.getText()}", which is neither a function (internal.file.fn / api.file.fn) nor a declared workflow in lunora/workflows.ts nor a declared agent in lunora/agents.ts.`,
             {
                 code: "CRON_NON_STATIC_FN",
                 name: "LunoraError",

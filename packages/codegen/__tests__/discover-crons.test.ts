@@ -175,6 +175,28 @@ describe("discover-crons", () => {
         expect(caught).toMatchObject({ code: "DUPLICATE_CRON_NAME", name: "LunoraError", status: 500 });
     });
 
+    it("accepts a no-substitution template literal for the job name and raw cron expression (CODEGEN-03)", () => {
+        expect.assertions(1);
+
+        // Backticks with no `${…}` interpolation are just as static as a
+        // string literal — `stringArgument` must accept
+        // `NoSubstitutionTemplateLiteral`, not only `StringLiteral`.
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { internal } from "./_generated/api.js";
+            const crons = cronJobs();
+            crons.cron(\`nightly\`, \`0 * * * *\`, internal.presence.clear, {});
+            export default crons;
+        `,
+        );
+
+        const result = discoverCrons(newProject(), workdir);
+
+        expect(result).toEqual([{ args: {}, cron: "0 * * * *", functionPath: "presence:clear", name: "nightly" }]);
+    });
+
     it("throws on an invalid raw cron expression", () => {
         expect.assertions(1);
 
@@ -380,6 +402,59 @@ describe("discover-crons", () => {
         );
 
         expect(() => discoverCrons(newProject(), workdir, [], [])).toThrow(/no such agent is declared/u);
+    });
+
+    it("also resolves a bare identifier naming a declared agent (direct import) (CODEGEN-03)", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "agents.ts",
+            `
+            import { defineAgent } from "@lunora/agent";
+            export const support = defineAgent({ model: "m" });
+        `,
+        );
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { support } from "./agents.js";
+            const crons = cronJobs();
+            crons.daily("nightly sweep", { hourUTC: 3, minuteUTC: 0 }, support, { input: "sweep", threadKey: "cron" });
+            export default crons;
+        `,
+        );
+
+        const project = newProject();
+        const agents = discoverAgents(project, workdir);
+
+        expect(discoverCrons(project, workdir, [], agents)).toEqual([
+            {
+                args: { input: "sweep", threadKey: "cron" },
+                cron: "0 3 * * *",
+                name: "nightly sweep",
+                workflow: { binding: "AGENT_SUPPORT", exportName: "support" },
+            },
+        ]);
+    });
+
+    it("mentions both workflows and agents when a bare-identifier target resolves to neither (CODEGEN-03)", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            const crons = cronJobs();
+            const notADefinition = 1;
+            crons.daily("oops", { hourUTC: 9, minuteUTC: 0 }, notADefinition, {});
+            export default crons;
+        `,
+        );
+
+        expect(() => discoverCrons(newProject(), workdir, [], [])).toThrow(
+            /neither a function \(internal\.file\.fn \/ api\.file\.fn\) nor a declared workflow in lunora\/workflows\.ts nor a declared agent in lunora\/agents\.ts/u,
+        );
     });
 
     it("emits a workflow-start dispatch for an agent-targeting cron (rides the workflow binding path)", () => {
