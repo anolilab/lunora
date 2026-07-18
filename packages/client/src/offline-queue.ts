@@ -207,6 +207,16 @@ class OfflineQueue {
      * gone after a reload). No-op when no persistence adapter is configured.
      * Returns the distinct shard keys of the restored writes so the caller can
      * open their sockets to trigger a flush.
+     *
+     * `hydrate()` runs post-construction (the caller awaits an async durable-store
+     * load), so a mutation issued while offline during that boot window is
+     * enqueued into `items` *before* this method's `await` resolves. Restored
+     * records are therefore `unshift`-ed ahead of whatever is already queued
+     * rather than `push`-ed to the end: the durable store's persist order is
+     * authoritative (a prior-session write is always older than anything from
+     * this session), so replaying a same-session boot-time write before an
+     * older restored write on the same document would let last-writer-wins
+     * silently clobber the newer data with the stale one.
      */
     public async hydrate(): Promise<(string | undefined)[]> {
         if (!this.persistence) {
@@ -223,9 +233,10 @@ class OfflineQueue {
         }
 
         const shardKeys = new Set<string | undefined>();
+        const restored: QueuedMutation[] = [];
 
         for (const mutation of persisted) {
-            if (this.items.some((item) => item.id === mutation.id)) {
+            if (this.items.some((item) => item.id === mutation.id) || restored.some((item) => item.id === mutation.id)) {
                 continue;
             }
 
@@ -239,7 +250,7 @@ class OfflineQueue {
                 continue;
             }
 
-            this.items.push({
+            restored.push({
                 args: mutation.args,
                 functionPath: mutation.functionPath,
                 id: mutation.id,
@@ -250,6 +261,8 @@ class OfflineQueue {
             });
             shardKeys.add(mutation.shardKey);
         }
+
+        this.items.unshift(...restored);
 
         this.notifySize();
 
