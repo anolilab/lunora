@@ -185,9 +185,9 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
                 try {
                     await action();
                     refetchAll();
-                } catch (error) {
-                    setActionError(errorMessage(error));
-                } finally {
+                    setActionBusy(false);
+                } catch (error_) {
+                    setActionError(errorMessage(error_));
                     setActionBusy(false);
                 }
             })(),

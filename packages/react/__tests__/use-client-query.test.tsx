@@ -79,7 +79,13 @@ let setOpenHandle: ((value: boolean) => void) | undefined;
 const Display = (): ReactElement => {
     const [open, setOpen] = useClientQuery(sidebarOpen);
 
-    renderCount += 1;
+    // Tracked in an effect (a side effect, not the render body) so the render
+    // count stays observable by the test without reassigning a
+    // module-scoped variable during render — that would defeat React
+    // Compiler's memoization analysis.
+    useEffect(() => {
+        renderCount += 1;
+    });
 
     useEffect(() => {
         setOpenHandle = setOpen;

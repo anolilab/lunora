@@ -71,6 +71,14 @@ const normalizeSourceValue = (value: unknown): unknown => {
         return String(value);
     }
 
+    if (Array.isArray(value)) {
+        return value.map((element) => normalizeSourceValue(element));
+    }
+
+    if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+        return normalizeSourceDocument(value as Record<string, unknown>);
+    }
+
     return value;
 };
 

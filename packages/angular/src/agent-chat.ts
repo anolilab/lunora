@@ -265,7 +265,17 @@ const agentChat = (options: AgentChatOptions): AgentChatResult => {
 
         optimistic.set([...reconcileOptimistic(optimistic(), durable()), { content: input, durableUserCountAtSend, id }]);
 
-        await client.mutation(sendReference, { input, threadKey, ...sendArgs, ...arguments_ });
+        try {
+            await client.mutation(sendReference, { input, threadKey, ...sendArgs, ...arguments_ });
+        } catch (error) {
+            // The mutation never landed, so no durable user turn will ever
+            // reconcile this optimistic row away — drop it by id so a failed
+            // send doesn't leave a permanent ghost message, then rethrow so
+            // the caller can surface the failure.
+            optimistic.set(optimistic().filter((pending) => pending.id !== id));
+
+            throw error;
+        }
     };
 
     const approve = async (toolCallId: string, note?: string): Promise<void> => {

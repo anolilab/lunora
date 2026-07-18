@@ -323,7 +323,18 @@ const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions):
         optimistic = [...reconcileOptimistic(optimistic, durable), { content: input, durableUserCountAtSend, id }];
         recompute();
 
-        await sendMutation.mutate({ input, threadKey, ...sendArgs, ...arguments_ });
+        try {
+            await sendMutation.mutate({ input, threadKey, ...sendArgs, ...arguments_ });
+        } catch (error) {
+            // The mutation never landed, so no durable user turn will ever
+            // reconcile this optimistic row away — drop it by id so a failed
+            // send doesn't leave a permanent ghost message, then rethrow so
+            // the caller can surface the failure.
+            optimistic = optimistic.filter((pending) => pending.id !== id);
+            recompute();
+
+            throw error;
+        }
     };
 
     const approve = async (toolCallId: string, note?: string): Promise<void> => {
