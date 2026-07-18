@@ -28,14 +28,6 @@ interface NamespaceState {
     totalLength: number;
 }
 
-/**
- * Whether a stored metadata record satisfies a flat-equality filter. Only
- * primitive-valued filter entries are evaluated; a Vectorize operator object
- * (e.g. `{ $ne: … }`) is not understood by this reference store — see the
- * fail-closed note on {@link bm25LexicalStore}.
- */
-const isPrimitiveFilter = (filter: Record<string, unknown>): boolean => Object.values(filter).every((value) => value === null || typeof value !== "object");
-
 /** Already-warned reference stores (deduped per instance) — a one-time dev signal, not per-query spam. */
 const filterWarned = new WeakSet<object>();
 
@@ -142,8 +134,13 @@ const bm25LexicalStore = (): RagLexicalStore => {
             return Promise.resolve();
         },
         search: (query, options) => {
-            // No metadata here → cannot honour a metadata/RLS filter. Fail closed.
-            if (options.filter && Object.keys(options.filter).length > 0 && !isPrimitiveFilter(options.filter)) {
+            // No metadata here → cannot honour a metadata/RLS filter. Fail closed on
+            // ANY non-empty filter — including a flat-equality filter (the exact
+            // shape `rlsFilter` produces), which must not be exempted: it is the
+            // canonical tenant-scoping predicate, and running the BM25 search over
+            // the whole namespace anyway would leak other tenants'/RLS-excluded
+            // chunk text into the fused retrieval result.
+            if (options.filter && Object.keys(options.filter).length > 0) {
                 if (!filterWarned.has(store)) {
                     filterWarned.add(store);
 

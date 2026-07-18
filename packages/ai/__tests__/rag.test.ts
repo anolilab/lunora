@@ -1029,4 +1029,25 @@ describe(bm25LexicalStore, () => {
             warn.mockRestore();
         }
     });
+
+    it("fails closed on a FLAT-equality filter too (the shape rlsFilter produces) — RLS bypass regression", async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            const store = bm25LexicalStore();
+
+            // "secret" is indexed WITHOUT a namespace/metadata split — a flat
+            // `{ orgId }` filter (exactly the shape `rlsFilter` produces) must not
+            // be exempted from the fail-closed guard, or the BM25 search runs over
+            // the whole namespace and leaks this chunk's text past the RLS filter.
+            await store.index([chunk("a#0", "tenant secret document")], {});
+
+            const matches = await store.search("secret", { filter: { orgId: "org-1" }, topK: 5 });
+
+            expect(matches).toStrictEqual([]);
+            expect(warn).toHaveBeenCalledTimes(1);
+        } finally {
+            warn.mockRestore();
+        }
+    });
 });
