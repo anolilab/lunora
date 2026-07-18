@@ -59,23 +59,30 @@ interface IndexQuery {
     order: (direction: "asc" | "desc") => { collect: () => Promise<FakeRow[]>; take: (limit: number) => Promise<FakeRow[]> };
 }
 
-/** Index names whose final sort column is `createdAt` — the only ones this double models `.order()` for. */
-const CREATED_AT_INDEXES = new Set(["byOwnerCreatedAt"]);
+/**
+ * Index names this double models `.order()` for, mapped to the field the
+ * REAL TableReader would sort by (the index's trailing key column). Guard so
+ * a future `.order()` on an unmapped index fails loudly here instead of
+ * silently returning a wrong order (a false green).
+ */
+const INDEX_ORDER_FIELDS: Record<string, string> = {
+    byOwnerCreatedAt: "createdAt",
+    byOwnerUpdatedAt: "updatedAt",
+    byThread: "seq",
+};
 
 const makeIndexQuery = (candidates: FakeRow[], indexName: string, build: (q: unknown) => unknown): IndexQuery => {
     const conditions = collectConditions(build);
     const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
-    // This double approximates `.order()` by sorting on `createdAt`; the REAL
-    // TableReader sorts by the index's key columns. Guard so a future `.order()`
-    // on a differently-keyed index fails loudly here instead of silently
-    // returning a wrong order (a false green).
     const ordered = (direction: "asc" | "desc"): FakeRow[] => {
-        if (!CREATED_AT_INDEXES.has(indexName)) {
-            throw new Error(`test double: .order() is only modeled for a createdAt-keyed index, not "${indexName}"`);
+        const field = INDEX_ORDER_FIELDS[indexName];
+
+        if (field === undefined) {
+            throw new Error(`test double: .order() is only modeled for a known-keyed index, not "${indexName}"`);
         }
 
         return matches().toSorted((a, b) => {
-            const delta = ((a["createdAt"] as number | undefined) ?? 0) - ((b["createdAt"] as number | undefined) ?? 0);
+            const delta = ((a[field] as number | undefined) ?? 0) - ((b[field] as number | undefined) ?? 0);
 
             return direction === "desc" ? -delta : delta;
         });
@@ -260,6 +267,40 @@ describe(agentComponent, () => {
 
         expect(thread["status"]).toBe("error");
         expect(thread["error"]).toBe("boom");
+    });
+
+    it("bounds the DB read for a limited tail over a long thread (descending take, reversed to ascending)", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" });
+
+        for (let index = 0; index < 50; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seq allocation is the point
+            await callMutation(functions.agentAppendMessage, ctx, {
+                content: `m${String(index)}`,
+                messageKey: `k${String(index)}`,
+                role: "user",
+                threadKey: "t-1",
+            });
+        }
+
+        // A limit smaller than the thread keeps exactly the newest N, ascending.
+        const tail = (await callMutation(functions.agentMessages, ctx, { key: "t-1", limit: 3 })) as Record<string, unknown>[];
+
+        expect(tail.map((message) => message["content"])).toStrictEqual(["m47", "m48", "m49"]);
+
+        // A limit exceeding the thread length still returns every message,
+        // in ascending order — `.take(limit)` on a short DESC scan can't
+        // over-read past what exists.
+        const everything = (await callMutation(functions.agentMessages, ctx, { key: "t-1", limit: 1000 })) as Record<string, unknown>[];
+
+        expect(everything.map((message) => message["content"])).toStrictEqual(Array.from({ length: 50 }, (_unused, index) => `m${String(index)}`));
+
+        // No limit: full ordered history, matching the bounded-tail cases.
+        const unbounded = (await callMutation(functions.agentMessages, ctx, { key: "t-1" })) as Record<string, unknown>[];
+
+        expect(unbounded).toStrictEqual(everything);
     });
 });
 
@@ -574,6 +615,74 @@ describe("graph memory", () => {
 
         // Only the heaviest (Beta, weight 0.9) edge is kept.
         expect(result.context).toBe("- hub —[works_at]→ beta");
+    });
+
+    it("bounds seed enumeration to the most-recently-touched entities, not the owner's full history", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        // Directly seed GRAPH_SEED_SCAN_CAP (500) recent entities plus one much
+        // OLDER entity that matches the query — bypasses the 64-per-call upsert
+        // cap so the fixture can exceed the scan cap without 500+ mutations.
+        const entityRows: FakeRow[] = [];
+
+        for (let index = 0; index < 500; index += 1) {
+            entityRows.push({
+                _id: `filler-${String(index)}`,
+                createdAt: index + 1,
+                name: `filler${String(index)}`,
+                owner: "u1",
+                updatedAt: index + 1,
+                weight: 1,
+            });
+        }
+
+        // The oldest row in the owner's history — a real match were the scan
+        // unbounded, but its `updatedAt` places it outside the top-500 window.
+        entityRows.push({
+            _id: "stale-ancient",
+            createdAt: 0,
+            name: "ancient",
+            owner: "u1",
+            updatedAt: 0,
+            weight: 1,
+        });
+
+        rows.set("agent_entities", entityRows);
+
+        const result = (await callMutation(functions.agentGraphTraverse, ctx, { owner: "u1", query: "ancient" })) as { context: string };
+
+        // A `.collect()`-all scan would find "ancient" and seed a traversal;
+        // the bounded scan (top 500 by `updatedAt` desc) excludes it.
+        expect(result.context).toBe("");
+
+        // A same-named entity WITHIN the scan window still seeds normally and
+        // reaches its edge — small/typical owners are unaffected by the cap.
+        entityRows.push({
+            _id: "recent-ancient",
+            createdAt: 501,
+            name: "ancient-recent",
+            owner: "u1",
+            updatedAt: 501,
+            weight: 1,
+        });
+        rows.set("agent_edges", [
+            {
+                _id: "edge-1",
+                createdAt: 501,
+                dstName: "somewhere",
+                label: "located_in",
+                messageKey: "k",
+                owner: "u1",
+                srcName: "ancient-recent",
+                updatedAt: 501,
+                weight: 1,
+            },
+        ]);
+
+        const found = (await callMutation(functions.agentGraphTraverse, ctx, { owner: "u1", query: "ancient-recent" })) as { context: string };
+
+        expect(found.context).toBe("- ancient-recent —[located_in]→ somewhere");
     });
 });
 

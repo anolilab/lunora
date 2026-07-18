@@ -465,15 +465,28 @@ export const agentComponent = (): AgentComponent => {
                 return [];
             }
 
-            const rows = await context.db
+            // A limit keeps the newest N (the tail of the conversation) — read
+            // `byThread` (["threadKey", "seq"]) in DESCENDING seq order and
+            // `.take(limit)` so the DB read itself is bounded to the tail,
+            // instead of collecting the whole thread and slicing in JS. This is
+            // a live subscription re-run on every append, so an unbounded read
+            // here was O(total thread length) on every turn.
+            if (args.limit !== undefined) {
+                const tail = await context.db
+                    .query(MESSAGES_TABLE)
+                    .withIndex("byThread", (q) => q.eq("threadKey", args.key))
+                    .order("desc")
+                    .take(args.limit);
+
+                return tail.toReversed();
+            }
+
+            // Unbounded case: `byThread` is already ordered `[threadKey, seq]`,
+            // so index order IS ascending `seq` order — no JS re-sort needed.
+            return context.db
                 .query(MESSAGES_TABLE)
                 .withIndex("byThread", (q) => q.eq("threadKey", args.key))
                 .collect();
-
-            const ordered = rows.toSorted((a, b) => (a["seq"] as number) - (b["seq"] as number));
-
-            // A limit keeps the newest N (the tail of the conversation).
-            return args.limit === undefined ? ordered : ordered.slice(Math.max(0, ordered.length - args.limit));
         });
 
     /**

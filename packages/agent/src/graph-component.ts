@@ -45,6 +45,9 @@ const graphTables: Record<string, TableDefinition> = {
     })
         // Upsert dedup AND seed enumeration (prefix-scan on `owner`).
         .index("byOwnerName", ["owner", "name"], { unique: true })
+        // Bounds seed enumeration to the most-recently-touched N entities
+        // (see GRAPH_SEED_SCAN_CAP) instead of an unbounded owner-wide scan.
+        .index("byOwnerUpdatedAt", ["owner", "updatedAt"])
         // Same RLS-exempt rationale as the thread tables (see component.ts).
         .public(),
 
@@ -85,6 +88,18 @@ const DEFAULT_GRAPH_DEPTH = 2;
 const DEFAULT_GRAPH_MAX_SEEDS = 4;
 const DEFAULT_GRAPH_FAN_OUT = 8;
 const DEFAULT_GRAPH_MAX_NODES = 32;
+
+/**
+ * Hard cap on the number of an owner's entities scanned for seed matching.
+ * Graph memory is owner-global and accretes across every conversation, so an
+ * unbounded owner-wide scan grows per-run cost linearly with lifetime entity
+ * count. Instead the scan reads the `byOwnerUpdatedAt` index in DESCENDING
+ * order (most-recently-touched first) and caps at this generous constant —
+ * seed matching is therefore best-effort over the most-salient/most-recent N
+ * entities, not the owner's entire history. Deterministic (no
+ * `Date.now()`/`Math.random()`), so replay stays stable.
+ */
+const GRAPH_SEED_SCAN_CAP = 500;
 
 /** Collapse internal whitespace runs to a single space. */
 const WHITESPACE_RUN = /\s+/gu;
@@ -379,13 +394,18 @@ const graphComponent = (): GraphComponentFunctions => {
                 return { context: "" };
             }
 
-            // Seed enumeration: prefix-scan the owner's entities, keep those
-            // whose normalized name matches a query token, rank by salience
-            // (weight) then name, and cap at maxSeeds.
+            // Seed enumeration: scan at most GRAPH_SEED_SCAN_CAP of the owner's
+            // most-recently-touched entities (via `byOwnerUpdatedAt`, descending
+            // — a bounded DB read, not a `.collect()` of the owner's entire
+            // lifetime entity set), keep those whose normalized name matches a
+            // query token, rank by salience (weight) then name, and cap at
+            // maxSeeds. Best-effort: an entity older/less-recent than the
+            // scan cap won't seed a traversal.
             const ownerEntities = await context.db
                 .query(ENTITIES_TABLE)
-                .withIndex("byOwnerName", (q) => q.eq("owner", args.owner))
-                .collect();
+                .withIndex("byOwnerUpdatedAt", (q) => q.eq("owner", args.owner))
+                .order("desc")
+                .take(GRAPH_SEED_SCAN_CAP);
 
             const seeds = ownerEntities
                 .filter((row) => matchesSeed(row["name"] as string, tokens))
