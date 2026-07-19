@@ -396,6 +396,92 @@ export const analyticsEngineSink = (options: AnalyticsEngineSinkOptions): Observ
     };
 };
 
+/**
+ * The Cloudflare Pipeline binding surface {@link pipelineLogSink} needs — the
+ * `env` binding declared in `wrangler.jsonc` under `pipelines`. Typed
+ * structurally (mirrors `@lunora/bindings/pipelines`' `PipelineBindingLike`) so
+ * the runtime takes no dependency on `@lunora/bindings` or `@cloudflare/workers-types`.
+ */
+export interface PipelineLike {
+    /** Durably ingest a batch of records (buffered to R2, read back later with R2 SQL). */
+    send: (records: Record<string, unknown>[]) => Promise<void>;
+}
+
+/** Options for {@link pipelineLogSink}. */
+export interface PipelineLogSinkOptions {
+    /** The Cloudflare Pipeline binding each log record is durably sent to. */
+    pipeline: PipelineLike;
+}
+
+/**
+ * A sink that durably persists each `ctx.log` line to a Cloudflare Pipeline
+ * (→ R2), so an app has a queryable log store WITHOUT the Cloud — read the
+ * archived records back with R2 SQL. This is the durable counterpart to the
+ * network {@link otlpSink}: where OTLP streams to a collector, this lands the
+ * structured record (message, level, function path, fields, trace ids, shard,
+ * user, timestamp) in object storage under the app's own account.
+ *
+ * Only `onLog` is implemented — RPC-span metrics belong in
+ * {@link analyticsEngineSink}. `Pipeline.send` is durable/fire-and-forget on the
+ * platform; the call is registered with the request's `context.waitUntil` when
+ * present (the DO threads its `state.waitUntil`) so the send survives isolate
+ * teardown, and every rejection is swallowed so a flaky pipeline never surfaces
+ * to the caller.
+ *
+ * Privacy: the persisted record carries `message` + structured `fields` (not the
+ * raw positional args). They may include user input — the R2 bucket is your own,
+ * but treat it as a log store and gate PII upstream if that is a concern.
+ * @param options Sink options: `pipeline` is the Cloudflare Pipeline binding.
+ */
+export const pipelineLogSink = (options: PipelineLogSinkOptions): ObservabilitySink => {
+    const { pipeline } = options;
+
+    return {
+        onLog: (event, context) => {
+            try {
+                const record: Record<string, unknown> = {
+                    functionPath: event.functionPath,
+                    level: event.level,
+                    message: event.message,
+                    ts: event.ts,
+                };
+
+                if (event.fields) {
+                    record.fields = event.fields;
+                }
+
+                if (event.shardKey !== undefined) {
+                    record.shardKey = event.shardKey;
+                }
+
+                if (event.userId !== undefined) {
+                    record.userId = event.userId;
+                }
+
+                if (event.traceId !== undefined) {
+                    record.traceId = event.traceId;
+                }
+
+                if (event.spanId !== undefined) {
+                    record.spanId = event.spanId;
+                }
+
+                // `.catch` swallows any rejection so a failed send can never reject
+                // into the handler path.
+                const sent = pipeline.send([record]).catch(() => {
+                    // Delivery error — intentionally ignored.
+                });
+
+                if (context?.waitUntil) {
+                    context.waitUntil(sent);
+                }
+            } catch {
+                // A missing or throwing pipeline binding must not break the handler.
+            }
+        },
+    };
+};
+
 /** Options for {@link otlpSink}. */
 export interface OtlpSinkOptions extends OnlyErrorsOption {
     /**

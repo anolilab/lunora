@@ -166,7 +166,7 @@ const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes
  * {@link LogEventInput} shape `emitLogEvent` consumes, built once per call.
  */
 interface LogSink {
-    onLog?: (event: LogEventInput) => void;
+    onLog?: (event: LogEventInput, context?: { waitUntil?: (promise: Promise<unknown>) => void }) => void;
 }
 
 /**
@@ -4438,7 +4438,11 @@ abstract class ShardDO {
 
         if (sink?.onLog) {
             try {
-                sink.onLog(event);
+                // Thread the DO's `waitUntil` so a durable sink (e.g. a
+                // Pipeline → R2 log sink) can keep its send alive past the
+                // response; `undefined` when the state doesn't expose it, where
+                // the sink falls back to fire-and-forget.
+                sink.onLog(event, { waitUntil: this.state.waitUntil?.bind(this.state) });
             } catch {
                 // A buggy log sink must not break the handler — see emitLogEvent.
             }

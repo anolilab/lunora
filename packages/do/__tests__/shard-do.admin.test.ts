@@ -1863,6 +1863,24 @@ describe("shardDO admin data migrations", () => {
         expect(body.result.entries[0]).toMatchObject({ functionPath: "messages:list", level: "info", message: "loaded" });
     });
 
+    it("threads a waitUntil context to the log sink so a durable sink can outlive the response", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        let hasWaitUntilSlot = false;
+        const shard = new LoggingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        shard.log("a:b", "info", ["hi"], {
+            onLog: (_event, context) => {
+                hasWaitUntilSlot = typeof context === "object" && context !== null && "waitUntil" in context;
+            },
+        });
+
+        expect(hasWaitUntilSlot).toBe(true);
+
+        vi.restoreAllMocks();
+    });
+
     it("treats console-style varargs as a rendered message with no structured fields", async () => {
         expect.assertions(2);
 

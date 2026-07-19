@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LogEvent, LogLevel, ObservabilityEvent } from "../src/observability";
 import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks";
-import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, sentrySink, webhookSink } from "../src/observability-sinks";
+import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, sentrySink, webhookSink } from "../src/observability-sinks";
 
 const okEvent: ObservabilityEvent = { durationMs: 5, functionPath: "messages:list", ok: true, shardKey: "channel-1" };
 const errorEvent: ObservabilityEvent = {
@@ -879,6 +879,72 @@ describe("observability-sinks", () => {
 
             expect(() => {
                 sink.onRpc!(okEvent);
+            }).not.toThrow();
+        });
+    });
+
+    describe("pipelineLogSink", () => {
+        const logEvent: LogEvent = {
+            args: ["order placed"],
+            fields: { orderId: "o-1" },
+            functionPath: "orders:place",
+            level: "info",
+            message: "order placed",
+            shardKey: "tenant-1",
+            spanId: "00f067aa0ba902b7",
+            traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+            ts: 1700,
+            userId: "user-1",
+        };
+
+        it("sends one structured record per log line, keeping every carried field", () => {
+            expect.assertions(2);
+
+            const sent: Record<string, unknown>[][] = [];
+            const sink = pipelineLogSink({ pipeline: { send: async (records) => void sent.push(records) } });
+
+            sink.onLog!(logEvent);
+
+            expect(sent).toHaveLength(1);
+            expect(sent[0]).toStrictEqual([
+                {
+                    fields: { orderId: "o-1" },
+                    functionPath: "orders:place",
+                    level: "info",
+                    message: "order placed",
+                    shardKey: "tenant-1",
+                    spanId: "00f067aa0ba902b7",
+                    traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+                    ts: 1700,
+                    userId: "user-1",
+                },
+            ]);
+        });
+
+        it("registers the send with the request's waitUntil so it survives teardown", () => {
+            expect.assertions(1);
+
+            const kept: Promise<unknown>[] = [];
+            const sink = pipelineLogSink({ pipeline: { send: async () => undefined } });
+
+            sink.onLog!(logEvent, { waitUntil: (promise) => void kept.push(promise) });
+
+            expect(kept).toHaveLength(1);
+        });
+
+        it("swallows a rejecting or throwing pipeline so a log call can't break the handler", () => {
+            expect.assertions(1);
+
+            const sink = pipelineLogSink({
+                pipeline: {
+                    send: () => {
+                        throw new Error("binding missing");
+                    },
+                },
+            });
+
+            expect(() => {
+                sink.onLog!(logEvent);
             }).not.toThrow();
         });
     });
