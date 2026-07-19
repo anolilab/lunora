@@ -3449,14 +3449,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         assertAdminAuthorized(request);
 
         if (request.method !== "POST") {
-            throw new CirrusError("scheduled tick endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("scheduled tick endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         const body = (await request.json().catch(() => undefined)) as { cron?: unknown } | undefined;
         const cron = typeof body?.cron === "string" ? body.cron : "";
 
         if (cron === "") {
-            throw new CirrusError("scheduled tick requires a `cron` expression", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("scheduled tick requires a `cron` expression", { code: "BAD_REQUEST", status: 400 });
         }
 
         await handleScheduled({ cron, noRetry: () => {}, scheduledTime: Date.now() }, env, context);
@@ -3474,11 +3474,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         assertAdminAuthorized(request);
 
         if (request.method !== "POST") {
-            throw new CirrusError("queue dispatch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("queue dispatch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!options.queueHandler) {
-            throw new CirrusError("no queueHandler configured", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("no queueHandler configured", { code: "BAD_REQUEST", status: 400 });
         }
 
         const body = (await request.json().catch(() => undefined)) as { messages?: unknown; queue?: unknown } | undefined;
