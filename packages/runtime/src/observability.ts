@@ -62,8 +62,20 @@ export interface ObservabilityEvent {
     traceId?: string;
 }
 
-/** Severity of a {@link LogEvent}, mirroring the usual console levels. */
-export type LogLevel = "debug" | "error" | "info" | "log" | "warn";
+/**
+ * Severity of a {@link LogEvent}. The five console tiers plus `trace`/`fatal`,
+ * so `ctx.log` spans the full OpenTelemetry severity ramp (`trace`→`fatal`) a
+ * collector and the Cloud log viewer render.
+ */
+export type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
+
+/**
+ * Structured, filterable key/value fields attached to a log line via
+ * `ctx.log.info(message, fields)` or a bound `ctx.log.with(fields)` child. Sinks
+ * map these to OTLP log-record attributes so a log pipeline can filter/index on
+ * them (primitive values pass through; objects/arrays are JSON-encoded).
+ */
+export type LogFields = Record<string, unknown>;
 
 /**
  * One application log line emitted from a function handler via `ctx.log`.
@@ -82,6 +94,12 @@ export type LogLevel = "debug" | "error" | "info" | "log" | "warn";
 export interface LogEvent {
     /** Raw arguments passed to the `ctx.log.*` call, in order. */
     args: unknown[];
+    /**
+     * Structured fields the caller attached via `ctx.log.info(message, fields)`
+     * or a bound `ctx.log.with(fields)` child. Absent for a plain console-style
+     * call. Sinks map these onto OTLP log-record attributes.
+     */
+    fields?: LogFields;
     /** Function path that emitted the line, e.g. `"messages:list"`. */
     functionPath: string;
     /** Severity the line was logged at. */
@@ -90,6 +108,17 @@ export interface LogEvent {
     message: string;
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey?: string;
+    /**
+     * Span id of the RPC this line was emitted under (the dispatch's server
+     * span), so a sink can correlate the log record to its trace. Absent on
+     * paths with no inbound trace context.
+     */
+    spanId?: string;
+    /**
+     * Trace id this line belongs to (the dispatch's W3C trace), threaded from the
+     * inbound `traceparent`. Absent on paths with no inbound trace context.
+     */
+    traceId?: string;
     /** Wall-clock millis when the line was emitted. */
     ts: number;
     /** Acting userId, or absent when anonymous. */

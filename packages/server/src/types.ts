@@ -1280,29 +1280,70 @@ interface VectorSearch extends VectorSearchReader {
 }
 
 /**
+ * Structured, filterable key/value fields attached to a log line — the second
+ * argument of a `ctx.log.<level>(message, fields)` call, or the fields bound by
+ * `ctx.log.with(fields)`. They travel to an `ObservabilitySink`'s `onLog` and,
+ * for a network sink, become OTLP log-record attributes a log pipeline (or the
+ * Cloud log viewer) can filter and index on. Primitive values pass through;
+ * objects/arrays are JSON-encoded at the sink boundary.
+ */
+type LogFields = Record<string, unknown>;
+
+/**
+ * One `ctx.log` severity method. Two call forms:
+ *
+ * - **Structured** — `ctx.log.info("order placed", { orderId, total })`: a
+ *   message string plus a `fields` object. The fields are indexed as attributes.
+ * - **Console-style** — `ctx.log.info("state", value, other)`: any number of
+ *   values, joined into the display message exactly like `console.log`.
+ *
+ * The structured form is matched when the second argument is a plain object;
+ * otherwise the call is treated as console-style, so existing `console`-shaped
+ * calls keep working unchanged.
+ */
+interface LunoraLogMethod {
+    (message: string, fields?: LogFields): void;
+    (...args: unknown[]): void;
+}
+
+/**
  * Structured logger on every function `ctx`. Each call emits one attributed log
  * line — tagged with the function path on the server — that flows to an
  * `ObservabilitySink`'s `onLog` (where you route it in production) and, in
  * development, to the dev server terminal via the CLI / Vite plugin formatter.
  * Mirrors the `console` method names so it's a drop-in for `console.log` inside a
- * handler, but with attribution and a routable transport.
+ * handler, but with attribution, structured fields, and a routable transport.
  *
- * Accepts any number of values per call, exactly like `console`; objects are
- * rendered into the human-readable message. The raw, un-rendered arguments are
- * preserved ONLY on the in-process `onLog` sink (which you opt into and control);
- * the rendered message — not the structured args — is what reaches the dev
- * terminal and the platform's Workers Logs.
+ * Six severities spanning the OpenTelemetry ramp: `trace`, `debug`, `info` (and
+ * its `log` alias), `warn`, `error`, `fatal`.
+ *
+ * Two ways to attach structured {@link LogFields}: pass them per call
+ * (`ctx.log.info(message, fields)`) or bind them once with {@link with} for a
+ * child logger that stamps every line. The rendered `message` and the structured
+ * `fields` reach the dev terminal and the platform's Workers Logs; the raw,
+ * un-rendered console-style arguments are preserved ONLY on the in-process
+ * `onLog` sink (which you opt into and control).
  *
  * Attribution follows the dispatched function: a log emitted inside an internal
  * function invoked via `ctx.runQuery`/`runMutation`/`runAction` is attributed to
  * the outer request entrypoint, since the composed call reuses its context.
  */
 interface LunoraLogger {
-    readonly debug: (...args: unknown[]) => void;
-    readonly error: (...args: unknown[]) => void;
-    readonly info: (...args: unknown[]) => void;
-    readonly log: (...args: unknown[]) => void;
-    readonly warn: (...args: unknown[]) => void;
+    readonly debug: LunoraLogMethod;
+    readonly error: LunoraLogMethod;
+    readonly fatal: LunoraLogMethod;
+    readonly info: LunoraLogMethod;
+    readonly log: LunoraLogMethod;
+    readonly trace: LunoraLogMethod;
+    readonly warn: LunoraLogMethod;
+
+    /**
+     * Return a child logger that stamps `fields` onto every line it emits,
+     * merged under any per-call fields (per-call wins on a key clash). Chainable
+     * — `ctx.log.with({ requestId }).with({ step })` accumulates both. Use it to
+     * bind request-scoped context once instead of repeating it per call.
+     */
+    readonly with: (fields: LogFields) => LunoraLogger;
 }
 
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
@@ -1542,7 +1583,9 @@ export type {
     InferArgs,
     LifecycleEvent,
     LifecycleEventKind,
+    LogFields,
     LunoraLogger,
+    LunoraLogMethod,
     MutationCtx,
     OnDeleteAction,
     PaginationOptions,

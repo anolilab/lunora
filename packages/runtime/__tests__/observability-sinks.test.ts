@@ -52,7 +52,9 @@ interface ParsedLogRecord {
     body: OtlpValue;
     severityNumber: number;
     severityText: string;
+    spanId?: string;
     timeUnixNano: string;
+    traceId?: string;
 }
 
 /** Look up an attribute's value by key. */
@@ -671,7 +673,7 @@ describe("observability-sinks", () => {
             vi.stubGlobal("fetch", fetchMock);
 
             const sink = otlpSink({ endpoint: "https://collector.example" });
-            const levels: LogLevel[] = ["debug", "error", "info", "log", "warn"];
+            const levels: LogLevel[] = ["trace", "debug", "info", "log", "warn", "error", "fatal"];
 
             for (const level of levels) {
                 sink.onLog!({ args: [], functionPath: "a:b", level, message: "m", ts: 1 });
@@ -679,8 +681,39 @@ describe("observability-sinks", () => {
 
             const numbers = fetchMock.mock.calls.map((call) => logFrom(call[1] as RequestInit).record.severityNumber);
 
-            // debug=DEBUG(5), error=ERROR(17), info=INFO(9), log→INFO(9), warn=WARN(13).
-            expect(numbers).toStrictEqual([5, 17, 9, 9, 13]);
+            // trace=TRACE(1), debug=DEBUG(5), info=INFO(9), log→INFO(9), warn=WARN(13), error=ERROR(17), fatal=FATAL(21).
+            expect(numbers).toStrictEqual([1, 5, 9, 9, 13, 17, 21]);
+        });
+
+        it("maps structured fields onto log-record attributes and correlates the record to its trace", () => {
+            expect.assertions(6);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onLog!({
+                args: ["order placed"],
+                fields: { attempt: 2, nested: { sku: "abc" }, orderId: "o-1", paid: true },
+                functionPath: "orders:place",
+                level: "info",
+                message: "order placed",
+                spanId: "00f067aa0ba902b7",
+                traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+                ts: 1,
+            });
+
+            const { record } = logFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            // Primitive fields become typed attributes; a nested value is JSON-encoded.
+            expect(attrValue(record.attributes, "orderId")).toStrictEqual({ stringValue: "o-1" });
+            expect(attrValue(record.attributes, "attempt")).toStrictEqual({ intValue: "2" });
+            expect(attrValue(record.attributes, "paid")).toStrictEqual({ boolValue: true });
+            expect(attrValue(record.attributes, "nested")).toStrictEqual({ stringValue: '{"sku":"abc"}' });
+            // Trace correlation (OTLP LogRecord.trace_id / span_id).
+            expect(record.traceId).toBe("4bf92f3577b34da6a3ce929d0e0e4736");
+            expect(record.spanId).toBe("00f067aa0ba902b7");
         });
 
         it("tolerates a trailing slash on the endpoint", () => {

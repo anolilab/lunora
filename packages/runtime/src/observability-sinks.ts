@@ -70,6 +70,29 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
     return wrapResourceSpans(span, "@lunora/runtime", serviceName);
 };
 
+/**
+ * Coerce a structured log-field value to an OTLP `AnyValue`-encodable primitive:
+ * booleans/numbers/strings pass through; everything else (objects, arrays,
+ * null/undefined) is stringified so a nested value still lands as a filterable
+ * attribute rather than being dropped.
+ */
+const coerceFieldValue = (value: unknown): boolean | number | string => {
+    if (typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+        return value;
+    }
+
+    if (value === null || value === undefined) {
+        return String(value);
+    }
+
+    try {
+        // `JSON.stringify` returns `undefined` for a function/symbol — fall back to `String`.
+        return (JSON.stringify(value) as string | undefined) ?? String(value);
+    } catch {
+        return String(value);
+    }
+};
+
 /** Build the OTLP log-export body for one application log line. */
 const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
     const attributes = [encodeAttribute("lunora.function_path", event.functionPath)];
@@ -82,13 +105,33 @@ const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
         attributes.push(encodeAttribute("lunora.user_id", event.userId));
     }
 
-    const logRecord = {
+    // Caller-supplied structured fields become log-record attributes so a
+    // pipeline can filter/index on them. Reserved `lunora.*` keys are pushed
+    // first; a field that reuses one is the caller's own override.
+    if (event.fields) {
+        for (const [key, value] of Object.entries(event.fields)) {
+            attributes.push(encodeAttribute(key, coerceFieldValue(value)));
+        }
+    }
+
+    const logRecord: Record<string, unknown> = {
         attributes,
         body: { stringValue: event.message },
         severityNumber: OTLP_SEVERITY[event.level],
         severityText: event.level.toUpperCase(),
         timeUnixNano: otlpUnixNano(event.ts),
     };
+
+    // Correlate the log record to its dispatch span (OTLP `LogRecord.trace_id` /
+    // `span_id`) when the runtime threaded the inbound trace context, so the
+    // Cloud/collector links the line to its trace.
+    if (event.traceId !== undefined) {
+        logRecord.traceId = event.traceId;
+    }
+
+    if (event.spanId !== undefined) {
+        logRecord.spanId = event.spanId;
+    }
 
     return wrapResourceLogs(logRecord, "@lunora/runtime", serviceName);
 };
@@ -125,7 +168,7 @@ export const consoleSink = (options: OnlyErrorsOption = {}): ObservabilitySink =
         onLog: (event) => {
             // `onlyErrors` filters the RPC summary stream; application log lines
             // are emitted whole so a developer still sees their `ctx.log` output.
-            if (event.level === "error") {
+            if (event.level === "error" || event.level === "fatal") {
                 // eslint-disable-next-line no-console
                 console.error("[lunora:log]", event.functionPath, event.message);
             } else {

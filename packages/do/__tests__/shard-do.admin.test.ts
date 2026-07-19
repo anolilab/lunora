@@ -220,8 +220,20 @@ class LoggingShard extends ShardDO {
         return { ok: true };
     }
 
-    public log(functionPath: string, level: "error" | "info" | "log" | "warn", args: unknown[], sink?: Parameters<LoggingShard["recordUserLog"]>[3]): void {
-        this.recordUserLog(functionPath, level, args, sink);
+    public log(
+        functionPath: string,
+        level: "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn",
+        args: unknown[],
+        sink?: Parameters<LoggingShard["makeLogger"]>[1],
+    ): void {
+        // Drive the real logger the generated `buildCtx` builds — arg parsing
+        // (structured vs console-style), buffer push, console event, and sink.
+        this.makeLogger(functionPath, sink)[level](...args);
+    }
+
+    /** Expose the built `ctx.log` logger so tests can drive `.with(...)` and overloads directly. */
+    public logger(functionPath: string, sink?: Parameters<LoggingShard["makeLogger"]>[1]): ReturnType<LoggingShard["makeLogger"]> {
+        return this.makeLogger(functionPath, sink);
     }
 }
 
@@ -1812,28 +1824,34 @@ describe("shardDO admin data migrations", () => {
         const seen: { args: unknown[]; functionPath: string; level: string; message: string }[] = [];
         const shard = new LoggingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
+        // `(string, object)` is the structured form: message + a fields bag.
         shard.log("messages:list", "info", ["loaded", { count: 3 }], { onLog: (event) => seen.push(event) });
 
-        // Forwarded to the programmatic sink, args un-redacted, attributed.
+        // Forwarded to the programmatic sink, args un-redacted, attributed, with
+        // the parsed structured `fields` and (absent here) trace-correlation ids.
         expect(seen).toStrictEqual([
             {
                 args: ["loaded", { count: 3 }],
+                fields: { count: 3 },
                 functionPath: "messages:list",
                 level: "info",
-                message: 'loaded {"count":3}',
+                message: "loaded",
                 shardKey: undefined,
+                spanId: undefined,
+                traceId: undefined,
                 ts: expect.any(Number),
                 userId: undefined,
             },
         ]);
 
-        // Structured console event for the dev terminal / Workers Logs.
+        // Structured console event for the dev terminal / Workers Logs — carries
+        // the message and the structured fields (but not the raw args).
         const events = log.mock.calls
             .map((call): Record<string, unknown> | undefined => tryParseJson(call[0]))
             .filter((event): event is Record<string, unknown> => event?.source === "lunora" && event.type === "log");
 
         expect(events).toHaveLength(1);
-        expect(events[0]).toMatchObject({ function: "messages:list", level: "info", message: 'loaded {"count":3}' });
+        expect(events[0]).toMatchObject({ fields: { count: 3 }, function: "messages:list", level: "info", message: "loaded" });
 
         vi.restoreAllMocks();
 
@@ -1842,7 +1860,46 @@ describe("shardDO admin data migrations", () => {
         const body = await response.json<{ result: { entries: { functionPath: string; level: string; message: string }[] } }>();
 
         expect(body.result.entries).toHaveLength(1);
-        expect(body.result.entries[0]).toMatchObject({ functionPath: "messages:list", level: "info", message: 'loaded {"count":3}' });
+        expect(body.result.entries[0]).toMatchObject({ functionPath: "messages:list", level: "info", message: "loaded" });
+    });
+
+    it("treats console-style varargs as a rendered message with no structured fields", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        const seen: { fields?: Record<string, unknown>; message: string }[] = [];
+        const shard = new LoggingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Three args (not the `(string, object)` structured shape) → console-style.
+        shard.log("a:b", "info", ["state", { count: 3 }, "extra"], { onLog: (event) => seen.push(event) });
+
+        expect(seen[0]!.message).toBe('state {"count":3} extra');
+        expect(seen[0]!.fields).toBeUndefined();
+
+        vi.restoreAllMocks();
+    });
+
+    it("with(fields) stamps bound fields onto every line, per-call fields winning on a clash", async () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        const seen: { fields?: Record<string, unknown>; level: string; message: string }[] = [];
+        const shard = new LoggingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const logger = shard.logger("orders:place", { onLog: (event) => seen.push(event) });
+        const bound = logger.with({ orderId: "o-1", step: "start" });
+
+        bound.info("charging");
+        bound.fatal("charge failed", { code: "CARD_DECLINED", step: "charge" });
+
+        // Bound fields flow onto a fields-free call.
+        expect(seen[0]).toMatchObject({ fields: { orderId: "o-1", step: "start" }, level: "info", message: "charging" });
+        // Per-call fields merge over bound; `step` is overridden, `code` added.
+        expect(seen[1]).toMatchObject({ fields: { code: "CARD_DECLINED", orderId: "o-1", step: "charge" }, level: "fatal", message: "charge failed" });
+        // The new severities are carried through verbatim.
+        expect(seen[1]!.level).toBe("fatal");
+
+        vi.restoreAllMocks();
     });
 
     it("folds the bare `log` level onto info for the studio buffer", async () => {

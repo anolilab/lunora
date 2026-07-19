@@ -328,8 +328,15 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
     }
 };
 
-/** Severity of a `ctx.log.*` call, mirroring the console method names (`log` is the default level, distinct from `info`). */
-type ContextLogLevel = "debug" | "error" | "info" | "log" | "warn";
+/**
+ * Severity of a `ctx.log.*` call. The five console method names (`log` is the
+ * default level, distinct from `info`) plus `trace`/`fatal`, so the logger
+ * spans the full OpenTelemetry severity ramp.
+ */
+type ContextLogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
+
+/** Structured, filterable key/value fields attached to a `ctx.log` line (see the server `LogFields`). */
+type LogFields = Record<string, unknown>;
 
 /** Stable `type` tag distinguishing a per-call application-log event from the per-dispatch `"request"` event; both share `source: "lunora"`. */
 const LOG_EVENT_TYPE = "log";
@@ -338,6 +345,13 @@ const LOG_EVENT_TYPE = "log";
 interface LogEventInput {
     /** Raw arguments passed to the call, in order. */
     args: unknown[];
+    /**
+     * Structured fields the caller attached (`ctx.log.info(message, fields)` or a
+     * bound `ctx.log.with(fields)` child). Unlike raw `args`, these ARE emitted on
+     * the console/Workers-Logs event (they are intentional, structured metadata,
+     * not incidental values) so a log pipeline can filter on them.
+     */
+    fields?: LogFields;
     /** Function that emitted the line, e.g. `messages:list`. */
     functionPath: string;
     /** Severity the line was logged at. */
@@ -346,6 +360,10 @@ interface LogEventInput {
     message: string;
     /** Shard key (DO id name), or `undefined` for the unnamed root DO. */
     shardKey?: string;
+    /** Span id of the RPC this line was emitted under (trace correlation), or `undefined`. */
+    spanId?: string;
+    /** Trace id this line belongs to (from the inbound `traceparent`), or `undefined`. */
+    traceId?: string;
     /** Wall-clock millis when the line was emitted. */
     ts: number;
     /** Acting userId, or `undefined` when anonymous. */
@@ -393,24 +411,41 @@ const renderLogMessage = (args: unknown[]): string =>
  * `message` already carries the developer's rendered values, exactly like a raw
  * `console.log` line.
  *
- * `error`/`warn` go to `console.error`/`console.warn` (so they surface at the
- * right level in the trace); every other level to `console.log`. The serialised
- * fields are a string + primitives, so `JSON.stringify` can't throw on a circular
- * arg here (the rendering already happened in `renderLogMessage`).
+ * `error`/`fatal` go to `console.error`, `warn` to `console.warn` (so they
+ * surface at the right level in the trace); every other level to `console.log`.
+ *
+ * Structured `fields` (plus `traceId`/`spanId` for correlation) ARE emitted here
+ * — they are intentional metadata a log pipeline filters on, unlike raw `args`.
+ * A field value that can't be serialised (a circular object) would make
+ * `JSON.stringify` throw and drop the whole line, so serialisation falls back to
+ * a fields-free line rather than losing the event.
  */
 const emitLogEvent = (input: LogEventInput): void => {
-    const line = JSON.stringify({
+    const payload = {
+        fields: input.fields,
         function: input.functionPath,
         level: input.level,
         message: input.message,
         shard: input.shardKey,
         source: REQUEST_LOG_EVENT_SOURCE,
+        spanId: input.spanId,
+        traceId: input.traceId,
         ts: input.ts,
         type: LOG_EVENT_TYPE,
         userId: input.userId,
-    });
+    };
 
-    if (input.level === "error") {
+    let line: string;
+
+    try {
+        line = JSON.stringify(payload);
+    } catch {
+        // A non-serialisable field (e.g. circular) must not swallow the line —
+        // drop `fields` and emit the rest.
+        line = JSON.stringify({ ...payload, fields: undefined });
+    }
+
+    if (input.level === "error" || input.level === "fatal") {
         // eslint-disable-next-line no-console -- intentional structured ctx.log event emission into CF Workers Logs / Logpush; error level.
         console.error(line);
     } else if (input.level === "warn") {
