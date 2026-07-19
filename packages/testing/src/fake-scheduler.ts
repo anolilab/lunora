@@ -120,6 +120,7 @@ type ScheduledDispatch = (kind: "action" | "mutation", reference: unknown, conte
 const createFakeScheduler = (
     getDispatch: () => ScheduledDispatch,
     getMutationContext: () => unknown,
+    getActionContext: () => unknown,
     getFunctionRegistry: () => Map<string, { handler: unknown; kind: string }>,
     now: number,
 ): { controls: FakeSchedulerControls; scheduler: Scheduler } => {
@@ -206,9 +207,9 @@ const createFakeScheduler = (
 
         if (entry.kind === "mutation" || entry.kind === "action") {
             const dispatch = getDispatch();
-            const mutationContext = getMutationContext();
+            const context = entry.kind === "action" ? getActionContext() : getMutationContext();
 
-            await dispatch(entry.kind, entry, mutationContext, job.args);
+            await dispatch(entry.kind, entry, context, job.args);
         } else {
             // eslint-disable-next-line no-console -- deliberate test-time warning
             console.warn(

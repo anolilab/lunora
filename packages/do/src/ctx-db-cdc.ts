@@ -218,7 +218,7 @@ const bumpCdcEpoch = (sql: SqlExec): string => {
  */
 const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Promise<void> => {
     if (change.op === "delete") {
-        await writer.delete(change.id);
+        await writer.delete(change.id, change.table);
 
         return;
     }

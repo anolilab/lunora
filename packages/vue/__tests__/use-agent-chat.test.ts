@@ -132,6 +132,48 @@ describe(useAgentChat, () => {
         scope.stop();
     });
 
+    it("shows a fresh optimistic echo for a repeated identical prompt, not reconciled by the earlier durable row", async () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const scope = effectScope();
+        const chat = scope.run(() =>
+            fake.provide((): UseAgentChatResult =>
+                useAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" }),
+            ),
+        )!;
+
+        // First send of "hi": acked by the server, durable history now has one "hi".
+        await chat.send("hi");
+
+        fake.push(MESSAGES_REF, { key: "t1" }, [{ content: "hi", role: "user", seq: 0 }]);
+
+        expect(chat.messages.value).toStrictEqual([{ content: "hi", role: "user", seq: 0 }]);
+
+        // Sending "hi" again must NOT be immediately swallowed by the stale durable
+        // "hi" that predates this send — the optimistic echo should render until
+        // ITS OWN durable row arrives.
+        await chat.send("hi");
+
+        expect(chat.messages.value).toStrictEqual([
+            { content: "hi", role: "user", seq: 0 },
+            { content: "hi", optimistic: true, role: "user", seq: 1 },
+        ]);
+
+        // Once the second durable "hi" lands, the optimistic row reconciles away.
+        fake.push(MESSAGES_REF, { key: "t1" }, [
+            { content: "hi", role: "user", seq: 0 },
+            { content: "hi", role: "user", seq: 1 },
+        ]);
+
+        expect(chat.messages.value).toStrictEqual([
+            { content: "hi", role: "user", seq: 0 },
+            { content: "hi", role: "user", seq: 1 },
+        ]);
+
+        scope.stop();
+    });
+
     it("routes approve / reject / cancel with the in-flight instanceId", async () => {
         expect.hasAssertions();
 

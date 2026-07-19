@@ -4,6 +4,7 @@ import { join } from "node:path";
 // The /naming subpath keeps codegen from loading the agent runtime (and the
 // AI SDK behind it) just to derive deploy names.
 import { agentBindingName, agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "@lunora/agent/naming";
+import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
@@ -137,12 +138,29 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
 };
 
 /**
+ * Unwrap `as`/`satisfies`/parenthesized wrappers around a call expression —
+ * `defineAgent({...}) satisfies AgentDefinition`, `defineAgent({...}) as const`,
+ * or `(defineAgent({...}))` — down to the inner `CallExpression`. Mirrors the
+ * identical helper in `discover-workflows.ts`. Returns `undefined` when the
+ * (possibly wrapped) node isn't ultimately a call.
+ */
+const unwrapToCallExpression = (node: Node | undefined): CallExpression | undefined => {
+    let current: Node | undefined = node;
+
+    while (current && (Node.isAsExpression(current) || Node.isSatisfiesExpression(current) || Node.isParenthesizedExpression(current))) {
+        current = current.getExpression();
+    }
+
+    return current && Node.isCallExpression(current) ? current : undefined;
+};
+
+/**
  * Collect exported `defineAgent` declarations from one source file. Apps never
  * re-export the runtime component functions (codegen auto-registers them), but
  * a hand-written `export const { agentAppendMessage } = agentComponent().functions`
  * must not break discovery either — its initializer is a property access, not a
- * `CallExpression`, so the guard below skips it and only `defineAgent()` calls
- * are lifted.
+ * `CallExpression` (nor a wrapped one), so it's skipped and only `defineAgent()`
+ * calls (optionally wrapped in `as`/`satisfies`/parens) are lifted.
  */
 const agentsFromSource = (source: SourceFile): AgentIR[] => {
     const agents: AgentIR[] = [];
@@ -152,13 +170,12 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
             continue;
         }
 
-        const initializer = declaration.getInitializer();
+        const call = unwrapToCallExpression(declaration.getInitializer());
 
-        if (initializer?.getKind() !== SyntaxKind.CallExpression) {
+        if (!call) {
             continue;
         }
 
-        const call = initializer as CallExpression;
         const callee = call.getExpression();
 
         if (!Node.isIdentifier(callee) || !isDefineAgent(callee)) {
@@ -175,6 +192,58 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
     }
 
     return agents;
+};
+
+/**
+ * Reject agents whose deployed `name`, `bindingName`, or `className` collide
+ * across exports — all three flow into wrangler/generated output (`workflows[].name`,
+ * the `AGENT_*` Workflow binding, and the `_generated/agents.ts` class), and agent
+ * naming case-folds (`supportBot`/`SupportBot` both derive `AGENT_SUPPORT_BOT`), so a
+ * collision on any one of them silently clobbers a binding or a generated class.
+ * Mirrors `discover-workflows.ts`'s `assertUniqueNames`, extended with `className`.
+ */
+const assertUniqueNames = (agents: ReadonlyArray<AgentIR>): void => {
+    const seenNames = new Map<string, string>();
+    const seenBindings = new Map<string, string>();
+    const seenClasses = new Map<string, string>();
+
+    for (const agent of agents) {
+        const priorName = seenNames.get(agent.name);
+
+        if (priorName !== undefined) {
+            throw new LunoraError(
+                "DUPLICATE_AGENT_NAME",
+                `Duplicate agent name "${agent.name}": produced by both "${priorName}" and "${agent.exportName}". Deployed agent names must be unique across the project.`,
+                { status: 500 },
+            );
+        }
+
+        seenNames.set(agent.name, agent.exportName);
+
+        const priorBinding = seenBindings.get(agent.bindingName);
+
+        if (priorBinding !== undefined) {
+            throw new LunoraError(
+                "DUPLICATE_AGENT_BINDING",
+                `Duplicate agent binding "${agent.bindingName}": produced by both "${priorBinding}" and "${agent.exportName}". Agent export names must yield unique binding names.`,
+                { status: 500 },
+            );
+        }
+
+        seenBindings.set(agent.bindingName, agent.exportName);
+
+        const priorClass = seenClasses.get(agent.className);
+
+        if (priorClass !== undefined) {
+            throw new LunoraError(
+                "DUPLICATE_AGENT_CLASS",
+                `Duplicate agent class "${agent.className}": produced by both "${priorClass}" and "${agent.exportName}". Agent export names must yield unique generated class names.`,
+                { status: 500 },
+            );
+        }
+
+        seenClasses.set(agent.className, agent.exportName);
+    }
 };
 
 /**
@@ -198,6 +267,7 @@ const discoverAgents = (project: Project, lunoraDirectory: string): AgentIR[] =>
     const agents = agentsFromSource(source);
 
     agents.sort((a, b) => a.exportName.localeCompare(b.exportName));
+    assertUniqueNames(agents);
 
     return agents;
 };

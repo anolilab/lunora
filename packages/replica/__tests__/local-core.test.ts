@@ -406,6 +406,94 @@ describe(EventLog, () => {
 
         expect(log.headSeq).toBe(1);
     });
+
+    // REPLICA-06: bounded in-memory growth ─────────────────────────────
+
+    it("maxEntries caps the log — a long run does not grow it unboundedly", () => {
+        const log = new EventLog({ maxEntries: 5 });
+
+        for (let index = 0; index < 100; index += 1) {
+            log.append("tick", index);
+        }
+
+        expect(log.size).toBe(5);
+        // headSeq/nextSeq are independent counters — unaffected by eviction.
+        expect(log.headSeq).toBe(99);
+        expect(log.nextSeq).toBe(100);
+
+        // Only the newest entries survive (oldest-first eviction).
+        const remaining = log.getSince(0);
+
+        expect(remaining.map((e) => e.seq)).toStrictEqual([95, 96, 97, 98, 99]);
+    });
+
+    it("maxEntries caps commitAll batches too", () => {
+        const log = new EventLog({ maxEntries: 3 });
+
+        log.commitAll(
+            Array.from({ length: 10 }, (_unused, index) => ({
+                type: "tick",
+                payload: index,
+            })),
+        );
+
+        expect(log.size).toBe(3);
+        expect(log.getSince(0).map((e) => e.seq)).toStrictEqual([7, 8, 9]);
+    });
+
+    it("without maxEntries the log stays unbounded (default, backward-compatible)", () => {
+        const log = new EventLog();
+
+        for (let index = 0; index < 50; index += 1) {
+            log.append("tick", index);
+        }
+
+        expect(log.size).toBe(50);
+    });
+
+    it("truncateBelow discards entries below the floor without disturbing headSeq/nextSeq", () => {
+        const log = new EventLog();
+
+        log.append("a", null);
+        log.append("b", null);
+        log.append("c", null);
+
+        log.truncateBelow(2);
+
+        expect(log.size).toBe(1);
+        expect(log.getSince(0).map((e) => e.seq)).toStrictEqual([2]);
+        expect(log.headSeq).toBe(2);
+        expect(log.nextSeq).toBe(3);
+
+        // Appends after truncation continue the same sequence.
+        const next = log.append("d", null);
+
+        expect(next.seq).toBe(3);
+        expect(log.size).toBe(2);
+    });
+
+    it("truncateBelow a floor past every entry empties the log", () => {
+        const log = new EventLog();
+
+        log.append("a", null);
+        log.append("b", null);
+
+        log.truncateBelow(99);
+
+        expect(log.size).toBe(0);
+        expect(log.headSeq).toBe(1); // unaffected — still the real head
+    });
+
+    it("truncateBelow(0) is a no-op", () => {
+        const log = new EventLog();
+
+        log.append("a", null);
+        log.append("b", null);
+
+        log.truncateBelow(0);
+
+        expect(log.size).toBe(2);
+    });
 });
 
 // ─── applyDiff ────────────────────────────────────────────────────────
@@ -433,6 +521,46 @@ describe(applyDiff, () => {
         expect(key).toBeTypeOf("string");
         expect(val.name).toBe("bob");
         expect(val.id).toBe(key);
+    });
+
+    // REPLICA-05: replay determinism — re-applying the exact same diff must
+    // derive the exact same id every time, not a fresh `crypto.randomUUID()`.
+    it("derives the SAME id when the same id-less diff is replayed", () => {
+        const diff = createTableDiff("t", [{ type: "insert", data: { name: "bob" } }], 1000);
+
+        const first = applyDiff(new Map(), diff);
+        const second = applyDiff(new Map(), diff);
+
+        const [firstKey] = [...first.keys()];
+        const [secondKey] = [...second.keys()];
+
+        expect(firstKey).toBe(secondKey);
+        expect(first.get(firstKey as string)).toStrictEqual(second.get(secondKey as string));
+    });
+
+    it("derives DIFFERENT ids for id-less inserts at different positions in the same diff, even with identical data", () => {
+        const diff = createTableDiff(
+            "t",
+            [
+                { type: "insert", data: { name: "dup" } },
+                { type: "insert", data: { name: "dup" } },
+            ],
+            1000,
+        );
+
+        const next = applyDiff(new Map(), diff);
+
+        expect(next.size).toBe(2);
+    });
+
+    it("derives DIFFERENT ids for id-less inserts with different content", () => {
+        const diffA = createTableDiff("t", [{ type: "insert", data: { name: "alice" } }], 1000);
+        const diffB = createTableDiff("t", [{ type: "insert", data: { name: "bob" } }], 1000);
+
+        const [keyA] = [...applyDiff(new Map(), diffA).keys()];
+        const [keyB] = [...applyDiff(new Map(), diffB).keys()];
+
+        expect(keyA).not.toBe(keyB);
     });
 
     it("updates existing rows", () => {

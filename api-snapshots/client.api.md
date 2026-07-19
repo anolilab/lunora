@@ -375,6 +375,7 @@ class LunoraClient {
     pendingCount(): number;
     onPendingChange(listener: (pending: number) => void): Unsubscribe;
     onMutationSettled(listener: (event: MutationSettledEvent) => void): Unsubscribe;
+    getWebSocketImpl(): typeof WebSocket | undefined;
     getClientQuery<T>(ref: ClientQueryRef<T>): T;
     setClientQuery<T>(ref: ClientQueryRef<T>, value: T): void;
     subscribeClientQuery(ref: ClientQueryRef, callback: (value: unknown) => void): Unsubscribe;

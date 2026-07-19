@@ -93,7 +93,16 @@ const materializeExternalRowsIncremental = async (
         const id = String(value._id);
 
         if (deletedIds?.has(id)) {
-            changes.push({ id, op: "delete", seq: 0, table, ts: 0 });
+            // eslint-disable-next-line no-await-in-loop -- one point read per pulled row; the slice is small and the read gates the delete/CDC append below.
+            const existing = await writer.get(id, table);
+
+            // Skip a re-pulled boundary tombstone whose row is already absent
+            // locally (mirrors the upsert path's byte-identical short-circuit
+            // below) — otherwise a steady-state re-pull of the same tombstoned
+            // boundary row re-emits a delete (and its CDC/broadcast) every tick.
+            if (existing) {
+                changes.push({ id, op: "delete", seq: 0, table, ts: 0 });
+            }
 
             continue;
         }

@@ -18,13 +18,16 @@
  * container and reason right beside ordinary Worker errors.
  */
 import { sha256Hex } from "./sha256";
-import { messageBucketFor } from "./superlog";
+import { messageBucketFor, stripNullBytes } from "./superlog";
 
 /** Hex length of the grouping hash — kept at 16 to match the vendored core. */
 const HASH_LEN = 16;
 
 /** Cap for the display title so a runaway message can't blow out the UI. */
 const TITLE_MAX = 120;
+
+/** Above this, a code point came from combining a surrogate pair (UTF-16 astral char). */
+const MAX_BMP_CODE_POINT = 0xff_ff;
 
 const buildTitle = (message: string, code: string | null | undefined, culprit: string): string => {
     const firstLine = (message.split("\n", 1)[0] ?? "").trim();
@@ -33,7 +36,24 @@ const buildTitle = (message: string, code: string | null | undefined, culprit: s
     // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- empty-string fallthrough is intended
     const base = firstLine || code || culprit || "Error";
 
-    return base.length > TITLE_MAX ? `${base.slice(0, TITLE_MAX - 1)}…` : base;
+    if (base.length <= TITLE_MAX) {
+        return base;
+    }
+
+    let end = TITLE_MAX - 1;
+    // Don't cut between a surrogate pair: `slice(0, end)` keeps code units
+    // `[0, end)`, so if the last retained unit (index `end - 1`) combines with
+    // the one at index `end` into an astral code point, that partner is
+    // dropped, leaving an invalid lone surrogate at the end of the title.
+    // `codePointAt` returns a value above `MAX_BMP_CODE_POINT` exactly when
+    // that pairing happens; trim one more unit instead.
+    const lastCodePoint = base.codePointAt(end - 1) ?? 0;
+
+    if (lastCodePoint > MAX_BMP_CODE_POINT) {
+        end -= 1;
+    }
+
+    return `${base.slice(0, end)}…`;
 };
 
 /** Input to `fingerprintError`: what every Lunora error source can supply. */
@@ -67,12 +87,26 @@ export interface ErrorFingerprint {
  * of whether the error came from a live sink event or a persisted history row.
  */
 export const fingerprintError = (input: FingerprintErrorInput): ErrorFingerprint => {
-    const culprit = input.functionPath || "unknown";
-    const bucket = messageBucketFor(input.message);
+    // Strip NUL bytes from the raw inputs up front — before bucketing/hashing —
+    // so neither the grouping hash nor any returned display field (title/bucket/
+    // culprit) can carry one downstream into a Postgres/SQLite upsert (the exact
+    // poisoning `stripNullBytes` documents defending against, applied everywhere
+    // else in this package but missed here). This only changes the hash for a
+    // message or functionPath that itself contains a NUL byte — already-broken
+    // input that couldn't be persisted anyway — so every existing non-NUL hash
+    // is unaffected.
+    const message = stripNullBytes(input.message);
+    // Same NUL-stripping applies to `code`: it feeds `buildTitle`'s fallback
+    // (when `message` is empty) and is returned verbatim as display metadata, so
+    // an unsanitized NUL-bearing code could still poison persistence downstream.
+    const code = stripNullBytes(input.code) ?? undefined;
+    // `||` not `??` on purpose — matches the pre-existing empty-string fallthrough.
+
+    const culprit = stripNullBytes(input.functionPath) || "unknown";
+    const bucket = messageBucketFor(message);
     const canonical = `lunora::${culprit}::${bucket}`;
     const hash = sha256Hex(canonical).slice(0, HASH_LEN);
-    const title = buildTitle(input.message, input.code, culprit);
-    const code = input.code ?? undefined;
+    const title = buildTitle(message, code, culprit);
 
     return code === undefined || code === "" ? { hash, title, culprit, bucket } : { hash, title, culprit, bucket, code };
 };

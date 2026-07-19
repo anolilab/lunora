@@ -1945,6 +1945,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `IncrementalMaterializeResult` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `IndexDefinitionLike` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2373,6 +2377,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `SourceCursorLike` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `SourceRefresh` (type)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2697,6 +2705,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `isSoftDeleted` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `isSourceDue` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2718,6 +2730,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `materializeExternalRows` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `materializeExternalRowsIncremental` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2746,6 +2762,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `planAggregateLookup` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `pullExternalSourceIncrementalTick` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -5836,6 +5856,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `DurableObjectJurisdiction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ExternalSourceCursor` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

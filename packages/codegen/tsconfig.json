@@ -4,14 +4,7 @@
         "outDir": "dist",
         "rootDir": ".",
         "moduleResolution": "bundler",
-        "types": ["node"],
-        // The plan-131 __prototype__ scripts self-import "@lunora/codegen"
-        // (Node resolves it to dist/ at runtime via self-referencing-package
-        // resolution). Map it to source here so `tsc --noEmit` passes on a
-        // fresh checkout without a prior build.
-        "paths": {
-            "@lunora/codegen": ["./src/index.ts"]
-        }
+        "types": ["node"]
     },
     "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"],
     "exclude": ["__tests__/fixtures/**", "**/__fixtures__/**"]

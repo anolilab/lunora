@@ -102,7 +102,7 @@ describe("permissionsMatrix", () => {
     });
 
     it("shows the empty state when no tables are configured", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         const mock = createMockClient({
             query: (reference): unknown => {

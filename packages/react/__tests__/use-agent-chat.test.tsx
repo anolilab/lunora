@@ -215,6 +215,67 @@ describe("useAgentChat", () => {
         expect(reconciled).toStrictEqual([{ content: "hello there", role: "user", seq: 0 }]);
     });
 
+    it("shows a fresh optimistic echo for a repeated identical prompt, not reconciled by the earlier durable row", async () => {
+        expect.hasAssertions();
+
+        const { client, emit } = buildClient();
+        let latest: UseAgentChatResult | undefined;
+
+        render(
+            <LunoraProvider client={client}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
+                    onReady={(result) => {
+                        latest = result;
+                    }}
+                    options={buildOptions()}
+                />
+            </LunoraProvider>,
+        );
+
+        // First send of "hi": acked by the server, durable history now has one "hi".
+        await act(async () => {
+            await latest?.send("hi");
+        });
+
+        await act(async () => {
+            emit(MESSAGES_REF, [{ content: "hi", role: "user", seq: 0 }]);
+        });
+
+        const afterFirstAck = JSON.parse(screen.getByTestId("messages").textContent ?? "[]") as Record<string, unknown>[];
+
+        expect(afterFirstAck).toStrictEqual([{ content: "hi", role: "user", seq: 0 }]);
+
+        // Sending "hi" again must NOT be immediately swallowed by the stale durable
+        // "hi" that predates this send — the optimistic echo should render until
+        // ITS OWN durable row arrives.
+        await act(async () => {
+            await latest?.send("hi");
+        });
+
+        const afterSecondSend = JSON.parse(screen.getByTestId("messages").textContent ?? "[]") as Record<string, unknown>[];
+
+        expect(afterSecondSend).toStrictEqual([
+            { content: "hi", role: "user", seq: 0 },
+            { content: "hi", optimistic: true, role: "user", seq: 1 },
+        ]);
+
+        // Once the second durable "hi" lands, the optimistic row reconciles away.
+        await act(async () => {
+            emit(MESSAGES_REF, [
+                { content: "hi", role: "user", seq: 0 },
+                { content: "hi", role: "user", seq: 1 },
+            ]);
+        });
+
+        const afterSecondAck = JSON.parse(screen.getByTestId("messages").textContent ?? "[]") as Record<string, unknown>[];
+
+        expect(afterSecondAck).toStrictEqual([
+            { content: "hi", role: "user", seq: 0 },
+            { content: "hi", role: "user", seq: 1 },
+        ]);
+    });
+
     it("rolls the optimistic user turn back when the send mutation fails", async () => {
         expect.hasAssertions();
 

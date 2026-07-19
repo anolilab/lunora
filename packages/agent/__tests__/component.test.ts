@@ -8,6 +8,7 @@ const IN_FLIGHT_PATTERN = /already has a run in flight/u;
 const NOT_ALLOWED_PATTERN = /not allowed to resolve approvals/u;
 const NO_PRODUCER_PATTERN = /no ctx\.agents/u;
 const NOT_ENABLED_PATTERN = /not enabled for public runs/u;
+const DOES_NOT_OWN_THREAD_PATTERN = /does not own thread/u;
 
 /** A `ctx.agents` double recording the `sendEvent` calls the approval mutation makes. */
 const fakeAgents = (): {
@@ -59,23 +60,30 @@ interface IndexQuery {
     order: (direction: "asc" | "desc") => { collect: () => Promise<FakeRow[]>; take: (limit: number) => Promise<FakeRow[]> };
 }
 
-/** Index names whose final sort column is `createdAt` — the only ones this double models `.order()` for. */
-const CREATED_AT_INDEXES = new Set(["byOwnerCreatedAt"]);
+/**
+ * Index names this double models `.order()` for, mapped to the field the
+ * REAL TableReader would sort by (the index's trailing key column). Guard so
+ * a future `.order()` on an unmapped index fails loudly here instead of
+ * silently returning a wrong order (a false green).
+ */
+const INDEX_ORDER_FIELDS: Record<string, string> = {
+    byOwnerCreatedAt: "createdAt",
+    byOwnerUpdatedAt: "updatedAt",
+    byThread: "seq",
+};
 
 const makeIndexQuery = (candidates: FakeRow[], indexName: string, build: (q: unknown) => unknown): IndexQuery => {
     const conditions = collectConditions(build);
     const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
-    // This double approximates `.order()` by sorting on `createdAt`; the REAL
-    // TableReader sorts by the index's key columns. Guard so a future `.order()`
-    // on a differently-keyed index fails loudly here instead of silently
-    // returning a wrong order (a false green).
     const ordered = (direction: "asc" | "desc"): FakeRow[] => {
-        if (!CREATED_AT_INDEXES.has(indexName)) {
-            throw new Error(`test double: .order() is only modeled for a createdAt-keyed index, not "${indexName}"`);
+        const field = INDEX_ORDER_FIELDS[indexName];
+
+        if (field === undefined) {
+            throw new Error(`test double: .order() is only modeled for a known-keyed index, not "${indexName}"`);
         }
 
         return matches().toSorted((a, b) => {
-            const delta = ((a["createdAt"] as number | undefined) ?? 0) - ((b["createdAt"] as number | undefined) ?? 0);
+            const delta = ((a[field] as number | undefined) ?? 0) - ((b[field] as number | undefined) ?? 0);
 
             return direction === "desc" ? -delta : delta;
         });
@@ -260,6 +268,40 @@ describe(agentComponent, () => {
 
         expect(thread["status"]).toBe("error");
         expect(thread["error"]).toBe("boom");
+    });
+
+    it("bounds the DB read for a limited tail over a long thread (descending take, reversed to ascending)", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" });
+
+        for (let index = 0; index < 50; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seq allocation is the point
+            await callMutation(functions.agentAppendMessage, ctx, {
+                content: `m${String(index)}`,
+                messageKey: `k${String(index)}`,
+                role: "user",
+                threadKey: "t-1",
+            });
+        }
+
+        // A limit smaller than the thread keeps exactly the newest N, ascending.
+        const tail = (await callMutation(functions.agentMessages, ctx, { key: "t-1", limit: 3 })) as Record<string, unknown>[];
+
+        expect(tail.map((message) => message["content"])).toStrictEqual(["m47", "m48", "m49"]);
+
+        // A limit exceeding the thread length still returns every message,
+        // in ascending order — `.take(limit)` on a short DESC scan can't
+        // over-read past what exists.
+        const everything = (await callMutation(functions.agentMessages, ctx, { key: "t-1", limit: 1000 })) as Record<string, unknown>[];
+
+        expect(everything.map((message) => message["content"])).toStrictEqual(Array.from({ length: 50 }, (_unused, index) => `m${String(index)}`));
+
+        // No limit: full ordered history, matching the bounded-tail cases.
+        const unbounded = (await callMutation(functions.agentMessages, ctx, { key: "t-1" })) as Record<string, unknown>[];
+
+        expect(unbounded).toStrictEqual(everything);
     });
 });
 
@@ -575,6 +617,74 @@ describe("graph memory", () => {
         // Only the heaviest (Beta, weight 0.9) edge is kept.
         expect(result.context).toBe("- hub —[works_at]→ beta");
     });
+
+    it("bounds seed enumeration to the most-recently-touched entities, not the owner's full history", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        // Directly seed GRAPH_SEED_SCAN_CAP (500) recent entities plus one much
+        // OLDER entity that matches the query — bypasses the 64-per-call upsert
+        // cap so the fixture can exceed the scan cap without 500+ mutations.
+        const entityRows: FakeRow[] = [];
+
+        for (let index = 0; index < 500; index += 1) {
+            entityRows.push({
+                _id: `filler-${String(index)}`,
+                createdAt: index + 1,
+                name: `filler${String(index)}`,
+                owner: "u1",
+                updatedAt: index + 1,
+                weight: 1,
+            });
+        }
+
+        // The oldest row in the owner's history — a real match were the scan
+        // unbounded, but its `updatedAt` places it outside the top-500 window.
+        entityRows.push({
+            _id: "stale-ancient",
+            createdAt: 0,
+            name: "ancient",
+            owner: "u1",
+            updatedAt: 0,
+            weight: 1,
+        });
+
+        rows.set("agent_entities", entityRows);
+
+        const result = (await callMutation(functions.agentGraphTraverse, ctx, { owner: "u1", query: "ancient" })) as { context: string };
+
+        // A `.collect()`-all scan would find "ancient" and seed a traversal;
+        // the bounded scan (top 500 by `updatedAt` desc) excludes it.
+        expect(result.context).toBe("");
+
+        // A same-named entity WITHIN the scan window still seeds normally and
+        // reaches its edge — small/typical owners are unaffected by the cap.
+        entityRows.push({
+            _id: "recent-ancient",
+            createdAt: 501,
+            name: "ancient-recent",
+            owner: "u1",
+            updatedAt: 501,
+            weight: 1,
+        });
+        rows.set("agent_edges", [
+            {
+                _id: "edge-1",
+                createdAt: 501,
+                dstName: "somewhere",
+                label: "located_in",
+                messageKey: "k",
+                owner: "u1",
+                srcName: "ancient-recent",
+                updatedAt: 501,
+                weight: 1,
+            },
+        ]);
+
+        const found = (await callMutation(functions.agentGraphTraverse, ctx, { owner: "u1", query: "ancient-recent" })) as { context: string };
+
+        expect(found.context).toBe("- ancient-recent —[located_in]→ somewhere");
+    });
 });
 
 describe("episodic memory", () => {
@@ -680,7 +790,7 @@ describe("episodic memory", () => {
 });
 
 describe("approval resolution", () => {
-    it("delivers the decision to the run's workflow instance via ctx.agents", async () => {
+    it("delivers the decision to the run's workflow instance via ctx.agents, scoped to the tool call", async () => {
         const { functions } = agentComponent();
         const owner = fakeDatabase({ userId: "user-a" });
         const { agents, sent } = fakeAgents();
@@ -697,7 +807,9 @@ describe("approval resolution", () => {
         });
 
         expect(result).toStrictEqual({ resolved: true });
-        expect(sent).toStrictEqual([{ event: { payload: { decision: "approve", note: "looks good" }, type: "agent-approval" }, id: "wf-1" }]);
+        expect(sent).toStrictEqual([
+            { event: { payload: { decision: "approve", note: "looks good", toolCallId: "call_1" }, type: "agent-approval:call_1" }, id: "wf-1" },
+        ]);
     });
 
     it("owner-gates the mutation: a foreign caller cannot approve", async () => {
@@ -727,6 +839,66 @@ describe("approval resolution", () => {
         await expect(
             callMutation(functions.agentResolveApproval, ctx, { decision: "reject", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
         ).rejects.toThrow(NO_PRODUCER_PATTERN);
+    });
+
+    it("(AGENT-01a) rejects an instanceId that does not own the thread, even for a readable (ownerless) thread", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+        const { agents, sent } = fakeAgents();
+
+        // An ownerless thread is readable by anyone who knows its key — but the
+        // caller must still name the instance actually bound to it.
+        await callMutation(functions.agentEnsureThread, { ...ctx, agents }, { agent: "support", instanceId: "wf-real", key: "t-1" });
+
+        await expect(
+            callMutation(
+                functions.agentResolveApproval,
+                { ...ctx, agents },
+                {
+                    decision: "approve",
+                    instanceId: "wf-attacker-guessed",
+                    threadKey: "t-1",
+                    toolCallId: "call_1",
+                },
+            ),
+        ).rejects.toThrow(DOES_NOT_OWN_THREAD_PATTERN);
+
+        // Never reached the workflow binding for the wrong instance.
+        expect(sent).toStrictEqual([]);
+    });
+
+    it("(AGENT-01b) scopes the event type per tool call, so a decision for one call cannot resolve another", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+        const { agents, sent } = fakeAgents();
+
+        await callMutation(functions.agentEnsureThread, { ...ctx, agents }, { agent: "support", instanceId: "wf-1", key: "t-1" });
+
+        await callMutation(
+            functions.agentResolveApproval,
+            { ...ctx, agents },
+            {
+                decision: "approve",
+                instanceId: "wf-1",
+                threadKey: "t-1",
+                toolCallId: "call_A",
+            },
+        );
+        await callMutation(
+            functions.agentResolveApproval,
+            { ...ctx, agents },
+            {
+                decision: "reject",
+                instanceId: "wf-1",
+                threadKey: "t-1",
+                toolCallId: "call_B",
+            },
+        );
+
+        // Each decision's event type is scoped to ITS OWN call id — never the same
+        // type twice, so a `step.waitForEvent` pending on one call.id's type can
+        // never be woken by an event meant for a different call.
+        expect(sent.map((entry) => entry.event.type)).toStrictEqual(["agent-approval:call_A", "agent-approval:call_B"]);
     });
 });
 
@@ -936,6 +1108,45 @@ describe("concurrency guard", () => {
         await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-b", key: "t-1" })).resolves.toStrictEqual({
             created: false,
         });
+    });
+
+    it("(AGENT-02) rejects an id-less dispatch onto a thread paused for approval under a live prior instance", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+        await callMutation(functions.agentPatchThread, ctx, { instanceId: "wf-a", status: "awaiting_input" });
+
+        // The inbound-email/inbound-channel paths dispatch with NO instanceId at
+        // all. Before the fix this fell through as an "idempotent reset",
+        // silently flipping `awaiting_input` back to "running" out from under
+        // the still-hibernating "wf-a" run — now it must hit the concurrency
+        // policy like any other genuine second run.
+        await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" })).rejects.toThrow(IN_FLIGHT_PATTERN);
+    });
+
+    it("(AGENT-02) rejects an id-less dispatch onto a running thread under a live prior instance", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+
+        await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" })).rejects.toThrow(IN_FLIGHT_PATTERN);
+    });
+
+    it("(AGENT-02) an id-less dispatch can still 'replace' a live run when explicitly configured to", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-old", key: "t-1" });
+
+        const result = await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1", onConcurrentRun: "replace" });
+
+        expect(result).toStrictEqual({ created: false, priorInstanceId: "wf-old", replaced: true });
+        // No new instance id was supplied to record — the column is left as-is
+        // rather than explicitly cleared (which the validators would reject).
+        expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-old");
+        expect(rows.get("agent_threads")?.[0]?.["status"]).toBe("running");
     });
 
     it("replaces: takes the thread over and reports the prior instance", async () => {

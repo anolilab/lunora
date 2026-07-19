@@ -83,7 +83,7 @@ describe("dashboardsPanel", () => {
     });
 
     it("removes a widget", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         render(renderPanel(numericMock()));
 

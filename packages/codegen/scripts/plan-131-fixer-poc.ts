@@ -2,10 +2,13 @@
  * THROWAWAY PROTOTYPE — Plan 131 (advisor autofix + baseline design spike).
  *
  * Not part of `@lunora/codegen`'s public API (nothing under `src/index.ts`
- * imports this directory). It exists only to prove, end-to-end, that ONE
- * AUTOFIX-SAFE lint (`unindexed_foreign_key`) can be mechanically fixed and
- * that the fix is Prettier-stable and makes the advisor finding disappear on
- * re-run. See `plans/131-phase0-design.md` for the design this de-risks.
+ * imports this directory) — lives under `scripts/`, outside `src/` and outside
+ * the package's `tsconfig.json` `include`, so it is neither type-checked as
+ * part of `tsc --noEmit` nor bundled into `dist/` by packem. It exists only to
+ * prove, end-to-end, that ONE AUTOFIX-SAFE lint (`unindexed_foreign_key`) can
+ * be mechanically fixed and that the fix is Prettier-stable and makes the
+ * advisor finding disappear on re-run. See `plans/131-phase0-design.md` for
+ * the design this de-risks.
  *
  * SELF-FIXTURING: the PoC copies `apps/playground` to a temp directory,
  * injects the unindexed-FK fixture (a `.relations()` clause on `channels`,
@@ -13,8 +16,9 @@
  * TEMP copy, and runs the before/fix/after loop there. Running it never
  * touches the repository working tree.
  *
- * Run with: `node --experimental-strip-types packages/codegen/src/__prototype__/plan-131-fixer-poc.ts`
- * (Node 24 supports type-stripping natively; no build step needed.)
+ * Run with: `node --experimental-strip-types packages/codegen/scripts/plan-131-fixer-poc.ts`
+ * (requires `pnpm run build:packages` first — no `tsconfig` `paths` hack maps
+ * `@lunora/codegen` to source here, unlike when this lived under `src/`.)
  *
  * Safe to delete — do not import from here in real code.
  */
@@ -26,16 +30,17 @@ import { fileURLToPath } from "node:url";
 import type { Finding } from "@lunora/advisor";
 // NOTE: this throwaway script runs directly via `node --experimental-strip-types`
 // (Node's real ESM resolver, not the bundler-mode resolver the rest of this
-// package's real source uses). Reaching into `../run-codegen` (source) hits
-// that file's own extension-less relative imports, which Node's loader can't
-// resolve without a build step. So the PoC instead self-imports the package's
-// own *built* public entry (`@lunora/codegen`, already built via `pnpm run
-// build:packages`) via Node's self-referencing-package resolution
+// package's real source uses). Reaching into `../src/run-codegen` (source)
+// hits that file's own extension-less relative imports, which Node's loader
+// can't resolve without a build step. So the PoC instead self-imports the
+// package's own *built* public entry (`@lunora/codegen`, already built via
+// `pnpm run build:packages`) via Node's self-referencing-package resolution
 // (package.json declares "name" + "exports", no node_modules symlink
 // needed) — which is also more representative of how a real fixer feature
-// would consume codegen (through its public API, not internal source).
-// For `tsc --noEmit` (which must pass WITHOUT a prior build), the package
-// tsconfig maps `@lunora/codegen` → `./src/index.ts` via `paths`.
+// would consume codegen (through its public API, not internal source). This
+// script lives under `scripts/`, outside the package `tsconfig.json`
+// `include`, so `tsc --noEmit` never has to resolve this self-import at all —
+// no `paths` hack needed (unlike when this lived under `src/`).
 import { runCodegen } from "@lunora/codegen";
 import { format, resolveConfig } from "prettier";
 import type { PropertyAssignment } from "ts-morph";
@@ -44,7 +49,7 @@ import { Project, SyntaxKind } from "ts-morph";
 // `import.meta.dirname` needs Node ^22.16/^24.0; the workspace floor is
 // ^22.15.0, so resolve the throwaway script's own directory the portable way.
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SOURCE_ROOT = join(HERE, "../../../../apps/playground");
+const SOURCE_ROOT = join(HERE, "../../../apps/playground");
 const TARGET_CACHE_KEY_PREFIX = "unindexed_foreign_key:channels:createdBy";
 /** Directories never copied into the temp fixture (heavy or machine-local state). */
 const SKIP_DIRS = new Set([".lunora", "dist", "node_modules"]);

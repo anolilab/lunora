@@ -117,15 +117,22 @@ describe("eventSource edge paths", () => {
         source.emitter.on("state-changed", ({ state }) => stateChanges.push(state));
 
         source.applyEvent("inc", null);
-        source.applyEvent("boom", null);
+
+        // REPLICA-07: a throwing reducer must not leave a logged entry that
+        // state never reflected, AND must not report the uncommitted
+        // candidate back to the caller as if it were a successfully
+        // persisted entry (its `seq` is free to be reused by the next
+        // event) — so `applyEvent` rethrows instead of returning it.
+        expect(() => source.applyEvent("boom", null)).toThrow("reducer exploded");
 
         expect(source.state).toStrictEqual({ count: 1 });
         expect(errors).toHaveLength(1);
         expect(errors[0]?.message).toBe("reducer exploded");
         // The bad event produced no state-changed emission.
         expect(stateChanges).toStrictEqual([{ count: 1 }]);
-        // But it IS in the log — the reducer failed, not the append.
-        expect(source.log.size).toBe(2);
+        // The log commits an entry only AFTER the reducer succeeds — the
+        // "boom" entry was never appended.
+        expect(source.log.size).toBe(1);
     });
 
     it("events() returns immediately for an already-aborted signal", async () => {

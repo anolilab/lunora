@@ -3827,17 +3827,29 @@ interface DatabaseWriter extends DatabaseReader {
 type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
 ```
 
+### `ExternalSourceCursor` (interface)
+
+```ts
+interface ExternalSourceCursor {
+    column: string;
+    query: string;
+}
+```
+
 ### `ExternalSourceDefinition` (interface)
 
 ```ts
 interface ExternalSourceDefinition {
     binding: string;
     columns?: ReadonlyArray<string>;
+    cursor?: ExternalSourceCursor;
     idColumn?: string;
     map?: (row: Record<string, unknown>) => Record<string, unknown>;
     mode?: ExternalSourceMode;
     query: string;
+    reconcileEveryMs?: number;
     refresh?: ExternalSourceRefresh;
+    softDeleteColumn?: string;
     tenantBy?: (shardKey: string) => ReadonlyArray<unknown>;
 }
 ```
@@ -3845,7 +3857,7 @@ interface ExternalSourceDefinition {
 ### `ExternalSourceMode` (type)
 
 ```ts
-type ExternalSourceMode = "full-pull";
+type ExternalSourceMode = "full-pull" | "incremental";
 ```
 
 ### `ExternalSourceRefresh` (type)

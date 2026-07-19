@@ -712,9 +712,33 @@ const takenAgentFunctionNames = (functions: ReadonlyArray<FunctionIR>): Readonly
     new Set(functions.filter((definition) => sanitizeNamespace(definition.filePath) === "agents").map((definition) => definition.exportName));
 
 /**
+ * Names of the `@lunora/agent` runtime functions the durable loop dispatches
+ * BY PATH internally (`agentAppendMessage`/`agentEnsureThread`/…) — as opposed
+ * to the public thread queries + the two client-facing mutations
+ * (`agentMessages`/`agentState`/`agentThread`/`agentRun`/`agentResolveApproval`),
+ * which an app is allowed to shadow (the app's own definition silently wins).
+ * Derived from the runtime component's own `visibility: "internal"` marker
+ * (mirroring the drift test in `discover-agents.test.ts`) rather than a
+ * hand-maintained list, so a newly added internal function is protected
+ * automatically.
+ */
+const internalAgentRuntimeFunctionNames = (): ReadonlySet<string> =>
+    new Set(
+        Object.entries(agentComponent().functions)
+            .filter(([, definition]) => definition.visibility === "internal")
+            .map(([name]) => name),
+    );
+
+/**
  * Dispatch-table fragment for the auto-registered agent runtime functions.
  * Every string is empty when the project declares no agents (or the app shadows
- * every name), keeping agent-free output byte-identical.
+ * every PUBLIC name), keeping agent-free output byte-identical.
+ *
+ * Shadowing a PUBLIC name (`agentMessages`/`agentState`/…) is a silent win for
+ * the app's own definition — unremarkable, since nothing but a client reference
+ * depends on it. Shadowing an INTERNAL name (`agentAppendMessage`/…) is instead
+ * rejected: the durable loop dispatches those by path unconditionally, so an
+ * app definition silently winning there would hijack the loop's own writes.
  */
 const renderAgentFunctionRegistry = (
     agents: ReadonlyArray<AgentIR>,
@@ -727,6 +751,16 @@ const renderAgentFunctionRegistry = (
     }
 
     const taken = takenAgentFunctionNames(functions);
+    const internal = internalAgentRuntimeFunctionNames();
+    const shadowedInternal = functions.find((definition) => sanitizeNamespace(definition.filePath) === "agents" && internal.has(definition.exportName));
+
+    if (shadowedInternal) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/codegen: "agents:${shadowedInternal.exportName}" is reserved for the durable agent loop's internal dispatch — rename the "${shadowedInternal.exportName}" export in ${shadowedInternal.filePath}`,
+        );
+    }
+
     const names = agentRuntimeFunctionNames().filter((name) => !taken.has(name));
 
     if (names.length === 0) {
@@ -3965,14 +3999,14 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
     /* eslint-disable no-secrets/no-secrets -- the emitted `pullExternalSourceIncrementalTick(this.sql …)` poll-loop call is a dense generated identifier, not a credential */
     const externalSourceOverride = hasSourcedTables
         ? `
-        protected override async pollExternalSources(): Promise<number> {
+        protected override async pollExternalSources(): Promise<number | undefined> {
             const env = (this.env ?? {}) as Record<string, unknown>;
             const sourced = Object.entries((schema as unknown as SchemaLike).tables)
                 .map(([table, definition]) => [table, (definition as { externalSource?: ExternalSourceLike }).externalSource] as const)
                 .filter((entry): entry is [string, ExternalSourceLike] => entry[1] !== undefined);
 
             if (sourced.length === 0) {
-                return 0;
+                return undefined;
             }
 
             const shardKey = this.currentShardKey();
@@ -4002,62 +4036,68 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
             }
 
             const now = Date.now();
-            // \`active\` counts non-manual sources: while > 0 the alarm re-arms; a
-            // manual-only schema returns 0 so the shared alarm goes idle.
-            let active = 0;
+            // \`nextDueAt\` tracks the EARLIEST next-due timestamp across every
+            // non-manual source; the shared alarm re-arms there instead of the
+            // fixed 2 s global-shape floor, so a large \`refresh.everyMs\` actually
+            // sleeps until it's due. Stays \`undefined\` when every source is
+            // \`refresh: "manual"\`, so the shared alarm goes idle for this tier.
+            let nextDueAt: number | undefined;
 
             for (const [table, source] of sourced) {
                 if (source.refresh === "manual") {
                     continue;
                 }
 
-                active += 1;
+                if (isSourceDue(source.refresh, polledAt.get(table), now)) {
+                    try {
+                        let client = clients.get(source.binding);
 
-                if (!isSourceDue(source.refresh, polledAt.get(table), now)) {
-                    continue;
-                }
+                        if (client === undefined) {
+                            client = config.sourceClient?.(env, source.binding);
 
-                try {
-                    let client = clients.get(source.binding);
-
-                    if (client === undefined) {
-                        client = config.sourceClient?.(env, source.binding);
-
-                        if (client !== undefined) {
-                            clients.set(source.binding, client);
+                            if (client !== undefined) {
+                                clients.set(source.binding, client);
+                            }
                         }
-                    }
 
-                    if (client === undefined) {
-                        // No SqlClient resolved for this binding (host never wired
-                        // \`config.sourceClient\`, or wired it wrong). Surface it in the
-                        // Logs panel and stamp \`polledAt\` so a persistent misconfig backs
-                        // off to \`refresh.everyMs\` instead of retrying every alarm tick.
-                        this.recordExternalSourceError(table, new Error(\`external-source: no sourceClient resolved for binding "\${source.binding}"\`));
-                        polledAt.set(table, now);
-                        continue;
-                    }
+                        if (client === undefined) {
+                            // No SqlClient resolved for this binding (host never wired
+                            // \`config.sourceClient\`, or wired it wrong). Surface it in the
+                            // Logs panel and stamp \`polledAt\` so a persistent misconfig backs
+                            // off to \`refresh.everyMs\` instead of retrying every alarm tick.
+                            this.recordExternalSourceError(table, new Error(\`external-source: no sourceClient resolved for binding "\${source.binding}"\`));
+                        } else if (source.mode === "incremental") {
+                            // Incremental (plan 136): pull only rows past the durable
+                            // watermark (or a full-pull seed/reconcile), upsert-only.
+                            // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; sequential keeps the writer transaction simple
+                            await pullExternalSourceIncrementalTick(this.sql as SqlExec, writer, client, table, source, shardKey, now);
+                        } else {
+                            // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; slices are independent but small and sequential keeps the writer transaction simple
+                            await pullExternalSourceTick(this.sql as SqlExec, writer, client, table, source, shardKey);
+                        }
 
-                    if (source.mode === "incremental") {
-                        // Incremental (plan 136): pull only rows past the durable
-                        // watermark (or a full-pull seed/reconcile), upsert-only.
-                        // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; sequential keeps the writer transaction simple
-                        await pullExternalSourceIncrementalTick(this.sql as SqlExec, writer, client, table, source, shardKey, now);
-                    } else {
-                        // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; slices are independent but small and sequential keeps the writer transaction simple
-                        await pullExternalSourceTick(this.sql as SqlExec, writer, client, table, source, shardKey);
+                        // Timestamp AFTER the poll finishes, not the batch-start \`now\` — a
+                        // poll that outruns \`everyMs\` must not make \`nextDueAt\` (below)
+                        // stale-immediate and re-arm the alarm in a hammering loop.
+                        polledAt.set(table, Date.now());
+                    } catch (error) {
+                        this.recordExternalSourceError(table, error);
+                        // Stamp on failure too, so a persistently failing source throttles
+                        // to \`refresh.everyMs\` rather than being hammered every tick.
+                        polledAt.set(table, Date.now());
                     }
-
-                    polledAt.set(table, now);
-                } catch (error) {
-                    this.recordExternalSourceError(table, error);
-                    // Stamp on failure too, so a persistently failing source throttles
-                    // to \`refresh.everyMs\` rather than being hammered every tick.
-                    polledAt.set(table, now);
                 }
+
+                // This source's own next-due time, read AFTER the poll-or-skip above
+                // so a just-polled source reports \`now + everyMs\` (its FRESH due
+                // time), not the stale pre-poll one. An omitted \`refresh\` (poll
+                // every tick) is due again immediately.
+                const sourceNextDueAt = source.refresh === undefined ? now : (polledAt.get(table) ?? now) + source.refresh.everyMs;
+
+                nextDueAt = nextDueAt === undefined ? sourceNextDueAt : Math.min(nextDueAt, sourceNextDueAt);
             }
 
-            return active;
+            return nextDueAt;
         }
 `
         : "";

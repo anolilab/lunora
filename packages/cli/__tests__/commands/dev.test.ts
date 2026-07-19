@@ -299,6 +299,38 @@ describe("lunora dev", () => {
             expect(plan.studioEnabled).toBe(false);
         });
 
+        it("respects the sidecar's OWN `dev.ip` (wrangler.dev.jsonc), not the deploy wrangler.jsonc, on a no-::1 host", () => {
+            expect.assertions(2);
+
+            // Class-B framework-worker setup: the sidecar actually runs
+            // `wrangler dev --config wrangler.dev.jsonc`, so its loopback
+            // override must be resolved from THAT file, not the deploy
+            // `wrangler.jsonc` (whose `main` doesn't even exist in dev).
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { "@sveltejs/kit": "^2.0.0" },
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    packageManager: "pnpm@11.0.0",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+            // The deploy config has no `dev.ip` pinned.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "dist/worker.js", name: "app" }), "utf8");
+            // The sidecar's OWN config pins its bind explicitly.
+            writeFileSync(join(workdir, "wrangler.dev.jsonc"), JSON.stringify({ dev: { ip: "0.0.0.0" }, main: "lunora/server.ts", name: "app" }), "utf8");
+
+            const plan = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => false, logger: silentLogger() });
+
+            // The user's own `dev.ip` in wrangler.dev.jsonc wins — the auto
+            // `--ip 127.0.0.1` must not override it, even on a host with no
+            // IPv6 loopback.
+            expect(plan.sidecar?.args).not.toContain("--ip");
+            expect(plan.sidecar?.args.join(" ")).not.toContain("127.0.0.1");
+        });
+
         it("threads the materializer's cleanup disposer onto the remote plan", () => {
             expect.assertions(1);
 

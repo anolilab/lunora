@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { defineMaterializer, MaterializerRuntime } from "../src/define-materializer";
 import { EventLogDO } from "../src/event-log-do";
 import { EventLogDOClient } from "../src/event-log-do-client";
+import { InMemorySnapshotStore } from "../src/snapshot-store";
 
 // ── Mock SqlStorage ────────────────────────────────────────────────────
 
@@ -287,5 +288,67 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
         const runtime = new MaterializerRuntime([counter]);
 
         await expect(runtime.appendEvent({ type: "x", payload: {} })).rejects.toThrow("requires a doClient");
+    });
+
+    // ── REPLICA-04: per-materializer catch-up watermark ─────────────────
+
+    it("a fresh materializer alongside one snapshotted at seq 500 still catches up from the start", async () => {
+        const do_ = createDO();
+        const client = createClient(do_);
+
+        // Seed 501 events (seq 0..500) — enough to simulate a materializer
+        // that has snapshotted far ahead of a sibling that has never run.
+        await client.append(Array.from({ length: 501 }, () => ({ type: "increment", payload: {} })));
+
+        const store = new InMemorySnapshotStore();
+
+        // "veteran" has a snapshot at the highest seq — as if it recovered
+        // long ago and persisted its state.
+        await store.save("veteran", { appliedSeq: 500, state: 500 });
+        // "fresh" has no snapshot at all — a materializer added later.
+
+        const veteran = defineMaterializer({
+            name: "veteran",
+            initial: () => 0,
+            handle: (state, entry) => (entry.type === "increment" ? state + 1 : state),
+        });
+        const fresh = defineMaterializer({
+            name: "fresh",
+            initial: () => 0,
+            handle: (state, entry) => (entry.type === "increment" ? state + 1 : state),
+        });
+
+        const runtime = new MaterializerRuntime([veteran, fresh], {
+            doClient: client,
+            snapshotStore: store,
+        });
+
+        // Before the REPLICA-04 fix, the shared watermark would be bumped to
+        // the MAX snapshot seq (500), so `getSince(500)` would only fetch the
+        // last event — `fresh` would never see events 0..499 and would be
+        // permanently stuck at `1` instead of `501`.
+        const applied = await runtime.initialize();
+
+        expect(applied).toBe(501);
+        expect(fresh.state).toBe(501); // caught up on every event from seq 0
+        expect(veteran.state).toBe(501); // 500 (snapshot) + the one event >= its own watermark
+    });
+
+    it("recovering from snapshots keeps a fresh materializer's watermark at 0 (not the sibling's)", async () => {
+        const store = new InMemorySnapshotStore();
+
+        await store.save("veteran", { appliedSeq: 500, state: 500 });
+
+        const veteran = defineMaterializer({ name: "veteran", initial: () => 0, handle: (state) => state });
+        const fresh = defineMaterializer({ name: "fresh", initial: () => 0, handle: (state) => state });
+
+        const runtime = new MaterializerRuntime([veteran, fresh], { snapshotStore: store });
+
+        await runtime.recoverFromSnapshots();
+
+        // `appliedSeq` is the MINIMUM watermark across materializers — 0,
+        // because `fresh` has no snapshot. A shared/MAX watermark would
+        // report 500 here, which is exactly the REPLICA-04 bug.
+        expect(runtime.appliedSeq).toBe(0);
     });
 });

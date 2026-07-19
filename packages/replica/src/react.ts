@@ -75,8 +75,11 @@ export const useLocalQuery = <T = Record<string, unknown>>(
 ): T[] | undefined => {
     const subscribe = (onStoreChange: () => void): (() => void) => mirror.onChange(onStoreChange);
 
-    const getSnapshot = (): number => mirror.eventLog.size;
-    const getServerSnapshot = (): number => mirror.eventLog.size;
+    // `mirror.version` (not `eventLog.size`) so operations that don't append
+    // to the log — e.g. `clearData()` — still produce a new snapshot and
+    // trigger a re-render (REPLICA-09).
+    const getSnapshot = (): number => mirror.version;
+    const getServerSnapshot = (): number => mirror.version;
 
     useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 

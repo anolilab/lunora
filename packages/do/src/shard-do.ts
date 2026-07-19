@@ -1608,6 +1608,28 @@ abstract class ShardDO {
         ShardDO.rootSizeWarned = false;
     }
 
+    /**
+     * Compute the shared poll alarm's next wake time from both tiers' signals.
+     * Global shapes need the fixed `GLOBAL_SHAPE_POLL_INTERVAL_MS` floor whenever
+     * any are subscribed (a global table has no per-DO op-log, so it can only be
+     * polled). External-source ingest instead reports the earliest NEXT-DUE
+     * timestamp across its non-manual sources (or `undefined` when none exist) —
+     * a source with a large `refresh.everyMs` must sleep until it's actually due,
+     * not spin at the global-shape floor. Returns `undefined` when NEITHER tier
+     * has pending work, so the DO can go fully idle instead of re-arming for no
+     * reason; otherwise the earlier of the two candidate times (never later than
+     * `nowMs`, so a source that's already due arms essentially immediately).
+     */
+    private static nextPollAlarmTarget(globalShapesRemaining: number, nextSourceDueAt: number | undefined, nowMs: number): number | undefined {
+        const globalTarget = globalShapesRemaining > 0 ? nowMs + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS : undefined;
+
+        if (globalTarget === undefined) {
+            return nextSourceDueAt === undefined ? undefined : Math.max(nextSourceDueAt, nowMs);
+        }
+
+        return nextSourceDueAt === undefined ? globalTarget : Math.min(globalTarget, nextSourceDueAt);
+    }
+
     protected state: ShardDOState;
 
     protected env: unknown;
@@ -2576,39 +2598,47 @@ abstract class ShardDO {
     }
 
     /**
-     * Durable Object alarm handler — the heartbeat for `.global()`-table shapes.
-     * The runtime wakes this when the poll alarm armed by `scheduleGlobalPoll`
-     * fires; it refreshes every subscribed global shape (diff-poke from the global
-     * backend) and re-arms while any remain. With no global subscribers left, the
-     * alarm is not re-armed and the DO goes idle. A base-only / global-free DO
-     * never arms it, so this stays dormant there.
+     * Durable Object alarm handler — the heartbeat for `.global()`-table shapes
+     * AND external-source (`.source(...)`) ingest, which share one alarm. The
+     * runtime wakes this when the poll alarm armed by `scheduleGlobalPoll` fires;
+     * it refreshes every subscribed global shape (diff-poke from the global
+     * backend), materializes any due sourced tables, and re-arms at
+     * {@link ShardDO.nextPollAlarmTarget} — the fixed floor while global shapes
+     * are subscribed, or the earliest source next-due time when only ingest
+     * remains (so a 1-hour-`refresh` source sleeps ~1 hour instead of waking
+     * every 2 s). With neither tier pending, the alarm is not re-armed and the DO
+     * goes idle. A base-only / global-free / source-free DO never arms it, so
+     * this stays dormant there.
      */
     public async alarm(): Promise<void> {
         this.globalPollScheduled = false;
 
-        let remaining: number;
+        let globalShapesRemaining: number;
 
         try {
-            remaining = await this.pollGlobalShapes();
+            globalShapesRemaining = await this.pollGlobalShapes();
         } catch (error) {
             // `pollGlobalShapes` already contains per-socket/per-shape failures;
             // this guards a catastrophic failure (e.g. `getWebSockets` throwing)
             // so the poll heartbeat re-arms and retries next tick instead of
             // dying permanently and silently dropping every global subscriber.
             this.recordShapeError("shape:poll", error);
-            remaining = 1;
+            globalShapesRemaining = 1;
         }
 
         // External-source (`.source(...)`) ingest shares this alarm (plan 077). The
-        // base hook is a no-op (0); the codegen subclass overrides it to materialize
-        // each sourced table. Summed into `remaining` so the shared alarm re-arms
-        // while either tier still has work. A contained failure re-arms (remaining)
-        // rather than stranding the ingest loop.
+        // base hook returns `undefined` (dormant); the codegen subclass overrides
+        // it to materialize each sourced table and report the earliest NEXT-DUE
+        // timestamp across every non-manual source. A contained failure re-arms
+        // at the fixed floor (a conservative retry) rather than stranding the
+        // ingest loop or spinning immediately.
+        let nextSourceDueAt: number | undefined;
+
         try {
-            remaining += await this.pollExternalSources();
+            nextSourceDueAt = await this.pollExternalSources();
         } catch (error) {
             this.recordShapeError("source:poll", error);
-            remaining += 1;
+            nextSourceDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
         }
 
         // Drain the tables the ingest poll just wrote: a sourced table is local, so
@@ -2619,8 +2649,10 @@ abstract class ShardDO {
         // when nothing was queued (non-sourced DOs, or a steady-state tick).
         await this.flushChangedTables();
 
-        if (remaining > 0) {
-            await this.scheduleGlobalPoll();
+        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, Date.now());
+
+        if (nextAlarmAt !== undefined) {
+            await this.scheduleGlobalPoll(nextAlarmAt);
         }
     }
 
@@ -4096,18 +4128,25 @@ abstract class ShardDO {
     /**
      * Poll external-source (`.source(...)`) tables once (plan 077): materialize
      * each sourced table's freshly-pulled tenant slice into this DO's SQLite. The
-     * base `ShardDO` has no sourced tables, so it returns `0` and the ingest tier
-     * stays dormant — zero behavior change for every existing DO. The codegen
-     * subclass overrides it to, per sourced table, build a `createShardCtxDb`
-     * writer, read the tenant slice from Hyperdrive under this DO's shard key, and
-     * run `runExternalSourceTick` (read local baseline → diff → apply via the
-     * validated CDC writer). Returns the number of sourced tables still being
-     * polled, so the shared poll alarm ({@link ShardDO.alarm}) re-arms while ingest
-     * is active.
+     * base `ShardDO` has no sourced tables, so it returns `undefined` and the
+     * ingest tier stays dormant — zero behavior change for every existing DO. The
+     * codegen subclass overrides it to, per sourced table, build a
+     * `createShardCtxDb` writer, read the tenant slice from Hyperdrive under this
+     * DO's shard key, and run `runExternalSourceTick` (read local baseline → diff
+     * → apply via the validated CDC writer).
+     *
+     * Returns the EARLIEST next-due timestamp (absolute epoch ms) across every
+     * non-manual sourced table — `polledAt.get(table) ?? now` plus that source's
+     * `refresh.everyMs` — or `undefined` when every sourced table is
+     * `refresh: "manual"` (or there are none). NOT a bare active count: the
+     * shared poll alarm ({@link ShardDO.alarm}) uses this to re-arm at the exact
+     * next time ingest needs to run, instead of spinning at the fixed
+     * `GLOBAL_SHAPE_POLL_INTERVAL_MS` floor for a source whose `refresh.everyMs`
+     * is, say, an hour away.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass implements the real Hyperdrive-backed poll
-    protected pollExternalSources(): Promise<number> {
-        return Promise.resolve(0);
+    protected pollExternalSources(): Promise<number | undefined> {
+        return Promise.resolve(undefined);
     }
 
     /**
@@ -7318,13 +7357,20 @@ abstract class ShardDO {
     }
 
     /**
-     * Arm the poll alarm for `.global()` shapes if one isn't already pending.
-     * Idempotent — every global-shape seed calls it, but only the first arms the
-     * alarm. Degrades to a no-op when the runtime exposes no `setAlarm` (the unit
-     * harness): a global shape is then seed-only, which the poll-loop tests assert
-     * by driving {@link ShardDO.alarm} directly.
+     * Arm the poll alarm if one isn't already pending. Idempotent — every
+     * global-shape seed calls it, but only the first arms the alarm. Degrades to
+     * a no-op when the runtime exposes no `setAlarm` (the unit harness): a global
+     * shape is then seed-only, which the poll-loop tests assert by driving
+     * {@link ShardDO.alarm} directly.
+     *
+     * `atMs` lets {@link ShardDO.alarm} re-arm at a computed target — the
+     * earlier of the fixed global-shape floor and the earliest external-source
+     * next-due time — instead of always the fixed floor. Every OTHER caller
+     * (a fresh global-shape seed, {@link ShardDO.scheduleSourcePoll}'s initial
+     * kick) omits it and gets the original `GLOBAL_SHAPE_POLL_INTERVAL_MS`
+     * default, since neither knows a more precise due time yet.
      */
-    private async scheduleGlobalPoll(): Promise<void> {
+    private async scheduleGlobalPoll(atMs?: number): Promise<void> {
         if (this.globalPollScheduled) {
             return;
         }
@@ -7338,7 +7384,7 @@ abstract class ShardDO {
         this.globalPollScheduled = true;
 
         try {
-            await setAlarm.call(this.state.storage, Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS);
+            await setAlarm.call(this.state.storage, atMs ?? Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS);
         } catch {
             // A failed arm clears the flag so a later seed/tick retries.
             this.globalPollScheduled = false;

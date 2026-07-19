@@ -775,6 +775,16 @@ interface ReconcileCompatibilityDateResult {
 }
 ```
 
+### `ReconcileCronsResult` (interface)
+
+```ts
+interface ReconcileResult {
+    changed: boolean;
+    reason?: string;
+    wranglerPath?: string;
+}
+```
+
 ### `RemoteBindingPlan` (interface)
 
 ```ts
@@ -944,6 +954,12 @@ interface TailConsumer {
 }
 ```
 
+### `WORKERS_CACHE_MIN_DATE` (const)
+
+```ts
+const WORKERS_CACHE_MIN_DATE = "2026-05-01";
+```
+
 ### `WRANGLER_FILES` (const)
 
 ```ts
@@ -978,6 +994,21 @@ interface WireRlsEdit {
 ### `WorkflowIR` (interface)
 
 Re-exported from `@lunora/codegen` — signature tracked at its source.
+
+### `WranglerCacheShape` (interface)
+
+```ts
+interface WranglerCacheShape {
+    cache?: {
+        enabled?: boolean;
+    } | null;
+    exports?: Record<string, {
+        cache?: {
+            enabled?: boolean;
+        } | null;
+    } | null> | null;
+}
+```
 
 ### `WranglerConfig` (interface)
 
@@ -1314,6 +1345,12 @@ const injectRemoteFlags: (text: string, plans: ReadonlyArray<RemoteBindingPlan>)
 const interpretRemote: (value: unknown) => RemotePreference;
 ```
 
+### `isCacheEnabled` (const)
+
+```ts
+const isCacheEnabled: (parsed: WranglerCacheShape | null | undefined) => boolean;
+```
+
 ### `isInteractive` (const)
 
 ```ts
@@ -1508,6 +1545,12 @@ const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBinding
 
 ```ts
 const reconcileWranglerCompatibilityDate: (projectRoot: string) => ReconcileCompatibilityDateResult;
+```
+
+### `reconcileWranglerCrons` (const)
+
+```ts
+const reconcileWranglerCrons: (projectRoot: string, cronTriggers: ReadonlyArray<string>) => ReconcileResult;
 ```
 
 ### `requiredSecrets` (const)

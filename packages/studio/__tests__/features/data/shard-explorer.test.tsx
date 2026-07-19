@@ -106,7 +106,7 @@ describe("shardExplorer", () => {
     });
 
     it("calls onFetchTables with the selected shard key", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         vi.mocked(loadRecentShards).mockReturnValue(["shard-a"]);
 
@@ -123,7 +123,7 @@ describe("shardExplorer", () => {
     });
 
     it("shows the summary section after a shard is selected", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         vi.mocked(loadRecentShards).mockReturnValue(["shard-a"]);
 
@@ -138,7 +138,7 @@ describe("shardExplorer", () => {
     });
 
     it("renders a row for each table in the summary", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         vi.mocked(loadRecentShards).mockReturnValue(["shard-a"]);
 
@@ -154,7 +154,7 @@ describe("shardExplorer", () => {
     });
 
     it("shows the empty state when the shard has no tables", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         vi.mocked(loadRecentShards).mockReturnValue(["shard-a"]);
 
@@ -169,7 +169,7 @@ describe("shardExplorer", () => {
     });
 
     it("shows an error when onFetchTables rejects", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         vi.mocked(loadRecentShards).mockReturnValue(["shard-a"]);
 

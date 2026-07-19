@@ -60,6 +60,8 @@ export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { reconcileWranglerBindings } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";
 export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
+export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons";
+export { reconcileWranglerCrons } from "./reconcile-crons";
 export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape } from "./remote-bindings";
 export {
     injectRemoteFlags,
@@ -133,6 +135,8 @@ export {
     paintBadge,
     STEP_BADGE_NAMES,
 } from "./tui-theme";
+export type { WranglerCacheShape } from "./workers-cache";
+export { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 export type { DiscoverWorkflowInfoResult, WorkflowIR } from "./workflow-info";
 export { discoverWorkflowInfo } from "./workflow-info";
 export type { ReadWranglerResult } from "./wrangler-path";

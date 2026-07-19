@@ -267,19 +267,33 @@ const httpStream = <Ref extends HttpStreamRef>(
 
     const ac = new AbortController();
 
+    // Track the listener we attach to an external `options.signal` so it can be
+    // detached on normal completion — otherwise a shared, long-lived signal (e.g.
+    // a page-level `AbortController` never aborted during the page's lifetime)
+    // accumulates one listener closure per `httpStream` call for as long as the
+    // signal lives, even after this stream has long since finished.
+    let onExternalAbort: (() => void) | undefined;
+
     if (options.signal) {
         if (options.signal.aborted) {
             ac.abort();
         } else {
-            options.signal.addEventListener(
-                "abort",
-                () => {
-                    ac.abort();
-                },
-                { once: true },
-            );
+            onExternalAbort = () => {
+                ac.abort();
+            };
+            options.signal.addEventListener("abort", onExternalAbort, { once: true });
         }
     }
+
+    // `{ once: true }` already self-removes the listener when it FIRES (i.e. on
+    // abort) — this detach covers the normal-completion / error paths where it
+    // never fires. Safe to call unconditionally (removing an already-removed
+    // listener is a no-op) and safe to call more than once.
+    const detachExternalAbort = (): void => {
+        if (onExternalAbort) {
+            options.signal?.removeEventListener("abort", onExternalAbort);
+        }
+    };
 
     const { handle, iterable } = createStream<HttpStreamChunkOf<Ref>>({
         maxBuffer: options.maxBuffer,
@@ -289,29 +303,40 @@ const httpStream = <Ref extends HttpStreamRef>(
     });
 
     (async () => {
-        const response = await fetchImpl(url, {
-            headers: { accept: "text/event-stream", ...options.headers },
-            method: route.method,
-            signal: ac.signal,
-        });
+        try {
+            const response = await fetchImpl(url, {
+                headers: { accept: "text/event-stream", ...options.headers },
+                method: route.method,
+                signal: ac.signal,
+            });
 
-        if (!response.ok) {
-            handle.fail(
-                new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${response.status.toString()})`, {
-                    status: response.status,
-                }),
-            );
+            if (!response.ok) {
+                // Release the (possibly still-open) response body before failing —
+                // otherwise an unread non-OK body keeps its underlying connection
+                // occupied until the runtime garbage-collects the response.
+                await response.body?.cancel().catch(() => {
+                    /* body already closed/unusable — nothing to release */
+                });
 
-            return;
+                handle.fail(
+                    new LunoraError("HTTP_STREAM_STATUS", `httpStream: request failed (status ${response.status.toString()})`, {
+                        status: response.status,
+                    }),
+                );
+
+                return;
+            }
+
+            if (!response.body) {
+                handle.fail(new LunoraError("HTTP_STREAM_NO_BODY", "httpStream: response has no body"));
+
+                return;
+            }
+
+            await pumpSseBody(response.body, handle as UntypedHandle);
+        } finally {
+            detachExternalAbort();
         }
-
-        if (!response.body) {
-            handle.fail(new LunoraError("HTTP_STREAM_NO_BODY", "httpStream: response has no body"));
-
-            return;
-        }
-
-        await pumpSseBody(response.body, handle as UntypedHandle);
     })().catch((error: unknown) => {
         // A consumer cancel (or external abort) rejects the in-flight read
         // with an AbortError — the iterator is already closing, stay silent.

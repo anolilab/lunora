@@ -343,8 +343,23 @@ const useVoiceAgent = (options: UseVoiceAgentOptions): UseVoiceAgentResult => {
 
         try {
             const url = voiceSocketUrl(client.url, agentNameFromReference(voice), threadKey);
+            // Default to the CLIENT's configured WebSocket implementation (not a
+            // raw `globalThis.WebSocket`) — on React Native the client wraps this
+            // constructor to inject the auth-headers factory's credential onto the
+            // upgrade request, which a bare global reference would silently bypass,
+            // leaving the voice socket uncredentialed on the cookie-jar-less runtime
+            // the auth design exists for.
             const openSocket: CreateSocket =
-                createSocket ?? ((target) => new (globalThis as unknown as { WebSocket: new (u: string) => VoiceSocket }).WebSocket(target));
+                createSocket ??
+                ((target) => {
+                    const WebSocketImpl = client.getWebSocketImpl() as unknown as (new (u: string) => VoiceSocket) | undefined;
+
+                    if (!WebSocketImpl) {
+                        throw new Error("useVoiceAgent: no WebSocket implementation available (pass createSocket explicitly)");
+                    }
+
+                    return new WebSocketImpl(target);
+                });
             const socket = openSocket(url);
 
             socket.binaryType = "arraybuffer";

@@ -114,6 +114,44 @@ describe("lunora env", () => {
             expect(file).toContain('NEW_KEY="v"');
         });
 
+        it("set collapses duplicate KEY= lines to one, agreeing with the last-wins read", async () => {
+            expect.assertions(3);
+
+            // Two lines defining the same key — `parseDevVariableEntries` (the
+            // shared read path `env get`/`env list` build on) is last-wins, so
+            // before this fix a `set` that only rewrote the FIRST duplicate
+            // left the untouched second line still winning at read time: a
+            // `set` that silently didn't take effect.
+            writeFileSync(join(workdir, ".dev.vars"), 'DUPLICATE_KEY="first"\nOTHER=1\nDUPLICATE_KEY="second"\n', "utf8");
+
+            const { logger } = recordingLogger();
+
+            await runEnvCommand({ cwd: workdir, key: "DUPLICATE_KEY", logger, subcommand: "set", value: "updated" });
+
+            const file = readFileSync(join(workdir, ".dev.vars"), "utf8");
+            const matchingLines = file.split("\n").filter((line) => line.startsWith("DUPLICATE_KEY="));
+
+            // Exactly one line now defines the key, at its FIRST original position.
+            expect(matchingLines).toStrictEqual(['DUPLICATE_KEY="updated"']);
+            expect(file).toContain("OTHER=1");
+
+            // The read path agrees with what was just set.
+            const written: string[] = [];
+            const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+                written.push(typeof chunk === "string" ? chunk : String(chunk));
+
+                return true;
+            });
+
+            try {
+                await runEnvCommand({ cwd: workdir, key: "DUPLICATE_KEY", logger, subcommand: "get" });
+
+                expect(written.join("")).toContain("updated");
+            } finally {
+                spy.mockRestore();
+            }
+        });
+
         it("unset removes only the target line, preserving comments and other entries", async () => {
             expect.assertions(3);
 

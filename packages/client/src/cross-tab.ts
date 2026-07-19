@@ -268,37 +268,13 @@ class TabCoordinator {
     private handleMessage(message: TabCoordinatorMessage): void {
         switch (message.type) {
             case "claim-leadership": {
-                if (message.tabId === this.tabId) {
-                    break;
-                }
-
-                // We're the current leader — assert our position with a
-                // heartbeat so the claimant defers to us.
-                if (this.leader) {
-                    this.broadcast({ type: "heartbeat", tabId: this.tabId, ts: Date.now() });
-
-                    break;
-                }
-
-                // A claim is NOT proof of an active leader — only a `heartbeat`
-                // establishes `knownLeader` (see below). When two tabs start
-                // together and both claim with no leader yet, break the tie
-                // deterministically: the lexicographically-smaller `tabId` wins.
-                // Defer only if the *other* tab's id sorts first, so our own
-                // promotion timeout stands down; the winner self-promotes and
-                // its heartbeat then confirms leadership for everyone. If both
-                // adopted each other here, neither would ever promote.
-                if (this.knownLeader === undefined && message.tabId < this.tabId) {
-                    this.knownLeader = message.tabId;
-                }
+                this.handleClaimLeadership(message);
 
                 break;
             }
 
             case "heartbeat": {
-                // Record the leader's heartbeat to track liveness.
-                this.lastHeartbeat = message.ts;
-                this.knownLeader = message.tabId;
+                this.handleHeartbeat(message);
 
                 break;
             }
@@ -336,6 +312,79 @@ class TabCoordinator {
                 // Exhaustive over the union — no other message types exist.
                 break;
             }
+        }
+    }
+
+    private handleClaimLeadership(message: Extract<WsFollowerMessage, { type: "claim-leadership" }>): void {
+        if (message.tabId === this.tabId) {
+            return;
+        }
+
+        // We're the current leader — assert our position with a heartbeat so
+        // the claimant defers to us.
+        if (this.leader) {
+            this.broadcast({ type: "heartbeat", tabId: this.tabId, ts: Date.now() });
+
+            return;
+        }
+
+        // A claim is NOT proof of an active leader — only a `heartbeat`
+        // establishes `knownLeader` (see `handleHeartbeat`). When two tabs
+        // start together and both claim with no leader yet, break the tie
+        // deterministically: the lexicographically-smaller `tabId` wins.
+        // Defer only if the *other* tab's id sorts first, so our own
+        // promotion timeout stands down; the winner self-promotes and its
+        // heartbeat then confirms leadership for everyone. If both adopted
+        // each other here, neither would ever promote.
+        if (this.knownLeader === undefined && message.tabId < this.tabId) {
+            this.knownLeader = message.tabId;
+            // Stamp `lastHeartbeat` at adoption time (using the claim's own
+            // timestamp) — leaving it at its stale/zero default would make
+            // `checkLeaderHealth` see an immediately-expired leader (elapsed
+            // since epoch/last-known-heartbeat > leaderTimeout) and un-adopt
+            // on its very next tick, re-claim, and re-adopt the same tab
+            // again next round: permanent un-adopt/re-claim churn instead of
+            // a settled deference to the smaller id.
+            this.lastHeartbeat = message.ts;
+        }
+    }
+
+    private handleHeartbeat(message: Extract<WsFollowerMessage, { type: "heartbeat" }>): void {
+        if (message.tabId === this.tabId) {
+            return;
+        }
+
+        if (this.leader) {
+            this.resolveLeaderVsLeaderTieBreak(message);
+
+            return;
+        }
+
+        // Record the leader's heartbeat to track liveness.
+        this.lastHeartbeat = message.ts;
+        this.knownLeader = message.tabId;
+    }
+
+    /**
+     * Resolve two leaders existing at once — e.g. this tab was backgrounded
+     * and its heartbeat/health timers were throttled while a foreground
+     * follower's were not, so the follower's `checkLeaderHealth` timed out
+     * the (still-alive) leader and self-promoted. `BroadcastChannel` message
+     * delivery isn't subject to the same timer-throttling clamp, so even a
+     * backgrounded leader eventually observes the pretender's heartbeat here
+     * — resolve the split-brain deterministically with the same
+     * lexicographically-smaller-tabId rule used at claim-adoption. If the
+     * other tab wins, step down; if we win, reassert immediately so the
+     * pretender demotes itself the moment it processes our heartbeat.
+     */
+    private resolveLeaderVsLeaderTieBreak(message: Extract<WsFollowerMessage, { type: "heartbeat" }>): void {
+        if (message.tabId < this.tabId) {
+            this.leader = false;
+            this.knownLeader = message.tabId;
+            this.lastHeartbeat = message.ts;
+            this.onStopBeingLeader?.();
+        } else {
+            this.broadcast({ type: "heartbeat", tabId: this.tabId, ts: Date.now() });
         }
     }
 

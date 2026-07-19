@@ -581,6 +581,15 @@ const SCHEMA_SNAPSHOT_VERSION: 1;
 const SHAPES_FILENAME = "shapes.ts";
 ```
 
+### `SandboxUsage` (interface)
+
+```ts
+interface SandboxUsage {
+    usesSandboxBrowser: boolean;
+    usesSandboxContainer: boolean;
+}
+```
+
 ### `SchemaDrift` (interface)
 
 ```ts
@@ -899,6 +908,12 @@ const discoverRlsMetadata: (project: Project, lunoraDirectory: string) => RlsMet
 
 ```ts
 const discoverRlsProcedures: (project: Project, lunoraDirectory: string) => RlsProcedureIR[];
+```
+
+### `discoverSandboxUsage` (const)
+
+```ts
+const discoverSandboxUsage: (project: Project, lunoraDirectory: string) => SandboxUsage;
 ```
 
 ### `discoverSchema` (const)

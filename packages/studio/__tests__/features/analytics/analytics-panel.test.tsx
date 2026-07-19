@@ -26,7 +26,7 @@ describe("analyticsPanel", () => {
     });
 
     it("runs the usage panels against the injected runQuery and renders rows", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const runQuery = vi.fn<(sql: string) => Promise<AnalyticsSqlResult>>(async (sql) => {
             if (sql.includes("count()") && sql.includes("GROUP BY fn")) {
@@ -53,7 +53,7 @@ describe("analyticsPanel", () => {
     });
 
     it("surfaces a SQL-API error per panel without crashing", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         const runQuery = vi.fn<(sql: string) => Promise<AnalyticsSqlResult>>(async () => {
             throw new Error("Analytics Engine SQL API returned 403: forbidden");

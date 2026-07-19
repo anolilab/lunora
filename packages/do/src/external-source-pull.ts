@@ -48,12 +48,67 @@ interface ExternalSourceLike {
 }
 
 /**
+ * Coerce a driver-native value that `stableStringify` can't represent (see
+ * `shared/stable-key.ts`) into its JSON-safe form: a `Date` → its ISO string, a
+ * `bigint` → its decimal string. Every other value passes through unchanged.
+ *
+ * node-pg / postgres-js / mysql2 return `timestamp`/`datetime` columns as JS
+ * `Date` and `bigint`/`int8` columns as `bigint` — both throw a `TypeError` out of
+ * `stableStringify` (used by the full-pull diff and the incremental content
+ * short-circuit), which bricks ingest for any table with such a column (e.g. the
+ * canonical `cursor: { column: "updated_at" }` incremental config). This is the
+ * single boundary where driver-native types cross into DO SQLite JSON; a new
+ * source driver (or a new non-JSON column type) must be normalized here too.
+ * `shared/stable-key.ts`'s throw contract is intentionally left unchanged — this
+ * normalizes the value *before* it can ever reach that encoder.
+ */
+const normalizeSourceValue = (value: unknown): unknown => {
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+
+    if (typeof value === "bigint") {
+        return String(value);
+    }
+
+    if (Array.isArray(value)) {
+        return value.map((element) => normalizeSourceValue(element));
+    }
+
+    if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a nested plain object is itself normalized field-by-field
+        return normalizeSourceDocument(value as Record<string, unknown>);
+    }
+
+    return value;
+};
+
+/**
+ * Normalize every field of a lifted document (see {@link normalizeSourceValue}).
+ * Applied once at the lift boundary (inside {@link liftSourceId}) so both the
+ * full-pull diff (`diffExternalSource`) and the incremental content short-circuit
+ * (`materializeExternalRowsIncremental`) — and whatever a stored row reads back
+ * as — see the same JSON-safe values.
+ */
+const normalizeSourceDocument = (document: Record<string, unknown>): Record<string, unknown> => {
+    const normalized: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(document)) {
+        normalized[key] = normalizeSourceValue(value);
+    }
+
+    return normalized;
+};
+
+/**
  * Lift an external row to a Lunora document: the `idColumn` value becomes a
  * stringified `_id`, then either `map` shapes the body or every other column is
  * copied verbatim. Throws on a missing/null id, and on a non-scalar id, so a
  * misconfigured query fails loudly instead of materializing rows under the literal
  * id `"undefined"` (or collapsing many rows onto one id). Shared with
- * `@lunora/hyperdrive`'s `projectSourceRow`.
+ * `@lunora/hyperdrive`'s `projectSourceRow`. The returned document's values are
+ * normalized (see {@link normalizeSourceValue}) so a `Date`/`bigint` column never
+ * reaches `stableStringify` un-normalized.
  */
 const liftSourceId = (
     row: Record<string, unknown>,
@@ -73,7 +128,7 @@ const liftSourceId = (
     const id = String(idValue);
 
     if (map) {
-        return { ...map(row), _id: id };
+        return normalizeSourceDocument({ ...map(row), _id: id });
     }
 
     const body: Record<string, unknown> = {};
@@ -84,7 +139,7 @@ const liftSourceId = (
         }
     }
 
-    return { ...body, _id: id };
+    return normalizeSourceDocument({ ...body, _id: id });
 };
 
 /**
@@ -216,7 +271,22 @@ const pullExternalSourceIncrementalTick = async (
     // to a non-null string in the `else` branch — no cast on `deserializeCursor`.
     if (state.watermark === null || reconcileDue) {
         slice = await pullAndLift(client, source.query, tenantParameters, source);
-        ({ applied } = await runExternalSourceTick(sql, writer, slice.documents, { columns: source.columns, table }));
+
+        // Exclude tombstoned rows from full-pull/reconcile membership (same
+        // predicate the incremental branch uses to resolve `deletedIds`), or a
+        // soft-deleted upstream row would be re-inserted as live on every seed/
+        // reconcile sweep — the full-pull diff otherwise treats "present in the
+        // slice" as "should exist locally" with no soft-delete awareness.
+        const { softDeleteColumn } = source;
+        const documents = softDeleteColumn
+            ? slice.documents.filter((_document, index) => {
+                  const row = slice.rows[index];
+
+                  return !(row && isSoftDeleted(row, softDeleteColumn));
+              })
+            : slice.documents;
+
+        ({ applied } = await runExternalSourceTick(sql, writer, documents, { columns: source.columns, table }));
     } else {
         slice = await pullAndLift(client, cursor.query, [...tenantParameters, deserializeCursor(state.watermark)], source);
 
@@ -250,10 +320,29 @@ const pullExternalSourceIncrementalTick = async (
         );
     }
 
+    // The incremental branch's analogue of the seed check above, adapted for a
+    // non-null prior watermark: a non-empty `>= watermark` slice where NOT A
+    // SINGLE row carries a value for `cursor.column` means `cursor.query` doesn't
+    // project it (or aliases it differently than the seed `query` does) — the
+    // watermark is stranded and every tick re-pulls the same slice forever. This
+    // deliberately does NOT compare the advanced `watermark` against
+    // `state.watermark`: a row genuinely carrying the boundary value (equal to
+    // the current watermark, since the query is `>= watermark` by design — see
+    // the incremental materialize function's doc comment) is the normal
+    // steady-state re-pull, not a misconfiguration, and must not throw.
+    const noRowCarriesCursor = slice.rows.length > 0 && slice.rows.every((row) => row[cursor.column] === null || row[cursor.column] === undefined);
+
+    if (!fullPull && noRowCarriesCursor) {
+        throw new LunoraError(
+            "INTERNAL",
+            `external-source: table "${table}" (mode "incremental") pulled ${String(slice.rows.length)} rows but none carry the cursor column "${cursor.column}" — \`cursor.query\` must project it (matching the seed \`query\`'s alias), or the watermark can never advance and every tick re-pulls the same stranded slice.`,
+        );
+    }
+
     writeSourceCursor(sql, table, shardKey, { lastReconcileMs: fullPull ? nowMs : state.lastReconcileMs, watermark });
 
     return { applied };
 };
 
-export { isSoftDeleted, isSourceDue, liftSourceId, pullExternalSourceIncrementalTick, pullExternalSourceTick };
+export { isSoftDeleted, isSourceDue, liftSourceId, normalizeSourceValue, pullExternalSourceIncrementalTick, pullExternalSourceTick };
 export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh };

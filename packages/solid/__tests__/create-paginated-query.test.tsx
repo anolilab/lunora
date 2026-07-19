@@ -1,4 +1,4 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
 
@@ -327,5 +327,103 @@ describe("createInfiniteQuery (Solid)", () => {
         await flushAsync();
 
         expect(capturedPages!()).toStrictEqual([firstPageItems, secondPageItems]);
+    });
+});
+
+/**
+ * A `LunoraClient` stand-in whose `subscribe` replays a preseeded cached value
+ * to the new subscriber SYNCHRONOUSLY — the callback fires before `subscribe`
+ * returns, exactly like the real client (`lunora-client.ts` replays `lastValue`
+ * before handing back the unsubscribe handle). This is the trigger for the
+ * reentrant-`syncSubscriptions` hazard the ported guard closes.
+ */
+interface ReplaySub {
+    args: Record<string, unknown>;
+    key: string;
+    push: (value: unknown) => void;
+    unsubscribed: boolean;
+}
+
+const createReplayFake = (): { asClient: LunoraClient; cache: Map<string, unknown>; subs: ReplaySub[] } => {
+    const subs: ReplaySub[] = [];
+    const cache = new Map<string, unknown>();
+
+    const client = {
+        subscribe: (_function: FunctionReference, args: Record<string, unknown>, callback: (value: unknown) => void) => {
+            const key = JSON.stringify(args);
+            const sub: ReplaySub = { args, key, push: callback, unsubscribed: false };
+
+            subs.push(sub);
+
+            if (cache.has(key)) {
+                // Synchronous replay — fires before this `subscribe` call returns.
+                callback(cache.get(key));
+            }
+
+            return () => {
+                sub.unsubscribed = true;
+            };
+        },
+    };
+
+    return { asClient: client as unknown as LunoraClient, cache, subs };
+};
+
+describe("createPaginatedQuery reentrancy (BUG: leaked WS subscription regression)", () => {
+    it("reentrant rebalance during a synchronous cached replay does not orphan or duplicate page subscriptions", async () => {
+        const fake = createReplayFake();
+        let capturedLoadMore: ((n: number) => void) | undefined;
+
+        const numItems = 2; // SPLIT_FACTOR (2) × numItems = 4 → a 5-item page splits.
+
+        render(
+            () => {
+                const { loadMore } = createPaginatedQuery(fn, {}, { initialNumItems: numItems });
+
+                capturedLoadMore = loadMore;
+
+                return <pre />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        // Resolve the first (open-ended) page so the feed can `loadMore`.
+        const firstKey = JSON.stringify({ paginationOpts: { cursor: null, endCursor: null, numItems } });
+
+        for (const sub of fake.subs) {
+            if (sub.key === firstKey && !sub.unsubscribed) {
+                sub.push({ continueCursor: "c1", isDone: false, page: [{ id: "a" }, { id: "b" }] });
+            }
+        }
+
+        await flushAsync();
+
+        // Preseed an OVERSIZED cached result for the page `loadMore` pins, so its
+        // fresh subscription replays synchronously and triggers a split mid-sync.
+        const pinnedKey = JSON.stringify({ paginationOpts: { cursor: null, endCursor: "c1", numItems } });
+
+        fake.cache.set(pinnedKey, {
+            continueCursor: "c1",
+            isDone: false,
+            page: [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }, { id: "e" }],
+            splitCursor: "mid",
+        });
+
+        capturedLoadMore!(numItems);
+        await flushAsync();
+
+        // The pinned page split into (null,"mid"] + ("mid","c1"], leaving three live
+        // pages: the two split halves and the open-ended tail.
+        const open = fake.subs.filter((sub) => !sub.unsubscribed);
+
+        expect(open).toHaveLength(3);
+
+        // No subscription survives for the now-dead pre-split pinned key…
+        expect(open.some((sub) => sub.key === pinnedKey)).toBe(false);
+
+        // …and the open-ended tail is covered exactly once (no reentrant duplicate).
+        const tailKey = JSON.stringify({ paginationOpts: { cursor: "c1", endCursor: null, numItems } });
+
+        expect(open.filter((sub) => sub.key === tailKey)).toHaveLength(1);
     });
 });

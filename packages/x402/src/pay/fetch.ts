@@ -8,14 +8,17 @@
  * resolved or held. Then {@link registerWallet} resolves the agent signer and
  * registers the scheme. Then `registerPolicy(buildSpendPolicy(...))` narrows the
  * offered requirements to the payable ones (per-call cap + allowlists). Finally
- * `onBeforePaymentCreation` / `onAfterPaymentCreation` enforce the stateful
- * per-run cap and confirmation gate, and track cumulative spend.
+ * `onBeforePaymentCreation` enforces the stateful per-run cap and confirmation
+ * gate, reserving the amount atomically as soon as it passes (the reservation
+ * itself is the record — there is no separate after-hook), and
+ * `onPaymentCreationFailure` releases that reservation if the signature itself
+ * later fails.
  */
 import { x402Client as X402Client } from "@x402/core/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
 
 import type { X402PayConfig } from "../config";
-import { assertBoundedPolicy, buildPaymentGuard, buildSpendPolicy, createSpendState, recordSpend } from "./policy";
+import { assertBoundedPolicy, buildPaymentGuard, buildSpendPolicy, createSpendState, releaseSpendOnFailure } from "./policy";
 import type { WalletDeps } from "./wallet";
 import { registerWallet } from "./wallet";
 
@@ -51,7 +54,7 @@ export const createPayFetch = async (config: X402PayConfig, deps: X402PayDeps): 
 
     client.registerPolicy(buildSpendPolicy(config.policy));
     client.onBeforePaymentCreation(buildPaymentGuard(config.policy, state));
-    client.onAfterPaymentCreation(recordSpend(state));
+    client.onPaymentCreationFailure(releaseSpendOnFailure(state));
 
     return wrapFetchWithPayment(deps.fetch ?? globalThis.fetch, client);
 };

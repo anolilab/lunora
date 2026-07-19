@@ -205,15 +205,22 @@ export const agentComponent = (): AgentComponent => {
                 // interleave their messages on the shared seq counter. "running"
                 // and "awaiting_input" both mean the prior instance is alive: the
                 // latter is a HITL pause hibernating on step.waitForEvent, which
-                // still owns the thread and will resume. A matching (or absent,
-                // pre-column) instance id is a REPLAY of the same run, which must
-                // be allowed. Only a known, differing instance id trips the policy.
+                // still owns the thread and will resume. A matching instance id is
+                // a REPLAY of the same run, which must be allowed. An ABSENT prior
+                // instance id (pre-column thread) can't be told apart from a
+                // replay either, so it also falls through. But an id-LESS caller
+                // dispatching onto a thread with a KNOWN, live prior instance is
+                // NOT a safe replay — the inbound-email/inbound-channel paths
+                // dispatch with no instanceId at all, and without this check that
+                // silently resets an `awaiting_input` thread straight back to
+                // "running", resuming writes on the shared `seq` counter out from
+                // under the still-hibernating prior instance. So only a *matching*
+                // instance id is exempt; missing OR differing both trip the policy.
                 const priorInstanceId = existing["instanceId"] as string | undefined;
                 const isConcurrentRun =
                     (existing["status"] === "running" || existing["status"] === "awaiting_input") &&
                     priorInstanceId !== undefined &&
-                    args.instanceId !== undefined &&
-                    priorInstanceId !== args.instanceId;
+                    (args.instanceId === undefined || args.instanceId !== priorInstanceId);
 
                 if (isConcurrentRun) {
                     const policy = args.onConcurrentRun ?? "reject";
@@ -229,7 +236,15 @@ export const agentComponent = (): AgentComponent => {
 
                     // Replace: take the thread over now (the caller terminates the
                     // prior instance) so the next append is attributed to this run.
-                    await context.db.patch(existing["_id"] as never, { error: undefined, instanceId: args.instanceId, status: "running", updatedAt: now });
+                    // The incoming instance id may itself be absent (an id-less
+                    // caller replacing a live run) — omit the column rather than
+                    // writing an explicit `undefined`, which the validators reject.
+                    await context.db.patch(existing["_id"] as never, {
+                        error: undefined,
+                        status: "running",
+                        updatedAt: now,
+                        ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
+                    });
 
                     return { created: false, priorInstanceId, replaced: true };
                 }
@@ -450,15 +465,28 @@ export const agentComponent = (): AgentComponent => {
                 return [];
             }
 
-            const rows = await context.db
+            // A limit keeps the newest N (the tail of the conversation) — read
+            // `byThread` (["threadKey", "seq"]) in DESCENDING seq order and
+            // `.take(limit)` so the DB read itself is bounded to the tail,
+            // instead of collecting the whole thread and slicing in JS. This is
+            // a live subscription re-run on every append, so an unbounded read
+            // here was O(total thread length) on every turn.
+            if (args.limit !== undefined) {
+                const tail = await context.db
+                    .query(MESSAGES_TABLE)
+                    .withIndex("byThread", (q) => q.eq("threadKey", args.key))
+                    .order("desc")
+                    .take(args.limit);
+
+                return tail.toReversed();
+            }
+
+            // Unbounded case: `byThread` is already ordered `[threadKey, seq]`,
+            // so index order IS ascending `seq` order — no JS re-sort needed.
+            return context.db
                 .query(MESSAGES_TABLE)
                 .withIndex("byThread", (q) => q.eq("threadKey", args.key))
                 .collect();
-
-            const ordered = rows.toSorted((a, b) => (a["seq"] as number) - (b["seq"] as number));
-
-            // A limit keeps the newest N (the tail of the conversation).
-            return args.limit === undefined ? ordered : ordered.slice(Math.max(0, ordered.length - args.limit));
         });
 
     /**
@@ -468,6 +496,18 @@ export const agentComponent = (): AgentComponent => {
      * gate as the reads, so only the thread's owner may approve. The AGENT_*
      * workflow binding is reached via `ctx.agents` (woven onto the function-run
      * ctx by generated code); the mutation ctx has no raw `env`.
+     *
+     * Two extra checks close a cross-run bypass (the owner gate alone isn't
+     * enough — an ownerless thread is readable by anyone who knows its key,
+     * and a benign client can simply pass the wrong ids):
+     * - `args.instanceId` must match the thread's OWN stored instance. Without
+     * this, a caller who passes the owner gate for one thread (including any
+     * ownerless one) could deliver an approve/reject to an arbitrary
+     * `instanceId` — a different, unrelated run entirely.
+     * - The delivered event's `type` is scoped to `toolCallId`
+     * (`agent-approval:&lt;id>`) — the SAME format `agent-loop.ts`'s
+     * `awaitApproval` matches on — so a decision meant for one pending tool
+     * call cannot resolve a different one on the same instance.
      */
     const agentResolveApproval = mutation
         .input({
@@ -490,6 +530,12 @@ export const agentComponent = (): AgentComponent => {
                 throw new LunoraError("FORBIDDEN", `@lunora/agent: not allowed to resolve approvals on thread "${args.threadKey}"`);
             }
 
+            if (readable["instanceId"] !== args.instanceId) {
+                // The caller passed the owner gate for THIS thread, but named a
+                // different instance — never let that resolve someone else's run.
+                throw new LunoraError("FORBIDDEN", `@lunora/agent: instance "${args.instanceId}" does not own thread "${args.threadKey}"`);
+            }
+
             const agentName = readable["agent"] as string;
             const { agents } = context as { agents?: Record<string, { sendEvent?: (id: string, event: { payload: unknown; type: string }) => Promise<void> }> };
             const handle = agents?.[agentName];
@@ -502,8 +548,9 @@ export const agentComponent = (): AgentComponent => {
             }
 
             await handle.sendEvent(args.instanceId, {
-                payload: { decision: args.decision, ...(args.note === undefined ? {} : { note: args.note }) },
-                type: "agent-approval",
+                payload: { decision: args.decision, toolCallId: args.toolCallId, ...(args.note === undefined ? {} : { note: args.note }) },
+                // Scoped per tool call — see the doc comment above.
+                type: `agent-approval:${args.toolCallId}`,
             });
 
             return { resolved: true };

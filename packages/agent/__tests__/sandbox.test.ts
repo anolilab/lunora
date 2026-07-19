@@ -91,7 +91,7 @@ describe(containerTool, () => {
         expect(() => containerTool("")).toThrow(EMPTY_NAME_ERROR);
     });
 
-    it("gates EXEC only by default and passes fetch through", () => {
+    it("gates EXEC by default and passes a method-omitted (GET) fetch through", () => {
         const tool = containerTool("sandbox");
 
         expect(tool.needsApproval).toBeTypeOf("function");
@@ -99,6 +99,7 @@ describe(containerTool, () => {
         const needsApproval = tool.needsApproval as (input: { op: string }) => boolean;
 
         expect(needsApproval({ op: "exec" })).toBe(true);
+        // No `method` ⇒ defaults to GET (idempotent) ⇒ unattended.
         expect(needsApproval({ op: "fetch" })).toBe(false);
     });
 
@@ -121,9 +122,28 @@ describe(containerTool, () => {
         expect(needsApproval({ op: "fetch", path: "/./exec" })).toBe(true);
         expect(needsApproval({ op: "fetch", path: "/foo/../exec" })).toBe(true);
         expect(needsApproval({ op: "fetch", path: "/exec?x=1" })).toBe(true);
-        // A fetch to any other route stays unattended.
+        // A GET fetch to any other route stays unattended.
         expect(needsApproval({ op: "fetch", path: "/health" })).toBe(false);
         expect(needsApproval({ op: "fetch", path: "/execute" })).toBe(false);
+    });
+
+    it("gates a fetch using a non-idempotent method, even off the /exec route", () => {
+        const needsApproval = containerTool("sandbox").needsApproval as (input: { method?: string; op: string; path?: string }) => boolean;
+
+        // A prompt-injected model could otherwise mutate container state
+        // through some OTHER privileged route just by avoiding `/exec`.
+        expect(needsApproval({ method: "POST", op: "fetch", path: "/health" })).toBe(true);
+        expect(needsApproval({ method: "PUT", op: "fetch", path: "/config" })).toBe(true);
+        expect(needsApproval({ method: "PATCH", op: "fetch", path: "/config" })).toBe(true);
+        expect(needsApproval({ method: "DELETE", op: "fetch", path: "/data" })).toBe(true);
+        // Case-insensitive.
+        expect(needsApproval({ method: "post", op: "fetch", path: "/health" })).toBe(true);
+
+        // Read-only methods (and an omitted method, defaulting to GET) stay unattended.
+        expect(needsApproval({ method: "GET", op: "fetch", path: "/health" })).toBe(false);
+        expect(needsApproval({ method: "HEAD", op: "fetch", path: "/health" })).toBe(false);
+        expect(needsApproval({ method: "OPTIONS", op: "fetch", path: "/health" })).toBe(false);
+        expect(needsApproval({ op: "fetch", path: "/health" })).toBe(false);
     });
 
     it("dispatches to sandbox:invoke with a container-kind payload carrying the name", async () => {

@@ -19,6 +19,19 @@ type RowChange =
 interface TableDiff {
     /** Ordered row changes — insert/update/delete, earliest first. */
     readonly changes: ReadonlyArray<RowChange>;
+
+    /**
+     * Optional stable identity for this diff, distinct from `timestamp`
+     * (multiple diffs can legitimately share a millisecond, so `timestamp`
+     * alone is not a unique diff identity). Used by `deriveInsertId` in
+     * `apply-diff.ts` to derive deterministic row ids for id-less inserts:
+     * replaying the SAME diff (same `id`) must always mint the SAME id,
+     * while two DIFFERENT diffs emitted in the same millisecond must not
+     * alias onto the same one. `createTableDiff` auto-generates one when
+     * omitted; diffs built as plain object literals (bypassing the helper)
+     * simply fall back to `timestamp` for that derivation.
+     */
+    readonly id?: string;
     /** Logical table name (matches the schema table name). */
     readonly table: string;
     /** Monotonic server timestamp (ms since epoch) when this diff was emitted. */
@@ -28,14 +41,16 @@ interface TableDiff {
 // ─── Helpers ────────────────────────────────────────────────────────────
 
 /**
- * Create a {@link TableDiff} with a snapshot of the current time.
+ * Create a {@link TableDiff} with a snapshot of the current time and a
+ * fresh stable `id` (unless one is explicitly provided).
  * @experimental
  */
-const createTableDiff = (table: string, changes: ReadonlyArray<RowChange>, timestamp?: number): TableDiff => {
+const createTableDiff = (table: string, changes: ReadonlyArray<RowChange>, timestamp?: number, id?: string): TableDiff => {
     return {
         table,
         changes,
         timestamp: timestamp ?? Date.now(),
+        id: id ?? crypto.randomUUID(),
     };
 };
 
@@ -89,10 +104,18 @@ const mergeDiffs = (diffs: ReadonlyArray<TableDiff>): TableDiff | null => {
     const first = diffs[0] as TableDiff;
     const last = diffs[diffs.length - 1] as TableDiff;
 
+    // Derive the merged diff's identity deterministically from its ordered
+    // children's identities (each child's `id`, or its `timestamp` as the same
+    // fallback `deriveInsertId` uses) — replaying the SAME sequence of diffs
+    // must mint the SAME merged id so id-less inserts stay stable across
+    // retries, while a different child sequence yields a different id.
+    const mergedId = `merge:${diffs.map((d) => d.id ?? String(d.timestamp)).join("|")}`;
+
     return createTableDiff(
         first.table,
         diffs.flatMap((d) => d.changes),
         last.timestamp,
+        mergedId,
     );
 };
 

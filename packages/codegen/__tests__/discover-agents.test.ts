@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { agentComponent } from "@lunora/agent";
-import { Project } from "ts-morph";
+import { Project, SyntaxKind } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { discoverAgents } from "../src/discover-agents";
@@ -13,6 +14,48 @@ import type { FunctionIR, SchemaIR } from "../src/ir";
 let workdir: string;
 
 const newProject = (): Project => new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+/**
+ * The monorepo-relative path to the `@lunora/agent` runtime component SOURCE
+ * (not the built `dist`, which type-erases every function's return shape onto
+ * the opaque `AgentRegisteredFunction` — see `component-shared.ts`). Reading
+ * the source syntactically (no type-checker pass needed) is the only way to
+ * recover each public function's declared return type for the drift guard
+ * below.
+ */
+const AGENT_COMPONENT_SOURCE_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "agent", "src", "component.ts");
+
+/**
+ * Read `const &lt;constantName> = query|mutation.input({...}).query|mutation(async (...): Promise&lt;T> => ...)`'s
+ * declared return-type text out of `component.ts`, unwrapped of its outer
+ * `Promise&lt;…>` — mirroring codegen's own Promise-unwrap convention
+ * (`unwrapHandlerReturn` in `discover-functions.ts`) so the comparison lines up
+ * with what `syntheticAgentApiFunctions` hand-pins in `emit.ts`.
+ */
+const sourceReturnTypeOf = (constantName: string): string => {
+    const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+    const source = project.addSourceFileAtPath(AGENT_COMPONENT_SOURCE_PATH);
+    // `getVariableDeclaration` only searches the source file's TOP-LEVEL
+    // statements — `agentMessages` et al. are declared inside the
+    // `agentComponent()` function body, so the declaration must be found by
+    // walking every descendant instead.
+    const declaration = source.getDescendantsOfKind(SyntaxKind.VariableDeclaration).find((candidate) => candidate.getName() === constantName);
+
+    if (!declaration) {
+        throw new Error(`test: expected to find a variable declaration named "${constantName}" in component.ts`);
+    }
+
+    const typedArrows = declaration.getDescendantsOfKind(SyntaxKind.ArrowFunction).filter((arrow) => arrow.getReturnTypeNode() !== undefined);
+
+    if (typedArrows.length !== 1) {
+        throw new Error(`test: expected exactly one typed handler arrow for "${constantName}", found ${String(typedArrows.length)}`);
+    }
+
+    const returnTypeText = typedArrows[0]!.getReturnTypeNodeOrThrow().getText();
+    const promisePrefix = "Promise<";
+
+    return returnTypeText.startsWith(promisePrefix) && returnTypeText.endsWith(">") ? returnTypeText.slice(promisePrefix.length, -1) : returnTypeText;
+};
 
 const writeAgents = (source: string): void => {
     writeFileSync(join(workdir, "agents.ts"), source);
@@ -161,6 +204,56 @@ describe("discover-agents", () => {
         `);
 
         expect(discoverAgents(newProject(), workdir).map((agent) => agent.className)).toEqual(["SupportAgentWorkflow"]);
+    });
+
+    it("discovers a defineAgent initializer wrapped in satisfies/as/parens (CODEGEN-02)", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import { defineAgent, type AgentDefinition } from "@lunora/agent";
+
+            export const viaSatisfies = defineAgent({ model: "m" }) satisfies AgentDefinition;
+            export const viaAs = defineAgent({ model: "m" }) as AgentDefinition;
+            export const viaParens = (defineAgent({ model: "m" }));
+        `);
+
+        expect(discoverAgents(newProject(), workdir).map((agent) => agent.exportName)).toEqual(["viaAs", "viaParens", "viaSatisfies"]);
+    });
+
+    it("rejects duplicate agent names/bindings/classes with a located diagnostic (CODEGEN-01)", () => {
+        expect.assertions(3);
+
+        writeAgents(`
+            import { defineAgent } from "@lunora/agent";
+
+            export const support = defineAgent({ model: "m", name: "helper" });
+            export const helper = defineAgent({ model: "m", name: "helper" });
+        `);
+
+        expect(() => discoverAgents(newProject(), workdir)).toThrow(/Duplicate agent name "helper"/u);
+
+        writeAgents(`
+            import { defineAgent } from "@lunora/agent";
+
+            export const supportBot = defineAgent({ model: "m" });
+            export const support_bot = defineAgent({ model: "m" });
+        `);
+
+        expect(() => discoverAgents(newProject(), workdir)).toThrow(/Duplicate agent binding "AGENT_SUPPORT_BOT"/u);
+
+        // `aB` vs `AB`: bindingName is NOT invariant to a first-character case
+        // change when the first two characters straddle a camelCase boundary
+        // (`aB`'s "a"→"B" transition inserts an underscore that "AB" never
+        // gets: AGENT_A_B vs AGENT_AB), so distinct `name:` overrides isolate a
+        // className-only collision (both capitalize to "ABAgentWorkflow").
+        writeAgents(`
+            import { defineAgent } from "@lunora/agent";
+
+            export const aB = defineAgent({ model: "m", name: "one" });
+            export const AB = defineAgent({ model: "m", name: "two" });
+        `);
+
+        expect(() => discoverAgents(newProject(), workdir)).toThrow(/Duplicate agent class "ABAgentWorkflow"/u);
     });
 
     it("rejects a non-literal name with a located diagnostic", () => {
@@ -399,6 +492,18 @@ describe("auto-registered agent runtime functions", () => {
         expect(content).toContain("lunoraAgentRuntimeFunctions.agentThread");
     });
 
+    it("rejects an app registering one of the loop's INTERNAL dispatch names (CODEGEN-04)", () => {
+        expect.assertions(1);
+
+        // Unlike a PUBLIC name (`agentMessages`, silently won above),
+        // `agentAppendMessage` is dispatched unconditionally BY PATH from the
+        // durable loop — an app definition silently winning there would hijack
+        // every thread-append the loop makes.
+        expect(() => emitFunctions({ agents: discoverSupportAgent(), functions: [appAgentsFunction("agentAppendMessage")] })).toThrow(
+            /"agents:agentAppendMessage" is reserved for the durable agent loop's internal dispatch/u,
+        );
+    });
+
     it("exposes the public thread queries and approval mutation as typed api references", () => {
         expect.assertions(7);
 
@@ -476,9 +581,10 @@ describe("auto-registered agent runtime functions", () => {
         // syntheticAgentApiFunctions encodes — this catches not just an added or
         // removed arg (KEY SET) but an optionality flip (e.g. `limit`/`title`
         // becoming required), a scalar-kind change, or a `decision` union member
-        // added/removed/renamed. Return TYPES stay hand-mirrored (see the KEEP
-        // IN SYNC breadcrumbs in emit.ts) but are pinned on the emit side by the
-        // "exposes the public thread queries…" FunctionReference assertions above.
+        // added/removed/renamed. Return TYPES are covered separately by the
+        // "pins the synthetic api RETURN shapes…" test below (source-level,
+        // since the runtime component's public `AgentRegisteredFunction` shape
+        // erases return types).
         const runtime = agentComponent().functions;
 
         expect(describeArgs(runtime.agentMessages.args)).toStrictEqual({
@@ -500,5 +606,26 @@ describe("auto-registered agent runtime functions", () => {
             threadKey: { kind: "string", optional: false },
             title: { kind: "string", optional: true },
         });
+    });
+
+    it("pins the synthetic api RETURN shapes to the runtime component (drift guard)", () => {
+        expect.assertions(5);
+
+        // CODEGEN-04: unlike the args (validated at runtime, so `describeArgs`
+        // above can introspect the LIVE `agentComponent().functions` object),
+        // each public handler's return type is erased onto the opaque
+        // `AgentRegisteredFunction.handler: (context, args) => unknown` shape —
+        // codegen can't recover it from the built package at all. Read the
+        // declared `: Promise<T>` annotation straight out of the `@lunora/agent`
+        // SOURCE instead (syntactic, no type-checker pass) and assert it against
+        // the same literal strings `syntheticAgentApiFunctions` hand-pins in
+        // emit.ts (see the "exposes the public thread queries…" test), so a
+        // return-shape change in component.ts fails here instead of silently
+        // going stale in the generated `api.ts`.
+        expect(sourceReturnTypeOf("agentMessages")).toBe("Record<string, unknown>[]");
+        expect(sourceReturnTypeOf("agentState")).toBe("Record<string, unknown> | undefined");
+        expect(sourceReturnTypeOf("agentThread")).toBe("Record<string, unknown> | undefined");
+        expect(sourceReturnTypeOf("agentResolveApproval")).toBe("{ resolved: boolean }");
+        expect(sourceReturnTypeOf("agentRun")).toBe("{ id: string; threadKey: string }");
     });
 });

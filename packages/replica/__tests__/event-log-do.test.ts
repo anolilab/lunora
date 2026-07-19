@@ -291,4 +291,59 @@ describe(EventLogDO, () => {
 
         expect(data.entries[0]!.timestamp).toBe(ts);
     });
+
+    // ── REPLICA-02: clientId/sessionId/parentSeqNum ────────────────────
+
+    it("round-trips clientId/sessionId/parentSeqNum through /append (REPLICA-02)", async () => {
+        const do_ = createDO();
+
+        const res = await doFetch(do_, "POST", "/append", {
+            events: [{ type: "t.1", payload: { v: 1 }, clientId: "client-1", sessionId: "session-1", parentSeqNum: 3 }],
+        });
+
+        expect(res.status).toBe(200);
+
+        const data = (await res.json()) as {
+            entries: { clientId?: string; parentSeqNum?: number; sessionId?: string }[];
+        };
+
+        // Previously always NULL — the fix threads these through `entry`.
+        expect(data.entries[0]!.clientId).toBe("client-1");
+        expect(data.entries[0]!.sessionId).toBe("session-1");
+        expect(data.entries[0]!.parentSeqNum).toBe(3);
+
+        // And they persist — a fresh read (not just the append response) sees them too.
+        const stateRes = await doFetch(do_, "GET", "/state");
+        const stateData = (await stateRes.json()) as {
+            entries: { clientId?: string; parentSeqNum?: number; sessionId?: string }[];
+        };
+
+        expect(stateData.entries[0]!.clientId).toBe("client-1");
+        expect(stateData.entries[0]!.sessionId).toBe("session-1");
+        expect(stateData.entries[0]!.parentSeqNum).toBe(3);
+    });
+
+    it("rejects a non-finite timestamp instead of trusting it into the INTEGER column", async () => {
+        const do_ = createDO();
+
+        const res = await doFetch(do_, "POST", "/append", {
+            events: [{ type: "t.1", payload: {}, timestamp: Number.NaN }],
+        });
+
+        expect(res.status).toBe(400);
+    });
+
+    it("rejects a negative or non-integer parentSeqNum", async () => {
+        const do_ = createDO();
+
+        const negative = await doFetch(do_, "POST", "/append", {
+            events: [{ type: "t.1", payload: {}, parentSeqNum: -1 }],
+        });
+        const nonInteger = await doFetch(do_, "POST", "/append", {
+            events: [{ type: "t.1", payload: {}, parentSeqNum: 1.5 }],
+        });
+
+        expect(negative.status).toBe(400);
+        expect(nonInteger.status).toBe(400);
+    });
 });

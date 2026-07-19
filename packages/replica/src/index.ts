@@ -38,7 +38,7 @@ export { defineMaterializer, MaterializerRuntime } from "./define-materializer";
 
 export { applyDiffsToDb, applyDiffToDb } from "./diff-applier";
 export { EventEmitter } from "./event-emitter";
-export type { AppendOptions, EventLogEntry, EventLogSnapshot } from "./event-log";
+export type { AppendOptions, EventLogEntry, EventLogOptions, EventLogSnapshot } from "./event-log";
 export { EventLog } from "./event-log";
 
 // ── Server-side Durable Object ────────────────────────────────────────────
@@ -58,7 +58,7 @@ export type { EventReducer } from "./event-source";
 // ── Events middleware ──────────────────────────────────────────────────────
 
 export type { EventSourceOptions, UnknownEventHandling } from "./event-source";
-export { EventSource } from "./event-source";
+export { EventSource, UNHANDLED } from "./event-source";
 
 // ── eventsContext ──────────────────────────────────────────────────────────
 

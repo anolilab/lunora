@@ -254,7 +254,7 @@ describe("studio", () => {
     });
 
     it("hides a domain's pages when its optional package is disabled", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         render(renderStudio(createClient({ storage: false })));
 
@@ -271,7 +271,7 @@ describe("studio", () => {
     });
 
     it("hides a single sub-page when its feature is disabled but keeps the domain's other pages", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         // payments lives in the "logs" domain alongside logs/audit/schedule — disabling
         // it should drop only the payments sub-page, not the whole domain.
@@ -287,7 +287,7 @@ describe("studio", () => {
     });
 
     it("labels the panel region by the active sub-page", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         fireEvent.click(await renderAndFind("dash-tab-logs"));
 

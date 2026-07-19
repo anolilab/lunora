@@ -2,12 +2,15 @@
  * THROWAWAY PROTOTYPE — Plan 131 (advisor autofix + baseline design spike).
  *
  * Not part of `@lunora/codegen`'s public API (nothing under `src/index.ts`
- * imports this directory). It proves a suppression/baseline path: a real
- * finding on `apps/playground` (`queue_without_dlq:notifications`, still
- * present after the fixer PoC in `plan-131-fixer-poc.ts`) gets acknowledged
- * via a baseline file with an audit trail (reason/by/at) and is excluded from
- * the findings `runAdvisor` (via codegen's `lintSchema`) produced. See
- * `plans/131-phase0-design.md` for the design this de-risks.
+ * imports this directory) — lives under `scripts/`, outside `src/` and outside
+ * the package's `tsconfig.json` `include`, so it is neither type-checked as
+ * part of `tsc --noEmit` nor bundled into `dist/` by packem. It proves a
+ * suppression/baseline path: a real finding on `apps/playground`
+ * (`queue_without_dlq:notifications`, still present after the fixer PoC in
+ * `plan-131-fixer-poc.ts`) gets acknowledged via a baseline file with an audit
+ * trail (reason/by/at) and is excluded from the findings `runAdvisor` (via
+ * codegen's `lintSchema`) produced. See `plans/131-phase0-design.md` for the
+ * design this de-risks.
  *
  * Lives under `packages/codegen/`, not `packages/advisor/`, even though it
  * demonstrates an advisor-level concept: it needs `runCodegen` to get real
@@ -16,7 +19,9 @@
  * would be circular). Self-importing codegen's own built public entry (as
  * `plan-131-fixer-poc.ts` does) avoids that boundary violation.
  *
- * Run with: `node --experimental-strip-types packages/codegen/src/__prototype__/plan-131-baseline-poc.ts`
+ * Run with: `node --experimental-strip-types packages/codegen/scripts/plan-131-baseline-poc.ts`
+ * (requires `pnpm run build:packages` first — no `tsconfig` `paths` hack maps
+ * `@lunora/codegen` to source here, unlike when this lived under `src/`.)
  *
  * Safe to delete — do not import from here in real code.
  */
@@ -81,7 +86,7 @@ const applyBaseline = (findings: ReadonlyArray<Finding>, baseline: Baseline): Ap
     return { findings: kept, suppressed };
 };
 
-const PROJECT_ROOT = join(HERE, "../../../../apps/playground");
+const PROJECT_ROOT = join(HERE, "../../../apps/playground");
 const BASELINE_PATH = join(HERE, "plan-131-baseline.demo.json");
 
 /* eslint-disable no-console -- this is a stdout-reporting CLI-style PoC script, not library code. */

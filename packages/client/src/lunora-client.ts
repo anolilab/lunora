@@ -1470,6 +1470,21 @@ class LunoraClient {
         return this.mutationSettledListeners.add(listener);
     }
 
+    /**
+     * The `WebSocket` implementation this client was constructed with (an
+     * explicit `options.WebSocket`, or the ambient global on platforms that have
+     * one) — `undefined` if neither is available. This is the seam a feature
+     * that opens its OWN socket outside the client's multiplexed connection
+     * (e.g. a voice-agent hook) should default to, instead of reaching for
+     * `globalThis.WebSocket` directly: on React Native the client wraps this
+     * constructor to inject the auth-headers factory's credential onto the
+     * upgrade request (`createLunoraClient`'s `withAuthWebSocket`), which a raw
+     * `new globalThis.WebSocket(url)` would silently bypass.
+     */
+    public getWebSocketImpl(): typeof WebSocket | undefined {
+        return this.WebSocketImpl;
+    }
+
     // --- Client Query (local state) ----------------------------------------
 
     /**

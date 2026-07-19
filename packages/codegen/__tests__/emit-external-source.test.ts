@@ -41,7 +41,7 @@ const PLAIN = `
 
 describe("emitShard — external-source ingest", () => {
     it("emits the poll override, arming constructor, client memo, import and config seam for a sourced schema", () => {
-        expect.assertions(9);
+        expect.assertions(11);
 
         const shard = emitShard({ schema: discover(SOURCED) });
 
@@ -59,6 +59,11 @@ describe("emitShard — external-source ingest", () => {
         expect(shard).toContain("const sourceClientCache = new WeakMap");
         // The poll helpers are imported from the base DO package.
         expect(shard).toContain("isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick,");
+        // Plan 148: the override reports the earliest NEXT-DUE timestamp (not a
+        // bare active count), so the shared alarm can sleep until a source is
+        // actually due instead of spinning at the 2 s global-shape floor.
+        expect(shard).toContain("protected override async pollExternalSources(): Promise<number | undefined>");
+        expect(shard).toContain("nextDueAt = nextDueAt === undefined ? sourceNextDueAt : Math.min(nextDueAt, sourceNextDueAt);");
     });
 
     it("stays byte-identical (none of the ingest surface) for a non-sourced schema", () => {

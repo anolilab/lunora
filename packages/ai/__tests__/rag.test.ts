@@ -483,6 +483,31 @@ describe(defineRag, () => {
             expect(result.context).toBe("");
         });
 
+        it("hydrates importance and caller metadata (otherwise inert under `returnMetadata: indexed`)", async () => {
+            const { vectors } = memoryVectors();
+            const { store: textStore } = memoryTextStore();
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ allowSharedNamespace: true, index: "docs", textStore });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", importance: 0.4, metadata: { title: "Weather" }, text: "rain storm cloud" });
+
+            const result = await rag.retrieve("rain storm cloud");
+
+            // `query()` alone (returnMetadata: "indexed") never sees `__ragImportance`
+            // or caller metadata in text-store mode — without the `getByIds`
+            // hydration these would read back as the default importance (1) and
+            // `undefined` metadata, exactly like the bug this closes.
+            expect(result.chunks[0]?.importance).toBe(0.4);
+            expect(result.chunks[0]?.metadata).toStrictEqual({ title: "Weather" });
+
+            // Importance actually weights the score (0.4x the raw cosine ~1.0 for
+            // an exact-text query), not a no-op 1x.
+            expect(result.chunks[0]?.score).toBeCloseTo(0.4, 5);
+            expect(result.sources[0]?.metadata).toStrictEqual({ title: "Weather" });
+            expect(result.sources[0]?.weight).toBe(0.4);
+        });
+
         it("propagates removals into the text store", async () => {
             const { vectors } = memoryVectors();
             const { removed, store: textStore } = memoryTextStore();
@@ -793,6 +818,36 @@ describe(defineRag, () => {
             expect(result.chunks[0]?.text).toBe("the qwerty token lives here");
         });
 
+        it("keeps a lexical-only hit under a cosine-scale minScore instead of comparing its BM25 score to it", async () => {
+            const { vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors);
+
+            // A synthetic lexical leg: one hit that exists ONLY in the lexical
+            // index (never upserted into the vector store), with a raw BM25
+            // score (0.3) that is NOT on the same scale as cosine similarity —
+            // `hybridRank`'s own docs note vector/lexical scores "are not
+            // comparable across different search methods".
+            const lexicalOnly: RagLexicalStore = {
+                index: async () => {},
+                search: async () => [{ id: "doc-2#0", score: 0.3, text: "gizmo contraption" }],
+            };
+
+            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", lexicalStore: lexicalOnly });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "rain storm cloud" });
+
+            // A cosine-scale `minScore` (well above the lexical-only hit's raw
+            // BM25 score) must still surface doc-2 via the lexical leg — it was
+            // never subject to a cosine-scale threshold that means something
+            // different for its own score.
+            const result = await rag.retrieve("rain storm cloud", { minScore: 0.5 });
+
+            expect(result.chunks.map((chunk) => chunk.sourceId)).toContain("doc-2");
+            // The genuine semantic match still passes the (unaffected) vector-leg threshold.
+            expect(result.chunks.map((chunk) => chunk.sourceId)).toContain("doc-1");
+        });
+
         it("removes chunks from the lexical store on remove()", async () => {
             const { store, vectors } = memoryVectors();
             const lexical = recordingLexicalStore();
@@ -1022,6 +1077,27 @@ describe(bm25LexicalStore, () => {
 
             // An operator-object filter is beyond a metadata-less store → no hits.
             const matches = await store.search("public", { filter: { visibility: { $ne: "private" } }, topK: 5 });
+
+            expect(matches).toStrictEqual([]);
+            expect(warn).toHaveBeenCalledTimes(1);
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it("fails closed on a FLAT-equality filter too (the shape rlsFilter produces) — RLS bypass regression", async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            const store = bm25LexicalStore();
+
+            // "secret" is indexed WITHOUT a namespace/metadata split — a flat
+            // `{ orgId }` filter (exactly the shape `rlsFilter` produces) must not
+            // be exempted from the fail-closed guard, or the BM25 search runs over
+            // the whole namespace and leaks this chunk's text past the RLS filter.
+            await store.index([chunk("a#0", "tenant secret document")], {});
+
+            const matches = await store.search("secret", { filter: { orgId: "org-1" }, topK: 5 });
 
             expect(matches).toStrictEqual([]);
             expect(warn).toHaveBeenCalledTimes(1);

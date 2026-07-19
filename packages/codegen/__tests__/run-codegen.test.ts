@@ -63,6 +63,31 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain("text: string;");
         });
 
+        it("rejects a workflow and an agent that share a deployed name (CODEGEN-01 cross-kind)", () => {
+            expect.assertions(1);
+
+            // discoverWorkflows/discoverAgents each dedup WITHIN their own kind,
+            // but both land in the exact same wrangler workflows[] array — a
+            // collision across kinds must be rejected before reconcile, not left
+            // to fail late in wrangler or silently clobber a binding.
+            writeFileSync(
+                join(workdir, "lunora", "workflows.ts"),
+                `
+                import { defineWorkflow } from "@lunora/workflow";
+                export const sweep = defineWorkflow({ handler: async () => undefined, name: "shared-name" });
+            `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "agents.ts"),
+                `
+                import { defineAgent } from "@lunora/agent";
+                export const support = defineAgent({ model: "m", name: "shared-name" });
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/Duplicate deployed name "shared-name"/u);
+        });
+
         it("is silent and output-unchanged when LUNORA_CODEGEN_TIMING is unset", () => {
             expect.assertions(3);
 

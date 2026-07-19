@@ -131,6 +131,49 @@ describe(agentChat, () => {
         destroy.destroy();
     });
 
+    it("shows a fresh optimistic echo for a repeated identical prompt, not reconciled by the earlier durable row", async () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        const chat: AgentChatResult = agentChat({
+            api: buildApi(),
+            client: fake.asClient,
+            destroyRef: destroy.asDestroyRef,
+            send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+            threadKey: "t1",
+        });
+
+        // First send of "hi": acked by the server, durable history now has one "hi".
+        await chat.send("hi");
+
+        fake.push(MESSAGES_REF, { key: "t1" }, [{ content: "hi", role: "user", seq: 0 }]);
+
+        expect(chat.messages()).toStrictEqual([{ content: "hi", role: "user", seq: 0 }]);
+
+        // Sending "hi" again must NOT be immediately swallowed by the stale durable
+        // "hi" that predates this send — the optimistic echo should render until
+        // ITS OWN durable row arrives.
+        await chat.send("hi");
+
+        expect(chat.messages()).toStrictEqual([
+            { content: "hi", role: "user", seq: 0 },
+            { content: "hi", optimistic: true, role: "user", seq: 1 },
+        ]);
+
+        // Once the second durable "hi" lands, the optimistic row reconciles away.
+        fake.push(MESSAGES_REF, { key: "t1" }, [
+            { content: "hi", role: "user", seq: 0 },
+            { content: "hi", role: "user", seq: 1 },
+        ]);
+
+        expect(chat.messages()).toStrictEqual([
+            { content: "hi", role: "user", seq: 0 },
+            { content: "hi", role: "user", seq: 1 },
+        ]);
+
+        destroy.destroy();
+    });
+
     it("routes approve / reject / cancel with the in-flight instanceId", async () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();

@@ -17,6 +17,8 @@ export { default as discoverQueries } from "./discover-queries";
 export { discoverQueues, QUEUES_FILENAME } from "./discover-queues";
 export { default as discoverR2sqlCalls } from "./discover-r2sql-calls";
 export { discoverRlsMetadata, default as discoverRlsProcedures } from "./discover-rls-procedures";
+export type { SandboxUsage } from "./discover-sandbox";
+export { discoverSandboxUsage } from "./discover-sandbox";
 export { default as discoverSchema } from "./discover-schema";
 export { discoverShapes, SHAPES_FILENAME } from "./discover-shapes";
 export { default as discoverStorageRulesMetadata } from "./discover-storage-rules";

@@ -212,6 +212,12 @@ const resolveNeedsApproval = async (tool: AnyAgentTool, input: unknown, context:
  * replay memoizes the resolved wait, so the run resumes with the recorded
  * decision without pausing (or re-persisting) again. Named ONLY from the
  * replay-stable `call.id`.
+ *
+ * The wait's match `type` is scoped to THIS call (`agent-approval:&lt;call.id>`,
+ * the same format `component.ts`'s `agentResolveApproval` sends) — native CF
+ * Workflows matches an incoming event against a waiter by `type`, not by the
+ * durable step name, so without this an approval meant for a different
+ * pending tool call on the same instance could resolve this one instead.
  */
 const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Promise<ApprovalDecision> => {
     const { instanceId, patchThread, persist, step } = turnContext;
@@ -226,7 +232,7 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
     });
     await patchThread({ status: "awaiting_input" });
 
-    const event = await step.waitForEvent<ApprovalDecision>(`approval:${call.id}`, { type: "agent-approval" });
+    const event = await step.waitForEvent<ApprovalDecision>(`approval:${call.id}`, { type: `agent-approval:${call.id}` });
 
     // Resume: back to running before we act on the decision.
     await patchThread({ status: "running" });

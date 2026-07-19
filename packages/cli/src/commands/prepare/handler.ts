@@ -6,7 +6,7 @@
  */
 import type { CodegenResult } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import { inferLunoraBindings, reconcileWranglerBindings, reconcileWranglerCompatibilityDate } from "@lunora/config";
+import { inferLunoraBindings, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, reconcileWranglerCrons } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -47,7 +47,7 @@ interface PrepareCommandResult {
  * `prepare`, because the subsequent `validateWrangler` call will catch any
  * truly-missing requirement.
  */
-const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => {
+const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> = []): Promise<void> => {
     try {
         const inferred = await inferLunoraBindings({ projectRoot: cwd });
         const reconciled = reconcileWranglerBindings(cwd, inferred);
@@ -77,6 +77,18 @@ const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => 
         const message = error instanceof Error ? error.message : String(error);
 
         logger.warn(`compatibility date sync skipped: ${message}`);
+    }
+
+    try {
+        const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
+
+        if (reconciled.changed) {
+            logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        }
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.warn(`cron trigger sync skipped: ${message}`);
     }
 };
 
@@ -130,7 +142,7 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
         };
     }
 
-    await provisionBindings(cwd, options.logger);
+    await provisionBindings(cwd, options.logger, codegen.cronTriggers);
 
     const validation = validateWrangler({ projectRoot: cwd });
 

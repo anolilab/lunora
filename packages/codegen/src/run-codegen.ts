@@ -201,6 +201,64 @@ const findTsconfig = (startPath: string): string | undefined => {
 const toPosixPath = (path: string): string => path.replaceAll("\\", "/");
 
 /**
+ * Reject a workflow and an agent that share a deployed `name`, `bindingName`,
+ * or generated `className`. `discoverWorkflows`/`discoverAgents` each guard
+ * uniqueness WITHIN their own kind, but both kinds land in the exact same
+ * wrangler `workflows[]` array (matched only by `class_name`/binding) — an
+ * agent named like a workflow (or vice versa) passes both discoverers silently
+ * and either fails late in wrangler or clobbers a binding at reconcile time.
+ * The `className` check catches the case where the deployed `name`/`bindingName`
+ * differ but the derived generated class collides — two implementations would
+ * then compete for one worker export/`class_name`. Runs after both are
+ * discovered, before reconcile ever sees them.
+ */
+const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, agents: ReadonlyArray<AgentIR>): void => {
+    const namesByLabel = new Map<string, string>();
+    const bindingsByLabel = new Map<string, string>();
+    const classesByLabel = new Map<string, string>();
+
+    for (const workflow of workflows) {
+        namesByLabel.set(workflow.name, `workflow "${workflow.exportName}"`);
+        bindingsByLabel.set(workflow.bindingName, `workflow "${workflow.exportName}"`);
+        classesByLabel.set(workflow.className, `workflow "${workflow.exportName}"`);
+    }
+
+    for (const agent of agents) {
+        const priorName = namesByLabel.get(agent.name);
+
+        if (priorName !== undefined) {
+            throw new LunoraError(
+                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
+                "DUPLICATE_WORKFLOW_NAME",
+                `Duplicate deployed name "${agent.name}": produced by both ${priorName} and agent "${agent.exportName}". Workflow and agent names share the same wrangler workflows[] array and must be unique together.`,
+                { status: 500 },
+            );
+        }
+
+        const priorBinding = bindingsByLabel.get(agent.bindingName);
+
+        if (priorBinding !== undefined) {
+            throw new LunoraError(
+                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
+                "DUPLICATE_WORKFLOW_BINDING",
+                `Duplicate binding "${agent.bindingName}": produced by both ${priorBinding} and agent "${agent.exportName}". Workflow and agent bindings share the same wrangler workflows[] array and must be unique together.`,
+                { status: 500 },
+            );
+        }
+
+        const priorClass = classesByLabel.get(agent.className);
+
+        if (priorClass !== undefined) {
+            throw new LunoraError(
+                "DUPLICATE_WORKFLOW_CLASS",
+                `Duplicate generated class "${agent.className}": produced by both ${priorClass} and agent "${agent.exportName}". Workflow and agent export names must yield unique generated class names.`,
+                { status: 500 },
+            );
+        }
+    }
+};
+
+/**
  * Construct the ts-morph `Project` codegen discovers over. Prefers the user's
  * `tsconfig.json` (when one is found walking up from `lunoraDirectory`) so
  * cross-file type resolution and path aliases work; falls back to an isolated
@@ -342,6 +400,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // Mutation/Action contexts, and the config layer's reconciliation of the
     // wrangler `workflows[]` array (an agent binding is a Workflow binding).
     const agents = discoverAgents(project, lunoraDirectory);
+
+    // Cross-kind guard: `discoverWorkflows`/`discoverAgents` each dedup WITHIN
+    // their own kind, but both share the single wrangler `workflows[]` array —
+    // a name/binding an agent and a workflow both produce must be rejected here,
+    // before the config layer's reconciliation ever sees them.
+    assertNoWorkflowAgentCollision(workflows, agents);
+
     const crons = discoverCrons(project, lunoraDirectory, workflows, agents);
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation

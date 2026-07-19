@@ -37,19 +37,53 @@ export type EventSourceEvents = {
 };
 
 /**
+ * Sentinel a reducer can return to EXPLICITLY signal it does not handle a
+ * given event's `type` — as opposed to returning the current `state`
+ * reference unchanged to represent a legitimate, idempotent no-op for a type
+ * it DOES recognise.
+ *
+ * Reference equality alone can't tell these two cases apart (REPLICA-07): a
+ * reducer that intentionally returns `state` for a type it fully understands
+ * (e.g. "already applied this event, nothing to do") would otherwise be
+ * misclassified as "unhandled" and trigger {@link UnknownEventHandling} — a
+ * spurious warning, or worse, a thrown error under `"fail"`. Return `UNHANDLED`
+ * only for a `type` your reducer truly does not recognise; every other return
+ * (including a `state` returned by reference) is treated as handled.
+ *
+ * Reducers that always recognise every event they're given (a single
+ * always-matching type, or a catch-all) can ignore this entirely.
+ * @experimental
+ */
+export const UNHANDLED: unique symbol = Symbol("lunora.replica.event-source.unhandled");
+
+/**
  * A function that reduces an event into a state mutation.
  *
  * Pure functions are strongly encouraged: given the same event payload
- * and state, they must produce the same next state.
+ * and state, they must produce the same next state. Return {@link UNHANDLED}
+ * to explicitly mark an event `type` this reducer does not process — see
+ * {@link UNHANDLED} for why reference equality against the input `state`
+ * cannot be used for this instead.
  * @experimental
  */
-export type EventReducer<S> = (state: S, entry: EventLogEntry) => S;
+export type EventReducer<S> = (state: S, entry: EventLogEntry) => S | typeof UNHANDLED;
 
 /**
  * Options for constructing an {@link EventSource}.
  * @experimental
  */
 export interface EventSourceOptions {
+    /**
+     * Cap this runtime's internal `log` to this many entries (REPLICA-06).
+     * `replayFromLog` copies every entry it replays from the source log into
+     * `this.log` too — a second, uncapped copy of the same history — so a
+     * long-lived `EventSource` fed by repeated replay accumulates entries in
+     * both places forever without a cap.
+     *
+     * `undefined` (the default) preserves unbounded retention.
+     */
+    maxLogEntries?: number;
+
     /**
      * How to handle events whose `type` is not recognised by the reducer.
      * @default "warn"
@@ -75,7 +109,7 @@ export interface EventSourceOptions {
 export class EventSource<S extends Record<string, unknown> = Record<string, unknown>> {
     // eslint-disable-next-line unicorn/prefer-event-target -- EventEmitter is the library's typed public API
     public readonly emitter: EventEmitter<EventSourceEvents> = new EventEmitter<EventSourceEvents>();
-    public readonly log: EventLog = new EventLog();
+    public readonly log: EventLog;
 
     #state: S;
     #reducer: EventReducer<S>;
@@ -96,6 +130,7 @@ export class EventSource<S extends Record<string, unknown> = Record<string, unkn
         this.#state = { ...initialState };
         this.#reducer = reducer;
         this.#unknownEventHandling = options?.unknownEventHandling ?? "warn";
+        this.log = new EventLog({ maxEntries: options?.maxLogEntries });
     }
 
     // ── Public API ────────────────────────────────────────────────────
@@ -138,9 +173,72 @@ export class EventSource<S extends Record<string, unknown> = Record<string, unkn
             resolvedOptions = payload as AppendOptions | undefined;
         }
 
-        const entry = this.log.append(type, pl, undefined, resolvedOptions);
+        // Build the entry the reducer will see WITHOUT committing it to the
+        // log yet (REPLICA-07): `seq`/`parentSeqNum` are derived exactly the
+        // way `EventLog#append` derives them, so — since nothing else can
+        // touch `this.log` synchronously between this peek and the real
+        // append below — the entry committed on success is identical.
+        const candidate: EventLogEntry = {
+            seq: this.log.nextSeq,
+            type,
+            payload: pl,
+            timestamp: Date.now(),
+            clientId: resolvedOptions?.clientId,
+            sessionId: resolvedOptions?.sessionId,
+            parentSeqNum: resolvedOptions?.parentSeqNum ?? this.log.headSeq ?? undefined,
+        };
 
-        this.#applyEntry(entry);
+        let reduced: S | typeof UNHANDLED;
+
+        try {
+            reduced = this.#reducer(this.#state, candidate);
+        } catch (error) {
+            const normalizedError = error instanceof Error ? error : new Error(String(error));
+
+            this.emitter.emit("replay-error", {
+                entry: candidate,
+                error: normalizedError,
+            });
+
+            // A throwing reducer must not leave a logged entry that state
+            // never reflected — do NOT commit to the log, and do NOT report
+            // the uncommitted candidate as a successful (persisted) entry:
+            // its `seq` is free to be reused by the next event.
+            throw normalizedError;
+        }
+
+        // Preflight UNHANDLED handling against the UNCOMMITTED candidate
+        // BEFORE appending to the log: the "fail" strategy (or a throwing
+        // callback) must abort here, or a retry after the thrown error would
+        // duplicate the logical event against an already-advanced log.
+        let handledByCallback = true;
+
+        if (reduced === UNHANDLED) {
+            handledByCallback = this.#handleUnknown(candidate);
+        }
+
+        // The reducer succeeded (whether it handled the event or returned
+        // UNHANDLED, and unknown-event handling didn't throw) — commit to
+        // the log now. `timestamp` is pinned to the candidate's so the
+        // reducer and the persisted entry are byte-for-byte identical
+        // (REPLICA-07): a second, independently-drawn `Date.now()` here
+        // would make a timestamp-dependent reducer's output unreproducible
+        // on replay.
+        const entry = this.log.append(type, pl, undefined, { ...resolvedOptions, timestamp: candidate.timestamp });
+
+        if (reduced === UNHANDLED) {
+            if (handledByCallback) {
+                // The callback returned true ("handled"), but state didn't
+                // change. Emit state-changed anyway (consumer may still want
+                // to know the entry was processed).
+                this.emitter.emit("state-changed", { state: this.#state, entry });
+            }
+
+            return entry;
+        }
+
+        this.#state = reduced;
+        this.emitter.emit("state-changed", { state: this.#state, entry });
 
         return entry;
     }
@@ -160,7 +258,15 @@ export class EventSource<S extends Record<string, unknown> = Record<string, unkn
 
         for (const entry of entries) {
             try {
-                this.#state = this.#reducer(this.#state, entry);
+                const reduced = this.#reducer(this.#state, entry);
+
+                // Replay doesn't run the unknown-event strategy (there's no
+                // live caller to notify) — UNHANDLED here just means "no
+                // state change", same as it always meant.
+                if (reduced !== UNHANDLED) {
+                    this.#state = reduced;
+                }
+
                 this.log.append(entry.type, entry.payload, entry.tableDiffs, {
                     clientId: entry.clientId,
                     sessionId: entry.sessionId,
@@ -270,33 +376,12 @@ export class EventSource<S extends Record<string, unknown> = Record<string, unkn
 
     // ── Internal ──────────────────────────────────────────────────────
 
-    #applyEntry(entry: EventLogEntry): void {
-        const stateBefore = this.#state;
-
-        try {
-            this.#state = this.#reducer(this.#state, entry);
-        } catch (error) {
-            this.emitter.emit("replay-error", {
-                entry,
-                error: error instanceof Error ? error : new Error(String(error)),
-            });
-
-            return;
-        }
-
-        // If the reducer returned the same reference, it did not handle this
-        // event type — invoke the unknown-event strategy.
-        if (this.#state === stateBefore && !this.#handleUnknown(entry)) {
-            return;
-        }
-
-        // The callback returned true ("handled"), but state didn't change.
-        // Fall through to emit state-changed anyway (consumer may still
-        // want to know the entry was processed).
-
-        this.emitter.emit("state-changed", { state: this.#state, entry });
-    }
-
+    /**
+     * Explicit-sentinel detection (not `state === stateBefore` reference
+     * equality) is what lets a reducer legitimately return `state` unchanged
+     * for a type it DOES recognise without being misclassified as unhandled
+     * (REPLICA-07).
+     */
     #handleUnknown(entry: EventLogEntry): boolean {
         const strategy = this.#unknownEventHandling;
 

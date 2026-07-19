@@ -149,8 +149,14 @@ export class EventsSync {
     /** The highest `seq + 1` that has been applied. Starts at `0`. */
     #watermark = 0;
     #timer: ReturnType<typeof setInterval> | undefined;
-    /** Guards against overlapping poll cycles (e.g. slow fetch). */
-    #running = false;
+
+    /**
+     * The in-flight poll cycle, or `undefined` when idle. A concurrent
+     * `sync()`/timer tick AWAITS this instead of no-op'ing (REPLICA-08) —
+     * previously a concurrent call returned `0` immediately without waiting
+     * for the in-progress cycle to actually finish.
+     */
+    #inFlight: Promise<number> | undefined;
 
     // ── Constructor ─────────────────────────────────────────────────────
 
@@ -213,16 +219,40 @@ export class EventsSync {
     // ── Internal ────────────────────────────────────────────────────────
 
     /**
-     * One poll cycle: fetch → apply → diff → mirror.
+     * Entry point for a poll cycle. A cycle already in flight is AWAITED
+     * (not restarted, not no-op'd) so a `sync()` racing a timer tick — or two
+     * concurrent `sync()` calls — observes the real outcome of the one cycle
+     * that actually runs (REPLICA-08).
      */
     async #poll(): Promise<number> {
-        // Guard against overlapping calls
-        if (this.#running) {
-            return 0;
+        if (this.#inFlight) {
+            return this.#inFlight;
         }
 
-        this.#running = true;
+        const promise = this.#pollOnce().finally(() => {
+            this.#inFlight = undefined;
+        });
 
+        this.#inFlight = promise;
+
+        return promise;
+    }
+
+    /**
+     * One poll cycle: fetch → (apply → diff → mirror) per event.
+     *
+     * Each event is driven through the FULL pipeline — `applyEvents`,
+     * `getTableDiffs`, and `mirror.applyDiff` — atomically before the
+     * watermark advances past it (REPLICA-08). Advancing the watermark any
+     * earlier (e.g. right after `applyEvents`) would let a later throw from
+     * `getTableDiffs`/`mirror.applyDiff` skip mirror delivery for that event
+     * PERMANENTLY, since the next poll would never re-fetch it. Keeping the
+     * watermark pinned to the last event whose entire pipeline succeeded
+     * means the next poll re-fetches exactly the unapplied remainder — never
+     * re-applying a fully-succeeded event, never silently dropping one that
+     * partially failed.
+     */
+    async #pollOnce(): Promise<number> {
         try {
             const events = await this.#options.fetchEventsSince(this.#watermark);
 
@@ -230,46 +260,40 @@ export class EventsSync {
                 return 0;
             }
 
-            // 1. Apply events to the state machine
-            this.#options.applyEvents(events);
+            let appliedCount = 0;
 
-            // 2. Advance the watermark IMMEDIATELY — before the diff/mirror
-            //    phase. `applyEvents` is the non-idempotent step; if a later step
-            //    throws, the watermark must not roll back, or the next poll would
-            //    re-fetch and re-apply these same events, double-applying
-            //    non-idempotent reducers.
-            //
-            //    Trade-off: a throw in the diff/mirror phase below is swallowed
-            //    with the watermark already advanced, so those diffs are NOT
-            //    retried. If `getTableDiffs()` is delta/consuming (diffs against a
-            //    cached baseline it advances), a transient `mirror.applyDiff`
-            //    failure can leave the mirror desynced until a later event
-            //    rewrites those rows. Prefer a `getTableDiffs()` that recomputes a
-            //    full diff from current state, or make `mirror.applyDiff` durable,
-            //    if you need at-least-once mirror delivery.
-            const lastEvent = events[events.length - 1];
+            try {
+                for (const event of events) {
+                    this.#options.applyEvents([event]);
 
-            if (lastEvent) {
-                this.#watermark = lastEvent.seq + 1;
+                    const diffs = this.#options.getTableDiffs();
+
+                    for (const diff of diffs) {
+                        this.#options.mirror.applyDiff(diff);
+                    }
+
+                    // Only advance the watermark once state, diff generation,
+                    // AND mirror persistence have all succeeded for this
+                    // event — a throw at any stage above leaves the
+                    // watermark where it was, so the next poll retries this
+                    // event (and only this event) instead of permanently
+                    // skipping it.
+                    this.#watermark = event.seq + 1;
+                    appliedCount += 1;
+                }
+            } catch (error) {
+                const onError = this.#options.onError ?? console.error;
+
+                onError(error);
             }
 
-            // 3. Extract table diffs from the updated state
-            const diffs = this.#options.getTableDiffs();
-
-            // 4. Apply each diff to the local mirror
-            for (const diff of diffs) {
-                this.#options.mirror.applyDiff(diff);
-            }
-
-            return events.length;
+            return appliedCount;
         } catch (error: unknown) {
             const onError = this.#options.onError ?? console.error;
 
             onError(error);
 
             return 0;
-        } finally {
-            this.#running = false;
         }
     }
 }

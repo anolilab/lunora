@@ -56,11 +56,18 @@ class ClientQueryStore {
 
     /**
      * Set a new value for `ref` and notify every subscriber. Pass `undefined`
-     * to reset the slot to `ref.defaultValue`.
+     * to reset the slot to `ref.defaultValue` — delegates to {@link reset} so
+     * `get` reports the default rather than a stored `undefined`.
      */
     public set<T>(ref: ClientQueryRef<T>, value: T): void {
+        if (value === undefined) {
+            this.reset(ref);
+
+            return;
+        }
+
         this.values.set(ref.key, value);
-        this.notify(ref.key);
+        this.notify(ref.key, value);
     }
 
     /**
@@ -69,7 +76,7 @@ class ClientQueryStore {
      */
     public reset(ref: ClientQueryRef): void {
         this.values.delete(ref.key);
-        this.notify(ref.key);
+        this.notify(ref.key, ref.defaultValue);
     }
 
     /**
@@ -96,15 +103,18 @@ class ClientQueryStore {
         };
     }
 
-    /** Notify every subscriber of a value change for the given key. */
-    private notify(key: string): void {
+    /**
+     * Notify every subscriber of a value change for the given key with the
+     * resolved value — the caller passes the just-stored value on `set` or
+     * `ref.defaultValue` on `reset`, so a subscriber always sees the same value
+     * {@link get} would return (never a stale re-read after the store mutation).
+     */
+    private notify(key: string, value: unknown): void {
         const subs = this.subscribers.get(key);
 
         if (!subs) {
             return;
         }
-
-        const value = this.values.get(key);
 
         for (const callback of subs) {
             try {

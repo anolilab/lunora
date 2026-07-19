@@ -538,10 +538,14 @@ interface ExternalSourceDiffResult {
 interface ExternalSourceLike {
     binding: string;
     columns?: ReadonlyArray<string>;
+    cursor?: SourceCursorLike;
     idColumn?: string;
     map?: (row: Record<string, unknown>) => Record<string, unknown>;
+    mode?: string;
     query: string;
+    reconcileEveryMs?: number;
     refresh?: SourceRefresh;
+    softDeleteColumn?: string;
     tenantBy?: (shardKey: string) => ReadonlyArray<unknown>;
 }
 ```
@@ -770,6 +774,14 @@ interface ImportShardResult {
     conflicts: number;
     errors: ImportError[];
     inserted: Record<string, number>;
+}
+```
+
+### `IncrementalMaterializeResult` (interface)
+
+```ts
+interface IncrementalMaterializeResult {
+    applied: number;
 }
 ```
 
@@ -1857,7 +1869,7 @@ abstract class ShardDO {
     protected resolveShape(_name: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): ResolvedShape | undefined;
     protected isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
     protected readGlobalShapeRows(_resolved: ResolvedShape, _identity?: SubscriptionIdentity): Promise<ShapeRow[]>;
-    protected pollExternalSources(): Promise<number>;
+    protected pollExternalSources(): Promise<number | undefined>;
     protected scheduleSourcePoll(): Promise<void>;
     protected currentShardKey(): string;
     protected recordExternalSourceError(table: string, error: unknown): void;
@@ -1963,6 +1975,15 @@ type SortDirection = "asc" | "desc";
 ```ts
 interface SourceClientLike {
     query: <Row = Record<string, unknown>>(text: string, parameters?: ReadonlyArray<unknown>) => Promise<Row[]>;
+}
+```
+
+### `SourceCursorLike` (interface)
+
+```ts
+interface SourceCursorLike {
+    column: string;
+    query: string;
 }
 ```
 
@@ -2622,6 +2643,12 @@ const importShardRows: (writer: DatabaseWriterLike, schema: SchemaLike, args: Im
 const isRelationPredicate: (value: unknown) => value is Record<string, WhereInput>;
 ```
 
+### `isSoftDeleted` (const)
+
+```ts
+const isSoftDeleted: (row: Record<string, unknown>, column: string) => boolean;
+```
+
 ### `isSourceDue` (const)
 
 ```ts
@@ -2664,6 +2691,16 @@ const materializeExternalRows: (writer: DatabaseWriterLike, pulled: ReadonlyArra
 }) => Promise<MaterializeResult>;
 ```
 
+### `materializeExternalRowsIncremental` (const)
+
+```ts
+const materializeExternalRowsIncremental: (writer: DatabaseWriterLike, pulled: ReadonlyArray<Record<string, unknown>>, options: {
+    columns?: ReadonlyArray<string>;
+    deletedIds?: ReadonlySet<string>;
+    table: string;
+}) => Promise<IncrementalMaterializeResult>;
+```
+
 ### `mergeWhere` (const)
 
 ```ts
@@ -2704,6 +2741,14 @@ const parseImportShardArgs: (args: Record<string, unknown>) => ImportShardAdminA
 
 ```ts
 const planAggregateLookup: (index: AggregateIndexDefinitionLike, requestedWhere: Record<string, unknown> | undefined) => Record<string, unknown> | undefined;
+```
+
+### `pullExternalSourceIncrementalTick` (const)
+
+```ts
+const pullExternalSourceIncrementalTick: (sql: SqlExec, writer: DatabaseWriterLike, client: SourceClientLike, table: string, source: ExternalSourceLike, shardKey: string, nowMs: number) => Promise<{
+    applied: number;
+}>;
 ```
 
 ### `pullExternalSourceTick` (const)
