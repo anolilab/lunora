@@ -41,9 +41,11 @@ import { delegateToLunora } from "../handler";
  * off the event, and return the worker's `Response` verbatim (H3 streams it,
  * including a `101 Switching Protocols` upgrade with its `webSocket`).
  */
-export default h3.defineEventHandler(async (event: unknown) => {
+const lunoraEventHandler: h3.EventHandler = h3.defineEventHandler(async (event: unknown) => {
     const { ctx, env } = resolveCloudflare(event as never);
     const request = resolveWebRequest(h3, event);
 
     return delegateToLunora(lunoraApp, request, env, ctx);
 });
+
+export default lunoraEventHandler;

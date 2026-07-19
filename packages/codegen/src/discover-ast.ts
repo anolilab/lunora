@@ -2,7 +2,7 @@ import type { CallExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
 /** Strips a trailing `.ts` extension from a relative source path. */
-export const TS_EXTENSION_RE = /\.ts$/u;
+export const TS_EXTENSION_RE: RegExp = /\.ts$/u;
 
 /**
  * Export binding name of the exported, top-level function that lexically contains

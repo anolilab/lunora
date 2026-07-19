@@ -3,7 +3,7 @@
  * `__tests__/**` include. Asserts the insert/select type divergence produced by
  * the column-modifier API (`.default`, `.$defaultFn`, `.unique`, `.nullable`).
  */
-import type { Id, InferInsert, InferSelect, InsertShape, SelectShape } from "../src/index";
+import type { ColumnValidator, Id, InferInsert, InferSelect, InsertShape, SelectShape, TimestampColumnValidator } from "../src/index";
 import { v } from "../src/index";
 
 type Assert<T extends true> = T;
@@ -17,68 +17,75 @@ type RequiredKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? never : K
 // --- scalar modifiers ---------------------------------------------------------
 
 // `.default(value)` leaves select alone but makes insert accept `undefined`.
-const priority = v.string().default("medium");
+const priority: ColumnValidator<string, string | undefined> = v.string().default("medium");
 
 type _DefaultSelect = Assert<Equal<InferSelect<typeof priority>, string>>;
 type _DefaultInsert = Assert<Equal<InferInsert<typeof priority>, string | undefined>>;
 
 // `.$defaultFn(fn)` behaves like `.default` for optionality.
-const createdAt = v.number().$defaultFn(() => Date.now());
+const createdAt: ColumnValidator<number, number | undefined> = v.number().$defaultFn(() => Date.now());
 
 type _DefaultFunctionSelect = Assert<Equal<InferSelect<typeof createdAt>, number>>;
 type _DefaultFunctionInsert = Assert<Equal<InferInsert<typeof createdAt>, number | undefined>>;
 
 // `.$onUpdateFn(fn)` does NOT make the field optional on insert.
-const updatedAt = v.number().$onUpdateFn(() => Date.now());
+const updatedAt: ColumnValidator<number, number> = v.number().$onUpdateFn(() => Date.now());
 
 type _OnUpdateInsert = Assert<Equal<InferInsert<typeof updatedAt>, number>>;
 
 // `.serverDefault(fn)` leaves select alone but makes insert optional — the
 // server stamps it, so the client need not (and cannot meaningfully) supply it.
-const ownerId = v.string().serverDefault(({ auth }) => auth.userId ?? "anon");
+const ownerId: ColumnValidator<string, string | undefined> = v.string().serverDefault(({ auth }) => auth.userId ?? "anon");
 
 type _ServerDefaultSelect = Assert<Equal<InferSelect<typeof ownerId>, string>>;
 type _ServerDefaultInsert = Assert<Equal<InferInsert<typeof ownerId>, string | undefined>>;
 
 // `.unique()` is type-transparent.
-const title = v.string().unique();
+const title: ColumnValidator<string, string> = v.string().unique();
 
 type _UniqueSelect = Assert<Equal<InferSelect<typeof title>, string>>;
 type _UniqueInsert = Assert<Equal<InferInsert<typeof title>, string>>;
 
 // `.nullable()` widens both select and insert to `T | null`.
-const note = v.string().nullable();
+const note: ColumnValidator<string | null, string | null> = v.string().nullable();
 
 type _NullableSelect = Assert<Equal<InferSelect<typeof note>, string | null>>;
 type _NullableInsert = Assert<Equal<InferInsert<typeof note>, string | null>>;
 
 // Modifiers compose: `.unique().default()` is unique + insert-optional.
-const composed = v.string().unique().default("x");
+const composed: ColumnValidator<string, string | undefined> = v.string().unique().default("x");
 
 type _ComposedInsert = Assert<Equal<InferInsert<typeof composed>, string | undefined>>;
 
 // `.$type<T>()` overrides both select and insert without touching runtime parsing.
-const externalId = v.string().$type<Id<"users">>();
+const externalId: ColumnValidator<Id<"users">, Id<"users">> = v.string().$type<Id<"users">>();
 
 type _TypeOverrideSelect = Assert<Equal<InferSelect<typeof externalId>, Id<"users">>>;
 type _TypeOverrideInsert = Assert<Equal<InferInsert<typeof externalId>, Id<"users">>>;
 
 // `v.timestamp()` / `v.date()` are epoch-millisecond numbers.
-const createdOn = v.timestamp();
-const dueOn = v.date();
+const createdOn: TimestampColumnValidator = v.timestamp();
+const dueOn: TimestampColumnValidator = v.date();
 
 type _TimestampSelect = Assert<Equal<InferSelect<typeof createdOn>, number>>;
 type _DateSelect = Assert<Equal<InferSelect<typeof dueOn>, number>>;
 
 // `.defaultNow()` leaves select alone but makes insert accept `undefined`.
-const startedAt = v.timestamp().defaultNow();
+const startedAt: ColumnValidator<number, number | undefined> = v.timestamp().defaultNow();
 
 type _DefaultNowSelect = Assert<Equal<InferSelect<typeof startedAt>, number>>;
 type _DefaultNowInsert = Assert<Equal<InferInsert<typeof startedAt>, number | undefined>>;
 
 // --- $inferSelect vs $inferInsert divergence over a table shape ---------------
 
-const shape = {
+const shape: {
+    archived: ColumnValidator<boolean, boolean | undefined>;
+    createdAt: ColumnValidator<number, number | undefined>;
+    note: ColumnValidator<string | null, string | null>;
+    priority: ColumnValidator<string, string | undefined>;
+    projectId: ColumnValidator<Id<"projects">, Id<"projects">>;
+    title: ColumnValidator<string, string>;
+} = {
     archived: v.boolean().default(false),
     createdAt: v.number().$defaultFn(() => Date.now()),
     note: v.string().nullable(),

@@ -149,7 +149,7 @@ export const EvilBarChart = <TData extends Record<string, unknown>, TConfig exte
     brushHeight,
     brushFormatLabel,
     onBrushChange,
-}: EvilBarChartProps<TData, TConfig>) => {
+}: EvilBarChartProps<TData, TConfig>): React.ReactElement => {
     const chartId = useId().replaceAll(":", ""); // colon-free id keeps CSS/SVG selectors valid
     // Anchors the grow-in to a fixed moment so it plays exactly once — re-renders
     // and Recharts' bar remounts read elapsed time from here instead of replaying.
@@ -271,7 +271,7 @@ export const Bar = ({
     glowing = false,
     bufferBar = false,
     barProps,
-}: BarProps) => {
+}: BarProps): React.ReactElement | null => {
     const {
         config,
         isStacked,
@@ -365,7 +365,7 @@ type XAxisProps = ComponentProps<typeof RechartsXAxis>;
  * its axis type from the chart layout — categorical when vertical, numeric
  * when the bars run horizontally.
  */
-export const XAxis = ({ tickLine = false, axisLine = false, tickMargin = 8, minTickGap = 8, type, ...props }: XAxisProps) => {
+export const XAxis = ({ tickLine = false, axisLine = false, tickMargin = 8, minTickGap = 8, type, ...props }: XAxisProps): React.ReactElement | null => {
     const { isLoading, isHorizontal } = useBarChart();
 
     if (isLoading) {
@@ -391,7 +391,7 @@ type YAxisProps = ComponentProps<typeof RechartsYAxis>;
  * from the chart layout — numeric when vertical, categorical when the bars run
  * horizontally. Hidden automatically while the chart is loading.
  */
-export const YAxis = ({ tickLine = false, axisLine = false, tickMargin = 8, minTickGap = 8, width = "auto", type, ...props }: YAxisProps) => {
+export const YAxis = ({ tickLine = false, axisLine = false, tickMargin = 8, minTickGap = 8, width = "auto", type, ...props }: YAxisProps): React.ReactElement | null => {
     const { isLoading, isHorizontal } = useBarChart();
 
     if (isLoading) {
@@ -418,7 +418,7 @@ type GridProps = ComponentProps<typeof CartesianGrid>;
  * axis based on the chart layout, and forwards every Recharts CartesianGrid
  * prop for full control.
  */
-export const Grid = ({ strokeDasharray = "3 3", vertical, horizontal, ...props }: GridProps) => {
+export const Grid = ({ strokeDasharray = "3 3", vertical, horizontal, ...props }: GridProps): React.ReactElement => {
     const { isHorizontal } = useBarChart();
 
     return <CartesianGrid horizontal={horizontal ?? !isHorizontal} strokeDasharray={strokeDasharray} vertical={vertical ?? isHorizontal} {...props} />;
@@ -434,7 +434,7 @@ type TooltipProps = {
  * The hover tooltip. Reads the chart's selection from context so its content
  * dims unselected series. Hidden automatically while the chart is loading.
  */
-export const Tooltip = ({ variant, roundness, defaultIndex }: TooltipProps) => {
+export const Tooltip = ({ variant, roundness, defaultIndex }: TooltipProps): React.ReactElement | null => {
     const { isLoading, selectedDataKey } = useBarChart();
 
     if (isLoading) {
@@ -461,7 +461,7 @@ type LegendProps = {
  * The series legend. When `isClickable` is set, each entry toggles selection of
  * its series, driving the shared selection state read by every &lt;Bar />.
  */
-export const Legend = ({ variant, align = "right", verticalAlign = "top", isClickable = false }: LegendProps) => {
+export const Legend = ({ variant, align = "right", verticalAlign = "top", isClickable = false }: LegendProps): React.ReactElement => {
     const { selectedDataKey, selectDataKey } = useBarChart();
 
     return (
@@ -515,7 +515,7 @@ type CustomBarProps = BarShapeProps & {
  * variant pattern, with an invisible full-height rectangle behind it to keep
  * the whole column hoverable and clickable.
  */
-const CustomBar = (props: CustomBarProps) => {
+const CustomBar = (props: CustomBarProps): React.ReactElement => {
     const {
         x = 0,
         y = 0,
@@ -733,7 +733,7 @@ type StyleProps = {
  * Vertical top-to-bottom color gradient for a series. Always rendered — every
  * fill variant and the buffer-bar stroke paint from this single gradient.
  */
-const ColorGradient = ({ id, dataKey, config }: StyleProps & { config: ChartConfig }) => {
+const ColorGradient = ({ id, dataKey, config }: StyleProps & { config: ChartConfig }): React.ReactElement => {
     const colorsCount = getColorsCount(config[dataKey] ?? {});
 
     return (
@@ -754,7 +754,7 @@ const ColorGradient = ({ id, dataKey, config }: StyleProps & { config: ChartConf
 };
 
 /** Diagonal hatched-stripe fill, masked from the series color gradient. */
-const HatchedPattern = ({ id, dataKey }: StyleProps) => (
+const HatchedPattern = ({ id, dataKey }: StyleProps): React.ReactElement => (
     <>
         <pattern height="5" id={`${id}-hatched-mask-pattern`} patternTransform="rotate(-45)" patternUnits="userSpaceOnUse" width="5" x="0" y="0">
             <rect fill="white" fillOpacity={0.3} height="5" width="5" />
@@ -770,7 +770,7 @@ const HatchedPattern = ({ id, dataKey }: StyleProps) => (
 );
 
 /** Hatched diagonal lines with no background fill, used for the buffer bar. */
-const BufferHatchedPattern = ({ id, dataKey }: StyleProps) => (
+const BufferHatchedPattern = ({ id, dataKey }: StyleProps): React.ReactElement => (
     <>
         <pattern height="5" id={`${id}-buffer-hatched-mask-pattern`} patternTransform="rotate(-45)" patternUnits="userSpaceOnUse" width="5" x="0" y="0">
             <rect fill="black" fillOpacity={0} height="5" width="5" />
@@ -786,7 +786,7 @@ const BufferHatchedPattern = ({ id, dataKey }: StyleProps) => (
 );
 
 /** Two-tone fill — a half-faded, half-solid split applied per bar bounding box. */
-const DuotonePattern = ({ id, dataKey, config }: StyleProps & { config: ChartConfig }) => {
+const DuotonePattern = ({ id, dataKey, config }: StyleProps & { config: ChartConfig }): React.ReactElement => {
     const colorsCount = getColorsCount(config[dataKey] ?? {});
 
     return (
@@ -819,7 +819,7 @@ const DuotonePattern = ({ id, dataKey, config }: StyleProps & { config: ChartCon
 };
 
 /** Two-tone fill with the solid and faded halves reversed from `duotone`. */
-const DuotoneReversePattern = ({ id, dataKey, config }: StyleProps & { config: ChartConfig }) => {
+const DuotoneReversePattern = ({ id, dataKey, config }: StyleProps & { config: ChartConfig }): React.ReactElement => {
     const colorsCount = getColorsCount(config[dataKey] ?? {});
 
     return (
@@ -859,7 +859,7 @@ const DuotoneReversePattern = ({ id, dataKey, config }: StyleProps & { config: C
 };
 
 /** Gradient fill that fades the series color from solid at the top to clear. */
-const GradientPattern = ({ id, dataKey }: StyleProps) => (
+const GradientPattern = ({ id, dataKey }: StyleProps): React.ReactElement => (
     <>
         <linearGradient id={`${id}-gradient-mask-gradient`} x1="0" x2="0" y1="0" y2="1">
             <stop offset="20%" stopColor="white" stopOpacity={1} />
@@ -875,7 +875,7 @@ const GradientPattern = ({ id, dataKey }: StyleProps) => (
 );
 
 /** Low-opacity body fill, paired with a solid top strip drawn by CustomBar. */
-const StrippedPattern = ({ id, dataKey }: StyleProps) => (
+const StrippedPattern = ({ id, dataKey }: StyleProps): React.ReactElement => (
     <>
         <linearGradient id={`${id}-stripped-mask-gradient`} x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="white" stopOpacity={0.2} />
@@ -891,7 +891,7 @@ const StrippedPattern = ({ id, dataKey }: StyleProps) => (
 );
 
 /** Soft outer-glow filter applied to a glowing bar. */
-const GlowFilter = ({ id, dataKey }: StyleProps) => (
+const GlowFilter = ({ id, dataKey }: StyleProps): React.ReactElement => (
     <filter height="300%" id={`${id}-bar-glow-${dataKey}`} width="300%" x="-100%" y="-100%">
         <feGaussianBlur in="SourceGraphic" result="blur" stdDeviation="8" />
         <feColorMatrix
@@ -931,7 +931,7 @@ const generateEasedGradientStops = (steps: number = 17, minOpacity: number = 0.0
  * when the shimmer has completely exited the visible area. This eliminates
  * timing drift issues from setTimeout/setInterval.
  */
-export function useLoadingData(isLoading: boolean, loadingBars: number = 12) {
+export function useLoadingData(isLoading: boolean, loadingBars: number = 12): { loadingData: { loading: number }[]; onShimmerExit: () => void } {
     const [, setLoadingDataKey] = useState(false);
 
     // Callback fired by motion.dev when the shimmer exits the visible area
@@ -950,7 +950,7 @@ export function useLoadingData(isLoading: boolean, loadingBars: number = 12) {
  * The skeleton bar shown while the chart is loading. Rendered by the root in
  * place of the real bars, paired with its own masked shimmer pattern.
  */
-const LoadingBar = ({ chartId, onShimmerExit }: { chartId: string; onShimmerExit: () => void }) => (
+const LoadingBar = ({ chartId, onShimmerExit }: { chartId: string; onShimmerExit: () => void }): React.ReactElement => (
     <>
         <RechartsBar
             dataKey={LOADING_BAR_DATA_KEY}
@@ -975,7 +975,7 @@ const LoadingBar = ({ chartId, onShimmerExit }: { chartId: string; onShimmerExit
  * rect travels x from -1 to 2; onShimmerExit fires as it crosses x=1, letting the
  * data swap happen while the shimmer is off-screen for a seamless loop.
  */
-const LoadingBarPattern = ({ chartId, onShimmerExit }: { chartId: string; onShimmerExit: () => void }) => {
+const LoadingBarPattern = ({ chartId, onShimmerExit }: { chartId: string; onShimmerExit: () => void }): React.ReactElement => {
     const gradientStops = generateEasedGradientStops();
 
     // 1 (left buffer) + 1 (visible) + 1 (right buffer)

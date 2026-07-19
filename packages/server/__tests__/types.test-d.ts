@@ -1,152 +1,164 @@
 /**
  * Compile-time only: this file is included by `tsc --noEmit` to exercise the
  * type surface. It is also imported by a no-op test so vitest counts it.
+ *
+ * All builder chains under test live inside the `check` function body so their
+ * inferred (generic-builder) types stay function-local — not part of the
+ * module's declaration output — which keeps the file `--isolatedDeclarations`-
+ * clean without hand-annotating each builder's complex inferred return type.
  */
 import type { ActionCtx, EmptyArgs, Id, Infer, LunoraRouteHandler, QueryCtx, RegisteredQuery, ScheduledFunctionDoc, StorageMetadata } from "../src/index";
 import { defineSchema, defineTable, httpRoute, initLunora, v } from "../src/index";
-
-const { mutation, query } = initLunora.dataModel().create();
 
 type Assert<T extends true> = T;
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- canonical type-equality idiom; each fresh `T` in the two function signatures is structurally load-bearing (relaxing it breaks the invariance check).
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 
-const schema = defineSchema({
-    messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId"),
-    users: defineTable({ email: v.string() }).global(),
-});
-
-// schema.tables.messages.shape.text is the v.string validator.
-type Check1 = Assert<Equal<Infer<typeof schema.tables.messages.shape.channelId>, Id<"channels">>>;
-
-const list = query.input({ limit: v.number() }).query(({ args }) => args.limit);
-
-const send = mutation.input({ text: v.string() }).mutation(({ args }) => args.text);
-
-type Check2 = Assert<Equal<typeof list.kind, "query">>;
-type Check3 = Assert<Equal<typeof send.kind, "mutation">>;
-
-const c = initLunora.dataModel<Record<string, never>>().create();
-
-// The builder terminal re-states the kind as a literal type.
-const builderList = c.query.input({ limit: v.number() }).query(({ args }) => args.limit);
-
-type Check4 = Assert<Equal<typeof builderList.kind, "query">>;
-
-// `.input()` flows the validator's inferred type into the handler's `args`.
-const builderArgs = c.query.input({ channelId: v.id("channels") }).query(({ args }) => args.channelId);
-
-type BuilderArgs = Parameters<typeof builderArgs.handler>[1];
-
-type Check5 = Assert<Equal<BuilderArgs["channelId"], Id<"channels">>>;
-
-// `.use()` returning `next({ ctx })` widens the context the handler sees — if
-// the extension weren't threaded through, `ctx.userId` wouldn't type-check.
-const builderContext = c.query.use(async ({ next }) => next({ ctx: { userId: "u" } })).query(({ ctx }) => ctx.userId);
-
-type Check6 = Assert<Equal<Awaited<ReturnType<typeof builderContext.handler>>, string>>;
-
-// `.output(validator)` narrows the registered return type to the validator's
-// inferred type, regardless of what the handler body would infer on its own.
-const outputValidator = v.object({ count: v.number() });
-const builderOutput = c.query.output(outputValidator).query(() => {
-    return { count: 1 };
-});
-
-type Check7 = Assert<Equal<typeof builderOutput, RegisteredQuery<EmptyArgs, Infer<typeof outputValidator>>>>;
-
-// `.output()` composes with `.input()` in either order: args stay typed and the
-// declared output type wins for the registered return.
-const builderInputOutput = c.mutation
-    .input({ text: v.string() })
-    .output(v.string())
-    .mutation(({ args }) => args.text);
-
-type Check8 = Assert<Equal<Awaited<ReturnType<typeof builderInputOutput.handler>>, string>>;
-
-// A handler whose return type doesn't satisfy `.output()` is a compile error.
-// @ts-expect-error - handler returns string, but .output declares { count: number }
-const builderOutputMismatch = c.query.output(v.object({ count: v.number() })).query(() => "nope");
-
-type Check9 = Assert<Equal<typeof builderOutputMismatch.kind, "query">>;
-
-// `httpRoute`: `.searchParams()` / `.body()` / `.params()` flow the validator
-// maps into the handler's typed `{ searchParams, body, params }`.
-const itemsRoute = httpRoute.get("/api/items/:id").searchParams({ limit: v.number() }).body({ text: v.string() }).params({ id: v.string() });
-
-type ItemsOptions = Parameters<Parameters<typeof itemsRoute.handler>[0]>[0];
-
-type Check10 = Assert<Equal<ItemsOptions["searchParams"]["limit"], number>>;
-type Check11 = Assert<Equal<ItemsOptions["body"]["text"], string>>;
-type Check11b = Assert<Equal<ItemsOptions["params"]["id"], string>>;
-
-// The terminal `.handler()` yields a `LunoraRouteHandler`, mountable on `httpRouter`.
-const pingRoute = httpRoute.get("/api/ping").handler(() => {
-    return { ok: true };
-});
-
-type Check12 = Assert<Equal<typeof pingRoute, LunoraRouteHandler>>;
-
-// `.output()` constrains the handler's return — a mismatch is a compile error.
-// The directive sits immediately before `.handler(() => 42)` because TypeScript
-// attributes the type error to that specific line within the multi-line chain;
-// prettier re-splits long chains, so an above-the-const placement won't survive
-// the pre-commit hook.
-const routeOutputMismatch = httpRoute
-    .get("/api/x")
-    .output(v.string())
-    // @ts-expect-error - handler returns number, but .output declares string
-    .handler(() => 42);
-
-type Check13 = Assert<Equal<typeof routeOutputMismatch, LunoraRouteHandler>>;
-
 // Server-to-server callers: `ctx.runQuery` / `runMutation` infer both the args
-// type and the result type from the passed function reference — no loose
-// `Record<string, unknown>` args, no manual return annotation.
+// type and the result type from the passed function reference. Ambient (`declare`)
+// so they can't live inside the function body.
 declare const actionCtx: ActionCtx;
-
-const ranQuery = actionCtx.runQuery(list, { limit: 3 });
-const ranMutation = actionCtx.runMutation(send, { text: "hi" });
-
-type Check14 = Assert<Equal<Awaited<typeof ranQuery>, number>>;
-type Check15 = Assert<Equal<Awaited<typeof ranMutation>, string>>;
-
-// A wrong arg type is a compile error now that args are inferred from the
-// reference's validator (the result type still flows, hence Check16).
-// @ts-expect-error - limit must be a number, per the query's args validator
-const ranBadArgs = actionCtx.runQuery(list, { limit: "nope" });
-
-type Check16 = Assert<Equal<Awaited<typeof ranBadArgs>, number>>;
-
-// `ctx.db.system` — read-only system tables. The overloaded `query`/`get`
-// resolve the per-table doc type (`_scheduled_functions` → ScheduledFunctionDoc,
-// `_storage` → StorageMetadata), so these awaited results are exactly typed.
 declare const queryCtx: QueryCtx;
 
-const systemScheduled = queryCtx.db.system.query("_scheduled_functions").collect();
-const systemStorageGet = queryCtx.db.system.get("_storage", "logo.png");
+const check = (): void => {
+    const { mutation, query } = initLunora.dataModel().create();
 
-type Check17 = Assert<Equal<Awaited<typeof systemScheduled>, ScheduledFunctionDoc[]>>;
-type Check18 = Assert<Equal<Awaited<typeof systemStorageGet>, StorageMetadata | null>>;
+    const schema = defineSchema({
+        messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId"),
+        users: defineTable({ email: v.string() }).global(),
+    });
 
-export type {
-    Check1,
-    Check2,
-    Check3,
-    Check4,
-    Check5,
-    Check6,
-    Check7,
-    Check8,
-    Check9,
-    Check10,
-    Check11,
-    Check11b,
-    Check12,
-    Check13,
-    Check14,
-    Check15,
-    Check16,
-    Check17,
-    Check18,
+    // schema.tables.messages.shape.text is the v.string validator.
+    type Check1 = Assert<Equal<Infer<typeof schema.tables.messages.shape.channelId>, Id<"channels">>>;
+
+    const list = query.input({ limit: v.number() }).query(({ args }) => args.limit);
+
+    const send = mutation.input({ text: v.string() }).mutation(({ args }) => args.text);
+
+    type Check2 = Assert<Equal<typeof list.kind, "query">>;
+    type Check3 = Assert<Equal<typeof send.kind, "mutation">>;
+
+    const c = initLunora.dataModel<Record<string, never>>().create();
+
+    // The builder terminal re-states the kind as a literal type.
+    const builderList = c.query.input({ limit: v.number() }).query(({ args }) => args.limit);
+
+    type Check4 = Assert<Equal<typeof builderList.kind, "query">>;
+
+    // `.input()` flows the validator's inferred type into the handler's `args`.
+    const builderArgs = c.query.input({ channelId: v.id("channels") }).query(({ args }) => args.channelId);
+
+    type BuilderArgs = Parameters<typeof builderArgs.handler>[1];
+
+    type Check5 = Assert<Equal<BuilderArgs["channelId"], Id<"channels">>>;
+
+    // `.use()` returning `next({ ctx })` widens the context the handler sees — if
+    // the extension weren't threaded through, `ctx.userId` wouldn't type-check.
+    const builderContext = c.query.use(async ({ next }) => next({ ctx: { userId: "u" } })).query(({ ctx }) => ctx.userId);
+
+    type Check6 = Assert<Equal<Awaited<ReturnType<typeof builderContext.handler>>, string>>;
+
+    // `.output(validator)` narrows the registered return type to the validator's
+    // inferred type, regardless of what the handler body would infer on its own.
+    const outputValidator = v.object({ count: v.number() });
+    const builderOutput = c.query.output(outputValidator).query(() => {
+        return { count: 1 };
+    });
+
+    type Check7 = Assert<Equal<typeof builderOutput, RegisteredQuery<EmptyArgs, Infer<typeof outputValidator>>>>;
+
+    // `.output()` composes with `.input()` in either order: args stay typed and the
+    // declared output type wins for the registered return.
+    const builderInputOutput = c.mutation
+        .input({ text: v.string() })
+        .output(v.string())
+        .mutation(({ args }) => args.text);
+
+    type Check8 = Assert<Equal<Awaited<ReturnType<typeof builderInputOutput.handler>>, string>>;
+
+    // A handler whose return type doesn't satisfy `.output()` is a compile error.
+    // @ts-expect-error - handler returns string, but .output declares { count: number }
+    const builderOutputMismatch = c.query.output(v.object({ count: v.number() })).query(() => "nope");
+
+    type Check9 = Assert<Equal<typeof builderOutputMismatch.kind, "query">>;
+
+    // `httpRoute`: `.searchParams()` / `.body()` / `.params()` flow the validator
+    // maps into the handler's typed `{ searchParams, body, params }`.
+    const itemsRoute = httpRoute.get("/api/items/:id").searchParams({ limit: v.number() }).body({ text: v.string() }).params({ id: v.string() });
+
+    type ItemsOptions = Parameters<Parameters<typeof itemsRoute.handler>[0]>[0];
+
+    type Check10 = Assert<Equal<ItemsOptions["searchParams"]["limit"], number>>;
+    type Check11 = Assert<Equal<ItemsOptions["body"]["text"], string>>;
+    type Check11b = Assert<Equal<ItemsOptions["params"]["id"], string>>;
+
+    // The terminal `.handler()` yields a `LunoraRouteHandler`, mountable on `httpRouter`.
+    const pingRoute = httpRoute.get("/api/ping").handler(() => {
+        return { ok: true };
+    });
+
+    type Check12 = Assert<Equal<typeof pingRoute, LunoraRouteHandler>>;
+
+    // `.output()` constrains the handler's return — a mismatch is a compile error.
+    // The directive sits immediately before `.handler(() => 42)` because TypeScript
+    // attributes the type error to that specific line within the multi-line chain;
+    // prettier re-splits long chains, so an above-the-const placement won't survive
+    // the pre-commit hook.
+    const routeOutputMismatch = httpRoute
+        .get("/api/x")
+        .output(v.string())
+        // @ts-expect-error - handler returns number, but .output declares string
+        .handler(() => 42);
+
+    type Check13 = Assert<Equal<typeof routeOutputMismatch, LunoraRouteHandler>>;
+
+    const ranQuery = actionCtx.runQuery(list, { limit: 3 });
+    const ranMutation = actionCtx.runMutation(send, { text: "hi" });
+
+    type Check14 = Assert<Equal<Awaited<typeof ranQuery>, number>>;
+    type Check15 = Assert<Equal<Awaited<typeof ranMutation>, string>>;
+
+    // A wrong arg type is a compile error now that args are inferred from the
+    // reference's validator (the result type still flows, hence Check16).
+    // @ts-expect-error - limit must be a number, per the query's args validator
+    const ranBadArgs = actionCtx.runQuery(list, { limit: "nope" });
+
+    type Check16 = Assert<Equal<Awaited<typeof ranBadArgs>, number>>;
+
+    // `ctx.db.system` — read-only system tables. The overloaded `query`/`get`
+    // resolve the per-table doc type (`_scheduled_functions` → ScheduledFunctionDoc,
+    // `_storage` → StorageMetadata), so these awaited results are exactly typed.
+    const systemScheduled = queryCtx.db.system.query("_scheduled_functions").collect();
+    const systemStorageGet = queryCtx.db.system.get("_storage", "logo.png");
+
+    type Check17 = Assert<Equal<Awaited<typeof systemScheduled>, ScheduledFunctionDoc[]>>;
+    type Check18 = Assert<Equal<Awaited<typeof systemStorageGet>, StorageMetadata | null>>;
+
+    // Reference every compile-time assertion so the unused-local lint can't strip
+    // the checks; each `Check*` fails at its definition if the equality regresses.
+    const assertions = null as unknown as [
+        Check1,
+        Check2,
+        Check3,
+        Check4,
+        Check5,
+        Check6,
+        Check7,
+        Check8,
+        Check9,
+        Check10,
+        Check11,
+        Check11b,
+        Check12,
+        Check13,
+        Check14,
+        Check15,
+        Check16,
+        Check17,
+        Check18,
+    ];
+
+    void assertions;
 };
+
+export default check;

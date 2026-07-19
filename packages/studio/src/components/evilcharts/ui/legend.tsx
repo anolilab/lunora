@@ -25,7 +25,7 @@ const ChartLegendContent = ({
         onSelectChange?: (selected: string | null) => void;
         selected?: string | null;
         variant?: ChartLegendVariant;
-    }) => {
+    }): React.ReactElement | null => {
     const { config } = useChart();
 
     if (!payload?.length) {
@@ -91,7 +91,7 @@ const ChartLegendContent = ({
 // can diverge freely in markup & style.
 // ---------------------------------------------------------------------------
 
-const LegendIndicator = ({ variant, dataKey, colorsCount }: { colorsCount: number; dataKey: string; variant: ChartLegendVariant }) => {
+const LegendIndicator = ({ variant, dataKey, colorsCount }: { colorsCount: number; dataKey: string; variant: ChartLegendVariant }): React.ReactElement => {
     const fillStyle = getLegendFillStyle(dataKey, colorsCount);
     const outlineStyle = getLegendOutlineStyle(dataKey, colorsCount);
 
@@ -177,6 +177,6 @@ function getLegendOutlineStyle(dataKey: string, colorsCount: number): React.CSSP
     };
 }
 
-const ChartLegend = RechartsPrimitive.Legend;
+const ChartLegend: typeof RechartsPrimitive.Legend = RechartsPrimitive.Legend;
 
 export { ChartLegend, ChartLegendContent, type ChartLegendVariant };

@@ -7,7 +7,7 @@ export default defineConfig({
     runtime: "node",
     rollup: {
         dts: {
-            oxc: false,
+            oxc: true,
         },
         license: {
             path: "./LICENSE.md",

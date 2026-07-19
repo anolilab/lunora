@@ -10,6 +10,7 @@ import type { WorkflowEntrypoint } from "cloudflare:workers";
 
 import { defineWorkflow } from "../../src/define-workflow";
 import LunoraWorkflow from "../../src/do";
+import type { WorkflowDefinition } from "../../src/types";
 
 interface SmokeParams {
     orderId: string;
@@ -28,7 +29,7 @@ interface Env {
  * The `lunora/workflows.ts`-style export under test: two named durable steps
  * chained through the Lunora run context (`ctx.params` + native `ctx.step.do`).
  */
-const smokeWorkflow = defineWorkflow<SmokeParams, SmokeOutput>({
+const smokeWorkflow: WorkflowDefinition<SmokeParams, SmokeOutput> = defineWorkflow<SmokeParams, SmokeOutput>({
     handler: async (context) => {
         const loaded = await context.step.do("load", () => Promise.resolve(`order:${context.params.orderId}`));
         const charged = await context.step.do("charge", () => Promise.resolve(`${loaded}:charged`));

@@ -189,7 +189,7 @@ const EvilBrush = ({
     minSpan = 2,
     showLabels = true,
     skipStyle = false,
-}: EvilBrushProps) => {
+}: EvilBrushProps): React.ReactElement | null => {
     const containerRef = React.useRef<HTMLDivElement>(null);
     const keys = dataKeys ?? Object.keys(chartConfig);
     const totalPoints = data.length;
@@ -396,7 +396,7 @@ const BrushHandle = ({
     label?: string;
     position: MotionValue<string>;
     side: "left" | "right";
-}) => {
+}): React.ReactElement => {
     const isLeft = side === "left";
 
     return (
@@ -460,7 +460,7 @@ const MiniChart = ({
     stacked: boolean;
     strokeVariant?: "solid" | "dashed" | "animated-dashed";
     variant: EvilBrushVariant;
-}) => {
+}): React.ReactElement => {
     const gradients = Object.entries(chartConfig)
         .filter(([key]) => keys.includes(key))
         .map(([dataKey, config]) => {
@@ -608,7 +608,15 @@ function useEvilBrush<TData extends Record<string, unknown>>({
     data: TData[];
     defaultEndIndex?: number;
     defaultStartIndex?: number;
-}) {
+}): {
+    range: EvilBrushRange;
+    visibleData: TData[];
+    brushProps: {
+        startIndex: number;
+        endIndex: number;
+        onChange: (range: EvilBrushRange) => void;
+    };
+} {
     const [range, setRange] = React.useState<EvilBrushRange>({
         startIndex: defaultStartIndex,
         endIndex: defaultEndIndex ?? Math.max(0, data.length - 1),

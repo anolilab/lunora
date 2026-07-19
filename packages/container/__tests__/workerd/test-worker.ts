@@ -12,13 +12,14 @@ import type { Container } from "@cloudflare/containers";
 
 import { defineContainer } from "../../src/define-container";
 import { LunoraContainer } from "../../src/do";
+import type { ContainerDefinition } from "../../src/types";
 
 interface Env {
     CONTAINER_SMOKE: DurableObjectNamespace<SmokeContainer>;
 }
 
 /** The `lunora/containers.ts`-style export under test. */
-const smokeContainer = defineContainer({
+const smokeContainer: ContainerDefinition = defineContainer({
     defaultPort: 8080,
     env: { GREETING: "hello" },
     image: "./Dockerfile",

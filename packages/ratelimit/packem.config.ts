@@ -6,7 +6,7 @@ import transformer from "@visulima/packem/transformer/esbuild";
 export default defineConfig({
     rollup: {
         dts: {
-            oxc: false,
+            oxc: true,
         },
         license: {
             path: "./LICENSE.md",

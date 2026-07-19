@@ -140,7 +140,7 @@ body {
 
 // ── React ────────────────────────────────────────────────────────────────────
 
-const REACT_APP = `import { useEffect, useState } from "react";
+const REACT_APP: string = `import { useEffect, useState } from "react";
 
 type Theme = "dark" | "light";
 
@@ -305,7 +305,7 @@ export default function App() {
 
 // ── Vue ──────────────────────────────────────────────────────────────────────
 
-const VUE_APP = `<script setup lang="ts">
+const VUE_APP: string = `<script setup lang="ts">
 import { onMounted, ref } from "vue";
 
 // Default to "dark" for a stable first paint, then reconcile to the OS
@@ -465,7 +465,7 @@ const toggle = (): void => {
 
 // ── Solid ────────────────────────────────────────────────────────────────────
 
-const SOLID_APP = `import { createSignal, onMount } from "solid-js";
+const SOLID_APP: string = `import { createSignal, onMount } from "solid-js";
 
 export default function App() {
     // Default to "dark" for a stable first paint, then reconcile to the OS
@@ -628,7 +628,7 @@ export default function App() {
 
 // ── Svelte ───────────────────────────────────────────────────────────────────
 
-const SVELTE_APP = `<script lang="ts">
+const SVELTE_APP: string = `<script lang="ts">
     import { onMount } from "svelte";
 
     // Default to "dark" for a stable first paint, then reconcile to the OS
@@ -793,7 +793,7 @@ const SVELTE_APP = `<script lang="ts">
 // Plain-DOM bootstrap: render the welcome markup, wire the theme toggle, and
 // drive a tiny live demo (the message count of a demo channel) off the Lunora
 // client so the starter shows real, reactive data without a framework.
-const VANILLA_MAIN = `import "./style.css";
+const VANILLA_MAIN: string = `import "./style.css";
 
 import { LunoraClient } from "lunorash/client";
 

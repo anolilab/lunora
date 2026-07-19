@@ -4,11 +4,11 @@ import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 
 import { cn } from "../../lib/utils";
 
-function Popover({ ...props }: PopoverPrimitive.Root.Props) {
+function Popover({ ...props }: PopoverPrimitive.Root.Props): React.ReactElement {
     return <PopoverPrimitive.Root data-slot="popover" {...props} />;
 }
 
-function PopoverTrigger({ ...props }: PopoverPrimitive.Trigger.Props) {
+function PopoverTrigger({ ...props }: PopoverPrimitive.Trigger.Props): React.ReactElement {
     return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />;
 }
 
@@ -20,7 +20,7 @@ function PopoverContent({
     side = "bottom",
     sideOffset = 6,
     ...props
-}: PopoverPrimitive.Popup.Props & Pick<PopoverPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset"> & { keepMounted?: boolean }) {
+}: PopoverPrimitive.Popup.Props & Pick<PopoverPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset"> & { keepMounted?: boolean }): React.ReactElement {
     return (
         <PopoverPrimitive.Portal keepMounted={keepMounted}>
             <PopoverPrimitive.Positioner align={align} alignOffset={alignOffset} className="isolate z-50 outline-none" side={side} sideOffset={sideOffset}>

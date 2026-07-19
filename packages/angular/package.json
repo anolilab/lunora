@@ -60,7 +60,7 @@
         "@lunora/ratelimit": "1.0.0-alpha.8"
     },
     "devDependencies": {
-        "@angular/core": "^22.0.5",
+        "@angular/core": "^22.0.7",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

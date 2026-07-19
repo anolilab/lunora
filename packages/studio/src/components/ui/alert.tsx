@@ -3,7 +3,7 @@ import type { ReactElement, ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
 
-const alertVariants = cva("flex items-start gap-2 rounded-md border px-3 py-2 text-sm [&>svg]:mt-0.5 [&>svg]:size-4 [&>svg]:shrink-0", {
+const alertVariants: (props?: { variant?: "default" | "destructive" | "warning" | null }) => string = cva("flex items-start gap-2 rounded-md border px-3 py-2 text-sm [&>svg]:mt-0.5 [&>svg]:size-4 [&>svg]:shrink-0", {
     defaultVariants: {
         variant: "default",
     },

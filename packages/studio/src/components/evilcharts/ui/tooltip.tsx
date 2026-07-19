@@ -46,7 +46,7 @@ const ChartTooltipContent = ({
         roundness?: TooltipRoundness;
         selected?: string | null;
         variant?: TooltipVariant;
-    }) => {
+    }): React.ReactElement => {
     const { config } = useChart();
 
     const tooltipLabel = React.useMemo(() => {
@@ -164,7 +164,7 @@ function getIndicatorColorStyle(dataKey: string, colorsCount: number): React.CSS
     return { background: `linear-gradient(to right, ${stops})` };
 }
 
-const ChartTooltip = ({ animationDuration = 200, ...props }: React.ComponentProps<typeof RechartsPrimitive.Tooltip>) => (
+const ChartTooltip = ({ animationDuration = 200, ...props }: React.ComponentProps<typeof RechartsPrimitive.Tooltip>): React.ReactElement => (
     <RechartsPrimitive.Tooltip animationDuration={animationDuration} {...props} />
 );
 

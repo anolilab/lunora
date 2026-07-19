@@ -72,7 +72,7 @@
         "react-hook-inview": "catalog:web",
         "react-icon-cloud": "catalog:web",
         "react-remove-scroll": "catalog:web",
-        "satori": "0.26.0",
+        "satori": "0.28.0",
         "shiki": "catalog:web",
         "tailwind-merge": "catalog:web",
         "tailwindcss": "catalog:web",
