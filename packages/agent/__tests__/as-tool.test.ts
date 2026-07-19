@@ -1,0 +1,224 @@
+import { describe, expect, it } from "vitest";
+
+import { runAgentLoop } from "../src/agent-loop";
+import { agentAsTool } from "../src/as-tool";
+import { defineAgent } from "../src/define-agent";
+import type { AgentMessageRow, AgentToolContext, AgentWorkflowBindingLike, AgentWorkflowInstanceLike } from "../src/types";
+import { DurableStepJournal, loopDefaults, memoryRuntime, scriptedGenerate, toolTurn } from "./loop-harness";
+
+/** No-op wait so poll loops run without wall-clock delay in tests. */
+const immediate = async (): Promise<void> => {};
+
+const SUB_AGENT_ERRORED = /Sub-agent "research" errored/u;
+const SUB_AGENT_TERMINATED = /Sub-agent "research" terminated/u;
+const DID_NOT_FINISH = /did not finish within/u;
+const NO_WORKFLOW_BINDING = /no Workflow binding "AGENT_RESEARCH"/u;
+const REQUIRES_NAME = /requires a `name`/u;
+const NON_EMPTY_DESCRIPTION = /non-empty `description`/u;
+const QUOTA_EXCEEDED = /quota exceeded/u;
+
+/**
+ * A mock `AGENT_&lt;NAME>` Workflow binding: `create` records the params + id, and
+ * `get(id)` returns an instance whose `status()` walks a scripted sequence
+ * (models a run progressing to a terminal state) and whose thread the caller
+ * seeds via `finalMessages`.
+ */
+const mockAgentBinding = (statuses: ReadonlyArray<string>): AgentWorkflowBindingLike & { created: { id?: string; params?: unknown }[] } => {
+    const created: { id?: string; params?: unknown }[] = [];
+    const remaining = [...statuses];
+
+    const instance: AgentWorkflowInstanceLike = {
+        sendEvent: async () => {},
+        status: async () => {
+            return { status: remaining.length > 1 ? remaining.shift() : remaining[0] };
+        },
+        terminate: async () => {},
+    };
+
+    return {
+        created,
+        create: async (options) => {
+            created.push({ id: options?.id, params: options?.params });
+
+            return { id: options?.id ?? "generated-id" };
+        },
+        get: async () => instance,
+    };
+};
+
+/**
+ * A mock `AGENT_&lt;NAME>` Workflow binding whose `create` always rejects with the
+ * given error (a duplicate-instance-id rejection, or any other failure); `get`
+ * still resolves to a normal instance walking the scripted status sequence.
+ */
+const mockRejectingBinding = (createError: unknown, statuses: ReadonlyArray<string>): AgentWorkflowBindingLike => {
+    const instance: AgentWorkflowInstanceLike = {
+        sendEvent: async () => {},
+        status: async () => {
+            return { status: statuses[0] };
+        },
+        terminate: async () => {},
+    };
+
+    return {
+        create: async () => {
+            throw createError;
+        },
+        get: async () => instance,
+    };
+};
+
+const context = (env: Record<string, unknown>, run: AgentToolContext["run"], overrides?: Partial<AgentToolContext>): AgentToolContext => {
+    return {
+        env,
+        getState: async () => undefined,
+        idempotencyKey: "tool:research:call_9",
+        reportProgress: () => {},
+        run,
+        setState: async () => {},
+        threadKey: "thread-1",
+        toolCallId: "call_9",
+        ...overrides,
+    };
+};
+
+/** A `run` seam that answers `agents:agentMessages` with a seeded child thread. */
+const runWithChildThread = (history: ReadonlyArray<AgentMessageRow>): { keys: string[]; run: AgentToolContext["run"] } => {
+    const keys: string[] = [];
+
+    const run: AgentToolContext["run"] = async (reference, args) => {
+        if (reference["__lunoraRef"] === "agents:agentMessages") {
+            keys.push(args?.["key"] as string);
+
+            return history;
+        }
+
+        throw new Error(`unexpected dispatch ${reference["__lunoraRef"]}`);
+    };
+
+    return { keys, run };
+};
+
+describe(agentAsTool, () => {
+    it("starts a child run with a derived, replay-stable thread key + instance id", async () => {
+        const binding = mockAgentBinding(["complete"]);
+        const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 3 }]);
+
+        const tool = agentAsTool({ description: "Delegate research.", name: "research", wait: immediate });
+        const output = await tool.execute({ prompt: "find X" }, context({ AGENT_RESEARCH: binding }, run));
+
+        expect(output).toBe("the answer");
+        expect(binding.created).toHaveLength(1);
+        // Derived from the parent's threadKey + toolCallId — same inputs replay identically.
+        expect(binding.created[0]?.id).toBe("sub-research-call_9");
+        expect(binding.created[0]?.params).toStrictEqual({ input: "find X", threadKey: "thread-1::sub::research::call_9" });
+    });
+
+    it("polls the child run's status until it reaches a terminal state", async () => {
+        const binding = mockAgentBinding(["queued", "running", "complete"]);
+        const { keys, run } = runWithChildThread([{ content: "done", role: "assistant", seq: 1 }]);
+
+        const tool = agentAsTool({ description: "Delegate.", name: "research", wait: immediate });
+        const output = await tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run));
+
+        expect(output).toBe("done");
+        // The child answer is read from its persisted thread (the source of truth).
+        expect(keys).toStrictEqual(["thread-1::sub::research::call_9"]);
+    });
+
+    it("returns a recovery message when the child run errors or is terminated", async () => {
+        const errored = agentAsTool({ description: "d", name: "research", wait: immediate });
+        const { run } = runWithChildThread([]);
+
+        await expect(errored.execute({ prompt: "go" }, context({ AGENT_RESEARCH: mockAgentBinding(["errored"]) }, run))).resolves.toMatch(SUB_AGENT_ERRORED);
+        await expect(errored.execute({ prompt: "go" }, context({ AGENT_RESEARCH: mockAgentBinding(["terminated"]) }, run))).resolves.toMatch(
+            SUB_AGENT_TERMINATED,
+        );
+    });
+
+    it("gives up with a message after the poll budget is exhausted", async () => {
+        const binding = mockAgentBinding(["running"]);
+        const { run } = runWithChildThread([]);
+
+        const tool = agentAsTool({ description: "d", maxPolls: 3, name: "research", wait: immediate });
+
+        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toMatch(DID_NOT_FINISH);
+    });
+
+    it("throws a clear error when the child agent's binding is absent", async () => {
+        const { run } = runWithChildThread([]);
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+
+        await expect(tool.execute({ prompt: "go" }, context({}, run))).rejects.toThrow(NO_WORKFLOW_BINDING);
+    });
+
+    it("rethrows a non-duplicate create error instead of silently taking over an unrelated instance", async () => {
+        const { run } = runWithChildThread([{ content: "unrelated instance's answer", role: "assistant", seq: 0 }]);
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+        const binding = mockRejectingBinding(new Error("Workflow creation quota exceeded"), ["complete"]);
+
+        // A real create failure (quota/config/service error) must surface, not
+        // fall through to `binding.get()` and return some other instance's
+        // (possibly stale/empty) answer.
+        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).rejects.toThrow(QUOTA_EXCEEDED);
+    });
+
+    it("takes over the existing instance on a genuine duplicate-instance-id error", async () => {
+        const { run } = runWithChildThread([{ content: "already running answer", role: "assistant", seq: 0 }]);
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+        const binding = mockRejectingBinding(new Error("instance already exists"), ["complete"]);
+
+        // A duplicate-instance-id rejection means a prior attempt already
+        // created this child run — take it over rather than failing.
+        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toBe("already running answer");
+    });
+
+    it("is exposed as `agent.asTool` and drives a durable sub-run inside the loop", async () => {
+        const child = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+
+        expect(child.asTool).toBeTypeOf("function");
+
+        const binding = mockAgentBinding(["complete"]);
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+
+        // The sub-agent tool reads the child thread through the loop's own `run`
+        // seam; the harness runtime resolves `agents:agentMessages`, so seed the
+        // child thread there before the parent loop runs.
+        runtime.threads.set("thread-1::sub::research::call_9", {
+            agent: "research",
+            key: "thread-1::sub::research::call_9",
+            messageCount: 1,
+            status: "idle",
+        });
+        runtime.messages.set("thread-1::sub::research::call_9:child", {
+            content: "child result",
+            messageKey: "child",
+            role: "assistant",
+            seq: 0,
+            threadKey: "thread-1::sub::research::call_9",
+        } as never);
+
+        const supervisor = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: { research: child.asTool({ description: "Delegate research.", name: "research", wait: immediate }) },
+        });
+
+        const generate = scriptedGenerate([toolTurn("call_9", "research", { prompt: "find X" }, "delegating…"), { text: "Done.", toolCalls: [] }]);
+
+        const result = await runAgentLoop(loopDefaults(supervisor, { env: { AGENT_RESEARCH: binding }, generate, run: runtime.run, step: journal }));
+
+        expect(result.stopped).toBe("final");
+        expect(journal.invoked).toStrictEqual(["llm:turn:0", "tool:research:call_9", "llm:turn:1"]);
+        expect(binding.created[0]?.id).toBe("sub-research-call_9");
+
+        const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool" && message.toolName === "research");
+
+        expect(toolRow?.content).toBe("child result");
+    });
+
+    it("rejects a missing name or description", () => {
+        expect(() => agentAsTool({ description: "d", name: "" })).toThrow(REQUIRES_NAME);
+        expect(() => agentAsTool({ description: "", name: "research" })).toThrow(NON_EMPTY_DESCRIPTION);
+    });
+});

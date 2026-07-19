@@ -65,7 +65,7 @@ describe("v.literal() with escapes/backticks/single-quotes in codegen", () => {
 
         // Emit must not throw (the pre-fix INTERNAL crash) and must carry the
         // literal types verbatim into the generated FunctionReference.
-        const rendered = emitApi(result);
+        const rendered = emitApi({ functions: result });
 
         expect(rendered).toContain(String.raw`"it\"s"`);
         expect(rendered).toContain('"admin"');

@@ -6,6 +6,10 @@ import { createQuerySubscription } from "@lunora/client/query";
 import { resolveLunoraClient } from "./client";
 import { shouldOpenSubscription } from "./platform";
 
+/**
+ * `SubscriptionOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface SubscriptionOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
@@ -26,6 +30,10 @@ export interface SubscriptionOptions {
     shardKey?: string;
 }
 
+/**
+ * `SubscriptionResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface SubscriptionResult<T> {
     /** The latest value pushed by the server. `undefined` before the first frame. */
     data: Signal<T | undefined>;
@@ -49,6 +57,7 @@ export interface SubscriptionResult<T> {
  * ```ts
  * readonly stream = subscription(api.events.stream, { roomId: "general" });
  * ```
+ * @experimental
  */
 export const subscription = <F extends FunctionReference>(
     reference: F,

@@ -4,7 +4,7 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { useEffect, useReducer, useRef } from "react";
 
 import { useLunora } from "./lunora-provider";
-import { stableStringify } from "./query-key";
+import { stableWireKey } from "./query-key";
 
 /** The lifecycle of a stream the hook is observing. */
 type UseStreamStatus = "complete" | "error" | "idle" | "streaming";
@@ -76,7 +76,7 @@ const useStream = <F extends FunctionReference<"stream">>(
     const [state, dispatch] = useReducer<State<ReturnOf<F>>, [Action<ReturnOf<F>>]>(reducer<ReturnOf<F>>, { chunks: [], error: undefined, status: "idle" });
 
     const skipped = args === "skip";
-    const serialized = skipped ? "skip" : stableStringify(args);
+    const serialized = skipped ? "skip" : stableWireKey(args);
 
     // Stash the live cancel handle so unmount + manual cancel call into the
     // same function. The reducer doesn't own it because cancel is a side

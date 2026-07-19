@@ -44,7 +44,7 @@ describe("organizationsPanel", () => {
     });
 
     it("lists organizations and loads members on demand when enabled", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const mock = createMockClient();
 

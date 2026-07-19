@@ -85,9 +85,8 @@ describe("logsPanel — requests view (default)", () => {
 
         render(renderPanel(createClient()));
 
-        await screen.findByTestId("lg-table");
-
-        const rows = screen.getAllByTestId("lg-req-row");
+        // findBy: rows only render once the async request-log read resolves.
+        const rows = await screen.findAllByTestId("lg-req-row");
 
         expect(rows).toHaveLength(2);
         // Newest first: the error precedes the ok.

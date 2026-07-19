@@ -1,10 +1,15 @@
 export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-storage-persistence";
 export { createAsyncStoragePersistence } from "./async-storage-persistence";
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
+export type { ClientQueryRef } from "./client-query-store";
+export { createClientQuery } from "./client-query-store";
+export { TabCoordinator } from "./cross-tab";
 export type { MutationDelta } from "./delta-merge";
 export { applyDelta, isMutationDelta } from "./delta-merge";
 export type { LunoraErrorCode } from "./errors";
 export { CONFLICT_ERROR_CODE, getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRateLimitedError, isUnauthorizedError } from "./errors";
+export type { HttpStreamOptions } from "./http-stream";
+export { httpStream } from "./http-stream";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
 export type { BatchSlot, ConnectionStatus, LunoraClientError, MutationCallOptions, MutationSettledEvent, SyncWatermark } from "./lunora-client";
@@ -22,10 +27,15 @@ export type { IndexedDbQueryCacheOptions } from "./query-cache";
 export { createIndexedDbQueryCache, createInMemoryQueryCache, queryCacheKey } from "./query-cache";
 export type { ReconnectCalculator } from "./reconnect";
 export { createReconnect } from "./reconnect";
+export { default as createSnapshotPrecondition } from "./snapshot-precondition";
 export type { StreamHandle, StreamIterable } from "./stream";
 export { createStream, DEFAULT_MAX_BUFFER } from "./stream";
 export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription";
 export { SubscriptionRegistry } from "./subscription";
+export type { ClientSwOptions, ServiceWorkerStatus } from "./sw/client-sw";
+export { ClientServiceWorker } from "./sw/client-sw";
+export type { ClientToSwMessage, SwToClientMessage } from "./sw/message-bridge";
+export { createReply, sendToSw } from "./sw/message-bridge";
 export type {
     ArgsOf,
     AuthCapabilities,
@@ -49,6 +59,10 @@ export type {
     GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
+    HttpStreamArgsOf,
+    HttpStreamCallArgs,
+    HttpStreamChunkOf,
+    HttpStreamRef,
     KvKeyEntry,
     KvKeyListResult,
     KvNamespaceSummary,
@@ -87,4 +101,5 @@ export type {
     WorkflowInstanceStatus,
     WorkflowInstanceSummary,
     WorkflowStepDetail,
+    WsTokenProvider,
 } from "./types";

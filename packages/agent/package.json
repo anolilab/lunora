@@ -1,0 +1,111 @@
+{
+    "name": "@lunora/agent",
+    "version": "1.0.0-alpha.4",
+    "description": "Durable AI agents for Lunora: defineAgent compiles a replay-safe tool-loop onto Cloudflare Workflows, with DO SQLite threads and live message subscriptions",
+    "keywords": [
+        "agent",
+        "ai",
+        "ai-sdk",
+        "braintrust",
+        "cloudflare",
+        "durable-objects",
+        "llm",
+        "lunora",
+        "observability",
+        "sentry",
+        "telemetry",
+        "tool-use",
+        "tracing",
+        "workers",
+        "workflows"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/agent"
+    },
+    "files": [
+        "./dist",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./channels": {
+            "types": "./dist/channels.d.ts",
+            "import": "./dist/channels.mjs"
+        },
+        "./component": {
+            "types": "./dist/component.d.ts",
+            "import": "./dist/component.mjs"
+        },
+        "./inbound": {
+            "types": "./dist/inbound.d.ts",
+            "import": "./dist/inbound.mjs"
+        },
+        "./naming": {
+            "types": "./dist/naming.d.ts",
+            "import": "./dist/naming.mjs"
+        },
+        "./sandbox": {
+            "types": "./dist/sandbox.d.ts",
+            "import": "./dist/sandbox.mjs"
+        },
+        "./telemetry": {
+            "types": "./dist/telemetry/index.d.ts",
+            "import": "./dist/telemetry/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "pnpm exec eslint .",
+        "lint:eslint:fix": "pnpm exec eslint . --fix",
+        "lint:prettier": "pnpm exec prettier --check .",
+        "lint:prettier:fix": "pnpm exec prettier --write .",
+        "lint:types": "pnpm exec tsc --noEmit",
+        "test": "pnpm exec vitest run",
+        "test:coverage": "pnpm exec vitest run --coverage"
+    },
+    "dependencies": {
+        "@lunora/ai": "1.0.0-alpha.16",
+        "@lunora/errors": "1.0.0-alpha.5",
+        "@lunora/mail": "1.0.0-alpha.15",
+        "@lunora/server": "1.0.0-alpha.27",
+        "@lunora/values": "1.0.0-alpha.8",
+        "@lunora/workflow": "1.0.0-alpha.10",
+        "@modelcontextprotocol/sdk": "catalog:mcp",
+        "ai": "catalog:ai"
+    },
+    "devDependencies": {
+        "@lunora/dispatch": "workspace:*",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

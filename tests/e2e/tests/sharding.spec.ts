@@ -1,8 +1,11 @@
+import type { Dialog } from "@playwright/test";
+
 import { expect, test } from "../fixtures/lunora.js";
 
 /**
  * Sharding E2E — proves `shardBy("channelId")` routes each channel's writes
- * to its own DO and the `messages.list` query never sees foreign rows.
+ * to its own DO and the `messages.list` query never sees foreign rows, and
+ * that two independent clients subscribed to the SAME shard converge.
  *
  * The unit tests in `packages/do/__tests__` already verify the DO
  * routing math, but they can't catch a regression where the *client* mints
@@ -98,4 +101,53 @@ test("both channels run independently — a thrown error in A doesn't kill B", a
     const listA = (await rpc("messages:list", { channelId: channelA, limit: 10 })) as unknown[];
 
     expect(listA).toHaveLength(0);
+});
+
+test("two clients on the same shard converge in both directions over WS", async ({ browser, makeUser, user }) => {
+    // DIFFERENT users, SAME channel → same shard DO. Cross-user convergence
+    // proves the shard's WS fan-out isn't accidentally scoped per-user/session
+    // (the subscriptions spec only ever covers one user in two tabs).
+    const userB = await makeUser("shard-user-b");
+
+    const contextA = await browser.newContext({ storageState: await user.request.storageState() });
+    const contextB = await browser.newContext({ storageState: await userB.request.storageState() });
+
+    const pageA = await contextA.newPage();
+    const pageB = await contextB.newPage();
+
+    await pageA.goto("/");
+    await pageB.goto("/");
+
+    pageA.once("dialog", async (dialog: Dialog) => dialog.accept("shared-shard"));
+    await pageA.getByRole("button", { name: "+ New channel" }).click();
+    await pageA.getByRole("button", { name: "shared-shard" }).click();
+
+    // B discovers the channel through the global channels subscription.
+    await expect(pageB.getByRole("button", { name: "shared-shard" })).toBeVisible({ timeout: 2000 });
+
+    await pageB.getByRole("button", { name: "shared-shard" }).click();
+
+    const stamp = Date.now();
+    const fromA = `same-shard-from-A-${stamp}`;
+    const fromB = `same-shard-from-B-${stamp}`;
+
+    // A → B over the shard's WS broadcast.
+    await pageA.getByPlaceholder("Type a message…").fill(fromA);
+    await pageA.getByRole("button", { name: "Send" }).click();
+    await expect(pageB.getByText(fromA)).toBeVisible({ timeout: 5000 });
+
+    // B → A, same shard, opposite direction.
+    await pageB.getByPlaceholder("Type a message…").fill(fromB);
+    await pageB.getByRole("button", { name: "Send" }).click();
+    await expect(pageA.getByText(fromB)).toBeVisible({ timeout: 5000 });
+
+    // Both clients render both messages — full convergence on the shard.
+    const [textsA, textsB] = await Promise.all([pageA.locator("main li").allTextContents(), pageB.locator("main li").allTextContents()]);
+    const relevant = (texts: string[]): string[] => texts.filter((text) => text.includes(`same-shard-`)).map((text) => (text.includes(fromA) ? "A" : "B"));
+
+    expect(relevant(textsA)).toEqual(["A", "B"]);
+    expect(relevant(textsB)).toEqual(["A", "B"]);
+
+    await contextA.close();
+    await contextB.close();
 });

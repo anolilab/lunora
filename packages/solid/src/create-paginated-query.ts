@@ -4,7 +4,7 @@ import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "
 import type { Accessor } from "solid-js";
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 
-import { stableStringify } from "../../../shared/stable-key";
+import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./context";
 
 /** The args a paginated query exposes minus the framework-supplied page cursor. */
@@ -56,11 +56,12 @@ const buildPageArgs = (page: Page, baseArgs: Record<string, unknown>): Record<st
     };
 };
 
-// Key pages with the repo's canonical `stableStringify` (keys sorted at every
-// depth) rather than raw `JSON.stringify`, so two structurally-equal arg records
-// built with a different key order collapse to one key instead of opening a
-// duplicate subscription — matching the client's own `SubscriptionRegistry.key`.
-const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${stableStringify(pageArgs)}`;
+// Key pages with the repo's canonical `stableWireKey` (keys sorted at every
+// depth, wire-typed args tokenized) rather than raw `JSON.stringify`, so two
+// structurally-equal arg records built with a different key order collapse to
+// one key instead of opening a duplicate subscription — matching the client's
+// own `SubscriptionRegistry.key`.
+const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${stableWireKey(pageArgs)}`;
 
 /**
  * SolidJS-native pagination engine shared by `createPaginatedQuery` and
@@ -138,7 +139,7 @@ const createPaginatedCore = <T>(
         }
     };
 
-    const syncSubscriptions = (currentPages: Page[], baseArgs: Record<string, unknown>): void => {
+    const syncPass = (currentPages: Page[], baseArgs: Record<string, unknown>): void => {
         const wantedKeys = new Set<string>();
 
         for (const page of currentPages) {
@@ -211,6 +212,55 @@ const createPaginatedCore = <T>(
             );
 
             activeSubs.set(key, unsub);
+        }
+    };
+
+    // `client.subscribe` replays a cached value to the new subscriber
+    // SYNCHRONOUSLY — the callback fires before `subscribe` returns, i.e. before
+    // this page's `activeSubs.set(key, unsub)` above is recorded. If that replay
+    // empties `pendingPageKeys` and `rebalance` returns a new layout, `setPages`
+    // updates the `pages` signal, and the `pages` effect below can re-enter
+    // `syncSubscriptions` against half-populated bookkeeping (depending on whether
+    // Solid schedules that effect synchronously in this construction). Re-entering
+    // the open loop there would duplicate still-wanted subs and orphan handles (the
+    // outer frame's `activeSubs.set` overwrites the reentrant entry) — a leaked,
+    // unsubscribable WS subscription. So guard: while a pass is running, a nested
+    // call only flags a re-sync, which the drain below runs once the outer pass has
+    // finished recording every handle — that follow-up pass closes any now-stale
+    // sub and opens the genuinely new pages against complete bookkeeping. Safe even
+    // if Solid already defers the effect (then this is a no-op hardening).
+    let syncing = false;
+    let resyncRequested = false;
+
+    const syncSubscriptions = (currentPages: Page[], baseArgs: Record<string, unknown>): void => {
+        if (syncing) {
+            resyncRequested = true;
+
+            return;
+        }
+
+        syncing = true;
+
+        try {
+            let pagesToSync = currentPages;
+            let argsToSync = baseArgs;
+
+            do {
+                resyncRequested = false;
+                syncPass(pagesToSync, argsToSync);
+
+                const latestArgs = resolveArgs();
+
+                if (latestArgs === "skip") {
+                    break;
+                }
+
+                pagesToSync = pages();
+                argsToSync = latestArgs;
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- resyncRequested is set by syncPass through a nested call the flow analyzer cannot track
+            } while (resyncRequested);
+        } finally {
+            syncing = false;
         }
     };
 

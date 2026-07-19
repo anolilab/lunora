@@ -438,6 +438,10 @@ const withDeadline = async <T>(operation: () => Promise<T>, timeoutMs: number): 
     }
 };
 
+/**
+ * `createBrowser` is part of the experimental `@lunora/browser` API and may change without a major version bump.
+ * @experimental
+ */
 // eslint-disable-next-line import/prefer-default-export -- named export: the package barrel re-exports by name, per the repo's no-default-mixing convention
 export const createBrowser = (options: LunoraBrowserOptions): Browser => {
     // Defensive runtime guard: `binding` is required by the type, but JS callers

@@ -29,6 +29,7 @@ overrides:
   # package's dependencies) so semantic-release-pnpm's per-package range rewrite
   # never clobbers it; published tarballs are unaffected (overrides are install-time).
   "@lunora/advisor": "workspace:*"
+  "@lunora/agent": "workspace:*"
   "@lunora/ai": "workspace:*"
   "@lunora/angular": "workspace:*"
   "@lunora/astro": "workspace:*"
@@ -453,6 +454,7 @@ allowBuilds:
   # build step (the tarball ships dist/), so skip it.
   '@coinbase/x402': false
   '@parcel/watcher': true
+  better-sqlite3: true
   core-js: false
   cpu-features: true
   esbuild: true

@@ -1,5 +1,7 @@
 export type { AgentDetection } from "./agent-env";
 export { AGENT_MODE_ENV, detectAiAgent } from "./agent-env";
+export type { AgentIR, DiscoverAgentInfoResult } from "./agent-info";
+export { discoverAgentInfo } from "./agent-info";
 export type { AgentRulesStatus } from "./agent-rules";
 export {
     AGENT_RULES_DIR,
@@ -41,7 +43,7 @@ export {
     writeDevServerState,
 } from "./dev-server-state";
 export { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "./dev-variables-format";
-export type { InferOptions, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
+export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";
@@ -53,11 +55,13 @@ export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
 export { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference } from "./project-config";
 export type { MultiSelectOption, SelectOption } from "./prompt";
-export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptYesNo } from "./prompt";
+export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { reconcileWranglerBindings } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";
 export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
+export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons";
+export { reconcileWranglerCrons } from "./reconcile-crons";
 export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape } from "./remote-bindings";
 export {
     injectRemoteFlags,
@@ -131,6 +135,8 @@ export {
     paintBadge,
     STEP_BADGE_NAMES,
 } from "./tui-theme";
+export type { WranglerCacheShape } from "./workers-cache";
+export { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 export type { DiscoverWorkflowInfoResult, WorkflowIR } from "./workflow-info";
 export { discoverWorkflowInfo } from "./workflow-info";
 export type { ReadWranglerResult } from "./wrangler-path";

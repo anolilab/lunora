@@ -212,6 +212,10 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
     return { applied: true, reason: "ok" };
 };
 
+/**
+ * `applyWebhookAction` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver): Promise<ApplyResult> => {
     if (action.type === "unhandled") {
         return { applied: false, reason: "unhandled" };

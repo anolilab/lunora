@@ -63,6 +63,31 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain("text: string;");
         });
 
+        it("rejects a workflow and an agent that share a deployed name (CODEGEN-01 cross-kind)", () => {
+            expect.assertions(1);
+
+            // discoverWorkflows/discoverAgents each dedup WITHIN their own kind,
+            // but both land in the exact same wrangler workflows[] array — a
+            // collision across kinds must be rejected before reconcile, not left
+            // to fail late in wrangler or silently clobber a binding.
+            writeFileSync(
+                join(workdir, "lunora", "workflows.ts"),
+                `
+                import { defineWorkflow } from "@lunora/workflow";
+                export const sweep = defineWorkflow({ handler: async () => undefined, name: "shared-name" });
+            `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "agents.ts"),
+                `
+                import { defineAgent } from "@lunora/agent";
+                export const support = defineAgent({ model: "m", name: "shared-name" });
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/Duplicate deployed name "shared-name"/u);
+        });
+
         it("is silent and output-unchanged when LUNORA_CODEGEN_TIMING is unset", () => {
             expect.assertions(3);
 
@@ -1517,7 +1542,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("imports Doc when a return type references it", () => {
             expect.assertions(3);
 
-            const output = emitApi([makeFunction({ returnType: 'Doc<"posts">[]' })]);
+            const output = emitApi({ functions: [makeFunction({ returnType: 'Doc<"posts">[]' })] });
 
             expect(output).toContain('import type { Doc } from "./dataModel.js";');
             expect(output).not.toContain("import type { Id }");
@@ -1527,7 +1552,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("imports both Doc and Id when both are referenced", () => {
             expect.assertions(1);
 
-            const output = emitApi([makeFunction({ args: { id: { kind: "id", tableName: "posts" } }, returnType: 'Doc<"posts">' })]);
+            const output = emitApi({ functions: [makeFunction({ args: { id: { kind: "id", tableName: "posts" } }, returnType: 'Doc<"posts">' })] });
 
             expect(output).toContain('import type { Doc, Id } from "./dataModel.js";');
         });
@@ -1535,7 +1560,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("imports only Id when no Doc is referenced", () => {
             expect.assertions(2);
 
-            const output = emitApi([makeFunction({ args: { id: { kind: "id", tableName: "posts" } }, returnType: "{ ok: boolean }" })]);
+            const output = emitApi({ functions: [makeFunction({ args: { id: { kind: "id", tableName: "posts" } }, returnType: "{ ok: boolean }" })] });
 
             expect(output).toContain('import type { Id } from "./dataModel.js";');
             expect(output).not.toContain("Doc");
@@ -1544,7 +1569,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("omits the dataModel import when neither is referenced", () => {
             expect.assertions(1);
 
-            const output = emitApi([makeFunction({ returnType: "{ ok: boolean }" })]);
+            const output = emitApi({ functions: [makeFunction({ returnType: "{ ok: boolean }" })] });
 
             expect(output).not.toContain("./dataModel.js");
         });
@@ -2560,7 +2585,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("imports ctx types from server.js as type-only (no runtime cycle)", () => {
             expect.assertions(2);
 
-            const output = emitFunctions([makeFunction("ping")]);
+            const output = emitFunctions({ functions: [makeFunction("ping")] });
 
             // functions.ts imports the user modules, so its edge back to server.ts
             // must be type-only — otherwise the two form a runtime cycle again.
@@ -2571,7 +2596,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("renders the caller arg as optional only when the function takes none", () => {
             expect.assertions(2);
 
-            const output = emitFunctions([makeFunction("ping"), makeFunction("get", { args: { id: { kind: "id", tableName: "posts" } } })]);
+            const output = emitFunctions({ functions: [makeFunction("ping"), makeFunction("get", { args: { id: { kind: "id", tableName: "posts" } } })] });
 
             expect(output).toContain("ping: (args?: {}) => Promise<unknown>;");
             expect(output).toContain('get: (args: { id: Id<"posts"> }) => Promise<unknown>;');
@@ -2580,7 +2605,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("threads a function's concrete return type through the caller", () => {
             expect.assertions(2);
 
-            const output = emitFunctions([makeFunction("count", { returnType: "number" })]);
+            const output = emitFunctions({ functions: [makeFunction("count", { returnType: "number" })] });
 
             expect(output).toContain("count: (args?: {}) => Promise<number>;");
             expect(output).toContain('count: (args) => callRegistered(context, "posts:count", args),');
@@ -2589,7 +2614,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("emits an empty caller (and no unused locals) when there are no functions", () => {
             expect.assertions(4);
 
-            const output = emitFunctions([]);
+            const output = emitFunctions({ functions: [] });
 
             // No functions ⇒ no `callRegistered` helper and the `context` parameter
             // is prefixed so it never trips noUnusedParameters in a real project.
@@ -2635,6 +2660,47 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             expect(shard).toContain('at: integer("at").notNull()');
             expect(shard).toContain('due: integer("due").notNull()');
+        });
+    });
+
+    describe("batteries-included sandbox", () => {
+        const sandboxFixtureRoot = join(here, "fixtures", "agent-sandbox");
+        let sandboxWorkdir: string;
+
+        beforeEach(() => {
+            sandboxWorkdir = mkdtempSync(join(tmpdir(), "lunora-sandbox-codegen-"));
+            cpSync(join(sandboxFixtureRoot, "lunora"), join(sandboxWorkdir, "lunora"), { recursive: true });
+        });
+
+        afterEach(() => {
+            rmSync(sandboxWorkdir, { force: true, recursive: true });
+        });
+
+        it("auto-registers the internal sandbox:invoke dispatcher when a sandbox tool is imported", () => {
+            expect.assertions(3);
+
+            const { functions } = runCodegen({ lint: false, projectRoot: sandboxWorkdir }).generated;
+
+            expect(functions).toContain('import { sandboxComponent } from "@lunora/agent/component";');
+            expect(functions).toContain("const lunoraSandbox = sandboxComponent();");
+            expect(functions).toContain('"sandbox:invoke": lunoraSandbox.invoke as unknown as RegisteredLunoraFunction,');
+        });
+
+        it("wires ctx.browser onto the ActionCtx because browserTool drives the headless browser", () => {
+            expect.assertions(1);
+
+            const { server } = runCodegen({ lint: false, projectRoot: sandboxWorkdir }).generated;
+
+            expect(ctxInterface(server, "ActionCtx")).toContain("browser");
+        });
+
+        it("does not register the sandbox dispatcher for a project without a sandbox tool", () => {
+            expect.assertions(1);
+
+            // The `simple` fixture imports no sandbox tool — its output must stay clean.
+            const { functions } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+
+            expect(functions).not.toContain("sandbox:invoke");
         });
     });
 });

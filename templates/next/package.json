@@ -1,0 +1,38 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
+    "scripts": {
+        "dev": "lunora codegen && next dev",
+        "dev:lunora": "wrangler dev --config wrangler.lunora.jsonc",
+        "build": "lunora codegen && next build",
+        "start": "next start",
+        "codegen": "lunora codegen",
+        "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+        "deploy:lunora": "wrangler deploy --config wrangler.lunora.jsonc",
+        "deploy:next": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+        "deploy": "pnpm run deploy:lunora && pnpm run deploy:next"
+    },
+    "dependencies": {
+        "@lunora/ratelimit": "^0.0.0",
+        "@lunora/react": "^0.0.0",
+        "lunorash": "^0.0.0",
+        "next": "^16.1.0",
+        "react": "^19.2.7",
+        "react-dom": "^19.2.7"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "^4.20260611.1",
+        "@lunora/studio": "^0.0.0",
+        "@opennextjs/cloudflare": "^1.8.0",
+        "@types/node": "^24.0.0",
+        "@types/react": "^19.2.7",
+        "@types/react-dom": "^19.2.7",
+        "typescript": "^6.0.3",
+        "wrangler": "^4.100.0"
+    }
+}

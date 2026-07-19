@@ -111,7 +111,7 @@ describe("cronTriggersPanel", () => {
     });
 
     it("surfaces a run error inline without affecting other rows", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         const loadCronJobs = vi.fn<() => Promise<CronJobInfo[]>>(async () => JOBS);
         const runCronJob = vi.fn<(name: string) => Promise<{ name: string; ran: boolean }>>(async () => {

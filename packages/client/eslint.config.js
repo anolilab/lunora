@@ -48,7 +48,7 @@ export default createConfig(
             // modern Node); eslint-plugin-n's Node-version data flags them conservatively.
             "n/no-unsupported-features/node-builtins": [
                 "error",
-                { ignores: ["crypto", "CryptoKey", "SubtleCrypto", "Storage", "sessionStorage", "localStorage"] },
+                { ignores: ["crypto", "CryptoKey", "SubtleCrypto", "Storage", "sessionStorage", "localStorage", "navigator"] },
             ],
             // Leading-underscore identifiers that are framework API by design: _id /
             // _creationTime are the public document fields; __lunora* are internal markers;

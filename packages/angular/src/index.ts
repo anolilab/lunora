@@ -1,3 +1,21 @@
+export type {
+    AgentApi,
+    AgentChatMessage,
+    AgentLiveEvent,
+    AgentOptions,
+    AgentProgressEvent,
+    AgentResult,
+    AgentThreadRecord,
+    AgentThreadStatus,
+    AgentTokenDelta,
+} from "./agent";
+export { agent } from "./agent";
+export type { AgentChatApi, AgentChatOptions, AgentChatResult, AgentTokenStreamReference } from "./agent-chat";
+export { agentChat } from "./agent-chat";
+export type { AgentStateApi, AgentStateOptions, AgentStateResult } from "./agent-state";
+export { agentState } from "./agent-state";
+export type { AgentToolEvent, AgentToolEventsApi, AgentToolEventsOptions, AgentToolEventsResult } from "./agent-tool-events";
+export { agentToolEvents } from "./agent-tool-events";
 export type { AuthOptions, AuthResult } from "./auth";
 export { auth } from "./auth";
 
@@ -38,8 +56,12 @@ export type { HeartbeatReference, ListPresentReference, PresenceOptions, Presenc
 export { presence } from "./presence";
 export type { RateLimitOptions, RateLimitResult } from "./rate-limit";
 export { rateLimit } from "./rate-limit";
+export type { StreamOptions, StreamResult, StreamStatus } from "./stream";
+export { stream } from "./stream";
 export type { SubscriptionOptions, SubscriptionResult } from "./subscription";
 export { subscription } from "./subscription";
+export type { VoiceAgentOptions, VoiceAgentResult, VoiceAudioFormat, VoiceReference, VoiceStatus } from "./voice-agent";
+export { voiceAgent } from "./voice-agent";
 export type {
     ArgsOf,
     ConnectionStatus,

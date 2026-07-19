@@ -48,6 +48,17 @@ export type CronTarget = FunctionReference | WorkflowReference;
 /** The arguments a cron's target accepts: a workflow's inferred `params`, else an open record (function args aren't inferred). */
 export type CronTargetArgs<T extends CronTarget> = T extends WorkflowReference<infer Params> ? Params : Record<string, unknown>;
 
+/**
+ * The arguments a one-shot schedule target ({@link Scheduler.runAfter} /
+ * {@link Scheduler.runAt}) accepts. Unlike {@link CronTargetArgs} it preserves a
+ * {@link FunctionReference}'s inferred `args` (via {@link ArgsOf}) as well as a
+ * {@link WorkflowReference}'s inferred `params`, so scheduling a plain function
+ * keeps its today's arg checking while scheduling a workflow/agent infers its
+ * `params`.
+ */
+export type ScheduleTargetArgs<T extends CronTarget> =
+    T extends WorkflowReference<infer Params> ? Params : T extends FunctionReference ? ArgsOf<T> : Record<string, unknown>;
+
 /** Narrow a {@link CronTarget} to a {@link WorkflowReference} by its runtime brand. */
 export const isWorkflowReference = (target: unknown): target is WorkflowReference =>
     typeof target === "object" && target !== null && (target as { isLunoraWorkflow?: unknown }).isLunoraWorkflow === true;
@@ -101,7 +112,13 @@ export interface ScheduleRecord {
      */
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+
+    /**
+     * The `ns:fn` path of the function to dispatch on fire. Absent when the job
+     * targets a durable workflow/agent instead — see {@link ScheduleRecord.workflow}.
+     * Exactly one of `functionPath` / `workflow` is set.
+     */
+    functionPath?: string;
     id: string;
 
     /**
@@ -123,6 +140,15 @@ export interface ScheduleRecord {
     retry?: RetryPolicy;
     scheduledFor: number;
     shardKey?: string;
+
+    /**
+     * The `WORKFLOW_*`/`AGENT_*` binding name to start a fresh durable instance
+     * of on fire (the {@link ScheduleRecord.args} become its `params`). Set
+     * instead of {@link ScheduleRecord.functionPath} when the job targets a
+     * workflow/agent {@link WorkflowReference}. The runtime — not the DO — owns
+     * the binding, so the dispatch payload carries this through to the Worker.
+     */
+    workflow?: string;
 }
 
 export interface Scheduler {
@@ -131,16 +157,26 @@ export interface Scheduler {
     get: (id: string) => Promise<ScheduleRecord | null>;
     /** All pending scheduled jobs (the DO's `/list` view). */
     list: () => Promise<ScheduleRecord[]>;
-    runAfter: <F extends FunctionReference>(
+
+    /**
+     * Schedule `target` to run once, `delayMs` from now. `target` is a function
+     * {@link FunctionReference} (dispatched as a one-shot) or a durable
+     * {@link WorkflowReference} — the generated `workflows.&lt;name>` /
+     * `agents.&lt;name>` ref — which starts a fresh instance on fire (args become
+     * its `params`). {@link ScheduleTargetArgs} infers the accepted args from
+     * whichever target was passed.
+     */
+    runAfter: <T extends CronTarget>(
         delayMs: number,
-        function_: F,
-        args: ArgsOf<F>,
+        target: T,
+        args: ScheduleTargetArgs<T>,
         options?: RunOptions,
     ) => Promise<{ id: string; scheduledFor: number }>;
-    runAt: <F extends FunctionReference>(
+    /** Like {@link Scheduler.runAfter} but fires at an absolute `date`/timestamp. */
+    runAt: <T extends CronTarget>(
         date: Date | number,
-        function_: F,
-        args: ArgsOf<F>,
+        target: T,
+        args: ScheduleTargetArgs<T>,
         options?: RunOptions,
     ) => Promise<{ id: string; scheduledFor: number }>;
 }

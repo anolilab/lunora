@@ -65,6 +65,7 @@ const ADMIN_FUNCTIONS = {
     getCapturedMail: "__lunora_admin__:getCapturedMail",
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
+    getIssues: "__lunora_admin__:getIssues",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
     getLogs: "__lunora_admin__:getLogs",

@@ -23,7 +23,11 @@
  * `JSON.stringify` rejects) and non-plain objects (`Date`, `ArrayBuffer`, typed
  * arrays, `Map`, `Set`, `RegExp`, class instances — all of which have no own
  * enumerable keys and would otherwise encode to `{}`) are refused, so two distinct
- * values can never share one cache key and serve each other's cached data.
+ * values can never share one cache key and serve each other's cached data. Keys
+ * over values that may legitimately carry wire-typed leaves (subscription /
+ * `useQuery` / shape args) should use {@link file://./wire-key.ts}'s
+ * `stableWireKey` instead, which tokenizes exactly the types the wire supports
+ * and stays byte-identical to this encoder for pure JSON.
  *
  * NOTE: `@lunora/seed`'s `copycat/hash.ts` carries its own, intentionally
  * forked, `stableStringify`. Do **not** fold it into this one: its hash domain
@@ -51,9 +55,9 @@ const stableStringify = (value: unknown): string => {
 
     // Fail loud on a `bigint`: `JSON.stringify(1n)` throws a cryptic native error,
     // so surface a clear, actionable one instead. A bigint isn't supported in a
-    // cache key (query / subscription / shape args) — pass it as a string.
+    // stable JSON key — pass it as a string, or key on the wire form (`stableWireKey`).
     if (typeof value === "bigint") {
-        throw new TypeError("stableStringify: cannot use a bigint in a cache key (query/subscription/shape args) — pass it as a string");
+        throw new TypeError("stableStringify: cannot use a bigint in a stable JSON cache key — pass it as a string, or use stableWireKey");
     }
 
     if (value === null || typeof value !== "object") {
@@ -76,7 +80,7 @@ const stableStringify = (value: unknown): string => {
         const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
 
         throw new TypeError(
-            `stableStringify: cannot use a ${name} in a cache key (query/subscription/shape args) — only plain objects, arrays, and JSON primitives are supported`,
+            `stableStringify: cannot use a ${name} in a stable JSON cache key — only plain objects, arrays, and JSON primitives are supported (wire-typed values key via stableWireKey)`,
         );
     }
 

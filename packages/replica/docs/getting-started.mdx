@@ -1,0 +1,133 @@
+---
+title: "@lunora/replica — Getting started"
+description: Build an offline-capable todo app with the local SQLite mirror and EventsSync.
+---
+
+This guide walks through building an offline-capable todo app using `@lunora/replica` — a local SQLite mirror that syncs with a server-side event log.
+
+By the end you'll have:
+
+- A `LocalMirror` that stores data in the browser
+- A `useLocalQuery` React hook for live-updating views
+- An `EventsSync` that polls the server for changes
+
+## 1. Install
+
+```bash
+pnpm add @lunora/replica
+# Choose a SQLite backend:
+pnpm add sql.js                          # browser + Node (WASM)
+pnpm add @sqlite.org/sqlite-wasm          # browser (official WASM)
+pnpm add better-sqlite3                  # Node.js only (native)
+```
+
+## 2. Create a mirror
+
+```ts
+// mirror.ts
+import initSqlJs from "sql.js";
+import { createSqlJsAdapter, LocalMirror } from "@lunora/replica";
+
+const SQL = await initSqlJs();
+const database = new SQL.Database();
+
+const adapter = createSqlJsAdapter(database);
+const mirror = new LocalMirror({ db: adapter });
+
+export { mirror };
+```
+
+For `better-sqlite3`:
+
+```ts
+// mirror.ts
+import Database from "better-sqlite3";
+import { createBetterSqlite3Adapter, LocalMirror } from "@lunora/replica";
+
+const database = new Database(":memory:");
+const adapter = createBetterSqlite3Adapter(database);
+const mirror = new LocalMirror({ db: adapter });
+
+export { mirror };
+```
+
+## 3. Apply a diff
+
+Server-side changes arrive as `TableDiff` objects. Apply them to the mirror:
+
+```ts
+import type { TableDiff } from "@lunora/replica";
+import { mirror } from "./mirror";
+
+function handleServerUpdate(diff: TableDiff) {
+    mirror.applyDiff(diff);
+}
+```
+
+The mirror auto-creates tables from the first diff's data, so no schema
+definition is needed upfront.
+
+## 4. Query locally
+
+```ts
+const todos = mirror.query<{ id: string; title: string; done: boolean }>("SELECT id, title, done FROM todos WHERE done = ?", [false]);
+```
+
+## 5. React hook
+
+Use `useLocalQuery` to subscribe to changes:
+
+```tsx
+import { useLocalQuery } from "@lunora/replica/react";
+import { mirror } from "./mirror";
+
+function TodoList() {
+    const todos = useLocalQuery<{ id: string; title: string; done: boolean }>(mirror, "SELECT id, title, done FROM todos ORDER BY id");
+
+    if (todos === undefined) {
+        return <p>Waiting for data…</p>;
+    }
+
+    return (
+        <ul>
+            {todos.map((todo) => (
+                <li key={todo.id}>
+                    <span>{todo.title}</span>
+                </li>
+            ))}
+        </ul>
+    );
+}
+```
+
+## 6. Sync with the server
+
+`EventsSync` polls a server-side event log and replays events through
+a state machine, then pushes the resulting diffs to the mirror:
+
+```ts
+import { EventsSync } from "@lunora/replica";
+import { EventSource } from "@lunora/replica";
+import { mirror } from "./mirror";
+
+const source = new EventSource(initialState, reducer);
+const sync = new EventsSync({
+    fetchEventsSince: (seq) => eventLogClient.getSince(seq),
+    applyEvents: (events) => {
+        for (const event of events) {
+            source.applyEvent(event.type, event.payload);
+        }
+    },
+    getTableDiffs: () => computeDiffs(source.state),
+    mirror,
+    pollInterval: 3000,
+});
+
+sync.start();
+```
+
+## Next steps
+
+- [Adapter reference](/docs/packages/replica) — all available SQLite backends
+- [`useLocalQuery` API](/docs/packages/replica) — hook options and error handling
+- [Custom adapters](/docs/packages/replica/guides/custom-adapter) — support any SQLite runtime

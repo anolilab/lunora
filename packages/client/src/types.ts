@@ -24,6 +24,55 @@ export type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R>
 /** Extract the return type from a {@link FunctionReference}. */
 export type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
 
+/**
+ * Typed reference to an HTTP-SSE stream route (`httpRoute.&lt;verb>(path).stream()`)
+ * emitted by `@lunora/codegen` as `httpStreams.&lt;namespace>.&lt;name>`.
+ *
+ * Distinct from {@link FunctionReference}: this is the **HTTP-SSE route stream**
+ * (opened with `fetch` + `ReadableStream` against the route's own URL), not the
+ * WS procedure stream (`kind: "stream"`). At runtime it carries the HTTP verb
+ * and the route path; the phantom marker carries the chunk / searchParams /
+ * params types so `httpStream` (and the framework hooks over it) infer the
+ * chunk type end-to-end.
+ * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
+ */
+export interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params = unknown> {
+    /**
+     * Phantom marker carrying the `Chunk`/`SearchParams`/`Params` type
+     * parameters for inference. Never present at runtime; declared in a
+     * covariant (output) position so a concrete reference stays assignable to
+     * a widened one.
+     */
+    readonly __lunoraHttpStream?: { chunk: Chunk; params: Params; searchParams: SearchParams };
+    /** HTTP verb the route binds to (uppercased), e.g. `"GET"`. */
+    readonly method: string;
+    /** The route path as declared, e.g. `/api/tokens/:id` — `:name` segments are filled from `params`. */
+    readonly path: string;
+}
+
+/**
+ * The call-side args of an HTTP-SSE stream route: `:name` path params plus URL query params.
+ * @experimental Part of the HTTP-SSE stream surface.
+ */
+export interface HttpStreamCallArgs<SearchParams = unknown, Params = unknown> {
+    /** Values for the route path's `:name` segments. */
+    params?: Params;
+    /** URL query params, appended to the request URL (undefined entries are skipped). */
+    searchParams?: SearchParams;
+}
+
+/**
+ * Extract the chunk type from a {@link HttpStreamRef}.
+ * @experimental Part of the HTTP-SSE stream surface.
+ */
+export type HttpStreamChunkOf<R> = R extends HttpStreamRef<infer Chunk, infer _S, infer _P> ? Chunk : never;
+
+/**
+ * Extract the call-side args type from a {@link HttpStreamRef}.
+ * @experimental Part of the HTTP-SSE stream surface.
+ */
+export type HttpStreamArgsOf<R> = R extends HttpStreamRef<infer _C, infer S, infer P> ? HttpStreamCallArgs<S, P> : never;
+
 export type Unsubscribe = () => void;
 
 /**
@@ -236,6 +285,16 @@ export interface QueryCacheAdapter {
     remove: (key: string) => Promise<void>;
 }
 
+/**
+ * Resolves the WS `?token=` credential fresh at every (re)connect — the channel
+ * for short-lived tokens (e.g. the ephemeral admin sub-token the worker mints
+ * at `POST /_lunora/admin/ws-token`) instead of a static secret in the URL.
+ * May return the token synchronously or as a Promise; returning `undefined`
+ * connects without a token. A thrown error / rejected Promise fails that
+ * connect attempt, and the client retries with its normal reconnect backoff.
+ */
+export type WsTokenProvider = () => Promise<string | undefined> | string | undefined;
+
 export interface LunoraClientOptions {
     /**
      * Base path the worker mounts better-auth at, used by the client's
@@ -275,6 +334,17 @@ export interface LunoraClientOptions {
      * Defaults to 10000 (10s); set to `0` (or negative) to disable.
      */
     connectTimeoutMs?: number;
+
+    /**
+     * When `true`, tabs sharing the same origin coordinate via BroadcastChannel
+     * so only one tab (the "leader") opens WebSocket connections to the server.
+     * Follower tabs receive subscription data through the channel instead.
+     *
+     * Reduces simultaneous WS connections, bandwidth, and cross-tab state drift.
+     * Requires `BroadcastChannel` (browser-only); silently ignored otherwise.
+     * Defaults to `false`.
+     */
+    crossTabSync?: boolean;
     fetch?: typeof fetch;
 
     /**
@@ -285,6 +355,17 @@ export interface LunoraClientOptions {
      * `0` (or a negative value) to disable the heartbeat entirely.
      */
     heartbeatIntervalMs?: number;
+
+    /**
+     * When `true` and a `queryCache` is active, framework hooks (React, Vue, …)
+     * wait for the durable cache to finish hydrating before their first render
+     * with an enabled subscription, so users see cached data instead of an
+     * undefined flash before the socket round-trip. Defaults to `false`.
+     *
+     * Requires `queryCache` to be set (not `false`); silently ignored otherwise.
+     */
+    hydrateOnStart?: boolean;
+
     offlineQueue?: OfflineQueueOptions;
 
     /**
@@ -338,15 +419,21 @@ export interface LunoraClientOptions {
     WebSocket?: typeof WebSocket;
 
     /**
-     * Token appended to the WebSocket URL as `?token=…`. The server matches it
-     * against `LUNORA_WS_BEARER` (to clear the upgrade gate) and/or
+     * Credential appended to the WebSocket URL as `?token=…`. The server matches
+     * it against `LUNORA_WS_BEARER` (to clear the upgrade gate) and/or
      * `LUNORA_ADMIN_TOKEN` (to authorize `__lunora_admin__:*` subscriptions —
-     * what the studio sets it to). Browsers can't set headers on the
-     * `WebSocket` constructor, so the query parameter is the only channel; it
-     * ends up in server logs and history, so prefer a short-lived rotating
-     * token in production.
+     * what the studio supplies). Browsers can't set headers on the `WebSocket`
+     * constructor, so the query parameter is the only channel; it ends up in
+     * server logs and history, so prefer a short-lived rotating token in
+     * production over a static secret.
+     *
+     * Pass a {@link WsTokenProvider} function to resolve the token fresh at
+     * every (re)connect — the channel for short-lived credentials such as the
+     * ephemeral admin sub-token minted by `POST /_lunora/admin/ws-token`: the
+     * provider re-mints on each reconnect, including the one following a `4001`
+     * token-expired drop, so a static master token never has to ride the URL.
      */
-    wsToken?: string;
+    wsToken?: string | WsTokenProvider;
     wsUrl?: string;
 }
 

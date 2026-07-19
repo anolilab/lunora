@@ -8,6 +8,7 @@ import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { jsonResponse } from "../../../shared/json-response";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
 import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
@@ -102,8 +103,17 @@ import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
 import type { OwnerRelay, RelayHost, RelayMember } from "./relay-hub";
 import { createRelayLink, DEFAULT_MAX_RELAYS } from "./relay-hub";
-import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
-import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
+import type { AppendRequestLogEntry, ContextLogLevel, IssuesResult, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
+import {
+    appendRequestLogEntry,
+    emitLogEvent,
+    emitRequestLogEvent,
+    ensureRequestLogTable,
+    readErrorIssues,
+    readRequestLog,
+    renderLogMessage,
+    REQUEST_LOG_TABLE,
+} from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
 import type { ShapePokePart, ShapeRowOp } from "./shape-global-diff";
@@ -137,6 +147,14 @@ import type {
 const WS_KEEPALIVE_PING = "lunora-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
 const WS_KEEPALIVE_PONG = "lunora-pong";
+
+/**
+ * Env values that read as "on" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` (see
+ * {@link ShardDO.isAdminSocket}). Mirrors the runtime's
+ * `REQUIRE_EPHEMERAL_ENV_VALUES` — the two packages don't import from each
+ * other to avoid a circular dep.
+ */
+const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
 
 /**
  * Optional programmatic log sink, resolved from `createShardDO({ observability })`.
@@ -780,6 +798,9 @@ const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fa
  */
 type ContainerLogEntry = LogEntry & { functionPath: string };
 
+/** Recovers the process exit code embedded in a container `stop` message as `(exit &lt;n>)`. */
+const CONTAINER_EXIT_CODE_PATTERN = /\(exit (\d+)\)/;
+
 /**
  * Validate the `__lunora_admin__:recordContainerEvent` payload — the Container
  * DO's best-effort push of one lifecycle transition (`@lunora/container`'s
@@ -810,8 +831,19 @@ const parseRecordContainerEventArgs = (args: Record<string, unknown>): Container
     const detail = typeof envelope["message"] === "string" ? envelope["message"] : undefined;
     const timestamp = typeof envelope["ts"] === "number" ? envelope["ts"] : Date.now();
 
+    // The per-instance correlation id (the container's Durable Object id) rides
+    // the envelope as `instance`; carry it through so the Studio can fold rows
+    // per running instance instead of collapsing every instance of a container
+    // into one lane. The exit code is embedded in the `stop` message as
+    // `(exit <n>)` (never a structured field), so recover it here.
+    const instance = typeof envelope["instance"] === "string" && envelope["instance"] !== "" ? envelope["instance"] : undefined;
+    const exitRaw = detail === undefined ? undefined : CONTAINER_EXIT_CODE_PATTERN.exec(detail)?.[1];
+    const exitCode = exitRaw === undefined ? undefined : Number.parseInt(exitRaw, 10);
+
     return {
+        exitCode,
         functionPath: `container:${container}`,
+        instance,
         level,
         message: detail === undefined || detail === "" ? event : `${event}: ${detail}`,
         timestamp,
@@ -1576,6 +1608,28 @@ abstract class ShardDO {
         ShardDO.rootSizeWarned = false;
     }
 
+    /**
+     * Compute the shared poll alarm's next wake time from both tiers' signals.
+     * Global shapes need the fixed `GLOBAL_SHAPE_POLL_INTERVAL_MS` floor whenever
+     * any are subscribed (a global table has no per-DO op-log, so it can only be
+     * polled). External-source ingest instead reports the earliest NEXT-DUE
+     * timestamp across its non-manual sources (or `undefined` when none exist) —
+     * a source with a large `refresh.everyMs` must sleep until it's actually due,
+     * not spin at the global-shape floor. Returns `undefined` when NEITHER tier
+     * has pending work, so the DO can go fully idle instead of re-arming for no
+     * reason; otherwise the earlier of the two candidate times (never later than
+     * `nowMs`, so a source that's already due arms essentially immediately).
+     */
+    private static nextPollAlarmTarget(globalShapesRemaining: number, nextSourceDueAt: number | undefined, nowMs: number): number | undefined {
+        const globalTarget = globalShapesRemaining > 0 ? nowMs + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS : undefined;
+
+        if (globalTarget === undefined) {
+            return nextSourceDueAt === undefined ? undefined : Math.max(nextSourceDueAt, nowMs);
+        }
+
+        return nextSourceDueAt === undefined ? globalTarget : Math.min(globalTarget, nextSourceDueAt);
+    }
+
     protected state: ShardDOState;
 
     protected env: unknown;
@@ -2204,6 +2258,15 @@ abstract class ShardDO {
                 timestamp: Date.now(),
             });
 
+            // A fresh error row landed, but the failed dispatch's own writes (if
+            // any) rolled back, so nothing else drives a refresh. Mark the reqlog
+            // table changed and flush so the live `getLogs`/`getIssues`
+            // admin-wildcard subscriptions re-run and surface the throw in real
+            // time — the ok path flushes here too. Any rolled-back data tables
+            // still in the pending set re-read committed state, so no stale push.
+            this.recordChangedTable(REQUEST_LOG_TABLE);
+            await this.flushChangedTables();
+
             return this.errorToResponse(error);
         } finally {
             this.currentRequestBookmark = undefined;
@@ -2311,7 +2374,40 @@ abstract class ShardDO {
                 return;
             }
 
-            const status = this.subscribe(ws, envelope.id, envelope.query);
+            // Decode the wire-encoded subscription args ONCE, at the entry point —
+            // BEFORE the attachment store and the seed — so every downstream
+            // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
+            // eval) sees REAL values (`bigint`/`Date`/bytes), and the
+            // structured-clone attachment carries them through hibernation.
+            // `decodeWire` is identity for pure-JSON args (legacy frames included).
+            let query: SubscriptionQuery;
+
+            try {
+                query =
+                    envelope.query.args === undefined
+                        ? envelope.query
+                        : { ...envelope.query, args: decodeWire(envelope.query.args) as Record<string, unknown> };
+            } catch {
+                // A malformed tagged payload (over-long bigint, over-deep nesting)
+                // must not throw out of `webSocketMessage` — surface a structured
+                // error frame instead, mirroring the persist-failure path.
+                try {
+                    ws.send(
+                        JSON.stringify({
+                            code: "BAD_SUBSCRIPTION_ARGS",
+                            error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
+                            id: envelope.id,
+                            type: "error",
+                        }),
+                    );
+                } catch {
+                    // Socket may already be closed; never throw out of webSocketMessage.
+                }
+
+                return;
+            }
+
+            const status = this.subscribe(ws, envelope.id, query);
 
             if (status !== "ok") {
                 const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
@@ -2337,15 +2433,27 @@ abstract class ShardDO {
             // subclass doesn't support re-execution (base default), this is a
             // no-op and the subscriber relies on its initial HTTP query.
             if (functionPath) {
-                await this.seedSubscription(ws, envelope.id, envelope.query, functionPath, isAdmin);
+                await this.seedSubscription(ws, envelope.id, query, functionPath, isAdmin);
             }
 
             return;
         }
 
         if (envelope.type === "shape_subscribe" && envelope.shape) {
+            // Decode-at-entry, mirroring the `subscribe` branch above: the stored
+            // descriptor and every `resolveShape` see real values.
+            let shapeArgs: Record<string, unknown> | undefined;
+
+            try {
+                shapeArgs = envelope.shape.args === undefined ? undefined : (decodeWire(envelope.shape.args) as Record<string, unknown>);
+            } catch {
+                this.sendShapeSubscribeError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
+
+                return;
+            }
+
             await this.handleShapeSubscribe(ws, envelope.id, {
-                args: envelope.shape.args,
+                args: shapeArgs,
                 name: envelope.shape.name,
                 sinceEpoch: envelope.sinceEpoch,
                 sinceSeq: envelope.sinceCheckpoint,
@@ -2490,39 +2598,47 @@ abstract class ShardDO {
     }
 
     /**
-     * Durable Object alarm handler — the heartbeat for `.global()`-table shapes.
-     * The runtime wakes this when the poll alarm armed by `scheduleGlobalPoll`
-     * fires; it refreshes every subscribed global shape (diff-poke from the global
-     * backend) and re-arms while any remain. With no global subscribers left, the
-     * alarm is not re-armed and the DO goes idle. A base-only / global-free DO
-     * never arms it, so this stays dormant there.
+     * Durable Object alarm handler — the heartbeat for `.global()`-table shapes
+     * AND external-source (`.source(...)`) ingest, which share one alarm. The
+     * runtime wakes this when the poll alarm armed by `scheduleGlobalPoll` fires;
+     * it refreshes every subscribed global shape (diff-poke from the global
+     * backend), materializes any due sourced tables, and re-arms at
+     * {@link ShardDO.nextPollAlarmTarget} — the fixed floor while global shapes
+     * are subscribed, or the earliest source next-due time when only ingest
+     * remains (so a 1-hour-`refresh` source sleeps ~1 hour instead of waking
+     * every 2 s). With neither tier pending, the alarm is not re-armed and the DO
+     * goes idle. A base-only / global-free / source-free DO never arms it, so
+     * this stays dormant there.
      */
     public async alarm(): Promise<void> {
         this.globalPollScheduled = false;
 
-        let remaining: number;
+        let globalShapesRemaining: number;
 
         try {
-            remaining = await this.pollGlobalShapes();
+            globalShapesRemaining = await this.pollGlobalShapes();
         } catch (error) {
             // `pollGlobalShapes` already contains per-socket/per-shape failures;
             // this guards a catastrophic failure (e.g. `getWebSockets` throwing)
             // so the poll heartbeat re-arms and retries next tick instead of
             // dying permanently and silently dropping every global subscriber.
             this.recordShapeError("shape:poll", error);
-            remaining = 1;
+            globalShapesRemaining = 1;
         }
 
         // External-source (`.source(...)`) ingest shares this alarm (plan 077). The
-        // base hook is a no-op (0); the codegen subclass overrides it to materialize
-        // each sourced table. Summed into `remaining` so the shared alarm re-arms
-        // while either tier still has work. A contained failure re-arms (remaining)
-        // rather than stranding the ingest loop.
+        // base hook returns `undefined` (dormant); the codegen subclass overrides
+        // it to materialize each sourced table and report the earliest NEXT-DUE
+        // timestamp across every non-manual source. A contained failure re-arms
+        // at the fixed floor (a conservative retry) rather than stranding the
+        // ingest loop or spinning immediately.
+        let nextSourceDueAt: number | undefined;
+
         try {
-            remaining += await this.pollExternalSources();
+            nextSourceDueAt = await this.pollExternalSources();
         } catch (error) {
             this.recordShapeError("source:poll", error);
-            remaining += 1;
+            nextSourceDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
         }
 
         // Drain the tables the ingest poll just wrote: a sourced table is local, so
@@ -2533,8 +2649,10 @@ abstract class ShardDO {
         // when nothing was queued (non-sourced DOs, or a steady-state tick).
         await this.flushChangedTables();
 
-        if (remaining > 0) {
-            await this.scheduleGlobalPoll();
+        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, Date.now());
+
+        if (nextAlarmAt !== undefined) {
+            await this.scheduleGlobalPoll(nextAlarmAt);
         }
     }
 
@@ -4010,18 +4128,25 @@ abstract class ShardDO {
     /**
      * Poll external-source (`.source(...)`) tables once (plan 077): materialize
      * each sourced table's freshly-pulled tenant slice into this DO's SQLite. The
-     * base `ShardDO` has no sourced tables, so it returns `0` and the ingest tier
-     * stays dormant — zero behavior change for every existing DO. The codegen
-     * subclass overrides it to, per sourced table, build a `createShardCtxDb`
-     * writer, read the tenant slice from Hyperdrive under this DO's shard key, and
-     * run `runExternalSourceTick` (read local baseline → diff → apply via the
-     * validated CDC writer). Returns the number of sourced tables still being
-     * polled, so the shared poll alarm ({@link ShardDO.alarm}) re-arms while ingest
-     * is active.
+     * base `ShardDO` has no sourced tables, so it returns `undefined` and the
+     * ingest tier stays dormant — zero behavior change for every existing DO. The
+     * codegen subclass overrides it to, per sourced table, build a
+     * `createShardCtxDb` writer, read the tenant slice from Hyperdrive under this
+     * DO's shard key, and run `runExternalSourceTick` (read local baseline → diff
+     * → apply via the validated CDC writer).
+     *
+     * Returns the EARLIEST next-due timestamp (absolute epoch ms) across every
+     * non-manual sourced table — `polledAt.get(table) ?? now` plus that source's
+     * `refresh.everyMs` — or `undefined` when every sourced table is
+     * `refresh: "manual"` (or there are none). NOT a bare active count: the
+     * shared poll alarm ({@link ShardDO.alarm}) uses this to re-arm at the exact
+     * next time ingest needs to run, instead of spinning at the fixed
+     * `GLOBAL_SHAPE_POLL_INTERVAL_MS` floor for a source whose `refresh.everyMs`
+     * is, say, an hour away.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass implements the real Hyperdrive-backed poll
-    protected pollExternalSources(): Promise<number> {
-        return Promise.resolve(0);
+    protected pollExternalSources(): Promise<number | undefined> {
+        return Promise.resolve(undefined);
     }
 
     /**
@@ -4946,11 +5071,51 @@ abstract class ShardDO {
      * the panel renders it alongside `ctx.log` lines. Admin-gated by
      * `handleAdminRpc`'s caller (the same `LUNORA_ADMIN_TOKEN` bearer as every
      * other admin write).
+     *
+     * An `error`-level lifecycle event (a crash/`onError`, or a non-zero-exit
+     * `stop`) is ALSO appended as an `error`-outcome row to the durable
+     * `__lunora_reqlog__` — the same readout `getIssues` groups over — so a
+     * crash-looping container folds into the Issues list right beside Worker
+     * errors (they share the `fingerprintError` hash over `functionPath ::
+     * bucket(message)`). The in-memory buffer stays the live Logs feed; the
+     * durable row is what survives hibernation for triage.
      */
-    private handleRecordContainerEvent(args: Record<string, unknown>): Response {
+    private async handleRecordContainerEvent(args: Record<string, unknown>): Promise<Response> {
         const entry = parseRecordContainerEventArgs(args);
 
         this.logs.push(entry);
+
+        // A crash is either an explicit `error`-level event (an `onError`) OR a
+        // `stop` that exited non-zero — the normal crash-loop signal. The exit
+        // code rides the `stop` message as `(exit <n>)` and is parsed onto
+        // `entry.exitCode`; a `stop` is always `level: "info"`, so without the
+        // exit-code arm the common crash path would never fold into Issues (only
+        // `onError` would), contradicting this method's contract.
+        const crashed = entry.level === "error" || (entry.exitCode !== undefined && entry.exitCode !== 0);
+
+        if (crashed) {
+            const logEntry: AppendRequestLogEntry = {
+                durationMs: 0,
+                errorMessage: entry.message,
+                functionPath: entry.functionPath,
+                outcome: "error",
+                shardKey: this.state.id?.name,
+                ts: entry.timestamp,
+            };
+
+            // Shared seam with `recordRequestLog` — persists the durable row AND
+            // streams the Logpush event, so a container crash reaches external
+            // sinks like every other error (best-effort throughout).
+            this.persistRequestLog(logEntry, this.requestLogConfig());
+
+            // The row lands through raw SQL the change-tracker can't observe, and
+            // a container push carries no other write — so without this the live
+            // `getIssues`/`getLogs` subscriptions (admin-wildcard memos, re-run
+            // only when a flush finds a changed table) would show the crash only
+            // once some unrelated write happened to flush.
+            this.recordChangedTable(REQUEST_LOG_TABLE);
+            await this.flushChangedTables();
+        }
 
         return jsonResponse({ result: { recorded: true } }, 200);
     }
@@ -5382,24 +5547,41 @@ abstract class ShardDO {
             userId: this.getCurrentUserId(),
         };
 
+        this.persistRequestLog(entry, config);
+    }
+
+    /**
+     * The single durable-row + Logpush write seam for `__lunora_reqlog__`. Both
+     * the per-dispatch {@link recordRequestLog} and the container-crash path
+     * ({@link handleRecordContainerEvent}) funnel through here so they can't
+     * drift — before this was extracted the container writer persisted the row
+     * but silently skipped the Logpush emit every other error got.
+     *
+     * Best-effort by contract: a SQL failure (e.g. a test double with no `sql`
+     * handle) or a serialization hiccup in the emit must NEVER turn a served
+     * request — or a container event push — into a failed one, so each half is
+     * swallowed independently.
+     *
+     * Errors are always streamed to `console` (rare, high-value — they ride CF
+     * Workers Logs at error level and the dev-server formats them in the
+     * terminal), redacted in prod like any other event. The full per-dispatch
+     * summary stream (successful OKs too) stays opt-in behind
+     * `LUNORA_REQUEST_LOG_EMIT` so a hot shard doesn't emit a line per call.
+     */
+    private persistRequestLog(entry: AppendRequestLogEntry, config: { captureRaw: boolean; emit: boolean; retention: number | undefined }): void {
         const writeOptions: RequestLogWriteOptions = { captureRaw: config.captureRaw, retention: config.retention };
 
         try {
             appendRequestLogEntry(this.state.storage.sql as unknown as SqlExec, entry, writeOptions);
         } catch {
-            // Best-effort: never let request-log persistence fail the request.
+            // Best-effort: never let request-log persistence fail the caller.
         }
 
-        // Errors are always streamed to `console` (rare, high-value — they ride
-        // CF Workers Logs at error level and the dev-server formats them in the
-        // terminal), redacted in prod like any other event. The full per-dispatch
-        // summary stream (successful OKs too) stays opt-in behind
-        // `LUNORA_REQUEST_LOG_EMIT` so a hot shard doesn't emit a line per call.
-        if (config.emit || outcome === "error") {
+        if (config.emit || entry.outcome === "error") {
             try {
                 emitRequestLogEvent(entry, writeOptions);
             } catch {
-                // Best-effort: never let event emission fail the request.
+                // Best-effort: never let event emission fail the caller.
             }
         }
     }
@@ -5521,6 +5703,10 @@ abstract class ShardDO {
 
         if (functionPath === ADMIN_FUNCTIONS.getRequestLog) {
             return this.readAdminRequestLog(sql, args);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getIssues) {
+            return this.readAdminIssues(sql, args);
         }
 
         const durable = this.readAdminDurableSignal(functionPath, sql, args);
@@ -5833,6 +6019,35 @@ abstract class ShardDO {
                 shardKey: typeof args["shardKey"] === "string" ? args["shardKey"] : undefined,
                 sinceSeq: typeof args["sinceSeq"] === "number" ? args["sinceSeq"] : undefined,
                 tableTouched: typeof args["tableTouched"] === "string" ? args["tableTouched"] : undefined,
+                userId: typeof args["userId"] === "string" ? args["userId"] : undefined,
+            }),
+        };
+
+        return { result, tables: new Set([ADMIN_WILDCARD]) };
+    }
+
+    /**
+     * Resolve a `getIssues` admin read: fold the recent `error`-outcome
+     * request-log rows into grouped {@link readErrorIssues Issues} by fingerprint,
+     * accepting the same optional correlation filters as `getRequestLog`
+     * (function-path prefix, exact shardKey/userId) plus a `limit` on rows
+     * scanned. This is a read over the bounded reqlog readout — no new store —
+     * so a self-hosted worker gets grouped error triage for free. Carries the
+     * {@link ADMIN_WILDCARD} like the other log reads so a live Issues
+     * subscription re-runs on every write-flush (the per-socket JSON memo still
+     * suppresses byte-identical pushes).
+     */
+    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
+    private readAdminIssues(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
+        // Defensive: the reqlog table may not exist yet on a shard that has never
+        // served a logged dispatch, so ensure it before the read.
+        ensureRequestLogTable(sql);
+
+        const result: IssuesResult = {
+            issues: readErrorIssues(sql, {
+                functionPathPrefix: typeof args["functionPathPrefix"] === "string" ? args["functionPathPrefix"] : undefined,
+                limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+                shardKey: typeof args["shardKey"] === "string" ? args["shardKey"] : undefined,
                 userId: typeof args["userId"] === "string" ? args["userId"] : undefined,
             }),
         };
@@ -7142,13 +7357,20 @@ abstract class ShardDO {
     }
 
     /**
-     * Arm the poll alarm for `.global()` shapes if one isn't already pending.
-     * Idempotent — every global-shape seed calls it, but only the first arms the
-     * alarm. Degrades to a no-op when the runtime exposes no `setAlarm` (the unit
-     * harness): a global shape is then seed-only, which the poll-loop tests assert
-     * by driving {@link ShardDO.alarm} directly.
+     * Arm the poll alarm if one isn't already pending. Idempotent — every
+     * global-shape seed calls it, but only the first arms the alarm. Degrades to
+     * a no-op when the runtime exposes no `setAlarm` (the unit harness): a global
+     * shape is then seed-only, which the poll-loop tests assert by driving
+     * {@link ShardDO.alarm} directly.
+     *
+     * `atMs` lets {@link ShardDO.alarm} re-arm at a computed target — the
+     * earlier of the fixed global-shape floor and the earliest external-source
+     * next-due time — instead of always the fixed floor. Every OTHER caller
+     * (a fresh global-shape seed, {@link ShardDO.scheduleSourcePoll}'s initial
+     * kick) omits it and gets the original `GLOBAL_SHAPE_POLL_INTERVAL_MS`
+     * default, since neither knows a more precise due time yet.
      */
-    private async scheduleGlobalPoll(): Promise<void> {
+    private async scheduleGlobalPoll(atMs?: number): Promise<void> {
         if (this.globalPollScheduled) {
             return;
         }
@@ -7162,7 +7384,7 @@ abstract class ShardDO {
         this.globalPollScheduled = true;
 
         try {
-            await setAlarm.call(this.state.storage, Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS);
+            await setAlarm.call(this.state.storage, atMs ?? Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS);
         } catch {
             // A failed arm clears the flag so a later seed/tick retries.
             this.globalPollScheduled = false;
@@ -7478,9 +7700,14 @@ abstract class ShardDO {
      * server logs, browser history, and `Referer` headers on any
      * subresource the upgrade page loads after the handshake. Use a
      * short-lived rotating token in production rather than a long-lived
-     * secret.
+     * secret — for the ADMIN credential specifically, the worker mints one
+     * (`POST /_lunora/admin/ws-token`) and {@link isAdminSocket} accepts it, so
+     * the master `LUNORA_ADMIN_TOKEN` never rides the URL.
+     *
+     * Async because the admin fallback ({@link isAdminSocket}) verifies the
+     * ephemeral sub-token with WebCrypto HMAC.
      */
-    private isUpgradeAllowed(request: Request): boolean {
+    private async isUpgradeAllowed(request: Request): Promise<boolean> {
         const env = (this.env ?? {}) as { LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
         const allowedOrigins = env.LUNORA_ALLOWED_ORIGINS;
 
@@ -7506,11 +7733,12 @@ abstract class ShardDO {
         if (expectedBearer && expectedBearer.length > 0) {
             const supplied = this.suppliedWsToken(request);
 
-            // The admin token is accepted as an alternate credential so a
-            // studio can open its socket even when `LUNORA_WS_BEARER` gates
-            // ordinary subscribers. The socket is flagged admin separately (see
-            // `isAdminSocket`); matching the bearer alone never grants it.
-            if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !this.isAdminSocket(request))) {
+            // The admin credential (master token or minted ephemeral sub-token)
+            // is accepted as an alternate so a studio can open its socket even
+            // when `LUNORA_WS_BEARER` gates ordinary subscribers. The socket is
+            // flagged admin separately (see `isAdminSocket`); matching the
+            // bearer alone never grants it.
+            if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
                 return false;
             }
         }
@@ -7536,13 +7764,23 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether the upgrade presented a token matching `LUNORA_ADMIN_TOKEN`,
-     * constant-time compared. Closed (returns `false`) when the admin token is
-     * unset, mirroring `isAdminAuthorized` for the HTTP path so admin
-     * streaming is opt-in rather than exposed by default.
+     * Whether the upgrade presented an admin credential: the master
+     * `LUNORA_ADMIN_TOKEN` (constant-time compared) or a short-lived sub-token
+     * the worker minted with it (`POST /_lunora/admin/ws-token` —
+     * HMAC-verified statelessly here, since both isolates hold the master token
+     * in `env`). The ephemeral token is what the studio sends in `?token=`, so
+     * the master credential stays out of URLs/logs. Closed (resolves `false`)
+     * when the admin token is unset, mirroring `isAdminAuthorized` for the HTTP
+     * path so admin streaming is opt-in rather than exposed by default.
+     *
+     * Enforcement: with `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` set
+     * (`1`/`true`/`on`/`yes`/`enabled`), a raw master token in the
+     * `?token=` query parameter is rejected — the query string is exactly
+     * where it leaks. The `Authorization` header path still takes the master
+     * token: browsers can't set it on a WS upgrade, so it never rides a URL.
      */
-    private isAdminSocket(request: Request): boolean {
-        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string };
+    private async isAdminSocket(request: Request): Promise<boolean> {
+        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN?: string };
         const adminToken = env.LUNORA_ADMIN_TOKEN;
 
         if (!adminToken || adminToken.length === 0) {
@@ -7551,7 +7789,24 @@ abstract class ShardDO {
 
         const supplied = this.suppliedWsToken(request);
 
-        return supplied !== undefined && constantTimeEqual(supplied, adminToken);
+        if (supplied === undefined) {
+            return false;
+        }
+
+        if (await verifyWsAdminToken(adminToken, supplied)) {
+            return true;
+        }
+
+        // `suppliedWsToken` prefers the header; the token came from the query
+        // string only when no bearer header was present.
+        const fromQuery = extractBearerToken(request.headers.get("authorization")) === undefined;
+        const requireEphemeral = REQUIRE_EPHEMERAL_ENV_VALUES.has((env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN ?? "").trim().toLowerCase());
+
+        if (fromQuery && requireEphemeral) {
+            return false;
+        }
+
+        return constantTimeEqual(supplied, adminToken);
     }
 
     /**
@@ -7610,10 +7865,15 @@ abstract class ShardDO {
         return undefined;
     }
 
-    private handleWebSocketUpgrade(request: Request): Response {
-        if (!this.isUpgradeAllowed(request)) {
+    private async handleWebSocketUpgrade(request: Request): Promise<Response> {
+        if (!(await this.isUpgradeAllowed(request))) {
             return new Response("Forbidden", { status: 403 });
         }
+
+        // Resolve the admin flag BEFORE accepting the socket: the (async)
+        // sub-token HMAC verify must not sit between `acceptWebSocket` and the
+        // attachment stamp, or an early frame could race an unstamped socket.
+        const admin = await this.isAdminSocket(request);
 
         const pair = new WebSocketPair();
         const client = pair[0];
@@ -7638,7 +7898,7 @@ abstract class ShardDO {
         // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
         // their own) can be gated without re-checking a token per message.
         (server as HibernatableWebSocket).serializeAttachment?.({
-            admin: this.isAdminSocket(request),
+            admin,
             connectionId: crypto.randomUUID(),
             subs: {},
             ...(expiresAt === undefined ? {} : { expiresAt }),

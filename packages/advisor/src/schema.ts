@@ -113,11 +113,13 @@ export interface AdvisorIndex {
 
 /** The statically-knowable `.source(...)` bits the `external_source_*` lints read. */
 export interface AdvisorExternalSource {
-    /** `true` when a `reconcileEveryMs` was given (the incremental-mode delete-visibility companion). */
+    /** `true` when a `reconcileEveryMs` was given — one incremental delete-visibility path the `external_source_incremental_no_delete_path` lint accepts. */
     hasReconcile?: boolean;
+    /** `true` when a `softDeleteColumn` was given — the other incremental delete-visibility path. */
+    hasSoftDelete?: boolean;
     /** `true` when a `tenantBy` mapper was given — the tenant-isolation boundary. */
     hasTenantBy: boolean;
-    /** Delete-detection mode literal, when given (`"full-pull"` | `"incremental"`). */
+    /** Delete-detection mode literal, when given (`"full-pull"` or `"incremental"`). */
     mode?: string;
 
     /**
@@ -196,6 +198,7 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 externalSource: table.externalSource
                     ? {
                           hasReconcile: table.externalSource.reconcileEveryMs !== undefined,
+                          hasSoftDelete: table.externalSource.softDeleteColumn !== undefined,
                           hasTenantBy: table.externalSource.tenantBy !== undefined,
                           mode: table.externalSource.mode,
                       }

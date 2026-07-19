@@ -1,3 +1,4 @@
+import { x402HTTPResourceServer as X402HTTPResourceServer } from "@x402/core/http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createProcedureChargeGate } from "../src/charge/procedure";
@@ -108,5 +109,70 @@ describe("createProcedureChargeGate", () => {
 
         expect(response.status).toBe(402);
         expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("settles before dispatch (settle-first): a settlement failure never dispatches the paid mutation", async () => {
+        // Reach the payment-verified branch and stub settlement to fail, so we
+        // can assert `dispatch` (the shard forward that commits the mutation)
+        // never ran — the free-execution gap X402-04 closes.
+        vi.spyOn(X402HTTPResourceServer.prototype, "initialize").mockResolvedValue(undefined);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processHTTPRequest").mockResolvedValue({
+            cancellationDispatcher: { cancel: vi.fn<() => Promise<void>>() },
+            paymentPayload: {},
+            paymentRequirements: {},
+            type: "payment-verified",
+        } as never);
+
+        const processSettlement = vi.spyOn(X402HTTPResourceServer.prototype, "processSettlement").mockResolvedValue({
+            errorReason: "insufficient_funds",
+            headers: {},
+            response: { body: { error: "insufficient_funds" }, headers: { "content-type": "application/json" }, status: 402 },
+            success: false,
+        } as never);
+
+        const gate = createProcedureChargeGate(gateConfig);
+        const dispatch = vi.fn<() => Promise<Response>>(() => Promise.resolve(new Response("shard-result")));
+
+        const response = await gate(rpcRequest(), { functionPath: "reports:charge", price: "$0.05" }, dispatch);
+
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(response.status).toBe(402);
+        expect(processSettlement).toHaveBeenCalledTimes(1);
+
+        vi.restoreAllMocks();
+    });
+
+    it("delivers the receipt sink via the injected waitUntil on a settled paid mutation", async () => {
+        vi.spyOn(X402HTTPResourceServer.prototype, "initialize").mockResolvedValue(undefined);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processHTTPRequest").mockResolvedValue({
+            cancellationDispatcher: { cancel: vi.fn<() => Promise<void>>() },
+            paymentPayload: {},
+            paymentRequirements: {},
+            type: "payment-verified",
+        } as never);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processSettlement").mockResolvedValue({
+            headers: { "x-payment-response": "settled" },
+            network: "eip155:8453",
+            payer: "0xPayer",
+            requirements: { amount: "50000", asset: "0xUSDC", payTo: "0x1111111111111111111111111111111111111111" },
+            success: true,
+            transaction: "0xTX",
+        } as never);
+
+        const onReceipt = vi.fn<() => Promise<void>>(() => Promise.resolve());
+        const waitUntil = vi.fn<(promise: Promise<unknown>) => void>();
+
+        const gate = createProcedureChargeGate({ ...gateConfig, onReceipt });
+        const dispatch = vi.fn<() => Promise<Response>>(() => Promise.resolve(new Response("shard-result")));
+
+        const response = await gate(rpcRequest(), { functionPath: "reports:charge", price: "$0.05" }, dispatch, { waitUntil });
+
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(response.headers.get("x-payment-response")).toBe("settled");
+        expect(onReceipt).toHaveBeenCalledTimes(1);
+        expect(waitUntil).toHaveBeenCalledTimes(1);
+        expect(waitUntil.mock.calls[0]?.[0]).toBeInstanceOf(Promise);
+
+        vi.restoreAllMocks();
     });
 });

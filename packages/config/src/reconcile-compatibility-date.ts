@@ -12,9 +12,8 @@ import { writeFileSync } from "node:fs";
 import { applyEdits, modify } from "jsonc-parser";
 
 import { FORMATTING } from "./jsonc-edit";
+import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
-
-const WORKERS_CACHE_MIN_DATE = "2026-05-01";
 
 export interface ReconcileCompatibilityDateResult {
     /** `true` when `wrangler.jsonc` was rewritten. */
@@ -50,16 +49,7 @@ export const reconcileWranglerCompatibilityDate = (projectRoot: string): Reconci
 
     const currentDate = parsed.compatibility_date ?? "";
 
-    // Determine if cache is enabled anywhere (top-level or in exports).
-    const cacheEnabledTopLevel = typeof parsed.cache === "object" && parsed.cache !== null && parsed.cache.enabled === true;
-    const cacheEnabledInExports =
-        typeof parsed.exports === "object" &&
-        parsed.exports !== null &&
-        Object.values(parsed.exports).some((entry) => typeof entry === "object" && entry !== null && entry.cache?.enabled === true);
-
-    const needsCacheDate = cacheEnabledTopLevel || cacheEnabledInExports;
-
-    if (!needsCacheDate) {
+    if (!isCacheEnabled(parsed)) {
         return { changed: false, date: currentDate || undefined, reason: "cache not enabled", wranglerPath };
     }
 

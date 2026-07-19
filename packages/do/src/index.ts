@@ -92,12 +92,16 @@ export type { DependencyTracker } from "./dependency-tracker";
 export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker";
 export type { RenderedSql, SqlEngine } from "./drizzle";
 export { renderSql } from "./drizzle";
+// `external-source-cursor` is an internal ingest detail (the durable watermark
+// codec + reserved-table helpers), consumed only by `external-source-pull` and its
+// own tests — not re-exported, mirroring `external-source-diff`'s module-private
+// `projectExternalSourceRow`.
 export type { ExternalSourceDiffResult } from "./external-source-diff";
 export { diffExternalSource } from "./external-source-diff";
-export type { MaterializeResult } from "./external-source-materialize";
-export { materializeExternalRows, readExternalSourceBaseline, runExternalSourceTick } from "./external-source-materialize";
-export type { ExternalSourceLike, SourceClientLike, SourceRefresh } from "./external-source-pull";
-export { isSourceDue, liftSourceId, pullExternalSourceTick } from "./external-source-pull";
+export type { IncrementalMaterializeResult, MaterializeResult } from "./external-source-materialize";
+export { materializeExternalRows, materializeExternalRowsIncremental, readExternalSourceBaseline, runExternalSourceTick } from "./external-source-materialize";
+export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh } from "./external-source-pull";
+export { isSoftDeleted, isSourceDue, liftSourceId, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "./external-source-pull";
 export type { FunctionMetricBucket, FunctionMetricIndexHit, RecordFunctionMetricInput } from "./function-metrics";
 export {
     ensureFunctionMetricsTables,
@@ -182,7 +186,7 @@ export type {
 } from "./rank";
 export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
-export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
+export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
 export { serveRelationFanout } from "./relation-fanout";
 export type { ResolveRelationPredicatesOptions } from "./relation-predicates";
 export {
@@ -239,6 +243,7 @@ export type { TransactionSqlLike } from "./transaction";
 export { ConflictError } from "./transaction";
 export type {
     RunTriggersOptions,
+    SchedulableWorkflowReferenceLike,
     SchedulerLike,
     TriggerContextLike,
     TriggerDefinitionLike,

@@ -17,17 +17,21 @@
  * ```
  */
 import type { X402ChargeConfig, X402Price } from "../config";
-import type { ChargeMiddleware } from "./middleware";
+import type { ChargeHandlerDeps, ChargeMiddleware } from "./middleware";
 import { createChargeMiddleware } from "./middleware";
 
 /**
  * Charge config for the procedure gate: the worker-level settlement vocabulary
  * (network, recipient, facilitator) minus `price` — price is per-procedure and
  * arrives with each {@link X402ProcedureSpec}.
+ * @experimental
  */
 export type X402ProcedureChargeConfig = Omit<X402ChargeConfig, "price">;
 
-/** The per-RPC charge spec the runtime passes the gate for each paid dispatch. */
+/**
+ * The per-RPC charge spec the runtime passes the gate for each paid dispatch.
+ * @experimental
+ */
 export interface X402ProcedureSpec {
     /** The `file:function` id of the paid procedure; becomes the x402 challenge `resource`. */
     readonly functionPath: string;
@@ -39,35 +43,50 @@ export interface X402ProcedureSpec {
  * Gate one paid RPC. Returns a real `402` + `PAYMENT-REQUIRED` challenge when the
  * request is unpaid, or the dispatched response (with `X-PAYMENT-RESPONSE`
  * attached) once the client's `X-PAYMENT` is verified and settled. `dispatch`
- * runs the actual shard forward — it is only invoked after payment is verified.
+ * runs the actual shard forward — settlement happens **before** `dispatch` is
+ * invoked (settle-first), so a settlement failure means the shard forward
+ * (the mutation's commit) never runs at all — no committed-but-unpaid write is
+ * possible. `deps.waitUntil`, when supplied (the request's `ctx.waitUntil`),
+ * keeps the opt-in receipt sink alive past the response.
+ * @experimental
  */
-export type X402ProcedureChargeGate = (request: Request, spec: X402ProcedureSpec, dispatch: () => Promise<Response>) => Promise<Response>;
+export type X402ProcedureChargeGate = (
+    request: Request,
+    spec: X402ProcedureSpec,
+    dispatch: () => Promise<Response>,
+    deps?: ChargeHandlerDeps,
+) => Promise<Response>;
 
 /**
  * Build the injectable procedure charge gate for `config`. One initialised
  * {@link ChargeMiddleware} is memoised per `functionPath` (each bakes that
  * function's price + `resource`), since `createChargeMiddleware` fetches
  * facilitator support on first use. A failed init is not cached, so a transient
- * facilitator outage retries on the next request.
+ * facilitator outage retries on the next request. Settlement runs before
+ * `dispatch` (`settleBeforeHandler: true`) since `dispatch` commits the
+ * procedure's real mutation — see `createChargeMiddleware`'s `ChargeMiddlewareOptions`.
+ * @experimental
  */
 export const createProcedureChargeGate = (config: X402ProcedureChargeConfig): X402ProcedureChargeGate => {
     const middlewareByFunction = new Map<string, Promise<ChargeMiddleware>>();
 
-    return async (request: Request, spec: X402ProcedureSpec, dispatch: () => Promise<Response>): Promise<Response> => {
+    return async (request: Request, spec: X402ProcedureSpec, dispatch: () => Promise<Response>, deps?: ChargeHandlerDeps): Promise<Response> => {
         let pending = middlewareByFunction.get(spec.functionPath);
 
         if (pending === undefined) {
-            pending = createChargeMiddleware({ ...config, price: spec.price }, { resource: spec.functionPath }).catch((error: unknown) => {
-                // Don't cache a failed init — let the next request retry.
-                middlewareByFunction.delete(spec.functionPath);
+            pending = createChargeMiddleware({ ...config, price: spec.price }, { resource: spec.functionPath }, { settleBeforeHandler: true }).catch(
+                (error: unknown) => {
+                    // Don't cache a failed init — let the next request retry.
+                    middlewareByFunction.delete(spec.functionPath);
 
-                throw error;
-            });
+                    throw error;
+                },
+            );
             middlewareByFunction.set(spec.functionPath, pending);
         }
 
         const middleware = await pending;
 
-        return middleware.handle(request, dispatch);
+        return middleware.handle(request, dispatch, deps);
     };
 };

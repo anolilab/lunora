@@ -5,7 +5,7 @@ export type { AiBindingLike, AiGatewayOptions, EmbeddingModelInput, LunoraAi, Lu
 // import for the whole inference surface. These are provider-agnostic — pass
 // them a Workers AI model (via `ctx.ai.model(...)`) or any other AI SDK model.
 export type { EmbeddingModel, LanguageModel } from "ai";
-export { embed, embedMany, generateObject, generateText, streamObject, streamText, tool } from "ai";
+export { embed, embedMany, generateObject, generateText, hasToolCall, jsonSchema, streamObject, streamText, tool } from "ai";
 // The Workers AI provider factory, for callers who want to build/configure the
 // provider themselves before handing it to `createAi({ provider })`.
 export { createWorkersAI } from "workers-ai-provider";

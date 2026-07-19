@@ -185,8 +185,10 @@ function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, 
  * and the former hand-rolled live-admin subscription hook.
  *
  * The admin RPCs are intercepted inside the Durable Object and gated by the
- * server's `LUNORA_ADMIN_TOKEN` (sent as the client's bearer / `wsToken`); this
- * hook issues no credentials of its own. The `QueryClient` it uses is the one
+ * server's `LUNORA_ADMIN_TOKEN` (sent as the client's bearer; the WS leg rides
+ * the client's `wsToken` provider, which mints a short-lived sub-token so the
+ * master credential never appears in the socket URL); this hook
+ * issues no credentials of its own. The `QueryClient` it uses is the one
  * `@lunora/react`'s `LunoraProvider` already mounts above the studio.
  *
  * With `live`, it additionally opens one shared WS subscription for the key and

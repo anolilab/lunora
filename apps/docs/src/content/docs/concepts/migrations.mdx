@@ -96,8 +96,10 @@ lunora migrate create backfill_read_by --table messages
 ```
 
 The free-text name is slugified into a kebab-case `id` and a camelCase export.
-`--table` must be a bare identifier; omit it and the stub gets a `TODO_table`
-placeholder you'll need to fill in.
+The table must be a bare identifier. Omit `--table` and the command prompts for
+it interactively (offering the tables declared in `lunora/schema.ts`); in a
+non-interactive context (CI / piped) it fails instead — pass `--table`
+explicitly there.
 
 ### Running a data migration
 

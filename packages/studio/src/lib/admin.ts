@@ -42,6 +42,7 @@ export const ADMIN_FUNCTIONS = {
     getCapturedMail: "__lunora_admin__:getCapturedMail",
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
+    getIssues: "__lunora_admin__:getIssues",
     listFlags: "__lunora_admin__:listFlags",
     listQueues: "__lunora_admin__:listQueues",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
@@ -674,11 +675,15 @@ export type LogLevel = "debug" | "error" | "info" | "warn";
 
 /**
  * One buffered log line returned by `__lunora_admin__:getLogs`. `functionPath`
- * is the RPC that produced it (when known); `timestamp` is epoch-ms. Mirrors
- * `@lunora/do`'s `LogEntry`.
+ * is the RPC that produced it (when known); `timestamp` is epoch-ms.
+ * `instance`/`exitCode` are populated for container lifecycle entries
+ * (`instance` = the per-instance Durable Object id, `exitCode` = the process
+ * exit code parsed out of a `stop` event). Mirrors `@lunora/do`'s `LogEntry`.
  */
 export interface LogEntry {
+    exitCode?: number;
     functionPath?: string;
+    instance?: string;
     level: LogLevel;
     message: string;
     timestamp: number;
@@ -853,6 +858,47 @@ export interface RequestLogQuery {
     shardKey?: string;
     sinceSeq?: number;
     tableTouched?: string;
+    userId?: string;
+}
+
+/**
+ * One grouped error **Issue** returned by `__lunora_admin__:getIssues`, mirroring
+ * `@lunora/do`'s `ErrorIssue`. Many `error`-outcome request-log rows (Worker
+ * throws and `container:&lt;name>` crashes alike) that share a fingerprint fold into
+ * a single triage row. The `hash` is the same stable key a cloud Incident groups
+ * on, so a local Issue and a cloud Incident are the same object.
+ */
+export interface ErrorIssue {
+    /** Number of `error` rows folded into this Issue within the scanned window. */
+    count: number;
+    /** The `&lt;file>:&lt;function>` (or `container:&lt;name>`) the errors came from. */
+    culprit: string;
+    /** Epoch-ms of the oldest folded row. */
+    firstSeen: number;
+    /** Stable 16-char grouping hash over `functionPath :: bucket(message)`. */
+    hash: string;
+    /** Epoch-ms of the newest folded row. */
+    lastSeen: number;
+    /** A representative raw error message — taken from the most recent folded row. */
+    sampleMessage: string;
+    /** Human-readable title (first line of the sample message, capped). */
+    title: string;
+}
+
+/** Payload of a `__lunora_admin__:getIssues` call: grouped error Issues, most-recently-active first. */
+export interface IssuesResult {
+    issues: ErrorIssue[];
+}
+
+/**
+ * Filters accepted by `__lunora_admin__:getIssues`, mirroring `@lunora/do`'s
+ * `ReadIssuesOptions`. All AND-combined and bound server-side; `outcome` is
+ * forced to `error` server-side.
+ */
+export interface IssuesQuery {
+    functionPathPrefix?: string;
+    limit?: number;
+    shardKey?: string;
     userId?: string;
 }
 

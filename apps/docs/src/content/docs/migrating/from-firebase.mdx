@@ -1,0 +1,291 @@
+---
+title: Migrating from Firebase
+description: Side-by-side mapping — Firestore, Cloud Functions, Auth, Storage, and real-time listeners.
+---
+
+Firebase and Lunora solve the same problem — a real-time backend with client
+SDKs, auth, storage, and functions — but from different ends. Firebase is a
+managed, schemaless document store where clients write directly to the database
+under Security Rules. Lunora is a **typed, code-first** backend on your own
+Cloudflare account where every write goes through a server function and the
+schema is the source of truth for end-to-end types.
+
+The mental models overlap enough that porting is mechanical, but two
+differences shape the whole migration:
+
+1. **You declare a schema.** Firestore infers structure from whatever you
+   write; Lunora's `defineSchema` gives you typed queries, indexes, and
+   generated client types. Modelling your collections up front is the first
+   real task.
+2. **Clients don't write the database directly.** There is no equivalent of a
+   client-side `setDoc`. Every mutation is a server function, and
+   authorization lives in code (`ctx.auth` + RLS) instead of a Security Rules
+   file.
+
+This guide is a side-by-side mapping plus the gotchas you'll hit porting a
+Firebase app.
+
+## At a glance
+
+| Concern            | Firebase                                   | Lunora                                          |
+| ------------------ | ------------------------------------------ | ----------------------------------------------- |
+| Hosting            | Google Cloud (managed)                     | Your Cloudflare account                         |
+| Backend runtime    | Cloud Functions (Node)                     | Cloudflare Workers + Durable Objects            |
+| Database           | Firestore / Realtime Database (NoSQL docs) | Durable Object SQLite (`__root__`) + D1         |
+| Schema             | schemaless                                 | `lunora/schema.ts` (`defineSchema`)             |
+| Collections / docs | `collection("messages").doc(id)`           | tables + rows (`v.id("messages")`)              |
+| Cross-tenant data  | top-level collections                      | `.global()` tables in D1                        |
+| Per-tenant data    | per-user subcollections                    | `.shardBy("field")` tables in DOs               |
+| Client writes      | `setDoc` / `updateDoc` (Security Rules)    | server `mutation` only (no direct client write) |
+| Server logic       | Cloud Functions (`onCall` / HTTP)          | `query` / `mutation` / `action`                 |
+| Real-time reads    | `onSnapshot` listener                      | `useQuery` (live by default)                    |
+| Authorization      | Security Rules (`.rules` file)             | `ctx.auth` + RLS (in code)                      |
+| Auth               | Firebase Auth                              | [`@lunora/auth`](/docs/packages/auth)           |
+| File storage       | Cloud Storage                              | `ctx.storage` (backed by R2)                    |
+| Scheduled work     | Cloud Scheduler / `pubsub.schedule`        | `ctx.scheduler.runAfter` / cron                 |
+| Offline            | Firestore offline persistence              | client offline queue + optimistic updates       |
+| Web SDK            | `firebase/firestore`, `firebase/auth`      | `@lunora/client` + `@lunora/react`              |
+| Deploy             | `firebase deploy`                          | `lunora deploy` (wraps `wrangler deploy`)       |
+
+## Schema
+
+Firestore has no schema — you write documents and structure emerges. Lunora
+requires you to declare tables up front, which is what powers the end-to-end
+types and the index planner. This is the biggest single step: turn your
+implicit document shapes into a `defineSchema`.
+
+Firestore (implicit — inferred from writes):
+
+```ts
+// messages/{id} → { channelId, text, authorId, createdAt }
+await setDoc(doc(db, "messages", id), {
+    channelId,
+    text,
+    authorId: user.uid,
+    createdAt: serverTimestamp(),
+});
+```
+
+Lunora:
+
+```ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export const schema = defineSchema({
+    messages: defineTable({
+        channelId: v.id("channels"),
+        text: v.string(),
+        authorId: v.string(),
+        createdAt: v.number(),
+    })
+        .shardBy("channelId")
+        .index("by_channel", ["channelId"]),
+});
+```
+
+Two decisions Firestore hid from you now surface:
+
+- **`.shardBy(field)` vs `.global()` vs neither** — this determines which
+  Durable Object owns the row (the Lunora analog of "which shard"). Start with
+  neither (everything in `__root__`) and promote when you hit the 1 GiB
+  warning. See [Concepts: sharding](/docs/concepts/sharding).
+- **Indexes are explicit.** Firestore auto-indexes single fields and prompts
+  you to create composite indexes. Lunora indexes are declared with
+  `.index(name, [fields])` and enforced by the [advisors](/docs/concepts/advisors)
+  (an unindexed filter is a lint, not a runtime surprise).
+
+## Reads: `onSnapshot` → `useQuery`
+
+Firestore's real-time model is a listener you attach and tear down. Lunora's
+`useQuery` **is** the subscription: it returns `undefined` while loading, then
+the typed result, and re-renders whenever a mutation changes the underlying
+rows. No `onSnapshot` / `unsubscribe` bookkeeping.
+
+Firebase:
+
+```ts
+import { collection, onSnapshot, query, where } from "firebase/firestore";
+
+useEffect(() => {
+    const q = query(collection(db, "messages"), where("channelId", "==", channelId));
+    const unsub = onSnapshot(q, (snap) => {
+        setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    });
+    return unsub;
+}, [channelId]);
+```
+
+Lunora:
+
+```ts
+import { useQuery } from "@lunora/react";
+import { api } from "../lunora/_generated/api";
+
+const messages = useQuery(api.messages.list, { channelId });
+// undefined while loading, then the typed array; live-updates automatically
+```
+
+…backed by a server query:
+
+```ts
+import { query, v } from "./_generated/server";
+
+export const list = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args: { channelId } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .collect();
+});
+```
+
+## Writes: `setDoc` → `mutation`
+
+This is the sharpest conceptual shift. Firebase clients write the database
+directly and Security Rules decide whether the write is allowed. Lunora has no
+client-side write to the database — the client **calls a mutation**, and the
+mutation is where validation and authorization live.
+
+Firebase:
+
+```ts
+// client writes straight to Firestore; a .rules file guards it
+await addDoc(collection(db, "messages"), { channelId, text, authorId: user.uid });
+```
+
+Lunora:
+
+```ts
+// client
+import { useMutation } from "@lunora/react";
+const send = useMutation(api.messages.send);
+await send({ channelId, text });
+```
+
+```ts
+// server — mutation is the only write path
+import { LunoraError } from "lunorash/server";
+
+import { mutation, v } from "./_generated/server";
+
+export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
+    // ctx.auth.userId is null | string — guard it, it does not throw on its own
+    if (!ctx.auth.userId) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
+
+    return ctx.db.insert("messages", { ...args, authorId: ctx.auth.userId, createdAt: Date.now() });
+});
+```
+
+Your Security Rules become **code** at the top of each mutation (checks on
+`ctx.auth`) plus [row-level security](/docs/concepts/rls) for read filtering.
+There's no separate rules language to keep in sync with the app.
+
+## Cloud Functions → actions
+
+`onCall` / HTTP Cloud Functions that talk to third-party APIs map to Lunora
+**actions** (the non-transactional tier that can do I/O). Firestore triggers
+(`onDocumentCreated`, etc.) have no direct equivalent — since every write goes
+through a mutation, run the follow-up logic inline in the mutation, or schedule
+it with `ctx.scheduler`.
+
+```ts
+// Firebase: exports.charge = functions.https.onCall(async (data, ctx) => { … })
+export const charge = action.input({ orderId: v.string() }).action(async ({ ctx, args }) => {
+    const key = await ctx.secrets.get("STRIPE_SECRET_KEY");
+    // …call Stripe, then persist via a mutation
+});
+```
+
+## Auth
+
+Firebase Auth becomes [`@lunora/auth`](/docs/packages/auth), an opt-in add-on
+that handles sessions, email/password and OAuth flows, and rotating refresh
+tokens inside a `SessionDO`. Inside functions you read `ctx.auth` (userId,
+claims) the same way you'd read `context.auth` in a callable Cloud Function.
+The client uses `useAuth` instead of `onAuthStateChanged`.
+
+If you'd rather keep an existing IdP, any provider that yields a verifiable
+token works — see [`@lunora/cloudflare-access`](/docs/packages/cloudflare-access)
+for the Zero Trust path.
+
+## File storage
+
+Cloud Storage maps to `ctx.storage`, backed by **R2**. Uploads go straight to
+R2 via a presigned URL and downloads stream from the Worker:
+
+```ts
+// Firebase: uploadBytes(ref(storage, path), file)
+const uploadUrl = await ctx.storage.generateUploadUrl(key, { contentType }); // client PUTs the file here
+const src = ctx.storage.getUrl(key); // read back (requires publicBaseUrl configured)
+```
+
+For typed buckets and signed downloads see [`@lunora/storage`](/docs/packages/storage).
+
+## Scheduled work
+
+Cloud Scheduler / `pubsub.schedule` functions become
+`ctx.scheduler.runAfter(ms, fn, args)` for one-shot delays, or a declared cron
+job for recurring work. Under the hood Lunora persists schedules in a
+`SchedulerDO`. See [`@lunora/scheduler`](/docs/packages/scheduler).
+
+## Porting checklist
+
+1. **Model the schema.** Export a sample of each Firestore collection and turn
+   the document shapes into `defineTable` entries in `lunora/schema.ts`. Decide
+   `.global()` / `.shardBy(field)` / neither per table
+   ([Sharding](/docs/concepts/sharding)).
+2. **Invert the writes.** Every client `setDoc`/`updateDoc`/`addDoc`/`deleteDoc`
+   becomes a `mutation`; the client calls it via `useMutation`. There is no
+   direct client→DB write path.
+3. **Port Security Rules to code.** Read guards → [RLS](/docs/concepts/rls);
+   write guards → `ctx.auth` checks at the top of each mutation. Delete the
+   `.rules` file.
+4. **Convert listeners.** Replace `onSnapshot` blocks with `useQuery` — the
+   live subscription is built in; drop the manual `unsubscribe` cleanup.
+5. **Rehome functions.** `onCall`/HTTP functions → `query`/`mutation`/`action`;
+   Firestore triggers → inline mutation logic or `ctx.scheduler`.
+6. **Swap auth + storage.** Firebase Auth → [`@lunora/auth`](/docs/packages/auth)
+   (or an external IdP via `@lunora/cloudflare-access`); Cloud Storage →
+   `ctx.storage`.
+7. **Export & import data.** Dump each Firestore collection (the Firestore
+   export or the Admin SDK), reshape to your new schema (Firestore
+   `Timestamp` → a numeric `createdAt` you populate; document IDs → your `id`
+   columns), then batch-insert via a Lunora mutation or a `lunora run` script.
+   Any `.global()` table needs a `lunora migrate generate init` schema step plus
+   a one-off data-import migration.
+8. **Wire the React provider.** Replace the Firebase app init with
+   `<LunoraProvider client={new LunoraClient({ url })}>` (`url` is your Worker's
+   `*.workers.dev` hostname).
+9. **Deploy.** `lunora deploy` builds, runs migrations, and calls
+   `wrangler deploy`. Your data plane now lives in your own Cloudflare account.
+
+## Caveats
+
+- **No client-side database writes.** This is by design — it's the source of
+  the type safety and the single authorization surface. Budget time to move
+  write logic server-side.
+- **No transactions across shards.** A mutation runs inside one Durable
+  Object; cross-shard writes need a saga or an action that fans out. Firestore
+  transactions are cross-document within a region; Lunora's are per-shard.
+- **Relational, not document, storage.** Rows are typed and SQL-indexed rather
+  than free-form documents. Deeply nested Firestore documents usually become a
+  couple of related tables — model relationships with `v.id(...)` columns and
+  indexes, not embedded maps.
+- **D1 eventual consistency on replicas.** Reads from `.global()` tables use
+  the D1 Sessions API. Pass the `x-d1-bookmark` header for read-your-writes;
+  otherwise you may read a slightly stale replica.
+- **Self-hosted studio, not a managed console.** There's no hosted control
+  plane like the Firebase Console. Instead [`@lunora/studio`](/docs/packages/studio)
+  ships a first-party studio that `lunora dev` serves at `/__lunora` (data
+  browser, function runner, metrics, migrations, scheduled jobs, advisors),
+  gated by your own `LUNORA_ADMIN_TOKEN`.
+
+## See also
+
+- [Concepts: schema](/docs/concepts/schema)
+- [Concepts: sharding](/docs/concepts/sharding)
+- [Concepts: RLS](/docs/concepts/rls)
+- [@lunora/auth](/docs/packages/auth) — sessions, OAuth, password flows
+- [@lunora/cli](/docs/packages/cli) — `lunora migrate generate`, `lunora run`
+- [Architecture](/docs/architecture)

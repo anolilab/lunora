@@ -86,18 +86,21 @@
             - "name": "Build affected packages"
               "run": "pnpm run build:affected:packages"
 
-            # workerd is intentionally OFF (no LUNORA_WORKERD_TESTS): the v8
-            # coverage provider collects via node:inspector, which the
-            # @cloudflare/vitest-pool-workers runtime does not implement, and the
-            # workerd-pool suites currently hang the runner. They run in a
-            # dedicated job once fixed. d1 runs here like any other package —
+            # workerd is intentionally OFF here (no LUNORA_WORKERD_TESTS): the
+            # v8 coverage provider collects via node:inspector, which the
+            # @cloudflare/vitest-pool-workers runtime does not implement, and
+            # with coverage on the workerd-pool suites hang the runner. The
+            # workerd projects run WITHOUT coverage in the dedicated
+            # `test-workerd` job below. d1 runs here like any other package —
             # with the workerd gate off, its vitest config exposes only the
             # plain-node "mocks" project (20 files), so neither the old hang
-            # rationale nor the inspector limitation applies. studio is still
-            # excluded from the `test*` scripts — its jsdom COMPONENT tests hang
-            # this runner — but its pure-logic `unit` project is DOM-free and
-            # runs via the "Run studio unit tests" step below. lunora-playground
-            # stays excluded (same hang class as e2e).
+            # rationale nor the inspector limitation applies. studio runs in the
+            # plain `test:affected` leg (its old component-suite hang — a render
+            # loop in the SQL editor — is fixed) but stays excluded from the
+            # COVERAGE scripts: a full component run under v8 coverage still
+            # stalls (see packages/studio/vitest.config.ts). The dedicated
+            # "Run studio tests" step below covers it on both legs.
+            # lunora-playground stays excluded (same hang class as e2e).
             - "name": "Run affected tests"
               "shell": "bash"
               "run": |
@@ -107,15 +110,18 @@
                       pnpm run test:affected
                   fi
 
-            # `derive-runtime-advisories.ts` value-imports `runAdvisor`/`RUNTIME_LINTS`
-            # from `@lunora/advisor`, so its dist must exist for the unit tests to
-            # resolve. Build it unconditionally (it's small) before running.
-            - "name": "Build @lunora/advisor for studio unit tests"
+            # The component tests import @lunora/{react,client,errors,advisor,
+            # bindings} dists, which the affected build above only produces when
+            # they changed. `vis run build` walks upstream deps via dependsOn
+            # (`^build`), so everything studio imports exists for the run.
+            - "name": "Build @lunora/studio dependencies"
               "run": |
-                  pnpm --filter "@lunora/advisor" run build
-            - "name": "Run studio unit tests"
+                  pnpm exec vis run build --query "project=studio"
+            # The full studio suite: the DOM-free `unit` project plus the jsdom
+            # `component` project (73 files / 544 tests, ~1-2 min, no coverage).
+            - "name": "Run studio tests"
               "run": |
-                  pnpm --filter "@lunora/studio" run test:unit
+                  pnpm --filter "@lunora/studio" run test
 
             - "name": "Upload coverage to Codecov"
               "if": "matrix.node_version == '22.15' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
@@ -125,9 +131,60 @@
                   "token": "${{ secrets.CODECOV_TOKEN }}"
                   "fail_ci_if_error": false
 
+    # Workerd integration suites: the `workerd` vitest projects run against real
+    # workerd via @cloudflare/vitest-pool-workers, gated behind
+    # LUNORA_WORKERD_TESTS=1. Coverage MUST stay off — the v8 provider collects
+    # via node:inspector, which workerd does not implement, and with coverage on
+    # these suites hang the runner. So this job uses the plain `test` script
+    # (`vitest run`, no coverage flags) with `--project workerd`, one matrix leg
+    # per package so a single slow suite can't starve the others.
+    "test-workerd":
+        "name": "Workerd integration (${{ matrix.package }})"
+        "if": "needs.files-changed.outputs.packages == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                "package": ["client", "container", "d1", "do", "queue", "runtime", "scheduler", "storage", "workflow", "x402"]
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "test-workerd"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # `vis run build` walks upstream deps via dependsOn (`^build`), so
+            # the package's dist plus everything it imports exists for workerd.
+            # (The `pnpm --filter "pkg..."` graph-walk does not build deps
+            # reliably.)
+            - "name": "Build package and dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=${{ matrix.package }}"
+
+            - "name": "Run workerd suites"
+              "env":
+                  "LUNORA_WORKERD_TESTS": "1"
+              "run": |
+                  pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
+
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
-        "if": "needs.files-changed.outputs.e2e == 'true' && vars.CI_E2E_SKIP != 'true'"
+        "if": "needs.files-changed.outputs.e2e == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
@@ -187,7 +244,7 @@
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "e2e"]
+        "needs": ["files-changed", "test", "test-workerd", "e2e"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

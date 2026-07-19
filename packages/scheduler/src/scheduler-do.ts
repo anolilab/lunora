@@ -91,7 +91,13 @@ const generateId = (): string => {
 
 interface ScheduleRequestBody {
     args: Record<string, unknown>;
-    functionPath: string;
+
+    /**
+     * The `ns:fn` path of the function to dispatch on fire. Absent when the job
+     * targets a durable workflow/agent instead — see
+     * {@link ScheduleRequestBody.workflow}. Exactly one of the two is set.
+     */
+    functionPath?: string;
 
     /**
      * The scheduler/workpool instance name the enqueuing client routed to
@@ -120,6 +126,15 @@ interface ScheduleRequestBody {
     retry?: RetryPolicy;
     scheduledFor: number;
     shardKey?: string;
+
+    /**
+     * The `WORKFLOW_*`/`AGENT_*` binding name to start a fresh durable instance
+     * of on fire (the {@link ScheduleRequestBody.args} become its `params`). Set
+     * instead of {@link ScheduleRequestBody.functionPath} when the job targets a
+     * workflow/agent. Passed straight through to the dispatch payload so the
+     * runtime — which owns the binding — can `create()` the instance.
+     */
+    workflow?: string;
 }
 
 /** Durable per-pool state stored under `pool:&lt;name>`. */
@@ -291,6 +306,23 @@ class SchedulerDO {
         return { ...pool, inFlight: next.length, inFlightIds: next };
     }
 
+    /**
+     * Normalize the mutually-exclusive dispatch target off an untrusted body: a
+     * one-shot function path (`functionPath`) or a durable workflow/agent
+     * instance (`workflow`, a `WORKFLOW_*`/`AGENT_*` binding). Returns `undefined`
+     * when neither is present so the caller can reject the schedule.
+     */
+    private static resolveScheduleTarget(body: ScheduleRequestBody | undefined): { functionPath?: string; workflow?: string } | undefined {
+        const functionPath = typeof body?.functionPath === "string" && body.functionPath.length > 0 ? body.functionPath : undefined;
+        const workflow = typeof body?.workflow === "string" && body.workflow.length > 0 ? body.workflow : undefined;
+
+        if (functionPath === undefined && workflow === undefined) {
+            return undefined;
+        }
+
+        return { functionPath, workflow };
+    }
+
     protected readonly state: SchedulerDOState;
 
     protected readonly env: SchedulerEnv;
@@ -456,6 +488,11 @@ class SchedulerDO {
             pool: record.pool,
             scheduledFor: record.scheduledFor,
             shardKey: record.shardKey,
+            // Present instead of `functionPath` for a workflow/agent target; the
+            // runtime starts a fresh instance of this binding. `undefined` when
+            // absent, so JSON.stringify drops it and the payload is unchanged for
+            // ordinary function dispatches.
+            workflow: record.workflow,
         });
 
         try {
@@ -753,7 +790,9 @@ class SchedulerDO {
             await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
 
             // eslint-disable-next-line no-console -- no logger is injected into SchedulerDO; emit via console so the host captures dead-letter parks
-            console.warn(`@lunora/scheduler: job "${record.id}" (${record.functionPath}) parked in dead-letter after ${String(attempts)} attempts`);
+            console.warn(
+                `@lunora/scheduler: job "${record.id}" (${record.functionPath ?? record.workflow ?? "unknown"}) parked in dead-letter after ${String(attempts)} attempts`,
+            );
 
             return;
         }
@@ -916,10 +955,13 @@ class SchedulerDO {
 
     private async handleSchedule(request: Request): Promise<Response> {
         const body = (await request.json().catch(() => undefined)) as ScheduleRequestBody | undefined;
+        const target = SchedulerDO.resolveScheduleTarget(body);
 
-        if (!body || typeof body.functionPath !== "string") {
-            return SchedulerDO.error(400, "INVALID_INPUT", "functionPath is required");
+        if (!body || target === undefined) {
+            return SchedulerDO.error(400, "INVALID_INPUT", "functionPath or workflow is required");
         }
+
+        const { functionPath, workflow } = target;
 
         // Reject NaN, +/-Infinity and non-positive timestamps. A finite
         // positive number is a precondition for the time-index padding to
@@ -957,13 +999,14 @@ class SchedulerDO {
             // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- parsed wire data can omit args
             args: body.args ?? {},
             enqueuedAt: Date.now(),
-            functionPath: body.functionPath,
             id,
+            ...(functionPath === undefined ? {} : { functionPath }),
             ...(instanceName === undefined ? {} : { instanceName }),
             ...(pool === undefined ? {} : { pool }),
             ...(retry === undefined ? {} : { retry }),
             scheduledFor: body.scheduledFor,
             shardKey: body.shardKey,
+            ...(workflow === undefined ? {} : { workflow }),
         };
 
         // Persist (or refresh) the pool's concurrency cap so the alarm-time gate

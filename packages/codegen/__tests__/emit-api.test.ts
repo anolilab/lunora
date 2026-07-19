@@ -7,9 +7,89 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApi, emitFunctions } from "../src/emit";
-import type { FunctionIR, WorkflowIR } from "../src/ir";
+import type { AgentIR, FunctionIR, HttpRouteIR, WorkflowIR } from "../src/ir";
+
+const SUPPORT_AGENT: AgentIR = {
+    bindingName: "AGENT_SUPPORT",
+    className: "SupportAgentWorkflow",
+    exportName: "support",
+    name: "agent-support",
+};
+
+/** A minimal `HttpRouteIR` with overridable fields, mirroring `openapi.test.ts`'s helper. */
+const makeStreamRoute = (overrides: Partial<HttpRouteIR> = {}): HttpRouteIR => {
+    return {
+        body: {},
+        exportName: "streamTokens",
+        filePath: "http",
+        method: "GET",
+        params: {},
+        path: "/api/tokens",
+        searchParams: {},
+        stream: true,
+        ...overrides,
+    };
+};
 
 describe("emitApi", () => {
+    it("emits a typed `agents.*` scheduler-target reference object when the project declares agents", () => {
+        expect.assertions(6);
+
+        const rendered = emitApi({ agents: [SUPPORT_AGENT], functions: [] });
+
+        // The flat AgentRunInput is imported (type-only) so `cronJobs()` args infer.
+        expect(rendered).toContain('import type { AgentRunInput } from "@lunora/agent";');
+        // The shared WorkflowReference interface backs the agent handle (an agent run is a workflow instance).
+        expect(rendered).toContain("export interface WorkflowReference<Params = Record<string, unknown>> {");
+        // Typed reference carries AgentRunInput.
+        expect(rendered).toContain("support: WorkflowReference<AgentRunInput>;");
+        // Runtime object carries the AGENT_* binding + stable name.
+        expect(rendered).toContain('support: { isLunoraWorkflow: true, binding: "AGENT_SUPPORT", name: "agent-support" },');
+        expect(rendered).toContain("export interface AgentsRef {");
+        expect(rendered).toContain("export const agents: AgentsRef = {");
+    });
+
+    it("omits the `agents` block entirely when no agents are declared", () => {
+        expect.assertions(3);
+
+        const rendered = emitApi({ functions: [] });
+
+        expect(rendered).not.toContain("AgentsRef");
+        expect(rendered).not.toContain("AgentRunInput");
+        // The shared WorkflowReference interface only appears when a workflow/agent exists.
+        expect(rendered).not.toContain("WorkflowReference");
+    });
+
+    it("emits agent-free api output byte-identical to before the agents-ref emitter", () => {
+        expect.assertions(2);
+
+        // The agent handle is fully gated on a declared agent: passing `agents: []`
+        // (or omitting it) must yield the exact same bytes as an agent-unaware call.
+        const withEmptyAgents = emitApi({ agents: [], functions: [] });
+        const withoutAgents = emitApi({ functions: [] });
+
+        expect(withEmptyAgents).toBe(withoutAgents);
+        expect(withEmptyAgents).not.toContain("agents");
+    });
+
+    it("emits ONE shared WorkflowReference interface when both workflows and agents are declared", () => {
+        expect.assertions(4);
+
+        const workflows: ReadonlyArray<WorkflowIR> = [
+            { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
+        ];
+
+        const rendered = emitApi({ agents: [SUPPORT_AGENT], functions: [], workflows });
+
+        // The WorkflowReference interface is emitted exactly once (shared by both blocks).
+        expect(rendered.match(/export interface WorkflowReference</gu)).toHaveLength(1);
+        // Both reference objects are present.
+        expect(rendered).toContain("export const workflows: WorkflowsRef = {");
+        expect(rendered).toContain("export const agents: AgentsRef = {");
+        // Both import lines are present.
+        expect(rendered).toContain('import type * as lunoraWorkflowDefinitions from "../workflows.js";');
+    });
+
     it("emits a typed `workflows.*` reference object when the project declares workflows", () => {
         expect.assertions(5);
 
@@ -17,7 +97,7 @@ describe("emitApi", () => {
             { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
         ];
 
-        const rendered = emitApi([], workflows);
+        const rendered = emitApi({ functions: [], workflows });
 
         // Imports the workflow definitions so params can be inferred from `__params`.
         expect(rendered).toContain('import type * as lunoraWorkflowDefinitions from "../workflows.js";');
@@ -33,7 +113,7 @@ describe("emitApi", () => {
     it("omits the `workflows` block entirely when no workflows are declared", () => {
         expect.assertions(2);
 
-        const rendered = emitApi([]);
+        const rendered = emitApi({ functions: [] });
 
         expect(rendered).not.toContain("WorkflowsRef");
         expect(rendered).not.toContain("lunoraWorkflowDefinitions");
@@ -56,7 +136,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_channels[]');
         expect(rendered).not.toContain('import("./_generated/dataModel.js")');
@@ -75,7 +155,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("@lunora/server").LunoraContext');
     });
@@ -93,7 +173,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
         expect(rendered).not.toContain('import("_generated/dataModel.js")');
@@ -117,7 +197,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
         expect(rendered).not.toContain('import("../_generated/dataModel.js")');
@@ -141,12 +221,73 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('"2fa": {');
         expect(rendered).toContain('verify: FunctionReference<"mutation"');
         // Never emit `2fa` as a bare (invalid) object key.
         expect(rendered).not.toContain("    2fa: {");
+    });
+
+    it("emits a typed `httpStreams.*` reference block for `.stream()` routes", () => {
+        expect.assertions(6);
+
+        const httpRoutes: ReadonlyArray<HttpRouteIR> = [
+            makeStreamRoute({
+                chunkType: "{ text: string }",
+                searchParams: { prompt: { kind: "string" } },
+            }),
+        ];
+
+        const rendered = emitApi({ functions: [], httpRoutes });
+
+        // The reference type comes from the client package (same source as FunctionReference).
+        expect(rendered).toContain('import type { FunctionReference, HttpStreamRef } from "@lunora/client";');
+        // Namespaced like `api.*`: file `http.ts` → `httpStreams.http.streamTokens`.
+        expect(rendered).toContain("export interface HttpStreamsRef {");
+        expect(rendered).toContain("streamTokens: HttpStreamRef<{ text: string }, { prompt: string }, {}>;");
+        // The runtime object carries the verb + path the consumer opens.
+        expect(rendered).toContain("export const httpStreams: HttpStreamsRef = {");
+        expect(rendered).toContain('streamTokens: { method: "GET", path: "/api/tokens" },');
+        expect(rendered).toContain("    http: {");
+    });
+
+    it("excludes non-stream routes and omits the block entirely when no `.stream()` route exists", () => {
+        expect.assertions(3);
+
+        const rendered = emitApi({ functions: [], httpRoutes: [makeStreamRoute({ stream: false })] });
+
+        expect(rendered).not.toContain("HttpStreamsRef");
+        expect(rendered).not.toContain("HttpStreamRef");
+        expect(rendered).toContain('import type { FunctionReference } from "@lunora/client";');
+    });
+
+    it("renders a chunkType-less stream route as `unknown` and defaults empty validator maps to `{}`", () => {
+        expect.assertions(1);
+
+        const rendered = emitApi({ functions: [], httpRoutes: [makeStreamRoute()] });
+
+        expect(rendered).toContain("streamTokens: HttpStreamRef<unknown, {}, {}>;");
+    });
+
+    it("relocates `_generated/` import qualifiers inside a stream chunk type", () => {
+        expect.assertions(2);
+
+        const rendered = emitApi({
+            functions: [],
+            httpRoutes: [makeStreamRoute({ chunkType: 'import("./_generated/dataModel.js").Doc_messages' })],
+        });
+
+        expect(rendered).toContain('import("./dataModel.js").Doc_messages');
+        expect(rendered).not.toContain('import("./_generated/dataModel.js")');
+    });
+
+    it("imports the umbrella client specifier for httpStreams when useUmbrella is set", () => {
+        expect.assertions(1);
+
+        const rendered = emitApi({ functions: [], httpRoutes: [makeStreamRoute()], useUmbrella: true });
+
+        expect(rendered).toContain('import type { FunctionReference, HttpStreamRef } from "lunorash/client";');
     });
 
     it("rewrites deeply nested `../../_generated/X` qualifiers", () => {
@@ -162,7 +303,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
         expect(rendered).not.toContain('_generated/dataModel.js");');
@@ -186,7 +327,7 @@ describe("emitFunctions Caller types", () => {
             },
         ];
 
-        const rendered = emitFunctions(functions);
+        const rendered = emitFunctions({ functions });
 
         // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated TS type string, not a secret
         expect(rendered).toContain("watch: (args?: {}) => Promise<AsyncIterable<string>>;");
@@ -209,7 +350,7 @@ describe("emitFunctions Caller types", () => {
             },
         ];
 
-        const rendered = emitFunctions(functions);
+        const rendered = emitFunctions({ functions });
 
         expect(rendered).toContain('"2fa": {');
         expect(rendered).toContain('callRegistered(context, "2fa:verify"');
@@ -229,7 +370,7 @@ describe("emitFunctions Caller types", () => {
             },
         ];
 
-        const rendered = emitFunctions(functions);
+        const rendered = emitFunctions({ functions });
 
         expect(rendered).toContain("list: (args?: {}) => Promise<string>;");
     });

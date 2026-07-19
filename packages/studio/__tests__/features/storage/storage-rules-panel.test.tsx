@@ -69,7 +69,7 @@ describe("storageRulesPanel", () => {
     });
 
     it("surfaces an admin error", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         const mock = createMockClient({
             query: (): unknown => {

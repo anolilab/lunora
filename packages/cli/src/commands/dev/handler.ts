@@ -1,5 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 import { runCodegen } from "@lunora/codegen";
 import type { ContainerLogStreamHandle } from "@lunora/config";
@@ -209,23 +211,40 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
     return { args: ["--config", result.configPath], plan: { bindings, cleanup, enabled: true } };
 };
 
+/** Read `dev.ip` from one wrangler config file, or `undefined` when unset / the file doesn't parse. */
+const readDevIp = (wranglerPath: string): unknown => readWranglerJsonc<{ dev?: { ip?: unknown } }>(wranglerPath).parsed?.dev?.ip;
+
 /**
  * Extra `wrangler dev` args that pin the worker to the IPv4 loopback
  * (`--ip 127.0.0.1`) when the host has no IPv6 loopback (`::1`) — without which
  * `workerd`'s default `[::1]` bind aborts on startup with `Cannot assign
  * requested address`. Returns nothing (leaving wrangler's default) when the host
- * has `::1`, or when the project already pins `dev.ip` in its wrangler config —
- * an explicit user choice always wins over the auto-detection.
+ * has `::1`, or when the wrangler config the `wrangler dev` process actually
+ * runs with already pins `dev.ip` — an explicit user choice always wins over
+ * the auto-detection.
+ *
+ * `sidecarConfigFile`, when given, names the config `wrangler dev` is actually
+ * invoked with (e.g. the `framework-worker` flavor's sidecar runs `--config
+ * wrangler.dev.jsonc`, not the project's default `wrangler.jsonc`) — it is
+ * checked FIRST, since that's the file whose `dev.ip` the spawned process
+ * would honor. The project's default wrangler config is still checked after
+ * (a `dev.ip` pinned there is a reasonable project-wide default), but a
+ * `dev.ip` in the wrong file must never suppress the flag the sidecar actually
+ * needs.
  */
-const resolveLoopbackArgs = (cwd: string, hasLoopback: () => boolean): string[] => {
-    const wranglerPath = findWranglerFile(cwd);
+const resolveLoopbackArgs = (cwd: string, hasLoopback: () => boolean, sidecarConfigFile?: string): string[] => {
+    if (sidecarConfigFile !== undefined) {
+        const sidecarConfigPath = join(cwd, sidecarConfigFile);
 
-    if (wranglerPath !== undefined) {
-        const { parsed } = readWranglerJsonc<{ dev?: { ip?: unknown } }>(wranglerPath);
-
-        if (parsed?.dev?.ip !== undefined) {
+        if (existsSync(sidecarConfigPath) && readDevIp(sidecarConfigPath) !== undefined) {
             return [];
         }
+    }
+
+    const wranglerPath = findWranglerFile(cwd);
+
+    if (wranglerPath !== undefined && readDevIp(wranglerPath) !== undefined) {
+        return [];
     }
 
     return hasLoopback() ? [] : ["--ip", "127.0.0.1"];
@@ -297,7 +316,9 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
         let sidecar: (SpawnDescriptor & { tag: string }) | undefined;
 
         if (flavor === "framework-worker") {
-            const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback);
+            // The sidecar runs `--config wrangler.dev.jsonc`, not the deploy
+            // `wrangler.jsonc` — check its own `dev.ip` first.
+            const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback, DEV_WRANGLER_CONFIG);
             const sidecarExec = execArgsFor(manager, "wrangler", ["dev", "--config", DEV_WRANGLER_CONFIG, ...loopbackArgs, "--var", "WORKER_ENV:development"]);
 
             sidecar = { args: sidecarExec.args, command: sidecarExec.command, cwd, tag: "worker" };

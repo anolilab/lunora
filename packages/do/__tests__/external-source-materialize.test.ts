@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations } from "../src/ctx-db";
-import { materializeExternalRows, runExternalSourceTick } from "../src/external-source-materialize";
+import { materializeExternalRows, materializeExternalRowsIncremental, runExternalSourceTick } from "../src/external-source-materialize";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -103,6 +103,154 @@ describe("materializeExternalRows", () => {
 
         expect(applied).toBe(0);
         expect([...nextBaseline]).toStrictEqual([...baseline]);
+    });
+});
+
+describe("materializeExternalRowsIncremental (upsert-only, plan 136)", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("upserts the slice (insert new, replace existing) and never deletes an absent row", async () => {
+        expect.assertions(4);
+
+        const writer = setupWriter();
+
+        await writer.insert("documents", { _id: "d1", orgId: "org_1", title: "one" }, { allowExplicitId: true });
+        await writer.insert("documents", { _id: "d2", orgId: "org_1", title: "two" }, { allowExplicitId: true });
+
+        // Incremental slice: d2 changed + d3 new. d1 is absent but must remain.
+        const pulled = [
+            { _id: "d2", orgId: "org_1", title: "two-edited" },
+            { _id: "d3", orgId: "org_1", title: "three" },
+        ];
+
+        const { applied } = await materializeExternalRowsIncremental(writer, pulled, { table: "documents" });
+
+        expect(applied).toBe(2);
+        await expect(writer.get("d1")).resolves.toMatchObject({ _id: "d1", title: "one" });
+        await expect(writer.get("d2")).resolves.toMatchObject({ _id: "d2", title: "two-edited" });
+        await expect(writer.get("d3")).resolves.toMatchObject({ _id: "d3", title: "three" });
+    });
+
+    it("skips a re-pulled boundary row whose content is unchanged (no spurious update/CDC)", async () => {
+        expect.assertions(3);
+
+        const writer = setupWriter();
+
+        await writer.insert("documents", { _id: "d1", orgId: "org_1", title: "one" }, { allowExplicitId: true });
+
+        const cdcBefore = readCdcChanges(harness.sql).changes.length;
+
+        // The `>= watermark` slice re-pulls d1 unchanged; it must NOT be re-applied.
+        const { applied } = await materializeExternalRowsIncremental(writer, [{ _id: "d1", orgId: "org_1", title: "one" }], { table: "documents" });
+
+        expect(applied).toBe(0);
+        await expect(writer.get("d1")).resolves.toMatchObject({ _id: "d1", title: "one" });
+        // No new CDC entry ⇒ no broadcast / re-embed for the unchanged row.
+        expect(readCdcChanges(harness.sql).changes).toHaveLength(cdcBefore);
+    });
+
+    it("turns a `deletedIds` entry into a delete while upserting the rest", async () => {
+        expect.assertions(2);
+
+        const writer = setupWriter();
+
+        await writer.insert("documents", { _id: "d1", orgId: "org_1", title: "one" }, { allowExplicitId: true });
+
+        const pulled = [
+            { _id: "d1", orgId: "org_1", title: "one" },
+            { _id: "d2", orgId: "org_1", title: "two" },
+        ];
+
+        await materializeExternalRowsIncremental(writer, pulled, { deletedIds: new Set(["d1"]), table: "documents" });
+
+        await expect(writer.get("d1")).resolves.toBeNull();
+        await expect(writer.get("d2")).resolves.toMatchObject({ _id: "d2", title: "two" });
+    });
+
+    it("skips re-emitting a boundary tombstone whose row is already absent locally (no repeated delete, DO-05)", async () => {
+        expect.assertions(4);
+
+        const writer = setupWriter();
+
+        await writer.insert("documents", { _id: "d1", orgId: "org_1", title: "one" }, { allowExplicitId: true });
+
+        const pulled = [{ _id: "d1", orgId: "org_1", title: "one" }];
+
+        // First tick: d1 is tombstoned upstream — the delete is emitted and applied.
+        const first = await materializeExternalRowsIncremental(writer, pulled, { deletedIds: new Set(["d1"]), table: "documents" });
+
+        expect(first.applied).toBe(1);
+        await expect(writer.get("d1")).resolves.toBeNull();
+
+        // Second tick re-pulls the SAME boundary tombstone (still `>= watermark`,
+        // same as the content short-circuit's rationale) — d1 is already absent
+        // locally, so the delete must not be re-emitted (no repeated CDC/broadcast).
+        const second = await materializeExternalRowsIncremental(writer, pulled, { deletedIds: new Set(["d1"]), table: "documents" });
+
+        expect(second.applied).toBe(0);
+        await expect(writer.get("d1")).resolves.toBeNull();
+    });
+});
+
+describe("runExternalSourceTick — CDC delete pins to its own table (DO-02)", () => {
+    // Two non-global tables sharing an id namespace, "otherTable" declared
+    // BEFORE "documents" — `locateRowById`'s cross-table UNION-ALL probe (used
+    // when a delete carries no `expectedTable`) matches branches in schema
+    // declaration order, so this ordering is what makes an unpinned delete
+    // reliably mis-hit the wrong table instead of accidentally the right one.
+    const twoTableSchema: SchemaLike = {
+        tables: {
+            otherTable: { indexes: [], shape: { note: { kind: "string" } } },
+            documents: { indexes: [], shape: { orgId: { kind: "string" }, title: { kind: "string" } } },
+        },
+    };
+
+    let twoTableHarness: ReturnType<typeof createSqliteExec>;
+
+    const setupTwoTableWriter = (): DatabaseWriterLike => {
+        runShardMigrations(twoTableHarness.sql, twoTableSchema, { cdc: true });
+
+        return createShardContextDatabase({
+            broadcast: () => undefined,
+            cdc: true,
+            clock: () => 1_700_000_000_000,
+            schema: twoTableSchema,
+            sql: twoTableHarness.sql,
+        });
+    };
+
+    beforeEach(() => {
+        twoTableHarness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        twoTableHarness.close();
+    });
+
+    it("a sourced-table delete never removes a same-id row living in a different table", async () => {
+        expect.assertions(2);
+
+        const writer = setupTwoTableWriter();
+
+        // Same id string, deliberately present in BOTH tables.
+        await writer.insert("otherTable", { _id: "dup1", note: "unrelated row, must survive" }, { allowExplicitId: true });
+        await writer.insert("documents", { _id: "dup1", orgId: "org_1", title: "to be deleted" }, { allowExplicitId: true });
+
+        // Upstream membership is now empty for "documents" → the diff against
+        // the current baseline (dup1 present) emits a delete for table "documents".
+        await runExternalSourceTick(twoTableHarness.sql, writer, [], { table: "documents" });
+
+        // The pinned delete (`applyCdcChange` passing `change.table`) must only
+        // ever reach "documents" — an unpinned delete would probe both tables in
+        // declaration order and remove "otherTable"'s row instead (DO-02).
+        await expect(writer.get("dup1", "documents")).resolves.toBeNull();
+        await expect(writer.get("dup1", "otherTable")).resolves.toMatchObject({ note: "unrelated row, must survive" });
     });
 });
 

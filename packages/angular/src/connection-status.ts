@@ -4,6 +4,10 @@ import type { ConnectionStatus, LunoraClient } from "@lunora/client";
 
 import { resolveLunoraClient } from "./client";
 
+/**
+ * `ConnectionStatusOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface ConnectionStatusOptions {
     /** Client to observe. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
@@ -20,6 +24,7 @@ export interface ConnectionStatusOptions {
  *
  * The listener is removed when the owning `DestroyRef` fires. Call from an
  * injection context (component/service field or constructor).
+ * @experimental
  */
 export const connectionStatus = (options: ConnectionStatusOptions = {}): Signal<ConnectionStatus> => {
     const client = resolveLunoraClient(options.client);

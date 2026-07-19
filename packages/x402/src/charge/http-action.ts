@@ -26,12 +26,16 @@ import type { X402ChargeConfig } from "../config";
 import type { ChargeMiddleware } from "./middleware";
 import { createChargeMiddleware } from "./middleware";
 
-/** A handler shaped like a Lunora HTTP action: `(context, request) => Response`. */
+/**
+ * A handler shaped like a Lunora HTTP action: `(context, request) => Response`.
+ * @experimental
+ */
 export type HttpActionHandler<Context> = (context: Context, request: Request) => Promise<Response> | Response;
 
 /**
  * Gate `handler` behind an x402 paywall described by `config`. Returns a handler
  * of the same shape, ready to pass to `httpAction`.
+ * @experimental
  */
 export const withX402 = <Context>(config: X402ChargeConfig, handler: HttpActionHandler<Context>): HttpActionHandler<Context> => {
     let pending: Promise<ChargeMiddleware> | undefined;

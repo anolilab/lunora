@@ -17,6 +17,7 @@ import { createContext, lazy, Suspense, use, useEffect, useMemo } from "react";
 import BrandMark from "../components/brand-mark";
 import { ErrorBoundary } from "../components/error-boundary";
 import RulesBanner from "../components/rules-banner";
+import { EnsureThemeProvider } from "../components/theme-provider";
 import { ThemeToggle } from "../components/theme-toggle";
 import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/input";
@@ -78,6 +79,7 @@ const lazyNamed = <P, K extends string>(load: () => Promise<Record<K, ComponentT
 const InsightsPanel = lazyNamed(() => import("../features/advisors/insights-panel"), "InsightsPanel");
 const RlsPanel = lazy(() => import("../features/advisors/rls-panel"));
 const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-advisor-panel"));
+const AgentsPanel = lazyNamed(() => import("../features/agents/agents-panel"), "AgentsPanel");
 const AnalyticsPanel = lazyNamed(() => import("../features/analytics/analytics-panel"), "AnalyticsPanel");
 const ApiTab = lazy(() => import("../features/api/api-tab"));
 const AuthConfigPanel = lazyNamed(() => import("../features/auth/auth-config-panel"), "AuthConfigPanel");
@@ -92,6 +94,7 @@ const PitrPanel = lazyNamed(() => import("../features/database/pitr-panel"), "Pi
 const FlagsPanel = lazyNamed(() => import("../features/flags/flags-panel"), "FlagsPanel");
 const FunctionRunner = lazyNamed(() => import("../features/functions/function-runner"), "FunctionRunner");
 const FunctionStatsPanel = lazyNamed(() => import("../features/functions/function-stats"), "FunctionStatsPanel");
+const IssuesPanel = lazyNamed(() => import("../features/issues/issues-panel"), "IssuesPanel");
 const AuditPanel = lazyNamed(() => import("../features/logs/audit-panel"), "AuditPanel");
 const LogDrainsPanel = lazyNamed(() => import("../features/logs/log-drains-panel"), "LogDrainsPanel");
 // `logs-panel` re-exports several types alongside the component, which trips the
@@ -123,6 +126,7 @@ const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"
 
 /** Identifier for each built-in studio tab. */
 type StudioTab =
+    | "agents"
     | "analytics"
     | "api"
     | "audit"
@@ -140,6 +144,7 @@ type StudioTab =
     | "health"
     | "home"
     | "insights"
+    | "issues"
     | "kv"
     | "logs"
     | "mail"
@@ -299,6 +304,9 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     authConfig: (
         <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6h-3.6l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
     ),
+    agents: (
+        <path d="M12 8V5m0 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM6 8h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2Zm3 5h.01M15 13h.01M9 21h6" />
+    ),
     authSessions: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     containers: <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Zm0 0 9 4.5m0 0 9-4.5m-9 4.5V21" />,
     dashboards: <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 14h7v5H4v-5Zm9-1h7v6h-7v-6Z" />,
@@ -316,6 +324,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     health: <path d="M3 12h4l2 6 4-14 2 8h6" />,
     home: <path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />,
     insights: <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.2 1.2h5l.2-1.2c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3ZM9.5 20.5h5M10 18h4" />,
+    issues: <path d="M10.3 4.3 2.5 18a2 2 0 0 0 1.7 3h15.6a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0ZM12 9v4m0 3v.01" />,
     kv: <path d="M5 5h14v4H5V5Zm0 5h14v4H5v-4Zm0 5h14v4H5v-4Z" />,
     logs: <path d="M5 6h14M5 10h14M5 14h9M5 18h11" />,
     mail: <path d="M4 5h16v14H4V5Zm0 1.5 8 6 8-6" />,
@@ -355,10 +364,10 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "overview", tabs: ["home", "dashboards"] },
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
-    { key: "functions", tabs: ["functions", "api", "workflows", "queues", "containers"] },
+    { key: "functions", tabs: ["functions", "api", "workflows", "agents", "queues"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
-    { key: "observability", tabs: ["logs", "audit", "realtime", "fanout", "metrics", "analytics", "health"] },
+    { key: "observability", tabs: ["issues", "logs", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health"] },
     { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
     { key: "operations", tabs: ["schedule", "mail", "drains", "payments", "flags"] },
     { key: "settings", tabs: ["settings"] },
@@ -433,6 +442,7 @@ const TABS = exhaustiveRouteTabs([
     "functions",
     "api",
     "workflows",
+    "agents",
     "queues",
     "containers",
     "schema",
@@ -455,6 +465,7 @@ const TABS = exhaustiveRouteTabs([
     "rls",
     "permissions",
     "insights",
+    "issues",
     "logs",
     "realtime",
     "fanout",
@@ -801,6 +812,7 @@ const StudioLayout = (): ReactElement => {
     // locale changes but aren't rebuilt on every unrelated render.
     const tabLabel = useMemo(() => {
         return {
+            agents: t("Agents"),
             analytics: t("Analytics"),
             api: t("API"),
             audit: t("Audit"),
@@ -818,6 +830,7 @@ const StudioLayout = (): ReactElement => {
             health: t("Health"),
             home: t("Home"),
             insights: t("Performance"),
+            issues: t("Issues"),
             kv: t("KV"),
             logs: t("Logs"),
             metrics: t("Metrics"),
@@ -856,12 +869,13 @@ const StudioLayout = (): ReactElement => {
 
     // One-line section descriptions for the page header.
     const tabDescription = {
+        agents: t("Inspect agent threads, message timelines, tool calls, and token usage."),
         analytics: t("Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards."),
         api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),
         audit: t("A durable log of admin state-changing operations."),
         authConfig: t("Enabled plugins and session config (read-only)."),
         authSessions: t("Browse and revoke active sessions across all users."),
-        containers: t("Live Cloudflare Containers — current lifecycle state per container from the log stream."),
+        containers: t("Live Cloudflare Containers — current lifecycle state per instance from the log stream."),
         dashboards: t("Chart widgets backed by saved read-only SQL queries."),
         data: t("Browse and edit rows across your shard and global tables."),
         drains: t("Forward logs to Logpush, Tail Workers, or a webhook collector."),
@@ -873,6 +887,7 @@ const StudioLayout = (): ReactElement => {
         health: t("At-a-glance connection, error, and shard signals."),
         home: t("Connection, health, and advisor summary for your deployment."),
         insights: t("Surface slow functions, error spikes, and cache problems."),
+        issues: t("Grouped error triage — Worker throws and container crashes folded by fingerprint."),
         logs: t("A live stream of recent function logs."),
         metrics: t("Per-shard health and aggregate metrics."),
         migrations: t("Review migration status and run them."),
@@ -1067,6 +1082,7 @@ const buildRouter = ({
     const rootRoute = createRootRoute({ component: StudioLayout });
 
     const panels: Record<StudioTab, ReactElement> = {
+        agents: <AgentsPanel initialShardKey={initialShardKey} />,
         analytics: <AnalyticsPanel />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
@@ -1090,6 +1106,7 @@ const buildRouter = ({
         health: <HealthPanel initialShardKey={initialShardKey} />,
         home: <HomePanel initialShardKey={initialShardKey} />,
         insights: <InsightsPanel initialShardKey={initialShardKey} />,
+        issues: <IssuesPanel initialShardKey={initialShardKey} />,
         logs: <LogsPanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
@@ -1234,21 +1251,26 @@ export const Studio = ({
     scheduledCron,
     scheduledLoad,
 }: StudioProps): ReactElement => {
+    // The header's <ThemeToggle> needs a theme context. `StudioApp` mounts one;
+    // a bare `<Studio>` embed (a public export) gets its own here — inherit-or-own,
+    // exactly like the i18n provider below.
     const shell = (
-        <StudioShell
-            basePath={basePath}
-            chrome={chrome}
-            dataEditable={dataEditable}
-            functions={functions}
-            initialShardKey={initialShardKey}
-            openApiSpec={openApiSpec}
-            openRpcSpec={openRpcSpec}
-            runAsIdentity={runAsIdentity}
-            scheduledCancel={scheduledCancel}
-            scheduledCron={scheduledCron}
-            scheduledLoad={scheduledLoad}
-            schemaEditable={schemaEditable}
-        />
+        <EnsureThemeProvider>
+            <StudioShell
+                basePath={basePath}
+                chrome={chrome}
+                dataEditable={dataEditable}
+                functions={functions}
+                initialShardKey={initialShardKey}
+                openApiSpec={openApiSpec}
+                openRpcSpec={openRpcSpec}
+                runAsIdentity={runAsIdentity}
+                scheduledCancel={scheduledCancel}
+                scheduledCron={scheduledCron}
+                scheduledLoad={scheduledLoad}
+                schemaEditable={schemaEditable}
+            />
+        </EnsureThemeProvider>
     );
 
     if (i18n === undefined && locale === undefined) {

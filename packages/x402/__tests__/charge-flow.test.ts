@@ -45,6 +45,30 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
+/** A minimal `payment-verified` result — enough for `handle` to reach settlement. */
+const paymentVerifiedResult = {
+    cancellationDispatcher: { cancel: vi.fn<() => Promise<void>>() },
+    paymentPayload: {},
+    paymentRequirements: {},
+    type: "payment-verified",
+} as const;
+
+const successSettlement = {
+    headers: { "x-payment-response": "settled" },
+    network: "eip155:8453",
+    payer: "0xPayer",
+    requirements: { amount: "10000", asset: "0xUSDC", payTo: "0x1111111111111111111111111111111111111111" },
+    success: true,
+    transaction: "0xTX",
+} as const;
+
+const failureSettlement = {
+    errorReason: "insufficient_funds",
+    headers: {},
+    response: { body: { error: "insufficient_funds" }, headers: { "content-type": "application/json" }, status: 402 },
+    success: false,
+} as const;
+
 describe("createChargeMiddleware", () => {
     it("challenges an unpaid request with 402 and never runs the handler", async () => {
         const fetchMock = stubFacilitator();
@@ -57,6 +81,76 @@ describe("createChargeMiddleware", () => {
         expect(handler).not.toHaveBeenCalled();
         // Only /supported was hit — no verify/settle for an unpaid request.
         expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("settle-first: a settlement failure never runs the handler (no committed-but-unpaid write)", async () => {
+        vi.spyOn(X402HTTPResourceServer.prototype, "initialize").mockResolvedValue(undefined);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processHTTPRequest").mockResolvedValue(paymentVerifiedResult as never);
+
+        const processSettlement = vi.spyOn(X402HTTPResourceServer.prototype, "processSettlement").mockResolvedValue(failureSettlement as never);
+
+        const middleware = await createChargeMiddleware(chargeConfig, undefined, { settleBeforeHandler: true });
+        const handler = vi.fn<() => Response>(() => new Response("mutated"));
+
+        const response = await middleware.handle(new Request("https://api.example/report"), handler);
+
+        // The handler (the mutation's shard-forward dispatch, in the procedure
+        // gate) never ran — settlement was decided first, so nothing committed.
+        expect(handler).not.toHaveBeenCalled();
+        expect(response.status).toBe(402);
+
+        // Settlement ran before the handler with no `responseHeaders` (there is
+        // no response yet at this point).
+        expect(processSettlement).toHaveBeenCalledTimes(1);
+
+        const transportContext = processSettlement.mock.calls[0]?.[3];
+
+        expect(transportContext).not.toHaveProperty("responseHeaders");
+
+        vi.restoreAllMocks();
+    });
+
+    it("settle-first: on success, reports the receipt via the injected waitUntil before running the handler", async () => {
+        vi.spyOn(X402HTTPResourceServer.prototype, "initialize").mockResolvedValue(undefined);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processHTTPRequest").mockResolvedValue(paymentVerifiedResult as never);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processSettlement").mockResolvedValue(successSettlement as never);
+
+        const onReceipt = vi.fn<() => Promise<void>>(() => Promise.resolve());
+        const waitUntil = vi.fn<(promise: Promise<unknown>) => void>();
+
+        const middleware = await createChargeMiddleware({ ...chargeConfig, onReceipt }, undefined, { settleBeforeHandler: true });
+        const handler = vi.fn<() => Response>(() => new Response("mutated"));
+
+        const response = await middleware.handle(new Request("https://api.example/report"), handler, { waitUntil });
+
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(response.headers.get("x-payment-response")).toBe("settled");
+
+        // The receipt sink ran synchronously (best-effort) and its promise was
+        // registered with the injected `waitUntil` so workerd keeps it alive.
+        expect(onReceipt).toHaveBeenCalledTimes(1);
+        expect(waitUntil).toHaveBeenCalledTimes(1);
+        expect(waitUntil.mock.calls[0]?.[0]).toBeInstanceOf(Promise);
+
+        vi.restoreAllMocks();
+    });
+
+    it("delivers the receipt sink without a waitUntil when none is injected (non-Workers fallback)", async () => {
+        vi.spyOn(X402HTTPResourceServer.prototype, "initialize").mockResolvedValue(undefined);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processHTTPRequest").mockResolvedValue(paymentVerifiedResult as never);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processSettlement").mockResolvedValue(successSettlement as never);
+
+        const onReceipt = vi.fn<() => Promise<void>>(() => Promise.resolve());
+
+        const middleware = await createChargeMiddleware({ ...chargeConfig, onReceipt }, undefined, { settleBeforeHandler: true });
+        const handler = vi.fn<() => Response>(() => new Response("mutated"));
+
+        const response = await middleware.handle(new Request("https://api.example/report"), handler);
+
+        expect(response.status).toBe(200);
+        expect(onReceipt).toHaveBeenCalledTimes(1);
+
+        vi.restoreAllMocks();
     });
 
     it("preserves the original handler error when payment cancellation also fails", async () => {

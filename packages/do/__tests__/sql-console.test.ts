@@ -38,6 +38,23 @@ describe("assertReadonly", () => {
         }).not.toThrow();
     });
 
+    it("strips leading block comments and returns fast on unterminated ones", () => {
+        expect.assertions(3);
+
+        expect(() => {
+            assertReadonly("/* leading block */ SELECT 1");
+        }).not.toThrow();
+
+        // A long run of unterminated `/*` openers must be rejected in linear time
+        // (the leading-noise scan is a single pass, not a backtracking regex).
+        const start = performance.now();
+
+        expect(() => {
+            assertReadonly(` ${"/*".repeat(50_000)}`);
+        }).toThrow();
+        expect(performance.now() - start).toBeLessThan(1000);
+    });
+
     it("rejects mutating and DDL statements", () => {
         expect.assertions(6);
 

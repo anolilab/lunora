@@ -531,6 +531,26 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
     const wrapped: MaskDatabase = {
         ...base,
 
+        async deleteWhere(tableName, where, options) {
+            assertWhereAllowed(tableName, where, "deleteMany({ where })");
+
+            if (base.deleteWhere === undefined) {
+                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.deleteMany({ where }) is unavailable: this writer has no where-based delete`);
+            }
+
+            return base.deleteWhere(tableName, where, options);
+        },
+
+        async patchWhere(tableName, args, options) {
+            assertWhereAllowed(tableName, args.where, "patchMany({ where })");
+
+            if (base.patchWhere === undefined) {
+                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.patchMany({ where }) is unavailable: this writer has no where-based patch`);
+            }
+
+            return base.patchWhere(tableName, args, options);
+        },
+
         aggregate(tableName, options) {
             assertReductionAllowed(tableName, [options.field], "aggregate");
             assertWhereAllowed(tableName, options.where, "aggregate");
@@ -560,6 +580,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
 
         async findFirst(tableName, args) {
             assertWhereAllowed(tableName, args?.where, "findFirst");
+            assertWhereAllowed(tableName, args?.baseWhere, "findFirst");
             assertOrderByAllowed(tableName, args?.orderBy, "findFirst");
 
             const row = await base.findFirst(tableName, args);
@@ -570,6 +591,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
 
         async findFirstOrThrow(tableName, args) {
             assertWhereAllowed(tableName, args?.where, "findFirstOrThrow");
+            assertWhereAllowed(tableName, args?.baseWhere, "findFirstOrThrow");
             assertOrderByAllowed(tableName, args?.orderBy, "findFirstOrThrow");
 
             const row = await base.findFirstOrThrow(tableName, args);
@@ -580,6 +602,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
 
         async findMany(tableName, args) {
             assertWhereAllowed(tableName, args?.where, "findMany");
+            assertWhereAllowed(tableName, args?.baseWhere, "findMany");
             assertOrderByAllowed(tableName, args?.orderBy, "findMany");
 
             const page = await base.findMany(tableName, args);

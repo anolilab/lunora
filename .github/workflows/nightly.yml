@@ -1,0 +1,159 @@
+# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
+
+# Nightly full-suite verification. PRs run `vis affected` in test.yml, so
+# unchanged packages can go stale between merges — this scheduled workflow
+# re-verifies the whole matrix daily: the full unit-test suite for every
+# package (no `affected` filter), all workerd integration suites, and the e2e
+# suite unconditionally (no paths-filter). Not a required check — a nightly
+# failure is a canary, it must never block a PR.
+
+"name": "Nightly"
+
+"on": # yamllint disable-line rule:truthy
+    "schedule":
+        # 03:00 UTC daily — after the day's merges, before the EU morning.
+        - "cron": "0 3 * * *"
+    "workflow_dispatch": # yamllint disable-line rule:empty-values
+
+"concurrency":
+    "group": "${{ github.workflow }}-${{ github.ref }}"
+    "cancel-in-progress": true
+
+"permissions":
+    "contents": "read" # to fetch code (actions/checkout)
+
+"jobs":
+    "test-full":
+        "name": "Full test suite (node-${{ matrix.node_version }})"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 60
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                "node_version": ["22.15", "24.11"]
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "${{ matrix.node_version }}"
+                  "cache-prefix": "nightly"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Full build (not `affected`) so every package's dist exists for
+            # the full test run.
+            - "name": "Build packages"
+              "run": "pnpm run build:packages"
+
+            # Full suite, no `affected` filter. workerd stays off here (the
+            # dedicated `test-workerd` job below covers it) and coverage is
+            # not collected — the nightly is a pass/fail canary, Codecov is
+            # fed by the PR-path test.yml run. The `test` script includes the
+            # studio package (unit + jsdom component projects) — the old
+            # component-suite hang is fixed, so no extra studio step is needed.
+            - "name": "Run all tests"
+              "run": "pnpm run test"
+
+    # Same design as the `test-workerd` job in test.yml (see the comments
+    # there): real workerd via @cloudflare/vitest-pool-workers, coverage off
+    # (v8/node:inspector is unsupported in the pool), one matrix leg per
+    # gated package.
+    "test-workerd":
+        "name": "Workerd integration (${{ matrix.package }})"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                "package": ["client", "container", "d1", "do", "queue", "runtime", "scheduler", "storage", "workflow", "x402"]
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "test-workerd"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Build package and dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=${{ matrix.package }}"
+
+            - "name": "Run workerd suites"
+              "env":
+                  "LUNORA_WORKERD_TESTS": "1"
+              "run": |
+                  pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
+
+    # Same job as test.yml's `e2e`, minus the paths-filter gate — the
+    # nightly always runs it.
+    "e2e":
+        "name": "E2E (Playwright + Miniflare)"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "e2e"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # See test.yml: the E2E global setup boots the playground's Vite
+            # dev server from built dist, so packages build first; the package
+            # build (CPU/disk) and the browser download (network) bottleneck on
+            # different resources and run concurrently.
+            - "parallel":
+                  - "name": "Build packages"
+                    "run": "pnpm run build:packages"
+
+                  - "name": "Install Playwright browsers"
+                    "run": "pnpm --filter @lunora/e2e exec playwright install chromium firefox"
+
+            - "name": "Run E2E suite"
+              "env":
+                  "CI": "true"
+                  "LUNORA_E2E": "true"
+              "run": "pnpm e2e"
+
+            - "name": "Upload Playwright report on failure"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "playwright-report"
+                  "path": "tests/e2e/playwright-report"
+                  "retention-days": 7

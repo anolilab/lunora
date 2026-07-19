@@ -139,6 +139,20 @@ describe("discover-workflows", () => {
         expect(discoverWorkflows(newProject(), workdir).map((workflow) => workflow.className)).toEqual(["CleanupWorkflow"]);
     });
 
+    it("discovers a defineWorkflow initializer wrapped in satisfies/as/parens (CODEGEN-02)", () => {
+        expect.assertions(1);
+
+        writeWorkflows(`
+            import { defineWorkflow, type WorkflowDefinition } from "@lunora/workflow";
+
+            export const viaSatisfies = defineWorkflow({ handler: async () => undefined }) satisfies WorkflowDefinition;
+            export const viaAs = defineWorkflow({ handler: async () => undefined }) as WorkflowDefinition;
+            export const viaParens = (defineWorkflow({ handler: async () => undefined }));
+        `);
+
+        expect(discoverWorkflows(newProject(), workdir).map((workflow) => workflow.exportName)).toEqual(["viaAs", "viaParens", "viaSatisfies"]);
+    });
+
     it("rejects a non-literal name with a located diagnostic", () => {
         expect.assertions(1);
 

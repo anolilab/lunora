@@ -98,3 +98,53 @@ describe("createWorker — workpool slot release", () => {
         expect(sched.calls.some((call) => call.path === "/complete")).toBe(false);
     });
 });
+
+/** POST a dispatch body with a custom `env` (for the workflow-binding path). */
+const dispatchWithEnv = (worker: ReturnType<typeof createWorker>, body: Record<string, unknown>, env: unknown): Promise<Response> =>
+    worker.fetch(
+        new Request("https://app.example/_lunora/scheduler/dispatch", {
+            body: JSON.stringify(body),
+            headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
+            method: "POST",
+        }),
+        env,
+        fakeContext,
+    );
+
+describe("createWorker — scheduled workflow/agent dispatch", () => {
+    it("starts a fresh instance of the workflow binding with the job args as params", async () => {
+        expect.assertions(3);
+
+        const created: { params?: Record<string, unknown> }[] = [];
+        const env = {
+            AGENT_SUPPORT: {
+                create: async (options: { params?: Record<string, unknown> }) => {
+                    created.push(options);
+
+                    return { id: "wf-1" };
+                },
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
+
+        const response = await dispatchWithEnv(worker, { args: { prompt: "digest" }, id: "job-3", workflow: "AGENT_SUPPORT" }, env);
+
+        expect(response.status).toBe(200);
+        // The binding is `create()`d with the scheduled args as its `params`.
+        expect(created).toStrictEqual([{ params: { prompt: "digest" } }]);
+        // A workflow target never holds a workpool slot → no /complete callback.
+        expect(sched.calls.some((call) => call.path === "/complete")).toBe(false);
+    });
+
+    it("fails with a 500 when the workflow binding is missing from env", async () => {
+        expect.assertions(1);
+
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
+
+        const response = await dispatchWithEnv(worker, { args: {}, id: "job-4", workflow: "AGENT_MISSING" }, {});
+
+        expect(response.status).toBe(500);
+    });
+});

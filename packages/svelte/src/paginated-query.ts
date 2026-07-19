@@ -154,7 +154,7 @@ const createPaginatedEngine = <T>(
         }
     };
 
-    const syncSubscriptions = (): void => {
+    const syncPass = (): void => {
         if (currentBaseArgs === "skip") {
             for (const unsub of activeSubs.values()) {
                 unsub();
@@ -223,6 +223,7 @@ const createPaginatedEngine = <T>(
                             // visible items before the new subscription's first frame.
                             migrateResultsForRebalance(latestPages, next);
                             pagesStore.set(next);
+                            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after syncSubscriptions is defined
                             syncSubscriptions();
                             rebuildPageResults();
                         }
@@ -232,6 +233,40 @@ const createPaginatedEngine = <T>(
             );
 
             activeSubs.set(key, unsub);
+        }
+    };
+
+    // `client.subscribe` replays a cached value to the new subscriber
+    // SYNCHRONOUSLY — the callback fires before `subscribe` returns, i.e. before
+    // this page's `activeSubs.set(key, unsub)` above is recorded. If that replay
+    // empties `pendingPageKeys` and `rebalance` returns a new layout, the callback
+    // re-enters `syncSubscriptions` against half-populated bookkeeping. Re-entering
+    // the open loop there would duplicate still-wanted subs and orphan handles (the
+    // outer frame's `activeSubs.set` overwrites the reentrant entry) — a leaked,
+    // unsubscribable WS subscription. So guard: while a pass is running, a nested
+    // call only flags a re-sync, which the drain below runs once the outer pass has
+    // finished recording every handle — that follow-up pass closes any now-stale
+    // sub and opens the genuinely new pages against complete bookkeeping.
+    let syncing = false;
+    let resyncRequested = false;
+
+    const syncSubscriptions = (): void => {
+        if (syncing) {
+            resyncRequested = true;
+
+            return;
+        }
+
+        syncing = true;
+
+        try {
+            do {
+                resyncRequested = false;
+                syncPass();
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- resyncRequested is set by syncPass through a nested call the flow analyzer cannot track
+            } while (resyncRequested);
+        } finally {
+            syncing = false;
         }
     };
 

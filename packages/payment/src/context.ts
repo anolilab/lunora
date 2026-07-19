@@ -14,7 +14,10 @@ import { createDatabasePaymentStore } from "./database-store";
 import type { EntitlementsConfig } from "./entitlements";
 import type { PaymentObserver } from "./observability";
 
-/** Structural subset of Lunora's `ctx.db` (the `findFirst`/`findMany(tableName, { where })` form). */
+/**
+ * Structural subset of Lunora's `ctx.db` (the `findFirst`/`findMany(tableName, { where })` form).
+ * @experimental
+ */
 export interface LunoraDatabaseLike {
     delete: (id: string) => Promise<void>;
     findFirst: (table: string, args?: { where?: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
@@ -23,12 +26,19 @@ export interface LunoraDatabaseLike {
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
 }
 
-/** Structural subset of a Lunora function context used to build payments. */
+/**
+ * Structural subset of a Lunora function context used to build payments.
+ * @experimental
+ */
 export interface PaymentContextLike {
     auth?: { userId?: null | string };
     db: LunoraDatabaseLike;
 }
 
+/**
+ * `PaymentsFromContextOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface PaymentsFromContextOptions {
     readonly adapter: PaymentAdapter;
     /** Override the default "caller owns the referenceId" authorization. */
@@ -39,7 +49,10 @@ export interface PaymentsFromContextOptions {
     readonly observability?: PaymentObserver;
 }
 
-/** Adapt a Lunora `ctx.db` to the {@link PaymentDatabase} port the store writes through. */
+/**
+ * Adapt a Lunora `ctx.db` to the {@link PaymentDatabase} port the store writes through.
+ * @experimental
+ */
 export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): PaymentDatabase => {
     return {
         delete: async (id) => database.delete(id),
@@ -54,6 +67,10 @@ export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): P
     };
 };
 
+/**
+ * `paymentsFromContext` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const paymentsFromContext = (context: PaymentContextLike, options: PaymentsFromContextOptions): LunoraPayment => {
     // Normalize any falsy identity (null/undefined/empty string) to `undefined` so a falsy-but-present
     // principal can never match an empty/orphan `referenceId`.

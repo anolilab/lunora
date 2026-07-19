@@ -6,6 +6,7 @@ import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CodegenDiagnosticError } from "../src/diagnostics";
+import { discoverAgents } from "../src/discover-agents";
 import discoverCrons from "../src/discover-crons";
 import { discoverWorkflows } from "../src/discover-workflows";
 import { emitCrons, emitWranglerCronTriggers } from "../src/emit";
@@ -174,6 +175,28 @@ describe("discover-crons", () => {
         expect(caught).toMatchObject({ code: "DUPLICATE_CRON_NAME", name: "LunoraError", status: 500 });
     });
 
+    it("accepts a no-substitution template literal for the job name and raw cron expression (CODEGEN-03)", () => {
+        expect.assertions(1);
+
+        // Backticks with no `${…}` interpolation are just as static as a
+        // string literal — `stringArgument` must accept
+        // `NoSubstitutionTemplateLiteral`, not only `StringLiteral`.
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { internal } from "./_generated/api.js";
+            const crons = cronJobs();
+            crons.cron(\`nightly\`, \`0 * * * *\`, internal.presence.clear, {});
+            export default crons;
+        `,
+        );
+
+        const result = discoverCrons(newProject(), workdir);
+
+        expect(result).toEqual([{ args: {}, cron: "0 * * * *", functionPath: "presence:clear", name: "nightly" }]);
+    });
+
     it("throws on an invalid raw cron expression", () => {
         expect.assertions(1);
 
@@ -325,6 +348,133 @@ describe("discover-crons", () => {
         );
 
         expect(() => discoverCrons(newProject(), workdir, [])).toThrow(/no such workflow is declared/u);
+    });
+
+    it("resolves the generated `agents.<name>` reference into a workflow-start target (the AGENT_* binding)", () => {
+        expect.assertions(1);
+
+        // An agent compiles onto a Cloudflare Workflow, so a cron targeting it
+        // rides the same durable workflow-start path — the AGENT_* binding is
+        // started per fire with the flat AgentRunInput as the run params.
+        writeSource(
+            "agents.ts",
+            `
+            import { defineAgent } from "@lunora/agent";
+            export const support = defineAgent({ model: "m" });
+        `,
+        );
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { agents } from "./_generated/api.js";
+            const crons = cronJobs();
+            crons.daily("nightly sweep", { hourUTC: 3, minuteUTC: 0 }, agents.support, { input: "sweep", threadKey: "cron" });
+            export default crons;
+        `,
+        );
+
+        const project = newProject();
+        const agents = discoverAgents(project, workdir);
+
+        expect(discoverCrons(project, workdir, [], agents)).toEqual([
+            {
+                args: { input: "sweep", threadKey: "cron" },
+                cron: "0 3 * * *",
+                name: "nightly sweep",
+                workflow: { binding: "AGENT_SUPPORT", exportName: "support" },
+            },
+        ]);
+    });
+
+    it("throws when `agents.<name>` names an agent that isn't declared", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { agents } from "./_generated/api.js";
+            const crons = cronJobs();
+            crons.daily("oops", { hourUTC: 9, minuteUTC: 0 }, agents.missingAgent, {});
+            export default crons;
+        `,
+        );
+
+        expect(() => discoverCrons(newProject(), workdir, [], [])).toThrow(/no such agent is declared/u);
+    });
+
+    it("also resolves a bare identifier naming a declared agent (direct import) (CODEGEN-03)", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "agents.ts",
+            `
+            import { defineAgent } from "@lunora/agent";
+            export const support = defineAgent({ model: "m" });
+        `,
+        );
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { support } from "./agents.js";
+            const crons = cronJobs();
+            crons.daily("nightly sweep", { hourUTC: 3, minuteUTC: 0 }, support, { input: "sweep", threadKey: "cron" });
+            export default crons;
+        `,
+        );
+
+        const project = newProject();
+        const agents = discoverAgents(project, workdir);
+
+        expect(discoverCrons(project, workdir, [], agents)).toEqual([
+            {
+                args: { input: "sweep", threadKey: "cron" },
+                cron: "0 3 * * *",
+                name: "nightly sweep",
+                workflow: { binding: "AGENT_SUPPORT", exportName: "support" },
+            },
+        ]);
+    });
+
+    it("mentions both workflows and agents when a bare-identifier target resolves to neither (CODEGEN-03)", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            const crons = cronJobs();
+            const notADefinition = 1;
+            crons.daily("oops", { hourUTC: 9, minuteUTC: 0 }, notADefinition, {});
+            export default crons;
+        `,
+        );
+
+        expect(() => discoverCrons(newProject(), workdir, [], [])).toThrow(
+            /neither a function \(internal\.file\.fn \/ api\.file\.fn\) nor a declared workflow in lunora\/workflows\.ts nor a declared agent in lunora\/agents\.ts/u,
+        );
+    });
+
+    it("emits a workflow-start dispatch for an agent-targeting cron (rides the workflow binding path)", () => {
+        expect.assertions(2);
+
+        // End-to-end: an agent cron IR flows through emitCrons exactly like a
+        // workflow cron — the AGENT_* binding becomes `workflow: "<binding>"`,
+        // so the runtime cron dispatcher starts a fresh agent run per fire.
+        const output = emitCrons([
+            {
+                args: { input: "sweep", threadKey: "cron" },
+                cron: "0 3 * * *",
+                name: "nightly sweep",
+                workflow: { binding: "AGENT_SUPPORT", exportName: "support" },
+            },
+        ]);
+
+        expect(output).toContain('{ name: "nightly sweep", workflow: "AGENT_SUPPORT", args: {"input":"sweep","threadKey":"cron"} },');
+        // The agent job carries no per-job functionPath dispatch (workflow-start only).
+        expect(output).not.toContain('name: "nightly sweep", functionPath:');
     });
 });
 

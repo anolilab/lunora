@@ -17,6 +17,7 @@ import { dirname } from "node:path";
 import join from "./path";
 import type { SchemaInfo } from "./schema-info";
 import { discoverSchemaInfo } from "./schema-info";
+import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 const REQUIRED_COMPATIBILITY_DATE: string = "2026-04-07";
@@ -1033,18 +1034,11 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
         errors.push(`compatibility_date must be >= "${REQUIRED_COMPATIBILITY_DATE}" (got "${compatibilityDate || "<missing>"}")`);
     }
 
-    // Workers Cache requires compatibility_date >= 2026-05-01. Only enforce
-    // this when the cache block is actually enabled, so non-cache apps aren't
-    // forced to bump. Malformed dates already produced a format error above, so
-    // skip the date comparison unless the shape is valid.
-    const WORKERS_CACHE_MIN_DATE = "2026-05-01";
-    const cacheEnabled = typeof wrangler.cache === "object" && wrangler.cache !== null && wrangler.cache.enabled === true;
-    const exportsWithCache =
-        typeof wrangler.exports === "object" &&
-        wrangler.exports !== null &&
-        Object.values(wrangler.exports).some((entry) => typeof entry === "object" && entry !== null && entry.cache?.enabled === true);
-
-    if ((cacheEnabled || exportsWithCache) && ISO_DATE_PATTERN.test(compatibilityDate) && compatibilityDate < WORKERS_CACHE_MIN_DATE) {
+    // Workers Cache requires compatibility_date >= WORKERS_CACHE_MIN_DATE. Only
+    // enforce this when the cache block is actually enabled, so non-cache apps
+    // aren't forced to bump. Malformed dates already produced a format error
+    // above, so skip the date comparison unless the shape is valid.
+    if (isCacheEnabled(wrangler) && ISO_DATE_PATTERN.test(compatibilityDate) && compatibilityDate < WORKERS_CACHE_MIN_DATE) {
         errors.push(`cache.enabled requires compatibility_date >= "${WORKERS_CACHE_MIN_DATE}" (got "${compatibilityDate || "<missing>"}")`);
     }
 

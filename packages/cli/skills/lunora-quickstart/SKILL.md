@@ -57,6 +57,7 @@ pnpm install
 | `vite`                 | React + Vite (the simplest full-stack starter) |
 | `standalone`           | Worker-only Lunora backend, no frontend        |
 | `astro`                | Astro integration                              |
+| `next`                 | Next.js (App Router, OpenNext on Cloudflare)   |
 | `nuxt`                 | Nuxt (Vue)                                     |
 | `sveltekit`            | SvelteKit                                      |
 | `tanstack-start-react` | TanStack Start (React)                         |

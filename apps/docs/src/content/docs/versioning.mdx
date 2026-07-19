@@ -1,0 +1,102 @@
+---
+title: Versioning & stability
+description: What SemVer means for Lunora packages — release channels, stability tiers, and the experimental surface.
+---
+
+Lunora is a monorepo of independently versioned npm packages (`lunorash`, the
+`@lunora/*` scope). Every package follows [Semantic
+Versioning](https://semver.org/) and is released automatically by
+multi-semantic-release: [Conventional
+Commits](https://www.conventionalcommits.org/) drive the bumps (`fix:` →
+patch, `feat:` → minor, a `BREAKING CHANGE:` footer or `!` → major), and each
+package ships its own changelog.
+
+<Callout type="warn">
+    Lunora is currently in **alpha**. Every package publishes as `1.0.0-alpha.N` on the `alpha` dist-tag, and — as prereleases — those versions carry **no
+    compatibility guarantee between one another**. Breaking changes land on the alpha channel and are announced in the per-package changelogs and in the [alpha
+    → 1.0 upgrade guide](/docs/migrating/from-alpha). The policy on this page describes the commitment that starts with stable `1.0.0`.
+</Callout>
+
+## Release channels
+
+Releases are published on every push to one of four branches. The branch
+determines the npm dist-tag your install resolves:
+
+| Branch  | npm dist-tag | Kind                                            |
+| ------- | ------------ | ----------------------------------------------- |
+| `alpha` | `alpha`      | Prerelease (`x.y.z-alpha.N`) — main development |
+| `beta`  | `beta`       | Prerelease (`x.y.z-beta.N`) — stabilization     |
+| `next`  | `next`       | Release-candidate channel                       |
+| `main`  | `latest`     | Stable releases                                 |
+
+Installing without a tag (`pnpm add lunorash`) resolves `latest` — the stable
+channel. To follow a prerelease channel, pin the tag explicitly
+(`pnpm add lunorash@alpha`). Projects scaffolded by `lunora init` are pinned to
+the concrete version the CLI's own channel points at, so a scaffold and its
+runtime always come from the same channel.
+
+## What SemVer means here
+
+From `1.0.0` on, for every package in the **stable** tiers below:
+
+- **Major** (`2.0.0`): may remove or change public APIs. Breaking changes ship
+  only here, each documented in the package changelog and a migration guide.
+- **Minor** (`1.1.0`): new features, backwards compatible. Anything already
+  compiling and passing against `1.0.0` keeps working.
+- **Patch** (`1.0.1`): bug fixes only.
+
+The _public API_ is what a package exports from its documented entry points
+(including subpath exports such as `lunorash/server`). Two carve-outs:
+
+- **Experimental APIs** — anything tagged `@experimental` in its JSDoc — may
+  change or disappear in a **minor** release. The tag is the contract: if an
+  export carries it, don't build load-bearing code on it without pinning.
+- **Internal packages** (`@lunora/config`, `@lunora/sql-store`) are published
+  for transparency but are implementation details of the CLI/Vite plugin;
+  depend on those instead.
+
+## Stability tiers
+
+Not all 47 packages make the stable promise at the same time. The current
+plan tiers them as follows.
+
+<Callout type="warn">
+    This tier assignment is **provisional** — it is the working plan on the road to 1.0 and will be ratified (and this page updated) when `1.0.0` ships. Until
+    then, treat tier membership as a statement of intent, not a guarantee.
+</Callout>
+
+| Tier                    | Packages                                                                                                                                                                                                                                                                           | 1.0 treatment                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **Core (stable 1.0)**   | `lunorash`, `@lunora/server`, `values`, `errors`, `runtime`, `do`, `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`                                                                                                                                          | Full SemVer commitment, API-guarded in CI                                                         |
+| **Stable adapters**     | `vue`, `solid`, `svelte`, `astro`, `nuxt`, `auth`, `storage`, `scheduler`, `mail`, `ratelimit`, `seed`, `db`, `sql-store` (internal), `studio`, `advisor`, `mcp`, `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`, `fingerprint`, `dispatch` (private) | 1.0 if they pass the same gates; any that don't hold at `0.x` / `-beta`                           |
+| **Experimental at 1.0** | `agent`, `replica`, `x402`, `react-native`, `angular`, `ai`, `browser`, `container`, `payment`                                                                                                                                                                                     | Published as `1.0.0-beta.*` or `0.x`, tagged experimental in docs; not part of the stable promise |
+
+What the tiers buy you:
+
+- **Core** — the schema/function API, the runtime, codegen, the CLI, and the
+  browser/React SDKs. These are the packages a minimal app cannot avoid, so
+  they carry the strictest guarantee: a breaking change must fail a CI check
+  (public-API snapshot), not just a review.
+- **Stable adapters** — opt-in add-ons held to the same standard, promoted to
+  1.0 individually as each one passes the verification gates.
+- **Experimental** — deliberately unsettled surfaces. They may change in any
+  release; use them, file issues, but pin exact versions in production.
+
+## What "experimental" means
+
+An experimental package (or a stable package's `@experimental`-tagged export):
+
+- may change behavior or shape in a **minor** release, with changelog notice
+  but without a major bump;
+- is excluded from the public-API snapshot gate;
+- graduates by dropping the tag / shipping its own `1.0.0` — that promotion is
+  itself announced as a feature, never done silently.
+
+## See also
+
+- [Upgrade guide: alpha → 1.0](/docs/migrating/from-alpha) — breaking changes
+  on the road to stable, and how to move a `1.0.0-alpha.*` app over.
+- [Getting started](/docs/getting-started) — installs from the `alpha`
+  dist-tag while the prerelease phase lasts.
+- [Production checklist](/docs/production-checklist) — what to verify before
+  you ship.

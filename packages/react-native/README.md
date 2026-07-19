@@ -6,6 +6,8 @@
 
 </div>
 
+> **Experimental** — this package is outside the Lunora 1.0 stability promise: its API may change in any release, without a major version bump.
+
 ---
 
 The same live hooks you use on the web — `useQuery`, `useMutation`,

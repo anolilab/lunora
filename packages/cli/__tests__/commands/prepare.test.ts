@@ -1,8 +1,9 @@
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runPrepareCommand } from "../../src/commands/prepare/handler";
@@ -136,6 +137,53 @@ describe("lunora prepare", () => {
         expect(Array.isArray(warns)).toBe(true);
         // No hard error on placeholder (that guard lives in deploy, not prepare)
         expect(result.validation.problems).toEqual([]);
+    });
+
+    it("syncs code-first cron schedules into wrangler.jsonc triggers.crons", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+        writeFileSync(
+            join(workdir, "lunora", "crons.ts"),
+            `import { cronJobs } from "@lunora/scheduler";
+import { internal } from "./_generated/api.js";
+
+const crons = cronJobs();
+
+crons.cron("ping", "0 * * * *", internal.messages.list, {});
+
+export default crons;
+`,
+            "utf8",
+        );
+
+        const { logger } = silentLogger();
+        const result = await runPrepareCommand({ cwd: workdir, logger });
+
+        expect(result.code).toBe(0);
+
+        const written = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+
+        expect(written).toContain("0 * * * *");
+    });
+
+    it("clears a stale triggers.crons array when the project declares no crons", async () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            VALID_WRANGLER.replace('"d1_databases"', '"triggers": { "crons": ["0 0 * * *"] },\n    "d1_databases"'),
+            "utf8",
+        );
+
+        const { logger } = silentLogger();
+        const result = await runPrepareCommand({ cwd: workdir, logger });
+
+        expect(result.code).toBe(0);
+
+        const parsed = parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { triggers?: { crons?: string[] } };
+
+        expect(parsed.triggers?.crons).toEqual([]);
     });
 
     it("returns code 1 when codegen fails (no schema.ts)", async () => {

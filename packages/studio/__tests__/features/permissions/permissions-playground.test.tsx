@@ -53,7 +53,7 @@ describe("permissionsPlayground", () => {
     });
 
     it("renders the denied outcome when the probe throws", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const mock = createMockClient({
             query: (reference): unknown => {

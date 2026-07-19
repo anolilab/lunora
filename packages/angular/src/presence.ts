@@ -6,12 +6,24 @@ import { randomSessionId } from "../../../shared/random-session-id";
 import { resolveLunoraClient } from "./client";
 import { runOutsideAngular, shouldOpenSubscription } from "./platform";
 
+/**
+ * `HeartbeatReference` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 type HeartbeatReference = FunctionReference<"mutation", { data?: Record<string, unknown>; roomId: string; sessionId: string }>;
 
+/**
+ * `ListPresentReference` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 type ListPresentReference = FunctionReference<"query", { roomId: string }>;
 
 const DEFAULT_INTERVAL_MS = 10_000;
 
+/**
+ * `PresenceOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface PresenceOptions<H extends HeartbeatReference, L extends ListPresentReference> {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
@@ -41,6 +53,10 @@ export interface PresenceOptions<H extends HeartbeatReference, L extends ListPre
     shardKey?: string;
 }
 
+/**
+ * `PresenceResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface PresenceResult<L extends ListPresentReference> {
     /** The present members for the room. `undefined` until the first push. */
     present: Signal<ReturnOf<L> | undefined>;
@@ -66,6 +82,7 @@ export interface PresenceResult<L extends ListPresentReference> {
  *     listPresent: api.presence.listPresent,
  * });
  * ```
+ * @experimental
  */
 export const presence = <H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: PresenceOptions<H, L>): PresenceResult<L> => {
     const client = resolveLunoraClient(options.client);

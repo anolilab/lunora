@@ -215,6 +215,35 @@ describe("offlineQueue — persistence", () => {
         expect(drained.map((d) => d.functionPath)).toEqual(["a", "b", "c"]);
     });
 
+    it("hydrate splices restored prior-session writes ahead of a mutation enqueued during boot-time hydration (CLIENT-03)", async () => {
+        expect.assertions(1);
+
+        const persistence = createInMemoryPersistence();
+
+        await persistence.append({ args: {}, functionPath: "old-session-write", id: "1" });
+
+        const queue = new OfflineQueue({}, { persistence });
+
+        // `hydrate()` starts its async durable-store load here; the following
+        // `enqueue` runs synchronously in the same tick, before that load's
+        // `await` resolves — simulating a mutation issued while offline during
+        // boot, which the client enqueues before hydration (an async
+        // microtask-deferred persistence load) finishes restoring the prior
+        // session's older writes.
+        const hydratePromise = queue.hydrate();
+
+        queue.enqueue({ args: {}, functionPath: "boot-time-write", reject: () => undefined, resolve: () => undefined });
+
+        await hydratePromise;
+
+        // The restored older write must replay BEFORE the boot-time write, or
+        // last-writer-wins on the server would let this session's write
+        // silently get clobbered by the (out-of-order-replayed) older one.
+        const drained = queue.drain();
+
+        expect(drained.map((d) => d.functionPath)).toEqual(["old-session-write", "boot-time-write"]);
+    });
+
     it("hydrate re-appends nothing and skips ids already queued", async () => {
         expect.assertions(1);
 

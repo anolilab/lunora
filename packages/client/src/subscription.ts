@@ -1,4 +1,4 @@
-import { stableStringify } from "../../../shared/stable-key";
+import { stableWireKey } from "../../../shared/wire-key";
 import type { FunctionReference } from "./types";
 
 export type SubscriptionCallback = (data: unknown) => void;
@@ -35,9 +35,10 @@ export interface SubscriptionState {
     readonly args: Record<string, unknown>;
 
     /**
-     * Stable-stringified `args`, computed once at subscribe time. Cached so the
-     * optimistic-update fan-out can compare against a mutation's args key without
-     * re-serializing every subscription's args on every mutation.
+     * Stable wire-key of `args` (`stableWireKey`), computed once at subscribe
+     * time. Cached so the optimistic-update fan-out can compare against a
+     * mutation's args key without re-serializing every subscription's args on
+     * every mutation.
      */
     readonly argsKey: string;
     readonly callbacks: Set<SubscriptionCallback>;
@@ -112,15 +113,17 @@ export interface SubscriptionState {
 
 /**
  * Active subscription registry. The client keys subscriptions by
- * `(functionPath, stableStringify(args), shardKey)` so duplicate calls share a
+ * `(functionPath, stableWireKey(args), shardKey)` so duplicate calls share a
  * single server-side registration. Args are stably encoded (keys sorted at every
  * depth) so two structurally-equal arg records constructed with a different key
  * order (`{ a, b }` vs `{ b, a }`) collapse to the same key instead of leaking a
- * duplicate subscription.
+ * duplicate subscription. Encoding the args' **wire form** keeps the key
+ * byte-identical for pure-JSON args while giving wire-typed args (`bigint`,
+ * `Date`, bytes, …) distinct stable tokens instead of a throw.
  */
 export class SubscriptionRegistry {
     public static key(functionPath: string, args: Record<string, unknown>, shardKey?: string): string {
-        return `${functionPath}::${stableStringify(args)}::${shardKey ?? ""}`;
+        return `${functionPath}::${stableWireKey(args)}::${shardKey ?? ""}`;
     }
 
     private readonly byKey = new Map<string, SubscriptionState>();

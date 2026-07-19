@@ -120,6 +120,7 @@ type ScheduledDispatch = (kind: "action" | "mutation", reference: unknown, conte
 const createFakeScheduler = (
     getDispatch: () => ScheduledDispatch,
     getMutationContext: () => unknown,
+    getActionContext: () => unknown,
     getFunctionRegistry: () => Map<string, { handler: unknown; kind: string }>,
     now: number,
 ): { controls: FakeSchedulerControls; scheduler: Scheduler } => {
@@ -152,6 +153,12 @@ const createFakeScheduler = (
         return id;
     };
 
+    // A schedule target is a function-path string or a generated workflow/agent
+    // ref (`workflows.<name>` / `agents.<name>`); reduce it to the string key the
+    // fake registry dispatches on. A string passes through unchanged, so existing
+    // function-scheduling tests are untouched.
+    const targetPath = (target: Parameters<Scheduler["runAfter"]>[1]): string => (typeof target === "string" ? target : (target.name ?? target.binding ?? ""));
+
     const scheduler: Scheduler = {
         cancel: (id: string) => {
             const existed = pending.has(id);
@@ -166,14 +173,14 @@ const createFakeScheduler = (
 
         list: () => Promise.resolve([...pending.values()]),
 
-        runAfter: (delayMs: number, functionPath: string, args?: Record<string, unknown>) => {
-            const id = enqueue(nowMs + delayMs, functionPath, args);
+        runAfter: (delayMs: number, target: Parameters<Scheduler["runAfter"]>[1], args?: Record<string, unknown>) => {
+            const id = enqueue(nowMs + delayMs, targetPath(target), args);
 
             return Promise.resolve(id);
         },
 
-        runAt: (timestampMs: number, functionPath: string, args?: Record<string, unknown>) => {
-            const id = enqueue(timestampMs, functionPath, args);
+        runAt: (timestampMs: number, target: Parameters<Scheduler["runAt"]>[1], args?: Record<string, unknown>) => {
+            const id = enqueue(timestampMs, targetPath(target), args);
 
             return Promise.resolve(id);
         },
@@ -200,9 +207,9 @@ const createFakeScheduler = (
 
         if (entry.kind === "mutation" || entry.kind === "action") {
             const dispatch = getDispatch();
-            const mutationContext = getMutationContext();
+            const context = entry.kind === "action" ? getActionContext() : getMutationContext();
 
-            await dispatch(entry.kind, entry, mutationContext, job.args);
+            await dispatch(entry.kind, entry, context, job.args);
         } else {
             // eslint-disable-next-line no-console -- deliberate test-time warning
             console.warn(

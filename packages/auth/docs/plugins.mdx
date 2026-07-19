@@ -263,7 +263,7 @@ adapter directly, so it is **not** an end-user API. Password hashes, session
 tokens, and OAuth access/refresh tokens are stripped from every response; the
 only token ever returned is the one from an explicit **Impersonate**.
 
-<Callout type="warn">The older read-only `authIntrospector` option still works (browse-only) but is deprecated — prefer `authAdmin`.</Callout>
+<Callout type="warn">The older read-only `authIntrospector` option has been removed — wire `authAdmin` (e.g. `createAuthAdmin(auth)`) instead.</Callout>
 
 ## The `withAuthPlugins` middleware
 

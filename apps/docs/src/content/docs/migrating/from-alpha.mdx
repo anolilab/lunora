@@ -1,0 +1,140 @@
+---
+title: Upgrading from alpha to 1.0
+description: How a 1.0.0-alpha.* app moves to stable — dependency bumps plus every breaking change already landed on the road to 1.0.
+---
+
+This guide collects everything a `1.0.0-alpha.*` app needs to reach stable
+`1.0.0`: the dependency bump strategy, and the breaking changes that have
+already landed on the alpha channel.
+
+<Callout type="warn">
+    Stable `1.0.0` has **not shipped yet**. This page is a living document: each breaking change that lands on the alpha channel before the stable cut is
+    recorded here, so it will be updated as 1.0 approaches. If you track the `alpha` dist-tag, treat this page as your changelog digest.
+</Callout>
+
+## Bump strategy
+
+Projects scaffolded by `lunora init` pin **concrete alpha versions** of
+`lunorash` and any `@lunora/*` add-ons (the scaffolder resolves the CLI's
+release-channel dist-tag to an exact version at init time). When 1.0 ships:
+
+1. **Move every Lunora dependency at once.** The packages are released as a
+   coordinated train; mixing an alpha runtime with a stable client (or vice
+   versa) is unsupported. Bump `lunorash` and each `@lunora/*` add-on to the
+   `latest` dist-tag together:
+
+    ```bash
+    pnpm add lunorash@latest
+    pnpm add @lunora/vite@latest @lunora/auth@latest   # …and every other @lunora/* you use
+    ```
+
+2. **Regenerate.** `_generated/` output is tied to the codegen version:
+
+    ```bash
+    pnpm lunora codegen
+    ```
+
+3. **Verify before deploying.** `lunora verify` validates `wrangler.jsonc`,
+   dry-runs codegen, and type-checks without writing files:
+
+    ```bash
+    pnpm lunora verify
+    ```
+
+4. **Read the sections below** and fix any usage of a removed API. TypeScript
+   catches all of the removals at compile time.
+
+Packages in the experimental tier (see
+[Versioning & stability](/docs/versioning)) stay on prerelease versions after
+1.0 — keep those pinned to their own channel.
+
+## Breaking changes already landed
+
+Each of these shipped on the alpha channel as a `BREAKING CHANGE` (or a
+deliberate surface cut) on the road to 1.0. If your app started on an early
+alpha, work through them in order.
+
+### `@lunora/ratelimit` — `random` option removed
+
+The deprecated `RateLimiterOptions.random` shard-selection hook is gone. Shard
+selection has been a deterministic hash of the storage key since the option
+was deprecated, so the hook was already unused.
+
+**Migration:** remove any `random` property from `new RateLimiter({ ... })`
+calls. No behavioral replacement is needed.
+
+```ts
+// Before
+const limiter = new RateLimiter({ limits, random: Math.random, shards: 8 });
+
+// After
+const limiter = new RateLimiter({ limits, shards: 8 });
+```
+
+### `@lunora/runtime` — `authIntrospector` removed
+
+The deprecated `WorkerOptions.authIntrospector` read-only fallback and the
+exported `AuthIntrospector` type alias are removed. Wire
+`WorkerOptions.authAdmin` instead — e.g. `@lunora/auth`'s
+`createAuthAdmin(auth)`.
+
+A browse-only plane still works: `listUsers` and `listSessions` are the only
+required `AuthAdmin` members, so passing the same read-only object as
+`authAdmin` keeps the Studio's browse endpoints working while the mutation
+routes respond `AUTH_OP_NOT_SUPPORTED`.
+
+```ts
+// Before
+export default createWorker({ authIntrospector: myIntrospector /* … */ });
+
+// After
+import { createAuthAdmin } from "@lunora/auth";
+
+export default createWorker({ authAdmin: createAuthAdmin(auth) /* … */ });
+```
+
+### `@lunora/server` — `mode: "incremental"` cut from external sources
+
+`mode: "incremental"` on `.source(...)` was accepted by the types but threw
+"not yet implemented" at `defineSchema` time. It is cut from the 1.0 surface:
+`ExternalSourceMode` is narrowed to the single literal `"full-pull"`, and the
+incremental-only `reconcileEveryMs` knob is dropped. A stray mode is now a
+compile-time error instead of a runtime throw.
+
+**Migration:** if you declared `mode: "incremental"` (it never worked), switch
+to `mode: "full-pull"` — or omit `mode` entirely — and remove any
+`reconcileEveryMs`. Incremental pulls may return after 1.0 as a new feature.
+
+### `@lunora/cli` — `migrate create` requires a table
+
+`lunora migrate create <name>` no longer writes a literal `TODO_table`
+placeholder when `--table` is omitted. Interactively it prompts for the target
+table (offering the tables declared in `lunora/schema.ts`); non-interactively
+(CI, scripts) it fails with a clear error.
+
+**Migration:** pass `--table` explicitly in any scripted invocation:
+
+```bash
+lunora migrate create backfill_read_by --table messages
+```
+
+## Recommended (non-breaking) follow-ups
+
+- **Enforce ephemeral WS admin tokens.** The worker can now reject the raw
+  master `LUNORA_ADMIN_TOKEN` in WebSocket `?token=` query strings in favor of
+  short-lived minted sub-tokens. Off by default; see the
+  [production checklist](/docs/production-checklist#lunora_admin_token-and-the-admin-plane)
+  for how to turn it on.
+
+## See also
+
+- [Versioning & stability](/docs/versioning) — channels, tiers, and what the
+  1.0 SemVer commitment covers.
+- [Production checklist](/docs/production-checklist) — verify the deployment
+  after the upgrade.
+- [Migrating from Convex](/docs/migrating/from-convex) — coming from another
+  backend instead.
+- [Migrating from Supabase](/docs/migrating/from-supabase) — Postgres, RLS,
+  Edge Functions, Auth, and Storage mapped to Lunora.
+- [Migrating from Firebase](/docs/migrating/from-firebase) — Firestore, Auth,
+  Cloud Functions, and Storage mapped to Lunora.

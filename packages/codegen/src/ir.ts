@@ -123,13 +123,15 @@ export interface ExternalSourceIR {
     binding: string;
     /** Whether a `columns` projection allow-list was given. */
     columns?: ReadonlyArray<string>;
-    /** `true` when a `reconcileEveryMs` was given (the incremental-mode delete-visibility companion). */
+    /** `true` when a `reconcileEveryMs` was given — one of the two incremental delete-visibility paths the `external_source_incremental_no_delete_path` lint checks. */
     hasReconcile?: boolean;
+    /** `true` when a `softDeleteColumn` was given — the other incremental delete-visibility path. */
+    hasSoftDelete?: boolean;
     /** `true` when a `tenantBy` mapper was given — the tenant-isolation boundary the `external_source_unscoped` lint checks. */
     hasTenantBy: boolean;
     /** The `idColumn` literal, when given (defaults to `"id"` at runtime). */
     idColumn?: string;
-    /** Delete-detection mode literal, when given (`"full-pull"` | `"incremental"`). */
+    /** Delete-detection mode literal, when given (`"full-pull"` today). */
     mode?: string;
     /** The membership query literal, when statically knowable. */
     query?: string;
@@ -454,6 +456,71 @@ export interface WorkflowIR {
      * statically comparable).
      */
     steps: ReadonlyArray<WorkflowStepIR>;
+}
+
+/**
+ * An agent lifted from a `defineAgent()` export in `lunora/agents.ts`. A
+ * `defineAgent` compiles its durable tool-loop onto a Cloudflare Workflow, so —
+ * like {@link WorkflowIR} — an agent is NOT a Durable Object: wrangler gets only
+ * a `workflows[]` entry, never a `durable_objects` binding or a migration class.
+ * Carries what the emitters and the config layer need to wire the generated
+ * agent `WorkflowEntrypoint` class (e.g. `SupportAgentWorkflow`), the typed
+ * per-agent `ctx.agents` producer, and the reconciled wrangler `workflows[]`
+ * entry. Names are derived via `@lunora/agent`'s shared helpers so codegen and
+ * the config layer can never disagree.
+ */
+export interface AgentIR {
+    /** The Cloudflare `Workflow` binding name, e.g. `AGENT_SUPPORT`. */
+    bindingName: string;
+    /** Generated `WorkflowEntrypoint` class name, e.g. `SupportAgentWorkflow`. */
+    className: string;
+    /** The `lunora/agents.ts` export name, e.g. `support`. */
+    exportName: string;
+
+    /**
+     * The stable wrangler `workflows[].name`. Defaults to the kebab-cased export
+     * name (`support` → `agent-support`); a static `name:` literal in the
+     * definition overrides it.
+     */
+    name: string;
+
+    /**
+     * Whether the definition declares an `onEmail` mapper on
+     * `defineAgent({ onEmail: … })`. When `true` the emitter wires this agent
+     * onto the worker's top-level `email()` handler (via `@lunora/agent/inbound`)
+     * so inbound mail starts a durable run. Detected by AST PRESENCE — the
+     * closure is never evaluated — and written to IR only when present, so
+     * email-free agents (and agent-free projects) stay byte-identical.
+     */
+    onEmail?: boolean;
+
+    /**
+     * Whether the definition opted into public run-starts via
+     * `defineAgent({ publicRun: true })` — emitted into the `ctx.agents` wiring
+     * spec so the public `agents:agentRun` mutation can gate on it fail-closed.
+     * Absent (falsy) means server-side starts only; the field is written to IR
+     * only when the literal is `true`, so agent-free and non-opted-in output is
+     * byte-identical.
+     */
+    publicRun?: boolean;
+
+    /**
+     * Whether the definition opted into a real-time voice session via a `voice`
+     * block on `defineAgent({ voice: … })`. Unlike the durable loop (a Workflow),
+     * the voice path IS a Durable Object — so when this is `true` the emitter
+     * generates the `voiceClassName` `VoiceSessionDO` subclass and the
+     * `api.agents.{name}Voice` client reference, and the config layer reconciles
+     * a `durable_objects` binding (`voiceBindingName`) + `new_sqlite_classes`
+     * migration. Written to IR only when the literal is present, so voice-free
+     * agents (and agent-free projects) stay byte-identical.
+     */
+    voice?: boolean;
+
+    /** The voice DO's Cloudflare `DurableObjectNamespace` binding name, e.g. `VOICE_SUPPORT`. Present only when `voice`. */
+    voiceBindingName?: string;
+
+    /** Generated `VoiceSessionDO` subclass name, e.g. `SupportVoiceDO`. Present only when `voice`. */
+    voiceClassName?: string;
 }
 
 /** One durable step call lifted from a workflow handler body (the use side of {@link WorkflowIR.steps}). */
@@ -837,6 +904,16 @@ export interface StorageRulesMetadataIR {
 export interface HttpRouteIR {
     /** `v.*` validators decoding the JSON request body (`.body({...})`), keyed by field. */
     body: Record<string, ValidatorIR>;
+
+    /**
+     * Rendered TS type of one SSE chunk — the `R` the `.stream(handler)`
+     * handler yields — inferred from the handler via the type checker. Present
+     * only when {@link HttpRouteIR.stream} is `true`; `"unknown"` when the
+     * checker can't resolve enough context. Feeds the emitted
+     * `HttpStreamRef&lt;Chunk, …>` so the chunk type flows to the client.
+     * @experimental Part of the HTTP-SSE stream surface (the `httpStreams.*` emission).
+     */
+    chunkType?: string;
     /** Export binding name of the route handler (used only for diagnostics / dedupe). */
     exportName: string;
     /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "http". */

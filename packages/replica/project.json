@@ -1,0 +1,24 @@
+{
+    "name": "replica",
+    "tags": ["type:package", "category:add-on"],
+    "targets": {
+        "lint:eslint": {
+            "executor": "nx:run-commands",
+            "options": {
+                "cwd": "{projectRoot}",
+                "command": "eslint --config {workspaceRoot}/eslint.config.js ."
+            },
+            "cache": true,
+            "inputs": ["default", "{workspaceRoot}/eslint.config.js"]
+        },
+        "lint:eslint:fix": {
+            "executor": "nx:run-commands",
+            "options": {
+                "cwd": "{projectRoot}",
+                "command": "eslint --config {workspaceRoot}/eslint.config.js . --fix"
+            },
+            "cache": true,
+            "inputs": ["default", "{workspaceRoot}/eslint.config.js"]
+        }
+    }
+}

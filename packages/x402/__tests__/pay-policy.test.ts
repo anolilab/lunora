@@ -2,7 +2,7 @@ import type { PaymentRequirements } from "@x402/core/types";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SpendPolicy } from "../src/pay/policy";
-import { assertBoundedPolicy, buildPaymentGuard, buildSpendPolicy, createSpendState, recordSpend, usdToAtomic } from "../src/pay/policy";
+import { assertBoundedPolicy, buildPaymentGuard, buildSpendPolicy, createSpendState, releaseSpendOnFailure, usdToAtomic } from "../src/pay/policy";
 
 /** A PaymentRequirements fixture (USDC on Base by default; `amount` is atomic base units). */
 const requirement = (overrides: Partial<PaymentRequirements> = {}): PaymentRequirements => {
@@ -21,6 +21,10 @@ const requirement = (overrides: Partial<PaymentRequirements> = {}): PaymentRequi
 /** A BeforePaymentCreationHook only reads `selectedRequirements`; build a minimal context. */
 const guardContext = (selected: PaymentRequirements) =>
     ({ paymentRequired: { accepts: [selected], resource: {}, x402Version: 2 }, selectedRequirements: selected }) as never;
+
+/** An OnPaymentCreationFailureHook only reads `selectedRequirements`; build a minimal context. */
+const failureContext = (selected: PaymentRequirements) =>
+    ({ error: new Error("signing failed"), paymentRequired: { accepts: [selected], resource: {}, x402Version: 2 }, selectedRequirements: selected }) as never;
 
 describe("usdToAtomic", () => {
     it("converts USD (number, string, and $-prefixed) to 6-decimal atomic units", () => {
@@ -81,50 +85,94 @@ describe("buildSpendPolicy", () => {
 });
 
 describe("buildPaymentGuard", () => {
-    it("allows a payment within the per-run cap, then blocks the one that would exceed it", async () => {
+    it("reserves atomically on pass, then blocks a subsequent payment that would exceed the per-run cap", async () => {
         const state = createSpendState();
         const guard = buildPaymentGuard({ maxPerRun: "$0.02" }, state);
-        const record = recordSpend(state);
 
         const first = await guard(guardContext(requirement({ amount: "15000" })));
 
+        // The reservation *is* the record: no separate after-hook call needed.
         expect(first).toBeUndefined();
-
-        await record(guardContext(requirement({ amount: "15000" })));
-
         expect(state.spentAtomic).toBe(15_000n);
 
         const second = await guard(guardContext(requirement({ amount: "10000" })));
 
         expect(second).toEqual({ abort: true, reason: expect.stringMatching(/per-run cap/) });
+        // The rejected attempt must not have reserved anything.
+        expect(state.spentAtomic).toBe(15_000n);
     });
 
-    it("aborts when the confirmation gate declines", async () => {
+    it("aborts when the confirmation gate declines, releasing its reservation", async () => {
         const onPaymentRequired = vi.fn<(r: PaymentRequirements) => boolean>(() => false);
-        const guard = buildPaymentGuard({ onPaymentRequired }, createSpendState());
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ maxPerRun: "$1", onPaymentRequired }, state);
 
         const result = await guard(guardContext(requirement()));
 
         expect(result).toEqual({ abort: true, reason: expect.stringMatching(/declined by onPaymentRequired/) });
         expect(onPaymentRequired).toHaveBeenCalledTimes(1);
+        // A declined confirmation must release the reservation it made while awaiting the gate.
+        expect(state.spentAtomic).toBe(0n);
     });
 
-    it("proceeds when the confirmation gate approves", async () => {
-        const guard = buildPaymentGuard({ onPaymentRequired: () => true }, createSpendState());
+    it("proceeds when the confirmation gate approves, keeping the reservation", async () => {
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ maxPerRun: "$1", onPaymentRequired: () => true }, state);
 
-        await expect(guard(guardContext(requirement()))).resolves.toBeUndefined();
+        await expect(guard(guardContext(requirement({ amount: "10000" })))).resolves.toBeUndefined();
+        expect(state.spentAtomic).toBe(10_000n);
+    });
+
+    it("closes the check-then-act race: two concurrent calls against one shared state cannot both pass (X402-02)", async () => {
+        const state = createSpendState();
+        // An async gate creates an await point between the cap check/reserve and the
+        // guard's return, so both calls are in flight ("concurrent") at once —
+        // exactly the shape of two parallel paid fetches sharing one PayFetch/state.
+        const guard = buildPaymentGuard({ maxPerRun: "$0.02", onPaymentRequired: async () => true }, state);
+
+        // Started back-to-back, not awaited individually: the first call's
+        // synchronous check-and-reserve runs to completion (up to its first
+        // `await`) before the second call's synchronous portion even begins.
+        const first = guard(guardContext(requirement({ amount: "15000" })));
+        const second = guard(guardContext(requirement({ amount: "10000" })));
+
+        const [firstResult, secondResult] = await Promise.all([first, second]);
+
+        expect(firstResult).toBeUndefined();
+        expect(secondResult).toEqual({ abort: true, reason: expect.stringMatching(/per-run cap/) });
+        // Only the first payment's amount is reserved — no double-pass overspend.
+        expect(state.spentAtomic).toBe(15_000n);
     });
 });
 
-describe("recordSpend", () => {
-    it("accumulates the selected requirement's amount", async () => {
+describe("releaseSpendOnFailure", () => {
+    it("releases a reservation so a subsequent guard call has capacity again", async () => {
         const state = createSpendState();
-        const record = recordSpend(state);
+        const guard = buildPaymentGuard({ maxPerRun: "$0.02" }, state);
+        const release = releaseSpendOnFailure(state);
 
-        await record(guardContext(requirement({ amount: "700" })));
-        await record(guardContext(requirement({ amount: "300" })));
+        const first = await guard(guardContext(requirement({ amount: "20000" })));
 
-        expect(state.spentAtomic).toBe(1000n);
+        expect(first).toBeUndefined();
+        expect(state.spentAtomic).toBe(20_000n);
+
+        // The scheme's signature creation failed after the guard reserved the amount.
+        await release(failureContext(requirement({ amount: "20000" })));
+
+        expect(state.spentAtomic).toBe(0n);
+
+        const second = await guard(guardContext(requirement({ amount: "20000" })));
+
+        expect(second).toBeUndefined();
+    });
+
+    it("clamps at zero rather than going negative", async () => {
+        const state = createSpendState();
+        const release = releaseSpendOnFailure(state);
+
+        await release(failureContext(requirement({ amount: "500" })));
+
+        expect(state.spentAtomic).toBe(0n);
     });
 });
 
@@ -138,19 +186,31 @@ describe("assertBoundedPolicy", () => {
         }).toThrow(/unbounded spend policy/);
     });
 
-    it("accepts any single bound", () => {
-        const bounded: SpendPolicy[] = [
-            { maxPerCall: "$0.01" },
-            { maxPerRun: "$1" },
-            { allowedRecipients: ["0x1111111111111111111111111111111111111111"] },
-            { allowedNetworks: ["base"] },
-            { onPaymentRequired: () => true },
-        ];
+    it("refuses an allowlist-only policy (X402-03): allowedNetworks/allowedRecipients narrow but do not bound spend", () => {
+        expect(() => {
+            assertBoundedPolicy({ allowedNetworks: ["base"] });
+        }).toThrow(/unbounded spend policy/);
+        expect(() => {
+            assertBoundedPolicy({ allowedRecipients: ["0x1111111111111111111111111111111111111111"] });
+        }).toThrow(/unbounded spend policy/);
+        expect(() => {
+            assertBoundedPolicy({ allowedNetworks: ["base"], allowedRecipients: ["0x1111111111111111111111111111111111111111"] });
+        }).toThrow(/unbounded spend policy/);
+    });
+
+    it("accepts any single real monetary/approval bound", () => {
+        const bounded: SpendPolicy[] = [{ maxPerCall: "$0.01" }, { maxPerRun: "$1" }, { onPaymentRequired: () => true }];
 
         for (const policy of bounded) {
             expect(() => {
                 assertBoundedPolicy(policy);
             }).not.toThrow();
         }
+    });
+
+    it("still accepts a bound policy that also carries allowlists (narrowing, not the bound itself)", () => {
+        expect(() => {
+            assertBoundedPolicy({ allowedNetworks: ["base"], maxPerCall: "$0.01" });
+        }).not.toThrow();
     });
 });

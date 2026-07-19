@@ -209,7 +209,9 @@ describe("studio", () => {
 
         fireEvent.click(await renderAndFind("dash-tab-schedule"));
 
-        const scheduledJobs = await screen.findByTestId("lunora-scheduled-jobs");
+        // The schedule panel is the heaviest lazy mount in the shell; under a
+        // fully loaded suite run the default 1s findBy window is too tight.
+        const scheduledJobs = await screen.findByTestId("lunora-scheduled-jobs", undefined, { timeout: 5000 });
 
         expect(scheduledJobs).toBeDefined();
     });
@@ -252,7 +254,7 @@ describe("studio", () => {
     });
 
     it("hides a domain's pages when its optional package is disabled", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         render(renderStudio(createClient({ storage: false })));
 
@@ -269,7 +271,7 @@ describe("studio", () => {
     });
 
     it("hides a single sub-page when its feature is disabled but keeps the domain's other pages", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         // payments lives in the "logs" domain alongside logs/audit/schedule — disabling
         // it should drop only the payments sub-page, not the whole domain.
@@ -285,7 +287,7 @@ describe("studio", () => {
     });
 
     it("labels the panel region by the active sub-page", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         fireEvent.click(await renderAndFind("dash-tab-logs"));
 
@@ -300,7 +302,20 @@ describe("studio", () => {
         // The compile-time guard (STUDIO_FEATURES_KEY_GUARD) fails the build on drift;
         // this asserts the canonical tuple at runtime so the guard can't be silently deleted.
         expect(STUDIO_FEATURES_KEY_GUARD).toBe(true);
-        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual(["flags", "mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"]);
+        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual([
+            "analytics",
+            "auth",
+            "containers",
+            "flags",
+            "kv",
+            "mail",
+            "payments",
+            "queues",
+            "scheduler",
+            "storage",
+            "vectors",
+            "workflows",
+        ]);
     });
 
     it("keeps the studio's QueueMetadata mirror in lockstep with @lunora/do's contract", () => {

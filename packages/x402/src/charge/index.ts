@@ -16,7 +16,7 @@ export type { Caip2, X402Network } from "../networks";
 export { isEvmNetwork, isSvmNetwork, toCaip2 } from "../networks";
 export type { HttpActionHandler } from "./http-action";
 export { withX402 } from "./http-action";
-export type { ChargeHandler, ChargeMiddleware, ChargeRouteOverrides } from "./middleware";
+export type { ChargeHandler, ChargeHandlerDeps, ChargeMiddleware, ChargeMiddlewareOptions, ChargeRouteOverrides } from "./middleware";
 export { createChargeMiddleware } from "./middleware";
 export type { X402ProcedureChargeConfig, X402ProcedureChargeGate, X402ProcedureSpec } from "./procedure";
 export { createProcedureChargeGate } from "./procedure";

@@ -1,3 +1,48 @@
+## @lunora/testing [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/%40lunora%2Ftesting%401.0.0-alpha.44...%40lunora%2Ftesting%401.0.0-alpha.45) (2026-07-19)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.4
+* **@lunora/do:** upgraded to 1.0.0-alpha.33
+* **@lunora/server:** upgraded to 1.0.0-alpha.27
+
+## @lunora/testing [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/%40lunora%2Ftesting%401.0.0-alpha.43...%40lunora%2Ftesting%401.0.0-alpha.44) (2026-07-18)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.3
+* **@lunora/do:** upgraded to 1.0.0-alpha.32
+* **@lunora/server:** upgraded to 1.0.0-alpha.26
+
+## @lunora/testing [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/%40lunora%2Ftesting%401.0.0-alpha.42...%40lunora%2Ftesting%401.0.0-alpha.43) (2026-07-17)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.2
+* **@lunora/do:** upgraded to 1.0.0-alpha.31
+* **@lunora/errors:** upgraded to 1.0.0-alpha.5
+* **@lunora/mail:** upgraded to 1.0.0-alpha.15
+* **@lunora/server:** upgraded to 1.0.0-alpha.25
+
+## @lunora/testing [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/%40lunora%2Ftesting%401.0.0-alpha.41...%40lunora%2Ftesting%401.0.0-alpha.42) (2026-07-13)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.30
+
+## @lunora/testing [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/%40lunora%2Ftesting%401.0.0-alpha.40...%40lunora%2Ftesting%401.0.0-alpha.41) (2026-07-13)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.1
+* **@lunora/do:** upgraded to 1.0.0-alpha.29
+* **@lunora/server:** upgraded to 1.0.0-alpha.24
+
 ## @lunora/testing [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/%40lunora%2Ftesting%401.0.0-alpha.39...%40lunora%2Ftesting%401.0.0-alpha.40) (2026-07-12)
 
 

@@ -94,6 +94,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                 externalSource: table.externalSource
                     ? {
                           hasReconcile: table.externalSource.hasReconcile ?? false,
+                          hasSoftDelete: table.externalSource.hasSoftDelete ?? false,
                           hasTenantBy: table.externalSource.hasTenantBy,
                           mode: table.externalSource.mode,
                           unanalyzable: table.externalSource.unanalyzable,

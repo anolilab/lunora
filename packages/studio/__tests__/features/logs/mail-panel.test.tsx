@@ -90,7 +90,11 @@ describe("mailPanel", () => {
 
         render(renderPanel(mock));
 
-        fireEvent.click(await screen.findByTestId("mail-clear"));
+        // The Clear button is disabled until the captured entries load — wait for
+        // the inbox to populate before clicking, or the click is a no-op.
+        await screen.findAllByTestId("mail-list-item");
+
+        fireEvent.click(screen.getByTestId("mail-clear"));
 
         await waitFor(() => {
             if (!cleared(mock)) {

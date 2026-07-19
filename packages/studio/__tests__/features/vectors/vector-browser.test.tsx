@@ -64,7 +64,7 @@ describe("vectorBrowser", () => {
     });
 
     it("surfaces a query error (e.g. no embedder wired)", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         const runQuery = vi.fn<(options: { name: string; text: string; topK?: number }) => Promise<VectorQueryMatch[]>>(async () => {
             throw new Error("VECTOR_QUERY_UNSUPPORTED");

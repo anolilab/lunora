@@ -141,4 +141,48 @@ describe("lunora add — entrypoint re-export injection", () => {
 
         expect(readFileSync(workerEntry(), "utf8")).toContain('export * from "../../lunora/_generated/workflows.js";');
     });
+
+    it("probes past a marker-less fallback candidate instead of stopping there", async () => {
+        expect.assertions(1);
+
+        // No wrangler `main` declared — falls back to WORKER_ENTRY_FALLBACKS.
+        // `src/server.ts` exists first in the fallback order but is NOT the
+        // class-B/C worker entry (no `createShardDO(` marker); `src/index.ts`,
+        // probed later in the fallback order, is. The old candidate-loop
+        // `break` stopped at the first EXISTING candidate regardless of
+        // whether it had the marker, so it never reached `src/index.ts`.
+        writeFileSync(join(workdir, "wrangler.jsonc"), "{}\n", "utf8");
+        rmSync(workerEntry(), { force: true });
+        writeFileSync(join(workdir, "src", "server.ts"), 'export default { fetch: () => new Response("ok") };\n', "utf8");
+        writeFileSync(
+            join(workdir, "src", "index.ts"),
+            'import { createShardDO } from "./lunora/_generated/shard.js";\nexport const ShardDO = createShardDO({});\n',
+            "utf8",
+        );
+
+        await addWorkflow();
+
+        const source = readFileSync(join(workdir, "src", "index.ts"), "utf8");
+
+        expect(source).toContain('export * from "../lunora/_generated/workflows.js";');
+    });
+
+    it("ignores a commented-out wrangler main (JSONC-aware, not a naive regex match against raw text)", async () => {
+        expect.assertions(1);
+
+        // A regex scan of the raw file text (blind to comments) would
+        // incorrectly treat this out-of-date, commented-out `main` as
+        // pointing at `src/worker.ts` — an existing file with no
+        // `createShardDO(` marker — and (with the old unconditional
+        // break-on-first-existing-candidate bug) give up right there without
+        // ever reaching the real entry (`src/server/index.ts`).
+        writeFileSync(join(workdir, "wrangler.jsonc"), '{\n    // "main": "src/worker.ts"\n}\n', "utf8");
+        writeFileSync(join(workdir, "src", "worker.ts"), 'export default { fetch: () => new Response("ok") };\n', "utf8");
+
+        await addWorkflow();
+
+        const source = readFileSync(workerEntry(), "utf8");
+
+        expect(source).toContain('export * from "../../lunora/_generated/workflows.js";');
+    });
 });

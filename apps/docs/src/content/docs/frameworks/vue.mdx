@@ -163,10 +163,9 @@ See [Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff.
 `@lunora/vue/worker` re-exports `withLunora` for frameworks that expose their
 emitted fetch handler as an importable module.
 
-<Callout type="warn">
-    **Nuxt caveat.** Nitro does not expose its fetch handler as an importable module, so single-worker composition is **not** achievable for Nuxt. The supported
-    Nuxt integration is a two-worker split: the Nuxt/Nitro SSR worker plus a standalone Lunora worker owning `/_lunora/*` + `ShardDO`, wired by
-    `NUXT_PUBLIC_LUNORA_URL`.
+<Callout type="info">
+    **Using Nuxt?** The [`@lunora/nuxt`](/docs/frameworks/nuxt) module mounts Lunora _inside_ Nitro (`addServerHandler` at `/_lunora/**`, a `#lunora/app` alias,
+    and a root `worker.ts` wrapper re-exporting `ShardDO`), so Nuxt gets single-worker composition too — see the [Nuxt guide](/docs/frameworks/nuxt).
 </Callout>
 
 See [Deploy your framework](/docs/frameworks/deploy).

@@ -31,12 +31,38 @@ type ShardMode = { backend?: GlobalBackend; kind: "global" } | { field: string; 
 type ExternalSourceRefresh = "manual" | { everyMs: number };
 
 /**
- * Delete-detection mode for external-source ingest. `"full-pull"` (default) reads
- * the whole tenant membership each tick and diffs it, so it observes upstream
- * deletes; `"incremental"` pulls only changed rows (cheap) and is blind to deletes
- * unless paired with a soft-delete column or a `reconcileEveryMs` full-pull sweep.
+ * Delete-detection mode for external-source ingest (plan 077 / 136).
+ *
+ * `"full-pull"` (the default) reads the **whole** tenant membership each tick and
+ * diffs it, so it observes upstream deletes for free — but costs a full read per tick
+ * (the Phase-0 bench put the ceiling at ~10k rows).
+ *
+ * `"incremental"` pulls **only rows past a durable watermark** (`cursor`), cheap for
+ * large low-churn tables above the full-pull cap. Because an absent row then means
+ * "unchanged", not "deleted", incremental requires a delete-visibility path: either a
+ * `reconcileEveryMs` periodic full-pull sweep, or a `softDeleteColumn` whose
+ * tombstones the pull returns. `defineSchema` throws (and the
+ * `external_source_incremental_no_delete_path` advisor lint fails the build) when an
+ * incremental source declares neither.
  */
 type ExternalSourceMode = "full-pull" | "incremental";
+
+/**
+ * Incremental-ingest cursor (plan 136): the monotonic watermark column plus the
+ * watermark-parameterized pull query. `column` names the field in the pulled rows
+ * whose max becomes the next watermark (e.g. `"updated_at"`). `query` is a second
+ * SQL that returns only rows changed since the watermark — the watermark binds as
+ * the parameter AFTER `tenantBy`'s params (e.g. Postgres
+ * `... WHERE tenant_id = $1 AND updated_at >= $2 ORDER BY updated_at`). Prefer `>=`
+ * with the idempotent upsert apply so rows sharing the boundary timestamp are never
+ * skipped (re-pulling them is a no-op).
+ */
+interface ExternalSourceCursor {
+    /** The monotonic watermark column in the pulled rows; its max advances the stored watermark. */
+    column: string;
+    /** The incremental pull SQL. `tenantBy`'s params bind first, then the watermark as the trailing param. */
+    query: string;
+}
 
 /**
  * Config for `.source(...)` (plan 077): declares a table as **materialized from an
@@ -54,23 +80,39 @@ interface ExternalSourceDefinition {
     /** Project the materialized rows to these columns (passed to the membership diff). Omit ⇒ the full mapped document. */
     columns?: ReadonlyArray<string>;
 
+    /** **Required for `mode: "incremental"`**: the watermark column + watermark-parameterized pull query (plan 136). Rejected on a `"full-pull"` source. */
+    cursor?: ExternalSourceCursor;
+
     /** Column whose value becomes the Lunora `_id`. Defaults to `"id"`. */
     idColumn?: string;
 
     /** Transform an external row into the stored document body. Omit ⇒ every selected column except `idColumn` is copied. */
     map?: (row: Record<string, unknown>) => Record<string, unknown>;
 
-    /** Delete-detection mode. Defaults to `"full-pull"`. */
+    /** Delete-detection mode. `"full-pull"` (the default) diffs the whole membership; `"incremental"` pulls past a `cursor` watermark. */
     mode?: ExternalSourceMode;
 
     /** The full tenant-membership query, with driver-native placeholders (`$1` / `?`). `tenantBy` binds its params. */
     query: string;
 
-    /** `"incremental"` only: run a full-pull reconcile this often to garbage-collect tombstones the incremental path can't see. */
+    /**
+     * **Incremental delete-visibility (plan 136)**: run a full-pull sweep at most
+     * this often (millis) to GC upstream deletes an incremental slice can't see.
+     * One of `reconcileEveryMs` / `softDeleteColumn` is required for incremental;
+     * rejected on a `"full-pull"` source.
+     */
     reconcileEveryMs?: number;
 
     /** Poll cadence, or `"manual"`. Omit ⇒ the runtime's size-scaled default. */
     refresh?: ExternalSourceRefresh;
+
+    /**
+     * **Incremental delete-visibility (plan 136)**: the upstream soft-delete
+     * tombstone column (e.g. `"deleted_at"`). When set, the incremental pull must
+     * return tombstoned rows and the ingest turns each into a local delete — an
+     * alternative to `reconcileEveryMs`. Rejected on a `"full-pull"` source.
+     */
+    softDeleteColumn?: string;
 
     /**
      * **Mandatory under `.shardBy()`**: map this DO's shard key → the query's bound
@@ -760,6 +802,22 @@ interface ScheduledJob {
     shardKey?: string;
 }
 
+/**
+ * A schedulable durable-workflow reference — the generated `workflows.&lt;name>` /
+ * `agents.&lt;name>` object, which carries its `WORKFLOW_*`/`AGENT_*` binding and
+ * stable name. Structural mirror of `@lunora/scheduler`'s `WorkflowReference` so
+ * `ctx.scheduler` can target a workflow/agent without a dependency on
+ * `@lunora/scheduler` / `@lunora/workflow`. A scheduled workflow target starts a
+ * fresh instance on fire (the args become its `params`).
+ */
+interface SchedulableWorkflowReference {
+    /** The `WORKFLOW_*`/`AGENT_*` binding name (present on a generated ref). */
+    readonly binding?: string;
+    readonly isLunoraWorkflow: true;
+    /** The workflow/agent export/stable name (present on a generated ref). */
+    readonly name?: string;
+}
+
 interface Scheduler {
     /** Cancel a pending job by id. `cancelled` is `false` when no such job exists. */
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
@@ -767,8 +825,16 @@ interface Scheduler {
     get: (id: string) => Promise<ScheduledJob | null>;
     /** List all pending scheduled jobs. */
     list: () => Promise<ScheduledJob[]>;
-    runAfter: (delayMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
+
+    /**
+     * Schedule a one-shot run `delayMs` from now. `target` is a function path
+     * (`"ns:fn"`) dispatched as a one-shot, or a generated `workflows.&lt;name>` /
+     * `agents.&lt;name>` reference which starts a fresh durable instance on fire
+     * (the args become its `params`).
+     */
+    runAfter: (delayMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    /** Like {@link Scheduler.runAfter} but fires at an absolute epoch-ms timestamp. */
+    runAt: (timestampMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
 }
 
 // --- Durable workflows -------------------------------------------------------
@@ -1464,6 +1530,7 @@ export type {
     DatabaseReader,
     DatabaseWriter,
     DurableObjectJurisdiction,
+    ExternalSourceCursor,
     ExternalSourceDefinition,
     ExternalSourceMode,
     ExternalSourceRefresh,

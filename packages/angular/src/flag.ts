@@ -10,10 +10,16 @@ import { resolveLunoraClient } from "./client";
  */
 const FLAGS_EVAL_PATH = "__lunora_flags__:eval";
 
-/** The value kinds a flag resolves to — OpenFeature's boolean / number / string / structured (JSON) flags. */
+/**
+ * The value kinds a flag resolves to — OpenFeature's boolean / number / string / structured (JSON) flags.
+ * @experimental
+ */
 type FlagValue = boolean | number | string | Record<string, unknown> | unknown[] | null;
 
-/** Targeting context bag forwarded to the OpenFeature provider. */
+/**
+ * Targeting context bag forwarded to the OpenFeature provider.
+ * @experimental
+ */
 type FlagContext = Record<string, unknown>;
 
 /** Wire args the generated flag-subscription read override reads. */
@@ -38,6 +44,10 @@ const flagKind = (value: unknown): FlagSubscribeArgs["type"] => {
 /** A typed reference to the reserved flags channel. */
 const flagsReference = { __lunoraRef: FLAGS_EVAL_PATH } as FunctionReference<"query", FlagSubscribeArgs, FlagValue>;
 
+/**
+ * `FlagOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface FlagOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
@@ -68,6 +78,7 @@ export interface FlagOptions {
  * ```ts
  * readonly darkMode = flag("dark-mode", false);
  * ```
+ * @experimental
  */
 export const flag = <T extends FlagValue>(key: string, defaultValue: T, options: FlagOptions = {}): Signal<T> => {
     const client = resolveLunoraClient(options.client);
@@ -102,6 +113,10 @@ export const flag = <T extends FlagValue>(key: string, defaultValue: T, options:
     return value.asReadonly();
 };
 
+/**
+ * `FlagsOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface FlagsOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
@@ -127,6 +142,7 @@ export interface FlagsOptions {
  * ```ts
  * readonly features = flags({ "dark-mode": false, "new-editor": false });
  * ```
+ * @experimental
  */
 export const flags = <T extends Record<string, FlagValue>>(flagDefaults: T, options: FlagsOptions = {}): Signal<T> => {
     const client = resolveLunoraClient(options.client);

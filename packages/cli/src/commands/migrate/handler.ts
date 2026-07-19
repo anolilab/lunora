@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 
 import { discoverMigrations, discoverSchema } from "@lunora/codegen";
+import { isInteractive, promptSelect, promptText } from "@lunora/config";
 import { LunoraError } from "@lunora/errors";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
@@ -242,7 +243,14 @@ interface MigrateCreateCommandOptions {
     logger: Logger;
     /** Free-text migration name; slugified into the `id` and export identifier. */
     name: string;
-    /** Target table the migration iterates. Left as a TODO placeholder when omitted. */
+
+    /**
+     * Inject a custom table prompt (tests, non-TTY callers). Receives the
+     * table names discovered in `lunora/schema.ts` (possibly empty) and
+     * resolves to the chosen table, or `undefined` to abort.
+     */
+    promptTable?: (tables: ReadonlyArray<string>) => Promise<string | undefined>;
+    /** Target table the migration iterates. Prompted for interactively when omitted. */
     table?: string;
 }
 
@@ -252,13 +260,81 @@ interface MigrateCreateCommandResult {
     file: string;
 }
 
+/** Table names declared in `lunora/schema.ts`, or `[]` when the schema is missing or unparsable. */
+const discoverKnownTables = (cwd: string): string[] => {
+    const schemaPath = join(cwd, "lunora", "schema.ts");
+
+    if (!existsSync(schemaPath)) {
+        return [];
+    }
+
+    try {
+        const project = new Project({ skipAddingFilesFromTsConfig: true });
+
+        return discoverSchema(project, schemaPath).tables.map((table) => table.name);
+    } catch {
+        // Best-effort convenience only — an unparsable schema just means no suggestions.
+        return [];
+    }
+};
+
+/**
+ * Default interactive table prompt: a numbered pick over the schema's known
+ * tables when any were discovered, else a free-text question.
+ */
+const promptForTable = async (tables: ReadonlyArray<string>): Promise<string | undefined> => {
+    if (tables.length > 0) {
+        return promptSelect(
+            "Which table does this migration iterate?",
+            tables.map((name) => {
+                return { label: name, value: name };
+            }),
+        );
+    }
+
+    return promptText("Target table for the migration: ");
+};
+
+/**
+ * Resolve the target table for `migrate create`: the explicit `--table` when
+ * given, else an interactive prompt (injected or the default). Returns
+ * `undefined` after logging when the table cannot be resolved — omitted in a
+ * non-interactive context, or the prompt was aborted.
+ */
+const resolveCreateTable = async (cwd: string, options: MigrateCreateCommandOptions): Promise<string | undefined> => {
+    if (options.table !== undefined) {
+        return options.table;
+    }
+
+    const prompt = options.promptTable ?? (isInteractive() ? promptForTable : undefined);
+
+    if (prompt === undefined) {
+        options.logger.error("migrate create requires a target table when not running interactively — re-run with --table <table>");
+
+        return undefined;
+    }
+
+    const answer = await prompt(discoverKnownTables(cwd));
+    const table = answer?.trim();
+
+    if (table === undefined || table === "") {
+        options.logger.error("no table selected — re-run with --table <table>");
+
+        return undefined;
+    }
+
+    return table;
+};
+
 /**
  * `lunora migrate create &lt;name>` — scaffold a `defineMigration({...})` block in
  * `lunora/migrations.ts`, appending to the file (and creating it with the
  * import) when it already exists. Refuses to clobber an existing migration of
- * the same id or export name.
+ * the same id or export name. The target table comes from `--table`, or from
+ * an interactive prompt when omitted (a non-interactive run without `--table`
+ * fails instead of scaffolding a placeholder).
  */
-const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): MigrateCreateCommandResult => {
+const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Promise<MigrateCreateCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const slug = kebabCase(options.name);
 
@@ -282,13 +358,17 @@ const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): MigrateC
         return { code: 1, file: "" };
     }
 
-    const table = options.table ?? "TODO_table";
+    const table = await resolveCreateTable(cwd, options);
+
+    if (table === undefined) {
+        return { code: 1, file: "" };
+    }
 
     // `table` is written verbatim into generated TypeScript (`table: "..."`),
-    // so it must be a bare identifier — otherwise a crafted `--table` value can
-    // inject arbitrary source into lunora/migrations.ts.
+    // so it must be a bare identifier — otherwise a crafted `--table` (or
+    // prompted) value can inject arbitrary source into lunora/migrations.ts.
     if (!IDENTIFIER_PATTERN.test(table)) {
-        options.logger.error(`invalid --table: "${table}" — must be a valid identifier ([A-Za-z_][A-Za-z0-9_]*)`);
+        options.logger.error(`invalid table: "${table}" — must be a valid identifier ([A-Za-z_][A-Za-z0-9_]*)`);
 
         return { code: 1, file: "" };
     }
@@ -320,10 +400,6 @@ const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): MigrateC
     writeFileSync(file, `${content.trimEnd()}\n\n${block}\n`, "utf8");
 
     options.logger.success(`scaffolded migration "${slug}" in ${file}`);
-
-    if (options.table === undefined) {
-        options.logger.warn(`set the \`table\` field on "${slug}" — it defaults to "${table}"`);
-    }
 
     return { code: 0, file };
 };

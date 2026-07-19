@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runDeployCommand } from "../../src/commands/deploy/handler";
@@ -500,6 +501,57 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("placeholder database_id"))).toBe(true);
             expect(errors.some((line) => line.includes("wrangler d1 create"))).toBe(true);
+        });
+
+        it("syncs code-first cron schedules into wrangler.jsonc triggers.crons", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/scheduler";
+import { internal } from "./_generated/api.js";
+
+const crons = cronJobs();
+
+crons.cron("ping", "0 * * * *", internal.messages.list, {});
+
+export default crons;
+`,
+                "utf8",
+            );
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
+
+            expect(result.code).toBe(0);
+
+            const written = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+
+            expect(written).toContain("0 * * * *");
+        });
+
+        it("clears a stale triggers.crons array when the project declares no crons", async () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                VALID_WRANGLER.replace('"d1_databases"', '"triggers": { "crons": ["0 0 * * *"] },\n    "d1_databases"'),
+                "utf8",
+            );
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
+
+            expect(result.code).toBe(0);
+
+            const parsed = parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { triggers?: { crons?: string[] } };
+
+            expect(parsed.triggers?.crons).toEqual([]);
         });
 
         it("does not run migrations when --migrate is not set", async () => {

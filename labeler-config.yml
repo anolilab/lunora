@@ -1,6 +1,9 @@
 "package: advisor":
     - changed-files:
           - any-glob-to-any-file: "packages/advisor/**/*"
+"package: agent":
+    - changed-files:
+          - any-glob-to-any-file: "packages/agent/**/*"
 "package: ai":
     - changed-files:
           - any-glob-to-any-file: "packages/ai/**/*"
@@ -88,6 +91,9 @@
 "package: react-native":
     - changed-files:
           - any-glob-to-any-file: "packages/react-native/**/*"
+"package: replica":
+    - changed-files:
+          - any-glob-to-any-file: "packages/replica/**/*"
 "package: runtime":
     - changed-files:
           - any-glob-to-any-file: "packages/runtime/**/*"

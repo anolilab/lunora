@@ -2,6 +2,7 @@
  * The slice of a key/value store the better-auth Expo plugin needs — the shape
  * of `expo-secure-store` (a synchronous `getItem`, plus `setItem`). Pass Expo
  * `SecureStore` straight in.
+ * @experimental
  */
 export interface SecureStorageLike {
     getItem: (key: string) => null | string;

@@ -4,6 +4,7 @@ import type { OfflineQueueOptions, PersistedMutation, PersistenceAdapter, Persis
 interface QueuedMutation<T = unknown> {
     readonly args: Record<string, unknown>;
     readonly functionPath: string;
+
     /** Stable id used to remove the entry from durable storage once replayed; assigned by the queue when absent. */
     id?: string;
 
@@ -28,6 +29,15 @@ interface QueuedMutation<T = unknown> {
      * Absent on hydrated records (the optimistic write lived in a prior session).
      */
     readonly onCommit?: (commitCursor: number | undefined) => void;
+
+    /**
+     * Optional sync predicate evaluated just before replay. When it returns
+     * `false` the write is dropped instead of replaying, handling the case
+     * where the mutation's preconditions are no longer valid (e.g. the
+     * document it referred to was deleted while offline). Absent or `true`
+     * means "ok to replay".
+     */
+    readonly precondition?: () => boolean;
     /** Rejects if the mutation can no longer be replayed. */
     readonly reject: (error: unknown) => void;
     /** Resolves once the mutation has been replayed against the server. */
@@ -197,6 +207,16 @@ class OfflineQueue {
      * gone after a reload). No-op when no persistence adapter is configured.
      * Returns the distinct shard keys of the restored writes so the caller can
      * open their sockets to trigger a flush.
+     *
+     * `hydrate()` runs post-construction (the caller awaits an async durable-store
+     * load), so a mutation issued while offline during that boot window is
+     * enqueued into `items` *before* this method's `await` resolves. Restored
+     * records are therefore `unshift`-ed ahead of whatever is already queued
+     * rather than `push`-ed to the end: the durable store's persist order is
+     * authoritative (a prior-session write is always older than anything from
+     * this session), so replaying a same-session boot-time write before an
+     * older restored write on the same document would let last-writer-wins
+     * silently clobber the newer data with the stale one.
      */
     public async hydrate(): Promise<(string | undefined)[]> {
         if (!this.persistence) {
@@ -213,9 +233,10 @@ class OfflineQueue {
         }
 
         const shardKeys = new Set<string | undefined>();
+        const restored: QueuedMutation[] = [];
 
         for (const mutation of persisted) {
-            if (this.items.some((item) => item.id === mutation.id)) {
+            if (this.items.some((item) => item.id === mutation.id) || restored.some((item) => item.id === mutation.id)) {
                 continue;
             }
 
@@ -229,7 +250,7 @@ class OfflineQueue {
                 continue;
             }
 
-            this.items.push({
+            restored.push({
                 args: mutation.args,
                 functionPath: mutation.functionPath,
                 id: mutation.id,
@@ -240,6 +261,8 @@ class OfflineQueue {
             });
             shardKeys.add(mutation.shardKey);
         }
+
+        this.items.unshift(...restored);
 
         this.notifySize();
 
@@ -289,6 +312,40 @@ class OfflineQueue {
 
         this.items.unshift(...items);
         this.notifySize();
+    }
+
+    /**
+     * Remove mutations whose precondition evaluates to `false` (stale/dirty
+     * writes that should not replay) and reject each with an
+     * `OFFLINE_PRECONDITION_FAILED` error. The valid (admitted) mutations stay
+     * queued in FIFO order. Returns the drained stale entries.
+     *
+     * Called during reconnect before the flush cycle to weed out writes whose
+     * assumptions no longer hold (e.g. a document was deleted by another client).
+     */
+    public drainConflict(): QueuedMutation[] {
+        const conflicted: QueuedMutation[] = [];
+        const kept: QueuedMutation[] = [];
+
+        for (const item of this.items) {
+            if (item.precondition !== undefined && !item.precondition()) {
+                const error = new Error("offline mutation skipped: precondition failed before replay");
+
+                (error as Error & { code?: string }).code = "OFFLINE_PRECONDITION_FAILED";
+                item.reject(error);
+                conflicted.push(item);
+            } else {
+                kept.push(item);
+            }
+        }
+
+        if (conflicted.length > 0) {
+            this.items.length = 0;
+            this.items.push(...kept);
+            this.notifySize();
+        }
+
+        return conflicted;
     }
 
     public clear(): void {

@@ -59,6 +59,16 @@ interface DispatchRunnerOptions {
     env: Record<string, unknown>;
     /** Injectable fetch (tests); defaults to the global. */
     fetchImpl?: typeof fetch;
+
+    /**
+     * Optional caller identity to attribute the dispatched call to (RLS / row
+     * ownership). When set, the runner forwards `x-lunora-userid` /
+     * `x-lunora-identity` alongside the admin bearer, so the shard reconstructs
+     * the caller's identity even though this is a server-initiated dispatch. The
+     * server-minted headers are trusted verbatim by the DO, so only pass a value
+     * derived from an already-verified identity (e.g. a voice socket's claims).
+     */
+    identity?: { claims?: Record<string, unknown>; userId?: string };
     /** Package label for directed error messages, e.g. `@lunora/queue`. */
     label: string;
 }
@@ -100,9 +110,22 @@ export const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRu
         }
 
         const url = `${trimTrailingSlashes(origin)}${SCHEDULER_DISPATCH_PATH}`;
+        const headers: Record<string, string> = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+
+        // Attribute the dispatch to a verified caller when one is supplied — the
+        // shard reconstructs identity from these headers independently of the
+        // system flag, so a server dispatch can still carry a userId for RLS.
+        if (options.identity?.userId !== undefined) {
+            headers["x-lunora-userid"] = options.identity.userId;
+        }
+
+        if (options.identity?.claims !== undefined) {
+            headers["x-lunora-identity"] = JSON.stringify(options.identity.claims);
+        }
+
         const response = await fetchImpl(url, {
             body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, shardKey: runOptions.shardKey }),
-            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+            headers,
             method: "POST",
         });
 

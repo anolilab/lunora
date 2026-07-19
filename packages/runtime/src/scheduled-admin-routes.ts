@@ -24,8 +24,8 @@ const SCHEDULED_DEAD_CANCEL_PATH = "/_lunora/admin/scheduled/dead/cancel";
 
 /** The worker internals the scheduled routes reach through injection rather than closure. */
 interface ScheduledAdminRouteDeps {
-    /** Accept the admin token from either the `Authorization` header or the `?token=` WS query param (returns `true` when authorized). */
-    checkWsAdmin: (request: Request) => boolean;
+    /** Accept the admin credential from either the `Authorization` header or the `?token=` WS query param — the master token or an ephemeral minted sub-token (resolves `true` when authorized). Async because the sub-token verify is WebCrypto HMAC. */
+    checkWsAdmin: (request: Request) => Promise<boolean>;
     /** Require a configured `schedulerDO` namespace, else throw `SCHEDULER_NOT_CONFIGURED`. */
     requireSchedulerNamespace: () => ShardNamespaceLike;
     /** Admin-gate the request, then resolve the scheduler-instance stub. */
@@ -68,15 +68,18 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
     /**
      * Proxy a browser WebSocket upgrade to the SchedulerDO's `/ws` so the
      * studio can subscribe to the live job list. A browser `WebSocket` can't
-     * set an `Authorization` header, so the admin token is also accepted via the
-     * `?token=` query parameter — the only channel the constructor allows.
+     * set an `Authorization` header, so the admin credential is also accepted
+     * via the `?token=` query parameter — the only channel the constructor
+     * allows. The gate takes the master token or an ephemeral minted sub-token
+     * (`POST /_lunora/admin/ws-token`), so the master credential can stay out
+     * of the URL.
      */
-    const handleScheduledWebSocket = (request: Request): Promise<Response> => {
+    const handleScheduledWebSocket = async (request: Request): Promise<Response> => {
         if (request.headers.get("Upgrade") !== "websocket") {
             throw new LunoraError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
         }
 
-        if (!checkWsAdmin(request)) {
+        if (!(await checkWsAdmin(request))) {
             throw new LunoraError("admin authorization required", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
 

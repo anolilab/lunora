@@ -1,0 +1,357 @@
+import { createSqlJsAdapter } from "./adapters/sqljs";
+import type { SqliteAdapter } from "./adapters/types";
+import { applyDiffToDb as applyDiffToDatabase, escapeIdentifier as escapeIdentifier_ } from "./diff-applier";
+import { EventLog } from "./event-log";
+import type { TableDiff } from "./table-diff";
+
+/**
+ * `MirrorTableDef` is part of the experimental `@lunora/replica` API and may change without a major version bump.
+ * @experimental
+ */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public API type name
+interface MirrorTableDef {
+    /** Primary key column name (defaults to `"id"`). */
+    readonly primaryKey?: string;
+}
+
+/**
+ * Options for constructing a {@link LocalMirror}.
+ * @experimental
+ */
+interface LocalMirrorOptions {
+    /** Platform-specific SQLite adapter. */
+    readonly db: SqliteAdapter;
+
+    /**
+     * Cap the mirror's internal {@link EventLog} to this many entries
+     * (REPLICA-06). Every applied diff is recorded in the log — with no cap,
+     * a long-running client accumulates one entry per diff forever.
+     *
+     * `undefined` (the default) preserves unbounded retention. Set this when
+     * catch-up replication only ever needs a bounded recent window; older
+     * entries are silently evicted (oldest-first) once the cap is exceeded.
+     * See {@link EventLog#truncateBelow} for caller-driven truncation tied to
+     * a snapshot instead.
+     */
+    readonly maxEventLogEntries?: number;
+
+    /**
+     * Table schemas the mirror should manage.
+     *
+     * On first use the mirror creates any missing tables automatically
+     * based on the columns observed in the first diff/row applied.
+     * If you want a fixed schema, pass it here with explicit column
+     * definitions in `columns`.
+     */
+    readonly tables?: Record<string, MirrorTableDef>;
+}
+
+// ── LocalMirror ──────────────────────────────────────────────────────────
+
+// Reserved for future mirror bookkeeping (e.g. persisting a sync watermark).
+// Created on construction; there is no reader/writer yet.
+const MIRROR_META_TABLE = "__lunora_mirror_meta";
+
+const ensureMetaTable = (database: SqliteAdapter): void => {
+    database.exec(
+        `CREATE TABLE IF NOT EXISTS ${MIRROR_META_TABLE} (
+            key   TEXT PRIMARY KEY NOT NULL,
+            value TEXT NOT NULL
+        )`,
+    );
+};
+
+/**
+ * Local SQLite mirror that maintains a client-side replica of server
+ * tables by applying {@link TableDiff} deltas.
+ *
+ * Usage:
+ * ```ts
+ * import { createSqlJsAdapter } from "@lunora/replica/adapters/sqljs";
+ * import initSqlJs from "sql.js";
+ *
+ * const SQL = await initSqlJs();
+ * const db = createSqlJsAdapter(new SQL.Database());
+ *
+ * const mirror = new LocalMirror({ db });
+ *
+ * // Apply a server diff:
+ * mirror.applyDiff(someDiff);
+ *
+ * // Query locally:
+ * const rows = mirror.query&lt;{ id: string; name: string }>(
+ *   "SELECT id, name FROM users WHERE name LIKE ?",
+ *   ["alice%"],
+ * );
+ * ```
+ */
+type ChangeSubscriber = () => void;
+
+/**
+ * `LocalMirror` is part of the experimental `@lunora/replica` API and may change without a major version bump.
+ * @experimental
+ */
+class LocalMirror {
+    readonly #db: SqliteAdapter;
+    readonly #tables: Record<string, MirrorTableDef>;
+    readonly #eventLog: EventLog;
+    readonly #changeListeners = new Set<ChangeSubscriber>();
+
+    /**
+     * Monotonically increasing counter bumped on every state-changing
+     * operation (`applyDiff`, `clearData`) — independent of `eventLog.size`.
+     * `clearData` doesn't grow the log (REPLICA-09), so a consumer that used
+     * `eventLog.size` as its `useSyncExternalStore` snapshot would never
+     * re-render after a clear; `version` changes on both operations.
+     */
+    #version = 0;
+
+    /**
+     * Convenience factory that creates a {@link LocalMirror} backed by a
+     * {@link createSqlJsAdapter sql.js adapter} without needing to import
+     * and wire sql.js manually.
+     *
+     * The caller provides an initialised sql.js database — this method wraps
+     * it in an adapter and constructs the mirror.
+     * @example
+     * ```ts
+     * import initSqlJs from "sql.js";
+     *
+     * const SQL = await initSqlJs();
+     * const mirror = LocalMirror.create(new SQL.Database(), {
+     *   tables: { todos: { primaryKey: "id" } },
+     * });
+     * ```
+     */
+    public static create(
+        sqlJsDatabase: {
+            close: () => void;
+            exec: (sql: string) => { columns: string[]; values: unknown[][] }[];
+            run: (sql: string, params?: unknown[]) => void;
+        },
+        options?: { tables?: Record<string, MirrorTableDef> },
+    ): LocalMirror {
+        const adapter = createSqlJsAdapter(sqlJsDatabase);
+
+        return new LocalMirror({ db: adapter, tables: options?.tables });
+    }
+
+    public constructor(options: LocalMirrorOptions) {
+        this.#db = options.db;
+        this.#tables = { ...options.tables };
+        this.#eventLog = new EventLog({ maxEntries: options.maxEventLogEntries });
+
+        ensureMetaTable(this.#db);
+    }
+
+    /**
+     * Subscribe to data-change notifications. Fires after every {@link applyDiff}.
+     * Returns an unsubscribe function.
+     */
+    public onChange(callback: ChangeSubscriber): () => void {
+        this.#changeListeners.add(callback);
+
+        return () => {
+            this.#changeListeners.delete(callback);
+        };
+    }
+
+    // ── Public API ─────────────────────────────────────────────────────
+
+    /**
+     * The in-memory event log tracking every diff applied to this mirror.
+     * Use {@link EventLog.getSince} for catch-up replication across tabs
+     * or service-worker instances.
+     */
+    public get eventLog(): EventLog {
+        return this.#eventLog;
+    }
+
+    /**
+     * The raw SQLite adapter. Advanced consumers (e.g. the React hook)
+     * can use it for ad-hoc queries or bulk operations.
+     */
+    public get db(): SqliteAdapter {
+        return this.#db;
+    }
+
+    /**
+     * Monotonically increasing version counter, bumped on every operation
+     * that changes mirrored data (`applyDiff`, `clearData`). Use this — not
+     * `eventLog.size` — as a `useSyncExternalStore` snapshot so operations
+     * that don't append to the log still trigger a re-render.
+     */
+    public get version(): number {
+        return this.#version;
+    }
+
+    /**
+     * Apply a server-side diff to the local SQLite mirror.
+     *
+     * The diff is applied in a transaction and recorded in the event log
+     * so other tabs or the SW can catch up.
+     */
+    public applyDiff(diff: TableDiff): void {
+        if (diff.changes.length === 0) {
+            return;
+        }
+
+        const pkColumn = this.#tables[diff.table]?.primaryKey ?? "id";
+
+        this.#ensureTableSchema(diff);
+
+        applyDiffToDatabase(this.#db, diff, pkColumn);
+
+        this.#eventLog.append("table-diff", diff, [diff]);
+        this.#version += 1;
+
+        // Notify change listeners (e.g. React hook subscriptions)
+        for (const listener of this.#changeListeners) {
+            try {
+                listener();
+            } catch {
+                // Listener threw — keep notifying others.
+            }
+        }
+    }
+
+    /**
+     * Run an arbitrary SQL query against the local mirror and return
+     * typed results.
+     * @example
+     * ```ts
+     * const users = mirror.query<{ id: string; name: string }>(
+     *   "SELECT id, name FROM users WHERE active = ?",
+     *   [true],
+     * );
+     * ```
+     */
+    public query<T = Record<string, unknown>>(sql: string, params?: ReadonlyArray<unknown>): T[] {
+        return this.#db.query<T>(sql, params);
+    }
+
+    /**
+     * Delete every row from all known tables (preserves the event log
+     * and schema). Useful when re-syncing from scratch.
+     *
+     * Notifies `onChange` subscribers and bumps {@link LocalMirror.version}
+     * (REPLICA-09) even though nothing is appended to the event log — a
+     * consumer keyed only on `eventLog.size` would otherwise never learn the
+     * mirror was cleared and keep rendering deleted rows.
+     */
+    public clearData(): void {
+        // The `_` wildcard in a LIKE pattern matches any single character, so
+        // an unescaped `'__lunora_%'` / `'sqlite_%'` also matches unrelated
+        // tables that merely happen to contain "lunora"/"sqlite" at the right
+        // offset (e.g. "AAlunoraBdata"), wrongly skipping them from the clear.
+        // `ESCAPE '\'` makes the `\_` sequences literal underscores.
+        const tables = this.#db.query<{ name: string }>(
+            String.raw`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '\_\_lunora\_%' ESCAPE '\' AND name NOT LIKE 'sqlite\_%' ESCAPE '\'`,
+        );
+
+        this.#db.transaction(() => {
+            for (const { name } of tables) {
+                this.#db.exec(`DELETE FROM ${escapeIdentifier_(name)}`);
+            }
+        });
+
+        this.#version += 1;
+
+        for (const listener of this.#changeListeners) {
+            try {
+                listener();
+            } catch {
+                // Listener threw — keep notifying others.
+            }
+        }
+    }
+
+    /**
+     * Dispose the mirror and close the database connection.
+     */
+    public close(): void {
+        this.#db.close();
+        this.#eventLog.clear();
+    }
+
+    // ── Schema helpers ─────────────────────────────────────────────────
+
+    /**
+     * Register a table schema so the mirror can create the table on
+     * first use.
+     */
+    public registerTable(name: string, definition: MirrorTableDef): void {
+        this.#tables[name] = definition;
+    }
+
+    /**
+     * Return the list of mirrored table names.
+     */
+    public get mirroredTables(): ReadonlyArray<string> {
+        return Object.keys(this.#tables);
+    }
+
+    // ── Internal ───────────────────────────────────────────────────────
+
+    /**
+     * Derive the UNION of non-PK column names across every non-delete change.
+     * @param diff The table diff whose changes are scanned.
+     * @param pk The primary-key column to exclude from the result.
+     */
+    static #collectDiffColumns(diff: TableDiff, pk: string): Set<string> {
+        const requiredColumns = new Set<string>();
+
+        for (const change of diff.changes) {
+            if (change.type === "delete") {
+                continue;
+            }
+
+            for (const key of Object.keys(change.data)) {
+                if (key !== pk) {
+                    requiredColumns.add(key);
+                }
+            }
+        }
+
+        return requiredColumns;
+    }
+
+    /**
+     * Ensure the target table exists with all columns needed by the diff.
+     *
+     * - If the table doesn't exist yet, CREATE it with columns derived from the diff data (PK + every non-delete column).
+     * - If the table already exists, ALTER TABLE ADD COLUMN for any keys in the diff that don't have a corresponding column yet (schema evolution).
+     */
+    #ensureTableSchema(diff: TableDiff): void {
+        const pk = this.#tables[diff.table]?.primaryKey ?? "id";
+
+        // Derive required columns from the UNION of keys across every non-delete change
+        const requiredColumns = LocalMirror.#collectDiffColumns(diff, pk);
+
+        // Check if the table already exists
+        const existing = this.#db.query<{ name: string }>(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, [diff.table]);
+
+        if (existing.length === 0) {
+            // Create the table with all required columns
+            let columnDefs = `${escapeIdentifier_(pk)} TEXT PRIMARY KEY NOT NULL`;
+
+            for (const key of requiredColumns) {
+                columnDefs += `, ${escapeIdentifier_(key)} TEXT`;
+            }
+
+            this.#db.exec(`CREATE TABLE IF NOT EXISTS ${escapeIdentifier_(diff.table)} (${columnDefs})`);
+        } else if (requiredColumns.size > 0) {
+            // Schema evolution: add any missing columns
+            const existingColumns = new Set(this.#db.query<{ name: string }>(`PRAGMA table_info(${escapeIdentifier_(diff.table)})`).map((row) => row.name));
+
+            for (const key of requiredColumns) {
+                if (!existingColumns.has(key)) {
+                    this.#db.exec(`ALTER TABLE ${escapeIdentifier_(diff.table)} ADD COLUMN ${escapeIdentifier_(key)} TEXT`);
+                }
+            }
+        }
+    }
+}
+
+export { LocalMirror };
+export type { LocalMirrorOptions, MirrorTableDef };

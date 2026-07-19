@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import { isConflictError } from "../src/errors";
 import type { OptimisticUpdate } from "../src/local-store";
 import { LunoraClient } from "../src/lunora-client";
@@ -454,6 +455,83 @@ describe("lunoraClient", () => {
             const last = JSON.parse(socket.sent.at(-1)!);
 
             expect(last).toEqual({ id: sub.id, type: "unsubscribe" });
+        });
+
+        it("wire-encodes bigint/Date subscription args on the subscribe frame (and dedups/distinguishes by value)", async () => {
+            expect.assertions(6);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // Pre-change this threw at the registry key; now it must key, send,
+            // and JSON-serialize cleanly (the raw frame stringify would throw on
+            // a real bigint).
+            client.subscribe(fnRef("messages:list"), { at: new Date(5000), since: 123n }, () => {});
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            expect(wireFrames(socket)).toHaveLength(1);
+
+            const sub = firstSub(socket);
+
+            expect(sub.type).toBe("subscribe");
+            // The frame carries the TAGGED wire form; the shard's decode-at-entry
+            // revives the real values before storing/executing.
+            expect(decodeWire(sub.query.args)).toStrictEqual({ at: new Date(5000), since: 123n });
+
+            socket.receive({ id: sub.id, type: "ack" });
+
+            // Same wire-typed args → deduped onto the existing (acked) registration…
+            client.subscribe(fnRef("messages:list"), { at: new Date(5000), since: 123n }, () => {});
+
+            expect(wireFrames(socket)).toHaveLength(1);
+
+            // …while args differing ONLY by the bigint open a distinct subscription.
+            client.subscribe(fnRef("messages:list"), { at: new Date(5000), since: 124n }, () => {});
+
+            expect(wireFrames(socket)).toHaveLength(2);
+            expect(wireFrames(socket)[1].id).not.toBe(sub.id);
+
+            client.close();
+        });
+
+        it("keeps pure-JSON subscribe frames byte-identical (no wire tags)", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), { channel: "general", limit: 10 }, () => {});
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            expect(firstSub(socket).query.args).toStrictEqual({ channel: "general", limit: 10 });
+
+            client.close();
+        });
+
+        it("rejects a subscription arg the wire refuses with a TypeError at the call site", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            expect(() => client.subscribe(fnRef("messages:list"), { pattern: /abc/ }, () => {})).toThrow(TypeError);
+
+            client.close();
         });
 
         it("forwards a settled frame's watermark to onCheckpoint without firing the data callback", () => {
@@ -2848,6 +2926,182 @@ describe("lunoraClient", () => {
             expect(second.url).toContain("/_lunora/admin/scheduled/ws");
 
             unsubscribe();
+            vi.useRealTimers();
+        });
+
+        it("resolves a wsToken provider per connect, re-minting on reconnect", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            let mints = 0;
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: async () => {
+                    mints += 1;
+
+                    return `eph-${String(mints)}`;
+                },
+            });
+
+            const unsubscribe = client.subscribeScheduledJobs(() => undefined);
+
+            // The scheduled socket is built only AFTER the async provider
+            // resolves (a few microtask hops). Drain until the socket carrying
+            // the minted token appears, and pick it by path + token — reading
+            // `latestSocket()` could otherwise grab a stray socket (e.g. a prior
+            // test's pending reconnect) that raced in during the advance.
+            const findScheduled = (needle: string): MockSocket | undefined =>
+                sockets.find((socket) => socket.url.includes("/_lunora/admin/scheduled/ws") && socket.url.includes(needle));
+
+            let first: MockSocket | undefined;
+
+            for (let attempt = 0; attempt < 30 && first === undefined; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential drain until the minted socket appears
+                await vi.advanceTimersByTimeAsync(0);
+                first = findScheduled("token=eph-1");
+            }
+
+            expect(first?.url).toContain("token=eph-1");
+
+            first?.open();
+            first?.triggerClose();
+
+            // The reconnect (10ms) re-resolves the provider — a fresh short-lived
+            // token per attempt, never a reused stale one. Drain until it lands.
+            let second: MockSocket | undefined;
+
+            for (let attempt = 0; attempt < 30 && second === undefined; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential drain: fire the 10ms reconnect timer then flush the re-mint hops
+                await vi.advanceTimersByTimeAsync(10);
+                second = findScheduled("token=eph-2");
+            }
+
+            expect(second).not.toBe(first);
+            expect(second?.url).toContain("token=eph-2");
+
+            unsubscribe();
+            vi.useRealTimers();
+        });
+    });
+
+    describe("lunoraClient — wsToken provider (ephemeral admin token)", () => {
+        it("resolves the provider before the shard socket connects and appends the minted token", async () => {
+            expect.assertions(3);
+
+            const provider = vi.fn<() => Promise<string>>(async () => "eph-token");
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: provider,
+            });
+
+            client.subscribe(fnRef("__lunora_admin__:getMetrics"), {}, () => undefined);
+
+            // No socket yet — the provider's Promise must resolve first.
+            expect(sockets).toHaveLength(0);
+
+            await flushMicrotasks();
+
+            // Select the token-bearing socket rather than `latestSocket()`: under
+            // full-suite load a stray reconnect socket from an earlier test can be
+            // the newest entry, so `.at(-1)` is not reliably the minted one.
+            let tokened = sockets.find((socket) => socket.url.includes("token=eph-token"));
+
+            for (let attempt = 0; attempt < 30 && tokened === undefined; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- drain macrotasks until the provider-minted socket opens
+                await flushMicrotasks();
+                tokened = sockets.find((socket) => socket.url.includes("token=eph-token"));
+            }
+
+            expect(tokened?.url).toContain("token=eph-token");
+            expect(provider).toHaveBeenCalledTimes(1);
+        });
+
+        it("re-invokes the provider on the reconnect after a token-expired (4001) drop", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            let mints = 0;
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: async () => {
+                    mints += 1;
+
+                    return `eph-${String(mints)}`;
+                },
+            });
+
+            client.subscribe(fnRef("__lunora_admin__:getMetrics"), {}, () => undefined);
+
+            await vi.advanceTimersByTimeAsync(0);
+
+            const first = latestSocket();
+
+            first.open();
+            first.triggerClose();
+
+            // The reconnect re-invokes the async provider (minting eph-2) before
+            // opening the new socket. `latestSocket()` is unreliable here — under
+            // full-suite load a stray reconnect socket can be the newest entry (see
+            // the sibling test above) — so drain the reconnect backoff + async mint
+            // and select the token-bearing reconnect socket explicitly.
+            let second = sockets.find((socket) => socket !== first && socket.url.includes("token=eph-2"));
+
+            for (let attempt = 0; attempt < 30 && second === undefined; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- drain fake timers + microtasks until the minted reconnect socket opens
+                await vi.advanceTimersByTimeAsync(15);
+                second = sockets.find((socket) => socket !== first && socket.url.includes("token=eph-2"));
+            }
+
+            expect(second).not.toBe(first);
+            expect(second?.url).toContain("token=eph-2");
+
+            vi.useRealTimers();
+        });
+
+        it("arms the reconnect backoff when the provider rejects, then connects once it recovers", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            let attempts = 0;
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: async () => {
+                    attempts += 1;
+
+                    if (attempts === 1) {
+                        throw new Error("mint endpoint unreachable");
+                    }
+
+                    return "eph-recovered";
+                },
+            });
+
+            client.subscribe(fnRef("__lunora_admin__:getMetrics"), {}, () => undefined);
+
+            // First attempt: the provider rejects, so no socket is built.
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(sockets).toHaveLength(0);
+
+            // The failure armed the normal reconnect backoff; the retry mints.
+            await vi.advanceTimersByTimeAsync(15);
+
+            expect(latestSocket().url).toContain("token=eph-recovered");
+
             vi.useRealTimers();
         });
     });

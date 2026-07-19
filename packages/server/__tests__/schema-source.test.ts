@@ -6,7 +6,7 @@ import { defineSchema, defineTable, v } from "../src/index";
  * `.source(...)` — external-source ingest declaration (plan 077). Orthogonal to
  * `.shardBy()`/`.global()`, implies `.externallyManaged()`, and fails fast on the
  * order-independent guards (`binding`/`query`). The tenant-scope + global
- * contradiction + unimplemented-mode checks need the fully-assembled table, so they
+ * contradiction + unknown-mode checks need the fully-assembled table, so they
  * are enforced (and asserted) at `defineSchema` time, not on the builder.
  */
 
@@ -48,9 +48,8 @@ describe("defineTable().source", () => {
             columns: ["title"],
             idColumn: "uuid",
             map,
-            mode: "incremental",
+            mode: "full-pull",
             query: "select uuid, title from documents",
-            reconcileEveryMs: 60_000,
             refresh: { everyMs: 5000 },
         });
 
@@ -59,9 +58,8 @@ describe("defineTable().source", () => {
             columns: ["title"],
             idColumn: "uuid",
             map,
-            mode: "incremental",
+            mode: "full-pull",
             query: "select uuid, title from documents",
-            reconcileEveryMs: 60_000,
             refresh: { everyMs: 5000 },
         });
     });
@@ -128,13 +126,104 @@ describe("defineSchema external-source validation", () => {
         ).toThrow(/cannot be both \.source\(\) and \.global\(\)/u);
     });
 
-    it("throws on mode: incremental (not yet implemented)", () => {
+    it("accepts the explicit default mode: full-pull", () => {
         expect.assertions(1);
 
         expect(() =>
             defineSchema({
-                documents: defineTable({ title: v.string() }).source({ binding: "HD", mode: "incremental", query: "select id, title from documents" }),
+                documents: defineTable({ title: v.string() }).source({ binding: "HD", mode: "full-pull", query: "select id, title from documents" }),
             }),
-        ).toThrow(/mode: "incremental"/u);
+        ).not.toThrow();
+    });
+
+    it("throws when an untyped caller passes an unknown mode", () => {
+        expect.assertions(1);
+
+        // A stray mode literal (`"incremental"` and `"full-pull"` are the only
+        // valid ones) is a compile-time error for typed callers; the runtime guard
+        // stays for untyped JS callers.
+        const source = { binding: "HD", mode: "delta", query: "select id, title from documents" };
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source(source as unknown as Parameters<ReturnType<typeof defineTable>["source"]>[0]),
+            }),
+        ).toThrow(/supported modes are "full-pull" \(default\) and "incremental"/u);
+    });
+
+    it("accepts mode: incremental with a cursor and a reconcile sweep", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source({
+                    binding: "HD",
+                    cursor: { column: "updated_at", query: "select id, title, updated_at from documents where updated_at >= $1" },
+                    mode: "incremental",
+                    query: "select id, title, updated_at from documents",
+                    reconcileEveryMs: 3_600_000,
+                }),
+            }),
+        ).not.toThrow();
+    });
+
+    it("accepts mode: incremental with a cursor and a soft-delete column", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source({
+                    binding: "HD",
+                    cursor: { column: "updated_at", query: "select id, title, updated_at, deleted_at from documents where updated_at >= $1" },
+                    mode: "incremental",
+                    query: "select id, title, updated_at from documents where deleted_at is null",
+                    softDeleteColumn: "deleted_at",
+                }),
+            }),
+        ).not.toThrow();
+    });
+
+    it("throws on mode: incremental without a cursor", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source({
+                    binding: "HD",
+                    mode: "incremental",
+                    query: "select id, title from documents",
+                    reconcileEveryMs: 3_600_000,
+                }),
+            }),
+        ).toThrow(/is `mode: "incremental"` but has no `cursor`/u);
+    });
+
+    it("throws on mode: incremental with no delete-visibility path", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source({
+                    binding: "HD",
+                    cursor: { column: "updated_at", query: "select id, title, updated_at from documents where updated_at >= $1" },
+                    mode: "incremental",
+                    query: "select id, title, updated_at from documents",
+                }),
+            }),
+        ).toThrow(/no delete-visibility path/u);
+    });
+
+    it("throws when an incremental-only knob is set on a full-pull source", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source({
+                    binding: "HD",
+                    query: "select id, title from documents",
+                    reconcileEveryMs: 1000,
+                }),
+            }),
+        ).toThrow(/only applies to incremental ingest/u);
     });
 });

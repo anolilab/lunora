@@ -1,3 +1,11 @@
+export type { AgentApi, AgentHandle, AgentOptions, AgentThreadRecord, AgentThreadStatus } from "./agent";
+export { agent } from "./agent";
+export type { AgentChatApi, AgentChatHandle, AgentChatMessage, AgentChatOptions, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta } from "./agent-chat";
+export { agentChat } from "./agent-chat";
+export type { AgentStateApi, AgentStateHandle, AgentStateOptions } from "./agent-state";
+export { agentState } from "./agent-state";
+export type { AgentToolEvent, AgentToolEventsApi, AgentToolEventsHandle, AgentToolEventsOptions } from "./agent-tool-events";
+export { agentToolEvents } from "./agent-tool-events";
 export type { AuthStore } from "./auth";
 export { auth } from "./auth";
 export type { ConnectionStatusStore } from "./connection-status";
@@ -40,7 +48,11 @@ export type { QueryStore, QueryStoreOptions } from "./query";
 export { query } from "./query";
 export type { RateLimitHandle, RateLimitOptions } from "./rate-limit";
 export { rateLimit } from "./rate-limit";
+export type { StreamHandle, StreamStatus, StreamStoreOptions } from "./stream";
+export { stream } from "./stream";
 export type { SubscriptionHandle, SubscriptionStoreOptions } from "./subscription";
 export { subscription } from "./subscription";
+export type { VoiceAgentHandle, VoiceAgentOptions, VoiceAudioFormat, VoiceReference, VoiceStatus } from "./voice-agent";
+export { voiceAgent } from "./voice-agent";
 // Re-export the core types adapters lean on, so consumers import them from one place.
 export type { ArgsOf, ConnectionStatus, FunctionReference, LunoraClient, MutationCallOptions, Preloaded, ReturnOf } from "@lunora/client";

@@ -132,10 +132,13 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         mutation: mutationFunction,
         onAuthTokenChange: onAuthTokenChangeFunction,
         onConnectionStatus: onConnectionStatusFunction,
+        peekHydratedQuery: () => undefined,
         query: queryFunction,
+        readyResolved: true,
         setAuthToken: setAuthTokenFunction,
         setConnectionContext: setConnectionContextFunction,
         subscribe: subscribeFunction,
+        whenReady: async () => undefined,
     } as unknown as LunoraClient;
 
     return {

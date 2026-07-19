@@ -1,6 +1,6 @@
 {
     "name": "@lunora/ai",
-    "version": "1.0.0-alpha.13",
+    "version": "1.0.0-alpha.16",
     "description": "Workers AI helper for Lunora: provider-agnostic AI SDK access from functions, Workers AI by default",
     "keywords": [
         "ai",
@@ -10,6 +10,8 @@
         "inference",
         "llm",
         "lunora",
+        "rag",
+        "retrieval",
         "workers",
         "workers-ai"
     ],
@@ -41,6 +43,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./rag": {
+            "types": "./dist/rag/index.d.ts",
+            "import": "./dist/rag/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -61,7 +67,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.4",
+        "@lunora/errors": "1.0.0-alpha.5",
         "ai": "catalog:ai",
         "workers-ai-provider": "catalog:ai"
     },

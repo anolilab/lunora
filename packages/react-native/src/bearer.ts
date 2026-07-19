@@ -24,6 +24,7 @@ const SESSION_TOKEN_COOKIE = /(?:^|;)[^;=]*session_token=([^;]+)/;
  * client.setAuthToken(token);
  * client.setWsToken(token ?? undefined);
  * ```
+ * @experimental
  */
 const expoBearerToken = (authClient: { getCookie: () => string }): null | string => {
     // Its raw value passes to the `bearer` plugin, which decodes it if URL-encoded.

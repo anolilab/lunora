@@ -33,6 +33,7 @@ import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-e
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
+import externalSourceIncrementalNoDeletePath from "./lints/static/external-source-incremental-no-delete-path";
 import externalSourceOnGlobal from "./lints/static/external-source-on-global";
 import externalSourceUnscoped from "./lints/static/external-source-unscoped";
 import filterWithoutIndex from "./lints/static/filter-without-index";
@@ -143,6 +144,7 @@ export { default as containerRuntimeEgressRelaxation } from "./lints/static/cont
 export { default as containerStartEnableInternetOverride } from "./lints/static/container-start-enable-internet-override";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
+export { default as externalSourceIncrementalNoDeletePath } from "./lints/static/external-source-incremental-no-delete-path";
 export { default as externalSourceOnGlobal } from "./lints/static/external-source-on-global";
 export { default as externalSourceUnscoped } from "./lints/static/external-source-unscoped";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
@@ -246,6 +248,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     workflowUnknownTarget,
     workflowDuplicateStepName,
     shapeUnknownTable,
+    externalSourceIncrementalNoDeletePath,
     externalSourceOnGlobal,
     externalSourceUnscoped,
     emptyIndex,

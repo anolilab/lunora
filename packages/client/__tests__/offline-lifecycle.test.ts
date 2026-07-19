@@ -736,6 +736,47 @@ describe("offline lifecycle (e2e)", () => {
         client.close();
     });
 
+    it("13. rejects a queued write whose precondition fails before replay (no hang)", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        // Queued offline with a precondition that no longer holds at replay time.
+        // On flush `drainConflict()` drops it, so the awaiting caller must reject
+        // terminally (not hang forever with an un-run optimistic rollback).
+        const stale = client.mutation(fnRef("posts:create"), { title: "stale" }, { precondition: () => false });
+        const settled = stale.then(
+            () => "resolved",
+            (error: unknown) => error,
+        );
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const result = await settled;
+
+        expect(result).toBeInstanceOf(Error);
+        expect((result as Error & { code?: string }).code).toBe("OFFLINE_PRECONDITION_FAILED");
+        expect(fetchMock).not.toHaveBeenCalled();
+
+        client.close();
+    });
+
     it("9. drops and purges a persisted write whose schema version no longer matches", async () => {
         expect.assertions(2);
 

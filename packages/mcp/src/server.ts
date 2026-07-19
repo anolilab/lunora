@@ -10,6 +10,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
+import type { McpAgentExposure } from "./agent-tools";
+import { agentToolDefinitions, callAgentTool, isAgentToolName } from "./agent-tools";
 import { callTool, toolDefinitions } from "./tools";
 
 /**
@@ -57,6 +59,23 @@ const resolveVersion = (): string => {
 const SERVER_INFO = { name: "lunora", version: resolveVersion() } as const;
 
 interface LunoraMcpServerOptions {
+    /** Wall-clock budget a single agent tool call awaits before returning a pending result. */
+    agentMaxWaitMs?: number;
+
+    /** Delay between agent thread-status polls. */
+    agentPollIntervalMs?: number;
+    /** The agents this server fronts as MCP tools (see `allowAgents`). */
+    agents?: ReadonlyArray<McpAgentExposure>;
+
+    /**
+     * Expose the per-agent tools (`agent_&lt;name>` + the generic
+     * `lunora_agent_status`). Defaults to `false`, mirroring `allowWrites`:
+     * starting a durable agent run is a side effect, so the agent tools are
+     * omitted from the advertised list AND refused at dispatch unless explicitly
+     * opted in. Only takes effect together with a non-empty `agents` list.
+     */
+    allowAgents?: boolean;
+
     /**
      * Expose the write tools (`lunora_run_mutation` / `lunora_run_action`).
      * Defaults to `false`: the server is READ-ONLY unless explicitly opted in,
@@ -121,17 +140,28 @@ const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
 const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     const client = resolveClient(options);
     const allowWrites = options.allowWrites ?? false;
+    const allowAgents = options.allowAgents ?? false;
+    const agents = options.agents ?? [];
     const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
-        return { tools: [...toolDefinitions(allowWrites)] };
+        return { tools: [...toolDefinitions(allowWrites), ...agentToolDefinitions(agents, allowAgents)] };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+        const { arguments: rawArguments, name } = request.params;
+        const input = rawArguments ?? {};
         // ToolResult is structurally a CallToolResult; the assertion bridges the
         // SDK's open-ended index signature (passthrough zod schema) which a
         // closed interface can't satisfy by inference alone.
-        const result = await callTool(client, request.params.name, request.params.arguments ?? {}, allowWrites);
+        const result = isAgentToolName(name, agents)
+            ? await callAgentTool(client, name, input, {
+                  allowAgents,
+                  exposures: agents,
+                  ...(options.agentMaxWaitMs === undefined ? {} : { maxWaitMs: options.agentMaxWaitMs }),
+                  ...(options.agentPollIntervalMs === undefined ? {} : { pollIntervalMs: options.agentPollIntervalMs }),
+              })
+            : await callTool(client, name, input, allowWrites);
 
         return result as CallToolResult;
     });

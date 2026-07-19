@@ -1,0 +1,108 @@
+---
+title: "Custom SQLite adapters"
+description: Implement SqliteAdapter for any SQLite runtime (React Native, bun:sqlite, expo-sqlite, etc.).
+---
+
+`@lunora/replica` ships adapters for [sql.js](/docs/packages/replica),
+[better-sqlite3](/docs/packages/replica), and the
+[official SQLite WASM](/docs/packages/replica). If your runtime uses a different
+SQLite backend — React Native's `expo-sqlite`, `bun:sqlite`, `capataz` — you can
+write a custom adapter.
+
+## The `SqliteAdapter` interface
+
+```ts
+interface SqliteAdapter {
+    close: () => void;
+    exec: (sql: string, params?: ReadonlyArray<unknown>) => void;
+    lastInsertRowId: () => number;
+    query: <T = Record<string, unknown>>(sql: string, params?: ReadonlyArray<unknown>) => T[];
+    transaction: (fn: () => void) => void;
+}
+```
+
+| Method            | Description                                                                  |
+| ----------------- | ---------------------------------------------------------------------------- |
+| `close`           | Tear down the database connection.                                           |
+| `exec`            | Execute a SQL statement with optional bound params. No result rows returned. |
+| `lastInsertRowId` | Return the rowid of the last `INSERT`.                                       |
+| `query`           | Execute SQL and return result rows as objects keyed by column name.          |
+| `transaction`     | Run all statements in the callback inside a single transaction.              |
+
+## Example: `bun:sqlite` adapter
+
+```ts
+import { Database } from "bun:sqlite";
+import type { SqliteAdapter } from "@lunora/replica";
+
+export const createBunSqliteAdapter = (database: Database): SqliteAdapter => {
+    return {
+        exec(sql, params) {
+            if (params && params.length > 0) {
+                database.run(sql, ...params);
+            } else {
+                database.run(sql);
+            }
+        },
+        query(sql, params) {
+            const stmt = database.prepare(sql);
+            if (params && params.length > 0) {
+                return stmt.all(...params) as Record<string, unknown>[];
+            }
+            return stmt.all() as Record<string, unknown>[];
+        },
+        transaction(fn) {
+            database.transaction(fn)();
+        },
+        lastInsertRowId() {
+            const row = database.prepare("SELECT last_insert_rowid() AS id").get() as { id: number } | undefined;
+            return row?.id ?? -1;
+        },
+        close() {
+            database.close();
+        },
+    };
+};
+```
+
+## Example: `expo-sqlite` adapter
+
+```ts
+import type { SqliteAdapter } from "@lunora/replica";
+import type { SQLiteDatabase } from "expo-sqlite";
+
+export const createExpoSqliteAdapter = (database: SQLiteDatabase): SqliteAdapter => {
+    return {
+        exec(sql, params) {
+            if (params && params.length > 0) {
+                database.runSync(sql, params);
+            } else {
+                database.runSync(sql);
+            }
+        },
+        query(sql, params) {
+            const result = params?.length ? database.getAllSync(sql, params) : database.getAllSync(sql);
+            return result as Record<string, unknown>[];
+        },
+        transaction(fn) {
+            database.withTransactionSync(fn);
+        },
+        lastInsertRowId() {
+            const result = database.getFirstSync("SELECT last_insert_rowid() AS id") as { id: number } | undefined;
+            return result?.id ?? -1;
+        },
+        close() {
+            database.closeSync();
+        },
+    };
+};
+```
+
+## Usage
+
+Pass your adapter to `LocalMirror`:
+
+```ts
+const adapter = createBunSqliteAdapter(new Database(":memory:"));
+const mirror = new LocalMirror({ db: adapter });
+```

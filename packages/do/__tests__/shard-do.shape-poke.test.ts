@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type { CdcChange, DatabaseWriterLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { ShardDOState } from "../src/shard-do";
@@ -310,5 +311,71 @@ describe("shardDO shape poke protocol (dispatch path)", () => {
 
         // Correctness is intact: every subscriber still received the insert poke.
         expect(three.sockets.every((ws) => pokeOps(ws).some((op) => op.key === "m1" && op.op === "insert"))).toBe(true);
+    });
+
+    it("decodes wire-encoded shape args at the shape_subscribe entry point (attachment + resolveShape see real values)", async () => {
+        expect.assertions(4);
+
+        const sockets: FakeWebSocket[] = [];
+        let seenArgs: Record<string, unknown> | undefined;
+
+        class CapturingShard extends ShapePokeShard {
+            protected override resolveShape(
+                name: string,
+                args: Record<string, unknown>,
+            ): { effectiveWhere?: Record<string, unknown>; table: string } | undefined {
+                seenArgs = args;
+
+                return super.resolveShape(name, args);
+            }
+        }
+
+        const shard = new CapturingShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        sockets.push(ws);
+
+        await shard.fetch(write("messages:send", { _id: "m1", channelId: "c1" }));
+        ws.sent.length = 0;
+
+        // The frame carries the client's wire-encoded args (raw JSON would drop the bigint).
+        await shard.webSocketMessage(
+            ws as unknown as WebSocket,
+            JSON.stringify({
+                id: "s1",
+                shape: { args: encodeWire({ channelId: "c1", since: 123n }), name: "messagesByChannel" },
+                type: "shape_subscribe",
+            }),
+        );
+
+        // Resolution ran under the DECODED args, not the tagged arrays.
+        expect(seenArgs).toStrictEqual({ channelId: "c1", since: 123n });
+        // The attachment stores decoded args, so hibernation and every later
+        // `resolveShape` (poke diffs, relay probes) see real values.
+        expect(ws.attachment?.shapes?.["s1"]?.args).toStrictEqual({ channelId: "c1", since: 123n });
+        expect(frameTypes(ws)).toContain("ack");
+        expect(pokeOps(ws)).toHaveLength(1);
+    });
+
+    it("answers a malformed tagged shape payload with a structured error instead of throwing", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        sockets.push(ws);
+
+        await shard.webSocketMessage(
+            ws as unknown as WebSocket,
+            JSON.stringify({
+                id: "s1",
+                shape: { args: { since: ["$lunora.wire$", "bigint", "9".repeat(2000)] }, name: "messagesByChannel" },
+                type: "shape_subscribe",
+            }),
+        );
+
+        expect(JSON.parse(ws.sent[0]!)).toMatchObject({ code: "BAD_SUBSCRIPTION_ARGS", id: "s1", type: "error" });
+        expect(ws.attachment?.shapes?.["s1"]).toBeUndefined();
     });
 });

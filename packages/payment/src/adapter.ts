@@ -20,11 +20,18 @@ import type {
     WebhookAction,
 } from "./types";
 
-/** A read-only header bag; the platform `Headers` object satisfies it. */
+/**
+ * A read-only header bag; the platform `Headers` object satisfies it.
+ * @experimental
+ */
 export interface WebhookHeaders {
     get: (name: string) => null | string;
 }
 
+/**
+ * `WebhookInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export interface WebhookInput {
     /** Request headers (signature schemes read provider-specific headers from here). */
     readonly headers: WebhookHeaders;
@@ -37,6 +44,7 @@ export interface WebhookInput {
  *
  * Adapters never own state — they make provider calls and normalize provider events into a
  * `WebhookAction`. All durable state lives in the payment store.
+ * @experimental
  */
 export interface PaymentAdapter {
     cancelPayment: (sessionId: string, options?: { idempotencyKey?: string }) => Promise<PaymentSession>;
@@ -85,13 +93,20 @@ export interface PaymentAdapter {
     updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
 }
 
-/** Registry of adapters keyed by provider id — supports dual-register during provider migration. */
+/**
+ * Registry of adapters keyed by provider id — supports dual-register during provider migration.
+ * @experimental
+ */
 export interface AdapterRegistry {
     all: () => PaymentAdapter[];
     get: (provider: ProviderId) => PaymentAdapter;
     has: (provider: ProviderId) => boolean;
 }
 
+/**
+ * `createAdapterRegistry` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
 export const createAdapterRegistry = (adapters: ReadonlyArray<PaymentAdapter>): AdapterRegistry => {
     const byId = new Map<ProviderId, PaymentAdapter>();
 

@@ -10,9 +10,9 @@ import { RateLimiter } from "../src/index";
  * measures the read+write path that's actually on the hot path.
  *
  * - **token bucket, unsharded** — single bucket; cheapest mode.
- * - **token bucket, shards=8** — one bucket lookup chosen at random;
- * the write still touches one shard. Sharding is a read cost, not a
- * write cost — the bench documents that.
+ * - **token bucket, shards=8** — one bucket lookup chosen by a
+ * deterministic hash of the key; the write still touches one shard.
+ * Sharding is a read cost, not a write cost — the bench documents that.
  * - **fixed window** — different algorithm, same store IO shape.
  * - **sliding window** — algorithm with the most arithmetic.
  * - **deny-list hit** — short-circuits before the algorithm runs.
@@ -52,7 +52,7 @@ describe("RateLimiter.limit() — algorithm + store-write throughput", () => {
         await tokenBucket.limit("hits", { key: "user-42" });
     });
 
-    bench("token bucket, shards=8 (random shard select per call)", async () => {
+    bench("token bucket, shards=8 (hashed shard select per call)", async () => {
         clock += 1;
         await tokenBucketSharded8.limit("hits", { key: "user-42" });
     });

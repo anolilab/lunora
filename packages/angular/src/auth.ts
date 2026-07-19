@@ -5,6 +5,10 @@ import { getIdentityStore } from "@lunora/client/auth";
 
 import { resolveLunoraClient } from "./client";
 
+/**
+ * `AuthOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface AuthOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
     client?: LunoraClient;
@@ -13,6 +17,10 @@ export interface AuthOptions {
     destroyRef?: DestroyRef;
 }
 
+/**
+ * `AuthResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
+ * @experimental
+ */
 export interface AuthResult {
     /** Set the auth token (sign-in / sign-out). */
     setToken: (token: string | null) => void;
@@ -38,6 +46,7 @@ export interface AuthResult {
  * ```ts
  * const { token, user, setToken } = auth();
  * ```
+ * @experimental
  */
 export const auth = (options: AuthOptions = {}): AuthResult => {
     const client = resolveLunoraClient(options.client);

@@ -16,6 +16,15 @@ packages: &packages
     - "vis.config.ts"
 
 # Lintable source (eslint + tsc).
+# Public-API snapshot guard: anything that can change a covered package's built
+# .d.ts surface, plus the snapshots and the tool itself.
+api_surface:
+    - "packages/**"
+    - "api-snapshots/**"
+    - "scripts/api-snapshot.js"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+
 frontend_lintable:
     - "**/*.[tj]{s,sx}"
     - "**/*.{cts,mts,cjs,mjs}"

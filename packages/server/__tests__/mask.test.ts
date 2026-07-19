@@ -63,6 +63,7 @@ interface FakeDatabase {
         aggregate: (tableName: string, options: unknown) => Promise<null | number>;
         count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
         delete: (id: string) => Promise<void>;
+        deleteWhere: (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => Promise<{ deleted: number }>;
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
         findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
         findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
@@ -71,6 +72,11 @@ interface FakeDatabase {
         insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
         lookupById?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
         patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+        patchWhere: (
+            tableName: string,
+            args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+            options?: { limit?: number },
+        ) => Promise<{ patched: number }>;
         query: (tableName: string) => FakeReader;
         rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
         rankPage: (
@@ -107,6 +113,11 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
             },
             async delete(id) {
                 calls.push({ args: undefined, method: "delete", tableOrId: id });
+            },
+            async deleteWhere(tableName, where, options) {
+                calls.push({ args: { options, where }, method: "deleteWhere", tableOrId: tableName });
+
+                return { deleted: rowsOfTable(tableName).length };
             },
             async findFirst(tableName, args) {
                 calls.push({ args, method: "findFirst", tableOrId: tableName });
@@ -150,6 +161,11 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
             },
             async patch(id, patchValue) {
                 calls.push({ args: patchValue, method: "patch", tableOrId: id });
+            },
+            async patchWhere(tableName, args, options) {
+                calls.push({ args: { ...args, options }, method: "patchWhere", tableOrId: tableName });
+
+                return { patched: rowsOfTable(tableName).length };
             },
             query() {
                 throw new Error("query() not used in these tests");
@@ -674,6 +690,71 @@ describe("mask — value oracle via filter/sort fails closed (regression)", () =
         await handler.handler(makeContext(database, "u1"), {});
 
         expect(database.calls.some((call) => call.method === "findMany")).toBe(true);
+    });
+
+    it("deleteMany({ where }) on a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.mutation
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .mutation(async ({ ctx }) => (ctx as unknown as TestContext).db.deleteWhere("users", { ssn: { eq: "123-45-6789" } }));
+
+        // deleteMany({ where }) routes to the writer's where-based delete — a
+        // masked-column predicate is the same confirm/destroy oracle `where` on
+        // reads already blocks, plus it destroys the probed rows. Must fail closed
+        // and never reach the writer.
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "deleteWhere")).toBe(false);
+    });
+
+    it("patchMany({ where, values }) on a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.mutation
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .mutation(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db.patchWhere("users", { patch: { status: "flagged" }, where: { ssn: { eq: "123-45-6789" } } }),
+            );
+
+        // patchMany({ where }) routes to the writer's where-based patch — the
+        // `{ patched: n }` count alone confirms/binary-searches the hidden value.
+        // Must fail closed and never reach the writer.
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "patchWhere")).toBe(false);
+    });
+
+    it("findMany with a baseWhere on a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            // `baseWhere` is a documented, caller-reachable field on `QueryArgs` that
+            // the RLS layer AND-merges into the SQL predicate — the same oracle
+            // `where` is already blocked for, reached through a different field.
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("users", { baseWhere: { ssn: { eq: "123-45-6789" } } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "findMany")).toBe(false);
+    });
+
+    it("deleteMany({ where }) on a NON-masked column of a masked table passes through", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", status: "active", table: "users" }]);
+
+        const handler = lunora.mutation
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .mutation(async ({ ctx }) => (ctx as unknown as TestContext).db.deleteWhere("users", { status: { eq: "active" } }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        expect(database.calls.some((call) => call.method === "deleteWhere")).toBe(true);
     });
 });
 

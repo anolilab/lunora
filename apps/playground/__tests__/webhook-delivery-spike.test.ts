@@ -277,7 +277,9 @@ class WebhookDeliverySchedulerDO extends SchedulerDO {
         const webhookTimestamp = String(Math.floor(Date.now() / 1000));
         const signature = await signStandardWebhook(WEBHOOK_SECRET, webhookId, webhookTimestamp, payload);
         // Reused unmodified from @lunora/payment: dedupe key per (event source, endpoint).
-        const idempotency = idempotencyKey("webhook.deliver", record.functionPath, record.id);
+        // `functionPath` is optional on ScheduleRecord (a job can target a workflow/agent
+        // instead); these spike jobs are always function-targeted, so fall back to "".
+        const idempotency = idempotencyKey("webhook.deliver", record.functionPath ?? "", record.id);
 
         try {
             const response = await fetch(this.targetUrl, {

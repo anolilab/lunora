@@ -20,6 +20,9 @@ export { lunoraQueryOptions } from "./query-options";
 export type {
     ArgsOf,
     FunctionReference,
+    HttpStreamArgsOf,
+    HttpStreamChunkOf,
+    HttpStreamRef,
     LunoraClient,
     OptimisticLocalStore,
     OptimisticUpdate,
@@ -37,10 +40,29 @@ export type {
     User,
     UseSubscriptionResult,
 } from "./types";
+export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
+export { useAgent } from "./use-agent";
+export type {
+    AgentChatMessage,
+    AgentLiveEvent,
+    AgentProgressEvent,
+    AgentTokenDelta,
+    UseAgentChatApi,
+    UseAgentChatOptions,
+    UseAgentChatResult,
+} from "./use-agent-chat";
+export { useAgentChat } from "./use-agent-chat";
+export type { UseAgentStateApi, UseAgentStateOptions, UseAgentStateResult } from "./use-agent-state";
+export { useAgentState } from "./use-agent-state";
+export type { AgentToolEvent, UseAgentToolEventsApi, UseAgentToolEventsOptions, UseAgentToolEventsResult } from "./use-agent-tool-events";
+export { useAgentToolEvents } from "./use-agent-tool-events";
 export { default as useAuth } from "./use-auth";
+export { default as useClientQuery } from "./use-client-query";
 export { default as useConnectionStatus } from "./use-connection-status";
 export type { FlagContext, FlagValue } from "./use-flag";
 export { useFlag, useFlags } from "./use-flag";
+export type { UseHttpStreamOptions, UseHttpStreamResult } from "./use-http-stream";
+export { useHttpStream } from "./use-http-stream";
 export { default as useInfiniteQuery } from "./use-infinite-query";
 export type { MutationHook } from "./use-mutation";
 export { useMutation } from "./use-mutation";
@@ -57,8 +79,15 @@ export { useRateLimit } from "./use-rate-limit";
 export type { UseStreamOptions, UseStreamResult, UseStreamStatus } from "./use-stream";
 export { useStream } from "./use-stream";
 export { default as useSubscription } from "./use-subscription";
+export type { UseVoiceAgentOptions, UseVoiceAgentResult, VoiceAudioFormat, VoiceReference, VoiceStatus } from "./use-voice-agent";
+export { useVoiceAgent } from "./use-voice-agent";
 
 // Framework-neutral error discriminators re-exported from `@lunora/client` so a
 // React-only user gets them without a second import (see the header note).
 export type { LunoraErrorCode } from "@lunora/client";
 export { getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRateLimitedError, isUnauthorizedError } from "@lunora/client";
+
+// Local client-query refs — the createClientQuery factory + the ref type are
+// re-exported so a React-only user imports everything from one package.
+export type { ClientQueryRef } from "@lunora/client";
+export { createClientQuery } from "@lunora/client";

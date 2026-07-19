@@ -275,7 +275,7 @@ describe("defineSchema(...).extend(...)", () => {
             }),
         });
 
-        const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(ratelimit.extension!);
+        const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(ratelimit.extension);
 
         expect(Object.keys(schema.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(["ratelimit_buckets", "todos"]);
     });
