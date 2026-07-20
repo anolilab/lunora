@@ -202,6 +202,8 @@ export { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from
 export type { LogEventInput } from "./request-log";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
 export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
+export type { CtxMetrics, CtxTracer, MetricsDeps, TraceAnchor, TracerDeps } from "./ctx-telemetry";
+export { createMetrics, createTracer, dispatchRootSpan } from "./ctx-telemetry";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
 export type { SessionRecord } from "./session-do";

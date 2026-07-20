@@ -6,30 +6,41 @@ import type { SpanEvent } from "../../../shared/span-event";
 import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
+import type { CtxMetrics, CtxTracer } from "../src/ctx-telemetry";
+import { createMetrics, createTracer } from "../src/ctx-telemetry";
 import { foldTraces, SpanBuffer } from "../src/span-buffer";
 
 const ADMIN_TOKEN = "test-admin-token-that-is-long-enough";
 
 /**
- * Exposes the protected `makeTracer` so tests can drive the real `ctx.trace`
- * factory the generated `buildCtx` builds, rather than a re-implementation.
+ * Drives the shard's own `makeTracer` wiring — used only by the `getTraces`
+ * integration test below. The span and measurement *semantics* are tested
+ * directly against `createTracer` / `createMetrics`, which need no shard at all.
  */
 class TracingShard extends ShardDO {
-    // eslint-disable-next-line class-methods-use-this -- override stub; this shard exists only to expose makeTracer
+    // eslint-disable-next-line class-methods-use-this -- override stub; this shard only exercises the admin RPC path
     public override async handleRpc(): Promise<unknown> {
         return { ok: true };
     }
 
-    // NOT named `metrics`: `ShardDO` already owns a `metrics` counters field, and
-    // the instance field would shadow a prototype method of the same name.
-    public metricsFor(functionPath: string, sink?: Parameters<TracingShard["makeMetrics"]>[1]): ReturnType<TracingShard["makeMetrics"]> {
-        return this.makeMetrics(functionPath, sink);
-    }
-
-    public tracer(functionPath: string, sink?: Parameters<TracingShard["makeTracer"]>[1]): ReturnType<TracingShard["makeTracer"]> {
-        return this.makeTracer(functionPath, sink);
+    public tracer(functionPath: string): ReturnType<TracingShard["makeTracer"]> {
+        return this.makeTracer(functionPath);
     }
 }
+
+/**
+ * A tracer that appends every finished span to `seen`. The injected `record` is
+ * where the shard would buffer + fan out to a sink; the factory itself only
+ * decides what a span *is*, so a test needs no Durable Object.
+ */
+const tracerInto = (seen: SpanEvent[]): CtxTracer =>
+    createTracer({
+        anchor: { rootSpanId: "00000000000000a1", traceId: "0af7651916cd43dd8448eb211c80319c" },
+        functionPath: "a:b",
+        record: (span) => seen.push(span),
+        shardKey: "tenant-1",
+        userId: () => "u1",
+    });
 
 const stateDouble = (): ShardDOState =>
     ({
@@ -178,8 +189,7 @@ describe("ctx.trace", () => {
         expect.assertions(3);
 
         const seen: SpanEvent[] = [];
-        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
-        const trace = shard.tracer("a:b", { onSpan: (event) => seen.push(event) });
+        const trace = tracerInto(seen);
 
         await expect(trace("work", () => 42)).resolves.toBe(42);
         expect(seen[0]?.name).toBe("work");
@@ -190,8 +200,7 @@ describe("ctx.trace", () => {
         expect.assertions(3);
 
         const seen: SpanEvent[] = [];
-        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
-        const trace = shard.tracer("a:b", { onSpan: (event) => seen.push(event) });
+        const trace = tracerInto(seen);
 
         await trace("outer", async (child) => {
             await child("inner", () => undefined);
@@ -210,8 +219,7 @@ describe("ctx.trace", () => {
         expect.assertions(3);
 
         const seen: SpanEvent[] = [];
-        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
-        const trace = shard.tracer("a:b", { onSpan: (event) => seen.push(event) });
+        const trace = tracerInto(seen);
         const sleep = async (ms: number): Promise<void> => {
             await new Promise((resolve) => {
                 setTimeout(resolve, ms);
@@ -240,8 +248,7 @@ describe("ctx.trace", () => {
         expect.assertions(4);
 
         const seen: SpanEvent[] = [];
-        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
-        const trace = shard.tracer("a:b", { onSpan: (event) => seen.push(event) });
+        const trace = tracerInto(seen);
         const thrown = new LunoraError("BAD_REQUEST", "bad input");
 
         await expect(
@@ -260,8 +267,7 @@ describe("ctx.trace", () => {
         expect.assertions(1);
 
         const seen: SpanEvent[] = [];
-        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
-        const trace = shard.tracer("a:b", { onSpan: (event) => seen.push(event) });
+        const trace = tracerInto(seen);
 
         await trace("outer", async (child) => {
             await child("failing", () => {
@@ -282,8 +288,7 @@ describe("ctx.trace", () => {
         expect.assertions(2);
 
         const seen: SpanEvent[] = [];
-        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
-        const trace = shard.tracer("a:b", { onSpan: (event) => seen.push(event) });
+        const trace = tracerInto(seen);
         const attributes: Record<string, unknown> = { step: "start" };
 
         await trace("work", () => undefined, attributes);
@@ -296,14 +301,17 @@ describe("ctx.trace", () => {
         expect(seen[1]?.attributes).toStrictEqual({ count: "1" });
     });
 
-    it("survives a throwing sink without failing the traced body", async () => {
+    it("survives a throwing recorder without failing the traced body", async () => {
         expect.assertions(1);
 
-        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
-        const trace = shard.tracer("a:b", {
-            onSpan: () => {
+        const trace = createTracer({
+            anchor: { rootSpanId: "0000000000000001", traceId: "t1" },
+            functionPath: "a:b",
+            record: () => {
                 throw new Error("sink is down");
             },
+            shardKey: undefined,
+            userId: () => undefined,
         });
 
         // The body already succeeded; a telemetry failure must not undo that.
@@ -337,11 +345,13 @@ describe("ctx.trace", () => {
 });
 
 describe("ctx.metrics", () => {
-    const recorderFor = (): { seen: MetricEvent[]; metrics: ReturnType<TracingShard["metricsFor"]> } => {
+    const recorderFor = (): { metrics: CtxMetrics; seen: MetricEvent[] } => {
         const seen: MetricEvent[] = [];
-        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
-        return { metrics: shard.metricsFor("orders:checkout", { onMetric: (event) => seen.push(event) }), seen };
+        return {
+            metrics: createMetrics({ functionPath: "orders:checkout", record: (event) => seen.push(event), shardKey: undefined }),
+            seen,
+        };
     };
 
     it("records each instrument kind with the value the caller passed", () => {
@@ -396,14 +406,15 @@ describe("ctx.metrics", () => {
         expect(seen).toHaveLength(0);
     });
 
-    it("survives a throwing sink without failing the handler", () => {
+    it("survives a throwing recorder without failing the handler", () => {
         expect.assertions(1);
 
-        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
-        const metrics = shard.metricsFor("orders:checkout", {
-            onMetric: () => {
+        const metrics = createMetrics({
+            functionPath: "orders:checkout",
+            record: () => {
                 throw new Error("sink is down");
             },
+            shardKey: undefined,
         });
 
         expect(() => {

@@ -40,6 +40,7 @@ const ADMIN_FUNCTIONS: {
     readonly getRequestLog: "__lunora_admin__:getRequestLog";
     readonly getSecurityAudit: "__lunora_admin__:getSecurityAudit";
     readonly getSettings: "__lunora_admin__:getSettings";
+    readonly getTraces: "__lunora_admin__:getTraces";
     readonly getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus";
     readonly importShard: "__lunora_admin__:importShard";
     readonly listFlags: "__lunora_admin__:listFlags";
@@ -367,6 +368,22 @@ interface CtxDbOptions {
     sql: SqlExec;
     storage?: SystemReaderStorageLike;
 }
+```
+
+### `CtxMetrics` (interface)
+
+```ts
+interface CtxMetrics {
+    count: (name: string, value?: number, attributes?: LogFields) => void;
+    gauge: (name: string, value: number, attributes?: LogFields) => void;
+    record: (name: string, value: number, attributes?: LogFields) => void;
+}
+```
+
+### `CtxTracer` (type)
+
+```ts
+type CtxTracer = <T>(name: string, fn: (trace: CtxTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 ```
 
 ### `DATA_MIGRATION_STATE_TABLE` (const)
@@ -842,15 +859,13 @@ type LogEventInput = LogEvent;
 ### `LogLevel` (type)
 
 ```ts
-type LogLevel = "debug" | "error" | "info" | "warn";
+type LogLevel = ContextLogLevel;
 ```
 
-### `LogSink` (interface)
+### `LogSink` (type)
 
 ```ts
-interface LogSink {
-    onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
-}
+type LogSink = TelemetrySink;
 ```
 
 ### `MAIL_RETENTION` (const)
@@ -907,6 +922,16 @@ interface MaskPoliciesResult {
 interface MaterializeResult {
     applied: number;
     nextBaseline: Map<string, string>;
+}
+```
+
+### `MetricsDeps` (interface)
+
+```ts
+interface MetricsDeps {
+    functionPath: string;
+    record: (event: MetricEvent) => void;
+    shardKey: string | undefined;
 }
 ```
 
@@ -1797,6 +1822,10 @@ abstract class ShardDO {
     protected getCurrentUserId(): string | undefined;
     protected getCurrentIp(): string | undefined;
     protected getCurrentTraceparent(): string | undefined;
+    protected getCurrentTrace(): {
+        rootSpanId: string;
+        traceId: string;
+    } | undefined;
     protected getCurrentIdentity(): Record<string, unknown> | undefined;
     protected isSystemDispatch(): boolean;
     protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult>;
@@ -1874,8 +1903,12 @@ abstract class ShardDO {
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
     protected recordChangedTable(table: string): void;
     protected flushMigrationProgress(): Promise<void>;
-    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: LogSink): void;
-    protected makeLogger(functionPath: string, sink?: LogSink, boundFields?: Record<string, unknown>): ContextLogger;
+    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink): void;
+    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): CtxLogger;
+    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): CtxTracer;
+    protected makeMetrics(functionPath: string, sink?: TelemetrySink): CtxMetrics;
+    protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void;
+    protected recordSpan(span: SpanEvent, sink?: TelemetrySink): void;
     protected isIdentityIndependent(functionPath: string): boolean;
     protected readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): {
         changes: CdcChange[];
@@ -2254,6 +2287,37 @@ interface TablesColumnsResult {
 }
 ```
 
+### `TelemetrySink` (interface)
+
+```ts
+interface TelemetrySink {
+    onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
+    onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
+    onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
+}
+```
+
+### `TraceAnchor` (interface)
+
+```ts
+interface TraceAnchor {
+    rootSpanId: string;
+    traceId: string;
+}
+```
+
+### `TracerDeps` (interface)
+
+```ts
+interface TracerDeps {
+    anchor: TraceAnchor;
+    functionPath: string;
+    record: (span: SpanEvent) => void;
+    shardKey: string | undefined;
+    userId: () => string | undefined;
+}
+```
+
 ### `TransactionSqlLike` (interface)
 
 ```ts
@@ -2506,6 +2570,12 @@ const containsRelationPredicate: (where: WhereInput, schema: ResolveContext["sch
 const createDependencyTracker: () => DependencyTracker;
 ```
 
+### `createMetrics` (const)
+
+```ts
+const createMetrics: (deps: MetricsDeps) => CtxMetrics;
+```
+
 ### `createShardCtxDb` (const)
 
 ```ts
@@ -2516,6 +2586,12 @@ const createShardCtxDb: (options: CtxDbOptions) => DatabaseWriterLike;
 
 ```ts
 const createSystemReader: (options?: SystemReaderOptions) => SystemDatabaseReader;
+```
+
+### `createTracer` (const)
+
+```ts
+const createTracer: (deps: TracerDeps) => CtxTracer;
 ```
 
 ### `decodeCursor` (const)
@@ -2537,6 +2613,22 @@ const diffExternalSource: (pulled: ReadonlyArray<Record<string, unknown>>, basel
     columns?: ReadonlyArray<string>;
     table: string;
 }) => ExternalSourceDiffResult;
+```
+
+### `dispatchRootSpan` (const)
+
+```ts
+const dispatchRootSpan: (input: {
+    anchor: TraceAnchor;
+    durationMs: number;
+    failure: {
+        thrown: unknown;
+    } | undefined;
+    functionPath: string;
+    shardKey: string | undefined;
+    startTs: number;
+    userId: string | undefined;
+}) => SpanEvent;
 ```
 
 ### `encodeAggregateKey` (const)
