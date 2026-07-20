@@ -12,11 +12,10 @@ const makeQueryContext = (): QueryContext => {
         db: {} as QueryContext["db"],
         log: {} as QueryContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
-
-        trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as QueryContext["trace"],
         now: 0,
         runQuery: vi.fn<QueryContext["runQuery"]>() as QueryContext["runQuery"],
         storage: {} as QueryContext["storage"],
+        trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as QueryContext["trace"],
         vectors: {} as QueryContext["vectors"],
     };
 };
@@ -28,13 +27,12 @@ const makeMutationContext = (): MutationContext => {
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
-
-        trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as MutationContext["trace"],
         now: 0,
         runMutation: vi.fn<MutationContext["runMutation"]>() as MutationContext["runMutation"],
         runQuery: vi.fn<MutationContext["runQuery"]>() as MutationContext["runQuery"],
         scheduler: {} as MutationContext["scheduler"],
         storage: {} as MutationContext["storage"],
+        trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as MutationContext["trace"],
         vectors: {} as MutationContext["vectors"],
         workflows: {} as MutationContext["workflows"],
     };
@@ -49,14 +47,13 @@ const makeActionContext = (): ActionContext => {
         fetch: globalThis.fetch,
         log: {} as ActionContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
-
-        trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as ActionContext["trace"],
         now: 0,
         runAction: vi.fn<ActionContext["runAction"]>() as ActionContext["runAction"],
         runMutation: vi.fn<ActionContext["runMutation"]>() as ActionContext["runMutation"],
         runQuery: vi.fn<ActionContext["runQuery"]>() as ActionContext["runQuery"],
         scheduler: {} as ActionContext["scheduler"],
         storage: {} as ActionContext["storage"],
+        trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as ActionContext["trace"],
         vectors: {} as ActionContext["vectors"],
         workflows: {} as ActionContext["workflows"],
     };
