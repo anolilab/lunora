@@ -3,7 +3,7 @@ import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { RateLimiter } from "@lunora/ratelimit";
 import type { ExecutionContextLike } from "@lunora/runtime";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api, internal } from "../../lunora/_generated/api.js";
 import type { AlertDelivery } from "../../lunora/telemetry";
 import { proxyAdminRequest } from "../admin/proxy";
 import { createHttpCloudflareApi } from "../cloudflare/api";
@@ -36,6 +36,8 @@ interface RouterEnv {
     LUNORA_ADMIN_TOKEN?: string;
     LUNORA_APP_DOMAIN?: string;
     LUNORA_CELL?: string;
+    /** Shared secret the dispatch-namespace tail worker presents to `POST /v1/logs/tail`. */
+    LUNORA_TAIL_SECRET?: string;
     /** Sender address for invitation email; the mailer reads the rest of env too. */
     MAIL_FROM?: string;
     /** 32-byte hex master key for tenant-secret envelope encryption (§7). */
@@ -383,17 +385,31 @@ const handleTenantRouteRoute = async (request: Request, environment: RouterEnv):
     return Response.json(result ?? { scriptName: null });
 };
 
+/** One line in a {@link LogsBody} batch — the framework's `type:"log"` event minus the transport keys (`logs.ingest` validates it). */
+interface LogsLine {
+    createdAt?: number;
+    fields?: Record<string, unknown>;
+    functionPath?: string;
+    level?: "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
+    message?: string;
+    shardKey?: string;
+    spanId?: string;
+    traceId?: string;
+    userId?: string;
+}
+
 interface LogsBody {
     deployKey?: string;
-    lines?: { createdAt?: number; level?: "error" | "log" | "warn"; line?: string }[];
+    lines?: LogsLine[];
     organizationId?: string;
     scriptName?: string;
 }
 
 /**
  * `POST /v1/logs/ingest` — tenant runtime log ingestion (GAPS.md B2). The
- * dispatch-namespace tail worker batches console/exception events here;
- * deploy-key authorized inside the `logs.ingest` mutation.
+ * dispatch-namespace tail worker maps each tenant `ctx.log` console event onto a
+ * batch and POSTs it here; deploy-key authorized inside the `logs.ingest`
+ * mutation, which validates each line's full structured shape.
  */
 const handleLogsIngestRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = environment.__lunoraCtx;
@@ -420,6 +436,94 @@ const handleLogsIngestRoute = async (request: Request, environment: RouterEnv): 
     } catch (error) {
         return jsonError(403, error instanceof Error ? error.message : "log ingestion rejected");
     }
+};
+
+/** Constant-time string compare (no early return on the first mismatched byte). Mirrors `src/github/webhook.ts`. */
+const tailSecretEqual = (a: string, b: string): boolean => {
+    if (a.length !== b.length) {
+        return false;
+    }
+
+    let diff = 0;
+
+    for (let index = 0; index < a.length; index += 1) {
+        diff |= a.charCodeAt(index) ^ b.charCodeAt(index);
+    }
+
+    return diff === 0;
+};
+
+/** One per-script batch in a {@link TailBody}. */
+interface TailBatchBody {
+    lines?: unknown[];
+    scriptName?: string;
+}
+
+interface TailBody {
+    batches?: TailBatchBody[];
+}
+
+/**
+ * `POST /v1/logs/tail` — platform ingest for the dispatch-namespace tail worker
+ * (`src/tail/worker.ts`). Unlike the deploy-key `POST /v1/logs/ingest`, this is
+ * gated by the shared `LUNORA_TAIL_SECRET` (the tail worker holds one platform
+ * secret, not per-org deploy keys) and resolves each batch's `scriptName` → org
+ * via `internal.logs.orgForScript` before storing through
+ * `internal.logs.ingestInternal`. Batches for an unknown script (a superseded
+ * release the tail lags behind) are dropped, not errored.
+ */
+const handleLogsTailRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const secret = environment.LUNORA_TAIL_SECRET;
+
+    if (!secret) {
+        return jsonError(503, "log tail ingest not configured");
+    }
+
+    const presented = request.headers.get("x-lunora-tail-secret");
+
+    if (presented === null || !tailSecretEqual(presented, secret)) {
+        return jsonError(403, "invalid tail secret");
+    }
+
+    const body = (await request.json().catch(() => null)) as null | TailBody;
+
+    if (!body || !Array.isArray(body.batches)) {
+        return jsonError(400, "batches are required");
+    }
+
+    let ingested = 0;
+    let scripts = 0;
+
+    for (const batch of body.batches) {
+        if (!batch.scriptName || !Array.isArray(batch.lines) || batch.lines.length === 0) {
+            continue;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- bounded per-flush script set; sequential keeps the resolver simple
+        const resolved = await context.runQuery<{ organizationId: string } | null>(internal.logs.orgForScript, { scriptName: batch.scriptName });
+
+        if (!resolved) {
+            continue;
+        }
+
+        scripts += 1;
+        // eslint-disable-next-line no-await-in-loop -- see above
+        const result = await context.runMutation<{ ingested: number }>(internal.logs.ingestInternal, {
+            lines: batch.lines,
+            organizationId: resolved.organizationId,
+            scriptName: batch.scriptName,
+        });
+
+        ingested += result.ingested;
+    }
+
+    return Response.json({ ingested, scripts });
 };
 
 /**
@@ -739,6 +843,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         "/v1/github/webhook": handleWebhookRoute,
         "/v1/invitations/send": handleInviteRoute,
         "/v1/logs/ingest": handleLogsIngestRoute,
+        "/v1/logs/tail": handleLogsTailRoute,
         "/v1/secrets": handleSecretRoute,
         "/v1/telemetry": handleTelemetryRoute,
         "/v1/usage": handleUsageRoute,
