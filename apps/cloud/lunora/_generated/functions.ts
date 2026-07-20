@@ -110,7 +110,9 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "issues:list": lunora_issues_12.list as unknown as RegisteredLunoraFunction,
     "issues:setStatus": lunora_issues_12.setStatus as unknown as RegisteredLunoraFunction,
     "logs:ingest": lunora_logs_13.ingest as unknown as RegisteredLunoraFunction,
+    "logs:ingestInternal": lunora_logs_13.ingestInternal as unknown as RegisteredLunoraFunction,
     "logs:list": lunora_logs_13.list as unknown as RegisteredLunoraFunction,
+    "logs:orgForScript": lunora_logs_13.orgForScript as unknown as RegisteredLunoraFunction,
     "logs:prune": lunora_logs_13.prune as unknown as RegisteredLunoraFunction,
     "members:add": lunora_members_14.add as unknown as RegisteredLunoraFunction,
     "members:list": lunora_members_14.list as unknown as RegisteredLunoraFunction,
@@ -480,18 +482,10 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_logs_13.list.args, (source) => {
+installCompiledValidatorMap(lunora_logs_13.orgForScript.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-let __has1 = false;
-let __val1;
-if (source["afterCreatedAt"] !== undefined) {
-if (typeof source["afterCreatedAt"] !== "number" || !Number.isFinite(source["afterCreatedAt"])) return DEFER;
-__val1 = source["afterCreatedAt"];
-__has1 = true;
-}
-if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["scriptName"] !== "string") return DEFER;
-return { ...(__has1 ? { "afterCreatedAt": __val1 } : {}), "organizationId": source["organizationId"], "scriptName": source["scriptName"] };
+return { "scriptName": source["scriptName"] };
 });
 installCompiledValidatorMap(lunora_members_14.add.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -767,8 +761,10 @@ export interface Caller {
         setStatus: (args: { id: Id<"issues">; organizationId: Id<"organizations">; status: unknown }) => Promise<Id<"issues">>;
     };
     logs: {
-        ingest: (args: { deployKey: string; lines: Array<{ createdAt: number | undefined; level: "log" | "warn" | "error"; line: string }>; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ ingested: number; }>;
-        list: (args: { afterCreatedAt?: number; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ createdAt: number; level: "error" | "log" | "warn"; line: string; }[]>;
+        ingest: (args: { deployKey: string; lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ ingested: number; }>;
+        ingestInternal: (args: { lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ ingested: number; }>;
+        list: (args: { afterCreatedAt?: number; functionPath?: string; levels?: Array<unknown>; limit?: number; organizationId: Id<"organizations">; scriptName: string; search?: string; traceId?: string }) => Promise<{ createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
+        orgForScript: (args: { scriptName: string }) => Promise<{ organizationId: Id<"organizations">; } | null>;
         prune: (args?: {}) => Promise<{ pruned: number; }>;
     };
     members: {
@@ -912,7 +908,9 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     logs: {
         ingest: (args) => callRegistered(context, "logs:ingest", args),
+        ingestInternal: (args) => callRegistered(context, "logs:ingestInternal", args),
         list: (args) => callRegistered(context, "logs:list", args),
+        orgForScript: (args) => callRegistered(context, "logs:orgForScript", args),
         prune: (args) => callRegistered(context, "logs:prune", args),
     },
     members: {

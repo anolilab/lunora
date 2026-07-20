@@ -201,9 +201,18 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
     "tenantLogs": [
         {
             "fields": [
-                "scriptName"
+                "organizationId",
+                "traceId"
             ],
-            "name": "by_script",
+            "name": "by_trace",
+            "type": "index"
+        },
+        {
+            "fields": [
+                "scriptName",
+                "createdAt"
+            ],
+            "name": "by_script_time",
             "type": "index"
         },
         {
@@ -922,12 +931,22 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "type": "number"
         },
         {
+            "name": "fields",
+            "optional": true,
+            "type": "record"
+        },
+        {
+            "name": "functionPath",
+            "optional": true,
+            "type": "string"
+        },
+        {
             "name": "level",
             "optional": false,
             "type": "union"
         },
         {
-            "name": "line",
+            "name": "message",
             "optional": false,
             "type": "string"
         },
@@ -940,6 +959,26 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "scriptName",
             "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "shardKey",
+            "optional": true,
+            "type": "string"
+        },
+        {
+            "name": "spanId",
+            "optional": true,
+            "type": "string"
+        },
+        {
+            "name": "traceId",
+            "optional": true,
+            "type": "string"
+        },
+        {
+            "name": "userId",
+            "optional": true,
             "type": "string"
         }
     ],
@@ -1922,6 +1961,33 @@ const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = {};
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = [
     {
+        "cacheKey": "duplicate_index:tenantLogs:by_org",
+        "categories": [
+            "PERFORMANCE"
+        ],
+        "description": "A secondary index is redundant because another index already covers every lookup it serves (its columns are a leading prefix of the other's). The redundant index costs storage and is maintained on every write for no read benefit.",
+        "detail": "Index \"by_org\" on table \"tenantLogs\" (organizationId) is redundant — index \"by_trace\" (organizationId, traceId) already covers its lookups.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "coveredBy": {
+                "fields": [
+                    "organizationId",
+                    "traceId"
+                ],
+                "name": "by_trace"
+            },
+            "fields": [
+                "organizationId"
+            ],
+            "index": "by_org",
+            "table": "tenantLogs"
+        },
+        "name": "duplicate_index",
+        "remediation": "Drop the redundant index; the covering index already serves its lookups.",
+        "title": "Duplicate / redundant index"
+    },
+    {
         "cacheKey": "duplicate_index:builds:by_project",
         "categories": [
             "PERFORMANCE"
@@ -2029,6 +2095,22 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "duplicate_index",
         "remediation": "Drop the redundant index; the covering index already serves its lookups.",
         "title": "Duplicate / redundant index"
+    },
+    {
+        "cacheKey": "table_without_insert:tenantLogs",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"tenantLogs\", …)` — table \"tenantLogs\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "tenantLogs"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
     },
     {
         "cacheKey": "table_without_insert:issues",
@@ -2803,32 +2885,12 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:logs:53:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:logs:296:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in ingest (logs:53) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "callee": "Date.now",
-            "exportName": "ingest",
-            "file": "logs",
-            "kind": "mutation",
-            "line": 53
-        },
-        "name": "nondeterministic_query_mutation",
-        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
-        "title": "Non-deterministic call in query/mutation handler"
-    },
-    {
-        "cacheKey": "nondeterministic_query_mutation:logs:96:Date.now",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in prune (logs:96) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in prune (logs:296) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -2836,7 +2898,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "prune",
             "file": "logs",
             "kind": "mutation",
-            "line": 96
+            "line": 296
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
@@ -4845,33 +4907,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `deployKey` of public procedure `ingest` (logs:37) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `deployKey` of public procedure `ingest` (logs:165) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "deployKey",
             "exportName": "ingest",
             "file": "logs",
-            "line": 37
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:logs:ingest:lines",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `lines` of public procedure `ingest` (logs:37) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "lines",
-            "exportName": "ingest",
-            "file": "logs",
-            "line": 37
+            "line": 165
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -4883,14 +4926,33 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `scriptName` of public procedure `ingest` (logs:37) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `scriptName` of public procedure `ingest` (logs:165) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "scriptName",
             "exportName": "ingest",
             "file": "logs",
-            "line": 37
+            "line": 165
+        },
+        "name": "unbounded_string_arg",
+        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
+        "title": "Public string argument has no length bound"
+    },
+    {
+        "cacheKey": "unbounded_string_arg:logs:list:functionPath",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
+        "detail": "Arg `functionPath` of public procedure `list` (logs:231) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "facing": "EXTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "argument": "functionPath",
+            "exportName": "list",
+            "file": "logs",
+            "line": 231
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -4902,14 +4964,52 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `scriptName` of public procedure `list` (logs:73) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `scriptName` of public procedure `list` (logs:231) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "scriptName",
             "exportName": "list",
             "file": "logs",
-            "line": 73
+            "line": 231
+        },
+        "name": "unbounded_string_arg",
+        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
+        "title": "Public string argument has no length bound"
+    },
+    {
+        "cacheKey": "unbounded_string_arg:logs:list:search",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
+        "detail": "Arg `search` of public procedure `list` (logs:231) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "facing": "EXTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "argument": "search",
+            "exportName": "list",
+            "file": "logs",
+            "line": 231
+        },
+        "name": "unbounded_string_arg",
+        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
+        "title": "Public string argument has no length bound"
+    },
+    {
+        "cacheKey": "unbounded_string_arg:logs:list:traceId",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
+        "detail": "Arg `traceId` of public procedure `list` (logs:231) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "facing": "EXTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "argument": "traceId",
+            "exportName": "list",
+            "file": "logs",
+            "line": 231
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -5872,19 +5972,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 ? paymentsFromContext({ auth: { userId: userId ?? null }, db: db as unknown as LunoraPaymentDbLike }, config.payment(env))
                 : paymentStub;
 
-            // `ctx.log`: each call is captured + attributed to the executing
-            // function and routed to the optional `observability` sink. The DO base
-            // also buffers it (studio Logs panel) and emits a structured console
-            // event the dev-server formats in the terminal.
+            // `ctx.log`: the DO base builds the attributed logger (structured
+            // fields + `.with(...)` child + trace correlation) and routes each call
+            // to the optional `observability` sink. It also buffers the line (studio
+            // Logs panel) and emits a structured console event the dev-server formats.
             const observability = config.observability?.(env);
             const logFunctionPath = options.functionPath ?? "";
-            const log = {
-                debug: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "debug", args, observability); },
-                error: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "error", args, observability); },
-                info: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "info", args, observability); },
-                log: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "log", args, observability); },
-                warn: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "warn", args, observability); },
-            };
+            const log = this.makeLogger(logFunctionPath, observability);
 
             // `ctx.now`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
