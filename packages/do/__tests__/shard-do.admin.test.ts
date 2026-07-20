@@ -31,6 +31,7 @@ import type {
     ShardDOState,
 } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
+import type { MetricSeries } from "../src/metric-buffer";
 import type { TraceSpan, TraceSummary } from "../src/span-buffer";
 import type { SocketAttachment } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -86,6 +87,17 @@ const TRACE_SPAN_KEY_GUARD: KeysMatch<keyof TraceSpan, (typeof TRACE_SPAN_KEYS)[
 const TRACE_SUMMARY_KEYS = ["durationMs", "functionPath", "ok", "rootName", "shardKey", "spans", "startTs", "traceId"] as const;
 
 const TRACE_SUMMARY_KEY_GUARD: KeysMatch<keyof TraceSummary, (typeof TRACE_SUMMARY_KEYS)[number]> = true;
+
+/**
+ * Canonical key set of `MetricSeries` — the `getMetricSeries` wire shape
+ * `@lunora/studio` hand-mirrors (it can't import `@lunora/do`) and duplicates in
+ * its own drift guard. `lint:types` fails here if a key moves without the tuple
+ * moving — and there if the studio copy drifts — so the Instruments table can't
+ * silently fall behind the fold that feeds it. `attributes`/`shardKey` optional.
+ */
+const METRIC_SERIES_KEYS = ["attributes", "count", "firstTs", "functionPath", "kind", "last", "lastTs", "max", "min", "name", "shardKey", "sum"] as const;
+
+const METRIC_SERIES_KEY_GUARD: KeysMatch<keyof MetricSeries, (typeof METRIC_SERIES_KEYS)[number]> = true;
 
 /**
  * Canonical key set of `QueueMessageRow` (the `getQueueMessages` consumed-message
@@ -625,6 +637,26 @@ describe("shardDO admin introspection", () => {
         expect(TRACE_SPAN_KEY_GUARD).toBe(true);
         expect(TRACE_SUMMARY_KEY_GUARD).toBe(true);
         expect([...TRACE_SUMMARY_KEYS]).toStrictEqual(["durationMs", "functionPath", "ok", "rootName", "shardKey", "spans", "startTs", "traceId"]);
+    });
+
+    it("keeps the getMetricSeries wire shape in lockstep with the studio's hand-mirror", () => {
+        expect.assertions(2);
+
+        expect(METRIC_SERIES_KEY_GUARD).toBe(true);
+        expect([...METRIC_SERIES_KEYS]).toStrictEqual([
+            "attributes",
+            "count",
+            "firstTs",
+            "functionPath",
+            "kind",
+            "last",
+            "lastTs",
+            "max",
+            "min",
+            "name",
+            "shardKey",
+            "sum",
+        ]);
     });
 
     it("keeps QueueMessageRow's keys in lockstep with the studio's hand-mirror", () => {

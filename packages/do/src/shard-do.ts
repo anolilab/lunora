@@ -97,6 +97,7 @@ import type { LogEntry } from "./log-buffer";
 import { LogBuffer } from "./log-buffer";
 import type { CtxMetrics, CtxTracer, TraceAnchor } from "./ctx-telemetry";
 import { createMetrics, createTracer, dispatchRootSpan } from "./ctx-telemetry";
+import { MetricBuffer } from "./metric-buffer";
 import { foldTraces, SpanBuffer } from "./span-buffer";
 import { resolveTraceAnchor } from "./trace-context";
 import type { RecordMailInput } from "./mail-catcher";
@@ -1965,6 +1966,14 @@ abstract class ShardDO {
      * {@link logs} — production tracing ships to a collector via `otlpSink`.
      */
     private readonly spans = new SpanBuffer();
+
+    /**
+     * Running aggregates of `ctx.metrics.*` measurements, powering the studio's
+     * Metrics panel. In-memory and hibernation-volatile like {@link logs} and
+     * {@link spans}, but folds samples into per-series totals rather than ringing
+     * raw events — production aggregation ships to a collector via the sink.
+     */
+    private readonly metricSeries = new MetricBuffer();
 
     /**
      * In-flight dependency tracker for the currently-executing query. Set by
@@ -4561,15 +4570,25 @@ abstract class ShardDO {
     }
 
     /**
-     * Hand one measurement to the optional `sink.onMetric`. Best-effort like
+     * Fold one measurement into the in-memory {@link metricSeries} readout and
+     * hand it to the optional `sink.onMetric`. Best-effort like
      * {@link recordUserLog} and {@link recordSpan}: recording a measurement must
      * never break the handler that recorded it.
      *
-     * Unlike logs and spans there is no in-memory buffer behind this — a
-     * measurement's value is in its aggregate over time, which a bounded ring on
-     * a hibernating instance cannot represent. Metrics go to the sink or nowhere.
+     * The buffer folds rather than rings: a measurement's value is in its
+     * aggregate over a window, which a bounded ring of raw samples can't represent
+     * (it evicts the oldest samples, the ones a running total needs). So the
+     * buffer keeps one running aggregate per series and resets on hibernation like
+     * logs and spans — a "recent metrics on this instance" dev readout. Durable,
+     * cross-instance aggregation is still the sink's job.
      */
     protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void {
+        try {
+            this.metricSeries.push(event);
+        } catch {
+            // Folding is best-effort: a malformed event must not break the handler.
+        }
+
         if (sink?.onMetric) {
             try {
                 sink.onMetric(event, { waitUntil: this.state.waitUntil?.bind(this.state) });
@@ -6125,8 +6144,20 @@ abstract class ShardDO {
         if (functionPath === ADMIN_FUNCTIONS.getTraces) {
             // Recent `ctx.trace` waterfalls from the in-memory span ring, folded
             // per trace (newest first) with depth/offset precomputed so the panel
-            // renders rows without re-deriving the tree.
-            return { traces: foldTraces(this.spans.entries()) };
+            // renders rows without re-deriving the tree. `total` reports the
+            // distinct traces available so the panel can flag when the newest
+            // `DEFAULT_TRACE_LIMIT` shown is only part of the ring.
+            const folded = foldTraces(this.spans.entries());
+
+            return { total: folded.total, traces: folded.traces };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getMetricSeries) {
+            // Running aggregates of `ctx.metrics.*` measurements from the in-memory
+            // fold, most-recently-updated first. The counterpart to getLogs/getTraces
+            // for the third signal — a "recent metrics on this instance" readout that
+            // resets on hibernation; durable aggregation is the sink's job.
+            return { series: this.metricSeries.entries() };
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getSettings) {

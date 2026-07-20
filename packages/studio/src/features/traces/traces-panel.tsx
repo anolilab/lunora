@@ -217,6 +217,11 @@ export const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement
     }, [data, debouncedShard]);
 
     const traces = tracesOf(data);
+    // The RPC returns only the newest `DEFAULT_TRACE_LIMIT` traces; `total` is how
+    // many distinct traces the ring actually holds, so `total > traces.length`
+    // means the view is truncated (older traces exist but weren't returned).
+    const total = data?.total ?? traces.length;
+    const truncated = total > traces.length;
     // The span ring is not a queryable store, so the search runs client-side over
     // the loaded traces (the same model as the Logs panel's Errors view).
     const filtered = filterTraces(traces, search);
@@ -282,6 +287,12 @@ export const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement
                     testId="tr-empty"
                     title={t("No traces")}
                 />
+            )}
+
+            {error === null && truncated && (
+                <p className="text-xs text-muted-foreground" data-testid="tr-truncated">
+                    {t("Showing the {shown} most recent of {total} traces in the buffer.", { shown: traces.length, total })}
+                </p>
             )}
 
             {error === null && filtered.length > 0 && (

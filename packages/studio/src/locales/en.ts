@@ -126,6 +126,13 @@ const MESSAGE_IDS = [
     "Database",
     "Database size",
     "db size",
+    // Observability — ctx.metrics instruments (Metrics page)
+    "Instruments",
+    "Counter",
+    "Gauge",
+    "Histogram",
+    "count",
+    "range",
     "Delete",
     "Delete saved query {name}",
     "Delete?",
@@ -1131,6 +1138,7 @@ const MESSAGE_IDS = [
     "Trace waterfall",
     "Errored span",
     "{count} spans",
+    "Showing the {shown} most recent of {total} traces in the buffer.",
     "No traces",
     "Traces recorded with ctx.trace show up here as your app handles traffic. The span buffer resets when the shard hibernates.",
     // Observability — grouped error Issues

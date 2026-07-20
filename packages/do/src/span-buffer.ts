@@ -218,12 +218,25 @@ const depthResolver = (anchor: SpanEvent, byId: ReadonlyMap<string, SpanEvent>):
     };
 };
 
+/** {@link foldTraces} result: the folded waterfalls plus the total distinct traces available before the `limit`. */
+export interface FoldedTraces {
+    /**
+     * Distinct traces present in the buffer — the denominator for a "showing N of
+     * M" affordance. `traces.length` is `min(total, limit)`, so `total > traces.length`
+     * means older traces are held in the ring but not returned.
+     */
+    total: number;
+    /** The newest `limit` traces, folded into waterfalls. */
+    traces: TraceSummary[];
+}
+
 /**
- * Group a flat span list into per-trace waterfalls, newest trace first.
+ * Group a flat span list into per-trace waterfalls, newest trace first, plus the
+ * total number of distinct traces available (so a caller can report truncation).
  * @param spans Buffered spans, in arrival order.
  * @param limit Maximum number of traces to return, newest first.
  */
-export const foldTraces = (spans: readonly SpanEvent[], limit = DEFAULT_TRACE_LIMIT): TraceSummary[] => {
+export const foldTraces = (spans: readonly SpanEvent[], limit = DEFAULT_TRACE_LIMIT): FoldedTraces => {
     const byTrace = groupByTrace(spans);
 
     // Newest-first and truncated to `limit` BEFORE folding, so a full ring only
@@ -288,6 +301,7 @@ export const foldTraces = (spans: readonly SpanEvent[], limit = DEFAULT_TRACE_LI
 
     // Re-sorted on the anchor's start: `selected` ordered by each group's
     // earliest span, which is the anchor in the normal case but not when the
-    // group is partial.
-    return summaries.sort((a, b) => b.startTs - a.startTs);
+    // group is partial. `total` is the distinct-trace count BEFORE the `limit`
+    // slice, so the panel can flag when older traces exist but weren't returned.
+    return { total: byTrace.size, traces: summaries.sort((a, b) => b.startTs - a.startTs) };
 };

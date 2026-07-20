@@ -23,6 +23,10 @@ class TracingShard extends ShardDO {
         return { ok: true };
     }
 
+    public metricRecorder(functionPath: string): ReturnType<TracingShard["makeMetrics"]> {
+        return this.makeMetrics(functionPath);
+    }
+
     public tracer(functionPath: string): ReturnType<TracingShard["makeTracer"]> {
         return this.makeTracer(functionPath);
     }
@@ -95,7 +99,9 @@ describe("foldTraces", () => {
         expect.assertions(3);
 
         // root ─ outer ─ inner, each starting 5ms after its parent.
-        const [trace] = foldTraces([
+        const {
+            traces: [trace],
+        } = foldTraces([
             span({ durationMs: 30, name: "inner", parentSpanId: "outer", spanId: "inner", startTs: 1010 }),
             span({ durationMs: 40, name: "outer", parentSpanId: "root", spanId: "outer", startTs: 1005 }),
             span({ durationMs: 50, name: "a:b", dispatch: true, spanId: "root", startTs: 1000 }),
@@ -113,7 +119,9 @@ describe("foldTraces", () => {
         // so the child is buffered first, and `startTs` has millisecond
         // resolution — a fast parent/child pair looks simultaneous. Ordering must
         // come from the structure, not from arrival order or timing.
-        const [trace] = foldTraces([
+        const {
+            traces: [trace],
+        } = foldTraces([
             span({ durationMs: 0, name: "inner", parentSpanId: "outer", spanId: "inner", startTs: 1000 }),
             span({ durationMs: 0, name: "outer", parentSpanId: "dispatch", spanId: "outer", startTs: 1000 }),
         ]);
@@ -125,7 +133,9 @@ describe("foldTraces", () => {
     it("marks a trace failed when any descendant span errored", () => {
         expect.assertions(2);
 
-        const [trace] = foldTraces([
+        const {
+            traces: [trace],
+        } = foldTraces([
             span({ name: "a:b", dispatch: true, spanId: "root" }),
             span({ error: { message: "nope", type: "BAD_REQUEST" }, name: "child", ok: false, parentSpanId: "root", spanId: "child" }),
         ]);
@@ -138,7 +148,9 @@ describe("foldTraces", () => {
         expect.assertions(2);
 
         // The ring evicted `outer`, so `inner` names a parent that isn't here.
-        const [trace] = foldTraces([
+        const {
+            traces: [trace],
+        } = foldTraces([
             span({ name: "a:b", dispatch: true, spanId: "root" }),
             span({ name: "inner", parentSpanId: "evicted", spanId: "inner", startTs: 1010 }),
         ]);
@@ -152,7 +164,9 @@ describe("foldTraces", () => {
 
         // Not producible by the tracer, but a replayed/hand-built stream could
         // carry it — depth resolution must not spin.
-        const [trace] = foldTraces([span({ name: "a", parentSpanId: "b", spanId: "a" }), span({ name: "b", parentSpanId: "a", spanId: "b" })]);
+        const {
+            traces: [trace],
+        } = foldTraces([span({ name: "a", parentSpanId: "b", spanId: "a" }), span({ name: "b", parentSpanId: "a", spanId: "b" })]);
 
         expect(trace?.spans).toHaveLength(2);
     });
@@ -161,16 +175,18 @@ describe("foldTraces", () => {
         expect.assertions(2);
 
         // Read mid-dispatch: children exist, the synthetic root span does not.
-        const [trace] = foldTraces([span({ name: "first", parentSpanId: "pending", spanId: "s1", startTs: 1000 })]);
+        const {
+            traces: [trace],
+        } = foldTraces([span({ name: "first", parentSpanId: "pending", spanId: "s1", startTs: 1000 })]);
 
         expect(trace?.rootName).toBe("first");
         expect(trace?.spans[0]?.offsetMs).toBe(0);
     });
 
-    it("groups by trace, newest first, and honours the limit", () => {
-        expect.assertions(2);
+    it("groups by trace, newest first, honours the limit, and reports the total", () => {
+        expect.assertions(3);
 
-        const traces = foldTraces(
+        const { total, traces } = foldTraces(
             [
                 span({ name: "old", spanId: "s1", startTs: 1000, traceId: "t1" }),
                 span({ name: "mid", spanId: "s2", startTs: 2000, traceId: "t2" }),
@@ -181,6 +197,8 @@ describe("foldTraces", () => {
 
         expect(traces.map((entry) => entry.traceId)).toStrictEqual(["t3", "t2"]);
         expect(traces).toHaveLength(2);
+        // Three distinct traces present, only two returned — the panel's "of M" total.
+        expect(total).toBe(3);
     });
 });
 
@@ -420,5 +438,34 @@ describe("ctx.metrics", () => {
         expect(() => {
             metrics.count("orders.placed");
         }).not.toThrow();
+    });
+
+    it("serves aggregated series over the getMetricSeries admin RPC", async () => {
+        expect.assertions(4);
+
+        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const metrics = shard.metricRecorder("orders:checkout");
+
+        metrics.count("orders.placed", 2);
+        metrics.count("orders.placed", 3);
+        metrics.gauge("cart.items", 7);
+
+        const response = await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: ADMIN_FUNCTIONS.getMetricSeries }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+        const body = await response.json<{ result: { series: { count: number; kind: string; name: string; sum: number }[] } }>();
+        const { series } = body.result;
+
+        expect(series).toHaveLength(2);
+
+        const placed = series.find((s) => s.name === "orders.placed");
+
+        expect(placed?.kind).toBe("counter");
+        expect(placed?.count).toBe(2);
+        expect(placed?.sum).toBe(5);
     });
 });

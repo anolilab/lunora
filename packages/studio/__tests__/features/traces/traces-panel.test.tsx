@@ -121,6 +121,38 @@ describe("tracesPanel", () => {
         expect(screen.getByTestId("tr-row-trace-list")).toBeTruthy();
     });
 
+    it("shows a 'showing N of M' notice when the ring holds more traces than were returned", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getTraces) {
+                    // One trace returned, three distinct traces in the ring.
+                    return { total: 3, traces: [TRACES[0]] };
+                }
+
+                throw new Error(`unexpected ${String(reference)}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        const notice = await screen.findByTestId("tr-truncated");
+
+        expect(notice.textContent).toContain("Showing the 1 most recent of 3");
+        expect(screen.getByTestId("tr-list")).toBeTruthy();
+    });
+
+    it("shows no truncation notice when the returned count equals the total", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(createClient()));
+
+        await screen.findByTestId("tr-list");
+
+        expect(screen.queryByTestId("tr-truncated")).toBeNull();
+    });
+
     it("renders the empty state when the shard's span ring holds no traces", async () => {
         expect.assertions(1);
 

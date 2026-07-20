@@ -9,6 +9,7 @@ import type {
     FanoutTopicStat,
     FlagEvaluation,
     FlagsResult,
+    MetricSeries,
     QueueMessageRow,
     QueueMetadata,
     StudioFeaturesResult,
@@ -134,6 +135,17 @@ const TRACE_SPAN_KEY_GUARD: KeysMatch<keyof TraceSpan, (typeof TRACE_SPAN_KEYS)[
 const TRACE_SUMMARY_KEYS = ["durationMs", "functionPath", "ok", "rootName", "shardKey", "spans", "startTs", "traceId"] as const;
 
 const TRACE_SUMMARY_KEY_GUARD: KeysMatch<keyof TraceSummary, (typeof TRACE_SUMMARY_KEYS)[number]> = true;
+
+/**
+ * Canonical key set of `MetricSeries` — the `getMetricSeries` wire shape this
+ * package hand-mirrors from `@lunora/do` (produced by its `MetricBuffer` fold).
+ * The Instruments table reads these fields off the wire, so a dropped mirror key
+ * would surface as a silent `undefined` cell; this guard fails the build instead.
+ * `attributes`/`shardKey` are optional.
+ */
+const METRIC_SERIES_KEYS = ["attributes", "count", "firstTs", "functionPath", "kind", "last", "lastTs", "max", "min", "name", "shardKey", "sum"] as const;
+
+const METRIC_SERIES_KEY_GUARD: KeysMatch<keyof MetricSeries, (typeof METRIC_SERIES_KEYS)[number]> = true;
 
 /**
  * Canonical key set of `QueueMessageRow` (the `getQueueMessages` consumed-message
@@ -347,6 +359,26 @@ describe("studio", () => {
         expect(TRACE_SPAN_KEY_GUARD).toBe(true);
         expect(TRACE_SUMMARY_KEY_GUARD).toBe(true);
         expect([...TRACE_SUMMARY_KEYS]).toStrictEqual(["durationMs", "functionPath", "ok", "rootName", "shardKey", "spans", "startTs", "traceId"]);
+    });
+
+    it("keeps the studio's getMetricSeries mirror in lockstep with @lunora/do's contract", () => {
+        expect.assertions(2);
+
+        expect(METRIC_SERIES_KEY_GUARD).toBe(true);
+        expect([...METRIC_SERIES_KEYS]).toStrictEqual([
+            "attributes",
+            "count",
+            "firstTs",
+            "functionPath",
+            "kind",
+            "last",
+            "lastTs",
+            "max",
+            "min",
+            "name",
+            "shardKey",
+            "sum",
+        ]);
     });
 
     it("keeps the studio's QueueMessageRow mirror in lockstep with @lunora/do's contract", () => {
