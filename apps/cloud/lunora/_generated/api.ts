@@ -81,8 +81,8 @@ export interface ApiTypes {
         setStatus: FunctionReference<"mutation", { id: Id<"issues">; organizationId: Id<"organizations">; status: unknown }, Id<"issues">>;
     };
     logs: {
-        ingest: FunctionReference<"mutation", { deployKey: string; lines: Array<{ createdAt: number | undefined; level: "log" | "warn" | "error"; line: string }>; organizationId: Id<"organizations">; scriptName: string }, { ingested: number; }>;
-        list: FunctionReference<"query", { afterCreatedAt?: number; organizationId: Id<"organizations">; scriptName: string }, { createdAt: number; level: "error" | "log" | "warn"; line: string; }[]>;
+        ingest: FunctionReference<"mutation", { deployKey: string; lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }, { ingested: number; }>;
+        list: FunctionReference<"query", { afterCreatedAt?: number; functionPath?: string; levels?: Array<unknown>; limit?: number; organizationId: Id<"organizations">; scriptName: string; search?: string; traceId?: string }, { createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
     };
     members: {
         add: FunctionReference<"mutation", { organizationId: Id<"organizations">; userId: string }, Id<"members">>;
@@ -142,6 +142,8 @@ export interface InternalApiTypes {
         tick: FunctionReference<"mutation", {}, { ok: true; }>;
     };
     logs: {
+        ingestInternal: FunctionReference<"mutation", { lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }, { ingested: number; }>;
+        orgForScript: FunctionReference<"query", { scriptName: string }, { organizationId: Id<"organizations">; } | null>;
         prune: FunctionReference<"mutation", {}, { pruned: number; }>;
     };
     organizations: {
