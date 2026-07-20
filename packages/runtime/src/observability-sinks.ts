@@ -18,6 +18,7 @@
  * third party. Scrub or redact before enabling it against an external service
  * if that is a concern.
  */
+import { coerceFieldValue } from "../../../shared/log-fields";
 import { encodeAttribute, mergeHeaders, OTLP_SEVERITY, otlpRandomHex, otlpUnixNano, wrapResourceLogs, wrapResourceSpans } from "../../../shared/otlp";
 import type { LogEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 
@@ -72,23 +73,49 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
 
 /** Build the OTLP log-export body for one application log line. */
 const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
-    const attributes = [encodeAttribute("lunora.function_path", event.functionPath)];
+    // Keyed by attribute name so a caller field that reuses a reserved `lunora.*`
+    // key overrides it (as documented) rather than emitting a duplicate `KeyValue`
+    // the collector resolves ambiguously. Reserved keys go in first; caller
+    // fields overwrite.
+    const attributeByKey = new Map<string, ReturnType<typeof encodeAttribute>>();
+
+    attributeByKey.set("lunora.function_path", encodeAttribute("lunora.function_path", event.functionPath));
 
     if (event.shardKey !== undefined) {
-        attributes.push(encodeAttribute("lunora.shard_key", event.shardKey));
+        attributeByKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", event.shardKey));
     }
 
     if (event.userId !== undefined) {
-        attributes.push(encodeAttribute("lunora.user_id", event.userId));
+        attributeByKey.set("lunora.user_id", encodeAttribute("lunora.user_id", event.userId));
     }
 
-    const logRecord = {
-        attributes,
+    // Caller-supplied structured fields become log-record attributes so a
+    // pipeline can filter/index on them. They arrive pre-normalized to JSON-safe
+    // primitives; `coerceFieldValue` re-applies for a sink fed a raw event.
+    if (event.fields) {
+        for (const [key, value] of Object.entries(event.fields)) {
+            attributeByKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
+        }
+    }
+
+    const logRecord: Record<string, unknown> = {
+        attributes: [...attributeByKey.values()],
         body: { stringValue: event.message },
         severityNumber: OTLP_SEVERITY[event.level],
         severityText: event.level.toUpperCase(),
         timeUnixNano: otlpUnixNano(event.ts),
     };
+
+    // Correlate the log record to its dispatch span (OTLP `LogRecord.trace_id` /
+    // `span_id`) when the runtime threaded the inbound trace context, so the
+    // Cloud/collector links the line to its trace.
+    if (event.traceId !== undefined) {
+        logRecord.traceId = event.traceId;
+    }
+
+    if (event.spanId !== undefined) {
+        logRecord.spanId = event.spanId;
+    }
 
     return wrapResourceLogs(logRecord, "@lunora/runtime", serviceName);
 };
@@ -125,7 +152,7 @@ export const consoleSink = (options: OnlyErrorsOption = {}): ObservabilitySink =
         onLog: (event) => {
             // `onlyErrors` filters the RPC summary stream; application log lines
             // are emitted whole so a developer still sees their `ctx.log` output.
-            if (event.level === "error") {
+            if (event.level === "error" || event.level === "fatal") {
                 // eslint-disable-next-line no-console
                 console.error("[lunora:log]", event.functionPath, event.message);
             } else {
@@ -167,6 +194,15 @@ export interface WebhookSinkOptions extends OnlyErrorsOption {
      * redactor can never leak the un-scrubbed payload.
      */
     transform?: (event: ObservabilityEvent) => null | ObservabilityEvent | undefined;
+
+    /**
+     * Optional redaction hook for `ctx.log` events (the {@link transform}
+     * counterpart for log lines). Same fail-closed contract: return the event to
+     * ship it, `null`/`undefined` to drop it, and a throw drops it. When unset,
+     * log events are shipped as-is (message + structured fields — which may carry
+     * user input; see the privacy note).
+     */
+    transformLog?: (event: LogEvent) => LogEvent | null | undefined;
     /** The ingestion endpoint to POST each event to. */
     url: string;
 }
@@ -190,10 +226,45 @@ export interface WebhookSinkOptions extends OnlyErrorsOption {
  * `transform` redacts/drops each event before send.
  */
 export const webhookSink = (options: WebhookSinkOptions): ObservabilitySink => {
-    const { headers, onlyErrors, transform, url } = options;
+    const { headers, onlyErrors, transform, transformLog, url } = options;
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers);
 
+    /** POST one already-redacted payload, keeping the send alive past the response. */
+    const post = (payload: unknown, context?: ObservabilitySinkContext): void => {
+        try {
+            const sent = fetch(url, { body: JSON.stringify(payload), headers: mergedHeaders, method: "POST" }).catch(() => {
+                // Network error / non-OK response — intentionally ignored.
+            });
+
+            if (context?.waitUntil) {
+                context.waitUntil(sent);
+            }
+        } catch {
+            // `fetch` throwing synchronously (e.g. an invalid URL) must not break dispatch.
+        }
+    };
+
     return {
+        onLog: (event, context) => {
+            // `onlyErrors` scopes the RPC stream; `ctx.log` lines always ship, so
+            // a developer's logs reach the endpoint even when RPC events are
+            // filtered. Fail-closed on a throwing `transformLog`.
+            let payload: LogEvent | null | undefined = event;
+
+            if (transformLog) {
+                try {
+                    payload = transformLog(event);
+                } catch {
+                    return;
+                }
+            }
+
+            if (payload === null || payload === undefined) {
+                return;
+            }
+
+            post(payload, context);
+        },
         onRpc: (event, context?: ObservabilitySinkContext) => {
             if (shouldSkip(event, onlyErrors)) {
                 return;
@@ -216,26 +287,9 @@ export const webhookSink = (options: WebhookSinkOptions): ObservabilitySink => {
                     return;
                 }
 
-                // The `.catch` swallows any rejection so a failed POST can never
-                // reject into the dispatch path.
-                const sent = fetch(url, {
-                    body: JSON.stringify(payload),
-                    headers: mergedHeaders,
-                    method: "POST",
-                }).catch(() => {
-                    // Network error / non-OK response — intentionally ignored.
-                });
-
-                // Prefer the request's `ctx.waitUntil` so the send outlives the
-                // response (workerd cancels in-flight promises at isolate
-                // teardown otherwise). Fall back to fire-and-forget when no
-                // request context is available (e.g. the serverQuery fast-path).
-                if (context?.waitUntil) {
-                    context.waitUntil(sent);
-                }
+                post(payload, context);
             } catch {
-                // `fetch` itself throwing synchronously (e.g. an invalid URL)
-                // must not break dispatch either.
+                // A synchronous throw in the transform/guard path must not break dispatch.
             }
         },
     };
@@ -249,6 +303,15 @@ export interface SentrySinkOptions extends OnlyErrorsOption {
      * injected callback so the runtime takes no dependency on `@sentry/*`.
      */
     capture: (event: ObservabilityEvent) => void;
+
+    /**
+     * Optional callback for `ctx.log` events. Wire it to Sentry's structured
+     * logging or a breadcrumb, e.g. `(e) => Sentry.logger[e.level]?.(e.message,
+     * e.fields)`. Omit it to leave `ctx.log` lines out of Sentry entirely
+     * (capturing every log line would usually flood the project). Invoked inside
+     * a try/catch so a throwing client can't break the handler.
+     */
+    captureLog?: (event: LogEvent) => void;
 }
 
 /**
@@ -262,12 +325,23 @@ export interface SentrySinkOptions extends OnlyErrorsOption {
  * `onlyErrors` defaults to true (error events only) — pass `false` for all.
  */
 export const sentrySink = (options: SentrySinkOptions): ObservabilitySink => {
-    const { capture } = options;
+    const { capture, captureLog } = options;
     // Sentry defaults to error-only — capturing every successful RPC as an
     // event would flood the project. Callers opt into all events explicitly.
     const onlyErrors = options.onlyErrors ?? true;
 
     return {
+        // Only forward log lines when the caller wired `captureLog`; otherwise
+        // `ctx.log` output stays out of Sentry.
+        onLog: captureLog
+            ? (event) => {
+                  try {
+                      captureLog(event);
+                  } catch {
+                      // A throwing capture callback must not break the handler.
+                  }
+              }
+            : undefined,
         onRpc: (event) => {
             if (shouldSkip(event, onlyErrors)) {
                 return;
@@ -348,6 +422,92 @@ export const analyticsEngineSink = (options: AnalyticsEngineSinkOptions): Observ
                 });
             } catch {
                 // A missing or throwing dataset binding must not break dispatch.
+            }
+        },
+    };
+};
+
+/**
+ * The Cloudflare Pipeline binding surface {@link pipelineLogSink} needs — the
+ * `env` binding declared in `wrangler.jsonc` under `pipelines`. Typed
+ * structurally (mirrors `@lunora/bindings/pipelines`' `PipelineBindingLike`) so
+ * the runtime takes no dependency on `@lunora/bindings` or `@cloudflare/workers-types`.
+ */
+export interface PipelineLike {
+    /** Durably ingest a batch of records (buffered to R2, read back later with R2 SQL). */
+    send: (records: Record<string, unknown>[]) => Promise<void>;
+}
+
+/** Options for {@link pipelineLogSink}. */
+export interface PipelineLogSinkOptions {
+    /** The Cloudflare Pipeline binding each log record is durably sent to. */
+    pipeline: PipelineLike;
+}
+
+/**
+ * A sink that durably persists each `ctx.log` line to a Cloudflare Pipeline
+ * (→ R2), so an app has a queryable log store WITHOUT the Cloud — read the
+ * archived records back with R2 SQL. This is the durable counterpart to the
+ * network {@link otlpSink}: where OTLP streams to a collector, this lands the
+ * structured record (message, level, function path, fields, trace ids, shard,
+ * user, timestamp) in object storage under the app's own account.
+ *
+ * Only `onLog` is implemented — RPC-span metrics belong in
+ * {@link analyticsEngineSink}. `Pipeline.send` is durable/fire-and-forget on the
+ * platform; the call is registered with the request's `context.waitUntil` when
+ * present (the DO threads its `state.waitUntil`) so the send survives isolate
+ * teardown, and every rejection is swallowed so a flaky pipeline never surfaces
+ * to the caller.
+ *
+ * Privacy: the persisted record carries `message` + structured `fields` (not the
+ * raw positional args). They may include user input — the R2 bucket is your own,
+ * but treat it as a log store and gate PII upstream if that is a concern.
+ * @param options Sink options: `pipeline` is the Cloudflare Pipeline binding.
+ */
+export const pipelineLogSink = (options: PipelineLogSinkOptions): ObservabilitySink => {
+    const { pipeline } = options;
+
+    return {
+        onLog: (event, context) => {
+            try {
+                const record: Record<string, unknown> = {
+                    functionPath: event.functionPath,
+                    level: event.level,
+                    message: event.message,
+                    ts: event.ts,
+                };
+
+                if (event.fields) {
+                    record.fields = event.fields;
+                }
+
+                if (event.shardKey !== undefined) {
+                    record.shardKey = event.shardKey;
+                }
+
+                if (event.userId !== undefined) {
+                    record.userId = event.userId;
+                }
+
+                if (event.traceId !== undefined) {
+                    record.traceId = event.traceId;
+                }
+
+                if (event.spanId !== undefined) {
+                    record.spanId = event.spanId;
+                }
+
+                // `.catch` swallows any rejection so a failed send can never reject
+                // into the handler path.
+                const sent = pipeline.send([record]).catch(() => {
+                    // Delivery error — intentionally ignored.
+                });
+
+                if (context?.waitUntil) {
+                    context.waitUntil(sent);
+                }
+            } catch {
+                // A missing or throwing pipeline binding must not break the handler.
             }
         },
     };

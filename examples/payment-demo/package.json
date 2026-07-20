@@ -19,7 +19,7 @@
         "lunorash": "workspace:*",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
-        "stripe": "^22.3.0"
+        "stripe": "^22.3.2"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",

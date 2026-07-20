@@ -1,6 +1,6 @@
 {
     "name": "@lunora/replica",
-    "version": "1.0.0-alpha.5",
+    "version": "1.0.0-alpha.6",
     "description": "Local-first replica runtime + local SQLite mirror for Lunora",
     "keywords": [
         "cloudflare",
@@ -73,7 +73,7 @@
         "test:coverage": "vitest run --coverage"
     },
     "devDependencies": {
-        "@lunora/server": "1.0.0-alpha.27",
+        "@lunora/server": "1.0.0-alpha.28",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@visulima/packem": "catalog:build",

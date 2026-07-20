@@ -9,16 +9,19 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/nuxt`
 
-### `ModuleOptions` (type)
+### `ModuleOptions` (interface)
 
 ```ts
-type ModuleOptions = typeof Module extends NuxtModule<infer O> ? Partial<O> : Record<string, any>;
+interface ModuleOptions {
+    appEntry: string;
+    prefix: string;
+}
 ```
 
 ### `default` (const)
 
 ```ts
-const _default: nuxt_schema.NuxtModule<ModuleOptions, ModuleOptions, false>;
+const lunoraNuxtModule: LunoraNuxtModule;
 ```
 
 ## `@lunora/nuxt/server`

@@ -9,15 +9,6 @@ import { defineIdentity, v } from "../src/index";
  * contract's typing regresses.
  */
 
-const identity = defineIdentity({
-    kind: v.optional(v.union(v.literal("user"), v.literal("service"))),
-    scopes: v.optional(v.array(v.string())),
-    tenantId: v.optional(v.string()),
-    userId: v.string(),
-});
-
-type Identity = InferIdentity<typeof identity>;
-
 // Assert a value has an exact type via a parameter position (no `void` operator,
 // no unused locals) — the argument fails to typecheck if the type regresses.
 const expectString = (_value: string): void => undefined;
@@ -25,7 +16,22 @@ const expectOptionalString = (_value: string | undefined): void => undefined;
 const expectOptionalStringArray = (_value: string[] | undefined): void => undefined;
 const expectNever = (_value: never): void => undefined;
 
-const check = (claims: Identity): void => {
+// Everything under test lives inside the function body so the inferred `identity`
+// contract and the recovered `Identity` type stay function-local (not part of the
+// module's declaration output) — keeping the file `--isolatedDeclarations`-clean
+// without hand-writing the inferred contract type.
+const check = (): void => {
+    const identity = defineIdentity({
+        kind: v.optional(v.union(v.literal("user"), v.literal("service"))),
+        scopes: v.optional(v.array(v.string())),
+        tenantId: v.optional(v.string()),
+        userId: v.string(),
+    });
+
+    type Identity = InferIdentity<typeof identity>;
+
+    const claims = null as unknown as Identity;
+
     // Declared claims are readable at their declared types.
     const { scopes, tenantId, userId } = claims;
 

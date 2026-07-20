@@ -17,6 +17,9 @@ import { CLOUDFLARE_OBSERVABILITY_URL } from "../../lib/cf-links";
 import { recordShard } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
 import flooredRectObserver from "../../lib/virtual-rect";
+// Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
+// sinks and the dev-terminal formatter (see CLAUDE.md `shared/` rules).
+import { formatLogFields } from "../../../../../shared/log-fields";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
 const SCROLL_HEIGHT = 400;
@@ -68,6 +71,9 @@ interface LogRowProps {
  */
 const LogRow = ({ entry, index, measureRef, start }: LogRowProps): ReactElement => {
     const style = { ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` };
+    // Rendered once; `""` (no fields, or an empty bag from a worker predating
+    // field normalization) skips the chip entirely rather than showing a blank span.
+    const fields = formatLogFields(entry.fields);
 
     return (
         <div
@@ -89,6 +95,11 @@ const LogRow = ({ entry, index, measureRef, start }: LogRowProps): ReactElement 
             </span>
             <span className="flex-1 truncate" role="gridcell">
                 {entry.message}
+                {fields === "" ? null : (
+                    <span className="ml-2 text-muted-foreground" data-testid="lg-fields">
+                        {fields}
+                    </span>
+                )}
             </span>
         </div>
     );
@@ -253,7 +264,9 @@ const filterLogs = (entries: ReadonlyArray<LogEntry>, criteria: LogFilterCriteri
             return false;
         }
 
-        return needle === "" || entry.message.toLowerCase().includes(needle);
+        // The message search also matches structured field values, so filtering
+        // on e.g. an `orderId` a handler logged just works.
+        return needle === "" || entry.message.toLowerCase().includes(needle) || formatLogFields(entry.fields).toLowerCase().includes(needle);
     });
 };
 

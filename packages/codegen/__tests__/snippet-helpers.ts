@@ -15,7 +15,7 @@ import compileArgsValidator from "../src/compile-validator";
 import { parseObjectShape } from "../src/parse-validator";
 
 /** Shared DEFER sentinel the compiled closures defer with. */
-const DEFER = Symbol("snippet.defer");
+const DEFER: symbol = Symbol("snippet.defer");
 
 /** Parse a `{ ... }` args object-literal snippet into the codegen IR via the production AST path. */
 const irFromSnippet = (snippet: string): Record<string, unknown> => {

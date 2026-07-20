@@ -101,7 +101,7 @@ const lunoraTsSourceResolver = (rootDirectory: string): TsSourceResolverPlugin =
 };
 
 /** Options for the `@lunora/nuxt` module (configurable under the `lunora` key in `nuxt.config`). */
-interface ModuleOptions {
+export interface ModuleOptions {
     /**
      * Module specifier of the Lunora app entry — its default export is the built
      * worker (`defineApp().build()` / `createWorker(...)`) and it re-exports
@@ -112,7 +112,20 @@ interface ModuleOptions {
     prefix: string;
 }
 
-export default defineNuxtModule<ModuleOptions>({
+/**
+ * Return type of `defineNuxtModule<ModuleOptions>({...})` — the value overload of
+ * `defineNuxtModule` (the one taking a definition), extracted structurally so the
+ * default export has a locally-nameable type under `isolatedDeclarations` without
+ * importing `NuxtModule` from `@nuxt/schema` (not a resolvable dependency here).
+ */
+type LunoraNuxtModule = typeof defineNuxtModule<ModuleOptions> extends {
+    (definition: infer _Definition): infer Result;
+    (): unknown;
+}
+    ? Result
+    : never;
+
+const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
     defaults: {
         appEntry: "~/lunora/server",
         prefix: "/_lunora",
@@ -165,3 +178,5 @@ export default defineNuxtModule<ModuleOptions>({
         }
     },
 });
+
+export default lunoraNuxtModule;

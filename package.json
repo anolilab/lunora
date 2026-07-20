@@ -91,7 +91,7 @@
         "fallow": "catalog:lint",
         "prettier": "catalog:lint",
         "prettier-plugin-svelte": "catalog:lint",
-        "react-doctor": "0.7.1",
+        "react-doctor": "0.8.1",
         "rimraf": "catalog:node",
         "semantic-release": "catalog:web",
         "ts-morph": "catalog:tooling",
@@ -102,5 +102,5 @@
         "node": "^22.15.0 || >=24.11.0",
         "pnpm": ">=10.32.1"
     },
-    "packageManager": "pnpm@11.5.3"
+    "packageManager": "pnpm@11.15.0"
 }

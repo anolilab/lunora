@@ -54,7 +54,7 @@ interface ChartContextProps {
 
 const ChartContext = React.createContext<ChartContextProps | null>(null);
 
-export function useChart() {
+export function useChart(): ChartContextProps {
     const context = React.useContext(ChartContext);
 
     if (!context) {
@@ -85,7 +85,7 @@ const ChartContainer = ({
     children,
     footer,
     ...props
-}: Readonly<ChartContainerProps>) => {
+}: Readonly<ChartContainerProps>): React.ReactElement => {
     const uniqueId = React.useId();
     const chartId = `chart-${id ?? uniqueId.replaceAll(":", "")}`;
 
@@ -115,7 +115,7 @@ const ChartContainer = ({
     );
 };
 
-const LoadingIndicator = ({ isLoading }: { isLoading: boolean }) => {
+const LoadingIndicator = ({ isLoading }: { isLoading: boolean }): React.ReactElement | null => {
     if (!isLoading) {
         return null;
     }
@@ -156,7 +156,7 @@ function distributeColors(colorsArray: string[], maxCount: number): string[] {
     return result;
 }
 
-const ChartStyle = ({ id, config }: { config: ChartConfig; id: string }) => {
+const ChartStyle = ({ id, config }: { config: ChartConfig; id: string }): React.ReactElement | null => {
     const colorConfig = Object.entries(config).filter(([, config]) => config.colors);
 
     if (colorConfig.length === 0) {
@@ -190,7 +190,7 @@ const ChartStyle = ({ id, config }: { config: ChartConfig; id: string }) => {
 };
 
 // Helper to extract item config from a payload.
-export function getPayloadConfigFromPayload(config: ChartConfig, payload: unknown, key: string) {
+export function getPayloadConfigFromPayload(config: ChartConfig, payload: unknown, key: string): ChartConfig[string] | undefined {
     if (typeof payload !== "object" || payload === null) {
         return undefined;
     }
@@ -224,7 +224,7 @@ function getColorsCount(config: ChartConfig[string]): number {
 
 // Generate random loading data for skeleton/loading state
 // min/max represent percentage of the range (0-100), defaults to 20-80 for realistic look
-export const getLoadingData = (points: number = 10, min: number = 0, max: number = 70) => {
+export const getLoadingData = (points: number = 10, min: number = 0, max: number = 70): { loading: number }[] => {
     const range = max - min;
     return Array.from({ length: points }, () => {
         return {

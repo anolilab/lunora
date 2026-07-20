@@ -8,6 +8,7 @@
  */
 import { defineQueue, queueDefaultName } from "../../src/define-queue";
 import type { QueueRegistry } from "../../src/dispatch";
+import type { QueueDefinition } from "../../src/types";
 import { dispatchQueueBatch } from "../../src/dispatch";
 
 interface SmokeBody {
@@ -34,7 +35,7 @@ interface DeliveredMessage {
 const deliveries: DeliveredMessage[] = [];
 
 /** The `lunora/queues.ts`-style export under test. */
-const smokeQueue = defineQueue<SmokeBody>({
+const smokeQueue: QueueDefinition<SmokeBody> = defineQueue<SmokeBody>({
     handler: (_context, batch) => {
         for (const message of batch.messages) {
             deliveries.push({ attempts: message.attempts, body: message.body, id: message.id, queue: batch.queue });

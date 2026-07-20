@@ -13,7 +13,7 @@
  */
 
 /** Markdown hint: a single string or an array of lines. Shape matches `@visulima/error`'s `hint`. */
-export type ErrorHint = string | string[];
+export type ErrorHint = string | readonly string[];
 
 /** A catalog entry: the fixed metadata for one error `code`. */
 export interface ErrorCatalogEntry {
@@ -123,7 +123,12 @@ export const ERROR_CATALOG = {
     ANALYTICS_SQL_ERROR: { status: 502, title: "Analytics Engine SQL API error" },
     R2_SQL_ERROR: { status: 502, title: "R2 SQL API error" },
     WORKFLOWS_REST_ERROR: { status: 502, title: "Cloudflare Workflows REST API error" },
-} as const satisfies Record<string, ErrorCatalogEntry>;
+} as const;
+
+// Shape validation kept as a standalone statement: `as const satisfies …` is not
+// emittable under isolatedDeclarations (TS9010), but `LunoraErrorCode` needs the
+// literal keys, so the catalog stays `as const` and its shape is checked here.
+void (ERROR_CATALOG satisfies Record<string, ErrorCatalogEntry>);
 
 /** A well-known Lunora error code (a key of {@link ERROR_CATALOG}). */
 export type LunoraErrorCode = keyof typeof ERROR_CATALOG;
@@ -306,7 +311,7 @@ export const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule> = [
  * Shared by the CLI renderer and the Studio `ErrorAlert` so the two can't drift.
  */
 export const flattenHint = (hint: ErrorHint): string =>
-    (Array.isArray(hint) ? hint.join("\n") : hint)
+    (typeof hint === "string" ? hint : hint.join("\n"))
         .split("\n")
         .filter((line) => !line.startsWith("```"))
         .join("\n")

@@ -219,7 +219,12 @@ const CAPABILITY_ROWS = [
         moduleSpecifier: "@lunora/bindings/vectors",
     },
     { contextProperty: "workflows", key: "workflows", moduleSpecifier: "@lunora/workflow" },
-] as const satisfies ReadonlyArray<CapabilityDescriptor>;
+] as const;
+
+// Shape-check the canonical table without an inline `satisfies` (which is not
+// emittable under isolated declarations, since `CAPABILITY_ROWS` is referenced
+// by the exported `typeof`-derived types below).
+void (CAPABILITY_ROWS satisfies ReadonlyArray<CapabilityDescriptor>);
 
 /** The literal union of every capability id — the single source of truth for `FeatureUsage`'s keys (so they cannot drift). */
 type CapabilityKey = (typeof CAPABILITY_ROWS)[number]["key"];

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/nuxt",
-    "version": "1.0.0-alpha.33",
+    "version": "1.0.0-alpha.34",
     "description": "Nuxt module for Lunora — single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers",
     "keywords": [
         "cloudflare",
@@ -33,17 +33,17 @@
     ],
     "type": "module",
     "sideEffects": false,
-    "main": "./dist/module.mjs",
-    "module": "./dist/module.mjs",
-    "types": "./dist/types.d.mts",
+    "main": "./dist/module.js",
+    "module": "./dist/module.js",
+    "types": "./dist/module.d.ts",
     "exports": {
         ".": {
-            "types": "./dist/types.d.mts",
-            "import": "./dist/module.mjs"
+            "types": "./dist/module.d.ts",
+            "import": "./dist/module.js"
         },
         "./server": {
-            "types": "./dist/server.d.mts",
-            "import": "./dist/server.mjs"
+            "types": "./dist/server.d.ts",
+            "import": "./dist/server.js"
         },
         "./package.json": "./package.json"
     },
@@ -51,7 +51,7 @@
         "access": "public"
     },
     "scripts": {
-        "build": "nuxt-module-build build",
+        "build": "packem build --development",
         "build:prod": "nuxt-module-build build",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
@@ -65,14 +65,15 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.24",
-        "@lunora/runtime": "1.0.0-alpha.28",
+        "@lunora/client": "1.0.0-alpha.25",
+        "@lunora/runtime": "1.0.0-alpha.29",
         "@nuxt/kit": "^4.4.8"
     },
     "devDependencies": {
-        "@nuxt/module-builder": "^1.0.2",
         "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "h3": "^1.15.11",
         "typescript": "catalog:tsc",

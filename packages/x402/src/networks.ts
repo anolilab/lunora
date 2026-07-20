@@ -50,19 +50,28 @@ export const NETWORK_TO_CAIP2 = {
     polygon: "eip155:137",
     solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
     "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
-} as const satisfies Record<FriendlyNetwork, Caip2>;
+} as const;
+
+// `isolatedDeclarations` (oxc `.d.ts` emit) rejects an inline `as const satisfies …`, so the
+// exported consts keep `as const` (preserving their literal types) and validate their shape with a
+// standalone `satisfies` here. Don't fold these back into `as const satisfies` — it reintroduces TS9010.
+void (NETWORK_TO_CAIP2 satisfies Record<FriendlyNetwork, Caip2>);
 
 /**
  * EVM friendly networks (signed via `@x402/evm` + viem).
  * @experimental
  */
-export const EVM_NETWORKS = ["arbitrum", "arbitrum-sepolia", "base", "base-sepolia", "ethereum", "polygon"] as const satisfies ReadonlyArray<FriendlyNetwork>;
+export const EVM_NETWORKS = ["arbitrum", "arbitrum-sepolia", "base", "base-sepolia", "ethereum", "polygon"] as const;
+
+void (EVM_NETWORKS satisfies ReadonlyArray<FriendlyNetwork>);
 
 /**
  * Solana friendly networks (signed via `@x402/svm`).
  * @experimental
  */
-export const SVM_NETWORKS = ["solana", "solana-devnet"] as const satisfies ReadonlyArray<FriendlyNetwork>;
+export const SVM_NETWORKS = ["solana", "solana-devnet"] as const;
+
+void (SVM_NETWORKS satisfies ReadonlyArray<FriendlyNetwork>);
 
 /**
  * Resolve a network to its CAIP-2 id. Friendly aliases are looked up; a value

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LogEvent, LogLevel, ObservabilityEvent } from "../src/observability";
 import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks";
-import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, sentrySink, webhookSink } from "../src/observability-sinks";
+import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, sentrySink, webhookSink } from "../src/observability-sinks";
 
 const okEvent: ObservabilityEvent = { durationMs: 5, functionPath: "messages:list", ok: true, shardKey: "channel-1" };
 const errorEvent: ObservabilityEvent = {
@@ -52,7 +52,9 @@ interface ParsedLogRecord {
     body: OtlpValue;
     severityNumber: number;
     severityText: string;
+    spanId?: string;
     timeUnixNano: string;
+    traceId?: string;
 }
 
 /** Look up an attribute's value by key. */
@@ -307,6 +309,40 @@ describe("observability-sinks", () => {
 
             vi.unstubAllGlobals();
         });
+
+        it("ships ctx.log lines too, applying transformLog fail-closed", () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const logEvent: LogEvent = { args: [], fields: { orderId: "o-1" }, functionPath: "orders:place", level: "info", message: "placed", ts: 1 };
+            const sink = webhookSink({
+                transformLog: (event) => ({ ...event, fields: undefined }),
+                url: "https://ingest.example/events",
+            });
+
+            sink.onLog!(logEvent);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            // The redactor stripped `fields` before the line left the worker.
+            expect((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body).toBe(JSON.stringify({ ...logEvent, fields: undefined }));
+
+            // A throwing transformLog drops the line rather than shipping it raw.
+            fetchMock.mockClear();
+            const throwing = webhookSink({
+                transformLog: () => {
+                    throw new Error("scrub failed");
+                },
+                url: "https://ingest.example/events",
+            });
+
+            throwing.onLog!(logEvent);
+
+            expect(fetchMock).not.toHaveBeenCalled();
+
+            vi.unstubAllGlobals();
+        });
     });
 
     describe("sentrySink", () => {
@@ -349,6 +385,36 @@ describe("observability-sinks", () => {
             expect(() => {
                 sink.onRpc!(errorEvent);
             }).not.toThrow();
+        });
+
+        it("forwards ctx.log lines to captureLog when wired, and swallows its throws", () => {
+            expect.assertions(3);
+
+            const captureLog = vi.fn<(event: LogEvent) => void>();
+            const sink = sentrySink({ capture: vi.fn(), captureLog });
+            const logEvent: LogEvent = { args: [], fields: { orderId: "o-1" }, functionPath: "orders:place", level: "error", message: "boom", ts: 1 };
+
+            sink.onLog!(logEvent);
+
+            expect(captureLog).toHaveBeenCalledWith(logEvent);
+
+            const throwing = sentrySink({
+                capture: vi.fn(),
+                captureLog: () => {
+                    throw new Error("sentry down");
+                },
+            });
+
+            expect(throwing.onLog).toBeDefined();
+            expect(() => throwing.onLog!(logEvent)).not.toThrow();
+        });
+
+        it("omits onLog entirely when captureLog is not provided (logs stay out of Sentry)", () => {
+            expect.assertions(1);
+
+            const sink = sentrySink({ capture: vi.fn() });
+
+            expect(sink.onLog).toBeUndefined();
         });
     });
 
@@ -671,7 +737,7 @@ describe("observability-sinks", () => {
             vi.stubGlobal("fetch", fetchMock);
 
             const sink = otlpSink({ endpoint: "https://collector.example" });
-            const levels: LogLevel[] = ["debug", "error", "info", "log", "warn"];
+            const levels: LogLevel[] = ["trace", "debug", "info", "log", "warn", "error", "fatal"];
 
             for (const level of levels) {
                 sink.onLog!({ args: [], functionPath: "a:b", level, message: "m", ts: 1 });
@@ -679,8 +745,65 @@ describe("observability-sinks", () => {
 
             const numbers = fetchMock.mock.calls.map((call) => logFrom(call[1] as RequestInit).record.severityNumber);
 
-            // debug=DEBUG(5), error=ERROR(17), info=INFO(9), log→INFO(9), warn=WARN(13).
-            expect(numbers).toStrictEqual([5, 17, 9, 9, 13]);
+            // trace=TRACE(1), debug=DEBUG(5), info=INFO(9), log→INFO(9), warn=WARN(13), error=ERROR(17), fatal=FATAL(21).
+            expect(numbers).toStrictEqual([1, 5, 9, 9, 13, 17, 21]);
+        });
+
+        it("maps structured fields onto log-record attributes and correlates the record to its trace", () => {
+            expect.assertions(6);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onLog!({
+                args: ["order placed"],
+                fields: { attempt: 2, nested: { sku: "abc" }, orderId: "o-1", paid: true },
+                functionPath: "orders:place",
+                level: "info",
+                message: "order placed",
+                spanId: "00f067aa0ba902b7",
+                traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+                ts: 1,
+            });
+
+            const { record } = logFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            // Primitive fields become typed attributes; a nested value is JSON-encoded.
+            expect(attrValue(record.attributes, "orderId")).toStrictEqual({ stringValue: "o-1" });
+            expect(attrValue(record.attributes, "attempt")).toStrictEqual({ intValue: "2" });
+            expect(attrValue(record.attributes, "paid")).toStrictEqual({ boolValue: true });
+            expect(attrValue(record.attributes, "nested")).toStrictEqual({ stringValue: '{"sku":"abc"}' });
+            // Trace correlation (OTLP LogRecord.trace_id / span_id).
+            expect(record.traceId).toBe("4bf92f3577b34da6a3ce929d0e0e4736");
+            expect(record.spanId).toBe("00f067aa0ba902b7");
+        });
+
+        it("emits a single attribute when a field reuses a reserved lunora.* key (field wins)", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onLog!({
+                args: [],
+                fields: { "lunora.user_id": "override" },
+                functionPath: "a:b",
+                level: "info",
+                message: "m",
+                ts: 1,
+                userId: "real",
+            });
+
+            const { record } = logFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+            const collisions = record.attributes.filter((attribute) => attribute.key === "lunora.user_id");
+
+            // Exactly one `KeyValue` for the key — the caller's override, not a duplicate.
+            expect(collisions).toHaveLength(1);
+            expect(collisions[0]?.value).toStrictEqual({ stringValue: "override" });
         });
 
         it("tolerates a trailing slash on the endpoint", () => {
@@ -846,6 +969,72 @@ describe("observability-sinks", () => {
 
             expect(() => {
                 sink.onRpc!(okEvent);
+            }).not.toThrow();
+        });
+    });
+
+    describe("pipelineLogSink", () => {
+        const logEvent: LogEvent = {
+            args: ["order placed"],
+            fields: { orderId: "o-1" },
+            functionPath: "orders:place",
+            level: "info",
+            message: "order placed",
+            shardKey: "tenant-1",
+            spanId: "00f067aa0ba902b7",
+            traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+            ts: 1700,
+            userId: "user-1",
+        };
+
+        it("sends one structured record per log line, keeping every carried field", () => {
+            expect.assertions(2);
+
+            const sent: Record<string, unknown>[][] = [];
+            const sink = pipelineLogSink({ pipeline: { send: async (records) => void sent.push(records) } });
+
+            sink.onLog!(logEvent);
+
+            expect(sent).toHaveLength(1);
+            expect(sent[0]).toStrictEqual([
+                {
+                    fields: { orderId: "o-1" },
+                    functionPath: "orders:place",
+                    level: "info",
+                    message: "order placed",
+                    shardKey: "tenant-1",
+                    spanId: "00f067aa0ba902b7",
+                    traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+                    ts: 1700,
+                    userId: "user-1",
+                },
+            ]);
+        });
+
+        it("registers the send with the request's waitUntil so it survives teardown", () => {
+            expect.assertions(1);
+
+            const kept: Promise<unknown>[] = [];
+            const sink = pipelineLogSink({ pipeline: { send: async () => undefined } });
+
+            sink.onLog!(logEvent, { waitUntil: (promise) => void kept.push(promise) });
+
+            expect(kept).toHaveLength(1);
+        });
+
+        it("swallows a rejecting or throwing pipeline so a log call can't break the handler", () => {
+            expect.assertions(1);
+
+            const sink = pipelineLogSink({
+                pipeline: {
+                    send: () => {
+                        throw new Error("binding missing");
+                    },
+                },
+            });
+
+            expect(() => {
+                sink.onLog!(logEvent);
             }).not.toThrow();
         });
     });

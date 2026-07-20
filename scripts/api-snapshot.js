@@ -38,7 +38,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+// The bare `typescript` package is the native TS7 compiler (catalog:tsc), whose root
+// import lacks the classic JS API this script relies on (createProgram, createPrinter,
+// printNode, SyntaxKind, …). ts-morph re-exports its own vendored classic TypeScript as
+// `ts`, giving a stable, catalog-independent compiler API here.
+import { ts } from "ts-morph";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, "..");

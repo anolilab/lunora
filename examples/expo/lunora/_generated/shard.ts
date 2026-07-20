@@ -588,19 +588,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
             facade["messages"] = bindTableFacade(db, "messages");
 
-            // `ctx.log`: each call is captured + attributed to the executing
-            // function and routed to the optional `observability` sink. The DO base
-            // also buffers it (studio Logs panel) and emits a structured console
-            // event the dev-server formats in the terminal.
+            // `ctx.log`: the DO base builds the attributed logger (structured
+            // fields + `.with(...)` child + trace correlation) and routes each call
+            // to the optional `observability` sink. It also buffers the line (studio
+            // Logs panel) and emits a structured console event the dev-server formats.
             const observability = config.observability?.(env);
             const logFunctionPath = options.functionPath ?? "";
-            const log = {
-                debug: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "debug", args, observability); },
-                error: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "error", args, observability); },
-                info: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "info", args, observability); },
-                log: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "log", args, observability); },
-                warn: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "warn", args, observability); },
-            };
+            const log = this.makeLogger(logFunctionPath, observability);
 
             // `ctx.now`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.

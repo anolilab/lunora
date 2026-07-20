@@ -44,7 +44,8 @@
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
               "with":
-                  "version": "11.5.3"
+                  # No "version" — the action reads the pinned pnpm from package.json's
+                  # `packageManager` field, so CI can't drift from the repo's version.
                   "run_install": false
 
             - "name": "Use Node.js 22.15"

@@ -24,6 +24,9 @@
 import { fingerprintError } from "@lunora/fingerprint";
 import { redact, standardRules } from "@visulima/redact";
 
+import type { ContextLogLevel, LogEvent } from "../../../shared/log-event";
+import type { LogFields } from "../../../shared/log-fields";
+import { normalizeLogFields } from "../../../shared/log-fields";
 import type { SqlCursor, SqlExec } from "./ctx-db";
 
 /** Reserved append-only table backing the studio Logs tab. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -328,29 +331,16 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
     }
 };
 
-/** Severity of a `ctx.log.*` call, mirroring the console method names (`log` is the default level, distinct from `info`). */
-type ContextLogLevel = "debug" | "error" | "info" | "log" | "warn";
+/**
+ * The `ctx.log` event contract (shape + severity union) lives in
+ * `shared/log-event.ts` (inlined into each `dist`) so the DO that builds these
+ * events and the `@lunora/runtime` sink that consumes them agree by construction.
+ * `LogEventInput` is the DO's historical name for the shared `LogEvent`.
+ */
+type LogEventInput = LogEvent;
 
 /** Stable `type` tag distinguishing a per-call application-log event from the per-dispatch `"request"` event; both share `source: "lunora"`. */
 const LOG_EVENT_TYPE = "log";
-
-/** The fields {@link emitLogEvent} ships for one `ctx.log.*` call. */
-interface LogEventInput {
-    /** Raw arguments passed to the call, in order. */
-    args: unknown[];
-    /** Function that emitted the line, e.g. `messages:list`. */
-    functionPath: string;
-    /** Severity the line was logged at. */
-    level: ContextLogLevel;
-    /** Display string — the args rendered and space-joined (see {@link renderLogMessage}). */
-    message: string;
-    /** Shard key (DO id name), or `undefined` for the unnamed root DO. */
-    shardKey?: string;
-    /** Wall-clock millis when the line was emitted. */
-    ts: number;
-    /** Acting userId, or `undefined` when anonymous. */
-    userId?: string;
-}
 
 /**
  * Render `ctx.log.*` arguments into a single display string, the way `console`
@@ -380,6 +370,41 @@ const renderLogMessage = (args: unknown[]): string =>
         .join(" ");
 
 /**
+ * True only for a **plain** object usable as a structured-fields bag — an object
+ * literal or a null-prototype bag, not an array, `Error`, `Date`, `Map`, or any
+ * class instance. This keeps the ubiquitous console-style idiom
+ * `ctx.log.error("failed", err)` on the render path (where the `Error` is shown)
+ * instead of misrouting it into the structured branch, where `normalizeLogFields`
+ * would find no own enumerable fields and silently drop it.
+ */
+const isLogFields = (value: unknown): value is LogFields => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return false;
+    }
+
+    const proto = Object.getPrototypeOf(value);
+
+    return proto === Object.prototype || proto === null;
+};
+
+/**
+ * Split a `ctx.log.<level>(...)` call's raw arguments into a display `message`
+ * and optional structured `fields`. The structured form — a message string plus
+ * a plain-object fields bag — is matched only for exactly `(string, object)`;
+ * every other shape is console-style and rendered whole (so existing
+ * `console`-shaped calls are unchanged). Bound `.with(...)` fields merge under
+ * the per-call fields (per-call wins); the result is normalized to a fresh bag
+ * of JSON-safe primitives, or `undefined` when empty (see `normalizeLogFields`).
+ */
+const parseLogArgs = (args: unknown[], boundFields?: LogFields): { fields?: LogFields; message: string } => {
+    if (args.length === 2 && typeof args[0] === "string" && isLogFields(args[1])) {
+        return { fields: normalizeLogFields(args[1], boundFields), message: args[0] };
+    }
+
+    return { fields: normalizeLogFields(undefined, boundFields), message: renderLogMessage(args) };
+};
+
+/**
  * Emit one application-log event from a `ctx.log.*` call to `console`, tagged
  * `{ source: "lunora", type: "log" }` so the CLI / Vite formatter can pretty-print
  * it in the dev terminal and a Logpush/SIEM consumer can filter it out of the
@@ -393,24 +418,41 @@ const renderLogMessage = (args: unknown[]): string =>
  * `message` already carries the developer's rendered values, exactly like a raw
  * `console.log` line.
  *
- * `error`/`warn` go to `console.error`/`console.warn` (so they surface at the
- * right level in the trace); every other level to `console.log`. The serialised
- * fields are a string + primitives, so `JSON.stringify` can't throw on a circular
- * arg here (the rendering already happened in `renderLogMessage`).
+ * `error`/`fatal` go to `console.error`, `warn` to `console.warn` (so they
+ * surface at the right level in the trace); every other level to `console.log`.
+ *
+ * Structured `fields` (plus `traceId`/`spanId` for correlation) ARE emitted here
+ * — they are intentional metadata a log pipeline filters on, unlike raw `args`.
+ * A field value that can't be serialised (a circular object) would make
+ * `JSON.stringify` throw and drop the whole line, so serialisation falls back to
+ * a fields-free line rather than losing the event.
  */
 const emitLogEvent = (input: LogEventInput): void => {
-    const line = JSON.stringify({
+    const payload = {
+        fields: input.fields,
         function: input.functionPath,
         level: input.level,
         message: input.message,
         shard: input.shardKey,
         source: REQUEST_LOG_EVENT_SOURCE,
+        spanId: input.spanId,
+        traceId: input.traceId,
         ts: input.ts,
         type: LOG_EVENT_TYPE,
         userId: input.userId,
-    });
+    };
 
-    if (input.level === "error") {
+    let line: string;
+
+    try {
+        line = JSON.stringify(payload);
+    } catch {
+        // A non-serialisable field (e.g. circular) must not swallow the line —
+        // drop `fields` and emit the rest.
+        line = JSON.stringify({ ...payload, fields: undefined });
+    }
+
+    if (input.level === "error" || input.level === "fatal") {
         // eslint-disable-next-line no-console -- intentional structured ctx.log event emission into CF Workers Logs / Logpush; error level.
         console.error(line);
     } else if (input.level === "warn") {
@@ -644,6 +686,7 @@ export {
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
+    parseLogArgs,
     readErrorIssues,
     readRequestLog,
     redactArgs,

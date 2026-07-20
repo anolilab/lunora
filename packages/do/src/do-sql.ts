@@ -13,7 +13,7 @@
  * from `./serialize-sql` so callers have a single SQL-helper import surface.
  */
 
-import type { SQL } from "drizzle-orm";
+import type { Name, SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
@@ -76,9 +76,9 @@ const createIndexSql = (name: string, table: string, columns: SQL, unique: boole
     dsql`CREATE ${unique ? dsql`UNIQUE ` : dsql``}INDEX IF NOT EXISTS ${dsql.identifier(name)} ON ${dsql.identifier(table)} (${columns})`;
 
 /** The aggregate-companion column identifiers, built once and reused across every aggregate statement (drizzle `SQL` chunks are immutable + safe to share). */
-const AGG_KEY = dsql.identifier("__key__");
-const AGG_VALUE = dsql.identifier("__value__");
-const AGG_COUNT = dsql.identifier("__count__");
+const AGG_KEY: Name = dsql.identifier("__key__");
+const AGG_VALUE: Name = dsql.identifier("__value__");
+const AGG_COUNT: Name = dsql.identifier("__count__");
 
 /**
  * An aggregate-counter upsert: `INSERT INTO &lt;agg> (__key__, __value__, __count__)

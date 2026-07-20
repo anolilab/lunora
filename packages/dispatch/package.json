@@ -54,7 +54,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.2"
+        "@lunora/errors": "1.0.0-alpha.5"
     },
     "devDependencies": {
         "@types/node": "catalog:types",

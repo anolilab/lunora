@@ -1,3 +1,11 @@
+## @lunora/astro [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/%40lunora%2Fastro%401.0.0-alpha.39...%40lunora%2Fastro%401.0.0-alpha.40) (2026-07-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.25
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.29
+
 ## @lunora/astro [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/%40lunora%2Fastro%401.0.0-alpha.38...%40lunora%2Fastro%401.0.0-alpha.39) (2026-07-19)
 
 

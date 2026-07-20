@@ -26,31 +26,31 @@ export type BackgroundVariant =
 
 type PatternProps = { id: string };
 
-const DotsPattern = ({ id }: PatternProps) => (
+const DotsPattern = ({ id }: PatternProps): React.ReactElement => (
     <pattern height="20" id={id} patternUnits="userSpaceOnUse" width="20" x="0" y="0">
         <circle className="text-border dark:text-border" cx="2" cy="2" fill="currentColor" r="1" />
     </pattern>
 );
 
-const GridPattern = ({ id }: PatternProps) => (
+const GridPattern = ({ id }: PatternProps): React.ReactElement => (
     <pattern height="20" id={id} patternUnits="userSpaceOnUse" width="20" x="0" y="0">
         <path className="text-border dark:text-border" d="M 20 0 L 0 0 0 20" fill="none" stroke="currentColor" strokeWidth="0.5" />
     </pattern>
 );
 
-const CrossHatchPattern = ({ id }: PatternProps) => (
+const CrossHatchPattern = ({ id }: PatternProps): React.ReactElement => (
     <pattern height="20" id={id} patternUnits="userSpaceOnUse" width="20" x="0" y="0">
         <path className="text-border/60 dark:text-border/50" d="M 0 0 L 20 20 M 20 0 L 0 20" fill="none" stroke="currentColor" strokeWidth="0.5" />
     </pattern>
 );
 
-const DiagonalLinesPattern = ({ id }: PatternProps) => (
+const DiagonalLinesPattern = ({ id }: PatternProps): React.ReactElement => (
     <pattern height="6" id={id} patternTransform="rotate(45)" patternUnits="userSpaceOnUse" width="6" x="0" y="0">
         <line className="text-border dark:text-border" stroke="currentColor" strokeWidth="0.5" x1="0" x2="0" y1="0" y2="6" />
     </pattern>
 );
 
-const PlusPattern = ({ id }: PatternProps) => (
+const PlusPattern = ({ id }: PatternProps): React.ReactElement => (
     <pattern height="16" id={id} patternUnits="userSpaceOnUse" width="16" x="0" y="0">
         <path
             className="text-border dark:text-border"
@@ -63,7 +63,7 @@ const PlusPattern = ({ id }: PatternProps) => (
     </pattern>
 );
 
-const FallingTrianglesPattern = ({ id }: PatternProps) => (
+const FallingTrianglesPattern = ({ id }: PatternProps): React.ReactElement => (
     <pattern height="36" id={id} patternUnits="userSpaceOnUse" width="18" x="0" y="0">
         <path
             className="text-border dark:text-border"
@@ -75,7 +75,7 @@ const FallingTrianglesPattern = ({ id }: PatternProps) => (
     </pattern>
 );
 
-const FourPointedStarPattern = ({ id }: PatternProps) => (
+const FourPointedStarPattern = ({ id }: PatternProps): React.ReactElement => (
     <pattern height="16" id={id} patternUnits="userSpaceOnUse" width="16" x="0" y="0">
         <polygon
             className="text-border dark:text-border"
@@ -87,13 +87,13 @@ const FourPointedStarPattern = ({ id }: PatternProps) => (
     </pattern>
 );
 
-const TinyCheckersPattern = ({ id }: PatternProps) => (
+const TinyCheckersPattern = ({ id }: PatternProps): React.ReactElement => (
     <pattern height="8" id={id} patternUnits="userSpaceOnUse" width="8" x="0" y="0">
         <path className="text-border dark:text-border" d="M0 0h4v4H0V0zm4 4h4v4H4V4z" fill="currentColor" fillOpacity="0.2" fillRule="evenodd" />
     </pattern>
 );
 
-const OverlappingCirclesPattern = ({ id }: PatternProps) => (
+const OverlappingCirclesPattern = ({ id }: PatternProps): React.ReactElement => (
     <pattern height="40" id={id} patternUnits="userSpaceOnUse" width="40" x="0" y="0">
         <path
             className="text-border dark:text-border"
@@ -105,7 +105,7 @@ const OverlappingCirclesPattern = ({ id }: PatternProps) => (
     </pattern>
 );
 
-const WiggleLinesPattern = ({ id }: PatternProps) => (
+const WiggleLinesPattern = ({ id }: PatternProps): React.ReactElement => (
     <pattern height="26" id={id} patternTransform="scale(0.6)" patternUnits="userSpaceOnUse" width="52" x="0" y="0">
         <path
             className="text-border dark:text-border"
@@ -116,7 +116,7 @@ const WiggleLinesPattern = ({ id }: PatternProps) => (
     </pattern>
 );
 
-const BubblesPattern = ({ id }: PatternProps) => (
+const BubblesPattern = ({ id }: PatternProps): React.ReactElement => (
     <pattern height="100" id={id} patternTransform="scale(0.6667)" patternUnits="userSpaceOnUse" width="100" x="0" y="0">
         <path
             className="text-border dark:text-border"
@@ -153,7 +153,7 @@ interface ChartBackgroundProps {
     variant: BackgroundVariant;
 }
 
-export const ChartBackground = ({ variant }: ChartBackgroundProps) => {
+export const ChartBackground = ({ variant }: ChartBackgroundProps): React.ReactElement => {
     const baseId = useId().replaceAll(":", "");
     const patternId = `${baseId}-bg-${variant}`;
     const maskId = `${baseId}-bg-edge-fade`;

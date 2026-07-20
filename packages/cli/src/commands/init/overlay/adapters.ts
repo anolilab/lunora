@@ -137,7 +137,7 @@ const app = mount(Root, { target: document.getElementById("app")! });
 export default app;
 `;
 
-const ADAPTERS = {
+const ADAPTERS: Record<OverlayFramework, FrameworkAdapter> = {
     react: {
         adapter: "@lunora/react",
         createViteTemplate: "react-ts",
@@ -188,10 +188,10 @@ const ADAPTERS = {
         ],
         label: "Vue",
     },
-} satisfies Record<string, FrameworkAdapter>;
+};
 
 /** The overlay-supported SPA frameworks (create-vite bases). */
-type OverlayFramework = keyof typeof ADAPTERS;
+type OverlayFramework = "react" | "solid" | "svelte" | "vanilla" | "vue";
 
 const isOverlayFramework = (value: string): value is OverlayFramework => Object.hasOwn(ADAPTERS, value);
 

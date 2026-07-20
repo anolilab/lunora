@@ -30,7 +30,7 @@ import { evictOldestEntry } from "./evict-oldest";
 const textEncoder = new TextEncoder();
 
 /** Upper bound on a signed-URL TTL — 7 days, matching common CDN/object-store ceilings. */
-const MAX_SIGNED_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
+const MAX_SIGNED_URL_TTL_SECONDS: number = 7 * 24 * 60 * 60;
 
 // Hoisted to module scope so the literal isn't recompiled on every call.
 const SCHEME_PREFIX_RE = /^[a-z][a-z0-9+\-.]*:\/\//i;

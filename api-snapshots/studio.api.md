@@ -595,6 +595,7 @@ interface InsightsPanelProps {
 ```ts
 interface LogEntry {
     exitCode?: number;
+    fields?: Record<string, unknown>;
     functionPath?: string;
     instance?: string;
     level: LogLevel;
