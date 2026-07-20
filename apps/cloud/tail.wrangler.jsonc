@@ -1,0 +1,23 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // The dispatch-namespace tail worker (GAPS.md B2) — a SEPARATE deployable from
+    // the control plane (wrangler.jsonc) and the dispatcher (dispatcher.wrangler.jsonc).
+    // Deploy with:
+    //   wrangler deploy -c tail.wrangler.jsonc
+    //   wrangler secret put LUNORA_TAIL_SECRET -c tail.wrangler.jsonc
+    //
+    // It has a `tail()` handler that receives tenant console output. The PRODUCER
+    // side of the binding — `tail_consumers: [{ service: "lunora-log-tail" }]` on
+    // each tenant script (or the dispatch namespace) — is set by the control-plane
+    // provisioner at deploy time, not here.
+    "name": "lunora-log-tail",
+    "main": "src/tail/worker.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    "vars": {
+        // Control-plane base URL the batches are POSTed to (`/v1/logs/tail`).
+        "LUNORA_CONTROL_PLANE_URL": "https://lunora-cloud.example.workers.dev",
+        // LUNORA_TAIL_SECRET is a secret — set it with `wrangler secret put`, and
+        // set the SAME value on the control plane so `/v1/logs/tail` accepts it.
+    },
+}

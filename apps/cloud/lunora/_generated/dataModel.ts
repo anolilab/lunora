@@ -140,10 +140,16 @@ export interface Doc_tenantLogs {
     _id: Id<"tenantLogs">;
     _creationTime: number;
     createdAt: number;
-    level: "log" | "warn" | "error";
-    line: string;
+    fields?: Record<string, unknown>;
+    functionPath?: string;
+    level: "trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal";
+    message: string;
     organizationId: Id<"organizations">;
     scriptName: string;
+    shardKey?: string;
+    spanId?: string;
+    traceId?: string;
+    userId?: string;
 }
 
 export interface Doc_githubInstallations {
@@ -419,7 +425,7 @@ export interface IndexNamesByTable {
     deployments: "by_script" | "by_project" | "by_kind" | "by_alias";
     deployKeys: "by_org" | "by_hash";
     overageDebits: "by_org_period";
-    tenantLogs: "by_script" | "by_org";
+    tenantLogs: "by_trace" | "by_script_time" | "by_org";
     githubInstallations: "by_org" | "by_installation";
     builds: "by_project_commit" | "by_project";
     buildLogs: "by_build";
@@ -609,10 +615,16 @@ export interface Insert_tenantLogs {
     _id?: Id<"tenantLogs">;
     _creationTime?: number;
     createdAt: number;
-    level: "log" | "warn" | "error";
-    line: string;
+    fields?: Record<string, unknown>;
+    functionPath?: string;
+    level: "trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal";
+    message: string;
     organizationId: Id<"organizations">;
     scriptName: string;
+    shardKey?: string;
+    spanId?: string;
+    traceId?: string;
+    userId?: string;
 }
 
 export interface Insert_githubInstallations {

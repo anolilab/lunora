@@ -1,23 +1,62 @@
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, v } from "./_generated/server.js";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 
 /**
- * Tenant runtime logs (GAPS.md B2). The dispatch-namespace tail worker batches
- * console/exception events to `POST /v1/logs/ingest` (deploy-key authorized,
- * like usage metering); the dashboard tails a deployment through the
- * cursor-paginated {@link list}. Retention is enforced by {@link prune}.
+ * Tenant runtime logs (GAPS.md B2) — full log management. The dispatch-namespace
+ * tail worker (`src/tail/worker.ts`) maps each tenant `ctx.log` console event
+ * (`{ source: "lunora", type: "log" }`) onto a batch and POSTs it to
+ * `POST /v1/logs/ingest` (deploy-key authorized, like usage metering). Every
+ * line keeps its full shape — the seven-tier severity, the rendered message, the
+ * structured `fields`, and the `traceId`/`spanId` for log↔trace correlation — so
+ * the dashboard can filter, search, and link a line back to its dispatch trace
+ * (and, for an error/fatal line, the OTLP-derived Issue). Retention is enforced
+ * by {@link prune}.
  */
 
+/** The seven-tier `ctx.log` severity ramp — matches the framework's `ContextLogLevel`. */
+const logLevel = v.union(
+    v.literal("trace"),
+    v.literal("debug"),
+    v.literal("info"),
+    v.literal("log"),
+    v.literal("warn"),
+    v.literal("error"),
+    v.literal("fatal"),
+);
+
+type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
+
+/** One persisted log row as stored (a superset of {@link TenantLogView}). */
 interface TenantLogRow {
     _id: Id<"tenantLogs">;
     createdAt: number;
-    level: "error" | "log" | "warn";
-    line: string;
+    fields?: Record<string, unknown>;
+    functionPath?: string;
+    level: LogLevel;
+    message: string;
     organizationId: Id<"organizations">;
     scriptName: string;
+    shardKey?: string;
+    spanId?: string;
+    traceId?: string;
+    userId?: string;
+}
+
+/** One log row as the dashboard consumes it (the persisted row minus internal keys). */
+interface TenantLogView {
+    createdAt: number;
+    fields?: Record<string, unknown>;
+    functionPath?: string;
+    level: LogLevel;
+    message: string;
+    shardKey?: string;
+    spanId?: string;
+    traceId?: string;
+    userId?: string;
 }
 
 /** Logs older than this are pruned (48 h — enough to debug yesterday's incident). */
@@ -26,20 +65,107 @@ export const LOG_RETENTION_MS = 48 * 60 * 60 * 1000;
 /** Batch cap per ingest call — the tail worker flushes well below this. */
 const MAX_BATCH = 500;
 
-/** Line length cap; longer lines are truncated, never rejected (mid-incident logs must land). */
-const MAX_LINE_LENGTH = 4096;
+/** Message length cap; longer messages are truncated, never rejected (mid-incident logs must land). */
+const MAX_MESSAGE_LENGTH = 4096;
+
+/** Default number of lines {@link list} returns when the caller gives no `limit`. */
+const DEFAULT_LIMIT = 200;
+
+/** Hard cap on `list` output — bounds the response even against a chatty script. */
+const MAX_LIMIT = 1000;
+
+/** One line accepted by {@link ingest} — the framework's `type:"log"` event, minus the transport keys. */
+const logEntry = v.object({
+    createdAt: v.optional(v.number()),
+    fields: v.optional(v.record(v.string(), v.any())),
+    functionPath: v.optional(v.string()),
+    level: logLevel,
+    message: v.string(),
+    shardKey: v.optional(v.string()),
+    spanId: v.optional(v.string()),
+    traceId: v.optional(v.string()),
+    userId: v.optional(v.string()),
+});
+
+/** One decoded line, as both {@link ingest} (deploy-key) and {@link ingestInternal} (tail route) receive it. */
+interface LogEntry {
+    createdAt?: number;
+    fields?: Record<string, unknown>;
+    functionPath?: string;
+    level: LogLevel;
+    message: string;
+    shardKey?: string;
+    spanId?: string;
+    traceId?: string;
+    userId?: string;
+}
+
+/** Insert one batch of already-authorized lines into `tenantLogs` (shared by both ingest paths). */
+const insertLines = async (context: MutationContext, organizationId: Id<"organizations">, scriptName: string, lines: LogEntry[]): Promise<void> => {
+    const now = Date.now();
+
+    for (const entry of lines) {
+        // eslint-disable-next-line no-await-in-loop -- bounded batch; sequential keeps the writer simple
+        await context.db.insert("tenantLogs", {
+            createdAt: entry.createdAt ?? now,
+            fields: entry.fields,
+            functionPath: entry.functionPath,
+            level: entry.level,
+            message: entry.message.length > MAX_MESSAGE_LENGTH ? `${entry.message.slice(0, MAX_MESSAGE_LENGTH)}…` : entry.message,
+            organizationId,
+            scriptName,
+            shardKey: entry.shardKey,
+            spanId: entry.spanId,
+            traceId: entry.traceId,
+            userId: entry.userId,
+        });
+    }
+};
+
+/** Project a stored row to the dashboard view (drop `_id`/`organizationId`/`scriptName`). */
+const toView = (row: TenantLogRow): TenantLogView => ({
+    createdAt: row.createdAt,
+    fields: row.fields,
+    functionPath: row.functionPath,
+    level: row.level,
+    message: row.message,
+    shardKey: row.shardKey,
+    spanId: row.spanId,
+    traceId: row.traceId,
+    userId: row.userId,
+});
+
+/** True when the line matches the case-insensitive `needle` over its message, function path, or field values. */
+const matchesSearch = (row: TenantLogRow, needle: string): boolean => {
+    if (row.message.toLowerCase().includes(needle)) {
+        return true;
+    }
+
+    if ((row.functionPath ?? "").toLowerCase().includes(needle)) {
+        return true;
+    }
+
+    if (row.fields) {
+        for (const value of Object.values(row.fields)) {
+            if (String(value).toLowerCase().includes(needle)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+};
 
 /**
  * Ingest a batch of tenant log lines (deploy-key authorized — the tail worker
- * holds an org deploy key). Lines are truncated to {@link MAX_LINE_LENGTH};
- * batches over {@link MAX_BATCH} are rejected outright.
+ * holds an org deploy key). Each line keeps its full structured shape; messages
+ * are truncated to {@link MAX_MESSAGE_LENGTH}; batches over {@link MAX_BATCH} are
+ * rejected outright.
  */
 export const ingest = mutation
     .input({
         deployKey: v.string(),
-        lines: v.array(
-            v.object({ createdAt: v.optional(v.number()), level: v.union(v.literal("log"), v.literal("warn"), v.literal("error")), line: v.string() }),
-        ),
+        lines: v.array(logEntry),
         organizationId: v.id("organizations"),
         scriptName: v.string(),
     })
@@ -50,46 +176,120 @@ export const ingest = mutation
             throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_BATCH)} lines)`);
         }
 
-        const now = Date.now();
-
-        for (const entry of lines) {
-            // eslint-disable-next-line no-await-in-loop -- bounded batch; sequential keeps the writer simple
-            await context.db.insert("tenantLogs", {
-                createdAt: entry.createdAt ?? now,
-                level: entry.level,
-                line: entry.line.length > MAX_LINE_LENGTH ? `${entry.line.slice(0, MAX_LINE_LENGTH)}…` : entry.line,
-                organizationId,
-                scriptName,
-            });
-        }
+        await insertLines(context, organizationId, scriptName, lines);
 
         return { ingested: lines.length };
     });
 
 /**
- * A script's log lines after `afterCreatedAt` (cursor pagination — the
- * dashboard tails by repeatedly passing the last timestamp it saw). Members.
+ * Resolve a dispatch-namespace script id → its owning org, via the immutable
+ * `deployments.by_script` index. Used by the platform tail route to attribute a
+ * batch of tail-captured lines (which carry only a `scriptName`) to an org
+ * without holding that org's deploy key. Returns `null` for an unknown script
+ * (e.g. a superseded/destroyed release the tail lags behind). SYSTEM only.
+ */
+export const orgForScript = internalQuery
+    .input({ scriptName: v.string() })
+    .query(async ({ ctx: context, args: { scriptName } }): Promise<{ organizationId: Id<"organizations"> } | null> => {
+        const { page } = await context.db.deployments.findMany({ where: { scriptName } });
+        const row = (page as unknown as { organizationId: Id<"organizations"> }[])[0];
+
+        return row ? { organizationId: row.organizationId } : null;
+    });
+
+/**
+ * Platform-authorized ingest for the tail route (`src/tail/worker.ts` →
+ * `POST /v1/logs/tail`). The tail worker holds a single platform secret and
+ * cannot present each org's deploy key, so this skips deploy-key auth — the edge
+ * route is secret-gated instead, and the org is resolved from the script id via
+ * {@link orgForScript}. SYSTEM only (internal dispatch).
+ */
+export const ingestInternal = internalMutation
+    .input({
+        lines: v.array(logEntry),
+        organizationId: v.id("organizations"),
+        scriptName: v.string(),
+    })
+    .mutation(async ({ ctx: context, args: { lines, organizationId, scriptName } }): Promise<{ ingested: number }> => {
+        if (lines.length > MAX_BATCH) {
+            throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_BATCH)} lines)`);
+        }
+
+        await insertLines(context, organizationId, scriptName, lines);
+
+        return { ingested: lines.length };
+    });
+
+/**
+ * A script's log lines, newest first, with server-side filtering: `levels`
+ * (severity allow-set), `functionPath` (exact), `traceId` (exact — every line in
+ * one trace), `search` (case-insensitive over message / function / field
+ * values), and `afterCreatedAt` (only newer than a cursor, for incremental
+ * tailing). Bounded by `limit` (default {@link DEFAULT_LIMIT}, capped at
+ * {@link MAX_LIMIT}). Members only.
  */
 export const list = query
-    .input({ afterCreatedAt: v.optional(v.number()), organizationId: v.id("organizations"), scriptName: v.string() })
-    .query(
-        async ({
-            ctx: context,
-            args: { afterCreatedAt, organizationId, scriptName },
-        }): Promise<{ createdAt: number; level: "error" | "log" | "warn"; line: string }[]> => {
-            await assertMember(context, organizationId);
+    .input({
+        afterCreatedAt: v.optional(v.number()),
+        functionPath: v.optional(v.string()),
+        levels: v.optional(v.array(logLevel)),
+        limit: v.optional(v.number()),
+        organizationId: v.id("organizations"),
+        scriptName: v.string(),
+        search: v.optional(v.string()),
+        traceId: v.optional(v.string()),
+    })
+    .query(async ({ ctx: context, args }): Promise<TenantLogView[]> => {
+        await assertMember(context, args.organizationId);
 
-            const { page } = await context.db.tenantLogs.findMany({ where: { organizationId, scriptName } });
-            const cursor = afterCreatedAt ?? 0;
+        const limit = Math.min(Math.max(Math.trunc(args.limit ?? DEFAULT_LIMIT), 1), MAX_LIMIT);
 
-            return (page as unknown as TenantLogRow[])
-                .filter((row) => row.createdAt > cursor)
-                .toSorted((a, b) => a.createdAt - b.createdAt)
-                .map((row) => {
-                    return { createdAt: row.createdAt, level: row.level, line: row.line };
-                });
-        },
-    );
+        // Exact-match filters push to the query (`traceId` rides the `by_trace`
+        // index); the rest — level allow-set, text search, cursor — are applied
+        // over the bounded, newest-first page below.
+        const where: { functionPath?: string; organizationId: Id<"organizations">; scriptName: string; traceId?: string } = {
+            organizationId: args.organizationId,
+            scriptName: args.scriptName,
+        };
+
+        if (args.traceId !== undefined) {
+            where.traceId = args.traceId;
+        }
+
+        if (args.functionPath !== undefined) {
+            where.functionPath = args.functionPath;
+        }
+
+        const { page } = await context.db.tenantLogs.findMany({ limit: MAX_LIMIT, orderBy: [{ createdAt: "desc" }], where });
+
+        const cursor = args.afterCreatedAt ?? Number.NEGATIVE_INFINITY;
+        const levelSet = args.levels && args.levels.length > 0 ? new Set<LogLevel>(args.levels) : undefined;
+        const needle = args.search?.trim().toLowerCase();
+
+        const rows: TenantLogView[] = [];
+
+        for (const row of page as unknown as TenantLogRow[]) {
+            if (row.createdAt <= cursor) {
+                continue;
+            }
+
+            if (levelSet && !levelSet.has(row.level)) {
+                continue;
+            }
+
+            if (needle !== undefined && needle !== "" && !matchesSearch(row, needle)) {
+                continue;
+            }
+
+            rows.push(toView(row));
+
+            if (rows.length >= limit) {
+                break;
+            }
+        }
+
+        return rows;
+    });
 
 /** Delete log lines past retention (GAPS.md B2). SYSTEM only (cron dispatch). */
 export const prune = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
