@@ -16,7 +16,9 @@ import { openApiSpec } from "../lunora/_generated/openapi.js";
 import { createShardDO } from "../lunora/_generated/shard.js";
 import schema from "../lunora/schema.js";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
+import { createHttpCloudflareApi } from "./cloudflare/api";
 import { createDeployRouter } from "./deploy/router";
+import { runTeardownSweep } from "./deploy/teardown";
 import type { CronTarget } from "./fanout/cron";
 import { fanOutCron } from "./fanout/cron";
 import type { QueueMessage, TenantQueueGroup } from "./fanout/queue";
@@ -143,6 +145,10 @@ interface Env {
     AUTH_SECRET?: string;
     /** Base URL better-auth resolves callbacks against. */
     AUTH_URL?: string;
+    /** Cloudflare account hosting this cell — the teardown sweep's REST target (§2.5). */
+    CLOUDFLARE_ACCOUNT_ID?: string;
+    /** Scoped Cloudflare API token; absent → resource teardown is skipped. */
+    CLOUDFLARE_API_TOKEN?: string;
     /** Creem (MoR) billing secrets (§4). Absent → billing reads work, live calls fail. */
     CREEM_API_KEY?: string;
     CREEM_TEST_MODE?: string;
@@ -223,6 +229,46 @@ const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
         .map((row) => {
             return { adminToken: row.adminToken, cronSpecs: row.cronSpecs, scriptName: row.scriptName };
         });
+};
+
+interface TeardownRow {
+    _id: string;
+    kind: "dev" | "preview" | "production";
+    scriptName: string;
+    teardownAt?: number;
+}
+
+/**
+ * Delete the Cloudflare dispatch scripts of deployments the lifecycle crons
+ * marked `destroyed` (§2.3 / GAPS.md A1) so dispatch namespaces don't grow
+ * unboundedly. Reads/writes the control-plane D1 directly (like
+ * {@link readLiveDeployments}); no-ops without Cloudflare credentials. The
+ * `teardownAt` stamp makes the sweep crash-safe idempotent.
+ */
+const sweepTeardown = async (env: Env): Promise<void> => {
+    if (!env.DB || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+        return;
+    }
+
+    const database = createD1CtxDb({ exec: buildExec(env.DB as D1DatabaseLike), schema: schema as unknown as D1CtxDbOptions["schema"] });
+    const api = createHttpCloudflareApi({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.CLOUDFLARE_API_TOKEN });
+
+    await runTeardownSweep({
+        destroy: (reference) => api.deleteDispatchScript({ namespace: reference.dispatchNamespace, scriptName: reference.scriptName }),
+        listPending: async () => {
+            const { page } = await database.findMany("deployments", { where: { status: "destroyed" } });
+
+            return (page as unknown as TeardownRow[])
+                .filter((row) => row.teardownAt === undefined)
+                // Dispatch namespace is `lunora-{kind}` — mirrors the deploy router.
+                .map((row) => ({ dispatchNamespace: `lunora-${row.kind}`, id: row._id, scriptName: row.scriptName }));
+        },
+        markTornDown: async (id) => {
+            const now = Date.now();
+
+            await database.patch(id as never, { teardownAt: now, updatedAt: now }, "deployments");
+        },
+    });
 };
 
 /** Script id → per-deployment admin token, for the queue fan-out. */
@@ -430,6 +476,13 @@ export default {
 
         // The control plane's own code crons fire on their declared expression.
         await worker.scheduled(controller, env, context);
+
+        // After the lifecycle crons mark deployments `destroyed`, delete their
+        // Cloudflare dispatch scripts (§2.3). Rides the hourly/6-hourly buckets
+        // the prune/cleanup/purge crons fire on — never the every-minute tick.
+        if (controller.cron !== EVERY_MINUTE) {
+            await sweepTeardown(env);
+        }
 
         // Tenant cron fan-out (§2.4): the every-minute trigger ticks each tenant
         // whose cron is due. WfP drops `triggers.crons` for namespaced workers, so

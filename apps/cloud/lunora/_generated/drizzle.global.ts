@@ -87,6 +87,7 @@ export const deployments = sqliteTable("deployments", {
     supersededAt: real("supersededAt"),
     failedAt: real("failedAt"),
     destroyedAt: real("destroyedAt"),
+    teardownAt: real("teardownAt"),
 }, (t) => ({
     by_script: index("by_script").on(t.scriptName),
     by_project: index("by_project").on(t.projectId),
