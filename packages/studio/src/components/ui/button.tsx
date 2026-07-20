@@ -42,7 +42,12 @@ const buttonVariants: (
     },
 );
 
-function Button({ className, variant = "default", size = "default", ...props }: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>): React.ReactElement {
+function Button({
+    className,
+    variant = "default",
+    size = "default",
+    ...props
+}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>): React.ReactElement {
     return <ButtonPrimitive data-slot="button" className={cn(buttonVariants({ variant, size, className }))} {...props} />;
 }
 

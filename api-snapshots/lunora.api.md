@@ -261,6 +261,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LogFields` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LunoraBuilders` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -282,6 +286,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LunoraHttpEnv` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LunoraLogMethod` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1965,7 +1973,7 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `LogEventInput` (interface)
+### `LogEventInput` (type)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3541,6 +3549,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `LogFields` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `LogLevel` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -3585,11 +3597,19 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `ObservabilitySinkContext` (interface)
+### `ObservabilitySinkContext` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `OtlpSinkOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLike` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogSinkOptions` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -3830,6 +3850,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `otlpSink` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `pipelineLogSink` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4127,6 +4151,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LogFields` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LunoraBuilders` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -4148,6 +4176,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LunoraHttpEnv` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LunoraLogMethod` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5904,6 +5936,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LifecycleEventKind` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LogFields` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LunoraLogMethod` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

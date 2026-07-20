@@ -100,7 +100,12 @@ test("built CLI scaffolds the standalone template and the scaffold typechecks", 
     expect(existsSync(join(projectRoot, "lunora", "_generated", "api.ts"))).toBe(true);
 
     // 4. The scaffold must typecheck exactly as a fresh user would see it.
-    const tsc = require.resolve("typescript/lib/tsc.js");
+    // Read the launcher path from the compiler's own package.json `bin.tsc`:
+    // TypeScript 7 native's package `exports` no longer expose `lib/tsc.js`
+    // (nor `bin/tsc`), so resolving the file directly throws — the bin field is
+    // the version-agnostic entry (classic and native both declare it).
+    const tsPackageJson = require.resolve("typescript/package.json");
+    const tsc = join(dirname(tsPackageJson), (require(tsPackageJson) as { bin: { tsc: string } }).bin.tsc);
     const typecheck = await run(process.execPath, [tsc, "--noEmit", "-p", projectRoot], projectRoot);
 
     expect(typecheck.code, `tsc failed:\n${typecheck.stdout}\n${typecheck.stderr}`).toBe(0);

@@ -83,7 +83,7 @@ const shape: {
     createdAt: ColumnValidator<number, number | undefined>;
     note: ColumnValidator<string | null, string | null>;
     priority: ColumnValidator<string, string | undefined>;
-    projectId: ColumnValidator<Id<"projects">, Id<"projects">>;
+    projectId: ColumnValidator<Id<"projects">, Id<"projects">>; // secret-scanner:allow -- a schema field name in a type-level test, not a credential
     title: ColumnValidator<string, string>;
 } = {
     archived: v.boolean().default(false),

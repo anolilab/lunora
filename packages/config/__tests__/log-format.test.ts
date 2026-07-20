@@ -38,6 +38,38 @@ describe("formatLunoraEvent", () => {
             });
         });
 
+        it("renders structured fields as compact key=value pairs after the message", () => {
+            expect.assertions(1);
+
+            expect(
+                formatLunoraEvent(
+                    event({
+                        fields: { attempt: 2, nested: { sku: "x" }, orderId: "o-1" },
+                        function: "orders:place",
+                        level: "info",
+                        message: "placed",
+                        type: "log",
+                    }),
+                )?.text,
+            ).toBe('orders:place  placed  attempt=2 nested={"sku":"x"} orderId=o-1');
+        });
+
+        it("appends a short trace-id suffix when the line carries one", () => {
+            expect.assertions(1);
+
+            expect(
+                formatLunoraEvent(event({ function: "a:b", level: "info", message: "hi", traceId: "4bf92f3577b34da6a3ce929d0e0e4736", type: "log" }))?.text,
+            ).toBe("a:b  hi  trace=4bf92f35");
+        });
+
+        it("surfaces trace/debug at info and fatal at error", () => {
+            expect.assertions(3);
+
+            expect(formatLunoraEvent(event({ function: "a:b", level: "trace", message: "m", type: "log" }))?.level).toBe("info");
+            expect(formatLunoraEvent(event({ function: "a:b", level: "debug", message: "m", type: "log" }))?.level).toBe("info");
+            expect(formatLunoraEvent(event({ function: "a:b", level: "fatal", message: "down", type: "log" }))?.level).toBe("error");
+        });
+
         it("maps the bare `log` level onto info", () => {
             expect.assertions(1);
 

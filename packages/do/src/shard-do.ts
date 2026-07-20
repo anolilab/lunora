@@ -7,6 +7,10 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { jsonResponse } from "../../../shared/json-response";
+import type { LogSinkContext } from "../../../shared/log-event";
+import { BUFFER_LEVEL } from "../../../shared/log-event";
+import type { LogFields } from "../../../shared/log-fields";
+import { parseTraceparent } from "../../../shared/otlp";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
@@ -109,9 +113,9 @@ import {
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
+    parseLogArgs,
     readErrorIssues,
     readRequestLog,
-    renderLogMessage,
     REQUEST_LOG_TABLE,
 } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
@@ -165,7 +169,23 @@ const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes
  * {@link LogEventInput} shape `emitLogEvent` consumes, built once per call.
  */
 interface LogSink {
-    onLog?: (event: LogEventInput) => void;
+    onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
+}
+
+/**
+ * Structural shape of the `ctx.log` logger the DO builds (see the server
+ * `LunoraLogger`). Declared locally so `@lunora/do` takes no dependency on
+ * `@lunora/server`; the overloaded public method type lives there.
+ */
+interface CtxLogger {
+    debug: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+    fatal: (...args: unknown[]) => void;
+    info: (...args: unknown[]) => void;
+    log: (...args: unknown[]) => void;
+    trace: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    with: (fields: LogFields) => CtxLogger;
 }
 
 /**
@@ -4352,23 +4372,36 @@ abstract class ShardDO {
      * Unlike request-log args, `ctx.log` args are NOT redacted: the developer
      * chose to log them, exactly like a raw `console.log`.
      */
-    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], sink?: LogSink): void {
+    protected recordUserLog(
+        functionPath: string,
+        level: ContextLogLevel,
+        args: unknown[],
+        message: string,
+        fields: Record<string, unknown> | undefined,
+        sink?: LogSink,
+    ): void {
+        // Correlate the line to its dispatch span from the inbound `traceparent`
+        // the runtime forwarded — `traceId` is the trace, `parentSpanId` the RPC
+        // server span. Absent on paths with no inbound trace context.
+        const trace = parseTraceparent(this.getCurrentTraceparent());
+
         // One canonical event built once, fed to all three destinations. Only the
-        // console event drops `args` (see emitLogEvent); the buffer and sink get
-        // the full payload.
+        // console event drops raw `args` (see emitLogEvent); the buffer and sink
+        // get the full payload. Structured `fields` DO ride every destination.
         const event: LogEventInput = {
             args,
+            fields,
             functionPath,
             level,
-            message: renderLogMessage(args),
+            message,
             shardKey: this.state.id?.name,
+            spanId: trace?.parentSpanId,
+            traceId: trace?.traceId,
             ts: Date.now(),
             userId: this.getCurrentUserId(),
         };
 
-        // The LogBuffer enum has no distinct `log` level; fold it into `info`
-        // (console.log is informational), keeping the panel's level set stable.
-        this.logs.push({ functionPath, level: level === "log" ? "info" : level, message: event.message, timestamp: event.ts });
+        this.logs.push({ fields, functionPath, level: BUFFER_LEVEL[level], message, timestamp: event.ts });
 
         try {
             emitLogEvent(event);
@@ -4378,11 +4411,41 @@ abstract class ShardDO {
 
         if (sink?.onLog) {
             try {
-                sink.onLog(event);
+                // Thread the DO's `waitUntil` so a durable sink (e.g. a
+                // Pipeline → R2 log sink) can keep its send alive past the
+                // response; `undefined` when the state doesn't expose it, where
+                // the sink falls back to fire-and-forget.
+                sink.onLog(event, { waitUntil: this.state.waitUntil?.bind(this.state) });
             } catch {
                 // A buggy log sink must not break the handler — see emitLogEvent.
             }
         }
+    }
+
+    /**
+     * Build the `ctx.log` logger for one dispatched function. Each severity method
+     * accepts either the structured form (`(message, fields)`) or console-style
+     * varargs (see {@link parseLogArgs}); `with(fields)` returns a child that
+     * stamps `fields` onto every line. The generated `buildCtx` calls this once
+     * per dispatch and assigns the result to `ctx.log`.
+     */
+    protected makeLogger(functionPath: string, sink?: LogSink, boundFields?: Record<string, unknown>): CtxLogger {
+        const emit = (level: ContextLogLevel, args: unknown[]): void => {
+            const { fields, message } = parseLogArgs(args, boundFields);
+
+            this.recordUserLog(functionPath, level, args, message, fields, sink);
+        };
+
+        return {
+            debug: (...args: unknown[]) => emit("debug", args),
+            error: (...args: unknown[]) => emit("error", args),
+            fatal: (...args: unknown[]) => emit("fatal", args),
+            info: (...args: unknown[]) => emit("info", args),
+            log: (...args: unknown[]) => emit("log", args),
+            trace: (...args: unknown[]) => emit("trace", args),
+            warn: (...args: unknown[]) => emit("warn", args),
+            with: (fields: Record<string, unknown>) => this.makeLogger(functionPath, sink, boundFields ? { ...boundFields, ...fields } : fields),
+        };
     }
 
     /**

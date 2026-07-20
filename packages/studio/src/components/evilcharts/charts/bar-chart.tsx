@@ -391,7 +391,15 @@ type YAxisProps = ComponentProps<typeof RechartsYAxis>;
  * from the chart layout — numeric when vertical, categorical when the bars run
  * horizontally. Hidden automatically while the chart is loading.
  */
-export const YAxis = ({ tickLine = false, axisLine = false, tickMargin = 8, minTickGap = 8, width = "auto", type, ...props }: YAxisProps): React.ReactElement | null => {
+export const YAxis = ({
+    tickLine = false,
+    axisLine = false,
+    tickMargin = 8,
+    minTickGap = 8,
+    width = "auto",
+    type,
+    ...props
+}: YAxisProps): React.ReactElement | null => {
     const { isLoading, isHorizontal } = useBarChart();
 
     if (isLoading) {

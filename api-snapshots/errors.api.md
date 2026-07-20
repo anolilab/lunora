@@ -201,7 +201,7 @@ interface ErrorCatalogEntry {
 ### `ErrorHint` (type)
 
 ```ts
-type ErrorHint = string | string[];
+type ErrorHint = string | readonly string[];
 ```
 
 ### `ErrorLocation` (interface)

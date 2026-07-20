@@ -15,19 +15,25 @@
  *
  * Keep this genuinely zero-dependency (only built-ins) so inlining stays sound.
  */
+import type { ContextLogLevel } from "./log-event";
 
-/** OTLP `SeverityNumber` levels Lunora emits (the worker adds `log`; the container never uses it). */
-type OtlpLevel = "debug" | "error" | "info" | "log" | "warn";
+/** OTLP `SeverityNumber` levels Lunora emits — the canonical `ctx.log` severity union. */
+type OtlpLevel = ContextLogLevel;
 
 /**
  * OTLP log severity numbers (`SeverityNumber` in the spec) keyed by level. `log`
  * has no distinct OTLP level, so it maps to INFO like a plain `console.log`.
+ * `trace`/`fatal` extend the console tiers to the full OTel range so a collector
+ * (and the Cloud log viewer) can render the same six-step severity ramp
+ * (`trace`→`fatal`) other OpenTelemetry sources use.
  */
 const OTLP_SEVERITY: Record<OtlpLevel, number> = {
     debug: 5, // DEBUG
     error: 17, // ERROR
+    fatal: 21, // FATAL
     info: 9, // INFO
     log: 9, // INFO
+    trace: 1, // TRACE
     warn: 13, // WARN
 };
 

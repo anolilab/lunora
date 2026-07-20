@@ -3,18 +3,21 @@ import type { ReactElement, ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
 
-const alertVariants: (props?: { variant?: "default" | "destructive" | "warning" | null }) => string = cva("flex items-start gap-2 rounded-md border px-3 py-2 text-sm [&>svg]:mt-0.5 [&>svg]:size-4 [&>svg]:shrink-0", {
-    defaultVariants: {
-        variant: "default",
-    },
-    variants: {
-        variant: {
-            default: "border-border bg-muted/40 text-foreground",
-            destructive: "border-destructive/40 bg-destructive/5 text-destructive",
-            warning: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-400",
+const alertVariants: (props?: { variant?: "default" | "destructive" | "warning" | null }) => string = cva(
+    "flex items-start gap-2 rounded-md border px-3 py-2 text-sm [&>svg]:mt-0.5 [&>svg]:size-4 [&>svg]:shrink-0",
+    {
+        defaultVariants: {
+            variant: "default",
+        },
+        variants: {
+            variant: {
+                default: "border-border bg-muted/40 text-foreground",
+                destructive: "border-destructive/40 bg-destructive/5 text-destructive",
+                warning: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-400",
+            },
         },
     },
-});
+);
 
 interface AlertProps extends VariantProps<typeof alertVariants> {
     readonly children: ReactNode;

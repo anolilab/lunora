@@ -14,7 +14,13 @@
  * caller (the CLI routes through its `pail` logger; the Vite plugin dims inline).
  * Any line that is not a lunora event returns `undefined`, signalling the caller
  * to pass it through unchanged.
+ *
+ * The one import is the bundler-inlined, zero-dependency `shared/log-fields.ts`
+ * field renderer (shared with the runtime sinks and the Studio panel so the
+ * `key=value` rendering isn't hand-mirrored), which keeps this module's
+ * dependency-free property intact.
  */
+import { formatLogFields } from "../../../shared/log-fields";
 
 /** Severity a formatted line should be surfaced at, mapped onto the three logger channels. */
 type LunoraLineLevel = "error" | "info" | "warn";
@@ -49,6 +55,8 @@ interface LunoraEvent {
     error?: unknown;
     /** `type: "container"` — the lifecycle transition (`start`/`stop`/`error`). */
     event?: unknown;
+    /** `type: "log"` — structured fields from `ctx.log.<level>(msg, fields)` / `ctx.log.with(fields)`. */
+    fields?: unknown;
     function?: unknown;
     /** `type: "container"` — the per-instance id (Durable Object id). */
     instance?: unknown;
@@ -57,8 +65,12 @@ interface LunoraEvent {
     outcome?: unknown;
     shard?: unknown;
     source?: unknown;
+    /** `type: "log"` — the dispatch span id, for trace correlation. */
+    spanId?: unknown;
     tablesRead?: unknown;
     tablesWritten?: unknown;
+    /** `type: "log"` — the trace id this line belongs to. */
+    traceId?: unknown;
     type?: unknown;
 }
 
@@ -73,7 +85,8 @@ const formatDuration = (value: unknown): string => (typeof value === "number" &&
 
 /** Map a raw `ctx.log` level string onto one of the three logger channels. */
 const toLineLevel = (rawLevel: string): LunoraLineLevel => {
-    if (rawLevel === "error") {
+    // `fatal` is the most severe tier — surface it on the error channel.
+    if (rawLevel === "error" || rawLevel === "fatal") {
         return "error";
     }
 
@@ -81,6 +94,7 @@ const toLineLevel = (rawLevel: string): LunoraLineLevel => {
         return "warn";
     }
 
+    // `trace` / `debug` / `info` / `log` all read as informational in the terminal.
     return "info";
 };
 
@@ -187,7 +201,22 @@ const formatLunoraEvent = (line: string): LunoraFormattedLine | undefined => {
     const functionPath = asString(event.function) || "<unknown>";
 
     if (event.type === "log") {
-        return { kind: "log", level: toLineLevel(asString(event.level)), text: `${labelFor(functionPath, event)}  ${asString(event.message)}`.trimEnd() };
+        const parts = [`${labelFor(functionPath, event)}  ${asString(event.message)}`.trimEnd()];
+        const fields = formatLogFields(event.fields);
+
+        if (fields !== "") {
+            parts.push(fields);
+        }
+
+        // A short trace-id suffix links the line to its RPC span without the noise
+        // of the full 32-hex id.
+        const traceId = asString(event.traceId);
+
+        if (traceId !== "") {
+            parts.push(`trace=${traceId.slice(0, 8)}`);
+        }
+
+        return { kind: "log", level: toLineLevel(asString(event.level)), text: parts.join("  ") };
     }
 
     if (event.type === "request") {
