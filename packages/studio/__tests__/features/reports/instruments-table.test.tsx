@@ -109,6 +109,20 @@ describe("instrumentsTable", () => {
         expect(screen.getByTestId("mt-instrument-value-checkout.ms").textContent).toBe("50");
     });
 
+    it("collapses a degenerate min===max range to a dash but shows a real spread", async () => {
+        expect.assertions(2);
+
+        render(renderTable(createClient()));
+
+        // Counter always +1 → range 1–1 → dash (noise, not information).
+        const counter = await screen.findByTestId("mt-instrument-orders.placed");
+        // Histogram with real spread → "min–max".
+        const histogram = screen.getByTestId("mt-instrument-checkout.ms");
+
+        expect(counter.textContent).not.toContain("1–1");
+        expect(histogram.textContent).toContain("10–100");
+    });
+
     it("shows a series' dimensions and a placeholder when it has none", async () => {
         expect.assertions(2);
 

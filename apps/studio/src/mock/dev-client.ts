@@ -98,6 +98,197 @@ const FUNCTIONS = [
 
 const now = 1_749_300_120_000;
 
+// Folded `ctx.trace` waterfalls for the Traces panel — the shape `@lunora/do`'s
+// `foldTraces` emits: each span already flattened with a `depth` (indent) and an
+// `offsetMs` (bar start relative to the trace), newest trace first. Covers the
+// states the panel renders: deep nesting, structured attributes, a fast
+// single-child trace, and an errored child that flips the trace's status badge.
+const TRACES = [
+    {
+        durationMs: 320,
+        functionPath: "orders:checkout",
+        ok: true,
+        rootName: "orders:checkout",
+        shardKey: "tenant-acme",
+        spans: [
+            { depth: 0, durationMs: 320, name: "orders:checkout", offsetMs: 0, ok: true, parentSpanId: "", spanId: "c0" },
+            { attributes: { itemCount: 3 }, depth: 1, durationMs: 20, name: "cart.load", offsetMs: 2, ok: true, parentSpanId: "c0", spanId: "c1" },
+            {
+                attributes: { provider: "stripe" },
+                depth: 1,
+                durationMs: 210,
+                name: "payment.authorize",
+                offsetMs: 25,
+                ok: true,
+                parentSpanId: "c0",
+                spanId: "c2",
+            },
+            {
+                attributes: { method: "POST", url: "api.stripe.com/v1/charges" },
+                depth: 2,
+                durationMs: 200,
+                name: "http.post",
+                offsetMs: 28,
+                ok: true,
+                parentSpanId: "c2",
+                spanId: "c3",
+            },
+            { depth: 1, durationMs: 50, name: "inventory.reserve", offsetMs: 240, ok: true, parentSpanId: "c0", spanId: "c4" },
+            { attributes: { table: "inventory" }, depth: 2, durationMs: 40, name: "db.update", offsetMs: 245, ok: true, parentSpanId: "c4", spanId: "c5" },
+        ],
+        startTs: now - 4000,
+        traceId: "trace-checkout",
+    },
+    {
+        durationMs: 220,
+        functionPath: "messages:send",
+        ok: true,
+        rootName: "messages:send",
+        shardKey: "room-general",
+        spans: [
+            { depth: 0, durationMs: 220, name: "messages:send", offsetMs: 0, ok: true, parentSpanId: "", spanId: "s0" },
+            { depth: 1, durationMs: 8, name: "auth.check", offsetMs: 2, ok: true, parentSpanId: "s0", spanId: "s1" },
+            { attributes: { table: "messages" }, depth: 1, durationMs: 40, name: "db.insert", offsetMs: 12, ok: true, parentSpanId: "s0", spanId: "s2" },
+            { depth: 1, durationMs: 6, name: "cache.set", offsetMs: 55, ok: true, parentSpanId: "s0", spanId: "s3" },
+            { attributes: { subscribers: 12 }, depth: 1, durationMs: 150, name: "fanout.publish", offsetMs: 64, ok: true, parentSpanId: "s0", spanId: "s4" },
+            { depth: 2, durationMs: 140, name: "ws.send", offsetMs: 66, ok: true, parentSpanId: "s4", spanId: "s5" },
+        ],
+        startTs: now - 9000,
+        traceId: "trace-send",
+    },
+    {
+        durationMs: 180,
+        functionPath: "posts:publish",
+        ok: false,
+        rootName: "posts:publish",
+        shardKey: "tenant-acme",
+        spans: [
+            { depth: 0, durationMs: 180, name: "posts:publish", offsetMs: 0, ok: true, parentSpanId: "", spanId: "e0" },
+            { depth: 1, durationMs: 5, name: "validate", offsetMs: 3, ok: true, parentSpanId: "e0", spanId: "e1" },
+            {
+                attributes: { amount: 4999, currency: "usd" },
+                depth: 1,
+                durationMs: 165,
+                error: { message: "card_declined: Your card was declined.", type: "StripeError" },
+                name: "stripe.charge",
+                offsetMs: 10,
+                ok: false,
+                parentSpanId: "e0",
+                spanId: "e2",
+            },
+        ],
+        startTs: now - 15_000,
+        traceId: "trace-publish",
+    },
+    {
+        durationMs: 12,
+        functionPath: "messages:list",
+        ok: true,
+        rootName: "messages:list",
+        spans: [
+            { depth: 0, durationMs: 12, name: "messages:list", offsetMs: 0, ok: true, parentSpanId: "", spanId: "l0" },
+            { attributes: { rows: 128 }, depth: 1, durationMs: 9, name: "db.query", offsetMs: 1, ok: true, parentSpanId: "l0", spanId: "l1" },
+        ],
+        startTs: now - 22_000,
+        traceId: "trace-list",
+    },
+];
+
+// Aggregated `ctx.metrics.*` series for the Metrics page's Instruments table —
+// the shape `@lunora/do`'s `MetricBuffer` fold emits: one running summary per
+// (name, kind, dimensions). Covers each instrument kind and the with/without
+// dimensions cases so the panel's counter-total / gauge-reading / histogram-mean
+// projections and the dimension column both render.
+const METRIC_SERIES = [
+    {
+        count: 642,
+        firstTs: now - 3_600_000,
+        functionPath: "orders:checkout",
+        kind: "counter",
+        last: 1,
+        lastTs: now - 4000,
+        max: 1,
+        min: 1,
+        name: "orders.placed",
+        sum: 642,
+    },
+    {
+        attributes: { route: "/api/messages" },
+        count: 2009,
+        firstTs: now - 3_600_000,
+        functionPath: "messages:list",
+        kind: "counter",
+        last: 1,
+        lastTs: now - 2000,
+        max: 1,
+        min: 1,
+        name: "http.requests",
+        sum: 2009,
+    },
+    {
+        attributes: { route: "/api/posts" },
+        count: 87,
+        firstTs: now - 3_600_000,
+        functionPath: "posts:publish",
+        kind: "counter",
+        last: 1,
+        lastTs: now - 15_000,
+        max: 1,
+        min: 1,
+        name: "http.requests",
+        sum: 87,
+    },
+    {
+        count: 340,
+        firstTs: now - 3_600_000,
+        functionPath: "orders:checkout",
+        kind: "gauge",
+        last: 3,
+        lastTs: now - 4000,
+        max: 9,
+        min: 0,
+        name: "cart.items",
+        sum: 1190,
+    },
+    {
+        count: 128,
+        firstTs: now - 3_600_000,
+        functionPath: "queue:drain",
+        kind: "gauge",
+        last: 12,
+        lastTs: now - 6000,
+        max: 45,
+        min: 0,
+        name: "queue.depth",
+        sum: 2304,
+    },
+    {
+        count: 642,
+        firstTs: now - 3_600_000,
+        functionPath: "orders:checkout",
+        kind: "histogram",
+        last: 128,
+        lastTs: now - 4000,
+        max: 812,
+        min: 41,
+        name: "checkout.ms",
+        sum: 118_400,
+    },
+    {
+        attributes: { table: "messages" },
+        count: 1280,
+        firstTs: now - 3_600_000,
+        functionPath: "messages:list",
+        kind: "histogram",
+        last: 9,
+        lastTs: now - 2000,
+        max: 88,
+        min: 3,
+        name: "db.query.ms",
+        sum: 15_360,
+    },
+];
+
 const minuteBuckets = (n: number, base: number, jitter: number): { bucketMs: number; calls: number; errors: number; path: string }[] =>
     Array.from({ length: n }, (_, index) => {
         return {
@@ -148,6 +339,9 @@ const dataFor = (reference: string, args: unknown): unknown => {
                     { level: "debug", message: "Reactive cache warm (312 entries)", timestamp: now - 22_000 },
                 ],
             };
+        }
+        case ADMIN_FUNCTIONS.getMetricSeries: {
+            return { series: METRIC_SERIES };
         }
         case ADMIN_FUNCTIONS.getMetrics: {
             return {
@@ -213,6 +407,12 @@ const dataFor = (reference: string, args: unknown): unknown => {
                     { bindingType: "r2", kind: "binding", name: "UPLOADS", value: undefined },
                 ],
             };
+        }
+        case ADMIN_FUNCTIONS.getTraces: {
+            // `total` exceeds the returned count so the panel's "showing N of M"
+            // truncation notice renders — the mock demonstrates the affordance even
+            // though it seeds only a handful of representative waterfalls.
+            return { total: 63, traces: TRACES };
         }
         case ADMIN_FUNCTIONS.listSubscriptions: {
             return {

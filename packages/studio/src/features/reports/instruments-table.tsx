@@ -126,7 +126,9 @@ export const InstrumentsTable = ({ shardKey }: InstrumentsTableProps): ReactElem
                                         </TableCell>
                                         <TableCell className="text-right tabular-nums text-muted-foreground">{s.count.toLocaleString()}</TableCell>
                                         <TableCell className="text-right font-mono text-xs tabular-nums text-muted-foreground">
-                                            {`${formatMetricValue(s.min)}–${formatMetricValue(s.max)}`}
+                                            {/* A degenerate range (a counter always +1, a pinned gauge) carries no
+                                                information, so collapse min===max to a dash rather than "1–1" noise. */}
+                                            {s.min === s.max ? "—" : `${formatMetricValue(s.min)}–${formatMetricValue(s.max)}`}
                                         </TableCell>
                                         <TableCell className="max-w-64 truncate font-mono text-xs text-muted-foreground" title={dimensions}>
                                             {dimensions === "" ? "—" : dimensions}
