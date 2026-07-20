@@ -1085,6 +1085,17 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const logFunctionPath = options.functionPath ?? "";
             const log = this.makeLogger(logFunctionPath, observability);
 
+            // `ctx.trace`: nested spans under this dispatch's trace. The DO base
+            // owns the span stack (scoped to this ctx, so concurrent dispatches
+            // can't corrupt each other's nesting) and routes each finished span to
+            // the same `observability` sink, plus the studio's Traces panel.
+            const trace = this.makeTracer(logFunctionPath, observability);
+
+            // `ctx.metrics`: application counters/gauges/histograms, routed to the
+            // same `observability` sink. Stateless — one call is one measurement,
+            // with counter deltas the collector aggregates.
+            const metrics = this.makeMetrics(logFunctionPath, observability);
+
             // `ctx.now`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
             // Query/mutation handlers must be deterministic (they may be re-run on
@@ -1102,10 +1113,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 fetch: globalThis.fetch.bind(globalThis),
                 ip: this.getCurrentIp(),
                 log,
+                metrics,
                 now,
                 orm: bindOrm(facade),
                 scheduler,
                 storage,
+                trace,
                 secrets,
                 payments,
             };
