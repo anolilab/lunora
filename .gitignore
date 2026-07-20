@@ -130,3 +130,4 @@ tests/e2e/diag*.mjs
 tests/e2e/experiment.mjs
 tests/e2e/validate-studio.mjs
 .omo
+instruments-trend.png
