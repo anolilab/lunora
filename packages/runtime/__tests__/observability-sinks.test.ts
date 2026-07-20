@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { LogEvent, LogLevel, ObservabilityEvent, SpanEvent } from "../src/observability";
+import type { LogEvent, LogLevel, MetricEvent, ObservabilityEvent, SpanEvent } from "../src/observability";
 import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks";
 import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, sentrySink, webhookSink } from "../src/observability-sinks";
 
@@ -24,6 +24,17 @@ const errorEvent: ObservabilityEvent = {
     functionPath: "messages:send",
     ok: false,
     shardKey: "channel-1",
+};
+
+/** One `ctx.metrics.count` measurement. */
+const metricEvent: MetricEvent = {
+    attributes: { plan: "pro" },
+    functionPath: "orders:checkout",
+    kind: "counter",
+    name: "orders.placed",
+    shardKey: "tenant-1",
+    ts: 1_700_000_000_000,
+    value: 2,
 };
 
 /** A 16-byte trace id, hex-encoded per the OTLP/JSON `trace_id` exception. */
@@ -84,6 +95,26 @@ const spanFrom = (init: RequestInit): { resourceAttributes: OtlpKeyValue[]; scop
     const scopeSpan = resourceSpan.scopeSpans[0]!;
 
     return { resourceAttributes: resourceSpan.resource.attributes, scopeName: scopeSpan.scope.name, span: scopeSpan.spans[0]! };
+};
+
+/** The subset of an OTLP metric the tests assert on. */
+interface ParsedMetric {
+    gauge?: { dataPoints: { asDouble: number; attributes: OtlpKeyValue[] }[] };
+    histogram?: {
+        aggregationTemporality: number;
+        dataPoints: { attributes: OtlpKeyValue[]; bucketCounts: string[]; count: string; explicitBounds: number[]; sum: number }[];
+    };
+    name: string;
+    sum?: { aggregationTemporality: number; dataPoints: { asDouble: number; attributes: OtlpKeyValue[] }[]; isMonotonic: boolean };
+}
+
+/** Decode a POSTed OTLP metric-export body down to its single metric. */
+const metricFrom = (init: RequestInit): ParsedMetric => {
+    const parsed = JSON.parse(init.body as string) as {
+        resourceMetrics: { scopeMetrics: { metrics: ParsedMetric[] }[] }[];
+    };
+
+    return parsed.resourceMetrics[0]!.scopeMetrics[0]!.metrics[0]!;
 };
 
 /** Decode a POSTed OTLP log-export body down to its single log record + resource attributes. */
@@ -1040,6 +1071,70 @@ describe("observability-sinks", () => {
             expect(span.status.code).toBe(2);
             expect(span.status.message).toBe("card declined");
             expect(attrValue(span.attributes, "error.type")).toStrictEqual({ stringValue: "PAYMENT_FAILED" });
+        });
+
+        it("exports a counter as a monotonic delta Sum", () => {
+            expect.assertions(6);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onMetric!(metricEvent);
+
+            const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(url).toBe("https://collector.example/v1/metrics");
+
+            const metric = metricFrom(init);
+
+            expect(metric.name).toBe("orders.placed");
+            expect(metric.sum?.isMonotonic).toBe(true);
+            // DELTA (1) — the runtime pre-aggregates nothing, so the collector sums.
+            expect(metric.sum?.aggregationTemporality).toBe(1);
+            expect(metric.sum?.dataPoints[0]?.asDouble).toBe(2);
+            expect(attrValue(metric.sum!.dataPoints[0]!.attributes, "plan")).toStrictEqual({ stringValue: "pro" });
+        });
+
+        it("exports a gauge as a Gauge with no temporality", () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onMetric!({ ...metricEvent, kind: "gauge", name: "cart.items", value: 7 });
+
+            const metric = metricFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(metric.name).toBe("cart.items");
+            expect(metric.gauge?.dataPoints[0]?.asDouble).toBe(7);
+            // A reading replaces the previous one — temporality does not apply.
+            expect(metric.sum).toBeUndefined();
+        });
+
+        it("exports a histogram sample as a single-observation delta data point", () => {
+            expect.assertions(5);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onMetric!({ ...metricEvent, kind: "histogram", name: "checkout.latency_ms", value: 128 });
+
+            const metric = metricFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+            const point = metric.histogram?.dataPoints[0];
+
+            expect(metric.histogram?.aggregationTemporality).toBe(1);
+            expect(point?.count).toBe("1");
+            expect(point?.sum).toBe(128);
+            // One implicit bucket: the collector builds the distribution from the
+            // stream, so the runtime never has to pick bounds for the user.
+            expect(point?.explicitBounds).toStrictEqual([]);
+            expect(point?.bucketCounts).toStrictEqual(["1"]);
         });
 
         it("exports a ctx.trace span even under onlyErrors", () => {

@@ -8,6 +8,8 @@ import type {
     DatabaseWriter,
     InferArgs,
     LunoraLogger,
+    LunoraMetrics,
+    LunoraTracer,
     MutationCtx,
     QueryCtx,
     RegisteredAction,
@@ -246,6 +248,21 @@ const stubProxy = (surface: string): unknown =>
         apply: () => unavailable(surface),
         get: () => unavailable(surface),
     });
+
+/**
+ * `ctx.trace` under test: runs the body and returns its value, recording
+ * nothing. There is no sink in the harness, so a span has nowhere to go — but
+ * the body must still execute and its result and any throw must pass through
+ * untouched, or instrumenting a handler would change what the test observes.
+ */
+const passthroughTrace: LunoraTracer = async <T>(_name: string, fn: () => Promise<T> | T): Promise<T> => await fn();
+
+/** `ctx.metrics` under test: accepts every measurement and records nothing. */
+const noopMetrics: LunoraMetrics = {
+    count: () => undefined,
+    gauge: () => undefined,
+    record: () => undefined,
+};
 
 const noopLog: LunoraLogger = {
     debug: () => undefined,
@@ -674,7 +691,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             db: database,
             env: options?.env,
             log: noopLog,
+            metrics: noopMetrics,
             now: harnessNow,
+            trace: passthroughTrace,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
             runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
             secrets: stubProxy("secrets") as QueryCtx["secrets"],
@@ -687,7 +706,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             db: database,
             env: options?.env,
             log: noopLog,
+            metrics: noopMetrics,
             now: harnessNow,
+            trace: passthroughTrace,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runMutation, after construction completes
             runMutation: (reference, args) => runInternal("mutation", reference, mutationContext, args) as Promise<never>,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
@@ -711,7 +732,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             // Use the injected fetch when provided; fall back to the v1 stub otherwise.
             fetch: options?.fetch ?? (stubProxy("fetch") as ActionCtx["fetch"]),
             log: noopLog,
+            metrics: noopMetrics,
             now: harnessNow,
+            trace: passthroughTrace,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runAction, after construction completes
             runAction: (reference, args) => runInternal("action", reference, actionContext, args) as Promise<never>,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runMutation, after construction completes
