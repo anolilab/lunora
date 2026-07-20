@@ -36,8 +36,18 @@ export interface CloudflareApi {
     createD1Database: (name: string) => Promise<{ uuid: string }>;
     /** Create an R2 bucket (idempotent at the call site — caller ignores "exists"). */
     createR2Bucket: (name: string) => Promise<void>;
+    /** Delete a D1 database by uuid (teardown). 404-tolerant (already gone). */
+    deleteD1Database: (uuid: string) => Promise<void>;
     /** Remove a dispatch-namespace script (preview teardown / project deletion). */
     deleteDispatchScript: (input: { namespace: string; scriptName: string }) => Promise<void>;
+    /**
+     * Delete an R2 bucket by name (teardown). 404-tolerant. Throws if the bucket
+     * is non-empty — R2's REST delete requires an empty bucket, and object purge
+     * needs the S3/data API (a separate credential the teardown context lacks).
+     */
+    deleteR2Bucket: (name: string) => Promise<void>;
+    /** Resolve a D1 database uuid by its name (teardown), or null if none exists. */
+    findD1DatabaseByName: (name: string) => Promise<null | { uuid: string }>;
     /** Upload (create/update) a user Worker into a dispatch namespace. */
     putDispatchScript: (input: PutScriptInput) => Promise<void>;
     /** Set a secret on a dispatch-namespace script. */
@@ -140,6 +150,13 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
         createR2Bucket: async (name) => {
             await callJson("/r2/buckets", "POST", { name });
         },
+        deleteD1Database: async (uuid) => {
+            const response = await fetchImpl(`${base}/d1/database/${uuid}`, { headers: { authorization: authHeader }, method: "DELETE" });
+
+            if (!response.ok && response.status !== 404) {
+                throw new Error(`cloudflare delete D1 failed: HTTP ${String(response.status)}`);
+            }
+        },
         deleteDispatchScript: async ({ namespace, scriptName }) => {
             const response = await fetchImpl(`${base}/workers/dispatch/namespaces/${namespace}/scripts/${scriptName}`, {
                 headers: { authorization: authHeader },
@@ -149,6 +166,21 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
             if (!response.ok && response.status !== 404) {
                 throw new Error(`cloudflare delete script failed: HTTP ${String(response.status)}`);
             }
+        },
+        deleteR2Bucket: async (name) => {
+            const response = await fetchImpl(`${base}/r2/buckets/${name}`, { headers: { authorization: authHeader }, method: "DELETE" });
+
+            if (!response.ok && response.status !== 404) {
+                const detail = await response.text().catch(() => "");
+
+                throw new Error(`cloudflare delete R2 bucket failed: HTTP ${String(response.status)}${detail ? `: ${detail}` : ""}`);
+            }
+        },
+        findD1DatabaseByName: async (name) => {
+            const result = (await callJson(`/d1/database?name=${encodeURIComponent(name)}`, "GET", undefined)) as { name?: string; uuid?: string }[] | undefined;
+            const match = (result ?? []).find((database) => database.name === name && typeof database.uuid === "string");
+
+            return match?.uuid ? { uuid: match.uuid } : null;
         },
         putDispatchScript: async (input) => {
             // Workers-for-Platforms multipart upload: a `metadata` part (bindings,
