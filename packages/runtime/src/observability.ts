@@ -11,8 +11,8 @@
  * the sink are swallowed (they would otherwise replace a useful user-visible
  * error with a telemetry-pipeline failure).
  */
-import type { LogFields } from "../../../shared/log-fields";
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
+
 
 /**
  * Per-RPC dispatch event. Single-shard calls set `shardKey`; cross-shard
@@ -76,8 +76,8 @@ export interface ObservabilityEvent {
  */
 export type LogLevel = ContextLogLevel;
 export type ObservabilitySinkContext = LogSinkContext;
-export type { LogFields };
-export type { LogEvent };
+
+
 
 /**
  * The hook contract. Methods are optional so a sink can opt into only the
@@ -127,3 +127,6 @@ export const emitLogEvent = (sink: ObservabilitySink | undefined, event: LogEven
         // Swallow — see emitRpcEvent.
     }
 };
+
+export {type LogEvent} from "../../../shared/log-event";
+export {type LogFields} from "../../../shared/log-fields";

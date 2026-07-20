@@ -13,7 +13,7 @@
  */
 
 /** Markdown hint: a single string or an array of lines. Shape matches `@visulima/error`'s `hint`. */
-export type ErrorHint = string | readonly string[];
+export type ErrorHint = string | ReadonlyArray<string>;
 
 /** A catalog entry: the fixed metadata for one error `code`. */
 export interface ErrorCatalogEntry {

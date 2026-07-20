@@ -1281,7 +1281,7 @@ interface VectorSearch extends VectorSearchReader {
 
 /**
  * Structured, filterable key/value fields attached to a log line — the second
- * argument of a `ctx.log.<level>(message, fields)` call, or the fields bound by
+ * argument of a `ctx.log.&lt;level>(message, fields)` call, or the fields bound by
  * `ctx.log.with(fields)`. They travel to an `ObservabilitySink`'s `onLog` and,
  * for a network sink, become OTLP log-record attributes a log pipeline (or the
  * Cloud log viewer) can filter and index on. Primitive values pass through;

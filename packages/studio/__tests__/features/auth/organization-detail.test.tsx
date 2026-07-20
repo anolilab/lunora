@@ -30,9 +30,9 @@ describe("organizationDetail row actions", () => {
 
         expect(error.textContent).toBe("FORBIDDEN");
         // The row must not vanish/refetch away on a failed removal — it's still there.
-        expect(screen.getByTestId("org-member-mem_1")).toBeTruthy();
+        expect(screen.getByTestId("org-member-mem_1")).toBe(true);
         // A failed action must not refetch (which would mask the failure as a stale success).
-        expect(mock.listAuthOrgMembers.mock.calls.length).toBe(1);
+        expect(mock.listAuthOrgMembers).toHaveBeenCalledTimes(1);
     });
 
     it("surfaces a rejected invitation-cancel", async () => {

@@ -113,7 +113,7 @@ export interface ModuleOptions {
 }
 
 /**
- * Return type of `defineNuxtModule<ModuleOptions>({...})` — the value overload of
+ * Return type of `defineNuxtModule&lt;ModuleOptions>({...})` — the value overload of
  * `defineNuxtModule` (the one taking a definition), extracted structurally so the
  * default export has a locally-nameable type under `isolatedDeclarations` without
  * importing `NuxtModule` from `@nuxt/schema` (not a resolvable dependency here).

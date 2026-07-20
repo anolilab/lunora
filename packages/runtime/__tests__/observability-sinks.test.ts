@@ -318,7 +318,7 @@ describe("observability-sinks", () => {
 
             const logEvent: LogEvent = { args: [], fields: { orderId: "o-1" }, functionPath: "orders:place", level: "info", message: "placed", ts: 1 };
             const sink = webhookSink({
-                transformLog: (event) => ({ ...event, fields: undefined }),
+                transformLog: (event) => {return { ...event, fields: undefined }},
                 url: "https://ingest.example/events",
             });
 
@@ -406,7 +406,7 @@ describe("observability-sinks", () => {
             });
 
             expect(throwing.onLog).toBeDefined();
-            expect(() => throwing.onLog!(logEvent)).not.toThrow();
+            expect(() => { throwing.onLog!(logEvent); }).not.toThrow();
         });
 
         it("omits onLog entirely when captureLog is not provided (logs stay out of Sentry)", () => {
