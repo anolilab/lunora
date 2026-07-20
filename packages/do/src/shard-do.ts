@@ -4428,7 +4428,7 @@ abstract class ShardDO {
             userId: this.getCurrentUserId(),
         };
 
-        this.logs.push({ functionPath, level: BUFFER_LEVEL[level], message, timestamp: event.ts });
+        this.logs.push({ fields, functionPath, level: BUFFER_LEVEL[level], message, timestamp: event.ts });
 
         try {
             emitLogEvent(event);

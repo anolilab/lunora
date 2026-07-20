@@ -51,6 +51,32 @@ const OUTCOME_VARIANT: Record<RequestOutcome, BadgeVariant> = {
     ok: "secondary",
 };
 
+/**
+ * Render a `ctx.log` fields object as compact, space-joined `key=value` pairs,
+ * or `""` when there are none. String values pass through bare; everything else
+ * is JSON-encoded (with a `String()` fallback) so a nested value still shows and
+ * rendering never throws.
+ */
+const formatEntryFields = (fields: Record<string, unknown> | undefined): string => {
+    if (fields === undefined) {
+        return "";
+    }
+
+    return Object.entries(fields)
+        .map(([key, raw]) => {
+            if (typeof raw === "string") {
+                return `${key}=${raw}`;
+            }
+
+            try {
+                return `${key}=${(JSON.stringify(raw) as string | undefined) ?? String(raw)}`;
+            } catch {
+                return `${key}=${String(raw)}`;
+            }
+        })
+        .join(" ");
+};
+
 interface LogRowProps {
     readonly entry: LogEntry;
     readonly index: number;
@@ -89,6 +115,11 @@ const LogRow = ({ entry, index, measureRef, start }: LogRowProps): ReactElement 
             </span>
             <span className="flex-1 truncate" role="gridcell">
                 {entry.message}
+                {entry.fields === undefined ? null : (
+                    <span className="ml-2 text-muted-foreground" data-testid="lg-fields">
+                        {formatEntryFields(entry.fields)}
+                    </span>
+                )}
             </span>
         </div>
     );
@@ -253,7 +284,9 @@ const filterLogs = (entries: ReadonlyArray<LogEntry>, criteria: LogFilterCriteri
             return false;
         }
 
-        return needle === "" || entry.message.toLowerCase().includes(needle);
+        // The message search also matches structured field values, so filtering
+        // on e.g. an `orderId` a handler logged just works.
+        return needle === "" || entry.message.toLowerCase().includes(needle) || formatEntryFields(entry.fields).toLowerCase().includes(needle);
     });
 };
 

@@ -38,7 +38,10 @@ export default createWorker({
 ```
 
 Every sink accepts `onlyErrors: true` to drop successful RPC events and export
-only failures (log events always pass through).
+only failures (log events always pass through). All five network/log sinks —
+`otlpSink`, `webhookSink`, `pipelineLogSink`, plus `sentrySink` when you wire its
+`captureLog` — forward `ctx.log` lines; `webhookSink` takes a `transformLog`
+redactor mirroring its RPC `transform`.
 
 ### `otlpSink`
 
@@ -100,10 +103,13 @@ export const placeOrder = mutation({
 ```
 
 The `(string, object)` shape is the structured form; every other shape is
-console-style, so existing `console`-shaped calls are unchanged. The rendered
-message and the structured fields reach the dev terminal, Workers Logs, and any
-sink; the raw positional args of a console-style call reach only the in-process
-`onLog` sink you control.
+console-style. The rendered message and the structured fields reach the dev
+terminal, Workers Logs, the Studio Logs panel, and any sink; the raw positional
+args of a console-style call reach only the in-process `onLog` sink you control.
+
+:::caution[Behavior change]
+A two-argument call whose second argument is a plain object — `ctx.log.info("saved", user)` — is now the **structured** form: the message is `"saved"` and `user` becomes `fields`, instead of being rendered into the message as `saved {…}`. Calls with a non-object second argument, or three or more arguments, are unchanged. If you relied on the object being folded into the message text, pass it as a third argument (`ctx.log.info("saved", "-", user)`) or pre-render it.
+:::
 
 ## Container telemetry
 

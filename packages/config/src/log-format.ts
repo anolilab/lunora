@@ -49,6 +49,8 @@ interface LunoraEvent {
     error?: unknown;
     /** `type: "container"` — the lifecycle transition (`start`/`stop`/`error`). */
     event?: unknown;
+    /** `type: "log"` — structured fields from `ctx.log.<level>(msg, fields)` / `ctx.log.with(fields)`. */
+    fields?: unknown;
     function?: unknown;
     /** `type: "container"` — the per-instance id (Durable Object id). */
     instance?: unknown;
@@ -57,8 +59,12 @@ interface LunoraEvent {
     outcome?: unknown;
     shard?: unknown;
     source?: unknown;
+    /** `type: "log"` — the dispatch span id, for trace correlation. */
+    spanId?: unknown;
     tablesRead?: unknown;
     tablesWritten?: unknown;
+    /** `type: "log"` — the trace id this line belongs to. */
+    traceId?: unknown;
     type?: unknown;
 }
 
@@ -73,7 +79,8 @@ const formatDuration = (value: unknown): string => (typeof value === "number" &&
 
 /** Map a raw `ctx.log` level string onto one of the three logger channels. */
 const toLineLevel = (rawLevel: string): LunoraLineLevel => {
-    if (rawLevel === "error") {
+    // `fatal` is the most severe tier — surface it on the error channel.
+    if (rawLevel === "error" || rawLevel === "fatal") {
         return "error";
     }
 
@@ -81,7 +88,34 @@ const toLineLevel = (rawLevel: string): LunoraLineLevel => {
         return "warn";
     }
 
+    // `trace` / `debug` / `info` / `log` all read as informational in the terminal.
     return "info";
+};
+
+/**
+ * Render a `ctx.log` fields object as compact, space-joined `key=value` pairs —
+ * `""` when there are no fields (or the value isn't a plain object). String
+ * values pass through bare; everything else is JSON-encoded (with a `String()`
+ * fallback) so a nested value still shows and rendering never throws.
+ */
+const formatFields = (value: unknown): string => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return "";
+    }
+
+    return Object.entries(value)
+        .map(([key, raw]) => {
+            if (typeof raw === "string") {
+                return `${key}=${raw}`;
+            }
+
+            try {
+                return `${key}=${(JSON.stringify(raw) as string | undefined) ?? String(raw)}`;
+            } catch {
+                return `${key}=${String(raw)}`;
+            }
+        })
+        .join(" ");
 };
 
 /** Parse a worker-output line into a lunora event, or `undefined` when it isn't one. Never throws. */
@@ -187,7 +221,22 @@ const formatLunoraEvent = (line: string): LunoraFormattedLine | undefined => {
     const functionPath = asString(event.function) || "<unknown>";
 
     if (event.type === "log") {
-        return { kind: "log", level: toLineLevel(asString(event.level)), text: `${labelFor(functionPath, event)}  ${asString(event.message)}`.trimEnd() };
+        const parts = [`${labelFor(functionPath, event)}  ${asString(event.message)}`.trimEnd()];
+        const fields = formatFields(event.fields);
+
+        if (fields !== "") {
+            parts.push(fields);
+        }
+
+        // A short trace-id suffix links the line to its RPC span without the noise
+        // of the full 32-hex id.
+        const traceId = asString(event.traceId);
+
+        if (traceId !== "") {
+            parts.push(`trace=${traceId.slice(0, 8)}`);
+        }
+
+        return { kind: "log", level: toLineLevel(asString(event.level)), text: parts.join("  ") };
     }
 
     if (event.type === "request") {

@@ -210,6 +210,15 @@ export interface WebhookSinkOptions extends OnlyErrorsOption {
      * redactor can never leak the un-scrubbed payload.
      */
     transform?: (event: ObservabilityEvent) => null | ObservabilityEvent | undefined;
+
+    /**
+     * Optional redaction hook for `ctx.log` events (the {@link transform}
+     * counterpart for log lines). Same fail-closed contract: return the event to
+     * ship it, `null`/`undefined` to drop it, and a throw drops it. When unset,
+     * log events are shipped as-is (message + structured fields — which may carry
+     * user input; see the privacy note).
+     */
+    transformLog?: (event: LogEvent) => LogEvent | null | undefined;
     /** The ingestion endpoint to POST each event to. */
     url: string;
 }
@@ -233,10 +242,45 @@ export interface WebhookSinkOptions extends OnlyErrorsOption {
  * `transform` redacts/drops each event before send.
  */
 export const webhookSink = (options: WebhookSinkOptions): ObservabilitySink => {
-    const { headers, onlyErrors, transform, url } = options;
+    const { headers, onlyErrors, transform, transformLog, url } = options;
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers);
 
+    /** POST one already-redacted payload, keeping the send alive past the response. */
+    const post = (payload: unknown, context?: ObservabilitySinkContext): void => {
+        try {
+            const sent = fetch(url, { body: JSON.stringify(payload), headers: mergedHeaders, method: "POST" }).catch(() => {
+                // Network error / non-OK response — intentionally ignored.
+            });
+
+            if (context?.waitUntil) {
+                context.waitUntil(sent);
+            }
+        } catch {
+            // `fetch` throwing synchronously (e.g. an invalid URL) must not break dispatch.
+        }
+    };
+
     return {
+        onLog: (event, context) => {
+            // `onlyErrors` scopes the RPC stream; `ctx.log` lines always ship, so
+            // a developer's logs reach the endpoint even when RPC events are
+            // filtered. Fail-closed on a throwing `transformLog`.
+            let payload: LogEvent | null | undefined = event;
+
+            if (transformLog) {
+                try {
+                    payload = transformLog(event);
+                } catch {
+                    return;
+                }
+            }
+
+            if (payload === null || payload === undefined) {
+                return;
+            }
+
+            post(payload, context);
+        },
         onRpc: (event, context?: ObservabilitySinkContext) => {
             if (shouldSkip(event, onlyErrors)) {
                 return;
@@ -259,26 +303,9 @@ export const webhookSink = (options: WebhookSinkOptions): ObservabilitySink => {
                     return;
                 }
 
-                // The `.catch` swallows any rejection so a failed POST can never
-                // reject into the dispatch path.
-                const sent = fetch(url, {
-                    body: JSON.stringify(payload),
-                    headers: mergedHeaders,
-                    method: "POST",
-                }).catch(() => {
-                    // Network error / non-OK response — intentionally ignored.
-                });
-
-                // Prefer the request's `ctx.waitUntil` so the send outlives the
-                // response (workerd cancels in-flight promises at isolate
-                // teardown otherwise). Fall back to fire-and-forget when no
-                // request context is available (e.g. the serverQuery fast-path).
-                if (context?.waitUntil) {
-                    context.waitUntil(sent);
-                }
+                post(payload, context);
             } catch {
-                // `fetch` itself throwing synchronously (e.g. an invalid URL)
-                // must not break dispatch either.
+                // A synchronous throw in the transform/guard path must not break dispatch.
             }
         },
     };
@@ -292,6 +319,15 @@ export interface SentrySinkOptions extends OnlyErrorsOption {
      * injected callback so the runtime takes no dependency on `@sentry/*`.
      */
     capture: (event: ObservabilityEvent) => void;
+
+    /**
+     * Optional callback for `ctx.log` events. Wire it to Sentry's structured
+     * logging or a breadcrumb, e.g. `(e) => Sentry.logger[e.level]?.(e.message,
+     * e.fields)`. Omit it to leave `ctx.log` lines out of Sentry entirely
+     * (capturing every log line would usually flood the project). Invoked inside
+     * a try/catch so a throwing client can't break the handler.
+     */
+    captureLog?: (event: LogEvent) => void;
 }
 
 /**
@@ -305,12 +341,23 @@ export interface SentrySinkOptions extends OnlyErrorsOption {
  * `onlyErrors` defaults to true (error events only) — pass `false` for all.
  */
 export const sentrySink = (options: SentrySinkOptions): ObservabilitySink => {
-    const { capture } = options;
+    const { capture, captureLog } = options;
     // Sentry defaults to error-only — capturing every successful RPC as an
     // event would flood the project. Callers opt into all events explicitly.
     const onlyErrors = options.onlyErrors ?? true;
 
     return {
+        // Only forward log lines when the caller wired `captureLog`; otherwise
+        // `ctx.log` output stays out of Sentry.
+        onLog: captureLog
+            ? (event) => {
+                  try {
+                      captureLog(event);
+                  } catch {
+                      // A throwing capture callback must not break the handler.
+                  }
+              }
+            : undefined,
         onRpc: (event) => {
             if (shouldSkip(event, onlyErrors)) {
                 return;

@@ -1860,7 +1860,8 @@ describe("shardDO admin data migrations", () => {
         const body = await response.json<{ result: { entries: { functionPath: string; level: string; message: string }[] } }>();
 
         expect(body.result.entries).toHaveLength(1);
-        expect(body.result.entries[0]).toMatchObject({ functionPath: "messages:list", level: "info", message: "loaded" });
+        // The buffer entry (and thus the studio Logs panel) carries the structured fields.
+        expect(body.result.entries[0]).toMatchObject({ fields: { count: 3 }, functionPath: "messages:list", level: "info", message: "loaded" });
     });
 
     it("threads a waitUntil context to the log sink so a durable sink can outlive the response", async () => {

@@ -212,6 +212,32 @@ describe("logsPanel — errors view", () => {
         expect(rows[0]?.textContent).toContain("messages:send");
     });
 
+    it("renders structured fields and matches them in the search box", async () => {
+        expect.assertions(3);
+
+        const withFields: LogEntry[] = [
+            { fields: { orderId: "o-42", total: 19 }, functionPath: "orders:place", level: "info", message: "order placed", timestamp: 1_700_000_005_000 },
+            { functionPath: "auth:login", level: "info", message: "signed in", timestamp: 1_700_000_004_000 },
+        ];
+
+        render(renderPanel(createClient(withFields)));
+
+        await screen.findByTestId("lg-table");
+        switchToErrors();
+
+        const fields = await screen.findByTestId("lg-fields");
+
+        expect(fields.textContent).toBe("orderId=o-42 total=19");
+
+        // The field value is searchable via the message search box.
+        fireEvent.change(screen.getByTestId("lg-search"), { target: { value: "o-42" } });
+
+        const rows = await screen.findAllByTestId("lg-row");
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.textContent).toContain("order placed");
+    });
+
     it("shows the empty state when there are no logs", async () => {
         expect.assertions(1);
 

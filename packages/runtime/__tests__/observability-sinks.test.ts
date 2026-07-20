@@ -309,6 +309,40 @@ describe("observability-sinks", () => {
 
             vi.unstubAllGlobals();
         });
+
+        it("ships ctx.log lines too, applying transformLog fail-closed", () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const logEvent: LogEvent = { args: [], fields: { orderId: "o-1" }, functionPath: "orders:place", level: "info", message: "placed", ts: 1 };
+            const sink = webhookSink({
+                transformLog: (event) => ({ ...event, fields: undefined }),
+                url: "https://ingest.example/events",
+            });
+
+            sink.onLog!(logEvent);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            // The redactor stripped `fields` before the line left the worker.
+            expect((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body).toBe(JSON.stringify({ ...logEvent, fields: undefined }));
+
+            // A throwing transformLog drops the line rather than shipping it raw.
+            fetchMock.mockClear();
+            const throwing = webhookSink({
+                transformLog: () => {
+                    throw new Error("scrub failed");
+                },
+                url: "https://ingest.example/events",
+            });
+
+            throwing.onLog!(logEvent);
+
+            expect(fetchMock).not.toHaveBeenCalled();
+
+            vi.unstubAllGlobals();
+        });
     });
 
     describe("sentrySink", () => {
@@ -351,6 +385,36 @@ describe("observability-sinks", () => {
             expect(() => {
                 sink.onRpc!(errorEvent);
             }).not.toThrow();
+        });
+
+        it("forwards ctx.log lines to captureLog when wired, and swallows its throws", () => {
+            expect.assertions(3);
+
+            const captureLog = vi.fn<(event: LogEvent) => void>();
+            const sink = sentrySink({ capture: vi.fn(), captureLog });
+            const logEvent: LogEvent = { args: [], fields: { orderId: "o-1" }, functionPath: "orders:place", level: "error", message: "boom", ts: 1 };
+
+            sink.onLog!(logEvent);
+
+            expect(captureLog).toHaveBeenCalledWith(logEvent);
+
+            const throwing = sentrySink({
+                capture: vi.fn(),
+                captureLog: () => {
+                    throw new Error("sentry down");
+                },
+            });
+
+            expect(throwing.onLog).toBeDefined();
+            expect(() => throwing.onLog!(logEvent)).not.toThrow();
+        });
+
+        it("omits onLog entirely when captureLog is not provided (logs stay out of Sentry)", () => {
+            expect.assertions(1);
+
+            const sink = sentrySink({ capture: vi.fn() });
+
+            expect(sink.onLog).toBeUndefined();
         });
     });
 
