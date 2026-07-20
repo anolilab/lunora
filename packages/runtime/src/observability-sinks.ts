@@ -554,9 +554,11 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
  * side lands in the same collector. Each RPC dispatch becomes one OTLP **span**
  * (`${endpoint}/v1/traces`) named after its `functionPath`, with start/end
  * derived from `durationMs` and status OK/ERROR; each `ctx.log.*` line becomes
- * one OTLP **log record** (`${endpoint}/v1/logs`). Trace/span ids are random
- * per span — real trace correlation (worker→container `traceparent`) is a later
- * phase.
+ * one OTLP **log record** (`${endpoint}/v1/logs`). Spans and log records reuse
+ * the dispatch's `traceId`/`spanId` (minted at dispatch entry and propagated to
+ * the shard and any container as a `traceparent`), so a handler's logs, its RPC
+ * span, and the container spans beneath it all stitch into one trace; ids are
+ * only randomised on paths that carry no trace context.
  *
  * Like {@link webhookSink}, each export is its own `fetch`, registered with the
  * request's `context.waitUntil` when present so it survives isolate teardown,

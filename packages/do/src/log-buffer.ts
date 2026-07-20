@@ -1,5 +1,14 @@
-/** Severity of a buffered log entry, mirroring the usual console levels. */
-type LogLevel = "debug" | "error" | "info" | "warn";
+import type { ContextLogLevel } from "../../../shared/log-event";
+
+/**
+ * Severity of a buffered log entry — the full seven-tier `ctx.log` ramp
+ * (`trace`→`fatal`), not a console-shaped subset. The buffer used to fold the
+ * ramp onto four tiers, which made `trace` and `fatal` lines indistinguishable
+ * from `debug` and `error` in the Studio Logs panel; it now stores the level the
+ * caller actually logged at. Container-lifecycle entries only ever use
+ * `info`/`error`, which remain part of the union.
+ */
+type LogLevel = ContextLogLevel;
 
 /**
  * One buffered log line. `functionPath` is the RPC that produced it (when the

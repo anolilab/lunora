@@ -670,8 +670,12 @@ export interface WorkflowInstanceStatusResult {
 }
 /* eslint-enable no-secrets/no-secrets */
 
-/** Severity of a buffered log entry, mirroring `@lunora/do`'s `LogLevel`. */
-export type LogLevel = "debug" | "error" | "info" | "warn";
+/**
+ * Severity of a buffered log entry, mirroring `@lunora/do`'s `LogLevel` — the
+ * full seven-tier `ctx.log` ramp (`trace`→`fatal`). A worker predating the
+ * un-folded buffer only ever sends the four console tiers, which are a subset.
+ */
+export type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
 
 /**
  * One buffered log line returned by `__lunora_admin__:getLogs`. `functionPath`

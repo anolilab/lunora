@@ -1989,19 +1989,28 @@ describe("shardDO admin data migrations", () => {
         vi.restoreAllMocks();
     });
 
-    it("folds the bare `log` level onto info for the studio buffer", async () => {
+    it("keeps the full severity ramp on the studio buffer instead of folding it", async () => {
         expect.assertions(1);
 
+        vi.spyOn(console, "debug").mockImplementation(() => {});
+        vi.spyOn(console, "error").mockImplementation(() => {});
         vi.spyOn(console, "log").mockImplementation(() => {});
+
         const shard = new LoggingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
+        // `log`/`trace`/`fatal` used to fold onto `info`/`debug`/`error`, which made
+        // the three tiers unreadable in the Studio Logs panel. Each is now buffered
+        // at the level the caller actually logged at.
         shard.log("a:b", "log", ["hi"]);
+        shard.log("a:b", "trace", ["deep"]);
+        shard.log("a:b", "fatal", ["boom"]);
         vi.restoreAllMocks();
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}));
         const body = await response.json<{ result: { entries: { level: string }[] } }>();
 
-        expect(body.result.entries[0]!.level).toBe("info");
+        // `entries()` is newest-first, so the buffer reads back in reverse order.
+        expect(body.result.entries.map((entry) => entry.level)).toStrictEqual(["fatal", "trace", "log"]);
     });
 });
 

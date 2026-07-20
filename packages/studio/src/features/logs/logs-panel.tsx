@@ -2,8 +2,10 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-// Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
-// sinks and the dev-terminal formatter (see CLAUDE.md `shared/` rules).
+// Bundler-inlined, zero-dep `key=value` field renderer and severity ordering
+// shared with the runtime sinks and the dev-terminal formatter (see CLAUDE.md
+// `shared/` rules).
+import { LOG_LEVEL_ORDER } from "../../../../../shared/log-event";
 import { formatLogFields } from "../../../../../shared/log-fields";
 import { ErrorAlert } from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
@@ -40,11 +42,19 @@ const ROW_BASE_STYLE: CSSProperties = {
 
 type BadgeVariant = "default" | "destructive" | "outline" | "secondary";
 
-/** Maps a log level to a shadcn Badge variant for Supabase-style severity chips. */
+/**
+ * Maps a log level to a shadcn Badge variant for Supabase-style severity chips.
+ * `fatal` shares `error`'s destructive tone (it is the louder of the two, and the
+ * label itself distinguishes them); `trace` reads quieter than `debug`, and the
+ * default `log` tier reads like `info`.
+ */
 const LEVEL_VARIANT: Record<LogLevel, BadgeVariant> = {
     debug: "secondary",
     error: "destructive",
+    fatal: "destructive",
     info: "outline",
+    log: "outline",
+    trace: "outline",
     warn: "secondary",
 };
 
@@ -210,8 +220,12 @@ const buildRequestQuery = (filters: {
     return query;
 };
 
-/** The four log severities, in ascending order, for the multi-select control. */
-const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
+/**
+ * The seven log severities, in ascending order, for the multi-select control.
+ * Sourced from the bundler-inlined `shared/` contract so the chip list and the
+ * grouped summary stay in step with the `ctx.log` ramp itself.
+ */
+const LOG_LEVELS = LOG_LEVEL_ORDER;
 
 /** A relative time-range window over the Errors buffer, or `all` (no bound). */
 type TimeRange = "15m" | "1h" | "5m" | "all";

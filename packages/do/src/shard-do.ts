@@ -8,7 +8,6 @@ import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
-import { BUFFER_LEVEL } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import { parseTraceparent } from "../../../shared/otlp";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
@@ -4401,7 +4400,7 @@ abstract class ShardDO {
             userId: this.getCurrentUserId(),
         };
 
-        this.logs.push({ fields, functionPath, level: BUFFER_LEVEL[level], message, timestamp: event.ts });
+        this.logs.push({ fields, functionPath, level, message, timestamp: event.ts });
 
         try {
             emitLogEvent(event);
