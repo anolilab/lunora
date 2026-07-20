@@ -15,7 +15,6 @@
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
 
-
 /**
  * Per-RPC dispatch event. Single-shard calls set `shardKey`; cross-shard
  * fan-outs set `fanOut` with the table being aggregated, shard count, and
@@ -79,8 +78,6 @@ export interface ObservabilityEvent {
 export type LogLevel = ContextLogLevel;
 export type ObservabilitySinkContext = LogSinkContext;
 
-
-
 /**
  * The hook contract. Methods are optional so a sink can opt into only the
  * events it cares about; the runtime no-ops the others.
@@ -130,5 +127,5 @@ export const emitLogEvent = (sink: ObservabilitySink | undefined, event: LogEven
     }
 };
 
-export {type LogEvent} from "../../../shared/log-event";
-export {type LogFields} from "../../../shared/log-fields";
+export { type LogEvent } from "../../../shared/log-event";
+export { type LogFields } from "../../../shared/log-fields";

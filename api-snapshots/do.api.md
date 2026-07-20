@@ -1875,7 +1875,7 @@ abstract class ShardDO {
     protected recordChangedTable(table: string): void;
     protected flushMigrationProgress(): Promise<void>;
     protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: LogSink): void;
-    protected makeLogger(functionPath: string, sink?: LogSink, boundFields?: Record<string, unknown>): CtxLogger;
+    protected makeLogger(functionPath: string, sink?: LogSink, boundFields?: Record<string, unknown>): ContextLogger;
     protected isIdentityIndependent(functionPath: string): boolean;
     protected readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): {
         changes: CdcChange[];

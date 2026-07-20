@@ -4437,13 +4437,27 @@ abstract class ShardDO {
         };
 
         return {
-            debug: (...args: unknown[]) => { emit("debug", args); },
-            error: (...args: unknown[]) => { emit("error", args); },
-            fatal: (...args: unknown[]) => { emit("fatal", args); },
-            info: (...args: unknown[]) => { emit("info", args); },
-            log: (...args: unknown[]) => { emit("log", args); },
-            trace: (...args: unknown[]) => { emit("trace", args); },
-            warn: (...args: unknown[]) => { emit("warn", args); },
+            debug: (...args: unknown[]) => {
+                emit("debug", args);
+            },
+            error: (...args: unknown[]) => {
+                emit("error", args);
+            },
+            fatal: (...args: unknown[]) => {
+                emit("fatal", args);
+            },
+            info: (...args: unknown[]) => {
+                emit("info", args);
+            },
+            log: (...args: unknown[]) => {
+                emit("log", args);
+            },
+            trace: (...args: unknown[]) => {
+                emit("trace", args);
+            },
+            warn: (...args: unknown[]) => {
+                emit("warn", args);
+            },
             with: (fields: Record<string, unknown>) => this.makeLogger(functionPath, sink, boundFields ? { ...boundFields, ...fields } : fields),
         };
     }
