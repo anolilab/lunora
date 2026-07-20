@@ -374,10 +374,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">): R
     return <li data-slot="sidebar-menu-item" data-sidebar="menu-item" className={cn("group/menu-item relative", className)} {...props} />;
 }
 
-const sidebarMenuButtonVariants: (props?: {
-    variant?: "default" | "outline" | null;
-    size?: "default" | "sm" | "lg" | null;
-}) => string = cva(
+const sidebarMenuButtonVariants: (props?: { variant?: "default" | "outline" | null; size?: "default" | "sm" | "lg" | null }) => string = cva(
     "peer/menu-button group/menu-button flex w-full items-center gap-2 overflow-hidden rounded-none p-2 text-start text-xs ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pe-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-sidebar-accent-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate",
     {
         variants: {
