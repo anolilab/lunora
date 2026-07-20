@@ -822,6 +822,11 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "name": "destroyedAt",
             "optional": true,
             "type": "number"
+        },
+        {
+            "name": "teardownAt",
+            "optional": true,
+            "type": "number"
         }
     ],
     "deployKeys": [

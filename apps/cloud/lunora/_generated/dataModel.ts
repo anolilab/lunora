@@ -112,6 +112,7 @@ export interface Doc_deployments {
     supersededAt?: number;
     failedAt?: number;
     destroyedAt?: number;
+    teardownAt?: number;
 }
 
 export interface Doc_deployKeys {
@@ -587,6 +588,7 @@ export interface Insert_deployments {
     supersededAt?: number;
     failedAt?: number;
     destroyedAt?: number;
+    teardownAt?: number;
 }
 
 export interface Insert_deployKeys {

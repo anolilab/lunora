@@ -157,6 +157,12 @@ export default defineSchema({
         supersededAt: v.optional(v.number()),
         failedAt: v.optional(v.number()),
         destroyedAt: v.optional(v.number()),
+        // Set when the teardown sweep has actually removed the Cloudflare
+        // dispatch script (GAPS.md A1 / §2.3). `destroyedAt` records the
+        // lifecycle transition; `teardownAt` records that the real resource is
+        // gone — the sweep only acts on `destroyed` rows where this is unset, so
+        // it is crash-safe idempotent (a re-run tears down nothing twice).
+        teardownAt: v.optional(v.number()),
     })
         .global()
         // Dispatcher resolves a stable alias → the project's active script.
