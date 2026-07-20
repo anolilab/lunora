@@ -2,7 +2,8 @@ import { LunoraProvider } from "@lunora/react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { formatMetricValue, InstrumentsTable, metricHeadline } from "../../../src/features/reports/instruments-table";
+import { formatMetricValue, metricHeadline } from "../../../src/features/reports/instrument-format";
+import { InstrumentsTable } from "../../../src/features/reports/instruments-table";
 import type { MetricSeries } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";

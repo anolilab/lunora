@@ -1138,6 +1138,7 @@ const MESSAGE_IDS = [
     "Trace waterfall",
     "Errored span",
     "{count} spans",
+    "starts {offset} in, runs {duration}",
     "Showing the {shown} most recent of {total} traces in the buffer.",
     "No traces",
     "Traces recorded with ctx.trace show up here as your app handles traffic. The span buffer resets when the shard hibernates.",

@@ -67,7 +67,20 @@ const SpanRow = ({ span, traceDurationMs }: SpanRowProps): ReactElement => {
                 )}
                 {span.name}
             </span>
-            <span className="relative h-3 flex-1 overflow-hidden rounded-sm bg-muted" role="gridcell">
+            {/*
+             * The bar cell carries no text, so a screen reader would announce an
+             * empty gridcell. Label it with the waterfall position it encodes —
+             * where in the trace the span starts and how long it ran — which is
+             * otherwise available only visually.
+             */}
+            <span
+                aria-label={t("starts {offset} in, runs {duration}", {
+                    duration: formatSpanDuration(span.durationMs),
+                    offset: formatSpanDuration(span.offsetMs),
+                })}
+                className="relative h-3 flex-1 overflow-hidden rounded-sm bg-muted"
+                role="gridcell"
+            >
                 <span
                     className={cn("absolute inset-y-0 rounded-sm", span.ok ? "bg-primary/70" : "bg-destructive")}
                     data-left={leftPercent}

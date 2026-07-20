@@ -7,6 +7,7 @@ import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import type { MetricKind, MetricSeries, MetricSeriesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { formatMetricValue, metricHeadline } from "./instrument-format";
 // Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
 // sinks and the other observability panels (see CLAUDE.md `shared/` rules).
 import { formatLogFields } from "../../../../../shared/log-fields";
@@ -15,28 +16,6 @@ interface InstrumentsTableProps {
     /** Shard key the series are read from — already debounced by the parent. */
     readonly shardKey: string;
 }
-
-/**
- * The headline value the panel shows for a series, projected by instrument kind:
- * a gauge's current reading, a histogram's mean, a counter's running total. A
- * histogram with no samples can't divide, so `count` is floored at 1 (the series
- * always has ≥1 sample once it exists, but this keeps the helper total).
- */
-export const metricHeadline = (series: MetricSeries): number => {
-    if (series.kind === "gauge") {
-        return series.last;
-    }
-
-    if (series.kind === "histogram") {
-        return series.sum / Math.max(1, series.count);
-    }
-
-    return series.sum;
-};
-
-/** Format a metric value: grouped integer, or up to 2 decimals for a fractional one. */
-export const formatMetricValue = (value: number): string =>
-    Number.isInteger(value) ? value.toLocaleString() : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
 /** Coerce a (possibly partial or pre-feature) `getMetricSeries` payload into its `series` array. */
 const seriesOf = (result: MetricSeriesResult | undefined): MetricSeries[] => (Array.isArray(result?.series) ? result.series : []);
