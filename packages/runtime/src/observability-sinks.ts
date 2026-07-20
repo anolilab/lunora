@@ -77,9 +77,9 @@ const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
     // key overrides it (as documented) rather than emitting a duplicate `KeyValue`
     // the collector resolves ambiguously. Reserved keys go in first; caller
     // fields overwrite.
-    const attributeByKey = new Map<string, ReturnType<typeof encodeAttribute>>();
-
-    attributeByKey.set("lunora.function_path", encodeAttribute("lunora.function_path", event.functionPath));
+    const attributeByKey = new Map<string, ReturnType<typeof encodeAttribute>>([
+        ["lunora.function_path", encodeAttribute("lunora.function_path", event.functionPath)],
+    ]);
 
     if (event.shardKey !== undefined) {
         attributeByKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", event.shardKey));
@@ -196,7 +196,7 @@ export interface WebhookSinkOptions extends OnlyErrorsOption {
     transform?: (event: ObservabilityEvent) => null | ObservabilityEvent | undefined;
 
     /**
-     * Optional redaction hook for `ctx.log` events (the {@link transform}
+     * Optional redaction hook for `ctx.log` events (the `transform`
      * counterpart for log lines). Same fail-closed contract: return the event to
      * ship it, `null`/`undefined` to drop it, and a throw drops it. When unset,
      * log events are shipped as-is (message + structured fields — which may carry

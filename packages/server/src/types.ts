@@ -1292,10 +1292,8 @@ type LogFields = Record<string, unknown>;
 /**
  * One `ctx.log` severity method. Two call forms:
  *
- * - **Structured** — `ctx.log.info("order placed", { orderId, total })`: a
- *   message string plus a `fields` object. The fields are indexed as attributes.
- * - **Console-style** — `ctx.log.info("state", value, other)`: any number of
- *   values, joined into the display message exactly like `console.log`.
+ * - **Structured** — `ctx.log.info("order placed", { orderId, total })`: a message string plus a `fields` object. The fields are indexed as attributes.
+ * - **Console-style** — `ctx.log.info("state", value, other)`: any number of values, joined into the display message exactly like `console.log`.
  *
  * The structured form is matched when the second argument is a plain object;
  * otherwise the call is treated as console-style, so existing `console`-shaped

@@ -28,6 +28,8 @@
  * export { ShardDO } from "./lunora/server";
  * ```
  */
+
+/* eslint-disable import/exports-last -- the public ModuleOptions type is declared next to the module definition it configures rather than grouped at the file end */
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 

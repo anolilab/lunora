@@ -382,7 +382,7 @@ const isLogFields = (value: unknown): value is LogFields => {
         return false;
     }
 
-    const proto = Object.getPrototypeOf(value);
+    const proto: unknown = Object.getPrototypeOf(value);
 
     return proto === Object.prototype || proto === null;
 };
@@ -707,4 +707,4 @@ export type {
     RequestOutcome,
 };
 
-export {type ContextLogLevel} from "../../../shared/log-event";
+export { type ContextLogLevel } from "../../../shared/log-event";

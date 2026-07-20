@@ -224,6 +224,7 @@ const CAPABILITY_ROWS = [
 // Shape-check the canonical table without an inline `satisfies` (which is not
 // emittable under isolated declarations, since `CAPABILITY_ROWS` is referenced
 // by the exported `typeof`-derived types below).
+// eslint-disable-next-line no-void, sonarjs/void-use -- `void` makes the standalone `satisfies` type-check a statement without tripping no-unused-expressions
 void (CAPABILITY_ROWS satisfies ReadonlyArray<CapabilityDescriptor>);
 
 /** The literal union of every capability id — the single source of truth for `FeatureUsage`'s keys (so they cannot drift). */

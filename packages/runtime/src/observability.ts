@@ -11,6 +11,8 @@
  * the sink are swallowed (they would otherwise replace a useful user-visible
  * error with a telemetry-pipeline failure).
  */
+
+/* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
 
 

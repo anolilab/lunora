@@ -158,6 +158,7 @@ const check = (): void => {
         Check18,
     ];
 
+    // eslint-disable-next-line no-void, sonarjs/void-use -- marks the type-assertion tuple as used so its `@ts-expect-error`/`Equal<>` checks are evaluated
     void assertions;
 };
 

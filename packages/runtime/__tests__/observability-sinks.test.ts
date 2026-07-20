@@ -318,7 +318,9 @@ describe("observability-sinks", () => {
 
             const logEvent: LogEvent = { args: [], fields: { orderId: "o-1" }, functionPath: "orders:place", level: "info", message: "placed", ts: 1 };
             const sink = webhookSink({
-                transformLog: (event) => {return { ...event, fields: undefined }},
+                transformLog: (event) => {
+                    return { ...event, fields: undefined };
+                },
                 url: "https://ingest.example/events",
             });
 
@@ -406,7 +408,9 @@ describe("observability-sinks", () => {
             });
 
             expect(throwing.onLog).toBeDefined();
-            expect(() => { throwing.onLog!(logEvent); }).not.toThrow();
+            expect(() => {
+                throwing.onLog!(logEvent);
+            }).not.toThrow();
         });
 
         it("omits onLog entirely when captureLog is not provided (logs stay out of Sentry)", () => {
@@ -991,7 +995,13 @@ describe("observability-sinks", () => {
             expect.assertions(2);
 
             const sent: Record<string, unknown>[][] = [];
-            const sink = pipelineLogSink({ pipeline: { send: async (records) => void sent.push(records) } });
+            const sink = pipelineLogSink({
+                pipeline: {
+                    send: async (records) => {
+                        sent.push(records);
+                    },
+                },
+            });
 
             sink.onLog!(logEvent);
 
@@ -1017,7 +1027,11 @@ describe("observability-sinks", () => {
             const kept: Promise<unknown>[] = [];
             const sink = pipelineLogSink({ pipeline: { send: async () => undefined } });
 
-            sink.onLog!(logEvent, { waitUntil: (promise) => void kept.push(promise) });
+            sink.onLog!(logEvent, {
+                waitUntil: (promise) => {
+                    kept.push(promise);
+                },
+            });
 
             expect(kept).toHaveLength(1);
         });
