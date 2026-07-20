@@ -1,4 +1,4 @@
-import type { Provisioner, TenantDeploymentSpec } from "../provision";
+import type { Provisioner, TenantBindingSpec, TenantDeploymentSpec } from "../provision";
 import { randomSecret } from "./keys";
 import type { DeployProgress } from "./orchestrator";
 import { runDeployment } from "./orchestrator";
@@ -67,7 +67,22 @@ export interface DeployHandlerDeps {
     scheduler: CellScheduler;
 }
 
+/**
+ * The tenant's binding manifest, as declared by the deploy request. The CLI
+ * reads it from the app's `wrangler.jsonc` (DO classes, and whether the app
+ * uses a per-tenant D1 / R2), so the control plane provisions exactly what the
+ * uploaded bundle expects. Mirrors {@link TenantBindingSpec}; normalized (and
+ * floored to ShardDO) by {@link normalizeBindings} before provisioning.
+ */
+interface DeployBindings {
+    d1?: { binding: string };
+    durableObjects?: { binding: string; className: string }[];
+    r2?: { binding: string };
+}
+
 interface DeployBody {
+    /** Per-tenant binding manifest (DO classes / D1 / R2); ShardDO is always ensured. */
+    bindings?: DeployBindings;
     branch?: string;
     /** Base64-encoded prebuilt worker module (the app's Vite build output — never built here). */
     bundle?: string;
@@ -75,6 +90,46 @@ interface DeployBody {
     projectId?: string;
     scriptName?: string;
 }
+
+/**
+ * Every Lunora tenant worker exports `ShardDO` (binding `SHARD`); without its
+ * binding and the matching `new_sqlite_classes` migration tag the uploaded
+ * dispatch script cannot boot (`putDispatchScript` omits the DO migration and
+ * the worker's `ShardDO` export has nowhere to bind). This is the floor the
+ * whole deploy path was missing — the spec was previously built with an empty
+ * binding set, so a real tenant could never come up.
+ */
+const SHARD_DO_BINDING = { binding: "SHARD", className: "ShardDO" } as const;
+
+/** Cap the declared DO classes so a malformed/abusive manifest can't balloon the upload metadata. */
+const MAX_DURABLE_OBJECTS = 25;
+
+const isBindingRef = (value: unknown): value is { binding: string } =>
+    typeof value === "object" && value !== null && typeof (value as { binding?: unknown }).binding === "string";
+
+/**
+ * Resolve the request's binding manifest into the provisioner spec, guaranteeing
+ * the ShardDO floor even when the caller under-declares (or omits `bindings`
+ * entirely). Malformed entries are dropped rather than trusted, and the DO list
+ * is capped.
+ */
+const normalizeBindings = (requested: DeployBindings | undefined): TenantBindingSpec => {
+    const declared = Array.isArray(requested?.durableObjects) ? requested.durableObjects : [];
+    const durableObjects = declared
+        .filter((entry): entry is { binding: string; className: string } => isBindingRef(entry) && typeof (entry as { className?: unknown }).className === "string")
+        .slice(0, MAX_DURABLE_OBJECTS)
+        .map((entry) => ({ binding: entry.binding, className: entry.className }));
+
+    if (!durableObjects.some((entry) => entry.className === SHARD_DO_BINDING.className)) {
+        durableObjects.unshift({ ...SHARD_DO_BINDING });
+    }
+
+    return {
+        ...(isBindingRef(requested?.d1) ? { d1: { binding: requested.d1.binding } } : {}),
+        ...(isBindingRef(requested?.r2) ? { r2: { binding: requested.r2.binding } } : {}),
+        durableObjects,
+    };
+};
 
 const json = (status: number, data: unknown): Response => Response.json(data, { headers: { "content-type": "application/json" }, status });
 
@@ -204,7 +259,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
             }
 
             const spec: TenantDeploymentSpec = {
-                bindings: {},
+                bindings: normalizeBindings(body.bindings),
                 bundle,
                 cell: deps.cell,
                 dispatchNamespace: deps.dispatchNamespace(kind),
