@@ -11,6 +11,7 @@ const makeQueryContext = (): QueryContext => {
         secrets: { get: async () => "secret" },
         db: {} as QueryContext["db"],
         log: {} as QueryContext["log"],
+        metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
 
         trace: (async (_name: string, fn: () => unknown) => fn()) as QueryContext["trace"],
         now: 0,
@@ -26,6 +27,7 @@ const makeMutationContext = (): MutationContext => {
         secrets: { get: async () => "secret" },
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
+        metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
 
         trace: (async (_name: string, fn: () => unknown) => fn()) as MutationContext["trace"],
         now: 0,
@@ -46,6 +48,7 @@ const makeActionContext = (): ActionContext => {
         db: {} as ActionContext["db"],
         fetch: globalThis.fetch,
         log: {} as ActionContext["log"],
+        metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
 
         trace: (async (_name: string, fn: () => unknown) => fn()) as ActionContext["trace"],
         now: 0,

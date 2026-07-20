@@ -26,6 +26,7 @@ const makeMutationContext = (): MutationContext => {
         auth: { getIdentity: async () => null, userId: null },
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
+        metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
 
         trace: (async (_name: string, fn: () => unknown) => fn()) as MutationContext["trace"],
         now: 0,

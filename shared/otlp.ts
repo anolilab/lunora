@@ -10,8 +10,9 @@
  * These are the pure, dependency-free pieces of the OTLP/JSON contract both sides
  * share: the `AnyValue`/`KeyValue` encoding, `SeverityNumber` map, the
  * decimal-string `*UnixNano` and hex `trace_id`/`span_id` encoders, the
- * case-insensitive header merge, and the `resourceSpans`/`resourceLogs`
- * envelopes. Each package keeps only its own transport and event→OTLP mapping.
+ * case-insensitive header merge, and the `resourceSpans`/`resourceLogs`/
+ * `resourceMetrics` envelopes. Each package keeps only its own transport and
+ * event→OTLP mapping.
  *
  * Keep this genuinely zero-dependency (only built-ins) so inlining stays sound.
  */
@@ -232,6 +233,18 @@ const wrapResourceLogs = (logRecord: unknown, scopeName: string, serviceName: st
     };
 };
 
+/** Wrap one encoded OTLP metric in the `ExportMetricsServiceRequest` envelope. */
+const wrapResourceMetrics = (metric: unknown, scopeName: string, serviceName: string): unknown => {
+    return {
+        resourceMetrics: [
+            {
+                resource: { attributes: [encodeAttribute("service.name", serviceName)] },
+                scopeMetrics: [{ metrics: [metric], scope: { name: scopeName } }],
+            },
+        ],
+    };
+};
+
 export type { OtlpAnyValue, OtlpAttribute, OtlpAttributeValue, OtlpLevel };
 export {
     buildTraceparent,
@@ -243,5 +256,6 @@ export {
     otlpUnixNano,
     parseTraceparent,
     wrapResourceLogs,
+    wrapResourceMetrics,
     wrapResourceSpans,
 };

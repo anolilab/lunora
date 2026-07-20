@@ -1375,6 +1375,50 @@ interface LunoraTracer {
     <T>(name: string, fn: () => Promise<T> | T, attributes?: LogFields): Promise<T>;
 }
 
+/**
+ * Application metrics on every function `ctx` — the third signal alongside
+ * `ctx.log` and `ctx.trace`. Each call records one measurement that flows to an
+ * `ObservabilitySink`'s `onMetric`, and from `otlpSink` to a collector's
+ * `/v1/metrics`.
+ *
+ * ```ts
+ * ctx.metrics.count("orders.placed", 1, { plan: user.plan });
+ * ctx.metrics.record("checkout.latency_ms", Date.now() - started);
+ * ctx.metrics.gauge("cart.items", cart.items.length);
+ * ```
+ *
+ * Pick the instrument by the question you want to answer: `count` for "how many"
+ * (summed over time), `gauge` for "how many right now" (replaces the last
+ * reading), `record` for "what's the distribution" (percentiles, not just a
+ * mean).
+ *
+ * `attributes` are the metric's dimensions. Keep them **low-cardinality** — an
+ * attribute valued by user id or order id creates a distinct time series per id,
+ * which is how a metrics backend gets expensive. Put identifiers on a log line or
+ * a span instead.
+ *
+ * No pre-aggregation happens: one call is one exported measurement, with counter
+ * deltas for the collector to sum. In a hot loop, sum locally and record once
+ * rather than calling per iteration.
+ */
+interface LunoraMetrics {
+    /**
+     * Add to a monotonic counter (default `1`) — requests served, retries,
+     * bytes sent. The collector sums successive deltas.
+     */
+    readonly count: (name: string, value?: number, attributes?: LogFields) => void;
+    /**
+     * Report a point-in-time reading that replaces the previous one — queue
+     * depth, cache size, connections open.
+     */
+    readonly gauge: (name: string, value: number, attributes?: LogFields) => void;
+    /**
+     * Observe one sample of a distribution — latency, payload size. Use this,
+     * not a counter, when percentiles matter.
+     */
+    readonly record: (name: string, value: number, attributes?: LogFields) => void;
+}
+
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 interface QueryCtx {
     readonly auth: AuthState;
@@ -1400,6 +1444,9 @@ interface QueryCtx {
 
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
+
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+    readonly metrics: LunoraMetrics;
 
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
@@ -1452,6 +1499,9 @@ interface MutationCtx {
 
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
+
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+    readonly metrics: LunoraMetrics;
 
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
@@ -1526,6 +1576,9 @@ interface ActionCtx {
 
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
+
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+    readonly metrics: LunoraMetrics;
 
     /**
      * Wall-clock time (epoch ms) the action began, captured once for convenience
@@ -1621,6 +1674,7 @@ export type {
     LogFields,
     LunoraLogger,
     LunoraLogMethod,
+    LunoraMetrics,
     LunoraTracer,
     MutationCtx,
     OnDeleteAction,

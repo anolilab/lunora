@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
+import type { MetricEvent } from "../../../shared/metric-event";
 import type { SpanEvent } from "../../../shared/span-event";
 import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { ShardDOState } from "../src/shard-do";
@@ -17,6 +18,12 @@ class TracingShard extends ShardDO {
     // eslint-disable-next-line class-methods-use-this -- override stub; this shard exists only to expose makeTracer
     public override async handleRpc(): Promise<unknown> {
         return { ok: true };
+    }
+
+    // NOT named `metrics`: `ShardDO` already owns a `metrics` counters field, and
+    // the instance field would shadow a prototype method of the same name.
+    public metricsFor(functionPath: string, sink?: Parameters<TracingShard["makeMetrics"]>[1]): ReturnType<TracingShard["makeMetrics"]> {
+        return this.makeMetrics(functionPath, sink);
     }
 
     public tracer(functionPath: string, sink?: Parameters<TracingShard["makeTracer"]>[1]): ReturnType<TracingShard["makeTracer"]> {
@@ -296,5 +303,81 @@ describe("ctx.trace", () => {
         expect(body.result.traces).toHaveLength(1);
         expect(first?.spans.map((entry) => entry.name)).toStrictEqual(["outer", "inner"]);
         expect(first?.spans.map((entry) => entry.depth)).toStrictEqual([0, 1]);
+    });
+});
+
+describe("ctx.metrics", () => {
+    const recorderFor = (): { seen: MetricEvent[]; metrics: ReturnType<TracingShard["metricsFor"]> } => {
+        const seen: MetricEvent[] = [];
+        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        return { metrics: shard.metricsFor("orders:checkout", { onMetric: (event) => seen.push(event) }), seen };
+    };
+
+    it("records each instrument kind with the value the caller passed", () => {
+        expect.assertions(4);
+
+        const { metrics, seen } = recorderFor();
+
+        metrics.count("orders.placed");
+        metrics.gauge("cart.items", 3);
+        metrics.record("checkout.latency_ms", 128);
+
+        expect(seen.map((event) => event.kind)).toStrictEqual(["counter", "gauge", "histogram"]);
+        // `count` defaults to an increment of 1.
+        expect(seen[0]?.value).toBe(1);
+        expect(seen[1]?.value).toBe(3);
+        expect(seen[2]?.value).toBe(128);
+    });
+
+    it("attributes the measurement to the dispatched function", () => {
+        expect.assertions(2);
+
+        const { metrics, seen } = recorderFor();
+
+        metrics.count("orders.placed", 2, { plan: "pro" });
+
+        expect(seen[0]?.functionPath).toBe("orders:checkout");
+        expect(seen[0]?.attributes).toStrictEqual({ plan: "pro" });
+    });
+
+    it("normalizes attributes to JSON-safe primitives and snapshots them", () => {
+        expect.assertions(2);
+
+        const { metrics, seen } = recorderFor();
+        const attributes: Record<string, unknown> = { size: 10n, tier: "gold" };
+
+        metrics.count("orders.placed", 1, attributes);
+        attributes.tier = "mutated";
+
+        expect(seen[0]?.attributes).toStrictEqual({ size: "10", tier: "gold" });
+        expect(seen).toHaveLength(1);
+    });
+
+    it("drops a non-finite measurement instead of poisoning the aggregate", () => {
+        expect.assertions(1);
+
+        const { metrics, seen } = recorderFor();
+
+        // e.g. a latency computed from a missing start time.
+        metrics.record("checkout.latency_ms", Number.NaN);
+        metrics.gauge("cart.items", Number.POSITIVE_INFINITY);
+
+        expect(seen).toHaveLength(0);
+    });
+
+    it("survives a throwing sink without failing the handler", () => {
+        expect.assertions(1);
+
+        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const metrics = shard.metricsFor("orders:checkout", {
+            onMetric: () => {
+                throw new Error("sink is down");
+            },
+        });
+
+        expect(() => {
+            metrics.count("orders.placed");
+        }).not.toThrow();
     });
 });

@@ -10,6 +10,7 @@ import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
+import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
 import { otlpRandomHex, parseTraceparent } from "../../../shared/otlp";
 import type { SpanEvent } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
@@ -172,6 +173,7 @@ const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes
  */
 interface LogSink {
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
+    onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
 }
 
@@ -197,6 +199,16 @@ interface ContextLogger {
  * `@lunora/do` takes no dependency on `@lunora/server`.
  */
 type CtxTracer = <T>(name: string, fn: () => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+
+/**
+ * Structural shape of the `ctx.metrics` recorder the DO builds (see the server
+ * `LunoraMetrics`). Declared locally for the same reason as {@link CtxLogger}.
+ */
+interface CtxMetrics {
+    count: (name: string, value?: number, attributes?: LogFields) => void;
+    gauge: (name: string, value: number, attributes?: LogFields) => void;
+    record: (name: string, value: number, attributes?: LogFields) => void;
+}
 
 /**
  * The trace ids a dispatch's spans hang off: taken from the inbound
@@ -4611,6 +4623,68 @@ abstract class ShardDO {
      * a span is recorded *after* its body already settled, so letting a telemetry
      * failure escape here would turn a succeeded operation into a failed request.
      */
+    /**
+     * Build the `ctx.metrics` recorder for one dispatched function. The generated
+     * `buildCtx` calls this once per dispatch and assigns the result to
+     * `ctx.metrics`.
+     *
+     * Deliberately stateless: each call emits one measurement rather than
+     * accumulating into a per-dispatch map. Pre-aggregating here would have to
+     * pick a flush point and a merge rule per instrument kind (sum a counter,
+     * last-wins a gauge, and a histogram cannot be merged at all without losing
+     * the distribution) — so the runtime stays a transport and the collector,
+     * which is built for exactly this, does the aggregation.
+     */
+    protected makeMetrics(functionPath: string, sink?: LogSink): CtxMetrics {
+        const emit = (kind: MetricKind, name: string, value: number, attributes?: LogFields): void => {
+            // A NaN/Infinity measurement has no meaningful encoding and would
+            // poison an aggregate downstream — drop it rather than export it.
+            if (!Number.isFinite(value)) {
+                return;
+            }
+
+            const normalized = normalizeLogFields(attributes);
+
+            this.recordMetric(
+                {
+                    ...(normalized === undefined ? {} : { attributes: normalized }),
+                    functionPath,
+                    kind,
+                    name,
+                    shardKey: this.state.id?.name,
+                    ts: Date.now(),
+                    value,
+                },
+                sink,
+            );
+        };
+
+        return {
+            count: (name: string, value = 1, attributes?: LogFields) => emit("counter", name, value, attributes),
+            gauge: (name: string, value: number, attributes?: LogFields) => emit("gauge", name, value, attributes),
+            record: (name: string, value: number, attributes?: LogFields) => emit("histogram", name, value, attributes),
+        };
+    }
+
+    /**
+     * Hand one measurement to the optional `sink.onMetric`. Best-effort like
+     * {@link recordUserLog} and {@link recordSpan}: recording a measurement must
+     * never break the handler that recorded it.
+     *
+     * Unlike logs and spans there is no in-memory buffer behind this — a
+     * measurement's value is in its aggregate over time, which a bounded ring on
+     * a hibernating instance cannot represent. Metrics go to the sink or nowhere.
+     */
+    protected recordMetric(event: MetricEvent, sink?: LogSink): void {
+        if (sink?.onMetric) {
+            try {
+                sink.onMetric(event, { waitUntil: this.state.waitUntil?.bind(this.state) });
+            } catch {
+                // A buggy metric sink must not break the handler.
+            }
+        }
+    }
+
     /**
      * Record the synthetic root span for a finished dispatch, so the studio's
      * waterfall has a bar for the request itself to hang `ctx.trace` spans under.

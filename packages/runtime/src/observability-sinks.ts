@@ -19,8 +19,17 @@
  * if that is a concern.
  */
 import { coerceFieldValue } from "../../../shared/log-fields";
-import { encodeAttribute, mergeHeaders, OTLP_SEVERITY, otlpRandomHex, otlpUnixNano, wrapResourceLogs, wrapResourceSpans } from "../../../shared/otlp";
-import type { LogEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
+import {
+    encodeAttribute,
+    mergeHeaders,
+    OTLP_SEVERITY,
+    otlpRandomHex,
+    otlpUnixNano,
+    wrapResourceLogs,
+    wrapResourceMetrics,
+    wrapResourceSpans,
+} from "../../../shared/otlp";
+import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
 
 /** Shared shape for sinks that can be limited to error events only. */
 interface OnlyErrorsOption {
@@ -123,6 +132,74 @@ const otlpSpanBody = (event: SpanEvent, serviceName: string): unknown => {
     return wrapResourceSpans(span, "@lunora/runtime", serviceName);
 };
 
+/**
+ * Build the OTLP metric-export body for one `ctx.metrics.*` measurement.
+ *
+ * One data point per call — the runtime does no pre-aggregation — so counters
+ * and histograms are exported with **DELTA** temporality (`aggregationTemporality: 1`),
+ * which tells the collector to sum successive exports rather than treat each as
+ * a running total. A gauge has no temporality: it is a reading that replaces the
+ * previous one.
+ *
+ * The histogram carries a single observation in one implicit bucket
+ * (`explicitBounds: []`, `bucketCounts: ["1"]`) — a valid OTLP encoding that lets
+ * the collector build the distribution from the stream of counts/sums, without
+ * the runtime having to pick bucket boundaries for the user.
+ */
+const otlpMetricBody = (event: MetricEvent, serviceName: string): unknown => {
+    const attributeByKey = new Map<string, ReturnType<typeof encodeAttribute>>();
+
+    attributeByKey.set("lunora.function_path", encodeAttribute("lunora.function_path", event.functionPath));
+
+    if (event.shardKey !== undefined) {
+        attributeByKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", event.shardKey));
+    }
+
+    for (const [key, value] of Object.entries(event.attributes ?? {})) {
+        attributeByKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
+    }
+
+    const timeUnixNano = otlpUnixNano(event.ts);
+    const attributes = [...attributeByKey.values()];
+    const dataPoint = { asDouble: event.value, attributes, startTimeUnixNano: timeUnixNano, timeUnixNano };
+
+    if (event.kind === "gauge") {
+        return wrapResourceMetrics({ gauge: { dataPoints: [dataPoint] }, name: event.name }, "@lunora/runtime", serviceName);
+    }
+
+    if (event.kind === "histogram") {
+        return wrapResourceMetrics(
+            {
+                histogram: {
+                    aggregationTemporality: 1,
+                    dataPoints: [
+                        {
+                            attributes,
+                            bucketCounts: ["1"],
+                            count: "1",
+                            explicitBounds: [],
+                            max: event.value,
+                            min: event.value,
+                            startTimeUnixNano: timeUnixNano,
+                            sum: event.value,
+                            timeUnixNano,
+                        },
+                    ],
+                },
+                name: event.name,
+            },
+            "@lunora/runtime",
+            serviceName,
+        );
+    }
+
+    return wrapResourceMetrics(
+        { name: event.name, sum: { aggregationTemporality: 1, dataPoints: [dataPoint], isMonotonic: true } },
+        "@lunora/runtime",
+        serviceName,
+    );
+};
+
 /** Build the OTLP log-export body for one application log line. */
 const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
     // Keyed by attribute name so a caller field that reuses a reserved `lunora.*`
@@ -212,6 +289,12 @@ export const consoleSink = (options: OnlyErrorsOption = {}): ObservabilitySink =
                 console.log("[lunora:log]", event.functionPath, event.message);
             }
         },
+        onMetric: (event) => {
+            // Measurements, like log lines, are the developer's own output and so
+            // are never scoped by `onlyErrors`.
+            // eslint-disable-next-line no-console
+            console.log("[lunora:metric]", `${event.name}=${String(event.value)}`, event.kind, event.functionPath);
+        },
         onRpc: (event) => {
             if (shouldSkip(event, onlyErrors)) {
                 return;
@@ -224,6 +307,12 @@ export const consoleSink = (options: OnlyErrorsOption = {}): ObservabilitySink =
                 // eslint-disable-next-line no-console
                 console.error("[lunora:rpc]", event);
             }
+        },
+        onSpan: (event) => {
+            const status = event.ok ? "ok" : `error ${event.error?.type ?? ""}`.trim();
+
+            // eslint-disable-next-line no-console
+            console.log("[lunora:span]", event.name, `${String(event.durationMs)}ms`, status, event.functionPath);
         },
     };
 };
@@ -638,6 +727,7 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
 
     const tracesUrl = `${base}/v1/traces`;
     const logsUrl = `${base}/v1/logs`;
+    const metricsUrl = `${base}/v1/metrics`;
     // `token` is applied last (inside `mergeHeaders`) so it wins over any
     // authorization in `headers`, matching the container exporter's precedence.
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers, token);
@@ -647,6 +737,11 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
             // Application log lines are exported whole; `onlyErrors` scopes the
             // RPC span stream, not the developer's `ctx.log` output.
             otlpPost(logsUrl, otlpLogBody(event, serviceName), mergedHeaders, context);
+        },
+        onMetric: (event, context) => {
+            // Like logs and spans, a measurement the developer explicitly recorded
+            // is never scoped by `onlyErrors`.
+            otlpPost(metricsUrl, otlpMetricBody(event, serviceName), mergedHeaders, context);
         },
         onRpc: (event, context) => {
             if (shouldSkip(event, onlyErrors)) {
@@ -698,6 +793,19 @@ export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink =
 
                 try {
                     sink.onRpc(event, context);
+                } catch {
+                    // Isolate failures so one bad sink doesn't starve the rest.
+                }
+            }
+        },
+        onMetric: (event: MetricEvent, context?: ObservabilitySinkContext) => {
+            for (const sink of sinks) {
+                if (!sink.onMetric) {
+                    continue;
+                }
+
+                try {
+                    sink.onMetric(event, context);
                 } catch {
                     // Isolate failures so one bad sink doesn't starve the rest.
                 }

@@ -47,9 +47,11 @@ export interface TraceSummary {
     rootName: string;
     shardKey?: string;
     /**
-     * Spans ordered by start time, ready to render as waterfall rows. Because a
-     * parent always starts before its children, that ordering is also a valid
-     * pre-order traversal of the span tree — indenting each row by its `depth`
+     * Spans ordered by `(offsetMs, depth)`, ready to render as waterfall rows.
+     * Start time alone is not enough to order them: spans are recorded on
+     * completion and `startTs` has millisecond resolution, so a parent and its
+     * child routinely tie. Breaking that tie by depth makes the sequence a valid
+     * pre-order traversal of the span tree, so indenting each row by its `depth`
      * yields the nesting without a separate tree walk.
      */
     spans: TraceSpan[];

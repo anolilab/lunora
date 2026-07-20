@@ -14,6 +14,7 @@
 
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
+import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
 import type { SpanEvent } from "../../../shared/span-event";
 
 /**
@@ -86,6 +87,11 @@ export type ObservabilitySinkContext = LogSinkContext;
 export interface ObservabilitySink {
     /** Invoked once per `ctx.log.*` call from a function handler. */
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
+    /**
+     * Invoked once per `ctx.metrics.*` measurement. No pre-aggregation happens
+     * upstream, so counter values are deltas for the destination to sum.
+     */
+    onMetric?: (event: MetricEvent, context?: ObservabilitySinkContext) => void;
     /** Invoked once per dispatched RPC (single-shard or fan-out). */
     onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
     /**
@@ -152,6 +158,24 @@ export const emitSpanEvent = (sink: ObservabilitySink | undefined, event: SpanEv
     }
 };
 
+/**
+ * Invoke `sink.onMetric` with the given measurement, swallowing any error the
+ * sink throws. The same failure model as {@link emitRpcEvent}: recording a
+ * measurement must never break the handler that recorded it.
+ */
+export const emitMetricEvent = (sink: ObservabilitySink | undefined, event: MetricEvent, context?: ObservabilitySinkContext): void => {
+    if (!sink?.onMetric) {
+        return;
+    }
+
+    try {
+        sink.onMetric(event, context);
+    } catch {
+        // Swallow — see emitRpcEvent.
+    }
+};
+
 export { type LogEvent } from "../../../shared/log-event";
 export { type LogFields } from "../../../shared/log-fields";
+export { type MetricEvent, type MetricKind } from "../../../shared/metric-event";
 export { type SpanEvent } from "../../../shared/span-event";
