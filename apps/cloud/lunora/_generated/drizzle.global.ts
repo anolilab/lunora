@@ -125,12 +125,19 @@ export const tenantLogs = sqliteTable("tenantLogs", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     createdAt: real("createdAt").notNull(),
-    level: text("level", { mode: "json" }).$type<"log" | "warn" | "error">().notNull(),
-    line: text("line").notNull(),
+    fields: text("fields", { mode: "json" }).$type<Record<string, unknown>>(),
+    functionPath: text("functionPath"),
+    level: text("level", { mode: "json" }).$type<"trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal">().notNull(),
+    message: text("message").notNull(),
     organizationId: text("organizationId").references(() => organizations._id).notNull(),
     scriptName: text("scriptName").notNull(),
+    shardKey: text("shardKey"),
+    spanId: text("spanId"),
+    traceId: text("traceId"),
+    userId: text("userId"),
 }, (t) => ({
-    by_script: index("by_script").on(t.scriptName),
+    by_trace: index("by_trace").on(t.organizationId, t.traceId),
+    by_script_time: index("by_script_time").on(t.scriptName, t.createdAt),
     by_org: index("by_org").on(t.organizationId),
 }));
 

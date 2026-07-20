@@ -97,16 +97,36 @@ deploy. PR events keep creating TTL'd previews, now built server-side too.
 - Dispatcher: hostname → `domains` → project → active deployment (A1 pointer),
   with the same cached lookup pattern as the plan resolver.
 
-### B2. Tenant runtime logs (✅ ingest/query shipped, 🌐 tail-worker attach)
+### B2. Tenant runtime logs — full log management (✅ code shipped, 🌐 tail-consumer wiring)
 
-**Today:** nothing observes a deployed tenant worker.
+**Shipped this pass — the framework now emits structured, trace-correlated logs
+(`shared/log-event.ts`, `@lunora/do`'s `emitLogEvent`), so the whole log path was
+upgraded to consume them:**
 
-**Design:** a **tail worker** on the dispatch namespace batches
-`console.*`/exception events to `POST /v1/logs/ingest` (deploy-key/admin
-gated). `tenantLogs` table with a retention cap + cleanup cron; cursor-paginated
-`logs.list` query; studio Logs tab tailing a deployment (ANSI-rendered).
-D1 is fine at launch volume; the ingest seam lets us re-point to Analytics
-Engine later without touching consumers.
+- **Producer (the missing piece).** `src/tail/worker.ts` — the dispatch-namespace
+  tail worker. It decodes each tenant `{ source: "lunora", type: "log" }` console
+  event (`src/tail/parse.ts`, pure + unit-tested), groups them per script, and
+  POSTs the batches to `POST /v1/logs/tail`. It holds one platform secret
+  (`LUNORA_TAIL_SECRET`), not per-org deploy keys; the route resolves each
+  `scriptName` → org via `internal.logs.orgForScript` and stores through
+  `internal.logs.ingestInternal`. Deployed from `tail.wrangler.jsonc`.
+- **Store.** `tenantLogs` widened to the full `LogEvent` shape — the seven-tier
+  severity (`trace`→`fatal`), `message`, structured `fields`, `functionPath`,
+  `traceId`/`spanId`, `userId`, `shardKey` — plus a `(scriptName, createdAt)`
+  index for tailing and a `(org, traceId)` index for log↔trace correlation.
+- **Query.** `logs.list` gained server-side filters — `levels`, `functionPath`,
+  `traceId`, free-text `search` (message / function / field values), a cursor,
+  and a bounded `limit` — returning newest-first.
+- **UI.** the studio Logs tab renders severity chips (filter), a search box,
+  structured fields, and a short trace id per line.
+
+**Still 🌐 (needs live infra):** the provisioner setting
+`tail_consumers: [{ service: "lunora-log-tail" }]` on each tenant script (or the
+namespace) at deploy time, and an end-to-end run against a live dispatch
+namespace. D1 is fine at launch volume; the ingest seam still lets us re-point to
+Analytics Engine / R2 later without touching consumers. Correlating an
+`error`/`fatal` log line to the OTLP-derived Issue by `traceId` (the telemetry
+path doesn't carry `traceId` yet) is the natural follow-up.
 
 ### B3. Debug header (✅ shipped)
 
