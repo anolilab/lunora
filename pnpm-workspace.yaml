@@ -25,6 +25,17 @@ onlyBuiltDependencies:
 # react-reconciler pin react@19.2.6 while everything else uses 19.2.7; the two
 # copies crash vis's TUI renderer ("Invalid hook call" / useContext on null).
 overrides:
+  # Force a single TypeScript across the whole graph. The catalog governs only
+  # our workspace packages; third-party tools that range-depend on `typescript`
+  # (eslint-plugin-sonarjs, ts-api-utils, the @typescript-eslint/* chain) resolve
+  # it independently and pick the highest published — 7.0, the native (Go) rewrite
+  # whose root export dropped the classic JS API (`SyntaxKind`, `readConfigFile`,
+  # …). Those tools load that API eagerly and crash on it (sonarjs: `Cannot read
+  # properties of undefined (reading 'FunctionType')`). 6.0 is the last
+  # classic-codebase release and carries the full API, so this keeps every
+  # consumer — build, typecheck, and lint — on one working compiler. See
+  # typescript-eslint#10940 (native tsgo support is 1–2 majors out).
+  typescript: 6.0.3
   # Internal packages → local workspace source. Lives in root overrides (NOT each
   # package's dependencies) so semantic-release-pnpm's per-package range rewrite
   # never clobbers it; published tarballs are unaffected (overrides are install-time).
@@ -178,7 +189,7 @@ catalogs:
     fake-indexeddb: 6.2.5
     vitest: 4.1.10
   tsc:
-    typescript: 7.0.2
+    typescript: 6.0.3
   types:
     "@standard-schema/spec": 1.1.0
     "@types/dockerode": ^4.0.1
@@ -374,7 +385,7 @@ catalogs:
     tailwindcss: 4.3.3
     tailwindcss-animate: 1.0.7
     three: 0.185.1
-    typescript: 7.0.2
+    typescript: 6.0.3
     unplugin-fonts: 2.0.0
     use-count-up: 3.0.1
     vite: 8.1.5
