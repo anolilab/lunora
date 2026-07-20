@@ -9,6 +9,16 @@ export type DeployEvent = Record<string, unknown>;
 
 export interface DeployClientOptions {
     apiUrl: string;
+    /**
+     * The tenant's binding manifest, read from its `wrangler.jsonc` (DO classes,
+     * and whether the app provisions a per-tenant D1 / R2). The server floors it
+     * to ShardDO, so omitting it still yields a bootable single-DO worker.
+     */
+    bindings?: {
+        d1?: { binding: string };
+        durableObjects?: { binding: string; className: string }[];
+        r2?: { binding: string };
+    };
     branch?: string;
     /** Base64-encoded prebuilt worker module (the app's Vite build output). */
     bundle: string;
@@ -70,6 +80,7 @@ export const deployToCloud = async (options: DeployClientOptions, onEvent: (even
 
     const response = await fetchImpl(`${stripTrailingSlashes(options.apiUrl)}/v1/deploy`, {
         body: JSON.stringify({
+            ...(options.bindings ? { bindings: options.bindings } : {}),
             branch: options.branch,
             bundle: options.bundle,
             kind: options.kind,
