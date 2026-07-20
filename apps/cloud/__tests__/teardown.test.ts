@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import type { CloudflareApi } from "../src/cloudflare/api";
 import type { TeardownTarget } from "../src/deploy/teardown";
-import { runTeardownSweep } from "../src/deploy/teardown";
+import { createResourceTeardown, runTeardownSweep } from "../src/deploy/teardown";
 
 const target = (id: string, kind = "preview"): TeardownTarget => ({ dispatchNamespace: `lunora-${kind}`, id, scriptName: `${id}-v1` });
 
@@ -83,5 +84,67 @@ describe(runTeardownSweep, () => {
         });
 
         expect(result).toStrictEqual({ failed: 0, tornDown: 0 });
+    });
+});
+
+const cloudflareApi = (over: Partial<CloudflareApi> = {}): CloudflareApi => ({
+    createCustomHostname: () => Promise.resolve({ id: "h" }),
+    createD1Database: () => Promise.resolve({ uuid: "u" }),
+    createR2Bucket: () => Promise.resolve(),
+    deleteD1Database: () => Promise.resolve(),
+    deleteDispatchScript: () => Promise.resolve(),
+    deleteR2Bucket: () => Promise.resolve(),
+    findD1DatabaseByName: () => Promise.resolve(null),
+    putDispatchScript: () => Promise.resolve(),
+    putSecret: () => Promise.resolve(),
+    ...over,
+});
+
+describe(createResourceTeardown, () => {
+    it("deletes the script, then the D1 database (resolved by name), then the R2 bucket", async () => {
+        const deleteDispatchScript = vi.fn(() => Promise.resolve());
+        const deleteD1Database = vi.fn(() => Promise.resolve());
+        const deleteR2Bucket = vi.fn(() => Promise.resolve());
+        const findD1DatabaseByName = vi.fn((name: string) => Promise.resolve(name === "app-v1-db" ? { uuid: "d1-uuid" } : null));
+
+        const destroy = createResourceTeardown(cloudflareApi({ deleteD1Database, deleteDispatchScript, deleteR2Bucket, findD1DatabaseByName }));
+
+        await destroy({ dispatchNamespace: "lunora-preview", scriptName: "app-v1" });
+
+        expect(deleteDispatchScript).toHaveBeenCalledWith({ namespace: "lunora-preview", scriptName: "app-v1" });
+        expect(findD1DatabaseByName).toHaveBeenCalledWith("app-v1-db");
+        expect(deleteD1Database).toHaveBeenCalledWith("d1-uuid");
+        expect(deleteR2Bucket).toHaveBeenCalledWith("app-v1-files");
+    });
+
+    it("skips D1 deletion when no database exists for the script (convention miss = no-op)", async () => {
+        const deleteD1Database = vi.fn(() => Promise.resolve());
+
+        const destroy = createResourceTeardown(cloudflareApi({ deleteD1Database, findD1DatabaseByName: () => Promise.resolve(null) }));
+
+        await destroy({ dispatchNamespace: "lunora-production", scriptName: "app-v2" });
+
+        expect(deleteD1Database).not.toHaveBeenCalled();
+    });
+
+    it("swallows a non-empty R2 failure (logged) so script + D1 teardown still completes", async () => {
+        const onR2Error = vi.fn();
+        const destroy = createResourceTeardown(
+            cloudflareApi({
+                deleteR2Bucket: () => Promise.reject(new Error("bucket not empty")),
+                findD1DatabaseByName: () => Promise.resolve({ uuid: "u" }),
+            }),
+            onR2Error,
+        );
+
+        // Does not throw despite the R2 failure.
+        await expect(destroy({ dispatchNamespace: "lunora-preview", scriptName: "app-v1" })).resolves.toBeUndefined();
+        expect(onR2Error).toHaveBeenCalledWith("app-v1-files", expect.any(Error));
+    });
+
+    it("propagates a script/D1 failure so the sweep leaves the target pending (retryable)", async () => {
+        const destroy = createResourceTeardown(cloudflareApi({ deleteDispatchScript: () => Promise.reject(new Error("cf 500")) }));
+
+        await expect(destroy({ dispatchNamespace: "lunora-preview", scriptName: "app-v1" })).rejects.toThrow("cf 500");
     });
 });

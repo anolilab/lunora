@@ -18,9 +18,10 @@ import schema from "../lunora/schema.js";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { createHttpCloudflareApi } from "./cloudflare/api";
 import { createDeployRouter } from "./deploy/router";
-import { runTeardownSweep } from "./deploy/teardown";
+import type { ControlPlaneDb } from "./deploy/sweeps";
+import { teardownPorts, usageRollbackPorts } from "./deploy/sweeps";
+import { createResourceTeardown, runTeardownSweep } from "./deploy/teardown";
 import { createHttpAnalyticsReader } from "./metering/analytics";
-import type { UsageAttribution } from "./metering/rollback";
 import { runUsageRollback } from "./metering/rollback";
 import type { CronTarget } from "./fanout/cron";
 import { fanOutCron } from "./fanout/cron";
@@ -238,44 +239,32 @@ const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
         });
 };
 
-interface TeardownRow {
-    _id: string;
-    kind: "dev" | "preview" | "production";
-    scriptName: string;
-    teardownAt?: number;
-}
+/** The control-plane D1 as the structural {@link ControlPlaneDb} the sweeps use. */
+const controlPlaneDb = (database: D1DatabaseLike): ControlPlaneDb =>
+    createD1CtxDb({ exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] }) as unknown as ControlPlaneDb;
 
 /**
- * Delete the Cloudflare dispatch scripts of deployments the lifecycle crons
- * marked `destroyed` (§2.3 / GAPS.md A1) so dispatch namespaces don't grow
- * unboundedly. Reads/writes the control-plane D1 directly (like
- * {@link readLiveDeployments}); no-ops without Cloudflare credentials. The
- * `teardownAt` stamp makes the sweep crash-safe idempotent.
+ * Delete the Cloudflare dispatch scripts (+ tenant D1 / best-effort R2) of
+ * deployments the lifecycle crons marked `destroyed` (§2.3 / GAPS.md A1) so
+ * dispatch namespaces don't grow unboundedly. No-ops without Cloudflare
+ * credentials; the `teardownAt` stamp makes the sweep crash-safe idempotent.
  */
 const sweepTeardown = async (env: Env): Promise<void> => {
     if (!env.DB || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
         return;
     }
 
-    const database = createD1CtxDb({ exec: buildExec(env.DB as D1DatabaseLike), schema: schema as unknown as D1CtxDbOptions["schema"] });
+    const database = controlPlaneDb(env.DB as D1DatabaseLike);
     const api = createHttpCloudflareApi({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.CLOUDFLARE_API_TOKEN });
 
-    await runTeardownSweep({
-        destroy: (reference) => api.deleteDispatchScript({ namespace: reference.dispatchNamespace, scriptName: reference.scriptName }),
-        listPending: async () => {
-            const { page } = await database.findMany("deployments", { where: { status: "destroyed" } });
-
-            return (page as unknown as TeardownRow[])
-                .filter((row) => row.teardownAt === undefined)
-                // Dispatch namespace is `lunora-{kind}` — mirrors the deploy router.
-                .map((row) => ({ dispatchNamespace: `lunora-${row.kind}`, id: row._id, scriptName: row.scriptName }));
-        },
-        markTornDown: async (id) => {
-            const now = Date.now();
-
-            await database.patch(id as never, { teardownAt: now, updatedAt: now }, "deployments");
-        },
+    // script + tenant D1 + tenant R2 (best-effort; a non-empty bucket is logged
+    // and left for a follow-up purge).
+    const destroy = createResourceTeardown(api, (bucket, error) => {
+        // eslint-disable-next-line no-console -- surface non-empty R2 teardown for the follow-up purge
+        console.warn("[teardown] R2 bucket not deleted (needs object purge):", bucket, error);
     });
+
+    await runTeardownSweep(teardownPorts(database, destroy, Date.now()));
 };
 
 /** Epoch ms for the first instant of the current UTC month — the usage period bucket (§4). */
@@ -285,22 +274,10 @@ const currentPeriodStart = (): number => {
     return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
 };
 
-interface AttributionRow {
-    _id: string;
-    organizationId: string;
-    scriptName: string;
-}
-
-interface CellRow {
-    _id: string;
-    usageReadAtMs?: number;
-}
-
 /**
  * Fold Analytics-Engine tenant request counts into the `platformUsage` ledger
  * (§4) so spend caps, the usage summary, and the usage chart have data to read.
- * Delta-read off this cell's `usageReadAtMs` checkpoint (no double counting).
- * Reads/writes the control-plane D1 directly (like {@link readLiveDeployments});
+ * Delta-read off this cell's `usageReadAtMs` checkpoint (no double counting);
  * no-ops without Cloudflare credentials.
  */
 const sweepUsageRollback = async (env: Env): Promise<void> => {
@@ -308,49 +285,16 @@ const sweepUsageRollback = async (env: Env): Promise<void> => {
         return;
     }
 
-    const database = createD1CtxDb({ exec: buildExec(env.DB as D1DatabaseLike), schema: schema as unknown as D1CtxDbOptions["schema"] });
+    const database = controlPlaneDb(env.DB as D1DatabaseLike);
     const reader = createHttpAnalyticsReader({
         accountId: env.CLOUDFLARE_ACCOUNT_ID,
         apiToken: env.CLOUDFLARE_API_TOKEN,
         dataset: env.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage",
     });
 
-    // Attribution: dispatch script id → owning org/deployment.
-    const { page: deploymentPage } = await database.findMany("deployments", {});
-    const byScript = new Map<string, UsageAttribution>();
+    const ports = await usageRollbackPorts(database, reader, { cellName: env.LUNORA_CELL ?? "default", now: Date.now(), periodStart: currentPeriodStart() });
 
-    for (const row of deploymentPage as unknown as AttributionRow[]) {
-        byScript.set(row.scriptName, { deploymentId: row._id, organizationId: row.organizationId });
-    }
-
-    const cellName = env.LUNORA_CELL ?? "default";
-    const { page: cellPage } = await database.findMany("cells", { where: { name: cellName } });
-    const cell = (cellPage as unknown as CellRow[])[0];
-    const periodStart = currentPeriodStart();
-
-    await runUsageRollback({
-        getCheckpoint: () => Promise.resolve(cell?.usageReadAtMs),
-        now: Date.now(),
-        read: (sinceMs) => reader.readRequestUsage(sinceMs),
-        record: async ({ attribution, quantity }) => {
-            await database.insert("platformUsage", {
-                createdAt: Date.now(),
-                deploymentId: attribution.deploymentId,
-                kind: "requests",
-                organizationId: attribution.organizationId,
-                periodStart,
-                quantity,
-            });
-        },
-        resolveScript: (scriptName) => byScript.get(scriptName),
-        // No cell row (unregistered cell) → checkpoint can't persist; the 1h
-        // bootstrap window then roughly matches the hourly cadence.
-        setCheckpoint: async (ms) => {
-            if (cell) {
-                await database.patch(cell._id as never, { usageReadAtMs: ms }, "cells");
-            }
-        },
-    });
+    await runUsageRollback(ports);
 };
 
 /** Script id → per-deployment admin token, for the queue fan-out. */

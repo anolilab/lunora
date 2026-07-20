@@ -47,6 +47,15 @@ export interface ProvisionResult {
     url: string;
 }
 
+/**
+ * Per-tenant resource names, derived from the (unique, versioned) script id.
+ * The provisioner creates resources under these names and teardown deletes them
+ * under the same names — the convention is the contract, so both sides call
+ * these helpers rather than inlining the suffix (no drift).
+ */
+export const tenantD1Name = (scriptName: string): string => `${scriptName}-db`;
+export const tenantR2Bucket = (scriptName: string): string => `${scriptName}-files`;
+
 export interface DestroyRef {
     dispatchNamespace: string;
     scriptName: string;
@@ -84,13 +93,13 @@ export const createCloudflareProvisioner = (options: CloudflareProvisionerOption
             const bindings: ScriptBinding[] = [];
 
             if (spec.bindings.d1) {
-                const { uuid } = await api.createD1Database(`${spec.scriptName}-db`);
+                const { uuid } = await api.createD1Database(tenantD1Name(spec.scriptName));
 
                 bindings.push({ id: uuid, name: spec.bindings.d1.binding, type: "d1" });
             }
 
             if (spec.bindings.r2) {
-                const bucketName = `${spec.scriptName}-files`;
+                const bucketName = tenantR2Bucket(spec.scriptName);
 
                 await api.createR2Bucket(bucketName);
                 bindings.push({ bucket_name: bucketName, name: spec.bindings.r2.binding, type: "r2_bucket" });

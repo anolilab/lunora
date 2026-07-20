@@ -28,9 +28,12 @@ const fakeApi = (): { api: CloudflareApi; deletes: string[]; puts: PutScriptInpu
                 return { uuid: "d1-uuid-123" };
             }),
             createR2Bucket: vi.fn(async () => undefined),
+            deleteD1Database: vi.fn(async () => undefined),
             deleteDispatchScript: vi.fn(async ({ scriptName }) => {
                 deletes.push(scriptName);
             }),
+            deleteR2Bucket: vi.fn(async () => undefined),
+            findD1DatabaseByName: vi.fn(async () => null),
             putDispatchScript: vi.fn(async (input) => {
                 puts.push(input);
             }),
