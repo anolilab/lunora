@@ -46,6 +46,11 @@ export default defineSchema({
         jurisdiction: v.optional(v.string()),
         name: v.string(),
         status: cellStatus,
+        // Metering readback checkpoint (§4): the epoch-ms boundary this cell has
+        // folded Analytics-Engine request counts into `platformUsage` through.
+        // The rollback reads AE for `timestamp > usageReadAtMs`, so repeated runs
+        // never double-count the same requests.
+        usageReadAtMs: v.optional(v.number()),
     })
         .global()
         .index("by_name", ["name"], { unique: true }),

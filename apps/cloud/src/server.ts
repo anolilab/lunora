@@ -19,6 +19,9 @@ import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { createHttpCloudflareApi } from "./cloudflare/api";
 import { createDeployRouter } from "./deploy/router";
 import { runTeardownSweep } from "./deploy/teardown";
+import { createHttpAnalyticsReader } from "./metering/analytics";
+import type { UsageAttribution } from "./metering/rollback";
+import { runUsageRollback } from "./metering/rollback";
 import type { CronTarget } from "./fanout/cron";
 import { fanOutCron } from "./fanout/cron";
 import type { QueueMessage, TenantQueueGroup } from "./fanout/queue";
@@ -157,6 +160,10 @@ interface Env {
     DB: unknown;
     /** Dispatch namespace — used by the cron fan-out to tick tenants (§2.4). */
     DISPATCHER?: { get: (scriptName: string) => { fetch: (request: Request) => Promise<Response> } };
+    /** This cell's name (`cells.name`) — keys the metering readback checkpoint. */
+    LUNORA_CELL?: string;
+    /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
+    USAGE_ANALYTICS_DATASET?: string;
     /** Optional GitHub OAuth app for studio social sign-in. */
     GITHUB_CLIENT_ID?: string;
     GITHUB_CLIENT_SECRET?: string;
@@ -267,6 +274,81 @@ const sweepTeardown = async (env: Env): Promise<void> => {
             const now = Date.now();
 
             await database.patch(id as never, { teardownAt: now, updatedAt: now }, "deployments");
+        },
+    });
+};
+
+/** Epoch ms for the first instant of the current UTC month — the usage period bucket (§4). */
+const currentPeriodStart = (): number => {
+    const now = new Date();
+
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+};
+
+interface AttributionRow {
+    _id: string;
+    organizationId: string;
+    scriptName: string;
+}
+
+interface CellRow {
+    _id: string;
+    usageReadAtMs?: number;
+}
+
+/**
+ * Fold Analytics-Engine tenant request counts into the `platformUsage` ledger
+ * (§4) so spend caps, the usage summary, and the usage chart have data to read.
+ * Delta-read off this cell's `usageReadAtMs` checkpoint (no double counting).
+ * Reads/writes the control-plane D1 directly (like {@link readLiveDeployments});
+ * no-ops without Cloudflare credentials.
+ */
+const sweepUsageRollback = async (env: Env): Promise<void> => {
+    if (!env.DB || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+        return;
+    }
+
+    const database = createD1CtxDb({ exec: buildExec(env.DB as D1DatabaseLike), schema: schema as unknown as D1CtxDbOptions["schema"] });
+    const reader = createHttpAnalyticsReader({
+        accountId: env.CLOUDFLARE_ACCOUNT_ID,
+        apiToken: env.CLOUDFLARE_API_TOKEN,
+        dataset: env.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage",
+    });
+
+    // Attribution: dispatch script id → owning org/deployment.
+    const { page: deploymentPage } = await database.findMany("deployments", {});
+    const byScript = new Map<string, UsageAttribution>();
+
+    for (const row of deploymentPage as unknown as AttributionRow[]) {
+        byScript.set(row.scriptName, { deploymentId: row._id, organizationId: row.organizationId });
+    }
+
+    const cellName = env.LUNORA_CELL ?? "default";
+    const { page: cellPage } = await database.findMany("cells", { where: { name: cellName } });
+    const cell = (cellPage as unknown as CellRow[])[0];
+    const periodStart = currentPeriodStart();
+
+    await runUsageRollback({
+        getCheckpoint: () => Promise.resolve(cell?.usageReadAtMs),
+        now: Date.now(),
+        read: (sinceMs) => reader.readRequestUsage(sinceMs),
+        record: async ({ attribution, quantity }) => {
+            await database.insert("platformUsage", {
+                createdAt: Date.now(),
+                deploymentId: attribution.deploymentId,
+                kind: "requests",
+                organizationId: attribution.organizationId,
+                periodStart,
+                quantity,
+            });
+        },
+        resolveScript: (scriptName) => byScript.get(scriptName),
+        // No cell row (unregistered cell) → checkpoint can't persist; the 1h
+        // bootstrap window then roughly matches the hourly cadence.
+        setCheckpoint: async (ms) => {
+            if (cell) {
+                await database.patch(cell._id as never, { usageReadAtMs: ms }, "cells");
+            }
         },
     });
 };
@@ -482,6 +564,9 @@ export default {
         // the prune/cleanup/purge crons fire on — never the every-minute tick.
         if (controller.cron !== EVERY_MINUTE) {
             await sweepTeardown(env);
+            // Fold AE tenant request counts into the platformUsage ledger (§4)
+            // so spend caps / usage views have data. Delta-read; safe to re-run.
+            await sweepUsageRollback(env);
         }
 
         // Tenant cron fan-out (§2.4): the every-minute trigger ticks each tenant
