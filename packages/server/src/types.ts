@@ -1344,6 +1344,37 @@ interface LunoraLogger {
     readonly with: (fields: LogFields) => LunoraLogger;
 }
 
+/**
+ * Span factory on every function `ctx`. Wraps a sub-operation so it becomes its
+ * own **span** nested under the dispatch's RPC span, giving a trace real shape:
+ * without it a slow request is one opaque bar, with it you see which part was
+ * slow.
+ *
+ * ```ts
+ * const charge = await ctx.trace("stripe.charge", () => stripe.charges.create(…), { orderId });
+ * ```
+ *
+ * Nesting works by lexical containment — a `ctx.trace` called inside another
+ * span's body is parented to it — so the shape of the code is the shape of the
+ * waterfall. Spans share the dispatch's trace id with its `ctx.log` lines and any
+ * container the handler calls (the same `traceparent` is propagated), so one
+ * trace spans worker, shard, and container.
+ *
+ * The span is recorded when the body settles, and the body's value is returned
+ * unchanged. A throw is recorded as an error span and then **re-thrown** — this
+ * is instrumentation, never flow control. Recording is best-effort: a failing
+ * sink can't turn a working handler into a broken one.
+ * @param name Span name, e.g. `"stripe.charge"`. Prefer a low-cardinality name
+ * and put the varying part in `attributes` — a name built from an id makes every
+ * span its own group in a collector.
+ * @param fn The body to time. May be sync or async; the result is awaited.
+ * @param attributes Structured attributes to stamp on the span, normalized like
+ * a log line's `fields`.
+ */
+interface LunoraTracer {
+    <T>(name: string, fn: () => Promise<T> | T, attributes?: LogFields): Promise<T>;
+}
+
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 interface QueryCtx {
     readonly auth: AuthState;
@@ -1391,6 +1422,8 @@ interface QueryCtx {
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
     readonly storage: ReadOnlyStorage;
+    /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearchReader;
 }
 
@@ -1450,6 +1483,8 @@ interface MutationCtx {
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
     readonly storage: ReadOnlyStorage;
+    /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
 
     /** Start / resume / inspect durable workflows; see {@link Workflows}. */
@@ -1505,6 +1540,8 @@ interface ActionCtx {
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
     readonly storage: Storage;
+    /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
 
     /** Start / resume / inspect durable workflows; see {@link Workflows}. */
@@ -1584,6 +1621,7 @@ export type {
     LogFields,
     LunoraLogger,
     LunoraLogMethod,
+    LunoraTracer,
     MutationCtx,
     OnDeleteAction,
     PaginationOptions,

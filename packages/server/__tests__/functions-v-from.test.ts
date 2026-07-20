@@ -26,6 +26,8 @@ const makeMutationContext = (): MutationContext => {
         auth: { getIdentity: async () => null, userId: null },
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
+
+        trace: (async (_name: string, fn: () => unknown) => fn()) as MutationContext["trace"],
         now: 0,
         runMutation: vi.fn<MutationContext["runMutation"]>() as MutationContext["runMutation"],
         secrets: { get: async () => "secret" },

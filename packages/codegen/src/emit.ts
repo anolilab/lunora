@@ -4649,6 +4649,12 @@ ${facadeBlock}${paymentsBuild}
             const logFunctionPath = options.functionPath ?? "";
             const log = this.makeLogger(logFunctionPath, observability);
 
+            // \`ctx.trace\`: nested spans under this dispatch's trace. The DO base
+            // owns the span stack (scoped to this ctx, so concurrent dispatches
+            // can't corrupt each other's nesting) and routes each finished span to
+            // the same \`observability\` sink, plus the studio's Traces panel.
+            const trace = this.makeTracer(logFunctionPath, observability);
+
             // \`ctx.now\`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
             // Query/mutation handlers must be deterministic (they may be re-run on
@@ -4668,7 +4674,8 @@ ${facadeBlock}${paymentsBuild}
                 log,
                 now,${ormContextField}
                 scheduler,
-                storage,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${agentsContextField}
+                storage,
+                trace,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${agentsContextField}
             };
 ${isActionLine}${actionOnlyBlock}
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);

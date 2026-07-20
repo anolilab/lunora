@@ -11,6 +11,8 @@ const makeQueryContext = (): QueryContext => {
         secrets: { get: async () => "secret" },
         db: {} as QueryContext["db"],
         log: {} as QueryContext["log"],
+
+        trace: (async (_name: string, fn: () => unknown) => fn()) as QueryContext["trace"],
         now: 0,
         runQuery: vi.fn<QueryContext["runQuery"]>() as QueryContext["runQuery"],
         storage: {} as QueryContext["storage"],
@@ -24,6 +26,8 @@ const makeMutationContext = (): MutationContext => {
         secrets: { get: async () => "secret" },
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
+
+        trace: (async (_name: string, fn: () => unknown) => fn()) as MutationContext["trace"],
         now: 0,
         runMutation: vi.fn<MutationContext["runMutation"]>() as MutationContext["runMutation"],
         runQuery: vi.fn<MutationContext["runQuery"]>() as MutationContext["runQuery"],
@@ -42,6 +46,8 @@ const makeActionContext = (): ActionContext => {
         db: {} as ActionContext["db"],
         fetch: globalThis.fetch,
         log: {} as ActionContext["log"],
+
+        trace: (async (_name: string, fn: () => unknown) => fn()) as ActionContext["trace"],
         now: 0,
         runAction: vi.fn<ActionContext["runAction"]>() as ActionContext["runAction"],
         runMutation: vi.fn<ActionContext["runMutation"]>() as ActionContext["runMutation"],

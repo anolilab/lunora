@@ -20,7 +20,7 @@
  */
 import { coerceFieldValue } from "../../../shared/log-fields";
 import { encodeAttribute, mergeHeaders, OTLP_SEVERITY, otlpRandomHex, otlpUnixNano, wrapResourceLogs, wrapResourceSpans } from "../../../shared/otlp";
-import type { LogEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
+import type { LogEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
 
 /** Shared shape for sinks that can be limited to error events only. */
 interface OnlyErrorsOption {
@@ -66,6 +66,58 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
         // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
         status: event.ok ? { code: 1 } : { code: 2, message: event.error?.message ?? "" },
         traceId: event.traceId ?? otlpRandomHex(16),
+    };
+
+    return wrapResourceSpans(span, "@lunora/runtime", serviceName);
+};
+
+/**
+ * Build the OTLP trace-export body for one user-created `ctx.trace` span.
+ *
+ * The counterpart to {@link otlpTraceBody}: that encodes the one SERVER span per
+ * dispatch, this encodes the INTERNAL spans a handler creates beneath it. The
+ * span carries a real `parentSpanId`, so a collector nests it under its parent
+ * (another `ctx.trace`, or the dispatch's own RPC span) rather than showing a
+ * flat list of orphans.
+ *
+ * Caller attributes are keyed so a caller key that collides with a reserved
+ * `lunora.*` one overrides it rather than emitting a duplicate `KeyValue` — the
+ * same precedence {@link otlpLogBody} gives a log line's `fields`.
+ */
+const otlpSpanBody = (event: SpanEvent, serviceName: string): unknown => {
+    const attributeByKey = new Map<string, ReturnType<typeof encodeAttribute>>();
+
+    attributeByKey.set("lunora.function_path", encodeAttribute("lunora.function_path", event.functionPath));
+
+    if (event.shardKey !== undefined) {
+        attributeByKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", event.shardKey));
+    }
+
+    if (event.userId !== undefined) {
+        attributeByKey.set("lunora.user_id", encodeAttribute("lunora.user_id", event.userId));
+    }
+
+    if (event.error) {
+        attributeByKey.set("error.type", encodeAttribute("error.type", event.error.type));
+    }
+
+    for (const [key, value] of Object.entries(event.attributes ?? {})) {
+        attributeByKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
+    }
+
+    const span = {
+        attributes: [...attributeByKey.values()],
+        endTimeUnixNano: otlpUnixNano(event.startTs + event.durationMs),
+        // SPAN_KIND_SERVER (2) for the synthetic dispatch root — it *is* server-side
+        // request handling — and SPAN_KIND_INTERNAL (1) for a handler's own spans.
+        kind: event.root === true ? 2 : 1,
+        name: event.name,
+        parentSpanId: event.parentSpanId,
+        spanId: event.spanId,
+        startTimeUnixNano: otlpUnixNano(event.startTs),
+        // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
+        status: event.ok ? { code: 1 } : { code: 2, message: event.error?.message ?? "" },
+        traceId: event.traceId,
     };
 
     return wrapResourceSpans(span, "@lunora/runtime", serviceName);
@@ -603,6 +655,12 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
 
             otlpPost(tracesUrl, otlpTraceBody(event, serviceName, Date.now()), mergedHeaders, context);
         },
+        onSpan: (event, context) => {
+            // `onlyErrors` scopes the RPC span stream; a handler that explicitly
+            // instrumented a sub-operation always gets its span exported, the same
+            // way `ctx.log` output is never scoped by it.
+            otlpPost(tracesUrl, otlpSpanBody(event, serviceName), mergedHeaders, context);
+        },
     };
 };
 
@@ -640,6 +698,19 @@ export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink =
 
                 try {
                     sink.onRpc(event, context);
+                } catch {
+                    // Isolate failures so one bad sink doesn't starve the rest.
+                }
+            }
+        },
+        onSpan: (event: SpanEvent, context?: ObservabilitySinkContext) => {
+            for (const sink of sinks) {
+                if (!sink.onSpan) {
+                    continue;
+                }
+
+                try {
+                    sink.onSpan(event, context);
                 } catch {
                     // Isolate failures so one bad sink doesn't starve the rest.
                 }

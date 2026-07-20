@@ -1,10 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { LogEvent, LogLevel, ObservabilityEvent } from "../src/observability";
+import type { LogEvent, LogLevel, ObservabilityEvent, SpanEvent } from "../src/observability";
 import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks";
 import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, sentrySink, webhookSink } from "../src/observability-sinks";
 
 const okEvent: ObservabilityEvent = { durationMs: 5, functionPath: "messages:list", ok: true, shardKey: "channel-1" };
+
+/** One `ctx.trace` span nested under a dispatch's RPC span. */
+const spanEvent: SpanEvent = {
+    durationMs: 25,
+    functionPath: "orders:checkout",
+    name: "stripe.charge",
+    ok: true,
+    parentSpanId: "b7ad6b7169203331",
+    shardKey: "tenant-1",
+    spanId: "00f067aa0ba902b7",
+    startTs: 1_700_000_000_000,
+    traceId: "0af7651916cd43dd8448eb211c80319c",
+};
 const errorEvent: ObservabilityEvent = {
     durationMs: 9,
     error: { code: "CONFLICT", message: "boom: user@example.com", status: 409 },
@@ -40,6 +53,8 @@ interface ParsedSpan {
     endTimeUnixNano: string;
     kind: number;
     name: string;
+    /** Absent on the RPC dispatch span; set on a `ctx.trace` span. */
+    parentSpanId?: string;
     spanId: string;
     startTimeUnixNano: string;
     status: { code: number; message?: string };
@@ -450,6 +465,25 @@ describe("observability-sinks", () => {
             // sink (e.g. webhookSink) to fire-and-forget — assert it is threaded.
             expect(a).toHaveBeenCalledWith(okEvent, context);
             expect(b).toHaveBeenCalledWith(okEvent, context);
+        });
+
+        it("fans spans out to every child and isolates a throwing one", () => {
+            expect.assertions(2);
+
+            const b = vi.fn<(event: SpanEvent) => void>();
+            const sink = combineSinks(
+                {
+                    onSpan: () => {
+                        throw new Error("bad sink");
+                    },
+                },
+                { onSpan: b },
+            );
+
+            expect(() => {
+                sink.onSpan!(spanEvent);
+            }).not.toThrow();
+            expect(b).toHaveBeenCalledWith(spanEvent, undefined);
         });
 
         it("isolates a throwing child so the rest still run", () => {
@@ -941,6 +975,86 @@ describe("observability-sinks", () => {
 
             expect(waitUntil).toHaveBeenCalledTimes(1);
             expect(waitUntil).toHaveBeenCalledWith(expect.any(Promise));
+        });
+
+        it("posts a ctx.trace span as an INTERNAL span carrying its parent", () => {
+            expect.assertions(7);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onSpan!(spanEvent);
+
+            const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(url).toBe("https://collector.example/v1/traces");
+
+            const { span } = spanFrom(init);
+
+            expect(span.name).toBe("stripe.charge");
+            // SPAN_KIND_INTERNAL — a sub-operation inside the handler, not the request.
+            expect(span.kind).toBe(1);
+            // The parent link is what lets a collector nest this under the RPC span
+            // instead of showing it as an orphan.
+            expect(span.parentSpanId).toBe("b7ad6b7169203331");
+            expect(span.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
+            expect(span.status).toStrictEqual({ code: 1 });
+            // The span covers exactly its own window, not the whole dispatch.
+            // Compared as BigInt: a nanosecond timestamp is past 2^53, so a
+            // `Number` subtraction would silently lose the low digits.
+            expect(BigInt(span.endTimeUnixNano) - BigInt(span.startTimeUnixNano)).toBe(25_000_000n);
+        });
+
+        it("carries a ctx.trace span's attributes, letting a caller key override a reserved one", () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onSpan!({ ...spanEvent, attributes: { "lunora.shard_key": "override", orderId: "o-1" } });
+
+            const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(attrValue(span.attributes, "orderId")).toStrictEqual({ stringValue: "o-1" });
+            expect(attrValue(span.attributes, "lunora.shard_key")).toStrictEqual({ stringValue: "override" });
+            // Overridden, not duplicated — a collector resolves duplicate keys ambiguously.
+            expect(span.attributes.filter((entry) => entry.key === "lunora.shard_key")).toHaveLength(1);
+        });
+
+        it("encodes a failed ctx.trace span with its error type and status message", () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onSpan!({ ...spanEvent, error: { message: "card declined", type: "PAYMENT_FAILED" }, ok: false });
+
+            const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(span.status.code).toBe(2);
+            expect(span.status.message).toBe("card declined");
+            expect(attrValue(span.attributes, "error.type")).toStrictEqual({ stringValue: "PAYMENT_FAILED" });
+        });
+
+        it("exports a ctx.trace span even under onlyErrors", () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example", onlyErrors: true });
+
+            sink.onSpan!(spanEvent);
+
+            // `onlyErrors` scopes the RPC span stream; an explicitly instrumented
+            // sub-operation is always exported, like `ctx.log` output.
+            expect(fetchMock).toHaveBeenCalledTimes(1);
         });
 
         it("swallows a rejected fetch", async () => {

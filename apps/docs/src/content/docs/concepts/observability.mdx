@@ -128,6 +128,50 @@ args of a console-style call reach only the in-process `onLog` sink you control.
 A two-argument call whose second argument is a plain object — `ctx.log.info("saved", user)` — is now the **structured** form: the message is `"saved"` and `user` becomes `fields`, instead of being rendered into the message as `saved {…}`. Calls with a non-object second argument, or three or more arguments, are unchanged. If you relied on the object being folded into the message text, pass it as a third argument (`ctx.log.info("saved", "-", user)`) or pre-render it.
 :::
 
+## Tracing sub-operations with `ctx.trace`
+
+Every dispatch is already one **span**, named after the function path. That tells
+you a request took 900ms; it doesn't tell you _which part_ took 900ms. `ctx.trace`
+wraps a sub-operation so it becomes its own span nested under the request:
+
+```ts
+export const checkout = action({
+    handler: async (ctx, args) => {
+        const cart = await ctx.trace("cart.load", () => loadCart(args.cartId));
+
+        // Attributes are structured like log fields, and become span attributes.
+        const charge = await ctx.trace("stripe.charge", () => stripe.charges.create({ amount: cart.total }), { cartId: cart._id });
+
+        // Nesting is lexical — a `ctx.trace` inside another span's body is
+        // parented to it, so the shape of the code is the shape of the waterfall.
+        await ctx.trace("fulfil", async () => {
+            await ctx.trace("reserve.stock", () => reserve(cart));
+            await ctx.trace("email.receipt", () => sendReceipt(charge));
+        });
+    },
+});
+```
+
+The body's value is returned unchanged, and a throw is recorded as an error span
+and then **re-thrown** — this is instrumentation, never flow control. Recording is
+best-effort: a failing sink can't turn a working handler into a broken one.
+
+Spans share the dispatch's trace id with its `ctx.log` lines and with any
+container the handler calls (the same `traceparent` is propagated), so one trace
+stitches together worker, shard, and container.
+
+:::tip[Keep span names low-cardinality]
+Put the varying part in the attributes, not the name — `ctx.trace("stripe.charge", …, { orderId })`, never a name interpolated from the order id. A name
+built from an id makes every span its own group in a collector, which is exactly
+what attributes exist to avoid.
+:::
+
+Locally, the **Traces** panel in the Studio renders recent waterfalls from an
+in-memory ring on the shard — recent activity on this instance, reset on
+hibernation. It is a development readout, not a trace store: for retention and
+cross-instance search, point [`otlpSink`](#otlpsink) at a real collector, where
+each span is exported as an OTLP `INTERNAL` span carrying its `parentSpanId`.
+
 ## Container telemetry
 
 Code running **inside** a [container](/docs/packages/container) can't use a worker
@@ -182,10 +226,10 @@ without special-casing.
 with **JSON** encoding (not protobuf). Two endpoints, derived from the configured
 base `endpoint` (trailing slashes are tolerated):
 
-| Signal | Request                     |
-| ------ | --------------------------- |
-| Spans  | `POST {endpoint}/v1/traces` |
-| Logs   | `POST {endpoint}/v1/logs`   |
+| Signal | Request                     | Emitted by                                                     |
+| ------ | --------------------------- | -------------------------------------------------------------- |
+| Spans  | `POST {endpoint}/v1/traces` | each RPC dispatch (`SERVER`) and each `ctx.trace` (`INTERNAL`) |
+| Logs   | `POST {endpoint}/v1/logs`   | each `ctx.log.*` call                                          |
 
 **Headers.**
 

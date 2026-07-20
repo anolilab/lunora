@@ -14,6 +14,7 @@
 
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
+import type { SpanEvent } from "../../../shared/span-event";
 
 /**
  * Per-RPC dispatch event. Single-shard calls set `shardKey`; cross-shard
@@ -87,6 +88,12 @@ export interface ObservabilitySink {
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
     /** Invoked once per dispatched RPC (single-shard or fan-out). */
     onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
+    /**
+     * Invoked once per `ctx.trace(name, fn)` span, when the span body settles.
+     * Distinct from `onRpc`: that is the one SERVER span per dispatch, this is the
+     * INTERNAL spans a handler creates beneath it.
+     */
+    onSpan?: (event: SpanEvent, context?: ObservabilitySinkContext) => void;
 }
 
 /**
@@ -127,5 +134,24 @@ export const emitLogEvent = (sink: ObservabilitySink | undefined, event: LogEven
     }
 };
 
+/**
+ * Invoke `sink.onSpan` with the given span event, swallowing any error the sink
+ * throws. The same failure model as {@link emitRpcEvent}: a buggy span sink must
+ * never break the `ctx.trace` body that produced it — least of all *after* that
+ * body already returned successfully.
+ */
+export const emitSpanEvent = (sink: ObservabilitySink | undefined, event: SpanEvent, context?: ObservabilitySinkContext): void => {
+    if (!sink?.onSpan) {
+        return;
+    }
+
+    try {
+        sink.onSpan(event, context);
+    } catch {
+        // Swallow — see emitRpcEvent.
+    }
+};
+
 export { type LogEvent } from "../../../shared/log-event";
 export { type LogFields } from "../../../shared/log-fields";
+export { type SpanEvent } from "../../../shared/span-event";
