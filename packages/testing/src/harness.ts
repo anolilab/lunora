@@ -250,9 +250,12 @@ const stubProxy = (surface: string): unknown =>
 const noopLog: LunoraLogger = {
     debug: () => undefined,
     error: () => undefined,
+    fatal: () => undefined,
     info: () => undefined,
     log: () => undefined,
+    trace: () => undefined,
     warn: () => undefined,
+    with: () => noopLog,
 };
 
 /** RunRegistered type extracted so buildSubscribe can reference it without duplication. */
