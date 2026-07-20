@@ -22,6 +22,8 @@ export interface DeployClientOptions {
     branch?: string;
     /** Base64-encoded prebuilt worker module (the app's Vite build output). */
     bundle: string;
+    /** The tenant's cron expressions (wrangler `triggers.crons`) for the fan-out (§2.4). */
+    cronSpecs?: string[];
     deployKey: string;
     fetch?: typeof globalThis.fetch;
     kind?: "dev" | "preview" | "production";
@@ -83,6 +85,7 @@ export const deployToCloud = async (options: DeployClientOptions, onEvent: (even
             ...(options.bindings ? { bindings: options.bindings } : {}),
             branch: options.branch,
             bundle: options.bundle,
+            ...(options.cronSpecs && options.cronSpecs.length > 0 ? { cronSpecs: options.cronSpecs } : {}),
             kind: options.kind,
             projectId: options.projectId, // secret-scanner:allow -- domain field name
             scriptName: options.scriptName,

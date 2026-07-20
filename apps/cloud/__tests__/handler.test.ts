@@ -191,6 +191,27 @@ describe(handleDeployRequest, () => {
         expect(bindings?.durableObjects).toStrictEqual([{ binding: "SHARD", className: "ShardDO" }]);
     });
 
+    it("forwards the request's cronSpecs to createDeployment (feeds the cron fan-out)", async () => {
+        let received: string[] | undefined;
+        const backend = backendWith({
+            createDeployment: (input) => {
+                received = input.cronSpecs;
+
+                return Promise.resolve({ deploymentId: "dep_1" });
+            },
+        });
+
+        const response = await handleDeployRequest(
+            request("k", { bundle: BUNDLE, cronSpecs: ["0 */6 * * *", 3 as unknown as string], projectId: "proj_1", scriptName: "s" }),
+            deps(backend, okProvisioner),
+        );
+
+        await response.text();
+
+        // Only valid string expressions survive.
+        expect(received).toStrictEqual(["0 */6 * * *"]);
+    });
+
     it("streams accepted → queued → provisioning → live and records status transitions", async () => {
         const statuses: string[] = [];
         const backend = backendWith({
