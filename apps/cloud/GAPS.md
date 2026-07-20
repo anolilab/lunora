@@ -6,8 +6,50 @@
 > attribution). Each gap states what exists today in `apps/cloud`, the design on
 > our Workers-for-Platforms substrate, and its build status.
 
-Legend: ✅ shipped here · 🔨 code-tractable now (no live infra needed) ·
-🌐 needs live Cloudflare/Creem/GitHub credentials · 🧭 decision, not code.
+Legend: ✅ wired end-to-end here · 🧩 pure module, tested, **no production caller
+yet** (logic exists; the wiring doesn't) · 🔨 code-tractable now (no live infra
+needed) · 🌐 needs live Cloudflare/Creem/GitHub credentials · 🧭 decision, not code.
+
+> **Legend note (2026-07-21).** An earlier revision used a single ✅ that
+> conflated two very different states: "the pure evaluator/planner/port exists
+> and is unit-tested" versus "the feature is actually wired and runs." Several
+> ✅ items were in fact 🧩 — a tested function reachable only from `__tests__/`.
+> The 🧩 marker now names that state explicitly. See the wiring pass below for
+> the items that were 🧩 and have since been wired.
+
+---
+
+## Wiring pass — 2026-07-21
+
+A review found the deploy pipeline could not produce a bootable tenant and that
+the metering loop never closed. Four fixes (each: pure port-injected logic +
+unit tests, verified by codegen + tsc + vitest):
+
+- **Tenant bindings (✅ wired).** `POST /v1/deploy` built the provisioner spec
+  with `bindings: {}`, so every uploaded Worker had no Durable Object binding and
+  no `new_sqlite_classes` migration tag — a real Lunora app (always exports
+  ShardDO) could never boot. The deploy request now carries the app's binding
+  manifest (CLI reads it from `wrangler.jsonc`), floored to ShardDO server-side.
+- **Resource teardown (✅ wired, scripts; 🌐 D1/R2).** The lifecycle crons only
+  marked deployments `destroyed`; nothing deleted the Cloudflare dispatch script,
+  so namespaces grew unboundedly (the leak Ring-2 claimed to have closed). A
+  `teardownAt`-checkpointed sweep (`src/deploy/teardown.ts`) now deletes the
+  script in `scheduled()`. Per-tenant **D1/R2** teardown-by-id still needs
+  resource-id persistence — a real follow-up (🌐/🔨).
+- **Metering readback (✅ wired).** The dispatcher wrote one Analytics-Engine
+  data point per request, but `createHttpAnalyticsReader` had no caller, so
+  `platformUsage` stayed empty and spend caps / usage views evaluated nothing.
+  A per-cell `usageReadAtMs`-checkpointed delta rollback
+  (`src/metering/rollback.ts`) now folds AE counts into the ledger in
+  `scheduled()` (no double-count; under-count-not-over-bill on failure).
+- **Build dispatcher (🧩 → logic wired, 🌐 execution).** `builds.claimNext` had
+  no caller, so enqueued builds sat until the 24h expiry cron failed them. The
+  claim→run→drain loop now exists and is tested (`src/builds/dispatch.ts`), but
+  its production activation stays gated on the runner's 🌐 seams — `execute` (a
+  Cloudflare Container running `lunora build`) and `fetchSource` (GitHub App
+  tarball). Claiming builds with no executor would only burn them, so it is not
+  yet wired into `scheduled()`. This is the one gap whose blocker is genuinely
+  infra, not code.
 
 ---
 
@@ -43,7 +85,15 @@ bad deploy replaces the good one instantly and there is nothing to roll back to.
 `updateStatus`. Queue time, provision time, and time-to-live become dashboard
 columns for free.
 
-### A3. Server-side builds + build logs (✅ core shipped, 🌐 execution)
+### A3. Server-side builds + build logs (✅ queue + dispatcher; 🌐 execution)
+
+> **2026-07-21:** the claim→run→drain **dispatcher** (`src/builds/dispatch.ts`)
+> now exists and is tested — `builds.claimNext` finally has a caller at the logic
+> layer. It is not yet wired into `scheduled()`: activation is gated on the
+> runner's container `execute` seam (below), and claiming with no executor would
+> only burn builds. Everything around execution (queue, lease, dedup, log
+> streaming, dispatcher) is code-complete; the container build itself is the 🌐.
+
 
 **Today:** builds happen on the developer's machine; the platform never builds.
 GitHub webhook only parses PR events into preview _intents_.
@@ -163,7 +213,7 @@ platform never inherits worldwide tax compliance. Product-based checkout
 (Creem product ids in `LUNORA_CLOUD_PLANS.priceIds`), hosted billing portal,
 `creem-signature` webhooks, sandbox via `CREEM_TEST_MODE`.
 
-**Overage billing = prepaid credits (✅ core shipped).** Creem has no metered
+**Overage billing = prepaid credits (🧩 pure module, no caller).** Creem has no metered
 subscription pricing (products are `recurring`/`onetime` only), but ships a
 first-party credits ledger (per-customer accounts, idempotent credit/debit by
 `reference`, balance/freeze) built for API metering. So overage is prepaid:
@@ -178,10 +228,12 @@ ledger adapter (`src/billing/creem-credits.ts`: balance/debit over
 `customerCredits`, `applyCreditPurchase` creating the account seeded on first
 buy), the fleet reconciliation driver (`reconcileAllOverages`: per-org failure
 isolation, watermark-after-debit ordering, exhausted → suspension hook), the
-`organizations.creditsAccountId` linkage, and 6 more tests are ✅. 🌐 remaining:
-create the credit-pack products, schedule the reconciliation against live
-credentials, and map pack purchases in the billing webhook to
-`applyCreditPurchase`.
+`organizations.creditsAccountId` linkage, and 6 more tests exist and pass. But
+**none of it has a production caller** (verified 2026-07-21): no cron invokes
+`reconcileAllOverages`, and the billing webhook never calls
+`applyCreditPurchase`. Those two are **code**, not credentials — 🔨, not 🌐 —
+so the accurate status is 🧩: a tested module that never runs. Genuinely 🌐:
+creating the credit-pack products against a live Creem account.
 
 ## D. Data & trust
 
