@@ -147,11 +147,10 @@ export const checkout = action({
         // Attributes are structured like log fields, and become span attributes.
         const charge = await ctx.trace("stripe.charge", () => stripe.charges.create({ amount: cart.total }), { cartId: cart._id });
 
-        // Nesting is lexical — a `ctx.trace` inside another span's body is
-        // parented to it, so the shape of the code is the shape of the waterfall.
-        await ctx.trace("fulfil", async () => {
-            await ctx.trace("reserve.stock", () => reserve(cart));
-            await ctx.trace("email.receipt", () => sendReceipt(charge));
+        // Nesting is explicit: the body receives a tracer bound to its own span,
+        // and calling that is what makes a child.
+        await ctx.trace("fulfil", async (trace) => {
+            await Promise.all([trace("reserve.stock", () => reserve(cart)), trace("email.receipt", () => sendReceipt(charge))]);
         });
     },
 });
@@ -160,6 +159,25 @@ export const checkout = action({
 The body's value is returned unchanged, and a throw is recorded as an error span
 and then **re-thrown** — this is instrumentation, never flow control. Recording is
 best-effort: a failing sink can't turn a working handler into a broken one.
+
+:::note[Why the tracer is passed in, rather than nesting being implicit]
+It would read nicer if a bare `ctx.trace` inside another span's body were
+automatically its child. That can't be done correctly here: with
+`Promise.all([trace("a", …), trace("b", …)])`, `b` starts while `a` is still
+open, so an "innermost currently-open span" rule records `b` as a **child** of
+`a` rather than its sibling — and parallel fan-out is one of the main things a
+tracer is for. Telling "called inside `a`" apart from "called concurrently with
+`a`" needs `AsyncLocalStorage`, which Lunora's Durable Objects deliberately
+don't require. Passing the parent is correct in every case, and visible where it
+happens.
+
+Calling `ctx.trace` inside a body instead of the passed tracer isn't an error —
+that span is just parented to the request rather than the enclosing span.
+:::
+
+A span created inside a function invoked via `ctx.runQuery` / `runMutation` /
+`runAction` is attributed to the **outer** entrypoint's function path, since the
+composed call reuses its context — the same rule `ctx.log` follows.
 
 Spans share the dispatch's trace id with its `ctx.log` lines and with any
 container the handler calls (the same `traceparent` is propagated), so one trace

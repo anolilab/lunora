@@ -37,6 +37,10 @@ export interface MetricEvent {
      * JSON-safe primitives (see `shared/log-fields.ts`). These are the metric's
      * dimensions — keep them low-cardinality; an id-valued attribute creates a
      * distinct time series per id.
+     *
+     * Caller-controlled, so they MAY contain user input and they DO egress to
+     * whatever destination the sink ships to — the same caveat as a log line's
+     * `fields` and a span's `error.message`. Scrub upstream if that matters.
      */
     attributes?: LogFields;
     /** Function path that recorded the measurement, e.g. `"orders:checkout"`. */

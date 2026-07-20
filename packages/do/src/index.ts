@@ -209,6 +209,7 @@ export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do";
 export type {
     HibernatableWebSocket,
     LogSink,
+    TelemetrySink,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
     RunShardBulkDeleteArgs,

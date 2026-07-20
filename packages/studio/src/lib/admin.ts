@@ -944,9 +944,9 @@ export interface TraceSpan {
 /**
  * One folded `ctx.trace` waterfall returned by `__lunora_admin__:getTraces`,
  * mirroring `@lunora/do`'s `TraceSummary`. The dispatch's synthetic root span
- * plus every `ctx.trace` span recorded beneath it, already ordered by start time
- * — which, because a parent always starts before its children, doubles as a
- * pre-order traversal of the span tree.
+ * plus every `ctx.trace` span recorded beneath it, already ordered by
+ * `(offsetMs, depth)` — a valid pre-order traversal of the span tree, so this
+ * panel renders rows in the given order and indents by `depth`.
  *
  * Sourced from the shard's bounded, in-memory span ring, so it resets on
  * hibernation/restart and can be legitimately partial (an evicted parent, or a
@@ -964,7 +964,11 @@ export interface TraceSummary {
     rootName: string;
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey?: string;
-    /** Spans ordered by start time, ready to render as waterfall rows. */
+    /**
+     * Spans ordered by `(offsetMs, depth)`, ready to render as waterfall rows.
+     * Start time alone cannot order them: spans are recorded on completion, and
+     * at millisecond resolution a parent and its child routinely tie.
+     */
     spans: TraceSpan[];
     /** Epoch-ms the trace's anchor span started. */
     startTs: number;

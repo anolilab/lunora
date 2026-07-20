@@ -12,6 +12,8 @@ import type {
     QueueMessageRow,
     QueueMetadata,
     StudioFeaturesResult,
+    TraceSpan,
+    TraceSummary,
 } from "../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../src/lib/admin";
 import type { MockClientHooks } from "../mock-client";
@@ -118,6 +120,20 @@ const STUDIO_FEATURES_KEY_GUARD: KeysMatch<keyof StudioFeaturesResult, (typeof S
 const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name"] as const;
 
 const QUEUE_METADATA_KEY_GUARD: KeysMatch<keyof QueueMetadata, (typeof QUEUE_METADATA_KEYS)[number]> = true;
+
+/**
+ * Canonical key sets of `TraceSpan` / `TraceSummary` — the `getTraces` wire
+ * shapes this package hand-mirrors from `@lunora/do`. `lint:types` fails here if a key moves
+ * without the tuple moving — and there if the studio copy drifts — so the
+ * waterfall renderer can't silently fall behind the fold that feeds it.
+ */
+const TRACE_SPAN_KEYS = ["attributes", "depth", "durationMs", "error", "name", "offsetMs", "ok", "parentSpanId", "spanId"] as const;
+
+const TRACE_SPAN_KEY_GUARD: KeysMatch<keyof TraceSpan, (typeof TRACE_SPAN_KEYS)[number]> = true;
+
+const TRACE_SUMMARY_KEYS = ["durationMs", "functionPath", "ok", "rootName", "shardKey", "spans", "startTs", "traceId"] as const;
+
+const TRACE_SUMMARY_KEY_GUARD: KeysMatch<keyof TraceSummary, (typeof TRACE_SUMMARY_KEYS)[number]> = true;
 
 /**
  * Canonical key set of `QueueMessageRow` (the `getQueueMessages` consumed-message
@@ -323,6 +339,14 @@ describe("studio", () => {
 
         expect(QUEUE_METADATA_KEY_GUARD).toBe(true);
         expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name"]);
+    });
+
+    it("keeps the studio's getTraces mirrors in lockstep with @lunora/do's contract", () => {
+        expect.assertions(3);
+
+        expect(TRACE_SPAN_KEY_GUARD).toBe(true);
+        expect(TRACE_SUMMARY_KEY_GUARD).toBe(true);
+        expect([...TRACE_SUMMARY_KEYS]).toStrictEqual(["durationMs", "functionPath", "ok", "rootName", "shardKey", "spans", "startTs", "traceId"]);
     });
 
     it("keeps the studio's QueueMessageRow mirror in lockstep with @lunora/do's contract", () => {

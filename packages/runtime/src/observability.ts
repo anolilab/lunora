@@ -14,7 +14,7 @@
 
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
-import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
+import type { MetricEvent } from "../../../shared/metric-event";
 import type { SpanEvent } from "../../../shared/span-event";
 
 /**
@@ -140,40 +140,11 @@ export const emitLogEvent = (sink: ObservabilitySink | undefined, event: LogEven
     }
 };
 
-/**
- * Invoke `sink.onSpan` with the given span event, swallowing any error the sink
- * throws. The same failure model as {@link emitRpcEvent}: a buggy span sink must
- * never break the `ctx.trace` body that produced it — least of all *after* that
- * body already returned successfully.
- */
-export const emitSpanEvent = (sink: ObservabilitySink | undefined, event: SpanEvent, context?: ObservabilitySinkContext): void => {
-    if (!sink?.onSpan) {
-        return;
-    }
-
-    try {
-        sink.onSpan(event, context);
-    } catch {
-        // Swallow — see emitRpcEvent.
-    }
-};
-
-/**
- * Invoke `sink.onMetric` with the given measurement, swallowing any error the
- * sink throws. The same failure model as {@link emitRpcEvent}: recording a
- * measurement must never break the handler that recorded it.
- */
-export const emitMetricEvent = (sink: ObservabilitySink | undefined, event: MetricEvent, context?: ObservabilitySinkContext): void => {
-    if (!sink?.onMetric) {
-        return;
-    }
-
-    try {
-        sink.onMetric(event, context);
-    } catch {
-        // Swallow — see emitRpcEvent.
-    }
-};
+// NOTE: there is deliberately no `emitSpanEvent` / `emitMetricEvent` to mirror
+// the two above. Spans and metrics originate in `@lunora/do`, which cannot
+// import this package (the dependency edge runs the other way), and the runtime
+// itself never emits them — so such helpers would have no possible caller. The
+// DO applies the identical swallow inline in its own `recordSpan`/`recordMetric`.
 
 export { type LogEvent } from "../../../shared/log-event";
 export { type LogFields } from "../../../shared/log-fields";

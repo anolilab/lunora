@@ -1,5 +1,5 @@
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
@@ -13,6 +13,7 @@ import { useT } from "../../i18n/i18n-context";
 import type { TraceSpan, TraceSummary, TracesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
+import { recordShard } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
 import { filterTraces, formatSpanDuration, spanBar } from "./trace-geometry";
 // Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
@@ -78,13 +79,24 @@ const SpanRow = ({ span, traceDurationMs }: SpanRowProps): ReactElement => {
             <span className="w-16 shrink-0 text-right tabular-nums text-muted-foreground" role="gridcell">
                 {formatSpanDuration(span.durationMs)}
             </span>
+            {/*
+             * Error and attributes get their own cells rather than sharing one.
+             * Sharing meant a failed span dropped its attributes — hiding
+             * `{ orderId }` on exactly the span you opened the panel to debug.
+             */}
             <span className="w-64 shrink-0 truncate text-muted-foreground" role="gridcell">
                 {span.error === undefined ? null : (
                     <span className="text-destructive" data-testid="tr-span-error-message" title={span.error.message}>
                         {`${span.error.type}: ${span.error.message}`}
                     </span>
                 )}
-                {span.error === undefined && attributes !== "" ? <span data-testid="tr-span-attributes">{attributes}</span> : null}
+            </span>
+            <span className="w-64 shrink-0 truncate text-muted-foreground" role="gridcell">
+                {attributes === "" ? null : (
+                    <span data-testid="tr-span-attributes" title={attributes}>
+                        {attributes}
+                    </span>
+                )}
             </span>
         </div>
     );
@@ -112,6 +124,7 @@ const TraceRow = ({ expanded, onToggle, trace }: TraceRowProps): ReactElement =>
     return (
         <div className="border-b border-border last:border-b-0" data-testid={`tr-row-${trace.traceId}`}>
             <button
+                aria-controls={`tr-waterfall-${trace.traceId}`}
                 aria-expanded={expanded}
                 className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted/50"
                 data-testid={`tr-toggle-${trace.traceId}`}
@@ -138,7 +151,13 @@ const TraceRow = ({ expanded, onToggle, trace }: TraceRowProps): ReactElement =>
             </button>
 
             {expanded && (
-                <div aria-label={t("Trace waterfall")} className="bg-muted/20" data-testid={`tr-waterfall-${trace.traceId}`} role="grid">
+                <div
+                    aria-label={t("Trace waterfall")}
+                    className="bg-muted/20"
+                    data-testid={`tr-waterfall-${trace.traceId}`}
+                    id={`tr-waterfall-${trace.traceId}`}
+                    role="grid"
+                >
                     {trace.spans.map((span) => (
                         <SpanRow key={span.spanId} span={span} traceDurationMs={trace.durationMs} />
                     ))}
@@ -162,9 +181,8 @@ interface TracesPanelProps {
  * Traces are the drill-down from a log line: a dispatch's synthetic root span
  * plus every `ctx.trace(name, fn)` span recorded beneath it. The server folds
  * them (`@lunora/do`'s pure `foldTraces`) and stamps each span with a `depth`
- * and an `offsetMs`, so this panel does no tree math — it
- * indents by `depth` and sizes each bar from `offsetMs`/`durationMs` via the
- * pure {@link spanBar} helper.
+ * and an `offsetMs`, so this panel does no tree math — it indents by `depth` and
+ * sizes each bar from `offsetMs`/`durationMs` via the pure {@link spanBar} helper.
  *
  * The backing span ring is bounded and in-memory, so it resets on hibernation or
  * restart and a trace can legitimately arrive partial. This is a local-development
@@ -187,6 +205,16 @@ export const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement
         {},
         { live: true, shardKey: debouncedShard },
     );
+
+    // Record the browsed shard into recent-shards history once the read resolves,
+    // so a shard visited here shows up in every other panel's autocomplete —
+    // matching the nine other shard-scoped panels.
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- recording the browsed shard is derived from the resolved read (a value, not a discrete event); writing it when the data lands is the correct pattern.
+        if (data !== undefined) {
+            recordShard(debouncedShard);
+        }
+    }, [data, debouncedShard]);
 
     const traces = tracesOf(data);
     // The span ring is not a queryable store, so the search runs client-side over

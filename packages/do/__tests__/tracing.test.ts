@@ -87,7 +87,7 @@ describe("foldTraces", () => {
         const [trace] = foldTraces([
             span({ durationMs: 30, name: "inner", parentSpanId: "outer", spanId: "inner", startTs: 1010 }),
             span({ durationMs: 40, name: "outer", parentSpanId: "root", spanId: "outer", startTs: 1005 }),
-            span({ durationMs: 50, name: "a:b", root: true, spanId: "root", startTs: 1000 }),
+            span({ durationMs: 50, name: "a:b", dispatch: true, spanId: "root", startTs: 1000 }),
         ]);
 
         expect(trace?.spans.map((entry) => entry.name)).toStrictEqual(["a:b", "outer", "inner"]);
@@ -115,7 +115,7 @@ describe("foldTraces", () => {
         expect.assertions(2);
 
         const [trace] = foldTraces([
-            span({ name: "a:b", root: true, spanId: "root" }),
+            span({ name: "a:b", dispatch: true, spanId: "root" }),
             span({ error: { message: "nope", type: "BAD_REQUEST" }, name: "child", ok: false, parentSpanId: "root", spanId: "child" }),
         ]);
 
@@ -128,7 +128,7 @@ describe("foldTraces", () => {
 
         // The ring evicted `outer`, so `inner` names a parent that isn't here.
         const [trace] = foldTraces([
-            span({ name: "a:b", root: true, spanId: "root" }),
+            span({ name: "a:b", dispatch: true, spanId: "root" }),
             span({ name: "inner", parentSpanId: "evicted", spanId: "inner", startTs: 1010 }),
         ]);
 
@@ -186,15 +186,15 @@ describe("ctx.trace", () => {
         expect(seen[0]?.ok).toBe(true);
     });
 
-    it("nests a span lexically under the enclosing span", async () => {
+    it("nests a span under the enclosing span via the tracer its body receives", async () => {
         expect.assertions(3);
 
         const seen: SpanEvent[] = [];
         const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const trace = shard.tracer("a:b", { onSpan: (event) => seen.push(event) });
 
-        await trace("outer", async () => {
-            await trace("inner", () => undefined);
+        await trace("outer", async (child) => {
+            await child("inner", () => undefined);
         });
 
         // Completion order: the inner span settles first.
@@ -204,6 +204,36 @@ describe("ctx.trace", () => {
         expect(inner?.parentSpanId).toBe(outer?.spanId);
         // Both sides of one dispatch share the trace.
         expect(inner?.traceId).toBe(outer?.traceId);
+    });
+
+    it("keeps concurrent siblings siblings instead of nesting them", async () => {
+        expect.assertions(3);
+
+        const seen: SpanEvent[] = [];
+        const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const trace = shard.tracer("a:b", { onSpan: (event) => seen.push(event) });
+        const sleep = async (ms: number): Promise<void> => {
+            await new Promise((resolve) => {
+                setTimeout(resolve, ms);
+            });
+        };
+
+        // The case an ambient "currently open span" stack cannot express: `slow`
+        // is still open when `fast` starts, so a stack would record `fast` as a
+        // CHILD of `slow` rather than its sibling. Parallel fan-out is a mainline
+        // use of a tracer, so this has to be right.
+        await trace("outer", async (child) => {
+            await Promise.all([child("slow", () => sleep(20)), child("fast", () => sleep(1))]);
+        });
+
+        const outer = seen.find((event) => event.name === "outer");
+        const slow = seen.find((event) => event.name === "slow");
+        const fast = seen.find((event) => event.name === "fast");
+
+        expect(slow?.parentSpanId).toBe(outer?.spanId);
+        expect(fast?.parentSpanId).toBe(outer?.spanId);
+        // Specifically NOT parented to the sibling that happened to be open.
+        expect(fast?.parentSpanId).not.toBe(slow?.spanId);
     });
 
     it("records a failed span and re-throws the original error untouched", async () => {
@@ -226,19 +256,19 @@ describe("ctx.trace", () => {
         expect(seen[0]?.error?.type).toBe("BAD_REQUEST");
     });
 
-    it("pops the span stack after a throw so a sibling is not mis-parented", async () => {
+    it("does not mis-parent a sibling that follows a throwing span", async () => {
         expect.assertions(1);
 
         const seen: SpanEvent[] = [];
         const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const trace = shard.tracer("a:b", { onSpan: (event) => seen.push(event) });
 
-        await trace("outer", async () => {
-            await trace("failing", () => {
+        await trace("outer", async (child) => {
+            await child("failing", () => {
                 throw new Error("boom");
             }).catch(() => undefined);
 
-            await trace("sibling", () => undefined);
+            await child("sibling", () => undefined);
         });
 
         const sibling = seen.find((event) => event.name === "sibling");
@@ -286,8 +316,8 @@ describe("ctx.trace", () => {
         const shard = new TracingShard(stateDouble(), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const trace = shard.tracer("a:b");
 
-        await trace("outer", async () => {
-            await trace("inner", () => undefined);
+        await trace("outer", async (child) => {
+            await child("inner", () => undefined);
         });
 
         const response = await shard.fetch(

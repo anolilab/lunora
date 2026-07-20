@@ -1,5 +1,5 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
-import { isLunoraError, LunoraError, toErrorBody } from "@lunora/errors";
+import { LunoraError, toErrorBody } from "@lunora/errors";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
@@ -11,7 +11,7 @@ import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
-import { otlpRandomHex, parseTraceparent } from "../../../shared/otlp";
+import { otlpRandomHex } from "../../../shared/otlp";
 import type { SpanEvent } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -98,6 +98,7 @@ import {
 import type { LogEntry } from "./log-buffer";
 import { LogBuffer } from "./log-buffer";
 import { foldTraces, SpanBuffer } from "./span-buffer";
+import { resolveTraceAnchor, toErrorType } from "./trace-context";
 import type { RecordMailInput } from "./mail-catcher";
 import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 import { armRestore, readBookmark } from "./pitr";
@@ -171,7 +172,12 @@ const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes
  * `@lunora/do` takes no dependency on `@lunora/runtime`; the event is the same
  * {@link LogEventInput} shape `emitLogEvent` consumes, built once per call.
  */
-interface LogSink {
+/**
+ * The sink surface the DO hands its three signals to: `ctx.log` lines, `ctx.trace`
+ * spans, and `ctx.metrics` measurements. Structurally compatible with
+ * `@lunora/runtime`'s `ObservabilitySink` without taking a dependency on it.
+ */
+interface TelemetrySink {
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
@@ -182,7 +188,7 @@ interface LogSink {
  * `LunoraLogger`). Declared locally so `@lunora/do` takes no dependency on
  * `@lunora/server`; the overloaded public method type lives there.
  */
-interface ContextLogger {
+interface CtxLogger {
     debug: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
     fatal: (...args: unknown[]) => void;
@@ -190,7 +196,7 @@ interface ContextLogger {
     log: (...args: unknown[]) => void;
     trace: (...args: unknown[]) => void;
     warn: (...args: unknown[]) => void;
-    with: (fields: LogFields) => ContextLogger;
+    with: (fields: LogFields) => CtxLogger;
 }
 
 /**
@@ -198,7 +204,7 @@ interface ContextLogger {
  * `LunoraTracer`). Declared locally for the same reason as {@link CtxLogger}:
  * `@lunora/do` takes no dependency on `@lunora/server`.
  */
-type CtxTracer = <T>(name: string, fn: () => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type CtxTracer = <T>(name: string, fn: (trace: CtxTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 
 /**
  * Structural shape of the `ctx.metrics` recorder the DO builds (see the server
@@ -209,33 +215,6 @@ interface CtxMetrics {
     gauge: (name: string, value: number, attributes?: LogFields) => void;
     record: (name: string, value: number, attributes?: LogFields) => void;
 }
-
-/**
- * The trace ids a dispatch's spans hang off: taken from the inbound
- * `traceparent` when the runtime forwarded one (so the shard's spans join the
- * worker's trace and any container's beneath it), else freshly minted so a
- * dispatch with no inbound context — a subscription re-run, a server-initiated
- * call — still produces a coherent, self-contained local trace.
- */
-const resolveTraceAnchor = (traceparent: string | undefined): { rootSpanId: string; traceId: string } => {
-    const inbound = parseTraceparent(traceparent);
-
-    return { rootSpanId: inbound?.parentSpanId ?? otlpRandomHex(8), traceId: inbound?.traceId ?? otlpRandomHex(16) };
-};
-
-/**
- * Classify a thrown value for a span's `error.type`. Prefers a `LunoraError`'s
- * stable `code` so spans group by the same taxonomy the RPC spans use
- * (`error.type` there is the catalog code), falling back to the constructor name
- * and finally to the OTel-conventional `"Error"` for a non-Error throw.
- */
-const toErrorType = (error: unknown): string => {
-    if (isLunoraError(error)) {
-        return error.code;
-    }
-
-    return error instanceof Error ? error.constructor.name : "Error";
-};
 
 /**
  * Minimal projection of `DurableObjectState` that the ShardDO base requires.
@@ -2176,6 +2155,11 @@ abstract class ShardDO {
         // the synthetic root span recorded on the way out agree on the ids even
         // when there is no inbound `traceparent` to derive them from.
         this.currentRequestTrace = resolveTraceAnchor(this.currentRequestTraceparent);
+        // Captured into a local as well: the `finally` below runs after the
+        // handler's awaits, by which point an interleaved dispatch may have
+        // re-set the shared field — reading it there would file this dispatch's
+        // root span under another request's trace (and leave that one rootless).
+        const dispatchTrace = this.currentRequestTrace;
         // Reset the per-request read/cache capture (filled by `runCachedQuery`
         // for cached query paths) so a previous dispatch can't leak into this
         // entry's logged read set / cache-hit flag.
@@ -2364,7 +2348,11 @@ abstract class ShardDO {
 
             return this.errorToResponse(error);
         } finally {
-            this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError);
+            // Guard hoisted to the call site so the common case — a handler that
+            // never called `ctx.trace` — is visibly a no-op here.
+            if (this.spans.hasTrace(dispatchTrace.traceId)) {
+                this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace);
+            }
             this.currentRequestTrace = undefined;
             this.currentRequestBookmark = undefined;
             this.currentResponseBookmark = undefined;
@@ -3076,6 +3064,15 @@ abstract class ShardDO {
      */
     protected getCurrentTraceparent(): string | undefined {
         return this.currentRequestTraceparent;
+    }
+
+    /**
+     * The in-flight dispatch's trace ids, for the generated `buildCtx` to hand to
+     * {@link makeTracer}. `undefined` outside a dispatch (an alarm, a lifecycle
+     * hook), where the tracer mints its own anchor.
+     */
+    protected getCurrentTrace(): { rootSpanId: string; traceId: string } | undefined {
+        return this.currentRequestTrace;
     }
 
     /**
@@ -4455,12 +4452,15 @@ abstract class ShardDO {
         args: unknown[],
         message: string,
         fields: Record<string, unknown> | undefined,
-        sink?: LogSink,
+        sink?: TelemetrySink,
     ): void {
-        // Correlate the line to its dispatch span from the inbound `traceparent`
-        // the runtime forwarded — `traceId` is the trace, `parentSpanId` the RPC
-        // server span. Absent on paths with no inbound trace context.
-        const trace = parseTraceparent(this.getCurrentTraceparent());
+        // Correlate the line to its dispatch span. Read from the resolved anchor
+        // rather than re-parsing the inbound `traceparent`, so a dispatch that
+        // MINTED its ids (no inbound context — a subscription re-run, an alarm, a
+        // server-initiated call) still correlates: re-parsing would yield
+        // `undefined` there and silently split a handler's logs from its spans,
+        // which is exactly what the docs promise doesn't happen.
+        const trace = this.currentRequestTrace;
 
         // One canonical event built once, fed to all three destinations. Only the
         // console event drops raw `args` (see emitLogEvent); the buffer and sink
@@ -4472,7 +4472,7 @@ abstract class ShardDO {
             level,
             message,
             shardKey: this.state.id?.name,
-            spanId: trace?.parentSpanId,
+            spanId: trace?.rootSpanId,
             traceId: trace?.traceId,
             ts: Date.now(),
             userId: this.getCurrentUserId(),
@@ -4506,7 +4506,7 @@ abstract class ShardDO {
      * stamps `fields` onto every line. The generated `buildCtx` calls this once
      * per dispatch and assigns the result to `ctx.log`.
      */
-    protected makeLogger(functionPath: string, sink?: LogSink, boundFields?: Record<string, unknown>): ContextLogger {
+    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): CtxLogger {
         const emit = (level: ContextLogLevel, args: unknown[]): void => {
             const { fields, message } = parseLogArgs(args, boundFields);
 
@@ -4552,77 +4552,84 @@ abstract class ShardDO {
      * ids, so `ctx.trace` still yields a coherent, self-contained local trace
      * rather than silently degrading to orphan spans.
      *
-     * Nesting is tracked in a **closure-local** stack rather than on `this`. That
-     * is the important detail: the surrounding `currentRequest*` fields are
-     * set-at-entry / cleared-at-exit and so are only sound for code that doesn't
-     * span an interleaving point, whereas a span stack is by definition held
-     * across the awaited body. Scoping it to the ctx makes concurrent dispatches
-     * structurally unable to corrupt each other's nesting.
+     * **Nesting is explicit, not ambient.** Each span's body receives a tracer
+     * bound to that span; calling it is what makes a child. An earlier design
+     * kept an ambient stack of "the currently open span" and parented to its top,
+     * which reads nicer but is unfixably wrong under concurrency: in
+     * `Promise.all([trace("a", …), trace("b", …)])`, `b` starts while `a` is on
+     * the stack and is recorded as a *child* of `a` rather than its sibling — and
+     * parallel fan-out is one of the main things people reach for a tracer to
+     * measure. Distinguishing "called inside a's body" from "called concurrently
+     * with a" needs `AsyncLocalStorage`, which this package deliberately avoids
+     * (see `dependency-tracker.ts` — shard DOs run under a slimmer compat profile
+     * than `nodejs_compat`). So the parent is threaded, exactly like the
+     * dependency tracker and the subscription identity: correct in every case,
+     * and visible at the call site.
+     *
+     * The trace anchor is likewise passed in rather than read from `this` at call
+     * time. `currentRequestTrace` is cleared in the dispatch `finally`, and a
+     * subscription re-run builds its ctx *during* the writing mutation's flush —
+     * so reading the shared field there would file the re-run's spans under the
+     * mutation's trace.
+     * @param anchor The trace this ctx's spans belong to. Omit for a ctx with no
+     * owning dispatch (an alarm, a subscription re-run) to mint a fresh anchor, so
+     * `ctx.trace` still yields a coherent self-contained trace there.
      */
-    protected makeTracer(functionPath: string, sink?: LogSink): CtxTracer {
-        // Normally set at dispatch entry; a ctx built outside that path (an alarm,
-        // a lifecycle hook) falls back to its own anchor so `ctx.trace` still
-        // works there — just without a dispatch root span above it.
-        const { rootSpanId, traceId } = this.currentRequestTrace ?? resolveTraceAnchor(this.getCurrentTraceparent());
-        // Ancestor span ids, innermost last. Empty => parent is the dispatch span.
-        const stack: string[] = [];
+    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: { rootSpanId: string; traceId: string }): CtxTracer {
+        const { rootSpanId, traceId } = anchor ?? resolveTraceAnchor(undefined);
 
-        return async <T>(name: string, fn: () => Promise<T> | T, attributes?: LogFields): Promise<T> => {
-            const spanId = otlpRandomHex(8);
-            const parentSpanId = stack.at(-1) ?? rootSpanId;
-            const startTs = Date.now();
-            // Normalized once, before the body runs, so a caller mutating the
-            // attributes object mid-span can't alter what gets recorded.
-            const normalized = normalizeLogFields(attributes);
+        const tracerFor =
+            (parentSpanId: string): CtxTracer =>
+            async <T>(name: string, fn: (trace: CtxTracer) => Promise<T> | T, attributes?: LogFields): Promise<T> => {
+                const spanId = otlpRandomHex(8);
+                const startTs = Date.now();
+                // Normalized once, before the body runs, so a caller mutating the
+                // attributes object mid-span can't alter what gets recorded.
+                const normalized = normalizeLogFields(attributes);
 
-            stack.push(spanId);
+                let ok = true;
+                let error: SpanEvent["error"];
 
-            let ok = true;
-            let error: SpanEvent["error"];
+                try {
+                    // The body gets a tracer bound to THIS span, so anything it
+                    // opens is a child of it — under `Promise.all` too.
+                    return await fn(tracerFor(spanId));
+                } catch (caught) {
+                    // Record the failure, then re-throw untouched: `ctx.trace` is
+                    // instrumentation, never flow control.
+                    ok = false;
+                    error = {
+                        message: caught instanceof Error ? caught.message : String(caught),
+                        // Prefer a LunoraError's stable `code` over the class name so
+                        // spans group by the same taxonomy the RPC spans use.
+                        type: toErrorType(caught),
+                    };
 
-            try {
-                return await fn();
-            } catch (caught) {
-                // Record the failure, then re-throw untouched: `ctx.trace` is
-                // instrumentation, never flow control.
-                ok = false;
-                error = {
-                    message: caught instanceof Error ? caught.message : String(caught),
-                    // Prefer a LunoraError's stable `code` over the class name so
-                    // spans group by the same taxonomy the RPC spans use.
-                    type: toErrorType(caught),
-                };
+                    throw caught;
+                } finally {
+                    this.recordSpan(
+                        {
+                            ...(normalized === undefined ? {} : { attributes: normalized }),
+                            durationMs: Date.now() - startTs,
+                            ...(error === undefined ? {} : { error }),
+                            functionPath,
+                            name,
+                            ok,
+                            parentSpanId,
+                            shardKey: this.state.id?.name,
+                            spanId,
+                            startTs,
+                            traceId,
+                            userId: this.getCurrentUserId(),
+                        },
+                        sink,
+                    );
+                }
+            };
 
-                throw caught;
-            } finally {
-                stack.pop();
-                this.recordSpan(
-                    {
-                        ...(normalized === undefined ? {} : { attributes: normalized }),
-                        durationMs: Date.now() - startTs,
-                        ...(error === undefined ? {} : { error }),
-                        functionPath,
-                        name,
-                        ok,
-                        parentSpanId,
-                        shardKey: this.state.id?.name,
-                        spanId,
-                        startTs,
-                        traceId,
-                        userId: this.getCurrentUserId(),
-                    },
-                    sink,
-                );
-            }
-        };
+        return tracerFor(rootSpanId);
     }
 
-    /**
-     * Buffer one span for the studio Traces panel and hand it to the optional
-     * `sink.onSpan`. Best-effort throughout, exactly like {@link recordUserLog}:
-     * a span is recorded *after* its body already settled, so letting a telemetry
-     * failure escape here would turn a succeeded operation into a failed request.
-     */
     /**
      * Build the `ctx.metrics` recorder for one dispatched function. The generated
      * `buildCtx` calls this once per dispatch and assigns the result to
@@ -4635,7 +4642,7 @@ abstract class ShardDO {
      * the distribution) — so the runtime stays a transport and the collector,
      * which is built for exactly this, does the aggregation.
      */
-    protected makeMetrics(functionPath: string, sink?: LogSink): CtxMetrics {
+    protected makeMetrics(functionPath: string, sink?: TelemetrySink): CtxMetrics {
         const emit = (kind: MetricKind, name: string, value: number, attributes?: LogFields): void => {
             // A NaN/Infinity measurement has no meaningful encoding and would
             // poison an aggregate downstream — drop it rather than export it.
@@ -4675,7 +4682,7 @@ abstract class ShardDO {
      * measurement's value is in its aggregate over time, which a bounded ring on
      * a hibernating instance cannot represent. Metrics go to the sink or nowhere.
      */
-    protected recordMetric(event: MetricEvent, sink?: LogSink): void {
+    protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void {
         if (sink?.onMetric) {
             try {
                 sink.onMetric(event, { waitUntil: this.state.waitUntil?.bind(this.state) });
@@ -4689,23 +4696,26 @@ abstract class ShardDO {
      * Record the synthetic root span for a finished dispatch, so the studio's
      * waterfall has a bar for the request itself to hang `ctx.trace` spans under.
      *
-     * Deliberately recorded ONLY when the dispatch actually produced spans: every
-     * request minting a root would fill the bounded ring with single-bar traces
-     * from uninstrumented handlers and evict the instrumented ones the panel
-     * exists to show. The buffer therefore holds traces a developer opted into by
-     * calling `ctx.trace`, not one entry per request.
+     * The caller gates this on the dispatch having actually produced spans (see
+     * the `hasTrace` check at the call site): every request minting a root would
+     * fill the bounded ring with single-bar traces from uninstrumented handlers
+     * and evict the instrumented ones the panel exists to show. The buffer
+     * therefore holds traces a developer opted into by calling `ctx.trace`, not
+     * one entry per request.
      *
      * Not routed to `sink.onSpan` — the runtime already emits this dispatch to
      * `onRpc`, which a collector renders as the same SERVER span; sending both
      * would duplicate it in every trace.
+     * @param anchor The dispatch's trace ids, captured at entry rather than read
+     * from `this` here — this runs after the handler's awaits, where the shared
+     * field may already belong to an interleaved dispatch.
      */
-    private recordDispatchRootSpan(functionPath: string, startedAt: number, failure: { thrown: unknown } | undefined): void {
-        const anchor = this.currentRequestTrace;
-
-        if (anchor === undefined || !this.spans.hasTrace(anchor.traceId)) {
-            return;
-        }
-
+    private recordDispatchRootSpan(
+        functionPath: string,
+        startedAt: number,
+        failure: { thrown: unknown } | undefined,
+        anchor: { rootSpanId: string; traceId: string },
+    ): void {
         try {
             this.spans.push({
                 durationMs: Date.now() - startedAt,
@@ -4724,7 +4734,7 @@ abstract class ShardDO {
                 // RPC span sits above it in a full collector-side trace, but it is
                 // not in this buffer, so naming it here would dangle.
                 parentSpanId: "",
-                root: true,
+                dispatch: true,
                 shardKey: this.state.id?.name,
                 spanId: anchor.rootSpanId,
                 startTs: startedAt,
@@ -4736,7 +4746,13 @@ abstract class ShardDO {
         }
     }
 
-    protected recordSpan(span: SpanEvent, sink?: LogSink): void {
+    /**
+     * Buffer one span for the studio Traces panel and hand it to the optional
+     * `sink.onSpan`. Best-effort throughout, exactly like {@link recordUserLog}:
+     * a span is recorded *after* its body already settled, so letting a telemetry
+     * failure escape here would turn a succeeded operation into a failed request.
+     */
+    protected recordSpan(span: SpanEvent, sink?: TelemetrySink): void {
         try {
             this.spans.push(span);
         } catch {
@@ -8475,9 +8491,16 @@ export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
 // Re-exported so existing import sites (`./index`, tests) keep their path; the
 // canonical home is `./subscription-delivery`.
 export { subscriptionListDeltas } from "./subscription-delivery";
+/**
+ * @deprecated Renamed to {@link TelemetrySink} — it carries spans and metrics as
+ * well as logs. Kept as an alias so existing import sites keep working.
+ */
+type LogSink = TelemetrySink;
+
 export type {
     HibernatableWebSocket,
     LogSink,
+    TelemetrySink,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
     RunShardBulkDeleteArgs,

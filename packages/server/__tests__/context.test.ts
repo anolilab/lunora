@@ -93,7 +93,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
             log: {} as QueryContext["log"],
             metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
 
-            trace: (async (_name: string, fn: () => unknown) => fn()) as QueryContext["trace"],
+            trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as QueryContext["trace"],
             now: 0,
             runQuery: (async () => undefined) as unknown as QueryContext["runQuery"],
             secrets: { get: async () => "secret" },

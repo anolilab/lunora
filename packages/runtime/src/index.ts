@@ -80,7 +80,7 @@ export type {
     ObservabilitySinkContext,
     SpanEvent,
 } from "./observability";
-export { emitLogEvent, emitMetricEvent, emitRpcEvent, emitSpanEvent } from "./observability";
+export { emitLogEvent, emitRpcEvent } from "./observability";
 export type {
     AnalyticsEngineDataPointLike,
     AnalyticsEngineDatasetLike,

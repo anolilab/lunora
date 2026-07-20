@@ -1354,11 +1354,24 @@ interface LunoraLogger {
  * const charge = await ctx.trace("stripe.charge", () => stripe.charges.create(…), { orderId });
  * ```
  *
- * Nesting works by lexical containment — a `ctx.trace` called inside another
- * span's body is parented to it — so the shape of the code is the shape of the
- * waterfall. Spans share the dispatch's trace id with its `ctx.log` lines and any
- * container the handler calls (the same `traceparent` is propagated), so one
- * trace spans worker, shard, and container.
+ * **Nesting is explicit.** The body receives a tracer bound to its own span;
+ * calling *that* is what makes a child:
+ *
+ * ```ts
+ * await ctx.trace("fulfil", async (trace) => {
+ *     // Children of "fulfil" — including under Promise.all, where an ambient
+ *     // "currently open span" would mis-record these as nested inside each other.
+ *     await Promise.all([trace("reserve.stock", …), trace("email.receipt", …)]);
+ * });
+ * ```
+ *
+ * Calling `ctx.trace` again inside a body (rather than the passed tracer) is not
+ * an error — that span is simply parented to the dispatch instead of to the
+ * enclosing span, which is flatter but never wrong.
+ *
+ * Spans share the dispatch's trace id with its `ctx.log` lines and any container
+ * the handler calls (the same `traceparent` is propagated), so one trace spans
+ * worker, shard, and container.
  *
  * The span is recorded when the body settles, and the body's value is returned
  * unchanged. A throw is recorded as an error span and then **re-thrown** — this
@@ -1367,12 +1380,13 @@ interface LunoraLogger {
  * @param name Span name, e.g. `"stripe.charge"`. Prefer a low-cardinality name
  * and put the varying part in `attributes` — a name built from an id makes every
  * span its own group in a collector.
- * @param fn The body to time. May be sync or async; the result is awaited.
+ * @param fn The body to time, receiving a tracer bound to this span for any
+ * nested spans. May be sync or async; the result is awaited.
  * @param attributes Structured attributes to stamp on the span, normalized like
  * a log line's `fields`.
  */
 interface LunoraTracer {
-    <T>(name: string, fn: () => Promise<T> | T, attributes?: LogFields): Promise<T>;
+    <T>(name: string, fn: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields): Promise<T>;
 }
 
 /**

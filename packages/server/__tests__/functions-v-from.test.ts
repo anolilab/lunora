@@ -28,7 +28,7 @@ const makeMutationContext = (): MutationContext => {
         log: {} as MutationContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
 
-        trace: (async (_name: string, fn: () => unknown) => fn()) as MutationContext["trace"],
+        trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as MutationContext["trace"],
         now: 0,
         runMutation: vi.fn<MutationContext["runMutation"]>() as MutationContext["runMutation"],
         secrets: { get: async () => "secret" },

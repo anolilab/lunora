@@ -38,7 +38,12 @@ export interface SpanEvent {
         message: string;
         type: string;
     };
-    /** Function path the span was created under, e.g. `"messages:list"`. */
+    /**
+     * Function path the span was created under, e.g. `"messages:list"`. A span
+     * created inside a function invoked via `ctx.runQuery`/`runMutation`/
+     * `runAction` carries the OUTER entrypoint's path, since the composed call
+     * reuses its context — the same attribution rule `ctx.log` follows.
+     */
     functionPath: string;
     /** Caller-supplied span name, e.g. `"stripe.charge"`. */
     name: string;
@@ -48,18 +53,22 @@ export interface SpanEvent {
      * Span id of the enclosing span — the parent `ctx.trace` when nested, else
      * the dispatch's own RPC span (from the inbound `traceparent`). A span with
      * no inbound trace context is parented to a locally-minted root, so this is
-     * always set for a `ctx.trace` span; only the synthetic `root` span below
+     * always set for a `ctx.trace` span; only the synthetic `dispatch` span below
      * carries `""`, meaning "nothing above me in this trace".
      */
     parentSpanId: string;
     /**
-     * True for the synthetic span representing the dispatch itself, which the
+     * True for the synthetic span representing the **dispatch itself**, which the
      * shard records so a waterfall has a bar for the request to hang its
-     * `ctx.trace` spans under. Never exported to a sink — the runtime already
-     * emits the dispatch to `onRpc`, and a collector would otherwise show it
-     * twice.
+     * `ctx.trace` spans under.
+     *
+     * Named for what it is rather than "root": it is not the root of the
+     * collector-side trace — the worker's own RPC span sits above it — and it is
+     * never exported to a sink, because the runtime already emits that dispatch
+     * via `onRpc` and a collector would otherwise show it twice. Locally it *is*
+     * the outermost span, which is why the fold prefers it as a trace's anchor.
      */
-    root?: boolean;
+    dispatch?: boolean;
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey?: string;
     /** This span's own id (16-hex). */

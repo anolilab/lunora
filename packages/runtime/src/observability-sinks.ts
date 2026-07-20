@@ -19,6 +19,7 @@
  * if that is a concern.
  */
 import { coerceFieldValue } from "../../../shared/log-fields";
+import type { OtlpAttribute } from "../../../shared/otlp";
 import {
     encodeAttribute,
     mergeHeaders,
@@ -81,6 +82,46 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
 };
 
 /**
+ * Build the OTLP attribute list shared by every signal: the reserved `lunora.*`
+ * keys, then the caller's own attributes.
+ *
+ * Keyed by name so a caller key that collides with a reserved one **overrides**
+ * it rather than emitting a duplicate `KeyValue` (which a collector resolves
+ * ambiguously). That precedence is a wire contract, and it was previously
+ * re-implemented in the span, log, and metric encoders — three copies of one
+ * rule, free to drift apart. One implementation, asserted once.
+ */
+const encodeSignalAttributes = (
+    reserved: { errorType?: string; functionPath: string; shardKey?: string; userId?: string },
+    caller: Record<string, unknown> | undefined,
+): OtlpAttribute[] => {
+    const byKey = new Map<string, OtlpAttribute>();
+
+    byKey.set("lunora.function_path", encodeAttribute("lunora.function_path", reserved.functionPath));
+
+    if (reserved.shardKey !== undefined) {
+        byKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", reserved.shardKey));
+    }
+
+    if (reserved.userId !== undefined) {
+        byKey.set("lunora.user_id", encodeAttribute("lunora.user_id", reserved.userId));
+    }
+
+    if (reserved.errorType !== undefined) {
+        // `error.type` is the OTel semantic-convention key.
+        byKey.set("error.type", encodeAttribute("error.type", reserved.errorType));
+    }
+
+    // Caller values arrive pre-normalized to JSON-safe primitives;
+    // `coerceFieldValue` re-applies for a sink fed a raw event.
+    for (const [key, value] of Object.entries(caller ?? {})) {
+        byKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
+    }
+
+    return [...byKey.values()];
+};
+
+/**
  * Build the OTLP trace-export body for one user-created `ctx.trace` span.
  *
  * The counterpart to {@link otlpTraceBody}: that encodes the one SERVER span per
@@ -89,37 +130,20 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
  * (another `ctx.trace`, or the dispatch's own RPC span) rather than showing a
  * flat list of orphans.
  *
- * Caller attributes are keyed so a caller key that collides with a reserved
- * `lunora.*` one overrides it rather than emitting a duplicate `KeyValue` — the
- * same precedence {@link otlpLogBody} gives a log line's `fields`.
+ * Attribute precedence follows {@link encodeSignalAttributes}.
  */
 const otlpSpanBody = (event: SpanEvent, serviceName: string): unknown => {
-    const attributeByKey = new Map<string, ReturnType<typeof encodeAttribute>>();
-
-    attributeByKey.set("lunora.function_path", encodeAttribute("lunora.function_path", event.functionPath));
-
-    if (event.shardKey !== undefined) {
-        attributeByKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", event.shardKey));
-    }
-
-    if (event.userId !== undefined) {
-        attributeByKey.set("lunora.user_id", encodeAttribute("lunora.user_id", event.userId));
-    }
-
-    if (event.error) {
-        attributeByKey.set("error.type", encodeAttribute("error.type", event.error.type));
-    }
-
-    for (const [key, value] of Object.entries(event.attributes ?? {})) {
-        attributeByKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
-    }
-
     const span = {
-        attributes: [...attributeByKey.values()],
+        attributes: encodeSignalAttributes(
+            { errorType: event.error?.type, functionPath: event.functionPath, shardKey: event.shardKey, userId: event.userId },
+            event.attributes,
+        ),
         endTimeUnixNano: otlpUnixNano(event.startTs + event.durationMs),
-        // SPAN_KIND_SERVER (2) for the synthetic dispatch root — it *is* server-side
-        // request handling — and SPAN_KIND_INTERNAL (1) for a handler's own spans.
-        kind: event.root === true ? 2 : 1,
+        // Always SPAN_KIND_INTERNAL: only `ctx.trace` spans reach a sink. The
+        // synthetic dispatch span is buffered for the Studio waterfall and never
+        // exported, because the runtime already emits that dispatch to `onRpc` as
+        // a SERVER span — encoding it here too would duplicate it in every trace.
+        kind: 1,
         name: event.name,
         parentSpanId: event.parentSpanId,
         spanId: event.spanId,
@@ -147,21 +171,15 @@ const otlpSpanBody = (event: SpanEvent, serviceName: string): unknown => {
  * the runtime having to pick bucket boundaries for the user.
  */
 const otlpMetricBody = (event: MetricEvent, serviceName: string): unknown => {
-    const attributeByKey = new Map<string, ReturnType<typeof encodeAttribute>>();
-
-    attributeByKey.set("lunora.function_path", encodeAttribute("lunora.function_path", event.functionPath));
-
-    if (event.shardKey !== undefined) {
-        attributeByKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", event.shardKey));
-    }
-
-    for (const [key, value] of Object.entries(event.attributes ?? {})) {
-        attributeByKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
-    }
-
     const timeUnixNano = otlpUnixNano(event.ts);
-    const attributes = [...attributeByKey.values()];
-    const dataPoint = { asDouble: event.value, attributes, startTimeUnixNano: timeUnixNano, timeUnixNano };
+    const attributes = encodeSignalAttributes({ functionPath: event.functionPath, shardKey: event.shardKey }, event.attributes);
+    // `startTimeUnixNano` is deliberately omitted (it is optional). A delta point
+    // covers `(startTimeUnixNano, timeUnixNano]`, so setting both to the same
+    // instant would declare a zero-width aggregation window — which the
+    // `deltatocumulative` processor and Prometheus remote-write paths treat as
+    // invalid and may drop. Omitting it lets the collector infer the interval
+    // from the previous export, which is what it does for a stream of deltas.
+    const dataPoint = { asDouble: event.value, attributes, timeUnixNano };
 
     if (event.kind === "gauge") {
         return wrapResourceMetrics({ gauge: { dataPoints: [dataPoint] }, name: event.name }, "@lunora/runtime", serviceName);
@@ -180,7 +198,8 @@ const otlpMetricBody = (event: MetricEvent, serviceName: string): unknown => {
                             explicitBounds: [],
                             max: event.value,
                             min: event.value,
-                            startTimeUnixNano: timeUnixNano,
+                            // `startTimeUnixNano` omitted for the same reason as
+                            // the Sum data point above — see the comment there.
                             sum: event.value,
                             timeUnixNano,
                         },
@@ -202,33 +221,10 @@ const otlpMetricBody = (event: MetricEvent, serviceName: string): unknown => {
 
 /** Build the OTLP log-export body for one application log line. */
 const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
-    // Keyed by attribute name so a caller field that reuses a reserved `lunora.*`
-    // key overrides it (as documented) rather than emitting a duplicate `KeyValue`
-    // the collector resolves ambiguously. Reserved keys go in first; caller
-    // fields overwrite.
-    const attributeByKey = new Map<string, ReturnType<typeof encodeAttribute>>([
-        ["lunora.function_path", encodeAttribute("lunora.function_path", event.functionPath)],
-    ]);
-
-    if (event.shardKey !== undefined) {
-        attributeByKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", event.shardKey));
-    }
-
-    if (event.userId !== undefined) {
-        attributeByKey.set("lunora.user_id", encodeAttribute("lunora.user_id", event.userId));
-    }
-
-    // Caller-supplied structured fields become log-record attributes so a
-    // pipeline can filter/index on them. They arrive pre-normalized to JSON-safe
-    // primitives; `coerceFieldValue` re-applies for a sink fed a raw event.
-    if (event.fields) {
-        for (const [key, value] of Object.entries(event.fields)) {
-            attributeByKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
-        }
-    }
-
     const logRecord: Record<string, unknown> = {
-        attributes: [...attributeByKey.values()],
+        // Caller-supplied structured fields become log-record attributes so a
+        // pipeline can filter/index on them; precedence per `encodeSignalAttributes`.
+        attributes: encodeSignalAttributes({ functionPath: event.functionPath, shardKey: event.shardKey, userId: event.userId }, event.fields),
         body: { stringValue: event.message },
         severityNumber: OTLP_SEVERITY[event.level],
         severityText: event.level.toUpperCase(),
@@ -767,62 +763,35 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
  * @param sinks The sinks to fan out to.
  */
 export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink => {
+    /**
+     * Fan one event out to every child that implements `method`.
+     *
+     * One helper rather than four near-identical loops: "invoke each child in
+     * order, isolate its throws, and forward the per-event context" is a single
+     * policy, not a per-signal one, and there is no reason for the four to
+     * diverge. Forwarding `context` matters — dropping the request's `waitUntil`
+     * would silently degrade every wrapped network sink to fire-and-forget.
+     */
+    const fanOut = <E>(method: "onLog" | "onMetric" | "onRpc" | "onSpan", event: E, context?: ObservabilitySinkContext): void => {
+        for (const sink of sinks) {
+            const handler = sink[method] as ((event: E, context?: ObservabilitySinkContext) => void) | undefined;
+
+            if (!handler) {
+                continue;
+            }
+
+            try {
+                handler.call(sink, event, context);
+            } catch {
+                // Isolate failures so one bad sink doesn't starve the rest.
+            }
+        }
+    };
+
     return {
-        onLog: (event: LogEvent, context?: ObservabilitySinkContext) => {
-            for (const sink of sinks) {
-                if (!sink.onLog) {
-                    continue;
-                }
-
-                try {
-                    // Forward the per-event context (the request's `ctx.waitUntil`)
-                    // so a wrapped network sink can still keep its send alive past
-                    // the response — dropping it would silently degrade every
-                    // combined sink to fire-and-forget.
-                    sink.onLog(event, context);
-                } catch {
-                    // Isolate failures so one bad sink doesn't starve the rest.
-                }
-            }
-        },
-        onRpc: (event, context?: ObservabilitySinkContext) => {
-            for (const sink of sinks) {
-                if (!sink.onRpc) {
-                    continue;
-                }
-
-                try {
-                    sink.onRpc(event, context);
-                } catch {
-                    // Isolate failures so one bad sink doesn't starve the rest.
-                }
-            }
-        },
-        onMetric: (event: MetricEvent, context?: ObservabilitySinkContext) => {
-            for (const sink of sinks) {
-                if (!sink.onMetric) {
-                    continue;
-                }
-
-                try {
-                    sink.onMetric(event, context);
-                } catch {
-                    // Isolate failures so one bad sink doesn't starve the rest.
-                }
-            }
-        },
-        onSpan: (event: SpanEvent, context?: ObservabilitySinkContext) => {
-            for (const sink of sinks) {
-                if (!sink.onSpan) {
-                    continue;
-                }
-
-                try {
-                    sink.onSpan(event, context);
-                } catch {
-                    // Isolate failures so one bad sink doesn't starve the rest.
-                }
-            }
-        },
+        onLog: (event: LogEvent, context?: ObservabilitySinkContext) => fanOut("onLog", event, context),
+        onMetric: (event: MetricEvent, context?: ObservabilitySinkContext) => fanOut("onMetric", event, context),
+        onRpc: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => fanOut("onRpc", event, context),
+        onSpan: (event: SpanEvent, context?: ObservabilitySinkContext) => fanOut("onSpan", event, context),
     };
 };

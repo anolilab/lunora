@@ -108,24 +108,11 @@ export class SpanBuffer {
     }
 }
 
-/**
- * Group a flat span list into per-trace waterfalls, newest trace first.
- *
- * Pure and total — every input yields a renderable result, because the buffer is
- * a bounded ring and so is *routinely* partial: eviction can drop a parent while
- * keeping its children, and a trace can be read mid-dispatch, before its root
- * span has been recorded at all. Both cases are normal, not corruption. A span
- * whose parent is missing from the group is therefore re-parented to the trace's
- * shallowest span rather than dropped, so a partial trace still renders every
- * span it does have.
- *
- * Cycles (which a correct tracer cannot produce, but a hand-built or replayed
- * event stream could) are bounded by tracking the ancestors already walked, so
- * depth resolution always terminates.
- * @param spans Buffered spans, in arrival order.
- * @param limit Maximum number of traces to return, newest first.
- */
-export const foldTraces = (spans: readonly SpanEvent[], limit = 50): TraceSummary[] => {
+/** Default number of traces {@link foldTraces} returns, newest first. */
+export const DEFAULT_TRACE_LIMIT = 50;
+
+/** Bucket spans by their trace id, preserving arrival order within each group. */
+const groupByTrace = (spans: readonly SpanEvent[]): Map<string, SpanEvent[]> => {
     const byTrace = new Map<string, SpanEvent[]>();
 
     for (const span of spans) {
@@ -138,45 +125,129 @@ export const foldTraces = (spans: readonly SpanEvent[], limit = 50): TraceSummar
         }
     }
 
+    return byTrace;
+};
+
+/**
+ * Pick the span a trace hangs off, in three explicitly-ordered cases:
+ *
+ * 1. The synthetic dispatch span, when it is present.
+ * 2. Otherwise the earliest span whose parent is **absent** from the group. Its
+ *    parent was evicted from the ring or hasn't settled yet, which makes it the
+ *    outermost span actually present. Both are routine for a bounded ring, not
+ *    corruption.
+ * 3. Otherwise the earliest span. Reachable only when *every* span's parent is
+ *    present, which requires a parent cycle — impossible from the tracer, but a
+ *    replayed or hand-built stream could carry one. `depthOf` breaks the cycle;
+ *    this just guarantees an anchor exists.
+ *
+ * Structure decides this, not timing: spans are recorded on completion and
+ * `startTs` has millisecond resolution, so a parent and its child routinely look
+ * simultaneous.
+ */
+const selectAnchor = (group: readonly SpanEvent[], byId: ReadonlyMap<string, SpanEvent>): SpanEvent | undefined => {
+    const declaredRoot = group.find((span) => span.dispatch === true);
+
+    if (declaredRoot !== undefined) {
+        return declaredRoot;
+    }
+
+    const byStart = [...group].sort((a, b) => a.startTs - b.startTs);
+
+    return byStart.find((span) => !byId.has(span.parentSpanId)) ?? byStart[0];
+};
+
+/**
+ * Build a memoized depth resolver for one trace: how many levels a span sits
+ * below `anchor`.
+ *
+ * Memoized across the group rather than walked per span — a deep chain would
+ * otherwise re-walk the same ancestors for every descendant, turning the fold
+ * quadratic on exactly the traces that are already the largest.
+ *
+ * A missing or cyclic parent re-parents onto the anchor rather than looping or
+ * dropping the span, so resolution always terminates and a partial trace still
+ * renders every span it has.
+ */
+const depthResolver = (anchor: SpanEvent, byId: ReadonlyMap<string, SpanEvent>): ((span: SpanEvent) => number) => {
+    const cache = new Map<string, number>([[anchor.spanId, 0]]);
+
+    return (span: SpanEvent): number => {
+        // Ancestors walked on the way up, innermost first, so each one can be
+        // memoized on the way back down.
+        const chain: SpanEvent[] = [];
+        const seen = new Set<string>();
+        let current: SpanEvent | undefined = span;
+        let base = 0;
+
+        while (current !== undefined) {
+            const known = cache.get(current.spanId);
+
+            if (known !== undefined) {
+                base = known;
+                break;
+            }
+
+            // Cycle: stop and treat the chain as hanging directly off the anchor.
+            if (seen.has(current.spanId)) {
+                break;
+            }
+
+            seen.add(current.spanId);
+            chain.push(current);
+
+            const parent: SpanEvent | undefined = byId.get(current.parentSpanId);
+
+            // Parent absent from the group — re-parent onto the anchor.
+            if (parent === undefined) {
+                break;
+            }
+
+            current = parent;
+        }
+
+        // `base` is the depth of the node ABOVE the chain's top — the memoized
+        // ancestor we stopped at, or the anchor (depth 0) when the walk ran out
+        // of parents. So the outermost unresolved span sits one below it, and
+        // each subsequent one another level down.
+        for (const [index, entry] of [...chain].reverse().entries()) {
+            cache.set(entry.spanId, base + index + 1);
+        }
+
+        return cache.get(span.spanId) ?? base;
+    };
+};
+
+/**
+ * Group a flat span list into per-trace waterfalls, newest trace first.
+ * @param spans Buffered spans, in arrival order.
+ * @param limit Maximum number of traces to return, newest first.
+ */
+export const foldTraces = (spans: readonly SpanEvent[], limit = DEFAULT_TRACE_LIMIT): TraceSummary[] => {
+    const byTrace = groupByTrace(spans);
+
+    // Newest-first and truncated to `limit` BEFORE folding, so a full ring only
+    // pays the fold cost for the traces actually returned. This runs on every
+    // write flush for a live Traces subscriber, so the discarded work is not
+    // free.
+    const selected = [...byTrace.entries()]
+        .map(([traceId, group]) => {
+            return { group, startTs: Math.min(...group.map((span) => span.startTs)), traceId };
+        })
+        .sort((a, b) => b.startTs - a.startTs)
+        .slice(0, limit);
+
     const summaries: TraceSummary[] = [];
 
-    for (const [traceId, group] of byTrace) {
+    for (const { group, traceId } of selected) {
         const byId = new Map(group.map((span) => [span.spanId, span]));
-        const byStart = [...group].sort((a, b) => a.startTs - b.startTs);
-        // The trace's anchor, in preference order: the declared root span; else
-        // the earliest span whose parent isn't in this group — i.e. one whose
-        // parent was evicted or hasn't settled yet, which makes it the outermost
-        // span actually present. Structure rather than timing decides this: spans
-        // are recorded on completion and `startTs` has millisecond resolution, so
-        // a parent and its child routinely look simultaneous.
-        const anchor = group.find((span) => span.root === true) ?? byStart.find((span) => !byId.has(span.parentSpanId)) ?? byStart[0];
+        const anchor = selectAnchor(group, byId);
 
         if (anchor === undefined) {
             continue;
         }
 
-        const depthOf = (span: SpanEvent): number => {
-            const seen = new Set<string>([span.spanId]);
-            let depth = 0;
-            let current = span;
-
-            while (current.spanId !== anchor.spanId) {
-                const parent = byId.get(current.parentSpanId);
-
-                // Missing or cyclic parent — re-parent onto the anchor rather
-                // than looping or dropping the span.
-                if (parent === undefined || seen.has(parent.spanId)) {
-                    return depth + 1;
-                }
-
-                seen.add(parent.spanId);
-                current = parent;
-                depth += 1;
-            }
-
-            return depth;
-        };
-
+        const depthOf = depthResolver(anchor, byId);
         const startTs = anchor.startTs;
         const endTs = Math.max(...group.map((span) => span.startTs + span.durationMs));
 
@@ -215,5 +286,8 @@ export const foldTraces = (spans: readonly SpanEvent[], limit = 50): TraceSummar
         });
     }
 
-    return summaries.sort((a, b) => b.startTs - a.startTs).slice(0, limit);
+    // Re-sorted on the anchor's start: `selected` ordered by each group's
+    // earliest span, which is the anchor in the normal case but not when the
+    // group is partial.
+    return summaries.sort((a, b) => b.startTs - a.startTs);
 };

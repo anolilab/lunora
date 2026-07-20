@@ -13,7 +13,7 @@ const makeQueryContext = (): QueryContext => {
         log: {} as QueryContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
 
-        trace: (async (_name: string, fn: () => unknown) => fn()) as QueryContext["trace"],
+        trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as QueryContext["trace"],
         now: 0,
         runQuery: vi.fn<QueryContext["runQuery"]>() as QueryContext["runQuery"],
         storage: {} as QueryContext["storage"],
@@ -29,7 +29,7 @@ const makeMutationContext = (): MutationContext => {
         log: {} as MutationContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
 
-        trace: (async (_name: string, fn: () => unknown) => fn()) as MutationContext["trace"],
+        trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as MutationContext["trace"],
         now: 0,
         runMutation: vi.fn<MutationContext["runMutation"]>() as MutationContext["runMutation"],
         runQuery: vi.fn<MutationContext["runQuery"]>() as MutationContext["runQuery"],
@@ -50,7 +50,7 @@ const makeActionContext = (): ActionContext => {
         log: {} as ActionContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
 
-        trace: (async (_name: string, fn: () => unknown) => fn()) as ActionContext["trace"],
+        trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as ActionContext["trace"],
         now: 0,
         runAction: vi.fn<ActionContext["runAction"]>() as ActionContext["runAction"],
         runMutation: vi.fn<ActionContext["runMutation"]>() as ActionContext["runMutation"],
