@@ -824,6 +824,7 @@ class LogBuffer {
 ```ts
 interface LogEntry {
     exitCode?: number;
+    fields?: Record<string, unknown>;
     functionPath?: string;
     instance?: string;
     level: LogLevel;
@@ -832,18 +833,10 @@ interface LogEntry {
 }
 ```
 
-### `LogEventInput` (interface)
+### `LogEventInput` (type)
 
 ```ts
-interface LogEventInput {
-    args: unknown[];
-    functionPath: string;
-    level: ContextLogLevel;
-    message: string;
-    shardKey?: string;
-    ts: number;
-    userId?: string;
-}
+type LogEventInput = LogEvent;
 ```
 
 ### `LogLevel` (type)
@@ -856,7 +849,7 @@ type LogLevel = "debug" | "error" | "info" | "warn";
 
 ```ts
 interface LogSink {
-    onLog?: (event: LogEventInput) => void;
+    onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
 }
 ```
 
@@ -1881,7 +1874,8 @@ abstract class ShardDO {
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
     protected recordChangedTable(table: string): void;
     protected flushMigrationProgress(): Promise<void>;
-    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], sink?: LogSink): void;
+    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: LogSink): void;
+    protected makeLogger(functionPath: string, sink?: LogSink, boundFields?: Record<string, unknown>): CtxLogger;
     protected isIdentityIndependent(functionPath: string): boolean;
     protected readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): {
         changes: CdcChange[];

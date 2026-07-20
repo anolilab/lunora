@@ -43,7 +43,13 @@ describe("formatLunoraEvent", () => {
 
             expect(
                 formatLunoraEvent(
-                    event({ fields: { attempt: 2, nested: { sku: "x" }, orderId: "o-1" }, function: "orders:place", level: "info", message: "placed", type: "log" }),
+                    event({
+                        fields: { attempt: 2, nested: { sku: "x" }, orderId: "o-1" },
+                        function: "orders:place",
+                        level: "info",
+                        message: "placed",
+                        type: "log",
+                    }),
                 )?.text,
             ).toBe('orders:place  placed  attempt=2 nested={"sku":"x"} orderId=o-1');
         });

@@ -913,19 +913,28 @@ interface ListAuthUsersOptions {
 ```ts
 interface LogEvent {
     args: unknown[];
+    fields?: LogFields;
     functionPath: string;
-    level: LogLevel;
+    level: ContextLogLevel;
     message: string;
     shardKey?: string;
+    spanId?: string;
+    traceId?: string;
     ts: number;
     userId?: string;
 }
 ```
 
+### `LogFields` (type)
+
+```ts
+type LogFields = Record<string, unknown>;
+```
+
 ### `LogLevel` (type)
 
 ```ts
-type LogLevel = "debug" | "error" | "info" | "log" | "warn";
+type LogLevel = ContextLogLevel;
 ```
 
 ### `LunoraError` (class)
@@ -1056,12 +1065,10 @@ interface ObservabilitySink {
 }
 ```
 
-### `ObservabilitySinkContext` (interface)
+### `ObservabilitySinkContext` (type)
 
 ```ts
-interface ObservabilitySinkContext {
-    waitUntil?: (promise: Promise<unknown>) => void;
-}
+type ObservabilitySinkContext = LogSinkContext;
 ```
 
 ### `OtlpSinkOptions` (interface)
@@ -1072,6 +1079,22 @@ interface OtlpSinkOptions extends OnlyErrorsOption {
     headers?: Record<string, string>;
     serviceName?: string;
     token?: string;
+}
+```
+
+### `PipelineLike` (interface)
+
+```ts
+interface PipelineLike {
+    send: (records: Record<string, unknown>[]) => Promise<void>;
+}
+```
+
+### `PipelineLogSinkOptions` (interface)
+
+```ts
+interface PipelineLogSinkOptions {
+    pipeline: PipelineLike;
 }
 ```
 
@@ -1261,6 +1284,7 @@ interface SecurityOptions {
 ```ts
 interface SentrySinkOptions extends OnlyErrorsOption {
     capture: (event: ObservabilityEvent) => void;
+    captureLog?: (event: LogEvent) => void;
 }
 ```
 
@@ -1501,6 +1525,7 @@ interface VectorQueryMatch {
 interface WebhookSinkOptions extends OnlyErrorsOption {
     headers?: Record<string, string>;
     transform?: (event: ObservabilityEvent) => null | ObservabilityEvent | undefined;
+    transformLog?: (event: LogEvent) => LogEvent | null | undefined;
     url: string;
 }
 ```
@@ -1690,6 +1715,12 @@ const mergeStrategyForAggregate: (input: {
 
 ```ts
 const otlpSink: (options: OtlpSinkOptions) => ObservabilitySink;
+```
+
+### `pipelineLogSink` (const)
+
+```ts
+const pipelineLogSink: (options: PipelineLogSinkOptions) => ObservabilitySink;
 ```
 
 ### `resolveLunoraOptions` (const)

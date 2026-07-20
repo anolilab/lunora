@@ -732,6 +732,12 @@ type LifecycleEventKind = "connect" | "disconnect";
 type LifecycleHandler = (context: MutationCtx, event: LifecycleEvent) => Promise<void> | void;
 ```
 
+### `LogFields` (type)
+
+```ts
+type LogFields = Record<string, unknown>;
+```
+
 ### `LunoraBuilders` (interface)
 
 ```ts
@@ -785,15 +791,27 @@ interface LunoraHttpEnv {
 }
 ```
 
+### `LunoraLogMethod` (interface)
+
+```ts
+interface LunoraLogMethod {
+    (message: string, fields?: LogFields): void;
+    (...args: unknown[]): void;
+}
+```
+
 ### `LunoraLogger` (interface)
 
 ```ts
 interface LunoraLogger {
-    readonly debug: (...args: unknown[]) => void;
-    readonly error: (...args: unknown[]) => void;
-    readonly info: (...args: unknown[]) => void;
-    readonly log: (...args: unknown[]) => void;
-    readonly warn: (...args: unknown[]) => void;
+    readonly debug: LunoraLogMethod;
+    readonly error: LunoraLogMethod;
+    readonly fatal: LunoraLogMethod;
+    readonly info: LunoraLogMethod;
+    readonly log: LunoraLogMethod;
+    readonly trace: LunoraLogMethod;
+    readonly warn: LunoraLogMethod;
+    readonly with: (fields: LogFields) => LunoraLogger;
 }
 ```
 
@@ -3931,15 +3949,33 @@ interface LifecycleEvent {
 type LifecycleEventKind = "connect" | "disconnect";
 ```
 
+### `LogFields` (type)
+
+```ts
+type LogFields = Record<string, unknown>;
+```
+
+### `LunoraLogMethod` (interface)
+
+```ts
+interface LunoraLogMethod {
+    (message: string, fields?: LogFields): void;
+    (...args: unknown[]): void;
+}
+```
+
 ### `LunoraLogger` (interface)
 
 ```ts
 interface LunoraLogger {
-    readonly debug: (...args: unknown[]) => void;
-    readonly error: (...args: unknown[]) => void;
-    readonly info: (...args: unknown[]) => void;
-    readonly log: (...args: unknown[]) => void;
-    readonly warn: (...args: unknown[]) => void;
+    readonly debug: LunoraLogMethod;
+    readonly error: LunoraLogMethod;
+    readonly fatal: LunoraLogMethod;
+    readonly info: LunoraLogMethod;
+    readonly log: LunoraLogMethod;
+    readonly trace: LunoraLogMethod;
+    readonly warn: LunoraLogMethod;
+    readonly with: (fields: LogFields) => LunoraLogger;
 }
 ```
 
