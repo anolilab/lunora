@@ -369,8 +369,23 @@ const renderLogMessage = (args: unknown[]): string =>
         })
         .join(" ");
 
-/** True for a plain object usable as a structured-fields bag (not null, not an array). */
-const isLogFields = (value: unknown): value is LogFields => typeof value === "object" && value !== null && !Array.isArray(value);
+/**
+ * True only for a **plain** object usable as a structured-fields bag — an object
+ * literal or a null-prototype bag, not an array, `Error`, `Date`, `Map`, or any
+ * class instance. This keeps the ubiquitous console-style idiom
+ * `ctx.log.error("failed", err)` on the render path (where the `Error` is shown)
+ * instead of misrouting it into the structured branch, where `normalizeLogFields`
+ * would find no own enumerable fields and silently drop it.
+ */
+const isLogFields = (value: unknown): value is LogFields => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return false;
+    }
+
+    const proto = Object.getPrototypeOf(value);
+
+    return proto === Object.prototype || proto === null;
+};
 
 /**
  * Split a `ctx.log.<level>(...)` call's raw arguments into a display `message`

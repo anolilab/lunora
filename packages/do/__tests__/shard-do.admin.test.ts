@@ -1898,6 +1898,26 @@ describe("shardDO admin data migrations", () => {
         vi.restoreAllMocks();
     });
 
+    it("treats an Error (or other class instance) second arg as console-style, not structured fields", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        const seen: { args: unknown[]; fields?: Record<string, unknown> }[] = [];
+        const shard = new LoggingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const error = new Error("boom");
+
+        // The ubiquitous `ctx.log.error("failed", err)` idiom: `err` is NOT a
+        // plain fields bag, so it must stay console-style — not be misrouted to
+        // the structured branch (where a field-less Error would be dropped).
+        shard.log("a:b", "error", ["failed", error], { onLog: (event) => seen.push(event) });
+
+        expect(seen[0]!.fields).toBeUndefined();
+        // The raw Error survives on `args` for an in-process sink to inspect.
+        expect(seen[0]!.args).toStrictEqual(["failed", error]);
+
+        vi.restoreAllMocks();
+    });
+
     it("with(fields) stamps bound fields onto every line, per-call fields winning on a clash", async () => {
         expect.assertions(3);
 

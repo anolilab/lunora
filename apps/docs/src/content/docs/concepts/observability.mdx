@@ -38,7 +38,7 @@ export default createWorker({
 ```
 
 Every sink accepts `onlyErrors: true` to drop successful RPC events and export
-only failures (log events always pass through). All five network/log sinks —
+only failures (log events always pass through). All four network/log sinks —
 `otlpSink`, `webhookSink`, `pipelineLogSink`, plus `sentrySink` when you wire its
 `captureLog` — forward `ctx.log` lines; `webhookSink` takes a `transformLog`
 redactor mirroring its RPC `transform`.
