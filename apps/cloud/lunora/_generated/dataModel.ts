@@ -46,6 +46,7 @@ export interface Doc_cells {
     jurisdiction?: string;
     name: string;
     status: unknown;
+    usageReadAtMs?: number;
 }
 
 export interface Doc_organizations {
@@ -522,6 +523,7 @@ export interface Insert_cells {
     jurisdiction?: string;
     name: string;
     status: unknown;
+    usageReadAtMs?: number;
 }
 
 export interface Insert_organizations {
