@@ -202,14 +202,38 @@ export default defineSchema({
     // Engine later without touching consumers.
     tenantLogs: defineTable({
         createdAt: v.number(),
-        level: v.union(v.literal("log"), v.literal("warn"), v.literal("error")),
-        line: v.string(),
+        // Structured fields the line carried (`ctx.log.info(msg, fields)` /
+        // `ctx.log.with(fields)`), already normalized to JSON-safe primitives by
+        // the framework. Absent for a plain console-style line.
+        fields: v.optional(v.record(v.string(), v.any())),
+        // The function that emitted the line, e.g. `messages:list`; absent for
+        // lines with no dispatch attribution.
+        functionPath: v.optional(v.string()),
+        // Full OpenTelemetry severity ramp — matches the framework's
+        // `ContextLogLevel` so `debug`/`info`/`trace`/`fatal` survive (was
+        // `log`/`warn`/`error` only).
+        level: v.union(v.literal("trace"), v.literal("debug"), v.literal("info"), v.literal("log"), v.literal("warn"), v.literal("error"), v.literal("fatal")),
+        // The rendered display string (was `line`).
+        message: v.string(),
         organizationId: v.id("organizations"),
         scriptName: v.string(),
+        // Shard key the line was emitted under, when sharded.
+        shardKey: v.optional(v.string()),
+        // Span id of the RPC this line belongs to — trace correlation.
+        spanId: v.optional(v.string()),
+        // Trace id (from the inbound `traceparent`) — links the line to its
+        // dispatch trace and, for an error/fatal line, the OTLP-derived Issue.
+        traceId: v.optional(v.string()),
+        // Acting user, when known.
+        userId: v.optional(v.string()),
     })
         .global()
         .index("by_org", ["organizationId"])
-        .index("by_script", ["scriptName"]),
+        // Primary tail/list index: page a script's lines by time without an
+        // in-isolate sort of the whole window.
+        .index("by_script_time", ["scriptName", "createdAt"])
+        // Fetch every line in a trace (log↔trace correlation), org-scoped.
+        .index("by_trace", ["organizationId", "traceId"]),
 
     // GitHub App installations (GAPS.md A4). Two-phase: the webhook *stages* an
     // installation (no org linkage — a spoofed call is harmless), then an org

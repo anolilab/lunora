@@ -18,7 +18,13 @@
 
 body {
     margin: 0;
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-family:
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        "Segoe UI",
+        Roboto,
+        sans-serif;
     background: var(--bg);
     color: var(--text);
 }
@@ -343,6 +349,85 @@ button.link.danger {
 
 .log-line.error {
     color: #f85149;
+}
+
+/* Full log management (GAPS.md B2): filter toolbar + severity chips + rich lines */
+.log-toolbar {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.log-search {
+    flex: 1 1 220px;
+    min-width: 180px;
+}
+
+.log-levels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.log-chip {
+    background: transparent;
+    border: 1px solid #d0d7de;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 9px;
+    text-transform: uppercase;
+}
+
+.log-chip.active {
+    background: #0969da;
+    border-color: #0969da;
+    color: #fff;
+}
+
+/* Per-severity accent for a line + its inline badge. */
+.log-line-fatal,
+.log-line-error {
+    color: #f85149;
+}
+
+.log-line-warn {
+    color: #d29922;
+}
+
+.log-line-debug,
+.log-line-trace {
+    color: #8b949e;
+}
+
+.log-badge {
+    border-radius: 4px;
+    font-size: 10px;
+    padding: 0 5px;
+    text-transform: uppercase;
+}
+
+.log-badge-fatal,
+.log-badge-error {
+    background: rgb(248 81 73 / 20%);
+}
+
+.log-badge-warn {
+    background: rgb(210 153 34 / 20%);
+}
+
+.log-fn {
+    color: #79c0ff;
+}
+
+.log-fields {
+    color: #a5d6ff;
+}
+
+.log-trace {
+    color: #8b949e;
 }
 
 /* Usage meters (GAPS.md ring 3): included-vs-used plan quota bars */

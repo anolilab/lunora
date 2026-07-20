@@ -69,3 +69,80 @@ describe(createDeployRouter, () => {
         expect(last.headers.get("retry-after")).not.toBeNull();
     });
 });
+
+/** POST to the platform tail route, optionally presenting a tail secret header. */
+const tailPost = (body: unknown, secret?: string): Request =>
+    new Request("https://control.lunora.app/v1/logs/tail", {
+        body: JSON.stringify(body),
+        headers: {
+            "cf-connecting-ip": "tail-worker",
+            "content-type": "application/json",
+            ...(secret === undefined ? {} : { "x-lunora-tail-secret": secret }),
+        },
+        method: "POST",
+    });
+
+describe("POST /v1/logs/tail", () => {
+    /** Router env with the platform tail secret configured. */
+    const env = (ctx: unknown): Record<string, unknown> => ({ __lunoraCtx: ctx, LUNORA_TAIL_SECRET: "tail-secret" });
+
+    it("503s when the platform tail secret is not configured", async () => {
+        const router = createDeployRouter();
+        // env intentionally omits LUNORA_TAIL_SECRET.
+        const response = await router.fetch(tailPost({ batches: [] }, "anything"), { __lunoraCtx: makeCtx() });
+
+        expect(response.status).toBe(503);
+    });
+
+    it("403s a missing or wrong tail secret", async () => {
+        const router = createDeployRouter();
+
+        expect((await router.fetch(tailPost({ batches: [] }), env(makeCtx()))).status).toBe(403);
+        expect((await router.fetch(tailPost({ batches: [] }, "nope"), env(makeCtx()))).status).toBe(403);
+    });
+
+    it("resolves each script → org and ingests the batch via the internal mutation", async () => {
+        const router = createDeployRouter();
+        const runQuery = vi.fn().mockResolvedValue({ organizationId: "org_9" });
+        const runMutation = vi.fn().mockResolvedValue({ ingested: 2 });
+        const ctx = makeCtx({ runMutation, runQuery });
+
+        const response = await router.fetch(
+            tailPost(
+                {
+                    batches: [
+                        {
+                            lines: [
+                                { level: "info", message: "a" },
+                                { level: "warn", message: "b" },
+                            ],
+                            scriptName: "app-v1",
+                        },
+                    ],
+                },
+                "tail-secret",
+            ),
+            env(ctx),
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ ingested: 2, scripts: 1 });
+        expect(runQuery).toHaveBeenCalledTimes(1);
+        expect(runMutation).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a batch whose script resolves to no org (superseded/unknown release)", async () => {
+        const router = createDeployRouter();
+        const runMutation = vi.fn();
+        const ctx = makeCtx({ runMutation, runQuery: vi.fn().mockResolvedValue(null) });
+
+        const response = await router.fetch(
+            tailPost({ batches: [{ lines: [{ level: "info", message: "a" }], scriptName: "ghost-v9" }] }, "tail-secret"),
+            env(ctx),
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ ingested: 0, scripts: 0 });
+        expect(runMutation).not.toHaveBeenCalled();
+    });
+});

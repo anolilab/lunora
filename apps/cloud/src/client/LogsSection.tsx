@@ -9,17 +9,59 @@ interface LogsSectionProps {
     organizationId: OrgId;
 }
 
+/** The seven-tier `ctx.log` severity ramp, ordered least→most severe for the filter chips. */
+type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
+
+const ALL_LEVELS: readonly LogLevel[] = ["trace", "debug", "info", "log", "warn", "error", "fatal"];
+
+/** Render a structured fields bag as compact, space-joined `key=value` pairs. */
+const renderFields = (fields: Record<string, unknown>): string =>
+    Object.entries(fields)
+        .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
+        .join(" ");
+
 /**
- * Logs tab (GAPS.md B2). Pick a project, then one of its deployments; the
- * tenant runtime lines (tail-worker ingested) render newest-last. The query is
- * live, so the view tails on its own — no polling.
+ * Logs tab (GAPS.md B2) — full log management. Pick a project, then a deployment;
+ * the tenant runtime lines (tail-worker ingested) render newest-first with their
+ * full shape: a severity chip, the emitting function, the message, structured
+ * `fields`, and a short trace id linking the line to its dispatch trace. Filter
+ * by severity (chips) and free-text search (message / function / field values);
+ * both push to the server-side `logs.list`. The query is live, so the view tails
+ * on its own — no polling.
  */
 export const LogsSection = ({ organizationId }: LogsSectionProps): ReactElement => {
     const projects = useQuery(api.projects.listByOrg, { organizationId });
     const [projectId, setProjectId] = useState<ProjectId | "">("");
     const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId } : "skip");
     const [scriptName, setScriptName] = useState("");
-    const logs = useQuery(api.logs.list, scriptName ? { organizationId, scriptName } : "skip");
+    const [levels, setLevels] = useState<Set<LogLevel>>(new Set());
+    const [search, setSearch] = useState("");
+
+    const logs = useQuery(
+        api.logs.list,
+        scriptName
+            ? {
+                  levels: levels.size > 0 ? [...levels] : undefined,
+                  organizationId,
+                  scriptName,
+                  search: search.trim() === "" ? undefined : search.trim(),
+              }
+            : "skip",
+    );
+
+    const toggleLevel = (level: LogLevel): void => {
+        setLevels((previous) => {
+            const next = new Set(previous);
+
+            if (next.has(level)) {
+                next.delete(level);
+            } else {
+                next.add(level);
+            }
+
+            return next;
+        });
+    };
 
     return (
         <div className="stack">
@@ -67,15 +109,42 @@ export const LogsSection = ({ organizationId }: LogsSectionProps): ReactElement 
 
             {scriptName ? (
                 <section className="card">
-                    <h3>{scriptName}</h3>
+                    <div className="log-toolbar">
+                        <input
+                            aria-label="Search logs"
+                            className="log-search"
+                            onChange={(event) => setSearch(event.target.value)}
+                            placeholder="Search message, function, or field values…"
+                            type="search"
+                            value={search}
+                        />
+                        <div className="log-levels" role="group">
+                            {ALL_LEVELS.map((level) => (
+                                <button
+                                    aria-pressed={levels.has(level)}
+                                    className={`log-chip log-chip-${level}${levels.has(level) ? " active" : ""}`}
+                                    key={level}
+                                    onClick={() => toggleLevel(level)}
+                                    type="button"
+                                >
+                                    {level}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
                     <pre className="log-view">
-                        {(logs ?? []).map((entry) => (
-                            <span className={entry.level === "error" ? "log-line error" : "log-line"} key={`${String(entry.createdAt)}-${entry.line}`}>
-                                [{new Date(entry.createdAt).toLocaleTimeString()}] {entry.line}
+                        {(logs ?? []).map((entry, index) => (
+                            <span className={`log-line log-line-${entry.level}`} key={`${String(entry.createdAt)}-${String(index)}`}>
+                                <span className="log-time">[{new Date(entry.createdAt).toLocaleTimeString()}]</span>{" "}
+                                <span className={`log-badge log-badge-${entry.level}`}>{entry.level}</span>{" "}
+                                {entry.functionPath ? <span className="log-fn">{entry.functionPath}</span> : null} {entry.message}
+                                {entry.fields ? <span className="log-fields"> {renderFields(entry.fields)}</span> : null}
+                                {entry.traceId ? <span className="log-trace"> trace={entry.traceId.slice(0, 8)}</span> : null}
                                 {"\n"}
                             </span>
                         ))}
-                        {logs?.length === 0 ? "No log lines in the retention window." : null}
+                        {logs?.length === 0 ? "No matching log lines in the retention window." : null}
                     </pre>
                 </section>
             ) : null}
