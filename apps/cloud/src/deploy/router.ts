@@ -17,6 +17,8 @@ import { decodeTelemetryEvents } from "../telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { DeployBackend, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
+import type { RegisteredRoute } from "./route-registry";
+import { assertRoutesClassified } from "./route-registry";
 import { CellScheduler } from "./scheduler";
 import { cloudflareAccountBudget } from "./token-bucket";
 
@@ -831,23 +833,39 @@ export const createDeployRouter = (): HttpRouterLike => {
         }
     };
 
-    // POST route table — keeps the `fetch` dispatcher flat (one lookup, no
-    // per-route branch chain).
-    const postRoutes: Record<string, (request: Request, environment: RouterEnv) => Promise<Response>> = {
-        "/v1/admin": handleAdminRoute,
-        "/v1/billing/webhook": handleBillingWebhookRoute,
-        "/v1/deploy": handleDeployRoute,
-        "/v1/deployments/rollback": handleRollbackRoute,
-        "/v1/domains": handleDomainAddRoute,
-        "/v1/domains/verify": handleDomainVerifyRoute,
-        "/v1/github/webhook": handleWebhookRoute,
-        "/v1/invitations/send": handleInviteRoute,
-        "/v1/logs/ingest": handleLogsIngestRoute,
-        "/v1/logs/tail": handleLogsTailRoute,
-        "/v1/secrets": handleSecretRoute,
-        "/v1/telemetry": handleTelemetryRoute,
-        "/v1/usage": handleUsageRoute,
-    };
+    // Every route carries an explicit auth classification; `assertRoutesClassified`
+    // (below) fails construction if any is missing — an unclassified route can
+    // never ship. The dispatch tables are derived from this one checked list.
+    type RouteHandler = (request: Request, environment: RouterEnv) => Promise<Response>;
+    const routes: RegisteredRoute<RouteHandler>[] = [
+        // deployKey — CI/deploy callers (no session); the delegated mutation `authorizeDeployKey`s.
+        { handler: handleDeployRoute, method: "POST", path: "/v1/deploy", spec: { auth: "deployKey" } },
+        { handler: handleRollbackRoute, method: "POST", path: "/v1/deployments/rollback", spec: { auth: "deployKey" } },
+        { handler: handleLogsIngestRoute, method: "POST", path: "/v1/logs/ingest", spec: { auth: "deployKey" } },
+        { handler: handleTelemetryRoute, method: "POST", path: "/v1/telemetry", spec: { auth: "deployKey" } },
+        { handler: handleUsageRoute, method: "POST", path: "/v1/usage", spec: { auth: "deployKey" } },
+        // session — dashboard callers; the delegated mutation `assertMember`s.
+        { handler: handleAdminRoute, method: "POST", path: "/v1/admin", spec: { auth: "session" } },
+        { handler: handleDomainAddRoute, method: "POST", path: "/v1/domains", spec: { auth: "session" } },
+        { handler: handleDomainVerifyRoute, method: "POST", path: "/v1/domains/verify", spec: { auth: "session" } },
+        { handler: handleInviteRoute, method: "POST", path: "/v1/invitations/send", spec: { auth: "session" } },
+        { handler: handleSecretRoute, method: "POST", path: "/v1/secrets", spec: { auth: "session" } },
+        // webhookHmac — provider signature (Creem / GitHub).
+        { handler: handleBillingWebhookRoute, method: "POST", path: "/v1/billing/webhook", spec: { auth: "webhookHmac" } },
+        { handler: handleWebhookRoute, method: "POST", path: "/v1/github/webhook", spec: { auth: "webhookHmac" } },
+        // tailSecret — the dispatch-namespace tail worker's shared secret.
+        { handler: handleLogsTailRoute, method: "POST", path: "/v1/logs/tail", spec: { auth: "tailSecret" } },
+        // adminToken — the dispatcher/platform trust boundary (LUNORA_ADMIN_TOKEN).
+        { handler: handleTenantPlanRoute, method: "GET", path: "/v1/tenants/plan", spec: { auth: "adminToken" } },
+        { handler: handleTenantRouteRoute, method: "GET", path: "/v1/tenants/route", spec: { auth: "adminToken" } },
+        { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
+    ];
+
+    // Boot scanner: throws here (at construction) if a route is unclassified.
+    assertRoutesClassified(routes);
+
+    const postRoutes = new Map(routes.filter((route) => route.method === "POST").map((route) => [route.path, route.handler]));
+    const getRoutes = new Map(routes.filter((route) => route.method === "GET").map((route) => [route.path, route.handler]));
 
     const rateLimited = async (request: Request): Promise<Response | undefined> => {
         const verdict = await limiter.limit("api", { key: request.headers.get("cf-connecting-ip") ?? "unknown" });
@@ -879,20 +897,8 @@ export const createDeployRouter = (): HttpRouterLike => {
             }
 
             const routerEnv = (environment as RouterEnv | undefined) ?? {};
-
-            if (request.method === "GET" && url.pathname === "/v1/tenants/plan") {
-                return handleTenantPlanRoute(request, routerEnv);
-            }
-
-            if (request.method === "GET" && url.pathname === "/v1/tenants/route") {
-                return handleTenantRouteRoute(request, routerEnv);
-            }
-
-            if (request.method === "GET" && url.pathname === "/v1/tenants/custom-domain") {
-                return handleTenantCustomDomainRoute(request, routerEnv);
-            }
-
-            const handler = request.method === "POST" ? postRoutes[url.pathname] : undefined;
+            const table = request.method === "GET" ? getRoutes : request.method === "POST" ? postRoutes : undefined;
+            const handler = table?.get(url.pathname);
 
             return handler ? handler(request, routerEnv) : jsonError(404, "not found");
         },
