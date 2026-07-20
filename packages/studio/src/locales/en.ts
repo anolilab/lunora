@@ -1122,6 +1122,17 @@ const MESSAGE_IDS = [
     "Live Cloudflare Containers — current lifecycle state per instance from the log stream.",
     "Cloudflare Containers are observed from their lifecycle log stream. This shows the current state per instance — ports and health checks aren't carried in that stream.",
     "No container lifecycle activity yet. Instances declared with defineContainer show up here once they start, sleep, stop, or error.",
+    // Observability — ctx.trace waterfalls
+    "Traces",
+    "Recent ctx.trace waterfalls for this shard — the drill-down from a log line.",
+    "Search traces",
+    "search trace or function",
+    "Recent traces",
+    "Trace waterfall",
+    "Errored span",
+    "{count} spans",
+    "No traces",
+    "Traces recorded with ctx.trace show up here as your app handles traffic. The span buffer resets when the shard hibernates.",
     // Observability — grouped error Issues
     "Issues",
     "Issue",

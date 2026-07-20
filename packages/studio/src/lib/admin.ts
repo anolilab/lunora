@@ -55,6 +55,7 @@ export const ADMIN_FUNCTIONS = {
     getRequestLog: "__lunora_admin__:getRequestLog",
     getSecurityAudit: "__lunora_admin__:getSecurityAudit",
     getSettings: "__lunora_admin__:getSettings",
+    getTraces: "__lunora_admin__:getTraces",
     // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
     getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus",
     importShard: "__lunora_admin__:importShard",
@@ -906,6 +907,74 @@ export interface IssuesQuery {
     limit?: number;
     shardKey?: string;
     userId?: string;
+}
+
+/**
+ * One span of a folded trace returned by `__lunora_admin__:getTraces`, mirroring
+ * `@lunora/do`'s `TraceSpan` (produced by its pure `foldTraces`). Already
+ * flattened for rendering: `depth` is the span's nesting level under the trace
+ * root and `offsetMs` its start relative to the trace start, so a waterfall row
+ * is a pure function of the record — indent by `depth`, draw the bar from
+ * `offsetMs` to `offsetMs + durationMs` — with no client-side tree math.
+ */
+export interface TraceSpan {
+    /** Structured attributes the `ctx.trace(name, fn, attributes)` caller attached; absent when none. */
+    attributes?: Record<string, unknown>;
+    /** Nesting level under the trace root; the root span is 0. */
+    depth: number;
+    /** Wall-clock duration of the span body, in milliseconds. */
+    durationMs: number;
+    /** Populated when the span body threw: `type` is the error's constructor name (or `LunoraError` code). */
+    error?: {
+        message: string;
+        type: string;
+    };
+    /** Caller-supplied span name, e.g. `"stripe.charge"`. */
+    name: string;
+    /** Start of this span relative to the trace's start, in ms. Clamped at 0 server-side. */
+    offsetMs: number;
+    /** `true` when the span body returned without throwing. */
+    ok: boolean;
+    /** Span id of the enclosing span; `""` for the synthetic dispatch root. */
+    parentSpanId: string;
+    /** This span's own id (16-hex). */
+    spanId: string;
+}
+
+/**
+ * One folded `ctx.trace` waterfall returned by `__lunora_admin__:getTraces`,
+ * mirroring `@lunora/do`'s `TraceSummary`. The dispatch's synthetic root span
+ * plus every `ctx.trace` span recorded beneath it, already ordered by start time
+ * — which, because a parent always starts before its children, doubles as a
+ * pre-order traversal of the span tree.
+ *
+ * Sourced from the shard's bounded, in-memory span ring, so it resets on
+ * hibernation/restart and can be legitimately partial (an evicted parent, or a
+ * trace read mid-dispatch). It is a "recent traces on this instance" readout for
+ * local development, NOT a durable trace store.
+ */
+export interface TraceSummary {
+    /** Wall-clock span of the whole trace (root start → last span end), in ms. May be 0. */
+    durationMs: number;
+    /** The `&lt;file>:&lt;function>` the trace's root span was recorded under. */
+    functionPath: string;
+    /** `false` when the root or any descendant span errored. */
+    ok: boolean;
+    /** Display name of the trace — the root span's name. */
+    rootName: string;
+    /** Shard key for single-shard calls; absent for the unnamed root DO. */
+    shardKey?: string;
+    /** Spans ordered by start time, ready to render as waterfall rows. */
+    spans: TraceSpan[];
+    /** Epoch-ms the trace's anchor span started. */
+    startTs: number;
+    /** Trace id (32-hex) — shared with the dispatch's log lines. */
+    traceId: string;
+}
+
+/** Payload of a `__lunora_admin__:getTraces` call: the folded waterfalls, newest trace first. */
+export interface TracesResult {
+    traces: TraceSummary[];
 }
 
 /**
