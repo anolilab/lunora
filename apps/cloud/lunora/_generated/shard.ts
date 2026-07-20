@@ -535,6 +535,11 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "name": "status",
             "optional": false,
             "type": "any"
+        },
+        {
+            "name": "usageReadAtMs",
+            "optional": true,
+            "type": "number"
         }
     ],
     "organizations": [

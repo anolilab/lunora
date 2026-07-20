@@ -12,6 +12,7 @@ export const cells = sqliteTable("cells", {
     jurisdiction: text("jurisdiction"),
     name: text("name").notNull(),
     status: text("status").notNull(),
+    usageReadAtMs: real("usageReadAtMs"),
 }, (t) => ({
     by_name: uniqueIndex("by_name").on(t.name),
 }));
