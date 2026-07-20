@@ -3556,38 +3556,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string"
                                             },
                                             "lines": {
-                                                "items": {
-                                                    "additionalProperties": false,
-                                                    "properties": {
-                                                        "createdAt": {
-                                                            "type": "number"
-                                                        },
-                                                        "level": {
-                                                            "anyOf": [
-                                                                {
-                                                                    "const": "log",
-                                                                    "type": "string"
-                                                                },
-                                                                {
-                                                                    "const": "warn",
-                                                                    "type": "string"
-                                                                },
-                                                                {
-                                                                    "const": "error",
-                                                                    "type": "string"
-                                                                }
-                                                            ]
-                                                        },
-                                                        "line": {
-                                                            "type": "string"
-                                                        }
-                                                    },
-                                                    "required": [
-                                                        "level",
-                                                        "line"
-                                                    ],
-                                                    "type": "object"
-                                                },
+                                                "items": {},
                                                 "type": "array"
                                             },
                                             "organizationId": {
@@ -3663,12 +3632,28 @@ export const openApiSpec: Record<string, unknown> = {
                                             "afterCreatedAt": {
                                                 "type": "number"
                                             },
+                                            "functionPath": {
+                                                "type": "string"
+                                            },
+                                            "levels": {
+                                                "items": {},
+                                                "type": "array"
+                                            },
+                                            "limit": {
+                                                "type": "number"
+                                            },
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
                                             "scriptName": {
+                                                "type": "string"
+                                            },
+                                            "search": {
+                                                "type": "string"
+                                            },
+                                            "traceId": {
                                                 "type": "string"
                                             }
                                         },
