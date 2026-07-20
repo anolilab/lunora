@@ -24,6 +24,9 @@
 import { fingerprintError } from "@lunora/fingerprint";
 import { redact, standardRules } from "@visulima/redact";
 
+import type { ContextLogLevel, LogEvent } from "../../../shared/log-event";
+import type { LogFields } from "../../../shared/log-fields";
+import { normalizeLogFields } from "../../../shared/log-fields";
 import type { SqlCursor, SqlExec } from "./ctx-db";
 
 /** Reserved append-only table backing the studio Logs tab. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -329,46 +332,15 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
 };
 
 /**
- * Severity of a `ctx.log.*` call. The five console method names (`log` is the
- * default level, distinct from `info`) plus `trace`/`fatal`, so the logger
- * spans the full OpenTelemetry severity ramp.
+ * The `ctx.log` event contract (shape + severity union) lives in
+ * `shared/log-event.ts` (inlined into each `dist`) so the DO that builds these
+ * events and the `@lunora/runtime` sink that consumes them agree by construction.
+ * `LogEventInput` is the DO's historical name for the shared `LogEvent`.
  */
-type ContextLogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
-
-/** Structured, filterable key/value fields attached to a `ctx.log` line (see the server `LogFields`). */
-type LogFields = Record<string, unknown>;
+type LogEventInput = LogEvent;
 
 /** Stable `type` tag distinguishing a per-call application-log event from the per-dispatch `"request"` event; both share `source: "lunora"`. */
 const LOG_EVENT_TYPE = "log";
-
-/** The fields {@link emitLogEvent} ships for one `ctx.log.*` call. */
-interface LogEventInput {
-    /** Raw arguments passed to the call, in order. */
-    args: unknown[];
-    /**
-     * Structured fields the caller attached (`ctx.log.info(message, fields)` or a
-     * bound `ctx.log.with(fields)` child). Unlike raw `args`, these ARE emitted on
-     * the console/Workers-Logs event (they are intentional, structured metadata,
-     * not incidental values) so a log pipeline can filter on them.
-     */
-    fields?: LogFields;
-    /** Function that emitted the line, e.g. `messages:list`. */
-    functionPath: string;
-    /** Severity the line was logged at. */
-    level: ContextLogLevel;
-    /** Display string — the args rendered and space-joined (see {@link renderLogMessage}). */
-    message: string;
-    /** Shard key (DO id name), or `undefined` for the unnamed root DO. */
-    shardKey?: string;
-    /** Span id of the RPC this line was emitted under (trace correlation), or `undefined`. */
-    spanId?: string;
-    /** Trace id this line belongs to (from the inbound `traceparent`), or `undefined`. */
-    traceId?: string;
-    /** Wall-clock millis when the line was emitted. */
-    ts: number;
-    /** Acting userId, or `undefined` when anonymous. */
-    userId?: string;
-}
 
 /**
  * Render `ctx.log.*` arguments into a single display string, the way `console`
@@ -396,6 +368,26 @@ const renderLogMessage = (args: unknown[]): string =>
             }
         })
         .join(" ");
+
+/** True for a plain object usable as a structured-fields bag (not null, not an array). */
+const isLogFields = (value: unknown): value is LogFields => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Split a `ctx.log.<level>(...)` call's raw arguments into a display `message`
+ * and optional structured `fields`. The structured form — a message string plus
+ * a plain-object fields bag — is matched only for exactly `(string, object)`;
+ * every other shape is console-style and rendered whole (so existing
+ * `console`-shaped calls are unchanged). Bound `.with(...)` fields merge under
+ * the per-call fields (per-call wins); the result is normalized to a fresh bag
+ * of JSON-safe primitives, or `undefined` when empty (see `normalizeLogFields`).
+ */
+const parseLogArgs = (args: unknown[], boundFields?: LogFields): { fields?: LogFields; message: string } => {
+    if (args.length === 2 && typeof args[0] === "string" && isLogFields(args[1])) {
+        return { fields: normalizeLogFields(args[1], boundFields), message: args[0] };
+    }
+
+    return { fields: normalizeLogFields(undefined, boundFields), message: renderLogMessage(args) };
+};
 
 /**
  * Emit one application-log event from a `ctx.log.*` call to `console`, tagged
@@ -679,6 +671,7 @@ export {
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
+    parseLogArgs,
     readErrorIssues,
     readRequestLog,
     redactArgs,

@@ -11,6 +11,8 @@
  * the sink are swallowed (they would otherwise replace a useful user-visible
  * error with a telemetry-pipeline failure).
  */
+import type { LogFields } from "../../../shared/log-fields";
+import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
 
 /**
  * Per-RPC dispatch event. Single-shard calls set `shardKey`; cross-shard
@@ -63,79 +65,19 @@ export interface ObservabilityEvent {
 }
 
 /**
- * Severity of a {@link LogEvent}. The five console tiers plus `trace`/`fatal`,
- * so `ctx.log` spans the full OpenTelemetry severity ramp (`trace`→`fatal`) a
- * collector and the Cloud log viewer render.
- */
-export type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
-
-/**
- * Structured, filterable key/value fields attached to a log line via
- * `ctx.log.info(message, fields)` or a bound `ctx.log.with(fields)` child. Sinks
- * map these to OTLP log-record attributes so a log pipeline can filter/index on
- * them (primitive values pass through; objects/arrays are JSON-encoded).
- */
-export type LogFields = Record<string, unknown>;
-
-/**
- * One application log line emitted from a function handler via `ctx.log`.
+ * The `ctx.log` observability contract lives in `shared/` (inlined into each
+ * `dist`) so the DO that builds the events and the runtime sink that consumes
+ * them agree by construction rather than by hand-mirrored duplication. Re-exported
+ * here under the runtime's historical names.
  *
- * Unlike {@link ObservabilityEvent} (one summary per dispatch), a `LogEvent`
- * is produced for each `ctx.log.*` call, carrying the human-readable `message`
- * (the args joined for display) plus the structured `args` array for sinks that
- * want the raw values. `functionPath` attributes the line to the handler that
- * emitted it; `shardKey`/`userId` mirror the dispatch context.
- *
- * This is how `ctx.log` reaches a destination in production: wire a sink's
- * {@link ObservabilitySink.onLog} and route it wherever you ship logs. In dev
- * the runtime also emits these to `console` so the CLI / Vite plugin can format
- * them in the terminal.
+ * `LogLevel` is the canonical `ctx.log` severity union (the five console tiers
+ * plus `trace`/`fatal`); `ObservabilitySinkContext` is the shared per-event sink
+ * context (a `waitUntil` to keep a background send alive past the response).
  */
-export interface LogEvent {
-    /** Raw arguments passed to the `ctx.log.*` call, in order. */
-    args: unknown[];
-    /**
-     * Structured fields the caller attached via `ctx.log.info(message, fields)`
-     * or a bound `ctx.log.with(fields)` child. Absent for a plain console-style
-     * call. Sinks map these onto OTLP log-record attributes.
-     */
-    fields?: LogFields;
-    /** Function path that emitted the line, e.g. `"messages:list"`. */
-    functionPath: string;
-    /** Severity the line was logged at. */
-    level: LogLevel;
-    /** Display string — the args rendered and space-joined. */
-    message: string;
-    /** Shard key for single-shard calls; absent for the unnamed root DO. */
-    shardKey?: string;
-    /**
-     * Span id of the RPC this line was emitted under (the dispatch's server
-     * span), so a sink can correlate the log record to its trace. Absent on
-     * paths with no inbound trace context.
-     */
-    spanId?: string;
-    /**
-     * Trace id this line belongs to (the dispatch's W3C trace), threaded from the
-     * inbound `traceparent`. Absent on paths with no inbound trace context.
-     */
-    traceId?: string;
-    /** Wall-clock millis when the line was emitted. */
-    ts: number;
-    /** Acting userId, or absent when anonymous. */
-    userId?: string;
-}
-
-/**
- * Per-event context handed to a sink alongside the event. Lets a sink register
- * background work (e.g. a telemetry POST) with the request's `ctx.waitUntil` so
- * it survives isolate teardown after the response returns. Absent (`undefined`
- * `waitUntil`) on paths with no request context (e.g. the in-process
- * `serverQuery` fast-path), where the sink falls back to fire-and-forget.
- */
-export interface ObservabilitySinkContext {
-    /** Keep a background promise alive past the response (the request's `ctx.waitUntil`). */
-    waitUntil?: (promise: Promise<unknown>) => void;
-}
+export type LogLevel = ContextLogLevel;
+export type ObservabilitySinkContext = LogSinkContext;
+export type { LogFields };
+export type { LogEvent };
 
 /**
  * The hook contract. Methods are optional so a sink can opt into only the

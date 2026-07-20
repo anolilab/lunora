@@ -7,6 +7,9 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { jsonResponse } from "../../../shared/json-response";
+import type { LogSinkContext } from "../../../shared/log-event";
+import { BUFFER_LEVEL } from "../../../shared/log-event";
+import type { LogFields } from "../../../shared/log-fields";
 import { parseTraceparent } from "../../../shared/otlp";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -110,9 +113,9 @@ import {
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
+    parseLogArgs,
     readErrorIssues,
     readRequestLog,
-    renderLogMessage,
     REQUEST_LOG_TABLE,
 } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
@@ -166,7 +169,7 @@ const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes
  * {@link LogEventInput} shape `emitLogEvent` consumes, built once per call.
  */
 interface LogSink {
-    onLog?: (event: LogEventInput, context?: { waitUntil?: (promise: Promise<unknown>) => void }) => void;
+    onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
 }
 
 /**
@@ -182,38 +185,8 @@ interface CtxLogger {
     log: (...args: unknown[]) => void;
     trace: (...args: unknown[]) => void;
     warn: (...args: unknown[]) => void;
-    with: (fields: Record<string, unknown>) => CtxLogger;
+    with: (fields: LogFields) => CtxLogger;
 }
-
-/** True for a plain object usable as a structured-fields bag (not null, not an array). */
-const isLogFields = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
-/**
- * Split a `ctx.log.<level>(...)` call's raw arguments into a display `message`
- * and optional structured `fields`. The structured form — a message string plus
- * a plain-object fields bag — is matched only for exactly `(string, object)`;
- * every other shape is console-style and rendered whole (so existing
- * `console`-shaped calls are unchanged). Bound fields from a `.with(...)` child
- * are merged under the per-call fields (per-call wins on a key clash).
- */
-const parseLogArgs = (args: unknown[], boundFields?: Record<string, unknown>): { fields?: Record<string, unknown>; message: string } => {
-    if (args.length === 2 && typeof args[0] === "string" && isLogFields(args[1])) {
-        return { fields: boundFields ? { ...boundFields, ...args[1] } : args[1], message: args[0] };
-    }
-
-    return { fields: boundFields, message: renderLogMessage(args) };
-};
-
-/** Fold the seven `ctx.log` severities onto the {@link LogBuffer}'s four tiers (it has no `log`/`trace`/`fatal`). */
-const BUFFER_LEVEL: Record<ContextLogLevel, "debug" | "error" | "info" | "warn"> = {
-    debug: "debug",
-    error: "error",
-    fatal: "error",
-    info: "info",
-    log: "info",
-    trace: "debug",
-    warn: "warn",
-};
 
 /**
  * Minimal projection of `DurableObjectState` that the ShardDO base requires.

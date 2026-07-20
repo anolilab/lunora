@@ -780,6 +780,32 @@ describe("observability-sinks", () => {
             expect(record.spanId).toBe("00f067aa0ba902b7");
         });
 
+        it("emits a single attribute when a field reuses a reserved lunora.* key (field wins)", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onLog!({
+                args: [],
+                fields: { "lunora.user_id": "override" },
+                functionPath: "a:b",
+                level: "info",
+                message: "m",
+                ts: 1,
+                userId: "real",
+            });
+
+            const { record } = logFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+            const collisions = record.attributes.filter((attribute) => attribute.key === "lunora.user_id");
+
+            // Exactly one `KeyValue` for the key — the caller's override, not a duplicate.
+            expect(collisions).toHaveLength(1);
+            expect(collisions[0]?.value).toStrictEqual({ stringValue: "override" });
+        });
+
         it("tolerates a trailing slash on the endpoint", () => {
             expect.assertions(1);
 

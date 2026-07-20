@@ -16,13 +16,13 @@ container ship the same telemetry over one protocol.
 A sink is passed to `createWorker` as the `observability` option. Lunora ships
 several; combine them with `combineSinks`.
 
-| Sink                          | Ships to                                                     |
-| ----------------------------- | ----------------------------------------------------------- |
-| `consoleSink()`               | `console` (local dev)                                       |
-| `otlpSink({ endpoint })`      | any OTLP-over-HTTP collector                                |
-| `webhookSink({ url })`        | an arbitrary HTTP endpoint (your own JSON shape)            |
-| `sentrySink({ dsn })`         | Sentry                                                       |
-| `analyticsEngineSink({ … })`  | a Cloudflare Analytics Engine dataset                       |
+| Sink                            | Ships to                                                        |
+| ------------------------------- | --------------------------------------------------------------- |
+| `consoleSink()`                 | `console` (local dev)                                           |
+| `otlpSink({ endpoint })`        | any OTLP-over-HTTP collector                                    |
+| `webhookSink({ url })`          | an arbitrary HTTP endpoint (your own JSON shape)                |
+| `sentrySink({ dsn })`           | Sentry                                                          |
+| `analyticsEngineSink({ … })`    | a Cloudflare Analytics Engine dataset                           |
 | `pipelineLogSink({ pipeline })` | a Cloudflare Pipeline → R2 (durable log store, read via R2 SQL) |
 
 ```ts
@@ -42,6 +42,22 @@ only failures (log events always pass through). All five network/log sinks —
 `otlpSink`, `webhookSink`, `pipelineLogSink`, plus `sentrySink` when you wire its
 `captureLog` — forward `ctx.log` lines; `webhookSink` takes a `transformLog`
 redactor mirroring its RPC `transform`.
+
+:::caution[Upgrading a `webhookSink`]
+`webhookSink` now ships `ctx.log` lines (message **and** structured `fields`,
+which may carry user input) in addition to RPC events — previously it shipped
+neither. Two consequences for an existing config:
+
+- `onlyErrors` does **not** gate log lines (only RPC events); every `ctx.log`
+  call egresses to the endpoint.
+- The RPC `transform` redactor does **not** cover log lines — add a
+  `transformLog` (same fail-closed contract) if you scrub PII before it leaves
+  the worker.
+
+Set `transformLog` (or point the sink at a trusted endpoint) before upgrading if
+your handlers log user data. `sentrySink` (opt-in via `captureLog`) and
+`otlpSink` don't have this expansion.
+:::
 
 ### `otlpSink`
 

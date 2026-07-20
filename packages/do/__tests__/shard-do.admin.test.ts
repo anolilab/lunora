@@ -1921,6 +1921,54 @@ describe("shardDO admin data migrations", () => {
         vi.restoreAllMocks();
     });
 
+    it("normalizes fields to JSON-safe primitives so a bigint/circular value can't break getLogs", async () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        const seen: { fields?: Record<string, unknown> }[] = [];
+        const shard = new LoggingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const circular: Record<string, unknown> = { name: "loop" };
+        circular.self = circular;
+
+        shard.log("pay:charge", "info", ["charged", { amount: 10n, circular }], { onLog: (event) => seen.push(event) });
+
+        // `bigint` → its `String()` form, a circular object → `"[object Object]"`; both JSON-safe.
+        expect(seen[0]!.fields).toStrictEqual({ amount: "10", circular: "[object Object]" });
+
+        // The whole buffer serializes through `getLogs` without throwing.
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}));
+        const body = await response.json<{ result: { entries: { fields?: Record<string, unknown> }[] } }>();
+
+        expect(body.result.entries).toHaveLength(1);
+        expect(body.result.entries[0]!.fields).toStrictEqual({ amount: "10", circular: "[object Object]" });
+
+        vi.restoreAllMocks();
+    });
+
+    it("drops an empty fields object and snapshots fields so a later mutation can't alter the logged line", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        const seen: { fields?: Record<string, unknown> }[] = [];
+        const shard = new LoggingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // An empty object carries no structured fields onto the line.
+        shard.log("a:b", "info", ["hi", {}], { onLog: (event) => seen.push(event) });
+
+        expect(seen[0]!.fields).toBeUndefined();
+
+        // Mutating the caller's object after the call does not reach the captured copy.
+        const bag: Record<string, unknown> = { step: "start" };
+
+        shard.log("a:b", "info", ["go", bag], { onLog: (event) => seen.push(event) });
+        bag.step = "mutated";
+
+        expect(seen[1]!.fields).toStrictEqual({ step: "start" });
+
+        vi.restoreAllMocks();
+    });
+
     it("folds the bare `log` level onto info for the studio buffer", async () => {
         expect.assertions(1);
 

@@ -14,7 +14,13 @@
  * caller (the CLI routes through its `pail` logger; the Vite plugin dims inline).
  * Any line that is not a lunora event returns `undefined`, signalling the caller
  * to pass it through unchanged.
+ *
+ * The one import is the bundler-inlined, zero-dependency `shared/log-fields.ts`
+ * field renderer (shared with the runtime sinks and the Studio panel so the
+ * `key=value` rendering isn't hand-mirrored), which keeps this module's
+ * dependency-free property intact.
  */
+import { formatLogFields } from "../../../shared/log-fields";
 
 /** Severity a formatted line should be surfaced at, mapped onto the three logger channels. */
 type LunoraLineLevel = "error" | "info" | "warn";
@@ -90,32 +96,6 @@ const toLineLevel = (rawLevel: string): LunoraLineLevel => {
 
     // `trace` / `debug` / `info` / `log` all read as informational in the terminal.
     return "info";
-};
-
-/**
- * Render a `ctx.log` fields object as compact, space-joined `key=value` pairs —
- * `""` when there are no fields (or the value isn't a plain object). String
- * values pass through bare; everything else is JSON-encoded (with a `String()`
- * fallback) so a nested value still shows and rendering never throws.
- */
-const formatFields = (value: unknown): string => {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-        return "";
-    }
-
-    return Object.entries(value)
-        .map(([key, raw]) => {
-            if (typeof raw === "string") {
-                return `${key}=${raw}`;
-            }
-
-            try {
-                return `${key}=${(JSON.stringify(raw) as string | undefined) ?? String(raw)}`;
-            } catch {
-                return `${key}=${String(raw)}`;
-            }
-        })
-        .join(" ");
 };
 
 /** Parse a worker-output line into a lunora event, or `undefined` when it isn't one. Never throws. */
@@ -222,7 +202,7 @@ const formatLunoraEvent = (line: string): LunoraFormattedLine | undefined => {
 
     if (event.type === "log") {
         const parts = [`${labelFor(functionPath, event)}  ${asString(event.message)}`.trimEnd()];
-        const fields = formatFields(event.fields);
+        const fields = formatLogFields(event.fields);
 
         if (fields !== "") {
             parts.push(fields);

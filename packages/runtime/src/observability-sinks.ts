@@ -18,6 +18,7 @@
  * third party. Scrub or redact before enabling it against an external service
  * if that is a concern.
  */
+import { coerceFieldValue } from "../../../shared/log-fields";
 import { encodeAttribute, mergeHeaders, OTLP_SEVERITY, otlpRandomHex, otlpUnixNano, wrapResourceLogs, wrapResourceSpans } from "../../../shared/otlp";
 import type { LogEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 
@@ -70,52 +71,35 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
     return wrapResourceSpans(span, "@lunora/runtime", serviceName);
 };
 
-/**
- * Coerce a structured log-field value to an OTLP `AnyValue`-encodable primitive:
- * booleans/numbers/strings pass through; everything else (objects, arrays,
- * null/undefined) is stringified so a nested value still lands as a filterable
- * attribute rather than being dropped.
- */
-const coerceFieldValue = (value: unknown): boolean | number | string => {
-    if (typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
-        return value;
-    }
-
-    if (value === null || value === undefined) {
-        return String(value);
-    }
-
-    try {
-        // `JSON.stringify` returns `undefined` for a function/symbol — fall back to `String`.
-        return (JSON.stringify(value) as string | undefined) ?? String(value);
-    } catch {
-        return String(value);
-    }
-};
-
 /** Build the OTLP log-export body for one application log line. */
 const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
-    const attributes = [encodeAttribute("lunora.function_path", event.functionPath)];
+    // Keyed by attribute name so a caller field that reuses a reserved `lunora.*`
+    // key overrides it (as documented) rather than emitting a duplicate `KeyValue`
+    // the collector resolves ambiguously. Reserved keys go in first; caller
+    // fields overwrite.
+    const attributeByKey = new Map<string, ReturnType<typeof encodeAttribute>>();
+
+    attributeByKey.set("lunora.function_path", encodeAttribute("lunora.function_path", event.functionPath));
 
     if (event.shardKey !== undefined) {
-        attributes.push(encodeAttribute("lunora.shard_key", event.shardKey));
+        attributeByKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", event.shardKey));
     }
 
     if (event.userId !== undefined) {
-        attributes.push(encodeAttribute("lunora.user_id", event.userId));
+        attributeByKey.set("lunora.user_id", encodeAttribute("lunora.user_id", event.userId));
     }
 
     // Caller-supplied structured fields become log-record attributes so a
-    // pipeline can filter/index on them. Reserved `lunora.*` keys are pushed
-    // first; a field that reuses one is the caller's own override.
+    // pipeline can filter/index on them. They arrive pre-normalized to JSON-safe
+    // primitives; `coerceFieldValue` re-applies for a sink fed a raw event.
     if (event.fields) {
         for (const [key, value] of Object.entries(event.fields)) {
-            attributes.push(encodeAttribute(key, coerceFieldValue(value)));
+            attributeByKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
         }
     }
 
     const logRecord: Record<string, unknown> = {
-        attributes,
+        attributes: [...attributeByKey.values()],
         body: { stringValue: event.message },
         severityNumber: OTLP_SEVERITY[event.level],
         severityText: event.level.toUpperCase(),

@@ -15,9 +15,10 @@
  *
  * Keep this genuinely zero-dependency (only built-ins) so inlining stays sound.
  */
+import type { ContextLogLevel } from "./log-event";
 
-/** OTLP `SeverityNumber` levels Lunora emits (the worker adds `log`; the container never uses it). */
-type OtlpLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
+/** OTLP `SeverityNumber` levels Lunora emits — the canonical `ctx.log` severity union. */
+type OtlpLevel = ContextLogLevel;
 
 /**
  * OTLP log severity numbers (`SeverityNumber` in the spec) keyed by level. `log`
