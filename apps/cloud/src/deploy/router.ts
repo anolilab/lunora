@@ -739,10 +739,11 @@ export const createDeployRouter = (): HttpRouterLike => {
             activateDeployment: async ({ deploymentId, key }) => {
                 await context.runMutation(api.deployments.activate, { deployKey: key, id: deploymentId });
             },
-            createDeployment: ({ adminToken, branch, key, kind, organizationId, projectId, scriptName }) =>
+            createDeployment: ({ adminToken, branch, cronSpecs, key, kind, organizationId, projectId, scriptName }) =>
                 context.runMutation<{ deploymentId: string; scriptName: string; version: number }>(api.deployments.create, {
                     adminToken,
                     branch,
+                    ...(cronSpecs && cronSpecs.length > 0 ? { cronSpecs } : {}),
                     deployKey: key,
                     kind,
                     organizationId,

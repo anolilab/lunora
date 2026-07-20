@@ -37,6 +37,8 @@ export interface DeployBackend {
     createDeployment: (input: {
         adminToken: string;
         branch?: string;
+        /** The tenant's compiled cron expressions for the WfP cron fan-out (§2.4). */
+        cronSpecs?: string[];
         key: string;
         kind: DeployKind;
         organizationId: string;
@@ -84,6 +86,8 @@ interface DeployBody {
     /** Per-tenant binding manifest (DO classes / D1 / R2); ShardDO is always ensured. */
     bindings?: DeployBindings;
     branch?: string;
+    /** The tenant's cron expressions (wrangler `triggers.crons`) for the fan-out (§2.4). */
+    cronSpecs?: string[];
     /** Base64-encoded prebuilt worker module (the app's Vite build output — never built here). */
     bundle?: string;
     kind?: DeployKind;
@@ -201,6 +205,8 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
 
     const kind = body.kind ?? target.type;
     const { branch, projectId, scriptName } = body;
+    // Tenant cron expressions to fan out (§2.4). Defensive: only strings, capped.
+    const cronSpecs = Array.isArray(body.cronSpecs) ? body.cronSpecs.filter((cron): cron is string => typeof cron === "string").slice(0, 50) : undefined;
 
     // The platform-minted tenant admin token: recorded on the deployment (for the
     // admin proxy) and set as the worker's LUNORA_ADMIN_TOKEN secret.
@@ -216,6 +222,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
         const created = await deps.backend.createDeployment({
             adminToken,
             branch,
+            ...(cronSpecs && cronSpecs.length > 0 ? { cronSpecs } : {}),
             key,
             kind,
             organizationId: target.organizationId,
