@@ -888,6 +888,146 @@ commit on `alpha`, stripped of the stray local `chore(release)` version-bump sta
   revised (per-asset-decimals) approach now in the plan.
 - **146** needs a small ESLint cleanup on its source (non-null assertions, JSDoc, complexity).
 
+## Wave 14 — competitive parity (baseline `70331e9b`, 2026-07-21)
+
+User-requested gap pass over the whole repo vs **Convex, Supabase, Firebase**
+(and the wider field: InstantDB, Zero, Triplit, ElectricSQL, PowerSync,
+Liveblocks, PartyKit, Wasp). Builds on the two prior competitive passes (Wave 5 =
+PartyKit, Wave 6 = workflais). Findings were grounded against `packages/*/src`,
+so **verified non-gaps are excluded**: full-text search (`.searchIndex()` /
+`withSearchIndex()`), vector/RAG (`@lunora/ai/rag`), cron (`@lunora/scheduler`),
+storage (`@lunora/storage`), offline/local-first (`@lunora/replica`,
+`@lunora/db`), presence (`whisper` + `usePresence`), flags (`@lunora/flags`),
+workflows + fan-out (`@lunora/workflow`). Full analysis: `.tmp/competitive-gap-analysis.md`
+(gitignored, not committed). All plans **TODO — none executed yet.**
+
+**Routing rule.** Every gap lands in exactly one bucket: **FRAMEWORK** (a plan
+below), **CLOUD** (owned by `apps/cloud/ROADMAP.md` — managed hosting, hosted
+dashboard, retained observability, preview envs, backups/PITR, managed
+multi-region, templates/marketplace, warehouse connectors — *not* re-planned
+here), or **NON-GOAL** (a documented design boundary: no arbitrary external SQL /
+ad-hoc cross-dataset joins; RPC-first not REST-first; cross-shard writes eventual
+unless plan 168 lands). Publishing the NON-GOALs as a docs page is the cheapest
+trust win — boundaries read as deliberate, not missing.
+
+### Plans (FRAMEWORK-bucketed gaps)
+
+| Plan | Title                                                                       | Category     | Pkg          | Pri | Effort | Risk | Status |
+| ---- | --------------------------------------------------------------------------- | ------------ | ------------ | --- | ------ | ---- | ------ |
+| 164  | Non-TypeScript client SDK (Swift *or* Python) — prove the wire protocol isn't TS-bound; biggest ceiling vs Convex | feat         | client (new) | P2  | L      | MED  | TODO   |
+| 165  | `@lunora/push` — Web Push (VAPID) → FCM/APNs; grep-confirmed zero push code today | feat         | push (new)   | P2  | L      | MED  | TODO   |
+| 166  | Enterprise auth: SSO + SCIM — `@better-auth/sso` + `@better-auth/scim` (MIT); OIDC/SCIM-Users LOW, SAML-on-workerd is the risk | feat         | auth         | P2  | M–L    | MED  | TODO   |
+| 167  | Opt-in public REST/GraphQL surface — extend the existing OpenAPI/OpenRPC spec (`cli/api-spec.ts`) for non-TS/interop, RLS-enforced | feat         | runtime/cli  | P3  | L      | MED  | TODO   |
+| 168  | Cross-shard transaction story — **design spike first** (saga vs 2PC vs documented boundary+lint); no code until ratified | architecture | do/runtime   | P2  | XL     | HIGH | TODO   |
+| 169  | `@lunora/collab` (CRDT) — Yjs persistence + awareness over `ShardDO` + `whisper`; reuse `y-partyserver` (ISC); demand-gated | feat         | collab (new) | P3  | XL     | MED  | TODO   |
+| 170  | Continuous CDC export tap (op-log → external sink) — the streaming counterpart to CDC-in; snapshot export/backup already exist | feat         | runtime/do   | P3  | L      | MED  | TODO   |
+| 171  | "Design boundaries / non-goals" docs page — state the NON-GOAL bucket plainly (no arbitrary SQL, RPC-not-REST-first, cross-shard eventual); cheapest trust win | docs         | docs         | P2  | S      | LOW  | TODO   |
+
+### Considered / newly surfaced (Fable 5 deep pass, 2026-07-21)
+
+**The three follow-up gaps — verified:**
+
+- **A/B testing / experimentation** — *real but narrow.* `@lunora/flags` already
+  serves variants + provider-side percentage rollouts; only the experiment layer
+  is missing (log `details.variant` exposures → `@lunora/bindings/analytics` + a
+  Studio results view). Only Firebase (of the three) has it. **M · P3 · FRAMEWORK**
+  (thin flags extension; a heavy stats engine stays NON-GOAL/CLOUD).
+- **Product analytics** — *partial.* Ingestion exists (`@lunora/bindings/analytics`
+  typed `track`/`writeDataPoint` + SQL-API + Studio panel), but Analytics Engine is
+  sampled with ~3-month retention — the wrong substrate for canonical product
+  analytics (no taxonomy/sessions/funnels/retention). Only Firebase ships a
+  first-party product. **P3 · CLOUD** primarily (retained, unsampled = hosted);
+  optional small FRAMEWORK event-helper slice. Near-term answer: document a
+  PostHog integration.
+- **Server-side DB triggers / webhooks** — *NOT a gap (core); small (packaging).*
+  Triggers already ship: `defineTable().triggers()` — before/after × insert/update/
+  delete, typed `previous` row, `before*` aborts the write, `TriggerCtx = {db,
+  scheduler}` (`server/src/schema.ts`, `types.ts:1104`) — stronger than Convex's
+  helper. Plan 133 is unrelated (CDC-*in*). The only open sliver is **packaged
+  outbound HTTP webhooks**, already spiked as **plan 132** (Standard-Webhooks over
+  `TriggerCtx.scheduler` + SchedulerDO retry/dead-letter, zero core changes).
+  **S–M · P2 · FRAMEWORK** = execute plan 132.
+
+**Additional gaps found by the deep gap-hunt (all repo-verified):**
+
+| Plan | Gap | Competitors with it | Lunora today | Sev | Bucket |
+| --- | --- | --- | --- | --- | --- |
+| [172](172-geospatial.md) | **Geospatial indexing / queries** (`near`, within-radius) | Convex (geo component), Supabase (PostGIS), Firebase (geohash) | none — zero geo code in `packages/server/src` | **HIGH** | FRAMEWORK |
+| [173](173-client-upload-sdk.md) | **Client-side upload SDK** (progress, pause/resume, resumable) | Firebase, Supabase (TUS), Convex | server R2 multipart + presigned exist; only admin-gated client upload, no `useUpload` | MED | FRAMEWORK |
+| [174](174-auth-audit-trail.md) | **Auth/security audit trail** | Supabase (`auth.audit_log_entries`), Firebase, Convex (paid) | admin-state audit log exists (`do/audit-log.ts`) but no auth-event recording | MED | FRAMEWORK |
+| [175](175-schema-ttl-auto-expiry.md) | **Schema-level TTL / auto-expiry** | Firebase (Firestore TTL), Supabase (pg_cron) — Convex also lacks | no `.ttl()`; only presence-heartbeat TTL. DO alarm infra (`do/triggers.ts`) already exists | LOW–MED | FRAMEWORK |
+| — | **Client integrity / attestation** (App Check) | Firebase only | none; Turnstile/WAF already front every Worker | LOW | CLOUD / NON-GOAL → plan 171 |
+
+**Verified non-gaps** confirmed by the deep pass (Lunora already ships — do not
+re-file): passkeys / anonymous / magic-link / email-OTP / phone / 2FA / SIWE /
+OIDC-provider / captcha / impersonation / orgs-RBAC (`auth/plugins.ts`);
+data-residency (DO jurisdiction pinning); aggregation (`count`/`aggregate`/
+`groupBy` + cross-shard rank); custom HTTP endpoints (`httpAction`/`httpRouter`);
+soft-delete + cascade/restrict/set-null + unique indexes + typed enums; Studio SQL
+editor; snapshot export/import + **backups with PITR restore** + CSV transfer
+(CLI); online batched migrations; paginated/infinite live queries; flag targeting +
+percentage rollouts; server-side R2 multipart uploads.
+
+### Competitor facts (verified July 2026 — closes `.tmp` §5)
+
+- **Convex SDKs**: TS/React/React-Native, Python, Rust, Swift, Kotlin — **no Go**;
+  streaming export via **Fivetran (Pro)**. Confirms plan 164 (Lunora is TS-only).
+- **Supabase**: branching GA (2.0 drops the Git requirement, paid/hourly); read
+  replicas (≤2, paid, geo-routed GETs); PostgREST + pg_graphql first-party (with a
+  2026 breaking change — `public` no longer auto-exposed). Confirms plans 167/012-branching.
+- **Firebase**: FCM still the only supported push path (legacy APIs shut down
+  2024-07); **Analytics (GA4) + A/B (Remote Config experiments) both still
+  first-party**. Confirms plan 165 + gap α.
+
+### Reuse — `@visulima/*` packages (2026-07-21)
+
+The visulima ecosystem (same author; `fetch` + Web-Crypto-first, Cloudflare-aware)
+already covers several of these gaps — **reuse over rebuild**:
+
+| Plan / need | Reuse | What it saves | Edge-safe? |
+| --- | --- | --- | --- |
+| **165** push | **`@visulima/notification`** | whole multi-channel engine (Web Push, FCM, Expo, APNs, SMS, chat, in-app inbox, webhook) + routing / retry / circuit-breaker | Web Push + FCM ✅; **APNs needs Node http2**, queue adapters Node-only |
+| **173** upload | **`@visulima/storage-client`** (+ `@visulima/storage` cloudflare handler) | `useUpload`/multipart/TUS hooks w/ progress + pause/resume; R2 + presigned server | ✅ (hooks want TanStack Query) |
+| **174** audit | **`@visulima/redact`** (already in `do`) + **`@visulima/secret-scanner`** | PII/secret redaction + leak scan | ✅ |
+| **167** REST | **`@visulima/pagination`**; `@visulima/jsdoc-open-api` (weak — Lunora derives the spec from codegen, not JSDoc) | pagination helpers; OpenAPI gen | build-time |
+
+New opportunities the catalog surfaces (not previously listed):
+
+- **`@visulima/email-verifier`** + **`disposable-email-domains`** + **`free-email-domains`**
+  → `@lunora/auth`: block throwaway signups / validate email (domain lists are
+  pure-data / edge-safe; MX verify needs DNS). → **[plan 176](176-auth-email-hardening.md)**.
+- **`@visulima/health-check`** → production-readiness health/metrics endpoint
+  (feeds the production-checklist). → **[plan 177](177-health-check-endpoint.md)**.
+- **`@visulima/content-safety`** → optional moderation for user-generated content
+  (multi-language filtering) — a `ctx` helper or small package. *(not yet a plan)*
+- **`@visulima/bytes`** → `encodeWire` Uint8Array handling (plan 164 SDK / storage).
+- Wider reuse of ones already in the tree: **`@visulima/error`/`ono`/`source-map`**
+  (`@lunora/errors`, vite-overlay), **`humanizer`** (Studio formatting),
+  **`inspector`** (Studio debug), **`iso-locale`** (time/locale).
+
+**No visulima reuse** for: 172 geospatial, 175 TTL, 168 cross-shard txn, 169 CRDT
+(that's `y-partyserver`). **`@visulima/workflow`** exists but `@lunora/workflow` is
+deliberately on Cloudflare Workflows — different substrate, not a reuse.
+
+### Notes
+
+- **166 is LOW-risk only for the OIDC-SSO + SCIM-Users half** (Fable 5 verified:
+  `@better-auth/sso` + `@better-auth/scim`, first-party MIT, edge-safe on that
+  path). **SAML is the risk** — `samlify` → `xml-crypto`/`node-rsa` are Node-only,
+  and upstream better-auth#10343 flags SAML ACS as a poor fit for Worker CPU
+  budgets (pluggable remote executor proposed, PR #10347 unmerged). Plan 166 is
+  re-split into Phase 1a (SSO+SCIM, do first) and Phase 1b (SAML, gated on a
+  workerd spike); risk raised LOW → MED.
+- **168 is decision-first** — the spike (`plans/168-phase0-design.md`, to be
+  filed) must decide whether cross-shard atomicity is a real need or a
+  documented boundary. Do not write transaction code before it concludes.
+- **169 and 170 are demand-gated** — file, don't build until a design partner
+  needs collab / warehouse export. 170 is scoped narrowly: the snapshot NDJSON
+  exporter (`runtime/export-stream.ts`) and R2 backup already ship; only the
+  continuous change tap is missing.
+- **164 has a prerequisite** — formalize the wire protocol as a
+  language-independent spec + conformance fixtures before writing the SDK.
+
 ## Notes for executors (carried from prior waves)
 
 - `dist/` is gitignored and built on demand. Build deps first:
