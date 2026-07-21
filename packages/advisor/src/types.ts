@@ -26,6 +26,7 @@ import type { AdvisorMaskStrategy } from "./mask-strategies";
 import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
+import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "./notify-calls";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
@@ -396,6 +397,23 @@ export interface LintContext {
      * for runtime callers, where the lint finds nothing.
      */
     normalizeIdAuthorizations?: ReadonlyArray<AdvisorNormalizeIdAuthorization>;
+
+    /**
+     * `ctx.notify` / `ctx.push` sends discovered lexically inside `query`/`mutation`
+     * handler bodies — the `notify_send_outside_action` input. Supplied by the
+     * codegen feeder, which omits `action` handlers (where these facades are the
+     * typed, intended surface); absent for runtime callers, where the lint finds
+     * nothing.
+     */
+    notifyCalls?: ReadonlyArray<AdvisorNotifyCall>;
+
+    /**
+     * Whether the app uses `ctx.push` and which push channels `defineNotify(...)`
+     * wires — the `notify_missing_push_config` input. Supplied by the codegen
+     * feeder from the resolved `lunora/notify.ts` definition; absent for runtime
+     * callers, where the lint finds nothing.
+     */
+    notifyConfig?: AdvisorNotifyConfig;
 
     /**
      * `ctx.db` writes (`insert` / `replace` / `patch` / `insertManyUnsafe`) that set
