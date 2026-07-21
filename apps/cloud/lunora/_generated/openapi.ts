@@ -5181,13 +5181,28 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "deployments"
                                             },
+                                            "errorOnly": {
+                                                "type": "boolean"
+                                            },
+                                            "from": {
+                                                "type": "number"
+                                            },
+                                            "functionPath": {
+                                                "type": "string"
+                                            },
                                             "limit": {
+                                                "type": "number"
+                                            },
+                                            "minDurationMs": {
                                                 "type": "number"
                                             },
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
+                                            },
+                                            "to": {
+                                                "type": "number"
                                             }
                                         },
                                         "required": [

@@ -612,13 +612,48 @@ __has1 = true;
 }
 let __has2 = false;
 let __val2;
-if (source["limit"] !== undefined) {
-if (typeof source["limit"] !== "number" || !Number.isFinite(source["limit"])) return DEFER;
-__val2 = source["limit"];
+if (source["errorOnly"] !== undefined) {
+if (typeof source["errorOnly"] !== "boolean") return DEFER;
+__val2 = source["errorOnly"];
 __has2 = true;
 }
+let __has3 = false;
+let __val3;
+if (source["from"] !== undefined) {
+if (typeof source["from"] !== "number" || !Number.isFinite(source["from"])) return DEFER;
+__val3 = source["from"];
+__has3 = true;
+}
+let __has4 = false;
+let __val4;
+if (source["functionPath"] !== undefined) {
+if (typeof source["functionPath"] !== "string") return DEFER;
+__val4 = source["functionPath"];
+__has4 = true;
+}
+let __has5 = false;
+let __val5;
+if (source["limit"] !== undefined) {
+if (typeof source["limit"] !== "number" || !Number.isFinite(source["limit"])) return DEFER;
+__val5 = source["limit"];
+__has5 = true;
+}
+let __has6 = false;
+let __val6;
+if (source["minDurationMs"] !== undefined) {
+if (typeof source["minDurationMs"] !== "number" || !Number.isFinite(source["minDurationMs"])) return DEFER;
+__val6 = source["minDurationMs"];
+__has6 = true;
+}
 if (typeof source["organizationId"] !== "string") return DEFER;
-return { ...(__has1 ? { "deploymentId": __val1 } : {}), ...(__has2 ? { "limit": __val2 } : {}), "organizationId": source["organizationId"] };
+let __has7 = false;
+let __val7;
+if (source["to"] !== undefined) {
+if (typeof source["to"] !== "number" || !Number.isFinite(source["to"])) return DEFER;
+__val7 = source["to"];
+__has7 = true;
+}
+return { ...(__has1 ? { "deploymentId": __val1 } : {}), ...(__has2 ? { "errorOnly": __val2 } : {}), ...(__has3 ? { "from": __val3 } : {}), ...(__has4 ? { "functionPath": __val4 } : {}), ...(__has5 ? { "limit": __val5 } : {}), ...(__has6 ? { "minDurationMs": __val6 } : {}), "organizationId": source["organizationId"], ...(__has7 ? { "to": __val7 } : {}) };
 });
 installCompiledValidatorMap(lunora_uptime_20.recent.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -859,7 +894,7 @@ export interface Caller {
     };
     traces: {
         get: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ completionTokens?: number; durationMs: number; endedAt: number; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
-        list: (args: { deploymentId?: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
+        list: (args: { deploymentId?: Id<"deployments">; errorOnly?: boolean; from?: number; functionPath?: string; limit?: number; minDurationMs?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
     };
     uptime: {
         prune: (args?: {}) => Promise<{ pruned: number; }>;

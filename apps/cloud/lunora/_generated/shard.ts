@@ -239,6 +239,15 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
         {
             "fields": [
                 "organizationId",
+                "deploymentId",
+                "startedAt"
+            ],
+            "name": "by_org_deployment_started",
+            "type": "index"
+        },
+        {
+            "fields": [
+                "organizationId",
                 "startedAt"
             ],
             "name": "by_org_started",
@@ -2293,16 +2302,17 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "PERFORMANCE"
         ],
         "description": "A secondary index is redundant because another index already covers every lookup it serves (its columns are a leading prefix of the other's). The redundant index costs storage and is maintained on every write for no read benefit.",
-        "detail": "Index \"by_org\" on table \"observations\" (organizationId) is redundant — index \"by_org_started\" (organizationId, startedAt) already covers its lookups.",
+        "detail": "Index \"by_org\" on table \"observations\" (organizationId) is redundant — index \"by_org_deployment_started\" (organizationId, deploymentId, startedAt) already covers its lookups.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
             "coveredBy": {
                 "fields": [
                     "organizationId",
+                    "deploymentId",
                     "startedAt"
                 ],
-                "name": "by_org_started"
+                "name": "by_org_deployment_started"
             },
             "fields": [
                 "organizationId"
@@ -5765,19 +5775,38 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Public string argument has no length bound"
     },
     {
+        "cacheKey": "unbounded_string_arg:traces:list:functionPath",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
+        "detail": "Arg `functionPath` of public procedure `list` (traces:75) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "facing": "EXTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "argument": "functionPath",
+            "exportName": "list",
+            "file": "traces",
+            "line": 75
+        },
+        "name": "unbounded_string_arg",
+        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
+        "title": "Public string argument has no length bound"
+    },
+    {
         "cacheKey": "unbounded_string_arg:traces:get:traceId",
         "categories": [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `traceId` of public procedure `get` (traces:98) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `traceId` of public procedure `get` (traces:120) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "traceId",
             "exportName": "get",
             "file": "traces",
-            "line": 98
+            "line": 120
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",

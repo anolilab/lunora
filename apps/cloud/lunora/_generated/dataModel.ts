@@ -481,7 +481,7 @@ export interface IndexNamesByTable {
     deployKeys: "by_org" | "by_hash";
     overageDebits: "by_org_period";
     tenantLogs: "by_trace" | "by_script_time" | "by_org";
-    observations: "by_org_started" | "by_trace" | "by_org";
+    observations: "by_org_deployment_started" | "by_org_started" | "by_trace" | "by_org";
     githubInstallations: "by_org" | "by_installation";
     builds: "by_project_commit" | "by_project";
     buildLogs: "by_build";

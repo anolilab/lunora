@@ -294,7 +294,11 @@ export default defineSchema({
         // The drill-in: every span in one trace (the waterfall / tree), org-scoped.
         .index("by_trace", ["organizationId", "traceId"])
         // Recent spans, org-scoped, to roll up into the trace list newest-first.
-        .index("by_org_started", ["organizationId", "startedAt"]),
+        .index("by_org_started", ["organizationId", "startedAt"])
+        // Recent spans for ONE deployment — so a deployment-scoped trace list scans
+        // that deployment's own spans (not the global recent window, where a quiet
+        // deployment's older traces would fall off the end).
+        .index("by_org_deployment_started", ["organizationId", "deploymentId", "startedAt"]),
 
     // GitHub App installations (GAPS.md A4). Two-phase: the webhook *stages* an
     // installation (no org linkage — a spoofed call is harmless), then an org

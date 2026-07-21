@@ -768,3 +768,18 @@ button.link.danger {
     color: var(--muted);
     font-variant-numeric: tabular-nums;
 }
+
+/* Trace-list filter row (errors-only, …). */
+.trace-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 12px;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.trace-filter input {
+    accent-color: var(--primary);
+}

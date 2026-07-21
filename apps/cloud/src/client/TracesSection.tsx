@@ -29,8 +29,9 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
     const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId } : "skip");
     const [deploymentId, setDeploymentId] = useState<DeploymentId | "">("");
     const [traceId, setTraceId] = useState("");
+    const [errorOnly, setErrorOnly] = useState(false);
 
-    const traces = useQuery(api.traces.list, deploymentId ? { deploymentId, organizationId } : "skip");
+    const traces = useQuery(api.traces.list, deploymentId ? { deploymentId, errorOnly, organizationId } : "skip");
     const spans = useQuery(api.traces.get, traceId ? { organizationId, traceId } : "skip");
 
     const selected = (traces ?? []).find((trace) => trace.traceId === traceId);
@@ -87,6 +88,10 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
 
             {deploymentId ? (
                 <section className="card">
+                    <label className="trace-filter">
+                        <input checked={errorOnly} onChange={(event) => setErrorOnly(event.target.checked)} type="checkbox" />
+                        Errors only
+                    </label>
                     <table className="table">
                         <thead>
                             <tr>

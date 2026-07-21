@@ -168,6 +168,7 @@ export const observations = sqliteTable("observations", {
     statusMessage: text("statusMessage"),
     traceId: text("traceId").notNull(),
 }, (t) => ({
+    by_org_deployment_started: index("by_org_deployment_started").on(t.organizationId, t.deploymentId, t.startedAt),
     by_org_started: index("by_org_started").on(t.organizationId, t.startedAt),
     by_trace: index("by_trace").on(t.organizationId, t.traceId),
     by_org: index("by_org").on(t.organizationId),
