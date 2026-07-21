@@ -98,14 +98,49 @@ const targetOf = (subscription: StoredSubscription): string => {
     return JSON.stringify({ endpoint: subscription.endpoint, keys: subscription.keys });
 };
 
-/** Gone/expired signals across Web Push (HTTP 404/410) and FCM (`UNREGISTERED`/`NotRegistered`). */
-const GONE_PATTERN = /\b(?:404|410|gone|expired|unregistered|not[\s-]?registered|invalid[\s-]?(?:token|registration))\b/iu;
+/**
+ * Structured "permanently gone" signal from the Web Push provider: an HTTP `404`
+ * (Not Found) or `410` (Gone) status. The `@visulima/notification` web-push
+ * provider surfaces these as `Subscription gone (HTTP 404|410)` / `HTTP 404|410:`
+ * in its failure receipt — the ONLY 4xx statuses that mean the endpoint is dead.
+ * Every other status (`400`, `429`, `413`, 5xx, TLS/`ECONNRESET`) is transient or
+ * a caller error worth retrying, never a prune.
+ */
+const WEB_PUSH_GONE_PATTERN = /\bhttp\s*4(?:04|10)\b/iu;
+
+/**
+ * Structured "permanently gone" signal from FCM: the canonical `UNREGISTERED`
+ * (HTTP v1) / `NotRegistered` (legacy) error codes — a.k.a.
+ * `registration-token-not-registered` — meaning the device token is dead.
+ */
+const FCM_GONE_PATTERN = /\b(?:unregistered|not[\s-]?registered|registration-token-not-registered)\b/iu;
+
+/**
+ * Last-resort text fallback for a provider that phrases "gone" in prose without a
+ * status/code. Deliberately narrow — it requires the word `subscription`
+ * qualifying `gone`/`expired`/`no longer valid`, so a transient message that
+ * merely CONTAINS `expired` (`TLS certificate expired`, `session expired, retry`)
+ * does NOT trigger a destructive prune.
+ */
+const GONE_TEXT_FALLBACK = /\bsubscription (?:is )?(?:gone|expired|no longer valid)\b/iu;
 
 /**
  * Whether a provider error message indicates the subscription is permanently gone
  * (the browser/device unsubscribed) and should be pruned — as opposed to a
- * transient failure worth retrying. Heuristic over the providers' error text.
+ * transient failure worth retrying.
+ *
+ * Gates on STRUCTURED signals first: a Web Push `HTTP 404/410` status or an FCM
+ * `UNREGISTERED`/`NOT_REGISTERED` code, both of which the providers surface in
+ * their failure receipts. The free-text {@link GONE_TEXT_FALLBACK} is a tightened
+ * last resort only, so a transient error that happens to contain `expired`
+ * (a cert/session expiry) can never permanently drop a valid subscription.
  */
-const isGoneError = (message: string | undefined): boolean => (message === undefined ? false : GONE_PATTERN.test(message));
+const isGoneError = (message: string | undefined): boolean => {
+    if (message === undefined) {
+        return false;
+    }
+
+    return WEB_PUSH_GONE_PATTERN.test(message) || FCM_GONE_PATTERN.test(message) || GONE_TEXT_FALLBACK.test(message);
+};
 
 export { fcmId, isGoneError, normalizeRegisterInput, targetOf, webPushId };

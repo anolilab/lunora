@@ -73,13 +73,26 @@ describe("targetOf / ids / isGoneError", () => {
         expect(webPushId("https://a")).not.toBe(webPushId("https://b"));
     });
 
-    it("recognizes gone signals", () => {
+    it("prunes on structured gone signals but never on transient errors", () => {
         expect.hasAssertions();
 
-        expect(isGoneError("410 Gone")).toBe(true);
-        expect(isGoneError("FCM UNREGISTERED")).toBe(true);
-        expect(isGoneError("404 not found")).toBe(true);
-        expect(isGoneError("503 transient")).toBe(false);
+        // Web Push structured status: HTTP 410 (Gone) / 404 (Not Found) → gone.
+        expect(isGoneError("Subscription gone (HTTP 410) — remove this subscription")).toBe(true);
+        expect(isGoneError("HTTP 404: Not Found")).toBe(true);
+        // FCM canonical unregistered codes → gone.
+        expect(isGoneError("FCM push failed: UNREGISTERED")).toBe(true);
+        expect(isGoneError("NotRegistered")).toBe(true);
+        expect(isGoneError("registration-token-not-registered")).toBe(true);
+        // Prose fallback still prunes an explicit "subscription expired/gone".
+        expect(isGoneError("The subscription is no longer valid")).toBe(true);
+
+        // Transient failures must NOT permanently drop a valid subscription, even
+        // when they contain "expired" or a status code that is not 404/410.
+        expect(isGoneError("TLS certificate expired")).toBe(false);
+        expect(isGoneError("session expired, retry")).toBe(false);
+        expect(isGoneError("HTTP 429: Too Many Requests")).toBe(false);
+        expect(isGoneError("HTTP 400: invalid token")).toBe(false);
+        expect(isGoneError("503 transient upstream error")).toBe(false);
         expect(isGoneError(undefined)).toBe(false);
     });
 });

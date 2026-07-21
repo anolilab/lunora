@@ -5,8 +5,10 @@ import type { D1Like, D1PreparedLike } from "../src/subscriptions/d1-store";
 
 /**
  * A mock push `Provider` whose outcome is driven by the target text: a target
- * containing `gone` fails with an HTTP 410 (pruned by the facade), `fail` fails
- * generically (kept + marked failed), anything else succeeds. Records every send.
+ * containing `gone` fails with a structured HTTP 410 (pruned by the facade), `fail`
+ * fails with a transient 503 (kept + marked failed), anything else succeeds.
+ * Mirrors the real web-push provider's failure phrasing so tests exercise the
+ * structured gone-signal path. Records every send.
  */
 const mockPushProvider = (): { provider: Provider<unknown, PushPayload>; sends: PushPayload[] } => {
     const sends: PushPayload[] = [];
@@ -22,7 +24,7 @@ const mockPushProvider = (): { provider: Provider<unknown, PushPayload>; sends: 
             const target = Array.isArray(payload.to) ? payload.to.join(",") : payload.to;
 
             if (target.includes("gone")) {
-                return { error: new Error("410 Gone — subscription expired"), success: false };
+                return { error: new Error("Subscription gone (HTTP 410) — remove this subscription"), success: false };
             }
 
             if (target.includes("fail")) {
