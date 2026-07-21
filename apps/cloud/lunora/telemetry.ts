@@ -5,8 +5,8 @@ import type { AlertDelivery as AlertDeliveryBase, FiringRule } from "../src/tele
 import { fireCrossedRules } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { internalMutation, mutation, v } from "./_generated/server.js";
-import { authorizeDeployKey } from "./authz";
+import { internalMutation, internalQuery, mutation, v } from "./_generated/server.js";
+import { authorizeDeployKey, resolveDeployKeyOrg } from "./authz";
 
 /**
  * Telemetry ingest for the Cloud Observability pipeline (superlog model). The
@@ -355,3 +355,17 @@ export const pruneObservations = internalMutation.mutation(async ({ ctx: context
 
     return { pruned: stale.length };
 });
+
+/**
+ * Resolve the org that owns a deploy key, for the standard OTLP ingest endpoints
+ * (`/v1/traces`, `/v1/logs`) — a stock OpenTelemetry exporter sends only an
+ * `Authorization: Bearer <key>` header, so the route resolves the org from the
+ * key before delegating to the deploy-key-authorized ingest. SYSTEM only.
+ */
+export const orgForDeployKey = internalQuery
+    .input({ deployKey: v.string() })
+    .query(async ({ ctx: context, args }): Promise<{ organizationId: Id<"organizations"> } | null> => {
+        const organizationId = await resolveDeployKeyOrg(context, args.deployKey);
+
+        return organizationId ? { organizationId } : null;
+    });

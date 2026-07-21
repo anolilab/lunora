@@ -12,8 +12,8 @@ import { handleGitHubWebhook } from "../github/webhook";
 import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createCloudflareProvisioner } from "../provision";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
-import type { OtlpTracePayload } from "../telemetry/otlp";
-import { decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
+import type { OtlpLogEntry, OtlpLogsPayload, OtlpTracePayload } from "../telemetry/otlp";
+import { decodeLogRecords, decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { DeployBackend, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
@@ -590,6 +590,156 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
     }
 };
 
+/** Extract the deploy key from a standard OTLP `Authorization` header (`Bearer <key>` or a bare token). */
+const bearerToken = (request: Request): string | undefined => {
+    const header = request.headers.get("authorization");
+
+    if (header === null || header === "") {
+        return undefined;
+    }
+
+    return header.startsWith("Bearer ") ? header.slice(7) : header;
+};
+
+/** Read an OTLP/HTTP JSON body, transparently `gzip`-decompressing when the exporter set `Content-Encoding: gzip`. */
+const readOtlpBody = async (request: Request): Promise<unknown> => {
+    if ((request.headers.get("content-encoding") ?? "").includes("gzip") && request.body) {
+        const text = await new Response(request.body.pipeThrough(new DecompressionStream("gzip"))).text();
+
+        return JSON.parse(text) as unknown;
+    }
+
+    return request.json();
+};
+
+/** Resolve the org for an OTLP request from its bearer, or a `Response` (401/415) to short-circuit. */
+const otlpAuthorize = async (request: Request, context: LunoraActionContext): Promise<Response | string> => {
+    if ((request.headers.get("content-type") ?? "").includes("protobuf")) {
+        return jsonError(415, "OTLP/protobuf is not supported yet — send Content-Type: application/json");
+    }
+
+    const key = bearerToken(request);
+
+    if (key === undefined) {
+        return jsonError(401, "missing Authorization: Bearer <deploy key>");
+    }
+
+    const org = await context.runQuery<{ organizationId: string } | null>(internal.telemetry.orgForDeployKey, { deployKey: key });
+
+    return org ? key : jsonError(401, "invalid or revoked deploy key");
+};
+
+/**
+ * `POST /v1/traces` — the **standard OTLP** trace ingest (mirrors Maple's
+ * `ingest.maple.dev/v1/traces` / Langfuse's OTLP endpoint), so any OpenTelemetry
+ * SDK or Collector can ship traces to the cloud with an `Authorization: Bearer
+ * &lt;deploy key>` header — not only Lunora's own `otlpSink`. Every span is stored
+ * as an observation (Traces) and error spans fold into Issues, exactly like
+ * `/v1/telemetry`. Responds with an OTLP `ExportTraceServiceResponse` (empty body
+ * = full success). Protobuf/gRPC/metrics are follow-ons.
+ */
+const handleOtlpTracesRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const authorized = await otlpAuthorize(request, context);
+
+    if (authorized instanceof Response) {
+        return authorized;
+    }
+
+    // The org is resolved from the key; re-authorized inside `telemetry.ingest`.
+    const org = await context.runQuery<{ organizationId: string }>(internal.telemetry.orgForDeployKey, { deployKey: authorized });
+
+    let body: OtlpTracePayload;
+
+    try {
+        body = (await readOtlpBody(request)) as OtlpTracePayload;
+    } catch {
+        return jsonError(400, "malformed OTLP/JSON body");
+    }
+
+    try {
+        await context.runMutation(api.telemetry.ingest, {
+            deployKey: authorized,
+            events: decodeTelemetryEvents(body),
+            observations: decodeObservations(body).slice(0, 1000),
+            organizationId: org.organizationId,
+        });
+    } catch (error) {
+        return jsonError(500, error instanceof Error ? error.message : "ingest failed");
+    }
+
+    return Response.json({}, { headers: { "content-type": "application/json" }, status: 200 });
+};
+
+/** Strip the routing-only `serviceName` off a decoded OTLP log entry, leaving the `logs.ingest` line shape. */
+const toLogLine = ({ serviceName: _serviceName, ...line }: OtlpLogEntry): Omit<OtlpLogEntry, "serviceName"> => line;
+
+/**
+ * `POST /v1/logs` — the **standard OTLP** logs ingest. Any OpenTelemetry logs
+ * exporter can ship to the cloud; records are decoded to tenant log lines,
+ * grouped by `service.name` (→ script), and stored via `logs.ingest`. Responds
+ * with an OTLP `ExportLogsServiceResponse` (empty body = full success).
+ */
+const handleOtlpLogsRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const authorized = await otlpAuthorize(request, context);
+
+    if (authorized instanceof Response) {
+        return authorized;
+    }
+
+    const org = await context.runQuery<{ organizationId: string }>(internal.telemetry.orgForDeployKey, { deployKey: authorized });
+
+    let body: OtlpLogsPayload;
+
+    try {
+        body = (await readOtlpBody(request)) as OtlpLogsPayload;
+    } catch {
+        return jsonError(400, "malformed OTLP/JSON body");
+    }
+
+    // OTLP logs carry `service.name` per resource; the store keys lines by script,
+    // so group the batch by service and ingest one call per script.
+    const byScript = new Map<string, OtlpLogEntry[]>();
+
+    for (const entry of decodeLogRecords(body).slice(0, 500)) {
+        const script = entry.serviceName ?? "unknown";
+        const group = byScript.get(script);
+
+        if (group) {
+            group.push(entry);
+        } else {
+            byScript.set(script, [entry]);
+        }
+    }
+
+    try {
+        for (const [scriptName, entries] of byScript) {
+            // eslint-disable-next-line no-await-in-loop -- one call per script; a batch spans few
+            await context.runMutation(api.logs.ingest, {
+                deployKey: authorized,
+                lines: entries.map((entry) => toLogLine(entry)),
+                organizationId: org.organizationId,
+                scriptName,
+            });
+        }
+    } catch (error) {
+        return jsonError(500, error instanceof Error ? error.message : "ingest failed");
+    }
+
+    return Response.json({}, { headers: { "content-type": "application/json" }, status: 200 });
+};
+
 interface DomainBody {
     hostname?: string;
     id?: string;
@@ -914,6 +1064,9 @@ export const createDeployRouter = (): HttpRouterLike => {
         },
         { handler: handleLogsIngestRoute, method: "POST", path: "/v1/logs/ingest", spec: { auth: "deployKey" } },
         { handler: handleTelemetryRoute, method: "POST", path: "/v1/telemetry", spec: { auth: "deployKey" } },
+        // Standard OTLP/HTTP+JSON ingest (bearer-authed) — any OTel SDK/Collector.
+        { handler: handleOtlpTracesRoute, method: "POST", path: "/v1/traces", spec: { auth: "deployKey" } },
+        { handler: handleOtlpLogsRoute, method: "POST", path: "/v1/logs", spec: { auth: "deployKey" } },
         { handler: handleUsageRoute, method: "POST", path: "/v1/usage", spec: { auth: "deployKey" } },
         // The MCP surface itself — deploy-key gated, never a tool (deny-listed).
         { handler: handleMcpRoute, method: "POST", path: "/v1/mcp", spec: { auth: "deployKey" } },

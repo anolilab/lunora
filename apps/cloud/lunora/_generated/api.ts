@@ -156,6 +156,7 @@ export interface InternalApiTypes {
         purgeDeleted: FunctionReference<"mutation", {}, { purged: number; }>;
     };
     telemetry: {
+        orgForDeployKey: FunctionReference<"query", { deployKey: string }, { organizationId: Id<"organizations">; } | null>;
         pruneObservations: FunctionReference<"mutation", {}, { pruned: number; }>;
     };
     uptime: {

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { crossesThreshold, isSafeWebhookUrl, renderAlert } from "../src/telemetry/alerts";
 import type { OtlpTracePayload } from "../src/telemetry/otlp";
-import { decodeObservations, decodeTelemetryEvents } from "../src/telemetry/otlp";
+import { decodeLogRecords, decodeObservations, decodeTelemetryEvents } from "../src/telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../src/telemetry/store";
 import { buildTriagePrompt, MAX_ISSUES } from "../src/telemetry/triage";
 
@@ -342,5 +342,63 @@ describe(decodeObservations, () => {
 
     it("skips a span with no trace/span id (it can't be placed in a trace)", () => {
         expect(decodeObservations(payload("@lunora/runtime", [{ name: "orphan", status: { code: 1 } }]))).toHaveLength(0);
+    });
+});
+
+/** Wrap OTLP log records into an ExportLogsServiceRequest with one resource + scope. */
+const logsPayload = (records: unknown[], serviceName?: string) => {
+    return {
+        resourceLogs: [
+            {
+                resource: serviceName === undefined ? {} : { attributes: attributes({ "service.name": serviceName }) },
+                scopeLogs: [{ logRecords: records as never }],
+            },
+        ],
+    };
+};
+
+describe(decodeLogRecords, () => {
+    it("maps severityNumber bands to the ctx.log ramp", () => {
+        const levels = [3, 7, 10, 14, 18, 22].map(
+            (severityNumber) => decodeLogRecords(logsPayload([{ body: { stringValue: "x" }, severityNumber, timeUnixNano: "1700000000000000000" }]))[0]?.level,
+        );
+
+        expect(levels).toEqual(["trace", "debug", "info", "warn", "error", "fatal"]);
+    });
+
+    it("decodes body, functionPath, ids, and non-lunora attributes as fields", () => {
+        const [entry] = decodeLogRecords(
+            logsPayload(
+                [
+                    {
+                        attributes: attributes({ "lunora.function_path": "messages:send", orderId: "ord_1" }),
+                        body: { stringValue: "order placed" },
+                        severityText: "info",
+                        spanId: "aaaa",
+                        timeUnixNano: "1700000000123000000",
+                        traceId: "bbbb",
+                    },
+                ],
+                "chat-prod",
+            ),
+        );
+
+        expect(entry).toMatchObject({
+            createdAt: 1_700_000_000_123,
+            fields: { orderId: "ord_1" },
+            functionPath: "messages:send",
+            level: "info",
+            message: "order placed",
+            serviceName: "chat-prod",
+            spanId: "aaaa",
+            traceId: "bbbb",
+        });
+    });
+
+    it("falls back to info + wall clock and tolerates an empty payload", () => {
+        const [entry] = decodeLogRecords(logsPayload([{ body: { stringValue: "no severity" } }]));
+
+        expect(entry?.level).toBe("info");
+        expect(decodeLogRecords({})).toHaveLength(0);
     });
 });

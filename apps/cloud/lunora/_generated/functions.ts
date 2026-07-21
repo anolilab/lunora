@@ -137,6 +137,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "secrets:remove": lunora_secrets_17.remove as unknown as RegisteredLunoraFunction,
     "secrets:store": lunora_secrets_17.store as unknown as RegisteredLunoraFunction,
     "telemetry:ingest": lunora_telemetry_18.ingest as unknown as RegisteredLunoraFunction,
+    "telemetry:orgForDeployKey": lunora_telemetry_18.orgForDeployKey as unknown as RegisteredLunoraFunction,
     "telemetry:pruneObservations": lunora_telemetry_18.pruneObservations as unknown as RegisteredLunoraFunction,
     "uptime:prune": lunora_uptime_19.prune as unknown as RegisteredLunoraFunction,
     "uptime:recent": lunora_uptime_19.recent as unknown as RegisteredLunoraFunction,
@@ -600,6 +601,11 @@ if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
+installCompiledValidatorMap(lunora_telemetry_18.orgForDeployKey.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["deployKey"] !== "string") return DEFER;
+return { "deployKey": source["deployKey"] };
+});
 installCompiledValidatorMap(lunora_uptime_19.recent.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["deploymentId"] !== "string") return DEFER;
@@ -835,6 +841,7 @@ export interface Caller {
     };
     telemetry: {
         ingest: (args: { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; observations?: Array<unknown>; organizationId: Id<"organizations"> }) => Promise<{ alerts: { body: string; channel: "email" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
+        orgForDeployKey: (args: { deployKey: string }) => Promise<{ organizationId: Id<"organizations">; } | null>;
         pruneObservations: (args?: {}) => Promise<{ pruned: number; }>;
     };
     uptime: {
@@ -988,6 +995,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     telemetry: {
         ingest: (args) => callRegistered(context, "telemetry:ingest", args),
+        orgForDeployKey: (args) => callRegistered(context, "telemetry:orgForDeployKey", args),
         pruneObservations: (args) => callRegistered(context, "telemetry:pruneObservations", args),
     },
     uptime: {

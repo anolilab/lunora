@@ -169,6 +169,136 @@ export const decodeTelemetryEvents = (payload: OtlpTracePayload): TelemetryEvent
     return events;
 };
 
+/** OTLP `LogRecord` — the fields the logs ingest reads. */
+interface OtlpLogRecord {
+    attributes?: OtlpKeyValue[];
+    body?: OtlpAnyValue;
+    observedTimeUnixNano?: string;
+    severityNumber?: number;
+    severityText?: string;
+    spanId?: string;
+    timeUnixNano?: string;
+    traceId?: string;
+}
+
+interface OtlpScopeLogs {
+    logRecords?: OtlpLogRecord[];
+    scope?: { name?: string };
+}
+
+interface OtlpResourceLogs {
+    resource?: { attributes?: OtlpKeyValue[] };
+    scopeLogs?: OtlpScopeLogs[];
+}
+
+/** The subset of an OTLP `ExportLogsServiceRequest` the ingest reads. */
+export interface OtlpLogsPayload {
+    resourceLogs?: OtlpResourceLogs[];
+}
+
+/** The seven-tier `ctx.log` severity ramp. */
+type OtlpLogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
+
+/** One decoded OTLP log record, mapped to the cloud's tenant-log row (`serviceName` routes it to a script). */
+export interface OtlpLogEntry {
+    createdAt: number;
+    fields?: Record<string, unknown>;
+    functionPath?: string;
+    level: OtlpLogLevel;
+    message: string;
+    /** `service.name` — the tenant script the line belongs to; grouped into `logs.ingest` calls. */
+    serviceName?: string;
+    spanId?: string;
+    traceId?: string;
+}
+
+/**
+ * Map an OTLP `severityNumber` (1–24, TRACE→FATAL in bands of four) to the
+ * seven-tier `ctx.log` ramp. Falls back to `severityText`, then `info`, so a
+ * record from any OTel SDK lands at a sane level.
+ */
+const severityToLevel = (severityNumber: number | undefined, severityText: string | undefined): OtlpLogLevel => {
+    if (severityNumber !== undefined && severityNumber > 0) {
+        if (severityNumber >= 21) {
+            return "fatal";
+        }
+
+        if (severityNumber >= 17) {
+            return "error";
+        }
+
+        if (severityNumber >= 13) {
+            return "warn";
+        }
+
+        if (severityNumber >= 9) {
+            return "info";
+        }
+
+        return severityNumber >= 5 ? "debug" : "trace";
+    }
+
+    const text = severityText?.toLowerCase();
+
+    return text === "trace" || text === "debug" || text === "info" || text === "log" || text === "warn" || text === "error" || text === "fatal" ? text : "info";
+};
+
+/** Read an OTLP `AnyValue` as a plain JS value (the variants Lunora emits). */
+const anyValue = (value: OtlpAnyValue | undefined): unknown =>
+    value?.stringValue ?? value?.doubleValue ?? (value?.intValue === undefined ? value?.boolValue : Number(value.intValue));
+
+/** Collect non-`lunora.*` attributes as structured log `fields` (the `lunora.*` ones drive functionPath/ids). */
+const logFields = (attributes: OtlpKeyValue[] | undefined): Record<string, unknown> | undefined => {
+    const out: Record<string, unknown> = {};
+
+    for (const attribute of attributes ?? []) {
+        if (!attribute.key.startsWith("lunora.") && attribute.key !== "code.function") {
+            const value = anyValue(attribute.value);
+
+            if (value !== undefined) {
+                out[attribute.key] = value;
+            }
+        }
+    }
+
+    return Object.keys(out).length > 0 ? out : undefined;
+};
+
+/**
+ * Decode an OTLP `ExportLogsServiceRequest` into tenant-log entries — the
+ * standard `/v1/logs` ingest, so any OpenTelemetry logs exporter can ship to the
+ * cloud (not only Lunora's own sink). Level from `severityNumber` (or text),
+ * message from the record `body`, `traceId`/`spanId` for correlation,
+ * `functionPath` from `lunora.function_path`/`code.function`, everything else as
+ * `fields`. Tolerant: a record missing a body/time falls back to `""`/wall clock.
+ */
+export const decodeLogRecords = (payload: OtlpLogsPayload): OtlpLogEntry[] => {
+    const entries: OtlpLogEntry[] = [];
+
+    for (const resourceLogs of payload.resourceLogs ?? []) {
+        const serviceName = attributeString(resourceLogs.resource?.attributes, "service.name");
+
+        for (const scopeLogs of resourceLogs.scopeLogs ?? []) {
+            for (const record of scopeLogs.logRecords ?? []) {
+                const body = anyValue(record.body);
+
+                entries.push({
+                    createdAt: epochMsFromNano(record.timeUnixNano ?? record.observedTimeUnixNano),
+                    fields: logFields(record.attributes),
+                    functionPath: attributeString(record.attributes, "lunora.function_path") ?? attributeString(record.attributes, "code.function"),
+                    level: severityToLevel(record.severityNumber, record.severityText),
+                    message: typeof body === "string" ? body : body === undefined ? "" : JSON.stringify(body),
+                    serviceName,
+                    spanId: record.spanId === "" ? undefined : record.spanId,
+                    traceId: record.traceId === "" ? undefined : record.traceId,
+                });
+            }
+        }
+    }
+
+    return entries;
+};
+
 /** Collect `lunora.*` string attributes (minus `function_path`, which becomes `functionPath`) into a compact record. */
 const lunoraAttributes = (attributes: OtlpKeyValue[] | undefined): Record<string, string> | undefined => {
     const out: Record<string, string> = {};

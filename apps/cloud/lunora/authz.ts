@@ -91,6 +91,21 @@ export const authorizeDeployKey = async (
 };
 
 /**
+ * Resolve a deploy key to its owning org from the key ALONE (no org supplied) —
+ * for the standard OTLP endpoints, where a stock OpenTelemetry exporter presents
+ * only an `Authorization: Bearer <key>` header and no body auth fields. Matches
+ * the key by SHA-256 against the unique `by_hash` index. Returns `null` for an
+ * unknown or revoked key (so the caller returns 401, never leaking which it was).
+ */
+export const resolveDeployKeyOrg = async (context: QueryContext, key: string): Promise<Id<"organizations"> | null> => {
+    const hashedKey = await hashDeployKey(key);
+    const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
+    const row = (page as unknown as DeployKeyRow[])[0];
+
+    return row && row.revokedAt === undefined ? row.organizationId : null;
+};
+
+/**
  * Assert that a row exists and belongs to `organizationId`, throwing `NOT_FOUND`
  * otherwise. Guards the cross-org IDOR on org-scoped delete/revoke mutations:
  * being an owner/admin of org A must not let you mutate org B's row by passing
