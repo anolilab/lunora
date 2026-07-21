@@ -91,6 +91,30 @@ describe("issue-state module", () => {
         }
     });
 
+    it("reads more than 100 hashes without exceeding the bound-parameter cap", () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            // 250 distinct fingerprints → 3 chunks of ≤100 params each. A single
+            // `WHERE hash IN (?×250)` would blow Durable Objects' 100-param limit.
+            const hashes = Array.from({ length: 250 }, (_, index) => `hash-${String(index)}`);
+
+            for (const hash of hashes) {
+                upsertIssueState(database.sql, hash, { status: "resolved" }, 1000);
+            }
+
+            const map = readIssueStates(database.sql, hashes);
+
+            expect(map.size).toBe(250);
+            expect(map.get("hash-0")?.status).toBe("resolved");
+            expect(map.get("hash-249")?.status).toBe("resolved");
+        } finally {
+            database.close();
+        }
+    });
+
     it("batch-reads a subset, omitting hashes with no row", () => {
         expect.assertions(2);
 

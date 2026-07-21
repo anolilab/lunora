@@ -19,6 +19,9 @@ import type { SqlCursor, SqlExec } from "./ctx-db";
 /** Reserved table holding one triage-state row per Issue fingerprint. Auto-hidden by the `__lunora` prefix. */
 const ISSUE_STATE_TABLE = "__lunora_issue_state__";
 
+/** Max hashes per `WHERE hash IN (...)` read — Durable Objects SQLite caps bound parameters at 100 per query. */
+const HASH_QUERY_BATCH = 100;
+
 /**
  * Triage status of an Issue. `open` is the implicit default (no state row); a
  * developer moves it to `resolved` (fixed, but a *new* matching error re-opens
@@ -119,6 +122,11 @@ const hydrate = (row: IssueStateRow): IssueState => {
  * `Map` keyed by `hash` so the caller can fold it into the derived Issues in one
  * pass. A hash with no row is simply absent (the caller treats that as the
  * implicit `open` default). Reads nothing when `hashes` is empty.
+ *
+ * Cloudflare Durable Objects SQLite caps bound parameters at 100 per query
+ * (https://developers.cloudflare.com/durable-objects/platform/limits/), so a
+ * shard with many distinct fingerprints is read in {@link HASH_QUERY_BATCH}-sized
+ * chunks — one `WHERE hash IN (...)` per chunk — and the rows merged.
  */
 const readIssueStates = (sql: SqlExec, hashes: ReadonlyArray<string>): Map<string, IssueState> => {
     const states = new Map<string, IssueState>();
@@ -129,15 +137,18 @@ const readIssueStates = (sql: SqlExec, hashes: ReadonlyArray<string>): Map<strin
 
     ensureIssueStateTable(sql);
 
-    const placeholders = hashes.map(() => "?").join(", ");
-    const rows = runSql<IssueStateRow>(
-        sql,
-        `SELECT hash, status, assignee, severity, updated_at, updated_by FROM "${ISSUE_STATE_TABLE}" WHERE hash IN (${placeholders})`,
-        ...hashes,
-    ).toArray();
+    for (let start = 0; start < hashes.length; start += HASH_QUERY_BATCH) {
+        const batch = hashes.slice(start, start + HASH_QUERY_BATCH);
+        const placeholders = batch.map(() => "?").join(", ");
+        const rows = runSql<IssueStateRow>(
+            sql,
+            `SELECT hash, status, assignee, severity, updated_at, updated_by FROM "${ISSUE_STATE_TABLE}" WHERE hash IN (${placeholders})`,
+            ...batch,
+        ).toArray();
 
-    for (const row of rows) {
-        states.set(row.hash, hydrate(row));
+        for (const row of rows) {
+            states.set(row.hash, hydrate(row));
+        }
     }
 
     return states;
