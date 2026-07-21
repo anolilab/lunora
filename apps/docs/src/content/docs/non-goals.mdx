@@ -1,0 +1,168 @@
+---
+title: Design boundaries
+description: The things Lunora deliberately does not do — each with the reason it's a boundary and the escape hatch when you need past it.
+---
+
+Every framework is defined as much by what it refuses to do as by what it ships.
+This page states Lunora's deliberate boundaries plainly, so a gap you find in a
+feature comparison reads as an **intentional trade-off**, not a missing feature.
+
+Each boundary below follows the same shape: **what** we don't do, **why** it's a
+boundary, and the **escape hatch** for when your app genuinely needs past it. If
+you're weighing Lunora against Convex, Supabase, or Firebase, read this alongside
+[Architecture → Design decisions](/docs/architecture#design-decisions) — the two
+pages are the same argument from two angles.
+
+## No arbitrary external SQL or ad-hoc cross-dataset joins
+
+**The boundary.** Primary state is per-Durable-Object SQLite, reached through
+typed queries and mutations. There is no `SELECT … JOIN` you write by hand across
+arbitrary tables, and no connection to a central SQL database that owns your data.
+
+**Why.** The single-threaded DO is what buys strong consistency, an authoritative
+op-log, and real-time fan-out without a process hop — see
+[Durable Objects as the database](/docs/architecture#durable-objects-as-the-database-not-d1-as-truth).
+Opening the store to arbitrary SQL would mean giving up the serialized cut those
+guarantees rest on, and routing every join through a query planner Lunora would
+then have to own. Typed RPC keeps RLS, validators, and the reactive engine in the
+path of every read; raw SQL would route around all three.
+
+**Escape hatch.** When you genuinely need raw SQL against an existing relational
+database, [`@lunora/hyperdrive`](/docs/packages/hyperdrive) connects a
+bring-your-own Postgres or MySQL through Cloudflare Hyperdrive and exposes it as
+`ctx.sql`. Two properties are the deliberate cost: it is **action-only** (external
+I/O never runs inside the deterministic query/mutation core) and **non-reactive**
+(live queries do not track writes made through it — Lunora has no op-log for a
+database it doesn't own). Use it for reporting, migrations, and integrating a
+system of record you already run; keep hot, reactive data in Lunora's tiers.
+
+## RPC-first, not REST-first
+
+**The boundary.** The typed RPC surface — the `api.*` client generated from your
+functions — is the primary contract. Lunora is not a REST-first framework, and
+there is no automatic REST/CRUD surface mapped straight onto your tables.
+
+**Why.** End-to-end type safety only holds when there is a single source of truth
+and one calling convention the toolchain enforces. Auto-CRUD directly on tables
+would bypass the procedures where RLS, `ctx.auth`, and validators live, so it's a
+boundary on purpose — every call routes through a procedure.
+
+**Escape hatch.** A generated REST (and, demand-permitting, GraphQL) surface is an
+**opt-in interop layer** for the clients that can't import the TypeScript client —
+webhooks-in, non-TS services, no-code tools. It is exposed per-procedure and
+default-closed: a procedure is only reachable over REST when you explicitly expose
+it, and the request still runs through the same procedure path, so auth, RLS, and
+validators are enforced exactly as they are over RPC. It sits beside typed RPC as
+an interop surface; it does not replace it as the main API.
+
+## Cross-shard writes are eventual, not atomic
+
+**The boundary.** Once an app calls `.shardBy()`, a single mutation that writes
+across two shards is **not atomic**. Each Durable Object is its own consistency
+island, and there is no cross-shard transaction and no cross-shard live join.
+
+**The exact guarantee.**
+
+<TypeTable
+    type={{
+        "Single-DO write": {
+            type: "Serializable (OCC)",
+            description:
+                "A mutation runs inside blockConcurrencyWhile + one storage transaction; the DO serializes writes, so the commit order is the consistency cut. All-or-nothing on eviction — no half-written row.",
+        },
+        "Cross-shard write": {
+            type: "Eventual, non-atomic",
+            description:
+                "A write spanning two shards is two independent DO commits. There is no coordinator, so it can partially apply; the two halves converge only as each DO commits its own transaction.",
+        },
+        "Global tables (D1)": {
+            type: "Read-your-writes, else eventual",
+            description: "A .global() table is read-your-writes via the Sessions API bookmark; replicas otherwise converge within the ~24h window.",
+        },
+    }}
+/>
+
+**Why.** The serialized single-DO write is the property the entire consistency
+model rests on — see
+[Serialized mutations](/docs/architecture#serialized-mutations-no-occ-retry-loop).
+A cross-shard coordinator (2PC across DOs) would trade that simplicity for
+higher latency and a large failure-handling surface, and most apps never need it.
+Rather than weaken the single-DO guarantee to average out the cross-shard case,
+the boundary is drawn where the guarantee is strongest.
+
+**Escape hatch.** Three answers, cheapest first:
+
+- **Keep the invariant inside one shard.** Choose a `.shardBy()` key so the data
+  that must change together lives in the same DO — then the write is a single
+  serializable transaction again. This is the right answer far more often than it
+  looks. See [Sharding](/docs/concepts/sharding).
+- **Promote the table to `.global()`.** Cross-tenant data (identities, billing)
+  belongs in D1, not one tenant's shard. You trade poke-live reactivity for
+  cross-shard queryability — see [the data tiers](/docs/architecture#the-data-tiers).
+- **Compose it as a saga.** For a genuine multi-shard effect, model it as a
+  [workflow](/docs/packages/workflow) with explicit compensation steps —
+  eventual and not ACID, but composable and durable.
+
+A bounded cross-shard write primitive is an open design question, not a shipped
+feature. Until one lands, the guarantee above is the contract; design to it rather
+than around it.
+
+## No data warehouse hosting in the framework
+
+**The boundary.** The framework does not host managed connectors to Snowflake,
+BigQuery, Airbyte, or Fivetran. Lunora is a real-time application backend, not a
+warehouse or an ETL platform.
+
+**Why.** Hosting managed warehouse pipes is an operational product — durable
+delivery infrastructure, credential management, per-destination connectors — that
+lives in a control plane, not in the Worker that serves your app. Bundling it
+would push operational surface into every deployment that never uses it, against
+the [batteries-as-separate-installs](/docs/architecture#batteries-as-separate-installs-not-a-bundled-framework)
+grain.
+
+**Escape hatch.** The framework ships the primitive — a continuous, ordered,
+per-shard change tap off the op-log with at-least-once delivery and a resumable
+cursor — and built-in webhook and R2 sinks you run yourself. Managed warehouse
+and ETL connectors are a **Lunora Cloud** offering built on that same tap; the
+framework gives you the stream, Cloud gives you the managed pipes. Self-hosting
+the tap to your own sink is always available.
+
+## No managed control plane as a hard dependency
+
+**The boundary.** Lunora does not require a proprietary hosted control plane.
+Self-host on your own Cloudflare account is the default and the fully-supported
+path; there are no servers in the loop that you don't own.
+
+**Why.** "Your data, your account" is a core promise, not a tier. The framework
+must run end-to-end against a Cloudflare account with nothing of ours in the
+request path.
+
+**Escape hatch.** [Lunora Cloud](https://lunora.sh/cloud) is an **optional**
+managed layer that runs the same open code with hosting, managed connectors, and
+operational tooling on top. Choosing it is a convenience trade, never a
+requirement to unlock the framework.
+
+## Also deliberately absent
+
+A few smaller boundaries, covered in depth on
+[Architecture → Non-goals](/docs/architecture#non-goals):
+
+- **No external message broker** (MQTT / Pub/Sub / Redis) — real-time fan-out is
+  entirely DO-based hibernatable WebSockets, so a delta never leaves the process.
+- **No OCC-retry loop on mutations** — serialized writes make a retry pointless; a
+  `ConflictError` is a deterministic self-conflict, not a race.
+- **No runtime enforcement of query/mutation determinism yet** — it's an advisor
+  lint today, not a hard runtime guard.
+
+## See also
+
+- [Architecture](/docs/architecture) — the topology and the design decisions these
+  boundaries fall out of, each stated as what-we-chose / why / what-it-costs.
+- [Sharding](/docs/concepts/sharding) — the `__root__` → `.shardBy()` → `.global()`
+  progression that the cross-shard boundary lives on.
+- [`@lunora/hyperdrive`](/docs/packages/hyperdrive) — the BYO external-SQL escape
+  hatch.
+- [Versioning & stability](/docs/versioning) — what the stability tiers promise
+  inside these boundaries.
+- [Limits](/docs/limits) — the Cloudflare ceilings these choices are designed
+  around.
