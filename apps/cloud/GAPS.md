@@ -213,7 +213,7 @@ platform never inherits worldwide tax compliance. Product-based checkout
 (Creem product ids in `LUNORA_CLOUD_PLANS.priceIds`), hosted billing portal,
 `creem-signature` webhooks, sandbox via `CREEM_TEST_MODE`.
 
-**Overage billing = prepaid credits (🧩 pure module, no caller).** Creem has no metered
+**Overage billing = prepaid credits (✅ reconciliation wired; 🌐 self-serve purchase).** Creem has no metered
 subscription pricing (products are `recurring`/`onetime` only), but ships a
 first-party credits ledger (per-customer accounts, idempotent credit/debit by
 `reference`, balance/freeze) built for API metering. So overage is prepaid:
@@ -228,12 +228,18 @@ ledger adapter (`src/billing/creem-credits.ts`: balance/debit over
 `customerCredits`, `applyCreditPurchase` creating the account seeded on first
 buy), the fleet reconciliation driver (`reconcileAllOverages`: per-org failure
 isolation, watermark-after-debit ordering, exhausted → suspension hook), the
-`organizations.creditsAccountId` linkage, and 6 more tests exist and pass. But
-**none of it has a production caller** (verified 2026-07-21): no cron invokes
-`reconcileAllOverages`, and the billing webhook never calls
-`applyCreditPurchase`. Those two are **code**, not credentials — 🔨, not 🌐 —
-so the accurate status is 🧩: a tested module that never runs. Genuinely 🌐:
-creating the credit-pack products against a live Creem account.
+`organizations.creditsAccountId` linkage. **Reconciliation is now wired**
+(2026-07-21): `sweepOverageReconciliation` runs on the 6-hourly bucket
+(`src/billing/reconcile.ts` builds the per-org inputs + fleet ports over the
+control-plane store; the Creem credits ledger is built from `CREEM_API_KEY`),
+debiting each org's period overage, suspending the exhausted (`suspendedReason:
+"overage"`), and lifting overage suspensions once a balance is restored
+(`onRecovered`, self-healing). No-ops without Creem keys. **Still 🧩/🌐:**
+`applyCreditPurchase` (self-serve credit-pack *purchase*) is not wired — the
+billing webhook delegates wholly to `ctx.payments.handleWebhook`, and mapping a
+pack purchase needs the live credit-pack **product ids** (the genuine 🌐) plus a
+Creem-event seam. Until that lands, accounts are funded out-of-band; the
+enforcement + recovery engine above already reacts to whatever balance exists.
 
 ## D. Data & trust
 

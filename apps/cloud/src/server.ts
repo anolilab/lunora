@@ -16,6 +16,10 @@ import { openApiSpec } from "../lunora/_generated/openapi.js";
 import { createShardDO } from "../lunora/_generated/shard.js";
 import schema from "../lunora/schema.js";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
+import type { CreemCreditsClientLike } from "./billing/creem-credits";
+import { createCreemCreditsLedger } from "./billing/creem-credits";
+import { reconcileAllOverages } from "./billing/overage";
+import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcile";
 import { createHttpCloudflareApi } from "./cloudflare/api";
 import { resolveAdminToken } from "./deploy/admin-token";
 import { createDeployRouter } from "./deploy/router";
@@ -212,6 +216,10 @@ const deployRouter = createDeployRouter();
 // to (the "tenant cron fan-out tick" heartbeat in lunora/crons.ts).
 const EVERY_MINUTE = "*/1 * * * *";
 
+// The 6-hourly expression `crons.interval({ hours: 6 })` compiles to — the
+// bucket the overage reconciliation rides (paces Creem credits API calls).
+const EVERY_SIX_HOURS = "0 */6 * * *";
+
 interface LiveDeploymentRow {
     adminToken?: string;
     adminTokenCiphertext?: string;
@@ -309,6 +317,32 @@ const sweepUsageRollback = async (env: Env): Promise<void> => {
     const ports = await usageRollbackPorts(database, reader, { cellName: env.LUNORA_CELL ?? "default", now: Date.now(), periodStart: currentPeriodStart() });
 
     await runUsageRollback(ports);
+};
+
+/**
+ * Reconcile prepaid-credit overage for the fleet (GAPS.md C3): debit each org's
+ * period overage against its Creem credits balance, suspend the exhausted, and
+ * lift overage suspensions once a balance is restored. Runs on Creem's credits
+ * API — no-ops without `CREEM_API_KEY`. (Self-serve credit-pack *purchase* — the
+ * webhook that funds these accounts — still needs the live credit-pack product
+ * ids; this is the enforcement + recovery half.)
+ */
+const sweepOverageReconciliation = async (env: Env): Promise<void> => {
+    if (!env.DB || !env.CREEM_API_KEY) {
+        return;
+    }
+
+    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const periodStart = currentPeriodStart();
+    const { accounts, inputs, suspension } = await buildOverageReconcileData(database, periodStart);
+
+    const creem = new Creem({ apiKey: env.CREEM_API_KEY, ...(env.CREEM_TEST_MODE === "true" ? { server: "test" as const } : {}) });
+    const ledger = createCreemCreditsLedger({
+        client: creem as unknown as CreemCreditsClientLike,
+        resolveAccountId: (organizationId) => Promise.resolve(accounts.get(organizationId) ?? null),
+    });
+
+    await reconcileAllOverages(inputs, overageFleetPorts(database, ledger, Date.now(), suspension));
 };
 
 /**
@@ -568,6 +602,13 @@ export default {
             // Fold AE tenant request counts into the platformUsage ledger (§4)
             // so spend caps / usage views have data. Delta-read; safe to re-run.
             await sweepUsageRollback(env);
+        }
+
+        // Reconcile prepaid-credit overage on the 6-hourly bucket (§4 C3): the
+        // usage rollup above runs on the same tick, so the ledger is current
+        // before we debit. Idempotent via the watermark.
+        if (controller.cron === EVERY_SIX_HOURS) {
+            await sweepOverageReconciliation(env);
         }
 
         // Tenant cron fan-out (§2.4): the every-minute trigger ticks each tenant

@@ -136,6 +136,13 @@ export interface OverageFleetPorts {
     ledger: CreditsLedgerPort;
     /** Balance can't cover the owed delta — suspend via the C1 machinery. */
     onExhausted: (organizationId: string) => Promise<void>;
+    /**
+     * The org's overage is covered this run (debited or nothing owed) — lift any
+     * overage suspension. Self-healing: an org that topped up its balance is
+     * un-suspended on the next reconcile. Optional (a fleet without a suspension
+     * model omits it). Only lifts *overage* suspensions (the wiring checks).
+     */
+    onRecovered?: (organizationId: string) => Promise<void>;
 }
 
 export interface OverageFleetSummary {
@@ -162,10 +169,17 @@ export const reconcileAllOverages = async (organizations: ReadonlyArray<OverageO
                 await ports.advanceWatermark(organization.organizationId, organization.periodStart, organization.alreadyDebitedCredits + outcome.credits);
                 summary.debitedCredits += outcome.credits;
                 summary.debitedOrgs += 1;
+                // eslint-disable-next-line no-await-in-loop -- recovery follows its own org's debit
+                await ports.onRecovered?.(organization.organizationId);
             } else if (outcome.status === "exhausted") {
                 // eslint-disable-next-line no-await-in-loop -- suspension follows its own org's outcome
                 await ports.onExhausted(organization.organizationId);
                 summary.exhausted += 1;
+            } else {
+                // status "none" — nothing owed; the org is in good standing, so
+                // lift any overage suspension left from a prior exhausted period.
+                // eslint-disable-next-line no-await-in-loop -- recovery follows its own org's outcome
+                await ports.onRecovered?.(organization.organizationId);
             }
         } catch {
             // Isolated: a provider blip on one org is retried on the next run
