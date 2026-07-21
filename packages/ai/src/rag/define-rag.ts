@@ -176,6 +176,20 @@ const resolveEmbeddingModel = (input: RagConfig["embeddingModel"], ai: RagContex
  * needs no `env.AI` binding (bind any context carrying just `vectors`).
  * @experimental
  */
+/**
+ * Structural slice of `ctx.trace` (see the server `LunoraTracer`) — enough to
+ * wrap one embed. Declared here rather than imported so `@lunora/ai/rag` takes
+ * no dependency on `@lunora/server`; the real tracer is assignable to it.
+ */
+type EmbedTracer = <T>(name: string, function_: () => Promise<T> | T, attributes?: Record<string, unknown>) => Promise<T>;
+
+/** Read an AI SDK model's stable id for the `gen_ai.request.model` attribute, defensively. */
+const modelIdOf = (model: EmbeddingModel): string | undefined => {
+    const id = (model as { modelId?: unknown }).modelId;
+
+    return typeof id === "string" && id.length > 0 ? id : undefined;
+};
+
 const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     if (typeof config.index !== "string" || config.index.length === 0) {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `index` must be a non-empty Vectorize index name");
@@ -229,12 +243,34 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         // drift onto different models within one request.
         let model: EmbeddingModel | undefined;
 
+        // A `ctx.trace` on the bound context (present on a real ActionCtx) turns
+        // each embed into a `generation` span; absent (a test / hand-built ctx),
+        // embeds run untraced. Narrowed from `unknown` — see `RagContext.trace`.
+        const tracer = typeof context.trace === "function" ? (context.trace as EmbedTracer) : undefined;
+
         const embedText = async (text: string): Promise<ReadonlyArray<number>> => {
             model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
 
-            const { embedding } = await aiEmbed({ model, value: text });
+            const run = async (): Promise<ReadonlyArray<number>> => {
+                const { embedding } = await aiEmbed({ model: model as EmbeddingModel, value: text });
 
-            return embedding;
+                return embedding;
+            };
+
+            if (tracer === undefined) {
+                return run();
+            }
+
+            // Token usage lands only after the call, but `ctx.trace` captures
+            // attributes at span start — so the span carries the model id (known
+            // up front); token/cost belong on the model-call spans the agent's
+            // OTLP telemetry emits, not on a cheap embed.
+            const modelId = modelIdOf(model);
+
+            return tracer("ai.embed", run, {
+                "gen_ai.operation.name": "embeddings",
+                ...(modelId === undefined ? {} : { "gen_ai.request.model": modelId }),
+            });
         };
 
         const checkNamespace = (namespace: string | undefined): void => {
