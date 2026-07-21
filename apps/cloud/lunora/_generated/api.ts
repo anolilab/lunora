@@ -83,6 +83,7 @@ export interface ApiTypes {
     logs: {
         ingest: FunctionReference<"mutation", { deployKey: string; lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }, { ingested: number; }>;
         list: FunctionReference<"query", { afterCreatedAt?: number; functionPath?: string; levels?: Array<unknown>; limit?: number; organizationId: Id<"organizations">; scriptName: string; search?: string; traceId?: string }, { createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
+        listTraces: FunctionReference<"query", { limit?: number; organizationId: Id<"organizations">; scriptName: string }, { endedAt: number; functionPath?: string; hasError: boolean; lineCount: number; maxLevel: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; startedAt: number; traceId: string }[]>;
     };
     members: {
         add: FunctionReference<"mutation", { organizationId: Id<"organizations">; userId: string }, Id<"members">>;

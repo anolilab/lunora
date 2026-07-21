@@ -574,3 +574,27 @@ button.link.danger {
     font-size: 11px;
     padding: 8px 14px;
 }
+
+/* Traces tab — clickable trace rows + the drill-in timeline. Reuses `.table`,
+   `.log-badge-*`, `.log-fn`, `.log-view`, and `.muted`. */
+.trace-clickable {
+    cursor: pointer;
+}
+
+.trace-clickable:hover td {
+    background: var(--surface-2);
+}
+
+.table tr.active td {
+    background: var(--surface-2);
+}
+
+.trace-error td:first-child {
+    box-shadow: inset 2px 0 0 var(--danger);
+}
+
+.trace-id,
+.trace-span-id {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--muted);
+}

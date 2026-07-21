@@ -166,9 +166,14 @@ upgraded to consume them:**
   index for tailing and a `(org, traceId)` index for log↔trace correlation.
 - **Query.** `logs.list` gained server-side filters — `levels`, `functionPath`,
   `traceId`, free-text `search` (message / function / field values), a cursor,
-  and a bounded `limit` — returning newest-first.
-- **UI.** the studio Logs tab renders severity chips (filter), a search box,
-  structured fields, and a short trace id per line.
+  and a bounded `limit` — returning newest-first. `logs.listTraces` folds the
+  recent lines by `traceId` (`src/telemetry/traces.ts`, pure + unit-tested) into
+  per-trace summaries (root function, time span, line count, peak severity).
+- **UI.** the Logs tab renders severity chips (filter), a search box, structured
+  fields, and a short trace id per line. A **Traces tab** lists recent dispatch
+  traces (newest-active first, red when a line erred) and drills each one into
+  its timeline — every line in the trace, ordered, with the offset from the trace
+  start (reusing `logs.list` filtered to the `traceId`).
 
 **Still 🌐 (needs live infra):** the provisioner setting
 `tail_consumers: [{ service: "lunora-log-tail" }]` on each tenant script (or the
@@ -176,7 +181,10 @@ namespace) at deploy time, and an end-to-end run against a live dispatch
 namespace. D1 is fine at launch volume; the ingest seam still lets us re-point to
 Analytics Engine / R2 later without touching consumers. Correlating an
 `error`/`fatal` log line to the OTLP-derived Issue by `traceId` (the telemetry
-path doesn't carry `traceId` yet) is the natural follow-up.
+path doesn't carry `traceId` yet) is the natural follow-up. The Traces tab is a
+**log-reconstructed** timeline (no span durations): the OTLP ingest keeps only
+error spans (→ Issues), so a true span-duration **waterfall** would need a
+separate span store — deferred until the log-derived view proves insufficient.
 
 ### B3. Debug header (✅ shipped)
 

@@ -113,6 +113,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "logs:ingest": lunora_logs_13.ingest as unknown as RegisteredLunoraFunction,
     "logs:ingestInternal": lunora_logs_13.ingestInternal as unknown as RegisteredLunoraFunction,
     "logs:list": lunora_logs_13.list as unknown as RegisteredLunoraFunction,
+    "logs:listTraces": lunora_logs_13.listTraces as unknown as RegisteredLunoraFunction,
     "logs:orgForScript": lunora_logs_13.orgForScript as unknown as RegisteredLunoraFunction,
     "logs:prune": lunora_logs_13.prune as unknown as RegisteredLunoraFunction,
     "members:add": lunora_members_14.add as unknown as RegisteredLunoraFunction,
@@ -486,6 +487,19 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
+installCompiledValidatorMap(lunora_logs_13.listTraces.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["limit"] !== undefined) {
+if (typeof source["limit"] !== "number" || !Number.isFinite(source["limit"])) return DEFER;
+__val1 = source["limit"];
+__has1 = true;
+}
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["scriptName"] !== "string") return DEFER;
+return { ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"], "scriptName": source["scriptName"] };
+});
 installCompiledValidatorMap(lunora_logs_13.orgForScript.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["scriptName"] !== "string") return DEFER;
@@ -786,6 +800,7 @@ export interface Caller {
         ingest: (args: { deployKey: string; lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ ingested: number; }>;
         ingestInternal: (args: { lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ ingested: number; }>;
         list: (args: { afterCreatedAt?: number; functionPath?: string; levels?: Array<unknown>; limit?: number; organizationId: Id<"organizations">; scriptName: string; search?: string; traceId?: string }) => Promise<{ createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
+        listTraces: (args: { limit?: number; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ endedAt: number; functionPath?: string; hasError: boolean; lineCount: number; maxLevel: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; startedAt: number; traceId: string }[]>;
         orgForScript: (args: { scriptName: string }) => Promise<{ organizationId: Id<"organizations">; } | null>;
         prune: (args?: {}) => Promise<{ pruned: number; }>;
     };
@@ -937,6 +952,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         ingest: (args) => callRegistered(context, "logs:ingest", args),
         ingestInternal: (args) => callRegistered(context, "logs:ingestInternal", args),
         list: (args) => callRegistered(context, "logs:list", args),
+        listTraces: (args) => callRegistered(context, "logs:listTraces", args),
         orgForScript: (args) => callRegistered(context, "logs:orgForScript", args),
         prune: (args) => callRegistered(context, "logs:prune", args),
     },

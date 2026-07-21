@@ -17,6 +17,7 @@ import { LogsSection } from "./LogsSection";
 import { MembersSection } from "./MembersSection";
 import { ProjectsSection } from "./ProjectsSection";
 import { SecretsSection } from "./SecretsSection";
+import { TracesSection } from "./TracesSection";
 import type { OrgId } from "./types";
 import { UptimeSection } from "./UptimeSection";
 import { UsageSection } from "./UsageSection";
@@ -42,6 +43,7 @@ type Tab =
     | "members"
     | "projects"
     | "secrets"
+    | "traces"
     | "uptime"
     | "usage";
 
@@ -53,6 +55,7 @@ const TABS: { id: Tab; label: string }[] = [
     { id: "domains", label: "Domains" },
     { id: "builds", label: "Builds" },
     { id: "logs", label: "Logs" },
+    { id: "traces", label: "Traces" },
     { id: "issues", label: "Issues" },
     { id: "incidents", label: "Incidents" },
     { id: "uptime", label: "Uptime" },
@@ -78,6 +81,7 @@ const SECTIONS: Record<Tab, (props: { organizationId: OrgId }) => ReactElement> 
     members: MembersSection,
     projects: ProjectsSection,
     secrets: SecretsSection,
+    traces: TracesSection,
     uptime: UptimeSection,
     usage: UsageSection,
 };
