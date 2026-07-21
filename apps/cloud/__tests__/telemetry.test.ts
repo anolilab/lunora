@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { crossesThreshold, isSafeWebhookUrl, renderAlert } from "../src/telemetry/alerts";
 import type { OtlpTracePayload } from "../src/telemetry/otlp";
 import { decodeLogRecords, decodeMetricPoints, decodeObservations, decodeTelemetryEvents } from "../src/telemetry/otlp";
-import { createCloudflareTelemetryStore } from "../src/telemetry/store";
+import { createCloudflareTelemetryStore, spanArchiveRecord } from "../src/telemetry/store";
 import { buildTriagePrompt, MAX_ISSUES } from "../src/telemetry/triage";
 
 /** Build an OTLP `KeyValue[]` from a flat string map. */
@@ -471,5 +471,44 @@ describe(decodeMetricPoints, () => {
 
     it("skips a data point with no numeric value", () => {
         expect(decodeMetricPoints({ resourceMetrics: [{ scopeMetrics: [{ metrics: [{ gauge: { dataPoints: [{}] }, name: "x" }] }] }] })).toHaveLength(0);
+    });
+});
+
+describe(spanArchiveRecord, () => {
+    it("tags the record with recordType + organizationId for the shared archive table", () => {
+        expect(
+            spanArchiveRecord(
+                { durationMs: 5, endedAt: 105, kind: "worker", level: "info", name: "a:b", spanId: "s1", startedAt: 100, traceId: "t1" },
+                "org_9",
+            ),
+        ).toMatchObject({ durationMs: 5, kind: "worker", name: "a:b", organizationId: "org_9", recordType: "span", spanId: "s1", traceId: "t1" });
+    });
+});
+
+describe("TelemetryStore.archiveSpans", () => {
+    it("no-ops without a pipeline binding", async () => {
+        await expect(
+            createCloudflareTelemetryStore({}).archiveSpans(
+                [{ durationMs: 1, endedAt: 2, kind: "worker", level: "info", name: "a", spanId: "s", startedAt: 1, traceId: "t" }],
+                "org_1",
+            ),
+        ).resolves.toBeUndefined();
+    });
+
+    it("sends tagged span records through the pipeline binding", async () => {
+        const batches: Record<string, unknown>[][] = [];
+        const TELEMETRY_PIPELINE = {
+            send: async (records: Record<string, unknown>[]) => {
+                batches.push(records);
+            },
+        } as unknown as Parameters<typeof createCloudflareTelemetryStore>[0]["TELEMETRY_PIPELINE"];
+
+        await createCloudflareTelemetryStore({ TELEMETRY_PIPELINE }).archiveSpans(
+            [{ durationMs: 1, endedAt: 2, kind: "generation", level: "info", model: "m", name: "chat", spanId: "s", startedAt: 1, traceId: "t" }],
+            "org_1",
+        );
+
+        expect(batches).toHaveLength(1);
+        expect(batches[0]?.[0]).toMatchObject({ kind: "generation", model: "m", organizationId: "org_1", recordType: "span" });
     });
 });

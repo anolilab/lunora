@@ -17,7 +17,7 @@ import { createAnalytics } from "@lunora/bindings/analytics";
 import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { createPipelines } from "@lunora/bindings/pipelines";
 
-import type { MetricPoint, TelemetryEvent } from "./otlp";
+import type { MetricPoint, SpanObservation, TelemetryEvent } from "./otlp";
 
 /** Per-ingest counts, recorded as one metric point for dashboards/alerts. */
 export interface TelemetryCounts {
@@ -33,11 +33,25 @@ const MAX_METRIC_WRITES = 500;
 export interface TelemetryStore {
     /** Archive the raw decoded events (Pipeline → R2). No-op without the binding. */
     archiveEvents: (events: ReadonlyArray<TelemetryEvent>) => Promise<void>;
+    /**
+     * Tier spans to the columnar archive (Pipeline → R2/Iceberg), so the Traces
+     * store scales past D1's hot 48 h window — read back with R2 SQL (an action,
+     * 🌐). No-op without the binding. Each record is tagged `recordType: "span"`
+     * and carries its `organizationId` so the archive is one queryable table.
+     */
+    archiveSpans: (observations: ReadonlyArray<SpanObservation>, organizationId: string) => Promise<void>;
     /** Record one ingest's issue/incident counts as an AE data point. */
     recordCounts: (counts: TelemetryCounts) => void;
     /** Write each `ctx.metrics.*` measurement to AE (`/v1/metrics`). No-op without the binding. */
     recordMetrics: (points: ReadonlyArray<MetricPoint>, organizationId: string) => void;
 }
+
+/** Map a span observation to its flat archive record (the R2/Iceberg row shape). */
+export const spanArchiveRecord = (observation: SpanObservation, organizationId: string): Record<string, unknown> => ({
+    ...observation,
+    organizationId,
+    recordType: "span",
+});
 
 /** The telemetry bindings the store reads off the worker env (all optional). */
 export interface TelemetryStoreEnv {
@@ -60,6 +74,13 @@ export const createCloudflareTelemetryStore = (env: TelemetryStoreEnv): Telemetr
 
             // TelemetryEvent is a fixed-shape record; the Pipeline stream stores it as JSON.
             await createPipelines({ binding: env.TELEMETRY_PIPELINE }).send(events as unknown as Record<string, unknown>[]);
+        },
+        archiveSpans: async (observations, organizationId) => {
+            if (!env.TELEMETRY_PIPELINE || observations.length === 0) {
+                return;
+            }
+
+            await createPipelines({ binding: env.TELEMETRY_PIPELINE }).send(observations.map((observation) => spanArchiveRecord(observation, organizationId)));
         },
         recordCounts: (counts) => {
             if (!env.TELEMETRY) {

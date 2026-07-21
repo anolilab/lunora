@@ -573,6 +573,8 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
 
         store.recordCounts({ incidents: result.incidents, issues: result.issues, organizationId: body.organizationId });
         await store.archiveEvents(events).catch(() => undefined);
+        // Tier every span to the columnar archive (scales past D1's hot window).
+        await store.archiveSpans(observations, body.organizationId ?? "").catch(() => undefined);
 
         // Deliver any alerts the ingest fired (best-effort), then stamp them delivered.
         if (result.alerts.length > 0) {
@@ -711,6 +713,11 @@ const handleOtlpTracesRoute = async (request: Request, environment: RouterEnv): 
     } catch (error) {
         return jsonError(500, error instanceof Error ? error.message : "ingest failed");
     }
+
+    // Tier the spans to the columnar archive (fire-and-forget; scales past D1).
+    await createCloudflareTelemetryStore(environment)
+        .archiveSpans(observations, org.organizationId)
+        .catch(() => undefined);
 
     return otlpAccepted(decoded.length - observations.length, "rejectedSpans");
 };
