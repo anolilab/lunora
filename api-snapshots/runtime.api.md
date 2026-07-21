@@ -1891,6 +1891,12 @@ const otlpSink: (options: OtlpSinkOptions) => ObservabilitySink;
 const pipelineLogSink: (options: PipelineLogSinkOptions) => ObservabilitySink;
 ```
 
+### `resolveLogArchiveFromEnv` (const)
+
+```ts
+const resolveLogArchiveFromEnv: (environment: unknown) => LogArchiveConfig | undefined;
+```
+
 ### `resolveLunoraOptions` (const)
 
 ```ts

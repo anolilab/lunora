@@ -174,10 +174,21 @@ so deep pages stay cheap over Iceberg. Filters (`sinceTs`/`untilTs`, `level`,
 `minLevel`, `functionPathPrefix`, `traceId`, `shardKey`, `userId`) are all
 inlined as escaped SQL literals — user values can never inject.
 
-**…or from the Studio.** Pass the same table config to your worker as
-`logArchive`, and the Studio **Logs → Archive** feed reads it back through an
-admin-gated route (the worker holds the R2 SQL credentials and runs the reader —
-the token never reaches the browser):
+**…or from the Studio.** The Studio **Logs → Archive** feed reads the archive back
+through an admin-gated route (the worker holds the R2 SQL credentials and runs the
+reader — the token never reaches the browser).
+
+For a **Vite-first / scaffolded** app there's nothing to wire in code: the
+generated worker entry already calls `createWorker({ logArchive: … })` for you,
+resolved from env. Set one more variable alongside the `R2_SQL_*` credentials:
+
+- `LUNORA_LOG_ARCHIVE_TABLE` — the Data Catalog table (e.g. `logs`)
+- `LUNORA_LOG_ARCHIVE_NAMESPACE` — the Iceberg namespace, optional (e.g. `default`)
+
+That's the opt-in — with the table unset, the Archive feed stays "not configured".
+
+For a **hand-written worker** (or to pass a `columnMap`), set `logArchive` on
+`createWorker` directly:
 
 ```ts
 import { createWorker } from "@lunora/runtime";
