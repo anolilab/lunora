@@ -147,6 +147,39 @@ describe(runUptimeSweep, () => {
         expect(insert).not.toHaveBeenCalledWith("uptimeState", expect.anything());
     });
 
+    it("skips an SSRF-unsafe deployment URL — never probes or records it", async () => {
+        const probe = vi.fn(() => Promise.resolve({ latencyMs: 1, ok: false }));
+        const insert = vi.fn((table: string) => Promise.resolve(`${table}_id`));
+        const database = fakeDb(
+            {
+                alertRules: [
+                    {
+                        _id: "r1",
+                        channel: "webhook",
+                        destination: "https://hook.example",
+                        enabled: true,
+                        name: "prod",
+                        organizationId: "org1",
+                        target: "uptime",
+                        threshold: 1,
+                    },
+                ],
+                // A private/loopback host a low-privilege member could set — must not be probed.
+                deployments: [{ _id: "dep1", organizationId: "org1", status: "live", url: "http://169.254.169.254/latest/meta-data" }],
+                uptimeState: [],
+            },
+            { insert },
+        );
+
+        const result = await runUptimeSweep(database, { fetch: globalThis.fetch, now: 1000, probe });
+
+        expect(result.skippedUnsafe).toBe(1);
+        expect(result.probed).toBe(0);
+        expect(probe).not.toHaveBeenCalled();
+        expect(insert).not.toHaveBeenCalled();
+        expect(result.deliveries).toStrictEqual([]);
+    });
+
     it("skips deployments without a URL and never fires for a disabled rule", async () => {
         const database = fakeDb({
             alertRules: [

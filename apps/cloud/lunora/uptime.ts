@@ -21,6 +21,14 @@ const RECENT_LIMIT = 120;
 /** Keep two weeks of probe history; older rows are pruned. */
 const CHECK_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 
+/**
+ * Oldest rows scanned per prune run. `uptimeChecks` is the fastest-growing table
+ * here (deployments × probes/day), so — with no range-`where` in the D1 ctx-db —
+ * the prune reads a bounded oldest-first page instead of the whole table, keeping
+ * a run's memory bounded; successive 6-hourly runs chip through any backlog.
+ */
+const PRUNE_SCAN_LIMIT = 2000;
+
 interface UptimeStateRow {
     consecutiveFailures: number;
     deploymentId: Id<"deployments">;
@@ -102,7 +110,9 @@ export const recent = query
 /** Prune probe rows past the retention window so the time series stays bounded. */
 export const prune = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const cutoff = Date.now() - CHECK_RETENTION_MS;
-    const { page } = await context.db.uptimeChecks.findMany({});
+    // Oldest-first, bounded: the stale rows (if any) sort to the front, so this page
+    // holds them without materializing the whole table.
+    const { page } = await context.db.uptimeChecks.findMany({ limit: PRUNE_SCAN_LIMIT, orderBy: [{ createdAt: "asc" }] });
     const stale = (page as unknown as UptimeCheckRow[]).filter((row) => row.createdAt < cutoff);
 
     for (const row of stale) {

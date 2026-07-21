@@ -322,14 +322,19 @@ const sweepUptime = async (env: Env): Promise<void> => {
 
     // Deliver each fired alert and stamp its row with the true outcome — a thrown
     // `deliverAlert` (transport failure / SSRF re-rejection) marks the row `failed`.
+    // `deliveredAt` is stamped only on success (an undelivered alert has no delivery
+    // time), unlike the deploy-key `markDelivered` path which only ever records
+    // `delivered`; the sweep runs in a trusted system context, so it patches directly.
     await Promise.all(
         deliveries.map(async (delivery) => {
-            const status = await deliverAlert(environmentRecord, delivery).then(
-                () => "delivered" as const,
-                () => "failed" as const,
+            const delivered = await deliverAlert(environmentRecord, delivery).then(
+                () => true,
+                () => false,
             );
 
-            await database.patch(delivery.id, { deliveredAt: now, status, updatedAt: now }, "alerts").catch(() => undefined);
+            await database
+                .patch(delivery.id, { ...(delivered ? { deliveredAt: now } : {}), status: delivered ? "delivered" : "failed", updatedAt: now }, "alerts")
+                .catch(() => undefined);
         }),
     );
 };
