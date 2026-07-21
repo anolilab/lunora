@@ -1,7 +1,8 @@
 import { fingerprintError } from "@lunora/fingerprint";
 import { LunoraError } from "@lunora/server";
 
-import { crossesThreshold, renderAlert } from "../src/telemetry/alerts";
+import type { AlertDelivery as AlertDeliveryBase, FiringRule } from "../src/telemetry/alerts";
+import { fireCrossedRules } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { mutation, v } from "./_generated/server.js";
@@ -63,14 +64,8 @@ interface AlertRuleRow {
     threshold: number;
 }
 
-/** A fired alert the router should deliver (email/webhook) then mark delivered. */
-export interface AlertDelivery {
-    body: string;
-    channel: "email" | "webhook";
-    destination: string;
-    id: Id<"alerts">;
-    subject: string;
-}
+/** A fired alert the router should deliver (email/webhook) then mark delivered — the shared shape at this store's branded id. */
+export type AlertDelivery = AlertDeliveryBase<Id<"alerts">>;
 
 /** A batch group: all events sharing one fingerprint hash, pre-aggregated. */
 interface EventGroup {
@@ -230,43 +225,32 @@ export const ingest = mutation
 
             const now = Date.now();
             const { page: rulePage } = await context.db.alertRules.findMany({ where: { organizationId: args.organizationId } });
-            const rules = (rulePage as unknown as AlertRuleRow[]).filter((rule) => rule.enabled);
+            const rules: FiringRule[] = (rulePage as unknown as AlertRuleRow[])
+                .filter((rule) => rule.enabled)
+                .map((rule) => ({
+                    channel: rule.channel,
+                    destination: rule.destination,
+                    name: rule.name,
+                    ruleId: rule._id,
+                    target: rule.target,
+                    threshold: rule.threshold,
+                }));
             const firedAlerts: AlertDelivery[] = [];
 
-            // Fire every enabled rule that this source's count just crossed. Inserts a
-            // `firing` alert row (pure DB) and queues its delivery for the edge.
+            // The typed ctx.db insert, adapted to the shared firing loop's structural
+            // row (cast is the same idiom the rulePage read above uses).
+            const insertAlert = (row: Record<string, unknown>): Promise<Id<"alerts">> => context.db.insert("alerts", row as never);
+
+            // Fire every enabled rule this source's count just crossed, via the shared
+            // `fireCrossedRules` — the same firing loop + `alerts` row shape the uptime
+            // sweep uses, so the two paths can't drift.
             const evaluateRules = async (
                 target: "incident" | "issue",
                 source: { after: number; before: number; culprit: string; hash: string; sampleMessage: string; title: string },
             ): Promise<void> => {
-                for (const rule of rules) {
-                    if (rule.target !== target || !crossesThreshold(source.before, source.after, rule.threshold)) {
-                        continue;
-                    }
+                const fired = await fireCrossedRules(rules, { ...source, organizationId: args.organizationId, target }, insertAlert, now);
 
-                    const rendered = renderAlert(rule, {
-                        count: source.after,
-                        culprit: source.culprit,
-                        sampleMessage: source.sampleMessage,
-                        title: source.title,
-                    });
-                    // eslint-disable-next-line no-await-in-loop -- one insert per fired rule; small, serialized
-                    const id = await context.db.insert("alerts", {
-                        body: rendered.body,
-                        channel: rule.channel,
-                        createdAt: now,
-                        destination: rule.destination,
-                        hash: source.hash,
-                        organizationId: args.organizationId,
-                        ruleId: rule._id,
-                        status: "firing",
-                        subject: rendered.subject,
-                        target,
-                        updatedAt: now,
-                    });
-
-                    firedAlerts.push({ body: rendered.body, channel: rule.channel, destination: rule.destination, id, subject: rendered.subject });
-                }
+                firedAlerts.push(...fired);
             };
 
             const groups = groupEvents(args.events);

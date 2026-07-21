@@ -45,6 +45,90 @@ export const renderAlert = (rule: { name: string; target: AlertTarget }, source:
     };
 };
 
+/**
+ * A fired alert to deliver (email/webhook) then mark delivered. `TId` is the
+ * alert-row id — a branded `Id<"alerts">` when fired from the lunora `ctx.db`
+ * (telemetry ingest), a plain `string` from the structural control-plane store
+ * (the uptime sweep) — so both firing paths share one type without either
+ * widening its id.
+ */
+export interface AlertDelivery<TId extends string = string> {
+    body: string;
+    channel: "email" | "webhook";
+    destination: string;
+    id: TId;
+    subject: string;
+}
+
+/** An enabled rule the firing loop evaluates. `ruleId` is the alertRules row id (any string id form). */
+export interface FiringRule {
+    channel: "email" | "webhook";
+    destination: string;
+    name: string;
+    ruleId: string;
+    target: AlertTarget;
+    threshold: number;
+}
+
+/** The tripping source (issue/incident/uptime) a batch of rules is evaluated against. */
+export interface FiringSource {
+    after: number;
+    before: number;
+    culprit: string;
+    hash: string;
+    organizationId: string;
+    sampleMessage: string;
+    target: AlertTarget;
+    title: string;
+}
+
+/**
+ * Fire every enabled rule whose target matches this source and whose threshold the
+ * source's count just crossed: render the notification, insert a `firing` alert
+ * row via the caller's `insertAlert`, and return the deliveries the edge should
+ * send. The single source of truth for the firing decision + the `alerts` row
+ * shape, shared by `lunora/telemetry.ts`'s ingest (issue/incident) and
+ * `src/uptime/sweep.ts` (uptime) so the two paths can't drift.
+ *
+ * `insertAlert` is injected because the two callers write through different
+ * stores — the typed lunora `ctx.db` (branded ids) vs the structural
+ * `ControlPlaneDb` (string ids) — so the id type flows through as `TId`.
+ */
+export const fireCrossedRules = async <TId extends string>(
+    rules: readonly FiringRule[],
+    source: FiringSource,
+    insertAlert: (row: Record<string, unknown>) => Promise<TId>,
+    now: number,
+): Promise<AlertDelivery<TId>[]> => {
+    const deliveries: AlertDelivery<TId>[] = [];
+
+    for (const rule of rules) {
+        if (rule.target !== source.target || !crossesThreshold(source.before, source.after, rule.threshold)) {
+            continue;
+        }
+
+        const rendered = renderAlert(rule, { count: source.after, culprit: source.culprit, sampleMessage: source.sampleMessage, title: source.title });
+        // eslint-disable-next-line no-await-in-loop -- one insert per fired rule; small, serialized
+        const id = await insertAlert({
+            body: rendered.body,
+            channel: rule.channel,
+            createdAt: now,
+            destination: rule.destination,
+            hash: source.hash,
+            organizationId: source.organizationId,
+            ruleId: rule.ruleId,
+            status: "firing",
+            subject: rendered.subject,
+            target: rule.target,
+            updatedAt: now,
+        });
+
+        deliveries.push({ body: rendered.body, channel: rule.channel, destination: rule.destination, id, subject: rendered.subject });
+    }
+
+    return deliveries;
+};
+
 /** An IPv4 octet's digit shape (numeric range is checked separately). */
 const IPV4_OCTET = /^\d{1,3}$/;
 
