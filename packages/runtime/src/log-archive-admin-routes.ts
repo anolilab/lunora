@@ -44,6 +44,40 @@ interface LogArchiveConfig {
     table: string;
 }
 
+/** Env var naming the R2 Data Catalog table the archive reads — the operator opt-in for the studio Archive feed. */
+const LOG_ARCHIVE_TABLE_ENV = "LUNORA_LOG_ARCHIVE_TABLE";
+
+/** Env var naming the Iceberg namespace (optional; omit when the table already carries it). */
+const LOG_ARCHIVE_NAMESPACE_ENV = "LUNORA_LOG_ARCHIVE_NAMESPACE";
+
+/**
+ * Build the {@link LogArchiveConfig} from `env` for the generated worker entry —
+ * the zero-config seam the codegen `createWorker({ logArchive })` wiring uses,
+ * mirroring how the R2 SQL *credentials* already come from `env` (`R2_SQL_*`).
+ *
+ * Returns `undefined` unless `LUNORA_LOG_ARCHIVE_TABLE` is set, so the studio
+ * Archive feed stays "not configured" until the operator opts in by naming the
+ * Data Catalog table (+ optional `LUNORA_LOG_ARCHIVE_NAMESPACE`). `columnMap`
+ * overrides aren't env-expressible — a hand-written worker passes `logArchive`
+ * to `createWorker` directly for those.
+ */
+const resolveLogArchiveFromEnv = (environment: unknown): LogArchiveConfig | undefined => {
+    if (typeof environment !== "object" || environment === null) {
+        return undefined;
+    }
+
+    const record = environment as Record<string, unknown>;
+    const table = record[LOG_ARCHIVE_TABLE_ENV];
+
+    if (typeof table !== "string" || table === "") {
+        return undefined;
+    }
+
+    const namespace = record[LOG_ARCHIVE_NAMESPACE_ENV];
+
+    return { table, ...(typeof namespace === "string" && namespace !== "" ? { namespace } : {}) };
+};
+
 /** The subset of worker `env` this route reads — the R2 SQL REST credentials. */
 interface LogArchiveEnvironment {
     /** Fallback account id, honoured when `R2_SQL_ACCOUNT_ID` is unset (matches `ctx.r2sql`). */
@@ -221,7 +255,7 @@ const buildLogArchiveAdminRoutes = (deps: LogArchiveAdminRouteDeps): Record<stri
 };
 
 export type { LogArchiveAdminRouteDeps, LogArchiveConfig };
-export { buildLogArchiveAdminRoutes, LOG_ARCHIVE_PATH };
+export { buildLogArchiveAdminRoutes, LOG_ARCHIVE_PATH, resolveLogArchiveFromEnv };
 // Re-exported from its source (also imported above for local use); keeps the
 // runtime's public surface (`@lunora/runtime`) stable now the constant lives in `shared/`.
 export { LOG_ARCHIVE_NOT_CONFIGURED } from "../../../shared/log-archive";

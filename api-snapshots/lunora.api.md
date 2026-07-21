@@ -3993,6 +3993,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `resolveLogArchiveFromEnv` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `resolveLunoraOptions` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.

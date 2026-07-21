@@ -178,6 +178,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
     const runtimeValueImports = [
         ...(hasGlobal || hasHyperdriveGlobal ? ["createCrossShardRelationCapabilities"] : []),
         "createWorker",
+        "resolveLogArchiveFromEnv",
         ...(hasFramework ? ["withFrameworkWorker"] : []),
     ].join(", ");
 
@@ -551,6 +552,11 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
     // with no manual `createKvIntrospector` call. A deployment with no KV binding
     // yields an empty namespace list rather than crashing.
     ...(options.hasKv ? [`        options.kvIntrospector = createKvIntrospectorFromEnv(env);`] : []),
+    // The studio's Logs → Archive feed is wired zero-config: when the operator sets
+    // `LUNORA_LOG_ARCHIVE_TABLE` (the R2 Data Catalog table `pipelineLogSink` writes
+    // to), the durable archive becomes readable; unset ⇒ `undefined` ⇒ the feed
+    // reports "not configured". The R2 SQL credentials come from `R2_SQL_*` env vars.
+    `        options.logArchive = resolveLogArchiveFromEnv(env);`,
     ...(options.hasAuth
         ? [
               `        if (this.authDeclaration) {
