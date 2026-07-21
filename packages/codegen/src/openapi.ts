@@ -1,6 +1,7 @@
 import type { JsonSchema } from "@lunora/values";
 
-import { restPathForFunction } from "../../../shared/rest-surface";
+import type { RestFunctionKind } from "../../../shared/rest-surface";
+import { restMethodForKind, restPathForFunction } from "../../../shared/rest-surface";
 import { GENERATED_HEADER } from "./emit";
 import type { FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
 import sanitizeNamespace from "./paths";
@@ -167,7 +168,7 @@ const rpcOperation = (definition: FunctionIR): { operation: Record<string, unkno
     };
 
     return { operation, pathKey: `/_lunora/rpc#${functionPath}` };
-}
+};
 
 /**
  * Build the OpenAPI operation for one `.expose({ rest: true })` procedure (plan
@@ -186,7 +187,11 @@ const restOperation = (definition: FunctionIR): { method: "get" | "post"; operat
     }
 
     const tag = sanitizeNamespace(definition.filePath);
-    const isQuery = definition.kind === "query";
+    // Single-source the transport method from the shared REST-surface contract (the
+    // same mapping the runtime router derives), so the spec cannot drift on method.
+    // `stream` is already filtered upstream, so the narrowing cast is safe here.
+    const method = restMethodForKind(definition.kind as RestFunctionKind);
+    const isQuery = method === "GET";
 
     const operation: Record<string, unknown> = {
         description: `Public REST endpoint for the \`${definition.kind}\` \`${functionPath}\` (opt-in via \`.expose({ rest: true })\`). Routed through the procedure, so auth / RLS / validators are enforced.`,
@@ -202,7 +207,7 @@ const restOperation = (definition: FunctionIR): { method: "get" | "post"; operat
             },
             default: { $ref: ERROR_COMPONENT_REF },
         },
-        summary: `${isQuery ? "GET" : "POST"} ${path}`,
+        summary: `${method} ${path}`,
         tags: [tag],
         "x-lunora-function-kind": definition.kind,
     };
@@ -234,7 +239,7 @@ const restOperation = (definition: FunctionIR): { method: "get" | "post"; operat
     };
 
     return { method: "post", operation, path };
-};;
+};
 
 /** Inputs the OpenAPI emitter needs from a codegen run. */
 interface OpenApiEmitInput {
