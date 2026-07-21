@@ -24,6 +24,7 @@
 import { HealthCheck } from "@visulima/health-check";
 
 import { LunoraError } from "./errors";
+import { methodGuard } from "./method-guard";
 
 const HEALTH_PATH = "/_lunora/health";
 const HEALTH_READY_PATH = "/_lunora/health/ready";
@@ -224,8 +225,10 @@ const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Requ
     };
 
     const respond = async (request: Request, env: unknown, probeKind: "aggregate" | "readiness"): Promise<Response> => {
-        if (request.method !== "GET" && request.method !== "HEAD") {
-            return new Response(undefined, { headers: { allow: "GET, HEAD" }, status: 405 });
+        const wrongMethod = methodGuard(request, ["GET", "HEAD"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
         gate(request);
@@ -254,40 +257,48 @@ const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Requ
  * an unknown path) proves the DO answered; only a thrown error means the object
  * is unreachable. Never inspects the response body, so it cannot leak state.
  */
-const durableObjectProbe = (name: string, namespace: { get: (id: unknown) => { fetch: (request: Request) => Promise<Response> }; idFromName: (id: string) => unknown; }, shardKey: string): HealthProbe => {return {
-    check: async () => {
-        try {
-            const stub = namespace.get(namespace.idFromName(shardKey));
+const durableObjectProbe = (
+    name: string,
+    namespace: { get: (id: unknown) => { fetch: (request: Request) => Promise<Response> }; idFromName: (id: string) => unknown },
+    shardKey: string,
+): HealthProbe => {
+    return {
+        check: async () => {
+            try {
+                const stub = namespace.get(namespace.idFromName(shardKey));
 
-            await stub.fetch(new Request("https://shard.internal/_lunora/status", { method: "GET" }));
+                await stub.fetch(new Request("https://shard.internal/_lunora/status", { method: "GET" }));
 
-            return { healthy: true };
-        } catch {
-            return { healthy: false, message: "durable object unreachable" };
-        }
-    },
-    critical: true,
-    name,
-}};
+                return { healthy: true };
+            } catch {
+                return { healthy: false, message: "durable object unreachable" };
+            }
+        },
+        critical: true,
+        name,
+    };
+};
 
 /**
  * Active probe of a D1 database: run `SELECT 1`. Healthy when it resolves. The
  * binding is passed structurally (only `.prepare().first()` is used) so the
  * runtime stays free of a hard `@cloudflare/workers-types` dependency.
  */
-const d1Probe = (name: string, database: { prepare: (sql: string) => { first: () => Promise<unknown> } }): HealthProbe => {return {
-    check: async () => {
-        try {
-            await database.prepare("SELECT 1").first();
+const d1Probe = (name: string, database: { prepare: (sql: string) => { first: () => Promise<unknown> } }): HealthProbe => {
+    return {
+        check: async () => {
+            try {
+                await database.prepare("SELECT 1").first();
 
-            return { healthy: true };
-        } catch {
-            return { healthy: false, message: "d1 query failed" };
-        }
-    },
-    critical: true,
-    name,
-}};
+                return { healthy: true };
+            } catch {
+                return { healthy: false, message: "d1 query failed" };
+            }
+        },
+        critical: true,
+        name,
+    };
+};
 
 /**
  * Presence check for a binding whose remote health cannot be probed cheaply (R2,
@@ -295,11 +306,13 @@ const d1Probe = (name: string, database: { prepare: (sql: string) => { first: ()
  * NOT perform a billable remote op. Non-critical by default: a presence gap
  * degrades the status without forcing a `503`.
  */
-const presenceProbe = (name: string, bound: boolean): HealthProbe => {return {
-    check: () => (bound ? { healthy: true } : { healthy: false, message: "binding not configured" }),
-    critical: false,
-    name,
-}};
+const presenceProbe = (name: string, bound: boolean): HealthProbe => {
+    return {
+        check: () => (bound ? { healthy: true } : { healthy: false, message: "binding not configured" }),
+        critical: false,
+        name,
+    };
+};
 
 export type { HealthAuthPosture, HealthBody, HealthCheckReport, HealthProbe, HealthProbeKind, HealthProbeResult, HealthRouteDeps };
 export { buildHealthRoutes, d1Probe, durableObjectProbe, HEALTH_PATH, HEALTH_READY_PATH, presenceProbe };

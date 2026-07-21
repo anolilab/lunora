@@ -18,6 +18,7 @@
  */
 import type { RestExposure } from "../../../shared/rest-surface";
 import { describeRestSurface } from "../../../shared/rest-surface";
+import { methodGuard } from "./method-guard";
 
 /** The bits of a registered function the REST router reads: its kind and its `.expose` tag. */
 interface RestRegistryEntry {
@@ -52,7 +53,9 @@ interface RestRouteDeps {
 
 /** Map a registry into the shared surface-descriptor input. */
 const registryToSurfaceInput = (functions: RestRegistryLike): { exposure?: RestExposure; functionPath: string; kind: RestRegistryEntry["kind"] }[] =>
-    Object.entries(functions).map(([functionPath, entry]) => {return { exposure: entry.expose, functionPath, kind: entry.kind }});
+    Object.entries(functions).map(([functionPath, entry]) => {
+        return { exposure: entry.expose, functionPath, kind: entry.kind };
+    });
 
 /**
  * The resolved REST surface for a registry — the ordered list of exposed
@@ -113,8 +116,10 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, (request: Request,
         const allowed = entry.kind === "query" ? ["GET", "POST"] : ["POST"];
 
         routes[entry.path] = async (request: Request, env: unknown): Promise<Response> => {
-            if (!allowed.includes(request.method)) {
-                return new Response(undefined, { headers: { allow: allowed.join(", ") }, status: 405 });
+            const wrongMethod = methodGuard(request, allowed);
+
+            if (wrongMethod) {
+                return wrongMethod;
             }
 
             const url = new URL(request.url);
@@ -163,7 +168,9 @@ interface RateLimiterLike {
  * runtime imports nothing from `@lunora/ratelimit` — build the limiter in the
  * worker entry and pass it here.
  */
-const createRestRateLimit = (limiter: RateLimiterLike, options: { key?: (request: Request, functionPath: string) => string | undefined; name: string }): RestRateLimit => async (request, functionPath) => {
+const createRestRateLimit =
+    (limiter: RateLimiterLike, options: { key?: (request: Request, functionPath: string) => string | undefined; name: string }): RestRateLimit =>
+    async (request, functionPath) => {
         const key = options.key ? options.key(request, functionPath) : (request.headers.get("cf-connecting-ip") ?? undefined);
         const status = await limiter.limit(options.name, key === undefined ? {} : { key });
 
@@ -173,10 +180,13 @@ const createRestRateLimit = (limiter: RateLimiterLike, options: { key?: (request
 
         const retryAfterSeconds = Math.max(1, Math.ceil(status.retryAfter / 1000));
 
-        return Response.json({ error: { code: "RATE_LIMITED", message: "Rate limit exceeded" } }, {
-            headers: { "content-type": "application/json", "retry-after": String(retryAfterSeconds) },
-            status: 429,
-        });
+        return Response.json(
+            { error: { code: "RATE_LIMITED", message: "Rate limit exceeded" } },
+            {
+                headers: { "content-type": "application/json", "retry-after": String(retryAfterSeconds) },
+                status: 429,
+            },
+        );
     };
 
 export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRouteDeps };

@@ -2262,24 +2262,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return response;
     };
 
-    // The data-movement admin routes (export / sync / connector-sync / apply /
-    // import) live in a sibling module; the export/import row producers are
-    // injected because they close over the worker options and are shared with
-    // the scheduled R2 backup (mirroring the other extracted clusters).
-    const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
-        applyGlobals: options.applyGlobals,
-        exportCursorStore: options.exportCursorStore,
-        exportSinks: options.exportSinks,
-        isAdmin: requestIsAdmin,
-        knownTables: () => collectKnownTables(options.resolveTableSharding),
-        queryCoordinator: options.queryCoordinator,
-        resolveForwardContext: resolveAdminForwardContext,
-        shardDO,
-        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow, shardDO),
-        streamingImport: (request, headers) => streamingImport(request, options, headers, shardDO),
-        syncGlobals: options.syncGlobals,
-    });
-
     /** The `&lt;CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
     interface NotConfiguredError {
         code: string;
@@ -2308,6 +2290,26 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         return value;
     };
+
+    // The data-movement admin routes (export / sync / connector-sync / apply /
+    // import) live in a sibling module; the export/import row producers are
+    // injected because they close over the worker options and are shared with
+    // the scheduled R2 backup (mirroring the other extracted clusters). Threads the
+    // shared `requireAdminOption` gate helper like its siblings (every route gates
+    // behind the coordinator option, so no bare `assertAdmin` is needed).
+    const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
+        applyGlobals: options.applyGlobals,
+        exportCursorStore: options.exportCursorStore,
+        exportSinks: options.exportSinks,
+        knownTables: () => collectKnownTables(options.resolveTableSharding),
+        queryCoordinator: options.queryCoordinator,
+        requireAdminOption,
+        resolveForwardContext: resolveAdminForwardContext,
+        shardDO,
+        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow, shardDO),
+        streamingImport: (request, headers) => streamingImport(request, options, headers, shardDO),
+        syncGlobals: options.syncGlobals,
+    });
 
     /** Read a query param, collapsing missing (`null`) and empty (`""`) to `undefined`. */
     const queryParameter = (url: URL, name: string): string | undefined => {
@@ -3653,7 +3655,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const restRoutes = buildRestRoutes({
-        functions: (options.functions ?? {}),
+        functions: options.functions ?? {},
         invoke: invokeExposed,
         readJsonBody: readJsonBodyWithLimit,
         ...(options.restRateLimit ? { rateLimit: options.restRateLimit } : {}),

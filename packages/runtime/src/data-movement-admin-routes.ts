@@ -21,6 +21,7 @@ import { LunoraError } from "./errors";
 import type { ExportRow } from "./export-stream";
 import type { ExportCursorStore, ExportSink } from "./export-tap";
 import { runExportTap } from "./export-tap";
+import { methodGuard } from "./method-guard";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
@@ -88,12 +89,12 @@ interface DataMovementAdminRouteDeps {
     exportCursorStore?: ExportCursorStore;
     /** Named export sinks (webhook / R2 / custom) the tap can drain to; absent / empty → the tap route reports not-configured. */
     exportSinks?: Record<string, ExportSink>;
-    /** Admin-token gate predicate (header bearer check). */
-    isAdmin: (request: Request) => boolean;
     /** Best-effort enumeration of known tables for the auto-discovery path (bound to the worker's table resolver). */
     knownTables: () => string[];
     /** The cross-shard query coordinator; absent on a single-DO deployment. */
     queryCoordinator?: QueryCoordinator;
+    /** Admin-gate + require a configured option, else throw the given error. Shared with the sibling admin route modules. */
+    requireAdminOption: <T>(request: Request, value: T | undefined, notConfigured: { code: string; message: string }) => T;
     /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
     resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
     /** The shard DO namespace fanned across. */
@@ -121,22 +122,31 @@ interface DataMovementAdminRouteDeps {
 
 /** Build the data-movement route map merged into the worker's internal route table. */
 const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
-    const { applyGlobals, exportCursorStore, exportSinks, isAdmin, knownTables, queryCoordinator, resolveForwardContext, shardDO, streamExportRows, streamingImport, syncGlobals } = deps;
+    const {
+        applyGlobals,
+        exportCursorStore,
+        exportSinks,
+        knownTables,
+        queryCoordinator,
+        requireAdminOption,
+        resolveForwardContext,
+        shardDO,
+        streamExportRows,
+        streamingImport,
+        syncGlobals,
+    } = deps;
 
     const handleExport = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Export endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
-        if (!isAdmin(request)) {
-            throw new LunoraError("admin export endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Export endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        const coordinator = requireAdminOption(request, queryCoordinator, {
+            code: "BAD_REQUEST",
+            message: "Export endpoint requires a `queryCoordinator` on the worker",
+        });
 
         const body = await parseExportBody(request);
 
@@ -173,19 +183,16 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      * the cursors and re-posts them to resume, so the worker holds no offsets.
      */
     const handleCdcSync = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
-        if (!isAdmin(request)) {
-            throw new LunoraError("admin sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        const coordinator = requireAdminOption(request, queryCoordinator, {
+            code: "BAD_REQUEST",
+            message: "Sync endpoint requires a `queryCoordinator` on the worker",
+        });
 
         const raw = await readJsonBodyWithLimit(request);
         const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
@@ -231,19 +238,16 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      * onto Fivetran/Airbyte via `toFivetranResponse` / `toAirbyteMessages`.
      */
     const handleConnectorSync = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Connector sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
-        if (!isAdmin(request)) {
-            throw new LunoraError("admin connector sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Connector sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        const coordinator = requireAdminOption(request, queryCoordinator, {
+            code: "BAD_REQUEST",
+            message: "Connector sync endpoint requires a `queryCoordinator` on the worker",
+        });
 
         const raw = await readJsonBodyWithLimit(request);
         const state = decodeConnectorCursor(raw["cursor"]);
@@ -297,19 +301,16 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      * returns the counts.
      */
     const handleApplyCdc = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Apply endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
-        if (!isAdmin(request)) {
-            throw new LunoraError("admin apply endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Apply endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        const coordinator = requireAdminOption(request, queryCoordinator, {
+            code: "BAD_REQUEST",
+            message: "Apply endpoint requires a `queryCoordinator` on the worker",
+        });
 
         const raw = await readJsonBodyWithLimit(request);
         const rawBatches = Array.isArray(raw["batches"]) ? raw["batches"] : [];
@@ -334,17 +335,15 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
     };
 
     const handleImport = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Import endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
-        if (!isAdmin(request)) {
-            throw new LunoraError("admin import endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        if (!queryCoordinator) {
-            throw new LunoraError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        // Import fans out through `streamingImport`, but still requires the coordinator
+        // to be configured; `requireAdminOption` enforces the admin gate + presence.
+        requireAdminOption(request, queryCoordinator, { code: "BAD_REQUEST", message: "Import endpoint requires a `queryCoordinator` on the worker" });
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
@@ -368,22 +367,22 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      * be poked by a cron or an external scheduler; safe to call repeatedly.
      */
     const handleExportTapRun = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Export-tap endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
-        if (!isAdmin(request)) {
-            throw new LunoraError("admin export-tap endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Export-tap endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        const coordinator = requireAdminOption(request, queryCoordinator, {
+            code: "BAD_REQUEST",
+            message: "Export-tap endpoint requires a `queryCoordinator` on the worker",
+        });
 
         if (exportSinks === undefined || Object.keys(exportSinks).length === 0 || exportCursorStore === undefined) {
-            throw new LunoraError("Export-tap endpoint requires `exportSinks` + `exportCursorStore` on the worker", { code: "EXPORT_TAP_NOT_CONFIGURED", status: 400 });
+            throw new LunoraError("Export-tap endpoint requires `exportSinks` + `exportCursorStore` on the worker", {
+                code: "EXPORT_TAP_NOT_CONFIGURED",
+                status: 400,
+            });
         }
 
         const raw = await readJsonBodyWithLimit(request);
