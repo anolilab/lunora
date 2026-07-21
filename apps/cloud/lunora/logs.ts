@@ -1,7 +1,5 @@
 import { LunoraError } from "@lunora/server";
 
-import type { TraceLogRow } from "../src/telemetry/traces";
-import { foldTraces } from "../src/telemetry/traces";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
@@ -48,22 +46,6 @@ interface TenantLogRow {
     userId?: string;
 }
 
-/**
- * One folded dispatch trace as the dashboard consumes it. Defined locally (not
- * imported from `src/telemetry/traces`) so codegen inlines its shape into the
- * generated `api.ts` — a bare imported type-name would emit unresolved. Mirrors
- * that module's `TraceSummary` structurally; `foldTraces`' result assigns cleanly.
- */
-interface TenantTraceView {
-    endedAt: number;
-    functionPath?: string;
-    hasError: boolean;
-    lineCount: number;
-    maxLevel: LogLevel;
-    startedAt: number;
-    traceId: string;
-}
-
 /** One log row as the dashboard consumes it (the persisted row minus internal keys). */
 interface TenantLogView {
     createdAt: number;
@@ -91,12 +73,6 @@ const DEFAULT_LIMIT = 200;
 
 /** Hard cap on `list` output — bounds the response even against a chatty script. */
 const MAX_LIMIT = 1000;
-
-/** Default number of traces {@link listTraces} returns. */
-const DEFAULT_TRACE_LIMIT = 50;
-
-/** Hard cap on {@link listTraces} output. */
-const MAX_TRACE_LIMIT = 200;
 
 /** One line accepted by {@link ingest} — the framework's `type:"log"` event, minus the transport keys. */
 const logEntry = v.object({
@@ -313,36 +289,6 @@ export const list = query
         }
 
         return rows;
-    });
-
-/**
- * A script's recent dispatch **traces** (GAPS.md B2 follow-up — log↔trace
- * correlation), newest-active first. The cloud stores no OpenTelemetry spans (the
- * OTLP path keeps only error spans → Issues), so this folds the tenant log lines
- * by `traceId`: each returned {@link TraceSummary} is one trace's time span, root
- * function, line count, and peak severity. The `Traces` tab lists these; drilling
- * into one calls {@link list} with its `traceId` to read the timeline. Bounded by
- * `limit` (default {@link DEFAULT_TRACE_LIMIT}, capped at {@link MAX_TRACE_LIMIT}),
- * folded over the most recent {@link MAX_LIMIT} lines. Members only.
- */
-export const listTraces = query
-    .input({
-        limit: v.optional(v.number()),
-        organizationId: v.id("organizations"),
-        scriptName: v.string(),
-    })
-    .query(async ({ ctx: context, args }): Promise<TenantTraceView[]> => {
-        await assertMember(context, args.organizationId);
-
-        const limit = Math.min(Math.max(Math.trunc(args.limit ?? DEFAULT_TRACE_LIMIT), 1), MAX_TRACE_LIMIT);
-
-        const { page } = await context.db.tenantLogs.findMany({
-            limit: MAX_LIMIT,
-            orderBy: [{ createdAt: "desc" }],
-            where: { organizationId: args.organizationId, scriptName: args.scriptName },
-        });
-
-        return foldTraces(page as unknown as TraceLogRow[], limit);
     });
 
 /** Delete log lines past retention (GAPS.md B2). SYSTEM only (cron dispatch). */

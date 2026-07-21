@@ -20,8 +20,9 @@ import * as lunora_organizations_15 from "../organizations.js";
 import * as lunora_projects_16 from "../projects.js";
 import * as lunora_secrets_17 from "../secrets.js";
 import * as lunora_telemetry_18 from "../telemetry.js";
-import * as lunora_uptime_19 from "../uptime.js";
-import * as lunora_usage_20 from "../usage.js";
+import * as lunora_traces_19 from "../traces.js";
+import * as lunora_uptime_20 from "../uptime.js";
+import * as lunora_usage_21 from "../usage.js";
 
 import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "@lunora/values";
 import { LunoraError } from "@lunora/server";
@@ -113,7 +114,6 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "logs:ingest": lunora_logs_13.ingest as unknown as RegisteredLunoraFunction,
     "logs:ingestInternal": lunora_logs_13.ingestInternal as unknown as RegisteredLunoraFunction,
     "logs:list": lunora_logs_13.list as unknown as RegisteredLunoraFunction,
-    "logs:listTraces": lunora_logs_13.listTraces as unknown as RegisteredLunoraFunction,
     "logs:orgForScript": lunora_logs_13.orgForScript as unknown as RegisteredLunoraFunction,
     "logs:prune": lunora_logs_13.prune as unknown as RegisteredLunoraFunction,
     "members:add": lunora_members_14.add as unknown as RegisteredLunoraFunction,
@@ -139,17 +139,19 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "telemetry:ingest": lunora_telemetry_18.ingest as unknown as RegisteredLunoraFunction,
     "telemetry:orgForDeployKey": lunora_telemetry_18.orgForDeployKey as unknown as RegisteredLunoraFunction,
     "telemetry:pruneObservations": lunora_telemetry_18.pruneObservations as unknown as RegisteredLunoraFunction,
-    "uptime:prune": lunora_uptime_19.prune as unknown as RegisteredLunoraFunction,
-    "uptime:recent": lunora_uptime_19.recent as unknown as RegisteredLunoraFunction,
-    "uptime:summary": lunora_uptime_19.summary as unknown as RegisteredLunoraFunction,
-    "usage:enforceSpendCaps": lunora_usage_20.enforceSpendCaps as unknown as RegisteredLunoraFunction,
-    "usage:ingest": lunora_usage_20.ingest as unknown as RegisteredLunoraFunction,
-    "usage:overageWatermark": lunora_usage_20.overageWatermark as unknown as RegisteredLunoraFunction,
-    "usage:record": lunora_usage_20.record as unknown as RegisteredLunoraFunction,
-    "usage:recordOverageDebit": lunora_usage_20.recordOverageDebit as unknown as RegisteredLunoraFunction,
-    "usage:rollup": lunora_usage_20.rollup as unknown as RegisteredLunoraFunction,
-    "usage:series": lunora_usage_20.series as unknown as RegisteredLunoraFunction,
-    "usage:summary": lunora_usage_20.summary as unknown as RegisteredLunoraFunction,
+    "traces:get": lunora_traces_19.get as unknown as RegisteredLunoraFunction,
+    "traces:list": lunora_traces_19.list as unknown as RegisteredLunoraFunction,
+    "uptime:prune": lunora_uptime_20.prune as unknown as RegisteredLunoraFunction,
+    "uptime:recent": lunora_uptime_20.recent as unknown as RegisteredLunoraFunction,
+    "uptime:summary": lunora_uptime_20.summary as unknown as RegisteredLunoraFunction,
+    "usage:enforceSpendCaps": lunora_usage_21.enforceSpendCaps as unknown as RegisteredLunoraFunction,
+    "usage:ingest": lunora_usage_21.ingest as unknown as RegisteredLunoraFunction,
+    "usage:overageWatermark": lunora_usage_21.overageWatermark as unknown as RegisteredLunoraFunction,
+    "usage:record": lunora_usage_21.record as unknown as RegisteredLunoraFunction,
+    "usage:recordOverageDebit": lunora_usage_21.recordOverageDebit as unknown as RegisteredLunoraFunction,
+    "usage:rollup": lunora_usage_21.rollup as unknown as RegisteredLunoraFunction,
+    "usage:series": lunora_usage_21.series as unknown as RegisteredLunoraFunction,
+    "usage:summary": lunora_usage_21.summary as unknown as RegisteredLunoraFunction,
 };
 
 /**
@@ -489,19 +491,6 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_logs_13.listTraces.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-let __has1 = false;
-let __val1;
-if (source["limit"] !== undefined) {
-if (typeof source["limit"] !== "number" || !Number.isFinite(source["limit"])) return DEFER;
-__val1 = source["limit"];
-__has1 = true;
-}
-if (typeof source["organizationId"] !== "string") return DEFER;
-if (typeof source["scriptName"] !== "string") return DEFER;
-return { ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"], "scriptName": source["scriptName"] };
-});
 installCompiledValidatorMap(lunora_logs_13.orgForScript.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["scriptName"] !== "string") return DEFER;
@@ -606,7 +595,32 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (typeof source["deployKey"] !== "string") return DEFER;
 return { "deployKey": source["deployKey"] };
 });
-installCompiledValidatorMap(lunora_uptime_19.recent.args, (source) => {
+installCompiledValidatorMap(lunora_traces_19.get.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["traceId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"], "traceId": source["traceId"] };
+});
+installCompiledValidatorMap(lunora_traces_19.list.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["deploymentId"] !== undefined) {
+if (typeof source["deploymentId"] !== "string") return DEFER;
+__val1 = source["deploymentId"];
+__has1 = true;
+}
+let __has2 = false;
+let __val2;
+if (source["limit"] !== undefined) {
+if (typeof source["limit"] !== "number" || !Number.isFinite(source["limit"])) return DEFER;
+__val2 = source["limit"];
+__has2 = true;
+}
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { ...(__has1 ? { "deploymentId": __val1 } : {}), ...(__has2 ? { "limit": __val2 } : {}), "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_uptime_20.recent.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["deploymentId"] !== "string") return DEFER;
 let __has1 = false;
@@ -619,12 +633,12 @@ __has1 = true;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "deploymentId": source["deploymentId"], ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_uptime_19.summary.args, (source) => {
+installCompiledValidatorMap(lunora_uptime_20.summary.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_usage_20.ingest.args, (source) => {
+installCompiledValidatorMap(lunora_usage_21.ingest.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["deployKey"] !== "string") return DEFER;
 let __has1 = false;
@@ -639,13 +653,13 @@ if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["period
 if (typeof source["quantity"] !== "number" || !Number.isFinite(source["quantity"])) return DEFER;
 return { "deployKey": source["deployKey"], ...(__has1 ? { "deploymentId": __val1 } : {}), "organizationId": source["organizationId"], "periodStart": source["periodStart"], "quantity": source["quantity"] };
 });
-installCompiledValidatorMap(lunora_usage_20.overageWatermark.args, (source) => {
+installCompiledValidatorMap(lunora_usage_21.overageWatermark.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
-installCompiledValidatorMap(lunora_usage_20.record.args, (source) => {
+installCompiledValidatorMap(lunora_usage_21.record.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 let __has1 = false;
 let __val1;
@@ -659,20 +673,20 @@ if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["period
 if (typeof source["quantity"] !== "number" || !Number.isFinite(source["quantity"])) return DEFER;
 return { ...(__has1 ? { "deploymentId": __val1 } : {}), "organizationId": source["organizationId"], "periodStart": source["periodStart"], "quantity": source["quantity"] };
 });
-installCompiledValidatorMap(lunora_usage_20.recordOverageDebit.args, (source) => {
+installCompiledValidatorMap(lunora_usage_21.recordOverageDebit.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["debitedCredits"] !== "number" || !Number.isFinite(source["debitedCredits"])) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "debitedCredits": source["debitedCredits"], "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
-installCompiledValidatorMap(lunora_usage_20.series.args, (source) => {
+installCompiledValidatorMap(lunora_usage_21.series.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
-installCompiledValidatorMap(lunora_usage_20.summary.args, (source) => {
+installCompiledValidatorMap(lunora_usage_21.summary.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
@@ -807,7 +821,6 @@ export interface Caller {
         ingest: (args: { deployKey: string; lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ ingested: number; }>;
         ingestInternal: (args: { lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ ingested: number; }>;
         list: (args: { afterCreatedAt?: number; functionPath?: string; levels?: Array<unknown>; limit?: number; organizationId: Id<"organizations">; scriptName: string; search?: string; traceId?: string }) => Promise<{ createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
-        listTraces: (args: { limit?: number; organizationId: Id<"organizations">; scriptName: string }) => Promise<{ endedAt: number; functionPath?: string; hasError: boolean; lineCount: number; maxLevel: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; startedAt: number; traceId: string }[]>;
         orgForScript: (args: { scriptName: string }) => Promise<{ organizationId: Id<"organizations">; } | null>;
         prune: (args?: {}) => Promise<{ pruned: number; }>;
     };
@@ -843,6 +856,10 @@ export interface Caller {
         ingest: (args: { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; observations?: Array<unknown>; organizationId: Id<"organizations"> }) => Promise<{ alerts: { body: string; channel: "email" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
         orgForDeployKey: (args: { deployKey: string }) => Promise<{ organizationId: Id<"organizations">; } | null>;
         pruneObservations: (args?: {}) => Promise<{ pruned: number; }>;
+    };
+    traces: {
+        get: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ durationMs: number; endedAt: number; functionPath?: string; level: "info" | "error"; name: string; parentSpanId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
+        list: (args: { deploymentId?: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
     };
     uptime: {
         prune: (args?: {}) => Promise<{ pruned: number; }>;
@@ -961,7 +978,6 @@ export const createCaller = (context: CallerCtx): Caller => ({
         ingest: (args) => callRegistered(context, "logs:ingest", args),
         ingestInternal: (args) => callRegistered(context, "logs:ingestInternal", args),
         list: (args) => callRegistered(context, "logs:list", args),
-        listTraces: (args) => callRegistered(context, "logs:listTraces", args),
         orgForScript: (args) => callRegistered(context, "logs:orgForScript", args),
         prune: (args) => callRegistered(context, "logs:prune", args),
     },
@@ -997,6 +1013,10 @@ export const createCaller = (context: CallerCtx): Caller => ({
         ingest: (args) => callRegistered(context, "telemetry:ingest", args),
         orgForDeployKey: (args) => callRegistered(context, "telemetry:orgForDeployKey", args),
         pruneObservations: (args) => callRegistered(context, "telemetry:pruneObservations", args),
+    },
+    traces: {
+        get: (args) => callRegistered(context, "traces:get", args),
+        list: (args) => callRegistered(context, "traces:list", args),
     },
     uptime: {
         prune: (args) => callRegistered(context, "uptime:prune", args),

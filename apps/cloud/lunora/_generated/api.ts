@@ -83,7 +83,6 @@ export interface ApiTypes {
     logs: {
         ingest: FunctionReference<"mutation", { deployKey: string; lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }, { ingested: number; }>;
         list: FunctionReference<"query", { afterCreatedAt?: number; functionPath?: string; levels?: Array<unknown>; limit?: number; organizationId: Id<"organizations">; scriptName: string; search?: string; traceId?: string }, { createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
-        listTraces: FunctionReference<"query", { limit?: number; organizationId: Id<"organizations">; scriptName: string }, { endedAt: number; functionPath?: string; hasError: boolean; lineCount: number; maxLevel: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; startedAt: number; traceId: string }[]>;
     };
     members: {
         add: FunctionReference<"mutation", { organizationId: Id<"organizations">; userId: string }, Id<"members">>;
@@ -113,6 +112,10 @@ export interface ApiTypes {
     };
     telemetry: {
         ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; observations?: Array<unknown>; organizationId: Id<"organizations"> }, { alerts: { body: string; channel: "email" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
+    };
+    traces: {
+        get: FunctionReference<"query", { organizationId: Id<"organizations">; traceId: string }, { durationMs: number; endedAt: number; functionPath?: string; level: "info" | "error"; name: string; parentSpanId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
+        list: FunctionReference<"query", { deploymentId?: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }, { durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
     };
     uptime: {
         recent: FunctionReference<"query", { deploymentId: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }, { _id: Id<"uptimeChecks">; createdAt: number; error?: string; latencyMs?: number; ok: boolean; statusCode?: number }[]>;

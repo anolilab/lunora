@@ -193,11 +193,20 @@ OTLP ingest no longer discards non-error spans: `decodeObservations`
 `telemetry.ingest` persists them to an `observations` table (retention-pruned by
 `pruneObservations`, like `tenantLogs`) — the Langfuse "observations" model,
 reimplemented on our schema (no Langfuse code; it's MIT-except-`ee/`, but a
-Postgres/ClickHouse app doesn't port). **Phase 2 (next):** a `traces.list`/`get`
-over `observations` with real aggregates, and a nested-tree waterfall (reusing
-the framework Studio's own `foldTraces`/`TraceSpan`) to replace the log-derived
-view. True *nesting* also needs the framework to emit `ctx.trace` child spans
-over OTLP — today the runtime emits one flat span per RPC (no `parentSpanId`).
+Postgres/ClickHouse app doesn't port). **Phase 2 shipped:** `traces.list`/`get`
+over `observations` (`lunora/traces.ts`) with real aggregates (latency, span +
+error counts), and the Traces tab now renders a **real-duration nested
+waterfall** — `buildTraceTree` (`src/telemetry/trace-tree.ts`, pure +
+unit-tested) lays each span out by its true start/duration and indents it by its
+depth under `parentSpanId`. The log-derived view (`logs.listTraces`) was removed.
+
+**Also shipped — standard OTLP ingest API** (`/v1/traces`, `/v1/logs`,
+bearer-authed, gzip; mirrors Maple / Langfuse's OTLP endpoints, the open spec):
+any OpenTelemetry SDK/Collector can now ship to the cloud, not only Lunora's
+sink. Follow-ons: OTLP protobuf + gRPC transports, `/v1/metrics` (no metrics
+store yet), and — for *deep* trees — the framework emitting `ctx.trace` child
+spans over OTLP (today the runtime emits one flat span per RPC, so trees are
+shallow until then).
 
 ### B3. Debug header (✅ shipped)
 
