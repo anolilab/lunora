@@ -69,27 +69,37 @@ export interface TelemetryEvent {
  * {@link TelemetryEvent}, this keeps EVERY span (not just errors) with its full
  * timing (`startedAt`/`endedAt` → `durationMs`) and identity
  * (`traceId`/`spanId`/`parentSpanId`), so the Traces waterfall can render real
- * durations and whatever nesting the emitter provides. (Today the runtime emits
- * one flat span per RPC — no `parentSpanId` — so trees are one level deep until
- * the framework ships `ctx.trace` child spans over OTLP.)
+ * durations and whatever nesting the emitter provides. The framework emits
+ * nested `ctx.trace` child spans with a real `parentSpanId` (deep trees), plus
+ * AI **generation** spans (`gen_ai.*`) from `@lunora/ai`/`@lunora/agent`.
  */
 export interface SpanObservation {
     /** Selected string span attributes (`lunora.shard_key`, `lunora.user_id`, …). */
     attributes?: Record<string, string>;
+    /** Generation spans: completion token count (`gen_ai.usage.output_tokens`). */
+    completionTokens?: number;
     /** `endedAt − startedAt`, in ms (≥ 0). */
     durationMs: number;
     /** Epoch-ms the span ended. */
     endedAt: number;
     /** The `&lt;file>:&lt;function>` (or `container:&lt;name>`) the span ran, when attributed. */
     functionPath?: string;
-    /** Which instrumentation emitted it — the worker runtime or a container. */
-    kind: "container" | "worker";
+    /** Generation spans: the recorded prompt (opt-in on the emitter), truncated. */
+    input?: string;
+    /** Which instrumentation emitted it — the worker runtime, a container, or an AI model call. */
+    kind: "container" | "generation" | "worker";
     /** `error` when the span's OTLP status is `STATUS_CODE_ERROR`, else `info`. */
     level: "error" | "info";
+    /** Generation spans: the model id (`gen_ai.request.model`). */
+    model?: string;
     /** Span display name (the RPC path, or the traced operation). */
     name: string;
+    /** Generation spans: the recorded completion (opt-in on the emitter), truncated. */
+    output?: string;
     /** Parent span id, when the span nests under another; absent for a root span. */
     parentSpanId?: string;
+    /** Generation spans: prompt token count (`gen_ai.usage.input_tokens`). */
+    promptTokens?: number;
     /** The `service.name` resource attribute, when set. */
     serviceName?: string;
     /** Hex span id. */
@@ -108,6 +118,34 @@ const STATUS_ERROR = 2;
 /** Read a string-valued attribute from an OTLP `KeyValue[]`. */
 const attributeString = (attributes: OtlpKeyValue[] | undefined, key: string): string | undefined =>
     attributes?.find((attribute) => attribute.key === key)?.value?.stringValue;
+
+/**
+ * Read a numeric attribute from an OTLP `KeyValue[]`. OTLP encodes int64 as a
+ * decimal string (`intValue`), floats as `doubleValue` — accept either. A
+ * non-finite parse is dropped.
+ */
+const attributeNumber = (attributes: OtlpKeyValue[] | undefined, key: string): number | undefined => {
+    const value = attributes?.find((attribute) => attribute.key === key)?.value;
+
+    if (value === undefined) {
+        return undefined;
+    }
+
+    if (value.intValue !== undefined) {
+        const parsed = Number(value.intValue);
+
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    return typeof value.doubleValue === "number" && Number.isFinite(value.doubleValue) ? value.doubleValue : undefined;
+};
+
+/** Max stored length of a recorded generation input/output before truncation. */
+const MAX_GENERATION_TEXT = 4096;
+
+/** Truncate a recorded generation payload so a large prompt/completion can't bloat a row. */
+const truncateText = (text: string | undefined): string | undefined =>
+    text === undefined ? undefined : text.length > MAX_GENERATION_TEXT ? `${text.slice(0, MAX_GENERATION_TEXT)}…` : text;
 
 /**
  * OTLP `timeUnixNano` (decimal nanoseconds as a string) → epoch ms. Slicing the
@@ -342,15 +380,27 @@ export const decodeObservations = (payload: OtlpTracePayload): SpanObservation[]
                 const errored = span.status?.code === STATUS_ERROR;
                 const workerPath = attributeString(span.attributes, "lunora.function_path") ?? span.name;
 
+                // A model call carries `gen_ai.request.model` — promote it to a
+                // `generation` observation with the model + token usage broken out
+                // (container spans stay container even if they somehow carry the
+                // attribute). Input/output only arrive when the emitter opted in.
+                const model = attributeString(span.attributes, "gen_ai.request.model");
+                const isGeneration = kind !== "container" && model !== undefined;
+
                 observations.push({
                     attributes: lunoraAttributes(span.attributes),
+                    ...(isGeneration ? { completionTokens: attributeNumber(span.attributes, "gen_ai.usage.output_tokens") } : {}),
                     durationMs: Math.max(endedAt - startedAt, 0),
                     endedAt,
                     functionPath: kind === "container" ? `container:${serviceName ?? "container"}` : workerPath,
-                    kind,
+                    ...(isGeneration ? { input: truncateText(attributeString(span.attributes, "gen_ai.prompt")) } : {}),
+                    kind: isGeneration ? "generation" : kind,
                     level: errored ? "error" : "info",
+                    ...(isGeneration ? { model } : {}),
                     name: span.name ?? workerPath ?? "span",
+                    ...(isGeneration ? { output: truncateText(attributeString(span.attributes, "gen_ai.completion")) } : {}),
                     parentSpanId: span.parentSpanId === "" ? undefined : span.parentSpanId,
+                    ...(isGeneration ? { promptTokens: attributeNumber(span.attributes, "gen_ai.usage.input_tokens") } : {}),
                     serviceName,
                     spanId: span.spanId,
                     startedAt,

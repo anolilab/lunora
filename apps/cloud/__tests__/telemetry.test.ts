@@ -343,6 +343,46 @@ describe(decodeObservations, () => {
     it("skips a span with no trace/span id (it can't be placed in a trace)", () => {
         expect(decodeObservations(payload("@lunora/runtime", [{ name: "orphan", status: { code: 1 } }]))).toHaveLength(0);
     });
+
+    it("promotes a gen_ai model span to a generation observation with model + tokens", () => {
+        const [observation] = decodeObservations(
+            payload("@lunora/agent", [
+                {
+                    attributes: [
+                        { key: "gen_ai.request.model", value: { stringValue: "@cf/meta/llama" } },
+                        // OTLP int64 on the wire is a decimal string (`intValue`).
+                        { key: "gen_ai.usage.input_tokens", value: { intValue: "12" } },
+                        { key: "gen_ai.usage.output_tokens", value: { intValue: "34" } },
+                        { key: "gen_ai.prompt", value: { stringValue: "hello" } },
+                        { key: "gen_ai.completion", value: { stringValue: "hi there" } },
+                    ],
+                    endTimeUnixNano: "1700000000200000000",
+                    name: "chat @cf/meta/llama",
+                    spanId: "cccccccccccccccc",
+                    startTimeUnixNano: "1700000000000000000",
+                    status: { code: 1 },
+                    traceId: "dddddddddddddddddddddddddddddddd",
+                },
+            ]),
+        );
+
+        expect(observation).toMatchObject({
+            completionTokens: 34,
+            input: "hello",
+            kind: "generation",
+            model: "@cf/meta/llama",
+            output: "hi there",
+            promptTokens: 12,
+        });
+    });
+
+    it("leaves a plain worker span as kind:worker with no generation fields", () => {
+        const [observation] = decodeObservations(payload("@lunora/runtime", [span({ spanId: "w1" })]));
+
+        expect(observation?.kind).toBe("worker");
+        expect(observation?.model).toBeUndefined();
+        expect(observation?.promptTokens).toBeUndefined();
+    });
 });
 
 /** Wrap OTLP log records into an ExportLogsServiceRequest with one resource + scope. */

@@ -749,3 +749,22 @@ button.link.danger {
 .trace-msg {
     color: var(--text);
 }
+
+/* AI generation span — a small chip + the model / token summary on the row. */
+.trace-gen-badge {
+    margin-right: 6px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
+    color: var(--primary);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.trace-gen-meta {
+    margin-left: 8px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}

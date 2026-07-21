@@ -13,12 +13,24 @@
 
 /** One stored span, as both folds read it (a subset of the `observations` row). */
 export interface ObservationSpan {
+    /** Generation spans: completion token count. */
+    completionTokens?: number;
     durationMs: number;
     endedAt: number;
     functionPath?: string;
+    /** Generation spans: the recorded prompt (opt-in on the emitter), truncated. */
+    input?: string;
+    /** Which instrumentation emitted the span; `generation` = an AI model call. */
+    kind?: "container" | "generation" | "worker";
     level: "error" | "info";
+    /** Generation spans: the model id. */
+    model?: string;
     name: string;
+    /** Generation spans: the recorded completion (opt-in on the emitter), truncated. */
+    output?: string;
     parentSpanId?: string;
+    /** Generation spans: prompt token count. */
+    promptTokens?: number;
     spanId: string;
     startedAt: number;
     statusMessage?: string;

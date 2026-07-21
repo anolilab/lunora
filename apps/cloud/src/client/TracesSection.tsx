@@ -171,8 +171,17 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
                                     />
                                 </div>
                                 <div className="trace-wmeta" style={{ paddingLeft: `${String(row.depth * 16)}px` }}>
+                                    {row.kind === "generation" ? <span className="trace-gen-badge">gen</span> : null}
                                     {row.functionPath ? <span className="log-fn">{row.functionPath}</span> : <span className="trace-msg">{row.name}</span>}
                                     <span className="muted"> {formatMs(row.durationMs)}</span>
+                                    {row.kind === "generation" ? (
+                                        <span className="trace-gen-meta">
+                                            {row.model ?? "generation"}
+                                            {row.promptTokens !== undefined || row.completionTokens !== undefined
+                                                ? ` · ${String(row.promptTokens ?? 0)}→${String(row.completionTokens ?? 0)} tok`
+                                                : ""}
+                                        </span>
+                                    ) : null}
                                     {row.statusMessage ? <span className="log-fields"> {row.statusMessage}</span> : null}
                                 </div>
                             </div>

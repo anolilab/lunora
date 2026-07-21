@@ -858,7 +858,7 @@ export interface Caller {
         pruneObservations: (args?: {}) => Promise<{ pruned: number; }>;
     };
     traces: {
-        get: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ durationMs: number; endedAt: number; functionPath?: string; level: "info" | "error"; name: string; parentSpanId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
+        get: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ completionTokens?: number; durationMs: number; endedAt: number; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
         list: (args: { deploymentId?: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
     };
     uptime: {

@@ -42,12 +42,18 @@ interface TraceRollupView {
 
 /** One span in a trace — mirrors `ObservationSpan` locally so codegen inlines it. */
 interface SpanView {
+    completionTokens?: number;
     durationMs: number;
     endedAt: number;
     functionPath?: string;
+    input?: string;
+    kind?: "container" | "generation" | "worker";
     level: "error" | "info";
+    model?: string;
     name: string;
+    output?: string;
     parentSpanId?: string;
+    promptTokens?: number;
     spanId: string;
     startedAt: number;
     statusMessage?: string;
@@ -102,12 +108,18 @@ export const get = query
         });
 
         return (page as unknown as ObservationRow[]).map((span) => ({
+            completionTokens: span.completionTokens,
             durationMs: span.durationMs,
             endedAt: span.endedAt,
             functionPath: span.functionPath,
+            input: span.input,
+            kind: span.kind,
             level: span.level,
+            model: span.model,
             name: span.name,
+            output: span.output,
             parentSpanId: span.parentSpanId,
+            promptTokens: span.promptTokens,
             spanId: span.spanId,
             startedAt: span.startedAt,
             statusMessage: span.statusMessage,

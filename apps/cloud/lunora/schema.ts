@@ -254,6 +254,8 @@ export default defineSchema({
     observations: defineTable({
         // Selected `lunora.*` string span attributes (shard key, user id, …).
         attributes: v.optional(v.record(v.string(), v.string())),
+        // Generation spans (`kind: "generation"`): completion token count.
+        completionTokens: v.optional(v.number()),
         createdAt: v.number(),
         // The deployment the span ran under, when the sink forwarded it.
         deploymentId: v.optional(v.id("deployments")),
@@ -262,14 +264,24 @@ export default defineSchema({
         endedAt: v.number(),
         // `<file>:<function>` (or `container:<name>`), when attributed.
         functionPath: v.optional(v.string()),
-        // Which instrumentation emitted the span.
-        kind: v.union(v.literal("container"), v.literal("worker")),
+        // Generation spans: the recorded prompt/input (only when the emitter opted
+        // into input recording — off by default), truncated.
+        input: v.optional(v.string()),
+        // Which instrumentation emitted the span. `generation` = an AI model call
+        // (carries `gen_ai.*`), from `@lunora/ai`/`@lunora/agent`.
+        kind: v.union(v.literal("container"), v.literal("generation"), v.literal("worker")),
         // `error` when the span's OTLP status was `STATUS_CODE_ERROR`, else `info`.
         level: v.union(v.literal("error"), v.literal("info")),
+        // Generation spans: the model id (`gen_ai.request.model`).
+        model: v.optional(v.string()),
         name: v.string(),
         organizationId: v.id("organizations"),
+        // Generation spans: the recorded completion/output (opt-in only), truncated.
+        output: v.optional(v.string()),
         // Parent span, when the span nests; absent for a root span.
         parentSpanId: v.optional(v.string()),
+        // Generation spans: prompt token count.
+        promptTokens: v.optional(v.number()),
         serviceName: v.optional(v.string()),
         spanId: v.string(),
         startedAt: v.number(),
