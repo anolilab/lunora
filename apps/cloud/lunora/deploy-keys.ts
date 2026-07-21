@@ -1,7 +1,7 @@
 import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
-import { assertMember, assertRowInOrg } from "./authz";
+import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 
 /** Public view of a deploy key — never exposes the stored hash. */
 interface DeployKeyView {
@@ -136,3 +136,74 @@ export const verify = mutation.input({ key: v.string() }).mutation(
         return { deployKeyId: row._id, organizationId: row.organizationId, projectId: row.projectId, type: row.type };
     },
 );
+
+/** The shape of an envelope-encrypted secret (mirrors `src/secrets/crypto` `EncryptedSecret`). */
+interface CipherEnvelope {
+    ciphertext: string;
+    iv: string;
+}
+
+/** One row as the ingest-key helpers read it. */
+interface IngestKeyRow {
+    capability?: "deploy" | "ingest";
+    encryptedSecret?: CipherEnvelope;
+    revokedAt?: number;
+}
+
+/**
+ * The org's platform-managed ingest key ciphertext, for the deploy path to
+ * re-inject into a tenant's `otlpSink`. Deploy-key authorized (the caller is a
+ * live deploy holding the org's deploy key). Returns the envelope only — never
+ * plaintext — or `null` when the org has no ingest key yet. The cipher is inert
+ * without the master key, so exposing it to the deploy edge is safe.
+ */
+export const ingestKeyCipher = query
+    .input({ deployKey: v.string(), organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { deployKey, organizationId } }): Promise<CipherEnvelope | null> => {
+        await authorizeDeployKey(context, organizationId, deployKey);
+
+        const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
+        const row = (page as unknown as IngestKeyRow[]).find(
+            (candidate) => candidate.capability === "ingest" && candidate.revokedAt === undefined && candidate.encryptedSecret !== undefined,
+        );
+
+        return row?.encryptedSecret ?? null;
+    });
+
+/**
+ * Record a platform-minted ingest key (its hash + envelope-encrypted plaintext),
+ * returning the **effective** cipher — the freshly stored one, or a pre-existing
+ * one if a concurrent deploy already provisioned it (so a race never injects a
+ * token whose hash wasn't stored). Deploy-key authorized.
+ */
+export const recordIngestKey = mutation
+    .input({
+        deployKey: v.string(),
+        encryptedSecret: v.object({ ciphertext: v.string(), iv: v.string() }),
+        hashedKey: v.string(),
+        organizationId: v.id("organizations"),
+    })
+    .mutation(async ({ ctx: context, args: { deployKey, encryptedSecret, hashedKey, organizationId } }): Promise<CipherEnvelope> => {
+        await authorizeDeployKey(context, organizationId, deployKey);
+
+        const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
+        const existing = (page as unknown as IngestKeyRow[]).find(
+            (candidate) => candidate.capability === "ingest" && candidate.revokedAt === undefined && candidate.encryptedSecret !== undefined,
+        );
+
+        if (existing?.encryptedSecret) {
+            return existing.encryptedSecret; // a racing deploy already provisioned it
+        }
+
+        await context.db.insert("deployKeys", {
+            capability: "ingest",
+            createdAt: Date.now(),
+            encryptedSecret,
+            hashedKey,
+            name: "Telemetry ingest (auto)",
+            organizationId,
+            type: "production",
+        });
+
+        return encryptedSecret;
+    });

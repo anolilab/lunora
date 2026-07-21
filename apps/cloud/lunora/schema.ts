@@ -184,6 +184,11 @@ export default defineSchema({
         // platform injects into a tenant's `otlpSink` can't be used to deploy.
         capability: v.optional(v.union(v.literal("deploy"), v.literal("ingest"))),
         createdAt: v.number(),
+        // Envelope-encrypted plaintext (AES-256-GCM). ONLY set for platform-managed
+        // `ingest` keys, so the deploy path can re-inject the token into a tenant's
+        // `otlpSink` on every deploy without re-minting. User deploy keys never
+        // store this — their plaintext is shown once and is unrecoverable.
+        encryptedSecret: v.optional(v.object({ ciphertext: v.string(), iv: v.string() })),
         // Only the hash is stored; the plaintext key is shown once at creation.
         hashedKey: v.string(),
         lastUsedAt: v.optional(v.number()),

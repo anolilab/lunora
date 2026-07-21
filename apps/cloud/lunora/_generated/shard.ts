@@ -936,6 +936,11 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "type": "number"
         },
         {
+            "name": "encryptedSecret",
+            "optional": true,
+            "type": "object"
+        },
+        {
             "name": "hashedKey",
             "optional": false,
             "type": "string"
@@ -2926,6 +2931,26 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
+        "cacheKey": "nondeterministic_query_mutation:deploy-keys:200:Date.now",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
+        "detail": "`Date.now(…)` in recordIngestKey (deploy-keys:200) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "callee": "Date.now",
+            "exportName": "recordIngestKey",
+            "file": "deploy-keys",
+            "kind": "mutation",
+            "line": 200
+        },
+        "name": "nondeterministic_query_mutation",
+        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
+        "title": "Non-deterministic call in query/mutation handler"
+    },
+    {
         "cacheKey": "nondeterministic_query_mutation:deployments:157:Date.now",
         "categories": [
             "SCHEMA"
@@ -3953,6 +3978,25 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Public write without a rate limit"
     },
     {
+        "cacheKey": "public_mutation_without_ratelimit:deploy-keys:recordIngestKey",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.",
+        "detail": "Public mutation `recordIngestKey` (deploy-keys) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "recordIngestKey",
+            "file": "deploy-keys",
+            "kind": "mutation",
+            "sensitive": false
+        },
+        "name": "public_mutation_without_ratelimit",
+        "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
+        "title": "Public write without a rate limit"
+    },
+    {
         "cacheKey": "public_mutation_without_ratelimit:deployments:create",
         "categories": [
             "SECURITY"
@@ -4957,6 +5001,82 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "verify",
             "file": "deploy-keys",
             "line": 112
+        },
+        "name": "unbounded_string_arg",
+        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
+        "title": "Public string argument has no length bound"
+    },
+    {
+        "cacheKey": "unbounded_string_arg:deploy-keys:ingestKeyCipher:deployKey",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
+        "detail": "Arg `deployKey` of public procedure `ingestKeyCipher` (deploy-keys:160) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "facing": "EXTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "argument": "deployKey",
+            "exportName": "ingestKeyCipher",
+            "file": "deploy-keys",
+            "line": 160
+        },
+        "name": "unbounded_string_arg",
+        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
+        "title": "Public string argument has no length bound"
+    },
+    {
+        "cacheKey": "unbounded_string_arg:deploy-keys:recordIngestKey:deployKey",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
+        "detail": "Arg `deployKey` of public procedure `recordIngestKey` (deploy-keys:179) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "facing": "EXTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "argument": "deployKey",
+            "exportName": "recordIngestKey",
+            "file": "deploy-keys",
+            "line": 179
+        },
+        "name": "unbounded_string_arg",
+        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
+        "title": "Public string argument has no length bound"
+    },
+    {
+        "cacheKey": "unbounded_string_arg:deploy-keys:recordIngestKey:encryptedSecret",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
+        "detail": "Arg `encryptedSecret` of public procedure `recordIngestKey` (deploy-keys:179) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "facing": "EXTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "argument": "encryptedSecret",
+            "exportName": "recordIngestKey",
+            "file": "deploy-keys",
+            "line": 179
+        },
+        "name": "unbounded_string_arg",
+        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
+        "title": "Public string argument has no length bound"
+    },
+    {
+        "cacheKey": "unbounded_string_arg:deploy-keys:recordIngestKey:hashedKey",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
+        "detail": "Arg `hashedKey` of public procedure `recordIngestKey` (deploy-keys:179) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "facing": "EXTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "argument": "hashedKey",
+            "exportName": "recordIngestKey",
+            "file": "deploy-keys",
+            "line": 179
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",

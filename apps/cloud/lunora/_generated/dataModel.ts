@@ -121,6 +121,7 @@ export interface Doc_deployKeys {
     _creationTime: number;
     capability?: "deploy" | "ingest";
     createdAt: number;
+    encryptedSecret?: { ciphertext: string; iv: string };
     hashedKey: string;
     lastUsedAt?: number;
     name: string;
@@ -661,6 +662,7 @@ export interface Insert_deployKeys {
     _creationTime?: number;
     capability?: "deploy" | "ingest";
     createdAt: number;
+    encryptedSecret?: { ciphertext: string; iv: string };
     hashedKey: string;
     lastUsedAt?: number;
     name: string;

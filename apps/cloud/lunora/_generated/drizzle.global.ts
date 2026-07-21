@@ -101,6 +101,7 @@ export const deployKeys = sqliteTable("deployKeys", {
     _creationTime: integer("_creationTime").notNull(),
     capability: text("capability", { mode: "json" }).$type<"deploy" | "ingest">(),
     createdAt: real("createdAt").notNull(),
+    encryptedSecret: text("encryptedSecret", { mode: "json" }).$type<{ ciphertext: string; iv: string }>(),
     hashedKey: text("hashedKey").notNull(),
     lastUsedAt: real("lastUsedAt"),
     name: text("name").notNull(),

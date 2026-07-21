@@ -12,6 +12,7 @@ import { handleGitHubWebhook } from "../github/webhook";
 import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createCloudflareProvisioner } from "../provision";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
+import { formatDeployKey, hashDeployKey, randomSecret } from "./keys";
 import type { OtlpLogEntry, OtlpLogsPayload, OtlpMetricsPayload, OtlpTracePayload } from "../telemetry/otlp";
 import { decodeLogRecords, decodeMetricPoints, decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
 import { decodeLogsPayloadProto, decodeMetricsPayloadProto, decodeTracePayloadProto } from "../telemetry/otlp-protobuf";
@@ -41,6 +42,8 @@ interface RouterEnv {
     LUNORA_ADMIN_TOKEN?: string;
     LUNORA_APP_DOMAIN?: string;
     LUNORA_CELL?: string;
+    /** OTLP ingest base injected into tenant Workers (`LUNORA_OTLP_ENDPOINT`); telemetry is off when unset. */
+    LUNORA_OTLP_ENDPOINT?: string;
     /** Shared secret the dispatch-namespace tail worker presents to `POST /v1/logs/tail`. */
     LUNORA_TAIL_SECRET?: string;
     /** Sender address for invitation email; the mailer reads the rest of env too. */
@@ -1035,7 +1038,60 @@ export const createDeployRouter = (): HttpRouterLike => {
             }
         };
 
-        return handleDeployRequest(request, { backend, cell, dispatchNamespace: (kind) => `lunora-${kind}`, healthCheck, provisioner, scheduler });
+        // Provision (once per org) a scoped ingest key, its plaintext stored
+        // encrypted so we can re-inject it every deploy without re-minting, and
+        // hand the tenant its OTLP endpoint + token + tail consumer. Off (returns
+        // undefined) when the ingest endpoint or the master key isn't configured.
+        const resolveTelemetry = async ({
+            key,
+            organizationId,
+        }: {
+            key: string;
+            organizationId: string;
+        }): Promise<undefined | { endpoint: string; tailConsumer?: string; token: string }> => {
+            const endpoint = environment.LUNORA_OTLP_ENDPOINT;
+            const encryptionKey = environment.SECRET_ENCRYPTION_KEY;
+
+            if (!endpoint || !encryptionKey) {
+                return undefined;
+            }
+
+            const existing = await context.runQuery<null | { ciphertext: string; iv: string }>(api.deploy_keys.ingestKeyCipher, {
+                deployKey: key,
+                organizationId,
+            });
+
+            let cipher: { ciphertext: string; iv: string };
+
+            if (existing) {
+                cipher = existing;
+            } else {
+                // Mint an `ingest`-capability key (telemetry-only — can't deploy),
+                // store it encrypted, and use the mutation's returned effective
+                // cipher (race-safe against a concurrent deploy).
+                const token = formatDeployKey({ organizationId, secret: randomSecret(), type: "production" });
+                const fresh = await encryptSecret(encryptionKey, token);
+
+                cipher = await context.runMutation<{ ciphertext: string; iv: string }>(api.deploy_keys.recordIngestKey, {
+                    deployKey: key,
+                    encryptedSecret: fresh,
+                    hashedKey: await hashDeployKey(token),
+                    organizationId,
+                });
+            }
+
+            return { endpoint, tailConsumer: "lunora-log-tail", token: await decryptSecret(encryptionKey, cipher) };
+        };
+
+        return handleDeployRequest(request, {
+            backend,
+            cell,
+            dispatchNamespace: (kind) => `lunora-${kind}`,
+            healthCheck,
+            provisioner,
+            resolveTelemetry,
+            scheduler,
+        });
     };
 
     // POST /v1/deployments/rollback — swap the stable URL back to a retained

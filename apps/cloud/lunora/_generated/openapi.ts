@@ -1339,6 +1339,74 @@ export const openApiSpec: Record<string, unknown> = {
                 "x-lunora-function-kind": "mutation"
             }
         },
+        "/_lunora/rpc#deploy_keys:ingestKeyCipher": {
+            "post": {
+                "description": "Invoke the `query` `deploy_keys:ingestKeyCipher` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "deploy_keys:ingestKeyCipher",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "deployKey": {
+                                                "type": "string"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            }
+                                        },
+                                        "required": [
+                                            "deployKey",
+                                            "organizationId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "deploy_keys:ingestKeyCipher",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "query: deploy_keys:ingestKeyCipher",
+                "tags": [
+                    "deploy_keys"
+                ],
+                "x-lunora-function-kind": "query"
+            }
+        },
         "/_lunora/rpc#deploy_keys:issue": {
             "post": {
                 "description": "Invoke the `mutation` `deploy_keys:issue` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -1503,6 +1571,95 @@ export const openApiSpec: Record<string, unknown> = {
                     "deploy_keys"
                 ],
                 "x-lunora-function-kind": "query"
+            }
+        },
+        "/_lunora/rpc#deploy_keys:recordIngestKey": {
+            "post": {
+                "description": "Invoke the `mutation` `deploy_keys:recordIngestKey` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "operationId": "deploy_keys:recordIngestKey",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "deployKey": {
+                                                "type": "string"
+                                            },
+                                            "encryptedSecret": {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                    "ciphertext": {
+                                                        "type": "string"
+                                                    },
+                                                    "iv": {
+                                                        "type": "string"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "ciphertext",
+                                                    "iv"
+                                                ],
+                                                "type": "object"
+                                            },
+                                            "hashedKey": {
+                                                "type": "string"
+                                            },
+                                            "organizationId": {
+                                                "description": "Id<\"organizations\">",
+                                                "type": "string",
+                                                "x-lunora-table": "organizations"
+                                            }
+                                        },
+                                        "required": [
+                                            "deployKey",
+                                            "encryptedSecret",
+                                            "hashedKey",
+                                            "organizationId"
+                                        ],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "deploy_keys:recordIngestKey",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/LunoraError"
+                    }
+                },
+                "summary": "mutation: deploy_keys:recordIngestKey",
+                "tags": [
+                    "deploy_keys"
+                ],
+                "x-lunora-function-kind": "mutation"
             }
         },
         "/_lunora/rpc#deploy_keys:revoke": {

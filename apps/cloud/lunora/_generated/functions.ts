@@ -77,8 +77,10 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "builds:recordPush": lunora_builds_3.recordPush as unknown as RegisteredLunoraFunction,
     "cells:list": lunora_cells_4.list as unknown as RegisteredLunoraFunction,
     "cells:register": lunora_cells_4.register as unknown as RegisteredLunoraFunction,
+    "deploy_keys:ingestKeyCipher": lunora_deploy_keys_5.ingestKeyCipher as unknown as RegisteredLunoraFunction,
     "deploy_keys:issue": lunora_deploy_keys_5.issue as unknown as RegisteredLunoraFunction,
     "deploy_keys:list": lunora_deploy_keys_5.list as unknown as RegisteredLunoraFunction,
+    "deploy_keys:recordIngestKey": lunora_deploy_keys_5.recordIngestKey as unknown as RegisteredLunoraFunction,
     "deploy_keys:revoke": lunora_deploy_keys_5.revoke as unknown as RegisteredLunoraFunction,
     "deploy_keys:verify": lunora_deploy_keys_5.verify as unknown as RegisteredLunoraFunction,
     "deployments:activate": lunora_deployments_6.activate as unknown as RegisteredLunoraFunction,
@@ -310,10 +312,27 @@ __has1 = true;
 if (typeof source["name"] !== "string") return DEFER;
 return { "cloudflareAccountId": source["cloudflareAccountId"], "dispatchNamespacePrefix": source["dispatchNamespacePrefix"], ...(__has1 ? { "jurisdiction": __val1 } : {}), "name": source["name"] };
 });
+installCompiledValidatorMap(lunora_deploy_keys_5.ingestKeyCipher.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["deployKey"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "deployKey": source["deployKey"], "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_deploy_keys_5.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_deploy_keys_5.recordIngestKey.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["deployKey"] !== "string") return DEFER;
+if (typeof source["encryptedSecret"] !== "object" || source["encryptedSecret"] === null || Array.isArray(source["encryptedSecret"])) return DEFER;
+if (typeof source["encryptedSecret"]["ciphertext"] !== "string") return DEFER;
+if (typeof source["encryptedSecret"]["iv"] !== "string") return DEFER;
+const __obj1 = { "ciphertext": source["encryptedSecret"]["ciphertext"], "iv": source["encryptedSecret"]["iv"] };
+if (typeof source["hashedKey"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "deployKey": source["deployKey"], "encryptedSecret": __obj1, "hashedKey": source["hashedKey"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_deploy_keys_5.revoke.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -803,8 +822,10 @@ export interface Caller {
         register: (args: { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }) => Promise<Id<"cells">>;
     };
     deploy_keys: {
+        ingestKeyCipher: (args: { deployKey: string; organizationId: Id<"organizations"> }) => Promise<null | { ciphertext: string; iv: string }>;
         issue: (args: { capability?: "deploy" | "ingest"; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }) => Promise<{ id: Id<"deployKeys">; key: string; }>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"deployKeys">; capability?: "deploy" | "ingest"; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
+        recordIngestKey: (args: { deployKey: string; encryptedSecret: { ciphertext: string; iv: string }; hashedKey: string; organizationId: Id<"organizations"> }) => Promise<{ ciphertext: string; iv: string }>;
         revoke: (args: { id: Id<"deployKeys">; organizationId: Id<"organizations"> }) => Promise<void>;
         verify: (args: { key: string }) => Promise<{ deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
     };
@@ -960,8 +981,10 @@ export const createCaller = (context: CallerCtx): Caller => ({
         register: (args) => callRegistered(context, "cells:register", args),
     },
     deploy_keys: {
+        ingestKeyCipher: (args) => callRegistered(context, "deploy_keys:ingestKeyCipher", args),
         issue: (args) => callRegistered(context, "deploy_keys:issue", args),
         list: (args) => callRegistered(context, "deploy_keys:list", args),
+        recordIngestKey: (args) => callRegistered(context, "deploy_keys:recordIngestKey", args),
         revoke: (args) => callRegistered(context, "deploy_keys:revoke", args),
         verify: (args) => callRegistered(context, "deploy_keys:verify", args),
     },

@@ -36,8 +36,10 @@ export interface ApiTypes {
         register: FunctionReference<"mutation", { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }, Id<"cells">>;
     };
     deploy_keys: {
+        ingestKeyCipher: FunctionReference<"query", { deployKey: string; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
         issue: FunctionReference<"mutation", { capability?: "deploy" | "ingest"; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }, { id: Id<"deployKeys">; key: string; }>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"deployKeys">; capability?: "deploy" | "ingest"; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
+        recordIngestKey: FunctionReference<"mutation", { deployKey: string; encryptedSecret: { ciphertext: string; iv: string }; hashedKey: string; organizationId: Id<"organizations"> }, { ciphertext: string; iv: string }>;
         revoke: FunctionReference<"mutation", { id: Id<"deployKeys">; organizationId: Id<"organizations"> }, void>;
         verify: FunctionReference<"mutation", { key: string }, { deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
     };
