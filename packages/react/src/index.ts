@@ -40,6 +40,34 @@ export type {
     User,
     UseSubscriptionResult,
 } from "./types";
+export type {
+    UploadMethod,
+    UploadRestrictions,
+    UploadResult,
+    UseChunkedRestUploadOptions,
+    UseChunkedRestUploadReturn,
+    UseFileInputOptions,
+    UseFileInputReturn,
+    UseMultipartUploadOptions,
+    UseMultipartUploadReturn,
+    UsePasteUploadOptions,
+    UsePasteUploadReturn,
+    UseTusUploadOptions,
+    UseTusUploadReturn,
+    UseUploadOptions,
+    UseUploadReturn,
+} from "./upload";
+export {
+    RestrictionError,
+    UploadControl,
+    UploadError,
+    useChunkedRestUpload,
+    useFileInput,
+    useMultipartUpload,
+    usePasteUpload,
+    useTusUpload,
+    useUpload,
+} from "./upload";
 export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
 export { useAgent } from "./use-agent";
 export type {
