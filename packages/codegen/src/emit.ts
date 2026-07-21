@@ -127,6 +127,8 @@ const SCALAR_TYPE_BY_KIND: Record<string, string> = {
     // not statically recoverable at codegen time — emit `unknown` so the
     // generated api types still compile without depending on the library.
     from: "unknown",
+    // A geographic point stored as a `{ lat, lng }` JSON object.
+    geoPoint: "{ lat: number; lng: number }",
     null: "null",
     number: "number",
     // The key of a stored R2 object — a string; the distinction is semantic only.
@@ -328,6 +330,16 @@ const emitDataModel = (schema: SchemaIR, useUmbrella = false): string => {
         })
         .join("\n");
 
+    const geoIndexNamesByTable = schema.tables
+        .map((table) => {
+            // Like search, geo queries route through the local DO reader; a
+            // `.global()` (D1) table has no geohash companion, so emit `never`.
+            const names = table.shardMode === "global" ? "" : (table.geoIndexes ?? []).map((index) => JSON.stringify(index.name)).join(" | ");
+
+            return `    ${table.name}: ${names || "never"};`;
+        })
+        .join("\n");
+
     const vectorIndexNames = schema.vectorIndexes.map((index) => JSON.stringify(index.name)).join(" | ") || "never";
 
     const insertInterfaces = schema.tables.map((table) => renderInsertInterface(table)).join("\n\n");
@@ -428,6 +440,13 @@ ${rankIndexNamesByTable}
 
 export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
 
+/** Per-table geo-index name union. \`never\` for tables without a geoIndex. */
+export interface GeoIndexNamesByTable {
+${geoIndexNamesByTable}
+}
+
+export type GeoIndexName<T extends keyof DataModel> = GeoIndexNamesByTable[T];
+
 /** Union of declared vector index names. \`never\` when none are declared. */
 export type VectorIndexName = ${vectorIndexNames};
 
@@ -467,16 +486,16 @@ export type WithArg<T extends keyof DataModel> = WithArgOf<DataModel, Relations,
 export type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;
 
 /** Read-only typed table accessor exposed on \`QueryCtx.db.<table>\`. */
-export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T>;
+export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
 
 /** Read-write typed table accessor exposed on \`MutationCtx.db.<table>\` / \`ActionCtx.db.<table>\`. */
-export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T>;
+export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
 
 /** Per-table read facade — \`ctx.db.<table>\` on a \`QueryCtx\`. */
-export type DatabaseReaderFacade = DatabaseReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable>;
+export type DatabaseReaderFacade = DatabaseReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
 
 /** Per-table read-write facade — \`ctx.db.<table>\` on a \`MutationCtx\` / \`ActionCtx\`. */
-export type DatabaseWriterFacade = DatabaseWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable>;
+export type DatabaseWriterFacade = DatabaseWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
 
 /** Insert builder returned by \`ctx.orm.insert(table)\`. */
 export interface OrmInsertBuilder<T extends keyof DataModel> {
@@ -2121,7 +2140,7 @@ const buildStorageColumns = (schema: SchemaIR): Record<string, string[]> => {
 interface EmittedTableIndex {
     fields: string[];
     name: string;
-    type: "index" | "rank" | "search" | "vector";
+    type: "geo" | "index" | "rank" | "search" | "vector";
     unique?: boolean;
 }
 
@@ -2143,6 +2162,9 @@ const buildTableIndexes = (schema: SchemaIR): Record<string, EmittedTableIndex[]
             ...table.searchIndexes.map((index) => {
                 return { fields: [index.field, ...(index.filterFields ?? [])], name: index.name, type: "search" as const };
             }),
+            ...(table.geoIndexes ?? []).map((index) => {
+                return { fields: [index.field], name: index.name, type: "geo" as const };
+            }),
             ...table.rankIndexes.map((index) => {
                 return { fields: index.sortBy.map((key) => key.field), name: index.name, type: "rank" as const };
             }),
@@ -2157,6 +2179,39 @@ const buildTableIndexes = (schema: SchemaIR): Record<string, EmittedTableIndex[]
     }
 
     return byTable;
+};
+
+/** One resolved TTL policy the generated shard hands to the base `ttlSweeps()` alarm hook. */
+interface EmittedTtlSweep {
+    after?: number;
+    field: string;
+    softDeleteField?: string;
+    table: string;
+}
+
+/**
+ * Resolve every `.ttl(field, { after? })` table into a {@link EmittedTtlSweep} the
+ * DO's alarm sweep consumes. `.global()` tables live in D1 (no local alarm), so
+ * they're skipped. The `.softDelete()` marker (when the table declares one) rides
+ * along so the sweep excludes already-tombstoned rows.
+ */
+const buildTtlSweeps = (schema: SchemaIR): EmittedTtlSweep[] => {
+    const sweeps: EmittedTtlSweep[] = [];
+
+    for (const table of schema.tables) {
+        if (!table.ttl || table.shardMode === "global") {
+            continue;
+        }
+
+        sweeps.push({
+            ...(table.ttl.after === undefined ? {} : { after: table.ttl.after }),
+            field: table.ttl.field,
+            ...(table.softDelete ? { softDeleteField: table.softDelete.field } : {}),
+            table: table.name,
+        });
+    }
+
+    return sweeps;
 };
 
 /** One column descriptor per table, mirroring `@lunora/do`'s `ColumnMeta`. */
@@ -3598,6 +3653,7 @@ const emitShard = ({
     const tableIndexes = buildTableIndexes(schema);
     const tableColumns = buildTableColumns(schema);
     const storageColumns = buildStorageColumns(schema);
+    const ttlSweeps = buildTtlSweeps(schema);
 
     // The facade option types (AggregateOptions/QueryArgs/RestrictableQueryOptions/
     // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
@@ -4108,11 +4164,13 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
     // schema must not spin the alarm). The alarm re-arms itself while
     // `pollExternalSources` reports active sources. Emitted only when the schema has
     // a sourced table (else the class stays constructor-free).
-    const sourceConstructorOverride = hasSourcedTables
+    // A single constructor bootstraps every alarm tier the schema needs: the
+    // external-source ingest poll (auto-refresh sources) and the declarative TTL
+    // sweep. Emitted only when at least one tier is present, so a plain schema
+    // still gets a byte-identical `shard.ts`.
+    const hasTtlTables = ttlSweeps.length > 0;
+    const sourceBootstrap = hasSourcedTables
         ? `
-        public constructor(state: ShardDOState, env: unknown) {
-            super(state, env);
-
             const autoSourced = Object.values((schema as unknown as SchemaLike).tables).some((definition) => {
                 const source = (definition as { externalSource?: ExternalSourceLike }).externalSource;
 
@@ -4122,9 +4180,23 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
             if (autoSourced) {
                 void this.scheduleSourcePoll();
             }
-        }
 `
         : "";
+    const ttlBootstrap = hasTtlTables
+        ? `
+            if (LUNORA_TTL_SWEEPS.length > 0) {
+                void this.scheduleTtlSweep();
+            }
+`
+        : "";
+    const sourceConstructorOverride =
+        hasSourcedTables || hasTtlTables
+            ? `
+        public constructor(state: ShardDOState, env: unknown) {
+            super(state, env);
+${sourceBootstrap}${ttlBootstrap}        }
+`
+            : "";
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
@@ -4193,14 +4265,17 @@ interface FunctionReference {
 /** Foreign-key columns per table (\`v.id("target")\` fields) for the data browser. */
 const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringify(tableReferences, undefined, 4)};
 
-/** Declared indexes per table (secondary, search, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = ${JSON.stringify(tableIndexes, undefined, 4)};
+/** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
+const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> = ${JSON.stringify(tableIndexes, undefined, 4)};
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via \`__lunora_admin__:describeTable\`. */
 const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>> = ${JSON.stringify(tableColumns, undefined, 4)};
 
 /** Storage-key columns per table (\`v.storage(...)\` fields) for the file browser's records↔files join. */
 const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = ${JSON.stringify(storageColumns, undefined, 4)};
+
+/** Declarative TTL policies (\`.ttl(field, { after? })\`) the DO alarm sweep auto-expires rows for. */
+const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = ${JSON.stringify(ttlSweeps, undefined, 4)};
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via \`__lunora_admin__:getAdvisories\`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = ${JSON.stringify(advisoryData, undefined, 4)};
@@ -4383,8 +4458,12 @@ ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${ext
             return LUNORA_TABLE_REFS[table];
         }
 
-        protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }> {
+        protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }> {
             return LUNORA_TABLE_INDEXES[table] ?? [];
+        }
+
+        protected override ttlSweeps(): ReadonlyArray<{ after?: number; field: string; softDeleteField?: string; table: string }> {
+            return LUNORA_TTL_SWEEPS;
         }
 
         protected override tableColumns(table: string): Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }> {

@@ -55,6 +55,7 @@ type ValidatorKind =
     | "bytes"
     | "date"
     | "from"
+    | "geoPoint"
     | "id"
     | "literal"
     | "null"
@@ -533,6 +534,50 @@ const storage = (bucket?: string): ColumnValidator<string, string> =>
         ),
     );
 
+/**
+ * A geographic point — latitude/longitude in decimal degrees (WGS84). The value
+ * a `v.geoPoint()` column reads/writes. Stored as a JSON object alongside the
+ * row; a `.geoIndex(name, { field })` on the table maintains a geohash companion
+ * so `withGeoIndex(name, q => q.near(point, radius) | q.within(bbox))` can answer
+ * proximity/bounding-box reads.
+ */
+interface GeoPoint {
+    /** Latitude in decimal degrees, `-90 … 90`. */
+    lat: number;
+    /** Longitude in decimal degrees, `-180 … 180`. */
+    lng: number;
+}
+
+/**
+ * A latitude/longitude point (WGS84 decimal degrees). Parses an object with
+ * finite `lat` ∈ `[-90, 90]` and `lng` ∈ `[-180, 180]`; any other shape or an
+ * out-of-range coordinate throws a {@link ValidationError}. Pair with a table's
+ * `.geoIndex(name, { field })` to enable `near` / `within` reads.
+ */
+const geoPoint = (): ColumnValidator<GeoPoint, GeoPoint> =>
+    asColumn(
+        createValidator<GeoPoint>("geoPoint", (value, context) => {
+            if (typeof value !== "object" || value === null || Array.isArray(value)) {
+                fail(context, "geoPoint { lat, lng }", value);
+            }
+
+            const point = value as Record<string, unknown>;
+            const { lat, lng } = point;
+
+            if (typeof lat !== "number" || !Number.isFinite(lat) || lat < -90 || lat > 90) {
+                context.path.push("lat");
+                fail(context, "latitude in [-90, 90]", lat);
+            }
+
+            if (typeof lng !== "number" || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+                context.path.push("lng");
+                fail(context, "longitude in [-180, 180]", lng);
+            }
+
+            return { lat, lng };
+        }),
+    );
+
 const literal = <T extends bigint | boolean | number | string | null>(literalValue: T): ColumnValidator<T, T> =>
     asColumn(
         createValidator<T>(
@@ -934,6 +979,7 @@ const v: {
     bytes: typeof bytes;
     date: typeof date;
     from: typeof from;
+    geoPoint: typeof geoPoint;
     id: typeof id;
     literal: typeof literal;
     null: typeof nullValidator;
@@ -953,6 +999,7 @@ const v: {
     bytes,
     date,
     from,
+    geoPoint,
     id,
     literal,
     null: nullValidator,
@@ -971,6 +1018,7 @@ export type {
     Column,
     ColumnMeta,
     ColumnValidator,
+    GeoPoint,
     Id,
     Infer,
     InferInsert,
