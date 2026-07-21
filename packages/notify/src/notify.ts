@@ -44,6 +44,59 @@ const mapWithConcurrency = async <T, R>(items: ReadonlyArray<T>, limit: number, 
     return results;
 };
 
+/** Resolve the (possibly env-thunked) channel configs into a ready-to-wire set. */
+const resolveProviders = (definition: NotifyDefinition, env: NotifyEnv): ResolvedProviders => {
+    return {
+        chat: resolveMaybeFactory(definition.chat, env) as Provider | undefined,
+        fcm: resolveMaybeFactory(definition.fcm, env),
+        inApp: resolveMaybeFactory(definition.inApp, env) as Provider | undefined,
+        webhook: resolveMaybeFactory(definition.webhook, env) as Provider | undefined,
+        webPush: resolveMaybeFactory(definition.webPush, env),
+    };
+};
+
+/**
+ * The per-isolate state memoized across `createNotify` calls. Codegen splices
+ * `createNotify(notifyDefinition, env)` onto EVERY handler ctx, so it runs once
+ * per RPC — but the engine (web-push/FCM providers + retry + circuit-breaker
+ * middleware) and the dev in-memory fallback store are expensive to build and MUST
+ * persist across requests (a `register()` in one request has to be visible to a
+ * `broadcast()` in the next). All three fields are lazy: the engine is only built
+ * when there is no `options.engine` override, the fallback store only when the
+ * config supplies no real `store`.
+ */
+interface NotifyRuntime {
+    engine?: Notification;
+    fallbackStore?: SubscriptionStore;
+    warnedNoStore: boolean;
+}
+
+/**
+ * Per-isolate memoization cache keyed on the {@link NotifyDefinition} identity (a
+ * module singleton — the `lunora/notify.ts` default export) then the Worker `env`,
+ * both stable for the isolate's lifetime. A `WeakMap` so a torn-down definition/env
+ * is collectable and tests using fresh objects never leak state into each other.
+ */
+const runtimeCache = new WeakMap<NotifyDefinition, WeakMap<NotifyEnv, NotifyRuntime>>();
+
+const runtimeFor = (definition: NotifyDefinition, env: NotifyEnv): NotifyRuntime => {
+    let byEnv = runtimeCache.get(definition);
+
+    if (byEnv === undefined) {
+        byEnv = new WeakMap<NotifyEnv, NotifyRuntime>();
+        runtimeCache.set(definition, byEnv);
+    }
+
+    let runtime = byEnv.get(env);
+
+    if (runtime === undefined) {
+        runtime = { warnedNoStore: false };
+        byEnv.set(env, runtime);
+    }
+
+    return runtime;
+};
+
 /** Options for {@link createNotify}. */
 export interface CreateNotifyOptions {
     /** Max concurrent sends during a `broadcast` (default 10). */
@@ -65,29 +118,40 @@ export interface CreateNotifyOptions {
  * `env`. Codegen calls this to splice the facades onto ctx — the same shape as
  * `createFlags` for `ctx.flags`. Returns both facades; `notify.push` is the very
  * same object exposed as `ctx.push`.
+ *
+ * The engine and the dev fallback store are memoized per isolate (see
+ * {@link NotifyRuntime}), so repeat calls with the same `definition`/`env` are
+ * cheap — only the thin facade closures below are rebuilt each call.
  */
 export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, options: CreateNotifyOptions = {}): { notify: LunoraNotify; push: LunoraPush } => {
-    const resolved: ResolvedProviders = {
-        chat: resolveMaybeFactory(definition.chat, env) as Provider | undefined,
-        fcm: resolveMaybeFactory(definition.fcm, env),
-        inApp: resolveMaybeFactory(definition.inApp, env) as Provider | undefined,
-        webhook: resolveMaybeFactory(definition.webhook, env) as Provider | undefined,
-        webPush: resolveMaybeFactory(definition.webPush, env),
-    };
+    const runtime = runtimeFor(definition, env);
 
-    const engine: Notification = options.engine ?? buildEngine(resolved);
+    let engine: Notification;
+
+    if (options.engine === undefined) {
+        // Build once per isolate; the `options.engine` override seam bypasses it.
+        runtime.engine ??= buildEngine(resolveProviders(definition, env));
+        engine = runtime.engine;
+    } else {
+        engine = options.engine;
+    }
 
     let store: SubscriptionStore | undefined = definition.store?.(env);
 
     if (store === undefined) {
-        if (!options.silent) {
+        // Reuse ONE in-memory store per isolate so registrations survive across
+        // requests; warn at most once (guarded on the per-isolate runtime).
+        runtime.fallbackStore ??= memorySubscriptionStore();
+
+        if (!options.silent && !runtime.warnedNoStore) {
+            runtime.warnedNoStore = true;
             // eslint-disable-next-line no-console -- one-time durability warning, mirrors other dev-store fallbacks
             console.warn(
                 "@lunora/notify: no `store` configured — using a non-durable in-memory subscription store. Configure `store: (env) => d1SubscriptionStore(env.DB)` for production.",
             );
         }
 
-        store = memorySubscriptionStore();
+        store = runtime.fallbackStore;
     }
 
     const subscriptionStore = store;

@@ -133,16 +133,63 @@ describe("ctx.notify multi-channel", () => {
     });
 });
 
-describe("createNotify store fallback", () => {
-    it("warns once and uses an in-memory store when none is configured", () => {
+describe("createNotify per-isolate memoization", () => {
+    it("builds the engine once per isolate across repeated createNotify calls", () => {
+        expect.hasAssertions();
+
+        // No `options.engine` override, so the real engine is built from the config.
+        // A counting `webPush` thunk proves `buildEngine`/provider resolution runs
+        // exactly once even though `createNotify` is invoked per (simulated) request.
+        let builds = 0;
+        const env = {};
+        const store = memorySubscriptionStore();
+        const definition: NotifyDefinition = {
+            isLunoraNotify: true,
+            store: () => store,
+            webPush: () => {
+                builds += 1;
+
+                return { vapidPrivateKey: "d", vapidPublicKey: "p", vapidSubject: "mailto:a@b.c" };
+            },
+        };
+
+        createNotify(definition, env, { silent: true });
+        createNotify(definition, env, { silent: true });
+        createNotify(definition, env, { silent: true });
+
+        expect(builds).toBe(1);
+    });
+
+    it("reuses one in-memory fallback store so a registration survives across calls", async () => {
+        expect.hasAssertions();
+
+        const env = {};
+        const definition: NotifyDefinition = { isLunoraNotify: true, webPush: { vapidPrivateKey: "d", vapidPublicKey: "p", vapidSubject: "s" } };
+
+        const first = createNotify(definition, env, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await first.push.register({ subscription: okSub, userId: "u1" });
+
+        // A second call in the SAME isolate (same definition + env) sees the earlier
+        // registration — the fallback store is memoized, not re-created per request.
+        const second = createNotify(definition, env, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await expect(second.push.list()).resolves.toHaveLength(1);
+        await expect(second.push.list({ userId: "u1" })).resolves.toHaveLength(1);
+    });
+
+    it("warns at most once per isolate when no store is configured", () => {
         expect.hasAssertions();
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const env = {};
         const push = mockPushProvider();
         const definition: NotifyDefinition = { isLunoraNotify: true, webPush: { vapidPrivateKey: "d", vapidPublicKey: "p", vapidSubject: "s" } };
 
-        createNotify(definition, {}, { engine: mockEngine({ push: push.provider }) });
+        createNotify(definition, env, { engine: mockEngine({ push: push.provider }) });
+        createNotify(definition, env, { engine: mockEngine({ push: push.provider }) });
 
+        expect(warn).toHaveBeenCalledTimes(1);
         expect(warn).toHaveBeenCalledWith(expect.stringContaining("non-durable in-memory subscription store"));
 
         warn.mockRestore();
