@@ -1,3 +1,11 @@
+## @lunora/nuxt [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/%40lunora%2Fnuxt%401.0.0-alpha.36...%40lunora%2Fnuxt%401.0.0-alpha.37) (2026-07-21)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.26
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.32
+
 ## @lunora/nuxt [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/%40lunora%2Fnuxt%401.0.0-alpha.35...%40lunora%2Fnuxt%401.0.0-alpha.36) (2026-07-21)
 
 
