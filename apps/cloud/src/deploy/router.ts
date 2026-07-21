@@ -15,6 +15,8 @@ import { decryptSecret, encryptSecret } from "../secrets/crypto";
 import type { OtlpTracePayload } from "../telemetry/otlp";
 import { decodeTelemetryEvents } from "../telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../telemetry/store";
+import type { StoredAdminToken } from "./admin-token";
+import { resolveAdminToken, sealAdminToken } from "./admin-token";
 import type { DeployBackend, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
 import type { RegisteredRoute } from "./route-registry";
@@ -176,8 +178,21 @@ const handleAdminRoute = async (request: Request, environment: RouterEnv): Promi
                 recordAudit: async (entry) => {
                     await context.runMutation(api.audit_log.record, { action: entry.action, organizationId: entry.organizationId });
                 },
-                resolveTarget: (organizationId, deploymentId) =>
-                    context.runMutation<null | { adminToken: string; url: string }>(api.deployments.adminTarget, { deploymentId, organizationId }),
+                resolveTarget: async (organizationId, deploymentId) => {
+                    const target = await context.runMutation<(StoredAdminToken & { url: string }) | null>(api.deployments.adminTarget, {
+                        deploymentId,
+                        organizationId,
+                    });
+
+                    if (!target) {
+                        return null;
+                    }
+
+                    // Decrypt the sealed admin token at the edge (never over RPC).
+                    const adminToken = await resolveAdminToken(target, environment.SECRET_ENCRYPTION_KEY);
+
+                    return adminToken ? { adminToken, url: target.url } : null;
+                },
             },
         );
     } catch (error) {
@@ -739,9 +754,13 @@ export const createDeployRouter = (): HttpRouterLike => {
             activateDeployment: async ({ deploymentId, key }) => {
                 await context.runMutation(api.deployments.activate, { deployKey: key, id: deploymentId });
             },
-            createDeployment: ({ adminToken, branch, cronSpecs, key, kind, organizationId, projectId, scriptName }) =>
-                context.runMutation<{ deploymentId: string; scriptName: string; version: number }>(api.deployments.create, {
-                    adminToken,
+            createDeployment: async ({ adminToken, branch, cronSpecs, key, kind, organizationId, projectId, scriptName }) => {
+                // Seal the admin token at the edge — the control-plane D1 stores
+                // ciphertext + IV (plaintext only in dev without a master key).
+                const sealed = await sealAdminToken(adminToken, environment.SECRET_ENCRYPTION_KEY);
+
+                return context.runMutation<{ deploymentId: string; scriptName: string; version: number }>(api.deployments.create, {
+                    ...sealed,
                     branch,
                     ...(cronSpecs && cronSpecs.length > 0 ? { cronSpecs } : {}),
                     deployKey: key,
@@ -749,7 +768,8 @@ export const createDeployRouter = (): HttpRouterLike => {
                     organizationId,
                     projectId,
                     scriptName,
-                }),
+                });
+            },
             updateStatus: async ({ bundleHash, deploymentId, key, status, url: deployedUrl }) => {
                 await context.runMutation(api.deployments.updateStatus, { bundleHash, deployKey: key, id: deploymentId, status, url: deployedUrl });
             },

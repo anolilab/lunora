@@ -17,6 +17,7 @@ import { createShardDO } from "../lunora/_generated/shard.js";
 import schema from "../lunora/schema.js";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { createHttpCloudflareApi } from "./cloudflare/api";
+import { resolveAdminToken } from "./deploy/admin-token";
 import { createDeployRouter } from "./deploy/router";
 import type { ControlPlaneDb } from "./deploy/sweeps";
 import { teardownPorts, usageRollbackPorts } from "./deploy/sweeps";
@@ -165,6 +166,8 @@ interface Env {
     DISPATCHER?: { get: (scriptName: string) => { fetch: (request: Request) => Promise<Response> } };
     /** This cell's name (`cells.name`) — keys the metering readback checkpoint. */
     LUNORA_CELL?: string;
+    /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
+    SECRET_ENCRYPTION_KEY?: string;
     /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
     USAGE_ANALYTICS_DATASET?: string;
     /** Optional GitHub OAuth app for studio social sign-in. */
@@ -211,6 +214,8 @@ const EVERY_MINUTE = "*/1 * * * *";
 
 interface LiveDeploymentRow {
     adminToken?: string;
+    adminTokenCiphertext?: string;
+    adminTokenIv?: string;
     cronSpecs?: string[];
     scriptName: string;
 }
@@ -227,18 +232,25 @@ const readLiveDeployments = async (env: Env): Promise<LiveDeploymentRow[]> => {
     return page as unknown as LiveDeploymentRow[];
 };
 
-/** Live deployments that declare cron expressions, shaped for the cron fan-out. */
+/**
+ * Live deployments that declare cron expressions, shaped for the cron fan-out.
+ * The stored admin token is sealed at rest (§7), so it is decrypted in-process
+ * here with the master key before it becomes the tenant Bearer.
+ */
 const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
     const live = await readLiveDeployments(env);
+    const resolved = await Promise.all(
+        live.map(async (row) => ({ adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY), cronSpecs: row.cronSpecs, scriptName: row.scriptName })),
+    );
+    const targets: CronTarget[] = [];
 
-    return live
-        .filter(
-            (row): row is LiveDeploymentRow & { adminToken: string; cronSpecs: string[] } =>
-                Boolean(row.adminToken) && Array.isArray(row.cronSpecs) && row.cronSpecs.length > 0,
-        )
-        .map((row) => {
-            return { adminToken: row.adminToken, cronSpecs: row.cronSpecs, scriptName: row.scriptName };
-        });
+    for (const row of resolved) {
+        if (row.adminToken && Array.isArray(row.cronSpecs) && row.cronSpecs.length > 0) {
+            targets.push({ adminToken: row.adminToken, cronSpecs: row.cronSpecs, scriptName: row.scriptName });
+        }
+    }
+
+    return targets;
 };
 
 /** The control-plane D1 as the structural {@link ControlPlaneDb} the sweeps use. */
@@ -339,13 +351,16 @@ const sweepUptime = async (env: Env): Promise<void> => {
     );
 };
 
-/** Script id → per-deployment admin token, for the queue fan-out. */
+/** Script id → per-deployment admin token (decrypted in-process), for the queue fan-out. */
 const readDeploymentTokens = async (env: Env): Promise<Map<string, string>> => {
     const tokens = new Map<string, string>();
 
     for (const row of await readLiveDeployments(env)) {
-        if (row.adminToken) {
-            tokens.set(row.scriptName, row.adminToken);
+        // eslint-disable-next-line no-await-in-loop -- small set; sequential decrypt keeps the map build simple
+        const adminToken = await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY);
+
+        if (adminToken) {
+            tokens.set(row.scriptName, adminToken);
         }
     }
 
