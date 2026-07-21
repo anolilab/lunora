@@ -70,8 +70,7 @@ unknown:
       `better-auth ^1.6.23`); export `ssoClient` in `plugins-client.ts`.
 - [ ] Wire `sso` (OIDC/OAuth2 mode) + `scim` into the curated plugin surface;
       D1 tables auto-surface via `authTables`.
-- [ ] Map SSO identity → `ctx.auth` used by RLS; SCIM create/replace/patch/delete
-      + `active:false` deactivation (with the `admin` plugin) → identity lifecycle.
+- [ ] Map SSO identity → `ctx.auth` used by RLS; SCIM create/replace/patch/delete + `active:false` deactivation (with the `admin` plugin) → identity lifecycle.
 
 ## Phase 1b — SAML (gated on the Phase-0 GO)
 

@@ -36,8 +36,7 @@ scheduled sends, `@lunora/queue` for fan-out, `@lunora/studio` for a surface.
 
 - [ ] Confirm `@visulima/notification`'s Web Push + FCM providers run under
       `workerd` (`fetch` + Web Crypto). **Caveat (like SAML):** APNs uses Node's
-      `http2` and the BullMQ/pg-boss/SQS queue adapters are Node-only — scope APNs
-      + heavy queueing out of the edge path or route them via `@lunora/queue`.
+      `http2` and the BullMQ/pg-boss/SQS queue adapters are Node-only — scope APNs + heavy queueing out of the edge path or route them via `@lunora/queue`.
 
 ## Phase 1 — Web Push + FCM via `ctx.notify`
 
