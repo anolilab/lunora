@@ -1230,6 +1230,25 @@ describe("observability-sinks", () => {
             ]);
         });
 
+        it("serializes `fields` to a JSON string when serializeFields is on", () => {
+            expect.assertions(1);
+
+            const sent: Record<string, unknown>[][] = [];
+            const sink = pipelineLogSink({
+                pipeline: {
+                    send: async (records) => {
+                        sent.push(records);
+                    },
+                },
+                serializeFields: true,
+            });
+
+            sink.onLog!(logEvent);
+
+            // `fields` lands as a queryable JSON string (the reader parses it back).
+            expect(sent[0]?.[0]?.fields).toBe(JSON.stringify({ orderId: "o-1" }));
+        });
+
         it("registers the send with the request's waitUntil so it survives teardown", () => {
             expect.assertions(1);
 

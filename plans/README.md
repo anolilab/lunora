@@ -904,7 +904,7 @@ workflows + fan-out (`@lunora/workflow`). Full analysis: `.tmp/competitive-gap-a
 **Routing rule.** Every gap lands in exactly one bucket: **FRAMEWORK** (a plan
 below), **CLOUD** (owned by `apps/cloud/ROADMAP.md` — managed hosting, hosted
 dashboard, retained observability, preview envs, backups/PITR, managed
-multi-region, templates/marketplace, warehouse connectors — *not* re-planned
+multi-region, templates/marketplace, warehouse connectors — _not_ re-planned
 here), or **NON-GOAL** (a documented design boundary: no arbitrary external SQL /
 ad-hoc cross-dataset joins; RPC-first not REST-first; cross-shard writes eventual
 unless plan 168 lands). Publishing the NON-GOALs as a docs page is the cheapest
@@ -912,51 +912,51 @@ trust win — boundaries read as deliberate, not missing.
 
 ### Plans (FRAMEWORK-bucketed gaps)
 
-| Plan | Title                                                                       | Category     | Pkg          | Pri | Effort | Risk | Status |
-| ---- | --------------------------------------------------------------------------- | ------------ | ------------ | --- | ------ | ---- | ------ |
-| 164  | Non-TypeScript client SDK (Swift *or* Python) — prove the wire protocol isn't TS-bound; biggest ceiling vs Convex | feat         | client (new) | P2  | L      | MED  | TODO   |
-| 165  | `@lunora/push` — Web Push (VAPID) → FCM/APNs; grep-confirmed zero push code today | feat         | push (new)   | P2  | L      | MED  | TODO   |
-| 166  | Enterprise auth: SSO + SCIM — `@better-auth/sso` + `@better-auth/scim` (MIT); OIDC/SCIM-Users LOW, SAML-on-workerd is the risk | feat         | auth         | P2  | M–L    | MED  | TODO   |
-| 167  | Opt-in public REST/GraphQL surface — extend the existing OpenAPI/OpenRPC spec (`cli/api-spec.ts`) for non-TS/interop, RLS-enforced | feat         | runtime/cli  | P3  | L      | MED  | TODO   |
-| 168  | Cross-shard transaction story — **design spike first** (saga vs 2PC vs documented boundary+lint); no code until ratified | architecture | do/runtime   | P2  | XL     | HIGH | TODO   |
-| 169  | `@lunora/collab` (CRDT) — Yjs persistence + awareness over `ShardDO` + `whisper`; reuse `y-partyserver` (ISC); demand-gated | feat         | collab (new) | P3  | XL     | MED  | TODO   |
-| 170  | Continuous CDC export tap (op-log → external sink) — the streaming counterpart to CDC-in; snapshot export/backup already exist | feat         | runtime/do   | P3  | L      | MED  | TODO   |
+| Plan | Title                                                                                                                                                          | Category     | Pkg          | Pri | Effort | Risk | Status |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------ | --- | ------ | ---- | ------ |
+| 164  | Non-TypeScript client SDK (Swift _or_ Python) — prove the wire protocol isn't TS-bound; biggest ceiling vs Convex                                              | feat         | client (new) | P2  | L      | MED  | TODO   |
+| 165  | `@lunora/push` — Web Push (VAPID) → FCM/APNs; grep-confirmed zero push code today                                                                              | feat         | push (new)   | P2  | L      | MED  | TODO   |
+| 166  | Enterprise auth: SSO + SCIM — `@better-auth/sso` + `@better-auth/scim` (MIT); OIDC/SCIM-Users LOW, SAML-on-workerd is the risk                                 | feat         | auth         | P2  | M–L    | MED  | TODO   |
+| 167  | Opt-in public REST/GraphQL surface — extend the existing OpenAPI/OpenRPC spec (`cli/api-spec.ts`) for non-TS/interop, RLS-enforced                             | feat         | runtime/cli  | P3  | L      | MED  | TODO   |
+| 168  | Cross-shard transaction story — **design spike first** (saga vs 2PC vs documented boundary+lint); no code until ratified                                       | architecture | do/runtime   | P2  | XL     | HIGH | TODO   |
+| 169  | `@lunora/collab` (CRDT) — Yjs persistence + awareness over `ShardDO` + `whisper`; reuse `y-partyserver` (ISC); demand-gated                                    | feat         | collab (new) | P3  | XL     | MED  | TODO   |
+| 170  | Continuous CDC export tap (op-log → external sink) — the streaming counterpart to CDC-in; snapshot export/backup already exist                                 | feat         | runtime/do   | P3  | L      | MED  | TODO   |
 | 171  | "Design boundaries / non-goals" docs page — state the NON-GOAL bucket plainly (no arbitrary SQL, RPC-not-REST-first, cross-shard eventual); cheapest trust win | docs         | docs         | P2  | S      | LOW  | TODO   |
 
 ### Considered / newly surfaced (Fable 5 deep pass, 2026-07-21)
 
 **The three follow-up gaps — verified:**
 
-- **A/B testing / experimentation** — *real but narrow.* `@lunora/flags` already
+- **A/B testing / experimentation** — _real but narrow._ `@lunora/flags` already
   serves variants + provider-side percentage rollouts; only the experiment layer
   is missing (log `details.variant` exposures → `@lunora/bindings/analytics` + a
   Studio results view). Only Firebase (of the three) has it. **M · P3 · FRAMEWORK**
   (thin flags extension; a heavy stats engine stays NON-GOAL/CLOUD).
-- **Product analytics** — *partial.* Ingestion exists (`@lunora/bindings/analytics`
+- **Product analytics** — _partial._ Ingestion exists (`@lunora/bindings/analytics`
   typed `track`/`writeDataPoint` + SQL-API + Studio panel), but Analytics Engine is
   sampled with ~3-month retention — the wrong substrate for canonical product
   analytics (no taxonomy/sessions/funnels/retention). Only Firebase ships a
   first-party product. **P3 · CLOUD** primarily (retained, unsampled = hosted);
   optional small FRAMEWORK event-helper slice. Near-term answer: document a
   PostHog integration.
-- **Server-side DB triggers / webhooks** — *NOT a gap (core); small (packaging).*
+- **Server-side DB triggers / webhooks** — _NOT a gap (core); small (packaging)._
   Triggers already ship: `defineTable().triggers()` — before/after × insert/update/
   delete, typed `previous` row, `before*` aborts the write, `TriggerCtx = {db,
-  scheduler}` (`server/src/schema.ts`, `types.ts:1104`) — stronger than Convex's
-  helper. Plan 133 is unrelated (CDC-*in*). The only open sliver is **packaged
+scheduler}` (`server/src/schema.ts`, `types.ts:1104`) — stronger than Convex's
+  helper. Plan 133 is unrelated (CDC-_in_). The only open sliver is **packaged
   outbound HTTP webhooks**, already spiked as **plan 132** (Standard-Webhooks over
   `TriggerCtx.scheduler` + SchedulerDO retry/dead-letter, zero core changes).
   **S–M · P2 · FRAMEWORK** = execute plan 132.
 
 **Additional gaps found by the deep gap-hunt (all repo-verified):**
 
-| Plan | Gap | Competitors with it | Lunora today | Sev | Bucket |
-| --- | --- | --- | --- | --- | --- |
-| [172](172-geospatial.md) | **Geospatial indexing / queries** (`near`, within-radius) | Convex (geo component), Supabase (PostGIS), Firebase (geohash) | none — zero geo code in `packages/server/src` | **HIGH** | FRAMEWORK |
-| [173](173-client-upload-sdk.md) | **Client-side upload SDK** (progress, pause/resume, resumable) | Firebase, Supabase (TUS), Convex | server R2 multipart + presigned exist; only admin-gated client upload, no `useUpload` | MED | FRAMEWORK |
-| [174](174-auth-audit-trail.md) | **Auth/security audit trail** | Supabase (`auth.audit_log_entries`), Firebase, Convex (paid) | admin-state audit log exists (`do/audit-log.ts`) but no auth-event recording | MED | FRAMEWORK |
-| [175](175-schema-ttl-auto-expiry.md) | **Schema-level TTL / auto-expiry** | Firebase (Firestore TTL), Supabase (pg_cron) — Convex also lacks | no `.ttl()`; only presence-heartbeat TTL. DO alarm infra (`do/triggers.ts`) already exists | LOW–MED | FRAMEWORK |
-| — | **Client integrity / attestation** (App Check) | Firebase only | none; Turnstile/WAF already front every Worker | LOW | CLOUD / NON-GOAL → plan 171 |
+| Plan                                 | Gap                                                            | Competitors with it                                              | Lunora today                                                                               | Sev      | Bucket                      |
+| ------------------------------------ | -------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | -------- | --------------------------- |
+| [172](172-geospatial.md)             | **Geospatial indexing / queries** (`near`, within-radius)      | Convex (geo component), Supabase (PostGIS), Firebase (geohash)   | none — zero geo code in `packages/server/src`                                              | **HIGH** | FRAMEWORK                   |
+| [173](173-client-upload-sdk.md)      | **Client-side upload SDK** (progress, pause/resume, resumable) | Firebase, Supabase (TUS), Convex                                 | server R2 multipart + presigned exist; only admin-gated client upload, no `useUpload`      | MED      | FRAMEWORK                   |
+| [174](174-auth-audit-trail.md)       | **Auth/security audit trail**                                  | Supabase (`auth.audit_log_entries`), Firebase, Convex (paid)     | admin-state audit log exists (`do/audit-log.ts`) but no auth-event recording               | MED      | FRAMEWORK                   |
+| [175](175-schema-ttl-auto-expiry.md) | **Schema-level TTL / auto-expiry**                             | Firebase (Firestore TTL), Supabase (pg_cron) — Convex also lacks | no `.ttl()`; only presence-heartbeat TTL. DO alarm infra (`do/triggers.ts`) already exists | LOW–MED  | FRAMEWORK                   |
+| —                                    | **Client integrity / attestation** (App Check)                 | Firebase only                                                    | none; Turnstile/WAF already front every Worker                                             | LOW      | CLOUD / NON-GOAL → plan 171 |
 
 **Verified non-gaps** confirmed by the deep pass (Lunora already ships — do not
 re-file): passkeys / anonymous / magic-link / email-OTP / phone / 2FA / SIWE /
@@ -984,12 +984,12 @@ percentage rollouts; server-side R2 multipart uploads.
 The visulima ecosystem (same author; `fetch` + Web-Crypto-first, Cloudflare-aware)
 already covers several of these gaps — **reuse over rebuild**:
 
-| Plan / need | Reuse | What it saves | Edge-safe? |
-| --- | --- | --- | --- |
-| **165** push | **`@visulima/notification`** | whole multi-channel engine (Web Push, FCM, Expo, APNs, SMS, chat, in-app inbox, webhook) + routing / retry / circuit-breaker | Web Push + FCM ✅; **APNs needs Node http2**, queue adapters Node-only |
-| **173** upload | **`@visulima/storage-client`** (+ `@visulima/storage` cloudflare handler) | `useUpload`/multipart/TUS hooks w/ progress + pause/resume; R2 + presigned server | ✅ (hooks want TanStack Query) |
-| **174** audit | **`@visulima/redact`** (already in `do`) + **`@visulima/secret-scanner`** | PII/secret redaction + leak scan | ✅ |
-| **167** REST | **`@visulima/pagination`**; `@visulima/jsdoc-open-api` (weak — Lunora derives the spec from codegen, not JSDoc) | pagination helpers; OpenAPI gen | build-time |
+| Plan / need    | Reuse                                                                                                           | What it saves                                                                                                                | Edge-safe?                                                             |
+| -------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| **165** push   | **`@visulima/notification`**                                                                                    | whole multi-channel engine (Web Push, FCM, Expo, APNs, SMS, chat, in-app inbox, webhook) + routing / retry / circuit-breaker | Web Push + FCM ✅; **APNs needs Node http2**, queue adapters Node-only |
+| **173** upload | **`@visulima/storage-client`** (+ `@visulima/storage` cloudflare handler)                                       | `useUpload`/multipart/TUS hooks w/ progress + pause/resume; R2 + presigned server                                            | ✅ (hooks want TanStack Query)                                         |
+| **174** audit  | **`@visulima/redact`** (already in `do`) + **`@visulima/secret-scanner`**                                       | PII/secret redaction + leak scan                                                                                             | ✅                                                                     |
+| **167** REST   | **`@visulima/pagination`**; `@visulima/jsdoc-open-api` (weak — Lunora derives the spec from codegen, not JSDoc) | pagination helpers; OpenAPI gen                                                                                              | build-time                                                             |
 
 New opportunities the catalog surfaces (not previously listed):
 
@@ -999,7 +999,7 @@ New opportunities the catalog surfaces (not previously listed):
 - **`@visulima/health-check`** → production-readiness health/metrics endpoint
   (feeds the production-checklist). → **[plan 177](177-health-check-endpoint.md)**.
 - **`@visulima/content-safety`** → optional moderation for user-generated content
-  (multi-language filtering) — a `ctx` helper or small package. *(not yet a plan)*
+  (multi-language filtering) — a `ctx` helper or small package. _(not yet a plan)_
 - **`@visulima/bytes`** → `encodeWire` Uint8Array handling (plan 164 SDK / storage).
 - Wider reuse of ones already in the tree: **`@visulima/error`/`ono`/`source-map`**
   (`@lunora/errors`, vite-overlay), **`humanizer`** (Studio formatting),

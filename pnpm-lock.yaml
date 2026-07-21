@@ -1964,6 +1964,9 @@ importers:
       '@bomb.sh/tab':
         specifier: 0.0.19
         version: 0.0.19(cac@6.7.14)(citty@0.2.2)(commander@15.0.0)
+      '@lunora/bindings':
+        specifier: workspace:*
+        version: link:../bindings
       '@lunora/codegen':
         specifier: workspace:*
         version: link:../codegen
@@ -1979,6 +1982,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@lunora/seed':
         specifier: workspace:*
         version: link:../seed
@@ -3105,6 +3111,9 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@lunora/bindings':
+        specifier: workspace:*
+        version: link:../bindings
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors

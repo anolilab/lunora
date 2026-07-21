@@ -95,6 +95,8 @@ import {
     summarizeFanoutTopics,
     summarizeSubscriptions,
 } from "./introspect";
+import type { IssueSeverity, IssueState, IssueStatePatch, IssueStatus } from "./issue-state";
+import { ISSUE_SEVERITIES, ISSUE_STATE_TABLE, ISSUE_STATUSES, upsertIssueState } from "./issue-state";
 import type { LogEntry } from "./log-buffer";
 import { LogBuffer } from "./log-buffer";
 import type { RecordMailInput } from "./mail-catcher";
@@ -605,6 +607,58 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
     }
 
     return { doc: record, id, op, table };
+};
+
+/** Narrow an unknown to a valid {@link IssueStatus} (used to validate the `getIssues` `status` filter and triage writes). */
+const isIssueStatus = (value: unknown): value is IssueStatus => typeof value === "string" && (ISSUE_STATUSES as ReadonlyArray<string>).includes(value);
+
+/** Narrow an unknown to a valid {@link IssueSeverity}. */
+const isIssueSeverity = (value: unknown): value is IssueSeverity => typeof value === "string" && (ISSUE_SEVERITIES as ReadonlyArray<string>).includes(value);
+
+/** Extract the required non-empty fingerprint `hash` an issue-triage write targets, else 400. */
+const parseIssueHash = (args: Record<string, unknown>): string => {
+    const hash = typeof args["hash"] === "string" ? args["hash"].trim() : "";
+
+    if (hash === "") {
+        throw new LunoraError("BAD_REQUEST", "issue triage: `hash` is required");
+    }
+
+    return hash;
+};
+
+// An explicit `null` from the wire is the CLEAR sentinel (unassign / untag); the
+// codebase otherwise avoids `null`.
+// eslint-disable-next-line unicorn/no-null -- see above
+const CLEAR = null;
+
+/** Parse the `assignee` arg of an `assignIssue` write: a non-empty string assigns, `null` clears, anything else is a 400. */
+const parseAssigneeArgument = (args: Record<string, unknown>): null | string => {
+    const raw = args["assignee"];
+
+    if (raw === null) {
+        return CLEAR;
+    }
+
+    if (typeof raw === "string" && raw.trim() !== "") {
+        return raw;
+    }
+
+    throw new LunoraError("BAD_REQUEST", "assignIssue: `assignee` must be a non-empty string (assign) or null (unassign)");
+};
+
+/** Parse the `severity` arg of a `setIssueSeverity` write: a valid severity tags, `null` clears, anything else is a 400. */
+const parseSeverityArgument = (args: Record<string, unknown>): IssueSeverity | null => {
+    const raw = args["severity"];
+
+    if (raw === null) {
+        return CLEAR;
+    }
+
+    if (isIssueSeverity(raw)) {
+        return raw;
+    }
+
+    throw new LunoraError("BAD_REQUEST", "setIssueSeverity: `severity` must be one of critical|high|medium|low, or null to clear");
 };
 
 /* eslint-disable no-secrets/no-secrets -- reserved admin RPC + workflow type names are framework constants, not credentials */
@@ -5307,7 +5361,76 @@ abstract class ShardDO {
             return this.handleListFlags(args);
         }
 
+        const triaged = await this.handleIssueTriageOp(functionPath, args);
+
+        if (triaged !== undefined) {
+            return triaged;
+        }
+
         return this.handlePitrAdminOp(functionPath, args);
+    }
+
+    /**
+     * Serve the four Issue-triage admin writes — `resolveIssue` / `ignoreIssue`
+     * (a status change), `assignIssue` (set/clear an owner), `setIssueSeverity`
+     * (tag/clear severity). Each upserts one row in the reserved
+     * `__lunora_issue_state__` side table keyed by the Issue's fingerprint
+     * `hash`, then re-derives at read time in {@link readErrorIssues}. Returns
+     * `undefined` for any path it doesn't own so `handleExtraAdminOp` falls
+     * through. Admin-gated by `handleAdminRpc`'s caller (the `LUNORA_ADMIN_TOKEN`
+     * bearer); a bad/missing `hash` (or a bad status/severity value) is a 400.
+     *
+     * The write lands through raw SQL the change-tracker can't observe, so it
+     * marks {@link ISSUE_STATE_TABLE} changed and flushes — the live Issues
+     * subscription is an admin-wildcard memo that re-runs whenever a flush finds
+     * a changed table, so the triage shows up without an unrelated write.
+     */
+    private async handleIssueTriageOp(functionPath: string, args: Record<string, unknown>): Promise<Response | undefined> {
+        const patch = this.parseIssueTriagePatch(functionPath, args);
+
+        if (patch === undefined) {
+            return undefined;
+        }
+
+        const hash = parseIssueHash(args);
+        const updatedBy = typeof args["updatedBy"] === "string" ? args["updatedBy"] : undefined;
+        const sql = this.state.storage.sql as unknown as SqlExec;
+        const state: IssueState = upsertIssueState(sql, hash, patch, Date.now(), updatedBy);
+
+        this.recordChangedTable(ISSUE_STATE_TABLE);
+        await this.flushChangedTables();
+
+        this.recordAudit(functionPath.slice(ADMIN_FUNCTION_PREFIX.length), { detail: { ...patch, hash } });
+
+        return jsonResponse({ result: { state } }, 200);
+    }
+
+    /**
+     * Map an Issue-triage admin path to the `IssueStatePatch` it applies, or
+     * `undefined` when the path isn't a triage write. `assignIssue`/
+     * `setIssueSeverity` accept an explicit `null` to CLEAR the field (unassign /
+     * untag); a missing or malformed value is a 400 rather than a silent no-op.
+     */
+    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `parse*`/handler seams
+    private parseIssueTriagePatch(functionPath: string, args: Record<string, unknown>): IssueStatePatch | undefined {
+        if (functionPath === ADMIN_FUNCTIONS.resolveIssue) {
+            return { status: "resolved" };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.ignoreIssue) {
+            return { status: "ignored" };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.assignIssue) {
+            // Assigning implicitly reopens (someone owns it now); the two moves stay one round-trip.
+            return { assignee: parseAssigneeArgument(args), status: "open" };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.setIssueSeverity) {
+            return { severity: parseSeverityArgument(args) };
+        }
+
+        return undefined;
     }
 
     /**
@@ -6338,6 +6461,7 @@ abstract class ShardDO {
                 functionPathPrefix: typeof args["functionPathPrefix"] === "string" ? args["functionPathPrefix"] : undefined,
                 limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
                 shardKey: typeof args["shardKey"] === "string" ? args["shardKey"] : undefined,
+                status: isIssueStatus(args["status"]) ? args["status"] : undefined,
                 userId: typeof args["userId"] === "string" ? args["userId"] : undefined,
             }),
         };

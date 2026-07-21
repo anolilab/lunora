@@ -99,6 +99,81 @@ Each record carries `message`, `level`, `functionPath`, `fields`, `traceId`,
 `spanId`, `shardKey`, `userId`, and `ts`. The send is registered with the
 request's `waitUntil` so it survives isolate teardown.
 
+#### Reading the durable archive back
+
+`pipelineLogSink` only writes. To read those records back — no cloud involved —
+use `createPipelineLogReader`, which builds a safe, keyset-paginated R2 SQL query
+over the Iceberg table the Pipeline lands in, or run the `lunora logs --durable`
+CLI command.
+
+> **This needs operator setup — it is not code-only.** The reader queries a table
+> that only exists once you have wired the Pipeline to an **R2 Data Catalog
+> (Iceberg) table** whose schema matches the written columns below, and provided
+> read credentials. Until then the CLI fails closed with a clear message.
+
+**1. Create the destination table** with a column per written field. The reader
+owns these names (its `DEFAULT_LOG_COLUMNS`), matching exactly what the sink
+writes:
+
+| Column         | Type                     | Always?  |
+| -------------- | ------------------------ | -------- |
+| `functionPath` | `string`                 | yes      |
+| `level`        | `string`                 | yes      |
+| `message`      | `string`                 | yes      |
+| `ts`           | `long` (epoch-millis)    | yes      |
+| `fields`       | `string` (JSON) / struct | when set |
+| `shardKey`     | `string`                 | when set |
+| `userId`       | `string`                 | when set |
+| `traceId`      | `string`                 | when set |
+| `spanId`       | `string`                 | when set |
+
+If your table types `fields` as a **string** column (so R2 SQL can query it),
+turn on `serializeFields` so the sink stores it as a JSON string; the reader
+parses it back to an object on read:
+
+```ts
+pipelineLogSink({ pipeline: env.LOG_PIPELINE, serializeFields: true });
+```
+
+Renamed a column in your Iceberg schema? Pass a `columnMap` to realign the
+reader without touching the writer.
+
+**2. Provide the R2 SQL credentials** as env vars (also used by `ctx.r2sql`):
+
+- `R2_SQL_ACCOUNT_ID` — the Cloudflare account that owns the bucket/catalog
+- `R2_SQL_TOKEN` — an API token scoped to R2 SQL read + R2 Data Catalog + R2 storage
+- `R2_SQL_BUCKET` — the R2 bucket (warehouse) the catalog runs against
+
+**3. Read it back**, from code:
+
+```ts
+import { createPipelineLogReader } from "@lunora/runtime";
+import { createR2Sql } from "@lunora/bindings/r2sql";
+
+const reader = createPipelineLogReader(createR2Sql({ accountId, apiToken, bucket }), { namespace: "default", table: "logs" });
+
+const page = await reader.query({ minLevel: "warn", sinceTs: Date.now() - 3_600_000, limit: 200 });
+// page.rows — newest first; page.nextCursor — pass as `cursor` for the next page
+```
+
+or from the CLI:
+
+```bash
+# newest 200 warn+ lines from the last hour, as a table
+lunora logs --durable --table logs --namespace default --min-level warn --limit 200
+
+# one JSON object per line, filtered to a function-path prefix (pipeable to jq)
+lunora logs --durable --table logs --function-prefix "messages:" --ndjson
+
+# resume the next page with the ts the previous run printed
+lunora logs --durable --table logs --cursor 1737460000000
+```
+
+The reader paginates by keyset on `ts DESC` (`WHERE ts < cursor`), not `OFFSET`,
+so deep pages stay cheap over Iceberg. Filters (`sinceTs`/`untilTs`, `level`,
+`minLevel`, `functionPathPrefix`, `traceId`, `shardKey`, `userId`) are all
+inlined as escaped SQL literals — user values can never inject.
+
 ## Structured logging with `ctx.log`
 
 `ctx.log` spans the full OpenTelemetry severity ramp — `trace`, `debug`, `info`

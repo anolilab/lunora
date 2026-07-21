@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { upsertIssueState } from "../src/issue-state";
 import {
     appendRequestLogEntry,
     emitLogEvent,
@@ -358,6 +359,108 @@ describe("readErrorIssues (grouped Issues over the bounded readout)", () => {
             const issues = readErrorIssues(database.sql, { functionPathPrefix: "messages:" });
 
             expect(issues.map((issue) => issue.culprit)).toEqual(["messages:list"]);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("defaults an untriaged Issue to status open with no assignee or severity", () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "a:b", outcome: "error", ts: 1 }));
+
+            const [issue] = readErrorIssues(database.sql);
+
+            expect(issue!.status).toBe("open");
+            expect(issue!.assignee).toBeUndefined();
+            expect(issue!.severity).toBeUndefined();
+        } finally {
+            database.close();
+        }
+    });
+
+    it("folds persisted triage state (status, assignee, severity) into the Issue", () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "a:b", outcome: "error", ts: 1000 }));
+            const [before] = readErrorIssues(database.sql);
+            // Resolve at a time AFTER the last occurrence, so it stays resolved.
+            upsertIssueState(database.sql, before!.hash, { assignee: "alice", severity: "high", status: "resolved" }, 5000, "alice");
+
+            const [after] = readErrorIssues(database.sql);
+
+            expect(after!.status).toBe("resolved");
+            expect(after!.assignee).toBe("alice");
+            expect(after!.severity).toBe("high");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("auto-reopens a resolved Issue that errs again after the resolution", () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "a:b", outcome: "error", ts: 1000 }));
+            const [issue] = readErrorIssues(database.sql);
+            // Resolve at ts 2000...
+            upsertIssueState(database.sql, issue!.hash, { status: "resolved" }, 2000);
+            // ...then a NEW occurrence lands at ts 3000 (a regression).
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "a:b", outcome: "error", ts: 3000 }));
+
+            const [reopened] = readErrorIssues(database.sql);
+
+            expect(reopened!.status).toBe("open");
+            // The persisted state row still says resolved; the reopen is derived, not written.
+            expect(reopened!.stateUpdatedAt).toBe(2000);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("keeps an ignored Issue sticky even when it errs again", () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "a:b", outcome: "error", ts: 1000 }));
+            const [issue] = readErrorIssues(database.sql);
+            upsertIssueState(database.sql, issue!.hash, { status: "ignored" }, 2000);
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "a:b", outcome: "error", ts: 3000 }));
+
+            const [still] = readErrorIssues(database.sql);
+
+            expect(still!.status).toBe("ignored");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("filters by triage status after the fold (auto-reopen included)", () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "a:b", outcome: "error", ts: 1000 }));
+            appendRequestLogEntry(database.sql, entry({ errorMessage: "boom", functionPath: "c:d", outcome: "error", ts: 1000 }));
+            const issues = readErrorIssues(database.sql);
+            const ab = issues.find((issue) => issue.culprit === "a:b")!;
+            const cd = issues.find((issue) => issue.culprit === "c:d")!;
+            upsertIssueState(database.sql, ab.hash, { status: "resolved" }, 5000);
+            upsertIssueState(database.sql, cd.hash, { status: "ignored" }, 5000);
+
+            expect(readErrorIssues(database.sql, { status: "resolved" }).map((issue) => issue.culprit)).toEqual(["a:b"]);
+            expect(readErrorIssues(database.sql, { status: "ignored" }).map((issue) => issue.culprit)).toEqual(["c:d"]);
         } finally {
             database.close();
         }

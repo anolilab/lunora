@@ -110,7 +110,7 @@ const LATEST_MAJORS: Record<string, number> = {
     "@tanstack/solid-router": 1,
     "@tanstack/solid-start": 1,
     "@vitejs/plugin-react": 6,
-    astro: 6,
+    astro: 7,
     isbot: 5,
     next: 16,
     nuxt: 4,

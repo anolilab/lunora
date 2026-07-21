@@ -18,7 +18,7 @@ Two halves already exist:
   (`streamExportRows`, NDJSON) powers the admin export endpoint and the scheduled
   R2 backup. This is a point-in-time dump, **not** a continuous stream.
 - **CDC-in**: `packages/runtime/src/connector-cdc.ts` / `connector-format.ts` /
-  `import-stream.ts` bring external changes *into* DO shapes (plan 136).
+  `import-stream.ts` bring external changes _into_ DO shapes (plan 136).
 
 The genuine gap is the **outbound continuous tap**: a subscription to the shard
 op-log that emits change events (insert/update/delete, ordered per shard) to an

@@ -27,6 +27,7 @@ export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
  * `LUNORA_ADMIN_TOKEN`.
  */
 export const ADMIN_FUNCTIONS = {
+    assignIssue: "__lunora_admin__:assignIssue",
     clearCapturedMail: "__lunora_admin__:clearCapturedMail",
     clearQueueMessages: "__lunora_admin__:clearQueueMessages",
     clearTable: "__lunora_admin__:clearTable",
@@ -59,6 +60,7 @@ export const ADMIN_FUNCTIONS = {
     getTraces: "__lunora_admin__:getTraces",
     // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
     getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus",
+    ignoreIssue: "__lunora_admin__:ignoreIssue",
     importShard: "__lunora_admin__:importShard",
     listTables: "__lunora_admin__:listTables",
     maskPolicies: "__lunora_admin__:maskPolicies",
@@ -66,12 +68,14 @@ export const ADMIN_FUNCTIONS = {
     pitrRestore: "__lunora_admin__:pitrRestore",
     readTablePage: "__lunora_admin__:readTablePage",
     replayQueueMessage: "__lunora_admin__:replayQueueMessage",
+    resolveIssue: "__lunora_admin__:resolveIssue",
     rlsPolicies: "__lunora_admin__:rlsPolicies",
     runAs: "__lunora_admin__:runAs",
     runMigration: "__lunora_admin__:runMigration",
     runSql: "__lunora_admin__:runSql",
     sendQueueMessage: "__lunora_admin__:sendQueueMessage",
     sendTestMail: "__lunora_admin__:sendTestMail",
+    setIssueSeverity: "__lunora_admin__:setIssueSeverity",
     storageOrphans: "__lunora_admin__:storageOrphans",
     storageReferences: "__lunora_admin__:storageReferences",
     storageRules: "__lunora_admin__:storageRules",
@@ -870,6 +874,16 @@ export interface RequestLogQuery {
 }
 
 /**
+ * Triage status of an Issue, mirroring `@lunora/do`'s `IssueStatus`. `open` is
+ * the default; a developer moves it to `resolved` (fixed — but a new matching
+ * error auto-reopens it server-side) or `ignored` (muted, and stays muted).
+ */
+export type IssueStatus = "ignored" | "open" | "resolved";
+
+/** Developer-tagged severity of an Issue, mirroring `@lunora/do`'s `IssueSeverity`; drives the badge palette. */
+export type IssueSeverity = "critical" | "high" | "low" | "medium";
+
+/**
  * One grouped error **Issue** returned by `__lunora_admin__:getIssues`, mirroring
  * `@lunora/do`'s `ErrorIssue`. Many `error`-outcome request-log rows (Worker
  * throws and `container:&lt;name>` crashes alike) that share a fingerprint fold into
@@ -877,6 +891,8 @@ export interface RequestLogQuery {
  * on, so a local Issue and a cloud Incident are the same object.
  */
 export interface ErrorIssue {
+    /** Assignee (a userId or a name) from the persisted triage state; absent when unassigned. */
+    assignee?: string;
     /** Number of `error` rows folded into this Issue within the scanned window. */
     count: number;
     /** The `&lt;file>:&lt;function>` (or `container:&lt;name>`) the errors came from. */
@@ -889,6 +905,12 @@ export interface ErrorIssue {
     lastSeen: number;
     /** A representative raw error message — taken from the most recent folded row. */
     sampleMessage: string;
+    /** Developer-tagged severity from the persisted triage state; absent when untriaged. */
+    severity?: IssueSeverity;
+    /** Epoch-ms the triage state was last changed; absent when never triaged. */
+    stateUpdatedAt?: number;
+    /** Triage status folded in from the persisted state (`open` by default); a resolved Issue that erred again auto-reopens to `open`. */
+    status: IssueStatus;
     /** Human-readable title (first line of the sample message, capped). */
     title: string;
 }
@@ -907,6 +929,7 @@ export interface IssuesQuery {
     functionPathPrefix?: string;
     limit?: number;
     shardKey?: string;
+    status?: IssueStatus;
     userId?: string;
 }
 

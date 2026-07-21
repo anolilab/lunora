@@ -49,6 +49,7 @@ const FLAGS_FUNCTION_PREFIX = "__lunora_flags__:";
  */
 const ADMIN_FUNCTIONS = {
     applyCdc: "__lunora_admin__:applyCdc",
+    assignIssue: "__lunora_admin__:assignIssue",
     cdcSync: "__lunora_admin__:cdcSync",
     clearCapturedMail: "__lunora_admin__:clearCapturedMail",
     clearQueueMessages: "__lunora_admin__:clearQueueMessages",
@@ -79,6 +80,7 @@ const ADMIN_FUNCTIONS = {
     getTraces: "__lunora_admin__:getTraces",
     // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
     getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus",
+    ignoreIssue: "__lunora_admin__:ignoreIssue",
     importShard: "__lunora_admin__:importShard",
     listFlags: "__lunora_admin__:listFlags",
     listQueues: "__lunora_admin__:listQueues",
@@ -95,12 +97,14 @@ const ADMIN_FUNCTIONS = {
     recordMail: "__lunora_admin__:recordMail",
     recordQueueMessage: "__lunora_admin__:recordQueueMessage",
     replayQueueMessage: "__lunora_admin__:replayQueueMessage",
+    resolveIssue: "__lunora_admin__:resolveIssue",
     rlsPolicies: "__lunora_admin__:rlsPolicies",
     runAs: "__lunora_admin__:runAs",
     runMigration: "__lunora_admin__:runMigration",
     runSql: "__lunora_admin__:runSql",
     sendQueueMessage: "__lunora_admin__:sendQueueMessage",
     sendTestMail: "__lunora_admin__:sendTestMail",
+    setIssueSeverity: "__lunora_admin__:setIssueSeverity",
     storageOrphans: "__lunora_admin__:storageOrphans",
     storageReferences: "__lunora_admin__:storageReferences",
     storageRules: "__lunora_admin__:storageRules",

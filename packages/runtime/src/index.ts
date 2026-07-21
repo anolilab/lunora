@@ -93,6 +93,17 @@ export type {
 } from "./observability-sinks";
 export { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, sentrySink, webhookSink } from "./observability-sinks";
 export type {
+    PipelineLogColumnMap,
+    PipelineLogCursor,
+    PipelineLogField,
+    PipelineLogPage,
+    PipelineLogQuery,
+    PipelineLogReader,
+    PipelineLogReaderOptions,
+    PipelineLogRow,
+} from "./pipeline-log-reader";
+export { createPipelineLogReader, DEFAULT_LOG_COLUMNS, DEFAULT_LOG_LIMIT } from "./pipeline-log-reader";
+export type {
     ExportFanOutRequest,
     ExportFanOutResult,
     FanOutRequest,

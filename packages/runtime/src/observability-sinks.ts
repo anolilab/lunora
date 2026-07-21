@@ -577,6 +577,18 @@ export interface PipelineLike {
 export interface PipelineLogSinkOptions {
     /** The Cloudflare Pipeline binding each log record is durably sent to. */
     pipeline: PipelineLike;
+
+    /**
+     * When true, `fields` is written as a **JSON string** (`JSON.stringify`)
+     * rather than a nested object. Defaults to `false` for back-compatibility.
+     *
+     * Turn it on when the destination Iceberg table types `fields` as a `string`
+     * column so the archive stays queryable (R2 SQL can `LIKE`/compare a string
+     * column, but not index into an arbitrarily-shaped struct). The reader
+     * (`createPipelineLogReader`) parses such a JSON string back to an object on
+     * read. Leave it off when the table types `fields` as a native struct.
+     */
+    serializeFields?: boolean;
 }
 
 /**
@@ -586,6 +598,20 @@ export interface PipelineLogSinkOptions {
  * network {@link otlpSink}: where OTLP streams to a collector, this lands the
  * structured record (message, level, function path, fields, trace ids, shard,
  * user, timestamp) in object storage under the app's own account.
+ *
+ * **Written-column contract.** Each record is a flat object; this is the exact
+ * read-side schema `createPipelineLogReader` (`pipeline-log-reader.ts`) mirrors
+ * in its `DEFAULT_LOG_COLUMNS`. Keep the two in lockstep — a column added here
+ * must gain a default there:
+ * - `functionPath` (string) — always present
+ * - `level` (string severity) — always present
+ * - `message` (string) — always present
+ * - `ts` (number, epoch-millis) — always present
+ * - `fields` (nested object, or a JSON string when `serializeFields`) — when set
+ * - `shardKey` (string) — when set
+ * - `userId` (string) — when set
+ * - `traceId` (string) — when set
+ * - `spanId` (string) — when set
  *
  * Only `onLog` is implemented — RPC-span metrics belong in
  * {@link analyticsEngineSink}. `Pipeline.send` is durable/fire-and-forget on the
@@ -597,10 +623,11 @@ export interface PipelineLogSinkOptions {
  * Privacy: the persisted record carries `message` + structured `fields` (not the
  * raw positional args). They may include user input — the R2 bucket is your own,
  * but treat it as a log store and gate PII upstream if that is a concern.
- * @param options Sink options: `pipeline` is the Cloudflare Pipeline binding.
+ * @param options Sink options: `pipeline` is the Cloudflare Pipeline binding;
+ * `serializeFields` stores `fields` as a queryable JSON string.
  */
 export const pipelineLogSink = (options: PipelineLogSinkOptions): ObservabilitySink => {
-    const { pipeline } = options;
+    const { pipeline, serializeFields } = options;
 
     return {
         onLog: (event, context) => {
@@ -613,7 +640,9 @@ export const pipelineLogSink = (options: PipelineLogSinkOptions): ObservabilityS
                 };
 
                 if (event.fields) {
-                    record.fields = event.fields;
+                    // `serializeFields` lands `fields` as a queryable JSON string
+                    // column; otherwise it stays a nested object (native struct).
+                    record.fields = serializeFields === true ? JSON.stringify(event.fields) : event.fields;
                 }
 
                 if (event.shardKey !== undefined) {
