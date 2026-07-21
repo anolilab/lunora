@@ -1,8 +1,10 @@
 import type { PipelineLogCursor, PipelineLogQuery, PipelineLogRow } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { LOG_ARCHIVE_NOT_CONFIGURED } from "../../../../../shared/log-archive";
+import type { ContextLogLevel } from "../../../../../shared/log-event";
 import { LOG_LEVEL_ORDER } from "../../../../../shared/log-event";
 import { formatLogFields } from "../../../../../shared/log-fields";
 import { Badge } from "../../components/ui/badge";
@@ -14,20 +16,7 @@ import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_OBSERVABILITY_URL } from "../../lib/cf-links";
 import { errorCode, errorMessage, fireAndForget } from "../../lib/internal";
-
-/** The error code the server returns when the operator has wired no archive table / R2 SQL creds. */
-const NOT_CONFIGURED_CODE = "LOG_ARCHIVE_NOT_CONFIGURED";
-
-/** A Badge variant per severity — mirrors the Logs panel's `LEVEL_VARIANT`. */
-const LEVEL_VARIANT: Record<string, "destructive" | "outline" | "secondary"> = {
-    debug: "secondary",
-    error: "destructive",
-    fatal: "destructive",
-    info: "outline",
-    log: "outline",
-    trace: "outline",
-    warn: "secondary",
-};
+import { LEVEL_VARIANT } from "./log-level-variant";
 
 interface ArchiveFeedProps {
     /** The shard to scope the archive read to (empty = the root shard). Threaded from the Logs panel's shard input. */
@@ -42,7 +31,7 @@ const ArchiveRow = ({ row }: { readonly row: PipelineLogRow }): ReactElement => 
         <TableRow data-testid={`lg-archive-row-${String(row.ts)}`}>
             <TableCell className="tabular-nums whitespace-nowrap text-xs text-muted-foreground">{new Date(row.ts).toLocaleString()}</TableCell>
             <TableCell>
-                <Badge variant={LEVEL_VARIANT[row.level] ?? "outline"}>{row.level}</Badge>
+                <Badge variant={LEVEL_VARIANT[row.level]}>{row.level}</Badge>
             </TableCell>
             <TableCell className="font-mono text-xs">{row.functionPath}</TableCell>
             <TableCell className="max-w-md">
@@ -81,7 +70,7 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
 
     const [pathPrefix, setPathPrefix] = useState<string>("");
     const [userIdFilter, setUserIdFilter] = useState<string>("");
-    const [minLevel, setMinLevel] = useState<string>("");
+    const [minLevel, setMinLevel] = useState<"" | ContextLogLevel>("");
 
     const [rows, setRows] = useState<null | PipelineLogRow[]>(null);
     const [cursor, setCursor] = useState<PipelineLogCursor | undefined>(undefined);
@@ -96,14 +85,23 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
     // effect below keys off its serialization so an equal filter doesn't refetch.
     const baseQuery: PipelineLogQuery = {
         ...(debouncedPathPrefix === "" ? {} : { functionPathPrefix: debouncedPathPrefix }),
-        ...(minLevel === "" ? {} : { minLevel: minLevel as PipelineLogQuery["minLevel"] }),
+        ...(minLevel === "" ? {} : { minLevel }),
         ...(shardKey === "" ? {} : { shardKey }),
         ...(debouncedUserId === "" ? {} : { userId: debouncedUserId }),
     };
     const querySignature = JSON.stringify(baseQuery);
 
+    // The filter generation currently on screen. `loadMore` captures the signature
+    // it started under and drops its result if this ref has moved on — so a page-2
+    // fetch that resolves after a filter change never appends stale rows / cursor
+    // (the main fetch effect owns the reset). Kept in a ref so an in-flight
+    // `loadMore` reads the latest value, not its stale closure.
+    const activeSignatureRef = useRef(querySignature);
+
     useEffect(() => {
         const token = { cancelled: false };
+
+        activeSignatureRef.current = querySignature;
 
         fireAndForget(
             (async (): Promise<void> => {
@@ -112,8 +110,10 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
                 // No `finally` — the React Compiler bails on a `try` with a finalizer
                 // (see the queues panel). Each branch resets `loading` itself; a
                 // cancelled run skips it, leaving the newer effect to own the flag.
+                // `baseQuery` is the same value `querySignature` is derived from, so
+                // keying the effect on the signature keeps this closure fresh.
                 try {
-                    const page = await client.queryLogArchive(JSON.parse(querySignature) as PipelineLogQuery);
+                    const page = await client.queryLogArchive(baseQuery);
 
                     if (!token.cancelled) {
                         setRows(page.rows);
@@ -128,7 +128,7 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
                         setCursor(undefined);
 
                         // A "not configured" failure is an empty state, not an error spew.
-                        if (errorCode(error_) === NOT_CONFIGURED_CODE) {
+                        if (errorCode(error_) === LOG_ARCHIVE_NOT_CONFIGURED) {
                             setNotConfigured(true);
                             setError(null);
                         } else {
@@ -145,12 +145,19 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
         return () => {
             token.cancelled = true;
         };
+        // `baseQuery` is intentionally omitted — `querySignature` is its serialization
+        // and the sole thing that should re-trigger a refetch (a new object identity
+        // each render would loop).
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [client, querySignature]);
 
     const loadMore = async (): Promise<void> => {
         if (cursor === undefined) {
             return;
         }
+
+        // The filter this page-2 fetch belongs to; if it changes mid-flight, drop the result.
+        const signature = querySignature;
 
         setLoading(true);
 
@@ -159,13 +166,17 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
         try {
             const page = await client.queryLogArchive({ ...baseQuery, cursor });
 
-            setRows((current) => [...(current ?? []), ...page.rows]);
-            setCursor(page.nextCursor);
-            setError(null);
-            setLoading(false);
+            if (activeSignatureRef.current === signature) {
+                setRows((current) => [...(current ?? []), ...page.rows]);
+                setCursor(page.nextCursor);
+                setError(null);
+                setLoading(false);
+            }
         } catch (error_) {
-            setError(errorMessage(error_));
-            setLoading(false);
+            if (activeSignatureRef.current === signature) {
+                setError(errorMessage(error_));
+                setLoading(false);
+            }
         }
     };
 
@@ -178,7 +189,8 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
     };
 
     const onMinLevelChange = (event: React.ChangeEvent<HTMLSelectElement>): void => {
-        setMinLevel(event.target.value);
+        // The <select> only offers "" or a LOG_LEVEL_ORDER value.
+        setMinLevel(event.target.value as "" | ContextLogLevel);
     };
 
     const onLoadMore = (): void => {
@@ -240,6 +252,14 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="lg-archive-error" role="alert">
                     {error}
+                </p>
+            )}
+
+            {/* Initial fetch: no rows/error/cursor to render yet, so show a placeholder
+                rather than a blank panel. (Paging keeps the existing rows on screen.) */}
+            {loading && rows === null && error === null && (
+                <p className="text-sm text-muted-foreground" data-testid="lg-archive-loading">
+                    {t("Loading…")}
                 </p>
             )}
 

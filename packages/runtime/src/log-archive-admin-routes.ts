@@ -19,6 +19,7 @@
  */
 import { createR2Sql } from "@lunora/bindings/r2sql";
 
+import { LOG_ARCHIVE_NOT_CONFIGURED } from "../../../shared/log-archive";
 import type { ContextLogLevel } from "../../../shared/log-event";
 import { LOG_LEVEL_ORDER } from "../../../shared/log-event";
 import { LunoraError } from "./errors";
@@ -27,9 +28,6 @@ import { createPipelineLogReader } from "./pipeline-log-reader";
 
 /** The route the studio's `queryLogArchive` client method POSTs to. */
 const LOG_ARCHIVE_PATH = "/_lunora/admin/logs/archive";
-
-/** The `NOT_CONFIGURED` error code shared by the "no table" and "no creds" fail-closed paths. */
-const LOG_ARCHIVE_NOT_CONFIGURED = "LOG_ARCHIVE_NOT_CONFIGURED";
 
 /**
  * The app-level archive config the worker passes through: which Data Catalog
@@ -223,4 +221,7 @@ const buildLogArchiveAdminRoutes = (deps: LogArchiveAdminRouteDeps): Record<stri
 };
 
 export type { LogArchiveAdminRouteDeps, LogArchiveConfig };
-export { buildLogArchiveAdminRoutes, LOG_ARCHIVE_NOT_CONFIGURED, LOG_ARCHIVE_PATH };
+export { buildLogArchiveAdminRoutes, LOG_ARCHIVE_PATH };
+// Re-exported from its source (also imported above for local use); keeps the
+// runtime's public surface (`@lunora/runtime`) stable now the constant lives in `shared/`.
+export { LOG_ARCHIVE_NOT_CONFIGURED } from "../../../shared/log-archive";
