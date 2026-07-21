@@ -36,8 +36,9 @@ import type { AggregateIndexDefinitionLike } from "./aggregates";
 // imports would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
-import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
+import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
 import { param } from "./drizzle";
+import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
 import type { RankIndexDefinitionLike } from "./rank";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
 import { ftsTableName, stringifySearchText } from "./search-text";
@@ -134,6 +135,8 @@ interface CompanionSync {
     syncAggregates: (tableName: string, previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined) => void;
     /** Post-write companion maintenance shared by the single + bulk insert paths. */
     syncCompanionsForInsert: (tableName: string, id: string, document: Record<string, unknown>) => void;
+    /** Keep the geohash companion tables in step with a row write (no-op without geo indexes). */
+    syncGeo: (tableName: string, id: string, document: Record<string, unknown> | undefined) => void;
     /** Post-write hook: apply the `-prev + next` step for every declared rank index. */
     syncRanks: (tableName: string, id: string, previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined) => void;
     /** Keep the FTS5 shadow tables in step with a row write (no-op without search indexes / FTS5). */
@@ -580,6 +583,44 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     };
 
     /**
+     * Keep the geohash companion tables in step with a row write. A no-op when
+     * the table declares no geo indexes. Delete then insert makes it idempotent
+     * across insert/update; `document === undefined` (or a missing/invalid point)
+     * deletes only. The raw `lat`/`lng` are stored beside the geohash so the
+     * reader can Haversine-refine without re-decoding the source doc.
+     */
+    const syncGeo = (tableName: string, id: string, document: Record<string, unknown> | undefined): void => {
+        const indexes = schema.tables[tableName]?.geoIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            return;
+        }
+
+        for (const index of indexes) {
+            const geoTable = geoTableName(tableName, index.name);
+
+            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(geoTable)} WHERE ${dsql.identifier("__id__")} = ${id}`);
+
+            const point = document?.[index.field];
+
+            if (
+                point !== null &&
+                typeof point === "object" &&
+                typeof (point as { lat?: unknown }).lat === "number" &&
+                typeof (point as { lng?: unknown }).lng === "number"
+            ) {
+                const { lat, lng } = point as { lat: number; lng: number };
+                const hash = encodeGeohash({ lat, lng }, index.precision ?? GEO_DEFAULT_PRECISION);
+
+                runDrizzle(
+                    sql,
+                    dsql`INSERT INTO ${dsql.identifier(geoTable)} (${dsql.identifier("__id__")}, ${dsql.identifier("__geohash__")}, ${dsql.identifier("__lat__")}, ${dsql.identifier("__lng__")}) VALUES (${id}, ${hash}, ${lat}, ${lng})`,
+                );
+            }
+        }
+    };
+
+    /**
      * Post-write companion maintenance shared by the insert paths — the single
      * `insert` and the `insertManyUnsafe` bulk loop run the identical fan-out, so
      * it lives here once: keep the search/aggregate/rank indexes, the CDC log, the
@@ -592,6 +633,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      */
     const syncCompanionsForInsert = (tableName: string, id: string, document: Record<string, unknown>): void => {
         syncSearch(tableName, id, document);
+        syncGeo(tableName, id, document);
         syncAggregates(tableName, undefined, document);
         syncRanks(tableName, id, undefined, document);
         invalidateCache(tableName, id);
@@ -606,6 +648,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
         ensureRankBackfilledForTable,
         syncAggregates,
         syncCompanionsForInsert,
+        syncGeo,
         syncRanks,
         syncSearch,
     };

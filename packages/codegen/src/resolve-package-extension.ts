@@ -219,6 +219,7 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
 
     return {
         ...(builder.isExternallyManaged ? { externallyManaged: true } : {}),
+        geoIndexes: [],
         indexes,
         name: bareName,
         rankIndexes: [],

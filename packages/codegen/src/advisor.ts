@@ -76,7 +76,21 @@ const flattenIndexes = (table: TableIR): AdvisorIndex[] => [
         .map((index): AdvisorIndex => {
             return { fields: [index.field as string], kind: "vector", name: index.name };
         }),
+    ...(table.geoIndexes ?? []).map((index): AdvisorIndex => {
+        return { fields: [index.field], kind: "geo", name: index.name };
+    }),
 ];
+
+/** Effective validator kind per column (a `v.optional(...)` is unwrapped to its inner kind) for the schema-type lints. */
+const columnKindsOf = (table: TableIR): Record<string, string> => {
+    const kinds: Record<string, string> = {};
+
+    for (const [fieldName, validator] of Object.entries(table.shape)) {
+        kinds[fieldName] = validator.kind === "optional" ? (validator.inner?.kind ?? "optional") : validator.kind;
+    }
+
+    return kinds;
+};
 
 /**
  * Collapse the AST-derived {@link SchemaIR} into the advisor's feeder-agnostic
@@ -100,6 +114,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                           unanalyzable: table.externalSource.unanalyzable,
                       }
                     : undefined,
+                columnKinds: columnKindsOf(table),
                 fields: Object.keys(table.shape),
                 indexes: flattenIndexes(table),
                 isPublic: table.isPublic ?? false,
@@ -116,6 +131,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                 }),
                 shardKind: typeof table.shardMode === "string" ? table.shardMode : "shardBy",
                 softDelete: table.softDelete,
+                ttl: table.ttl,
             };
         }),
     };

@@ -38,6 +38,7 @@ import externalSourceOnGlobal from "./lints/static/external-source-on-global";
 import externalSourceUnscoped from "./lints/static/external-source-unscoped";
 import filterWithoutIndex from "./lints/static/filter-without-index";
 import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-security-with-unsafe-default";
+import geoIndexFieldNotGeopoint from "./lints/static/geo-index-field-not-geopoint";
 import hardcodedSecret from "./lints/static/hardcoded-secret";
 import httpActionMissingAuthGuard from "./lints/static/http-action-missing-auth-guard";
 import httpActionResponseHeaderInjection from "./lints/static/http-action-response-header-injection";
@@ -84,6 +85,7 @@ import storagePresignedUrlForPrivateContent from "./lints/static/storage-presign
 import storageUploadWithoutContentTypeAllowlist from "./lints/static/storage-upload-without-content-type-allowlist";
 import storageUploadWithoutMaxSize from "./lints/static/storage-upload-without-max-size";
 import tableWithoutInsert from "./lints/static/table-without-insert";
+import ttlFieldNotTimestamp from "./lints/static/ttl-field-not-timestamp";
 import unboundedStringArgument from "./lints/static/unbounded-string-argument";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import unindexedRelationTarget from "./lints/static/unindexed-relation-target";
@@ -149,6 +151,7 @@ export { default as externalSourceOnGlobal } from "./lints/static/external-sourc
 export { default as externalSourceUnscoped } from "./lints/static/external-source-unscoped";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
 export { default as flagGatesSecurityWithUnsafeDefault } from "./lints/static/flag-gates-security-with-unsafe-default";
+export { default as geoIndexFieldNotGeopoint } from "./lints/static/geo-index-field-not-geopoint";
 export { default as hardcodedSecret } from "./lints/static/hardcoded-secret";
 export { default as httpActionMissingAuthGuard } from "./lints/static/http-action-missing-auth-guard";
 export { default as httpActionResponseHeaderInjection } from "./lints/static/http-action-response-header-injection";
@@ -195,6 +198,7 @@ export { default as storagePresignedUrlForPrivateContent } from "./lints/static/
 export { default as storageUploadWithoutContentTypeAllowlist } from "./lints/static/storage-upload-without-content-type-allowlist";
 export { default as storageUploadWithoutMaxSize } from "./lints/static/storage-upload-without-max-size";
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
+export { default as ttlFieldNotTimestamp } from "./lints/static/ttl-field-not-timestamp";
 export { default as unboundedStringArgument } from "./lints/static/unbounded-string-argument";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
 export { default as unindexedRelationTarget } from "./lints/static/unindexed-relation-target";
@@ -252,6 +256,8 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     externalSourceOnGlobal,
     externalSourceUnscoped,
     emptyIndex,
+    geoIndexFieldNotGeopoint,
+    ttlFieldNotTimestamp,
     circularFk,
     unindexedForeignKey,
     unindexedRelationTarget,

@@ -8,6 +8,7 @@ export type {
     Column,
     ColumnMeta,
     ColumnValidator,
+    GeoPoint,
     Id,
     Infer,
     InferInsert,

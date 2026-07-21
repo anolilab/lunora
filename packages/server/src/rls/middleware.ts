@@ -137,6 +137,7 @@ interface TableReaderLike {
     first: () => Promise<Record<string, unknown> | null>;
     paginate: (options: { cursor?: null | string; numItems: number }) => Promise<QueryPage>;
     take: (limit: number) => Promise<Record<string, unknown>[]>;
+    withGeoIndex: (indexName: string, build: (q: unknown) => unknown) => TableReaderLike;
     withIndex: (indexName: string, range?: (q: unknown) => unknown) => TableReaderLike;
     withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => TableReaderLike;
 }

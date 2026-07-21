@@ -25,8 +25,8 @@ const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {
     }
 };
 
-/** Declared indexes per table (secondary, search, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
+/** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
+const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
     "messages": [
         {
             "fields": [
@@ -52,6 +52,15 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
             "name": "by_email",
             "type": "index",
             "unique": true
+        }
+    ],
+    "places": [
+        {
+            "fields": [
+                "location"
+            ],
+            "name": "by_location",
+            "type": "geo"
         }
     ]
 };
@@ -115,6 +124,52 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "type": "record"
         }
     ],
+    "places": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "location",
+            "optional": false,
+            "type": "geoPoint"
+        },
+        {
+            "name": "name",
+            "optional": false,
+            "type": "string"
+        }
+    ],
+    "sessions": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "expiresAt",
+            "optional": false,
+            "type": "timestamp"
+        },
+        {
+            "name": "token",
+            "optional": false,
+            "type": "string"
+        }
+    ],
     "attachments": [
         {
             "name": "_id",
@@ -168,6 +223,14 @@ const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = {
         "fileKey"
     ]
 };
+
+/** Declarative TTL policies (`.ttl(field, { after? })`) the DO alarm sweep auto-expires rows for. */
+const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = [
+    {
+        "field": "expiresAt",
+        "table": "sessions"
+    }
+];
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = [];
@@ -335,6 +398,14 @@ const dispatchRun = async (expected: FunctionKind, functionPath: string, args: R
  */
 export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOState, env: unknown) => ShardDOBase =>
     class extends ShardDOBase {
+        public constructor(state: ShardDOState, env: unknown) {
+            super(state, env);
+
+            if (LUNORA_TTL_SWEEPS.length > 0) {
+                void this.scheduleTtlSweep();
+            }
+        }
+
         private migrated = false;
 
         public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
@@ -427,8 +498,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_TABLE_REFS[table];
         }
 
-        protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }> {
+        protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }> {
             return LUNORA_TABLE_INDEXES[table] ?? [];
+        }
+
+        protected override ttlSweeps(): ReadonlyArray<{ after?: number; field: string; softDeleteField?: string; table: string }> {
+            return LUNORA_TTL_SWEEPS;
         }
 
         protected override tableColumns(table: string): Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }> {
@@ -705,6 +780,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
             facade["messages"] = bindTableFacade(db, "messages");
             facade["users"] = bindTableFacade(db, "users");
+            facade["places"] = bindTableFacade(db, "places");
+            facade["sessions"] = bindTableFacade(db, "sessions");
             facade["attachments"] = bindTableFacade(db, "attachments");
 
             // `ctx.log`: the DO base builds the attributed logger (structured
