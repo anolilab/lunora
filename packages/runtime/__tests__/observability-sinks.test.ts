@@ -439,7 +439,7 @@ describe("observability-sinks", () => {
             expect.assertions(3);
 
             const captureLog = vi.fn<(event: LogEvent) => void>();
-            const sink = sentrySink({ capture: vi.fn(), captureLog });
+            const sink = sentrySink({ capture: vi.fn<(event: ObservabilityEvent) => void>(), captureLog });
             const logEvent: LogEvent = { args: [], fields: { orderId: "o-1" }, functionPath: "orders:place", level: "error", message: "boom", ts: 1 };
 
             sink.onLog!(logEvent);
@@ -447,7 +447,7 @@ describe("observability-sinks", () => {
             expect(captureLog).toHaveBeenCalledWith(logEvent);
 
             const throwing = sentrySink({
-                capture: vi.fn(),
+                capture: vi.fn<(event: ObservabilityEvent) => void>(),
                 captureLog: () => {
                     throw new Error("sentry down");
                 },
@@ -462,7 +462,7 @@ describe("observability-sinks", () => {
         it("omits onLog entirely when captureLog is not provided (logs stay out of Sentry)", () => {
             expect.assertions(1);
 
-            const sink = sentrySink({ capture: vi.fn() });
+            const sink = sentrySink({ capture: vi.fn<(event: ObservabilityEvent) => void>() });
 
             expect(sink.onLog).toBeUndefined();
         });

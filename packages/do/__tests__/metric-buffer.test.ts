@@ -109,11 +109,11 @@ describe("metricBuffer", () => {
         const buffer = new MetricBuffer();
 
         buffer.push(event({ kind: "counter", name: "a", value: 1 }));
-        const snapshot = buffer.entries()[0];
+        // Mutating the returned snapshot must not touch the live aggregate — the
+        // series exists (we just pushed it), so no defensive conditional is needed.
+        const snapshot = buffer.entries()[0]!;
 
-        if (snapshot !== undefined) {
-            snapshot.sum = 999;
-        }
+        snapshot.sum = 999;
 
         buffer.push(event({ kind: "counter", name: "a", value: 1 }));
 
