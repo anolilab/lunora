@@ -88,6 +88,61 @@ better-auth's plugin factories are re-exported from `@lunora/auth/plugins` (so y
 
 For Cloudflare Turnstile on the **auth flow**, use the `captcha` plugin (`captcha({ provider: "cloudflare-turnstile", secretKey: env.TURNSTILE_SECRET_KEY })`); it reads the token from the `x-captcha-response` header. For **non-auth** procedures, the package root also exports standalone helpers — `verifyTurnstile` (pure `siteverify`) and `verifyTurnstileMiddleware` (a `.use()` middleware that takes the token from the function args).
 
+### Disposable / free-email gating
+
+Reject throwaway/disposable signups (and branch on free-vs-business email) by reusing the visulima email lists — pure-data and **edge-safe on the default path** (no DNS). Wire it into better-auth's native signup with `withEmailGate` (or `emailGateDatabaseHooks`):
+
+```ts
+import { createAuth, withEmailGate, lunoraD1Adapter } from "@lunora/auth";
+
+const auth = createAuth(
+    withEmailGate(
+        { secret: env.AUTH_SECRET, database: lunoraD1Adapter(env.DB), emailAndPassword: { enabled: true } },
+        {
+            blockDisposable: true, // default — reject disposable domains with `EMAIL_DOMAIN_BLOCKED`
+            allowDomains: ["your-company.com"], // never blocked; always classified `business`
+            denyDomains: [], // extra domains to treat as disposable
+            // mx: true,       // OPT-IN deliverability check — needs DNS (node:dns), so keep it OFF on the edge path
+            onClassify: (c, user) => console.log(`signup ${user.email as string}: ${c.emailClass}`),
+        },
+    ),
+);
+```
+
+A blocked signup fails with the coded error `EMAIL_DOMAIN_BLOCKED` (HTTP 400); a business/free email passes and its `emailClass` (`disposable | free | business`) is surfaced via `onClassify`. Everything is config-gated and defaults sensibly.
+
+- **Programmatic / non-auth use:** `classifyEmail(email, config)` (sync, pure-data) and `assertEmailAllowed(email, config)` (async; throws the coded error) come from `@lunora/auth/email-guard`, plus `emailGateMiddleware({ email: (ctx) => ctx.args.email })` for a `.use()` gate on your own signup mutations.
+- **Edge-safety:** on workerd, `await loadEmailDomainLists()` once at worker init (the gate helpers do this for you). The optional `mx: true` deliverability check is loaded via a dynamic import so `node:dns` never enters the default bundle — enable it only with `nodejs_compat` (or a DNS-over-HTTPS shim).
+
+### Security / audit trail
+
+Record authentication & security events (sign-in, sign-up, password change, MFA enable/disable, token refresh, session revoke, …) to a durable, queryable audit trail. Install the better-auth `hooks.after` recorder with `authAuditHook` (or compose via `withAuthAudit`), backed by the same D1 database as the auth tables:
+
+```ts
+import { authAuditHook, createAuth, d1Executor, lunoraD1Adapter, readAuthAuditLog } from "@lunora/auth";
+
+const executor = d1Executor(env.DB);
+
+const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    database: lunoraD1Adapter(env.DB),
+    hooks: {
+        after: authAuditHook({
+            executor,
+            // retention is CONFIGURABLE and NOT capped — omit it for an unbounded, compliance-grade trail
+            retention: 100_000,
+            // optional export tap for SIEM forwarding (receives each redacted entry)
+            onRecord: (entry) => forwardToSiem(entry),
+        }),
+    },
+});
+
+// Query the trail (RLS/admin-gate this in your own read):
+const recent = await readAuthAuditLog(executor, { event: "sign-in", limit: 100 });
+```
+
+The free-form `detail` payload is scrubbed with `@visulima/redact` before it is persisted, so a token/password that leaks into an event's context never reaches the durable table. Retention defaults to unbounded (set `retention` to bound it). The store lives in the reserved `__lunora_auth_audit__` table (auto-hidden from the data browser).
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/auth)**.
 
 ## Related

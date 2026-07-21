@@ -76,6 +76,7 @@ import relationReferencesUnknownTable from "./lints/static/relation-references-u
 import rlsUncoveredTable from "./lints/static/rls-uncovered-table";
 import shapeTargetsGlobalTable from "./lints/static/shape-targets-global-table";
 import shapeUnknownTable from "./lints/static/shape-unknown-table";
+import signupMutationWithoutDisposableGating from "./lints/static/signup-mutation-without-disposable-gating";
 import softDeleteIncludeDeletedFromArgs from "./lints/static/soft-delete-include-deleted-from-args";
 import sqlInjectionRisk from "./lints/static/sql-injection-risk";
 import storageGenerateUploadUrlNoContentTypePin from "./lints/static/storage-generate-upload-url-no-content-type-pin";
@@ -187,6 +188,7 @@ export { default as relationReferencesUnknownTable } from "./lints/static/relati
 export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table";
 export { default as shapeTargetsGlobalTable } from "./lints/static/shape-targets-global-table";
 export { default as shapeUnknownTable } from "./lints/static/shape-unknown-table";
+export { default as signupMutationWithoutDisposableGating } from "./lints/static/signup-mutation-without-disposable-gating";
 export { default as softDeleteIncludeDeletedFromArgs } from "./lints/static/soft-delete-include-deleted-from-args";
 export { default as sqlInjectionRisk } from "./lints/static/sql-injection-risk";
 export { default as storageGenerateUploadUrlNoContentTypePin } from "./lints/static/storage-generate-upload-url-no-content-type-pin";
@@ -274,6 +276,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     containerPublicInternet,
     publicMutationWithoutRatelimit,
     userCreatingMutationWithoutCaptcha,
+    signupMutationWithoutDisposableGating,
     publicArgumentUsesAny,
     unboundedStringArgument,
     hardcodedSecret,

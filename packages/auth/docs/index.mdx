@@ -203,6 +203,90 @@ installs a runtime guard by default: a call that omits `headers` throws
 invocation. See [plugins](/docs/packages/auth/plugins#the-withauthplugins-middleware)
 for the full pattern and the `withoutHeaders()` escape hatch.
 
+## Disposable / free-email gating
+
+Reject throwaway/disposable signups (and branch on free-vs-business email) at
+registration by reusing the visulima email lists. The classification is
+**pure-data and edge-safe on the default path** — no DNS, no filesystem.
+
+Wire it into better-auth's native `/sign-up/email` endpoint with `withEmailGate`
+(or spread `emailGateDatabaseHooks(...)` into `createAuth({ databaseHooks })`):
+
+```ts
+import { createAuth, lunoraD1Adapter, withEmailGate } from "@lunora/auth";
+
+const auth = createAuth(
+    withEmailGate(
+        { secret: env.AUTH_SECRET, database: lunoraD1Adapter(env.DB), emailAndPassword: { enabled: true } },
+        {
+            blockDisposable: true, // default: reject disposable domains with `EMAIL_DOMAIN_BLOCKED` (400)
+            allowDomains: ["your-company.com"], // never blocked; always classified `business`
+            denyDomains: [], // extra domains to treat as disposable
+            onClassify: (classification, user) => {
+                // classification.emailClass is "disposable" | "free" | "business"
+            },
+        },
+    ),
+);
+```
+
+A blocked signup rejects with the coded `EMAIL_DOMAIN_BLOCKED` error; a
+business/free address passes. Everything is config-gated and defaults sensibly.
+
+For non-auth procedures, `@lunora/auth/email-guard` exports the building blocks:
+
+- `classifyEmail(email, config)` — sync, pure-data → `{ emailClass, domain }`.
+- `assertEmailAllowed(email, config)` — async; throws the coded error on a policy failure.
+- `emailGateMiddleware({ email: (ctx) => ctx.args.email })` — a `.use()` gate for your own signup mutation.
+- `loadEmailDomainLists()` — call once at worker init on workerd (the gate helpers already do).
+
+**MX / deliverability (opt-in, needs DNS).** Passing `mx: true` runs an MX check
+via `@visulima/email-verifier/checks/mx`, which uses `node:dns` and is therefore
+**not edge-safe** — it is loaded through a dynamic import so the DNS module never
+enters the default bundle. Enable it only where DNS is available (`nodejs_compat`
+or a DNS-over-HTTPS shim); an undeliverable domain then fails with
+`EMAIL_UNDELIVERABLE`.
+
+The advisor ships a `signup_mutation_without_disposable_gating` lint that flags a
+public account-creating mutation with no email gate (pairs with the existing
+`user_creating_mutation_without_captcha` lint).
+
+## Security / audit trail
+
+Record authentication & security events — sign-in, sign-up, password change, MFA
+enable/disable, token refresh, session revoke, account link/unlink — to a
+durable, queryable audit trail (the compliance/forensics surface Supabase and
+Firebase expose). Install the better-auth `hooks.after` recorder with
+`authAuditHook` (or compose via `withAuthAudit`):
+
+```ts
+import { authAuditHook, createAuth, d1Executor, lunoraD1Adapter, readAuthAuditLog } from "@lunora/auth";
+
+const executor = d1Executor(env.DB); // same D1 as the auth tables
+
+const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    database: lunoraD1Adapter(env.DB),
+    hooks: {
+        after: authAuditHook({
+            executor,
+            retention: 100_000, // CONFIGURABLE, NOT capped — omit for an unbounded (compliance) trail
+            onRecord: (entry) => forwardToSiem(entry), // optional export tap for SIEM forwarding
+        }),
+    },
+});
+
+// Read the trail (RLS/admin-gate this in your own query):
+const signIns = await readAuthAuditLog(executor, { event: "sign-in", limit: 100 });
+```
+
+Each row captures the actor (id + email), event type, client IP/User-Agent,
+timestamp, and outcome. The free-form `detail` payload is scrubbed with
+`@visulima/redact` before it is persisted, so a token/password that leaks into an
+event's context never reaches the durable table. The trail lives in the reserved
+`__lunora_auth_audit__` table (auto-hidden from the data browser); retention is
+configurable via `retention` and defaults to unbounded.
+
 ## See also
 
 - [@lunora/auth plugins](/docs/packages/auth/plugins) — passkeys, org, admin, 2FA, and the studio dashboard.

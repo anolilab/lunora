@@ -429,6 +429,10 @@ catalogs:
     hono: ^4.12.30
   redact:
     "@visulima/redact": 3.0.0
+  email:
+    "@visulima/disposable-email-domains": 1.0.1
+    "@visulima/free-email-domains": 1.0.0
+    "@visulima/email-verifier": 1.0.1
 
 preferWorkspacePackages: true
 
