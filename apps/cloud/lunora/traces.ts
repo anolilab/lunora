@@ -43,6 +43,7 @@ interface TraceRollupView {
 
 /** One span in a trace — mirrors `ObservationSpan` locally so codegen inlines it. */
 interface SpanView {
+    attributes?: Record<string, string>;
     completionTokens?: number;
     durationMs: number;
     endedAt: number;
@@ -133,6 +134,7 @@ export const get = query
         });
 
         return (page as unknown as ObservationRow[]).map((span) => ({
+            attributes: span.attributes,
             completionTokens: span.completionTokens,
             durationMs: span.durationMs,
             endedAt: span.endedAt,

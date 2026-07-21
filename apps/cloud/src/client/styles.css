@@ -769,6 +769,89 @@ button.link.danger {
     font-variant-numeric: tabular-nums;
 }
 
+/* Clickable waterfall row + selection highlight. */
+.trace-wrow-click {
+    cursor: pointer;
+}
+
+.trace-wrow-click:hover {
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.trace-wrow-click.active {
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+/* Selected-span detail pane. */
+.trace-span-detail {
+    margin-top: 14px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+}
+
+.trace-span-detail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.trace-span-detail-name {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.trace-span-detail-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 16px;
+    margin: 0 0 10px;
+    font-size: 13px;
+}
+
+.trace-span-detail-grid dt {
+    color: var(--muted);
+}
+
+.trace-span-detail-grid dd {
+    margin: 0;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    word-break: break-word;
+}
+
+.trace-attr-row {
+    display: contents;
+}
+
+.trace-span-io {
+    margin-top: 8px;
+}
+
+.trace-span-io-label {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.trace-span-io-body {
+    max-height: 220px;
+    margin: 0;
+    padding: 8px 10px;
+    overflow: auto;
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 /* Trace-list filter row (errors-only, …). */
 .trace-filter {
     display: inline-flex;

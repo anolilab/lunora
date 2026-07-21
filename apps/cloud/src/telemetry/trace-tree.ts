@@ -13,6 +13,8 @@
 
 /** One stored span, as both folds read it (a subset of the `observations` row). */
 export interface ObservationSpan {
+    /** Selected string span attributes (shown in the detail pane). */
+    attributes?: Record<string, string>;
     /** Generation spans: completion token count. */
     completionTokens?: number;
     durationMs: number;

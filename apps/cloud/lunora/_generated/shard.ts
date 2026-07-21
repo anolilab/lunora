@@ -5905,14 +5905,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `functionPath` of public procedure `list` (traces:75) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `functionPath` of public procedure `list` (traces:76) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "functionPath",
             "exportName": "list",
             "file": "traces",
-            "line": 75
+            "line": 76
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -5924,14 +5924,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `traceId` of public procedure `get` (traces:123) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `traceId` of public procedure `get` (traces:124) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "traceId",
             "exportName": "get",
             "file": "traces",
-            "line": 123
+            "line": 124
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",

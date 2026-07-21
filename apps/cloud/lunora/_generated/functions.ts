@@ -914,7 +914,7 @@ export interface Caller {
         pruneObservations: (args?: {}) => Promise<{ pruned: number; }>;
     };
     traces: {
-        get: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ completionTokens?: number; durationMs: number; endedAt: number; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
+        get: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
         list: (args: { deploymentId?: Id<"deployments">; errorOnly?: boolean; from?: number; functionPath?: string; limit?: number; minDurationMs?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
     };
     uptime: {
