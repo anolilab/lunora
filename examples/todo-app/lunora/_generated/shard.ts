@@ -648,6 +648,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const logFunctionPath = options.functionPath ?? "";
             const log = this.makeLogger(logFunctionPath, observability);
 
+            // `ctx.trace` / `ctx.metrics`: spans and measurements to the same sink.
+            // The trace anchor is threaded explicitly for the same reason `identity`
+            // is — a deferred caller (a subscription re-run) must not inherit the
+            // writing mutation's trace from the shared per-request field.
+            const trace = this.makeTracer(logFunctionPath, observability, options.identity ? undefined : this.getCurrentTrace());
+            const metrics = this.makeMetrics(logFunctionPath, observability);
+
             // `ctx.now`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
             // Query/mutation handlers must be deterministic (they may be re-run on
@@ -665,10 +672,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 fetch: globalThis.fetch.bind(globalThis),
                 ip: this.getCurrentIp(),
                 log,
+                metrics,
                 now,
                 orm: bindOrm(facade),
                 scheduler,
                 storage,
+                trace,
                 secrets,
             };
 

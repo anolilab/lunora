@@ -66,6 +66,7 @@ const ADMIN_FUNCTIONS = {
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     getIssues: "__lunora_admin__:getIssues",
+    getMetricSeries: "__lunora_admin__:getMetricSeries",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
     getLogs: "__lunora_admin__:getLogs",
@@ -75,6 +76,7 @@ const ADMIN_FUNCTIONS = {
     getRequestLog: "__lunora_admin__:getRequestLog",
     getSecurityAudit: "__lunora_admin__:getSecurityAudit",
     getSettings: "__lunora_admin__:getSettings",
+    getTraces: "__lunora_admin__:getTraces",
     // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
     getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus",
     importShard: "__lunora_admin__:importShard",

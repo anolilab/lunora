@@ -1003,6 +1003,26 @@ type MergeStrategy = {
 };
 ```
 
+### `MetricEvent` (interface)
+
+```ts
+interface MetricEvent {
+    attributes?: LogFields;
+    functionPath: string;
+    kind: MetricKind;
+    name: string;
+    shardKey?: string;
+    ts: number;
+    value: number;
+}
+```
+
+### `MetricKind` (type)
+
+```ts
+type MetricKind = "counter" | "gauge" | "histogram";
+```
+
 ### `MigrationFanOutRequest` (interface)
 
 ```ts
@@ -1061,7 +1081,9 @@ interface ObservabilityEvent {
 ```ts
 interface ObservabilitySink {
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
+    onMetric?: (event: MetricEvent, context?: ObservabilitySinkContext) => void;
     onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
+    onSpan?: (event: SpanEvent, context?: ObservabilitySinkContext) => void;
 }
 ```
 
@@ -1443,6 +1465,29 @@ interface ShardingInfo {
         field?: string;
         kind: "global" | "root" | "shardBy";
     };
+}
+```
+
+### `SpanEvent` (interface)
+
+```ts
+interface SpanEvent {
+    attributes?: LogFields;
+    durationMs: number;
+    error?: {
+        message: string;
+        type: string;
+    };
+    functionPath: string;
+    name: string;
+    ok: boolean;
+    parentSpanId: string;
+    dispatch?: boolean;
+    shardKey?: string;
+    spanId: string;
+    startTs: number;
+    traceId: string;
+    userId?: string;
 }
 ```
 

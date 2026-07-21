@@ -1344,6 +1344,95 @@ interface LunoraLogger {
     readonly with: (fields: LogFields) => LunoraLogger;
 }
 
+/**
+ * Span factory on every function `ctx`. Wraps a sub-operation so it becomes its
+ * own **span** nested under the dispatch's RPC span, giving a trace real shape:
+ * without it a slow request is one opaque bar, with it you see which part was
+ * slow.
+ *
+ * ```ts
+ * const charge = await ctx.trace("stripe.charge", () => stripe.charges.create(…), { orderId });
+ * ```
+ *
+ * **Nesting is explicit.** The body receives a tracer bound to its own span;
+ * calling *that* is what makes a child:
+ *
+ * ```ts
+ * await ctx.trace("fulfil", async (trace) => {
+ *     // Children of "fulfil" — including under Promise.all, where an ambient
+ *     // "currently open span" would mis-record these as nested inside each other.
+ *     await Promise.all([trace("reserve.stock", …), trace("email.receipt", …)]);
+ * });
+ * ```
+ *
+ * Calling `ctx.trace` again inside a body (rather than the passed tracer) is not
+ * an error — that span is simply parented to the dispatch instead of to the
+ * enclosing span, which is flatter but never wrong.
+ *
+ * Spans share the dispatch's trace id with its `ctx.log` lines and any container
+ * the handler calls (the same `traceparent` is propagated), so one trace spans
+ * worker, shard, and container.
+ *
+ * The span is recorded when the body settles, and the body's value is returned
+ * unchanged. A throw is recorded as an error span and then **re-thrown** — this
+ * is instrumentation, never flow control. Recording is best-effort: a failing
+ * sink can't turn a working handler into a broken one.
+ * @param name Span name, e.g. `"stripe.charge"`. Prefer a low-cardinality name
+ * and put the varying part in `attributes` — a name built from an id makes every
+ * span its own group in a collector.
+ * @param fn The body to time, receiving a tracer bound to this span for any
+ * nested spans. May be sync or async; the result is awaited.
+ * @param attributes Structured attributes to stamp on the span, normalized like
+ * a log line's `fields`.
+ */
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+
+/**
+ * Application metrics on every function `ctx` — the third signal alongside
+ * `ctx.log` and `ctx.trace`. Each call records one measurement that flows to an
+ * `ObservabilitySink`'s `onMetric`, and from `otlpSink` to a collector's
+ * `/v1/metrics`.
+ *
+ * ```ts
+ * ctx.metrics.count("orders.placed", 1, { plan: user.plan });
+ * ctx.metrics.record("checkout.latency_ms", Date.now() - started);
+ * ctx.metrics.gauge("cart.items", cart.items.length);
+ * ```
+ *
+ * Pick the instrument by the question you want to answer: `count` for "how many"
+ * (summed over time), `gauge` for "how many right now" (replaces the last
+ * reading), `record` for "what's the distribution" (percentiles, not just a
+ * mean).
+ *
+ * `attributes` are the metric's dimensions. Keep them **low-cardinality** — an
+ * attribute valued by user id or order id creates a distinct time series per id,
+ * which is how a metrics backend gets expensive. Put identifiers on a log line or
+ * a span instead.
+ *
+ * No pre-aggregation happens: one call is one exported measurement, with counter
+ * deltas for the collector to sum. In a hot loop, sum locally and record once
+ * rather than calling per iteration.
+ */
+interface LunoraMetrics {
+    /**
+     * Add to a monotonic counter (default `1`) — requests served, retries,
+     * bytes sent. The collector sums successive deltas.
+     */
+    readonly count: (name: string, value?: number, attributes?: LogFields) => void;
+
+    /**
+     * Report a point-in-time reading that replaces the previous one — queue
+     * depth, cache size, connections open.
+     */
+    readonly gauge: (name: string, value: number, attributes?: LogFields) => void;
+
+    /**
+     * Observe one sample of a distribution — latency, payload size. Use this,
+     * not a counter, when percentiles matter.
+     */
+    readonly record: (name: string, value: number, attributes?: LogFields) => void;
+}
+
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 interface QueryCtx {
     readonly auth: AuthState;
@@ -1370,6 +1459,9 @@ interface QueryCtx {
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+    readonly metrics: LunoraMetrics;
+
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
      * handler sees a single stable value. Query/mutation handlers must be
@@ -1391,6 +1483,8 @@ interface QueryCtx {
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
     readonly storage: ReadOnlyStorage;
+    /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearchReader;
 }
 
@@ -1419,6 +1513,9 @@ interface MutationCtx {
 
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
+
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+    readonly metrics: LunoraMetrics;
 
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
@@ -1450,6 +1547,8 @@ interface MutationCtx {
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
     readonly storage: ReadOnlyStorage;
+    /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
 
     /** Start / resume / inspect durable workflows; see {@link Workflows}. */
@@ -1492,6 +1591,9 @@ interface ActionCtx {
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+    readonly metrics: LunoraMetrics;
+
     /**
      * Wall-clock time (epoch ms) the action began, captured once for convenience
      * and parity with query/mutation `ctx.now`. Actions run exactly once, so they
@@ -1505,6 +1607,8 @@ interface ActionCtx {
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
     readonly storage: Storage;
+    /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
 
     /** Start / resume / inspect durable workflows; see {@link Workflows}. */
@@ -1584,6 +1688,8 @@ export type {
     LogFields,
     LunoraLogger,
     LunoraLogMethod,
+    LunoraMetrics,
+    LunoraTracer,
     MutationCtx,
     OnDeleteAction,
     PaginationOptions,

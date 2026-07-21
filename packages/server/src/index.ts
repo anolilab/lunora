@@ -107,6 +107,8 @@ export type {
     LogFields,
     LunoraLogger,
     LunoraLogMethod,
+    LunoraMetrics,
+    LunoraTracer,
     MutationCtx,
     OnDeleteAction,
     PaginationOptions,

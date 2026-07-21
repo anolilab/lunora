@@ -35,12 +35,14 @@ const ADMIN_FUNCTIONS: {
     readonly listTableIndexes: "__lunora_admin__:listTableIndexes";
     readonly listWorkflows: "__lunora_admin__:listWorkflows";
     readonly getLogs: "__lunora_admin__:getLogs";
+    readonly getMetricSeries: "__lunora_admin__:getMetricSeries";
     readonly getMetrics: "__lunora_admin__:getMetrics";
     readonly getPitrBookmark: "__lunora_admin__:getPitrBookmark";
     readonly getQueueMessages: "__lunora_admin__:getQueueMessages";
     readonly getRequestLog: "__lunora_admin__:getRequestLog";
     readonly getSecurityAudit: "__lunora_admin__:getSecurityAudit";
     readonly getSettings: "__lunora_admin__:getSettings";
+    readonly getTraces: "__lunora_admin__:getTraces";
     readonly getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus";
     readonly importShard: "__lunora_admin__:importShard";
     readonly listTables: "__lunora_admin__:listTables";
@@ -607,7 +609,7 @@ interface LogEntry {
 ### `LogLevel` (type)
 
 ```ts
-type LogLevel = "debug" | "error" | "info" | "warn";
+type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
 ```
 
 ### `LogsPanel` (const)
@@ -1023,7 +1025,7 @@ interface StudioProps {
 ### `StudioTab` (type)
 
 ```ts
-type StudioTab = "agents" | "analytics" | "api" | "audit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "realtime" | "rls" | "schedule" | "schema" | "security" | "settings" | "sql" | "storageRules" | "users" | "vectors" | "workflows";
+type StudioTab = "agents" | "analytics" | "api" | "audit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "realtime" | "rls" | "schedule" | "schema" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
 ```
 
 ### `TFunction` (type)

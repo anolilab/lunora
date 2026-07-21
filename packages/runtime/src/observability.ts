@@ -14,6 +14,8 @@
 
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
+import type { MetricEvent } from "../../../shared/metric-event";
+import type { SpanEvent } from "../../../shared/span-event";
 
 /**
  * Per-RPC dispatch event. Single-shard calls set `shardKey`; cross-shard
@@ -85,8 +87,21 @@ export type ObservabilitySinkContext = LogSinkContext;
 export interface ObservabilitySink {
     /** Invoked once per `ctx.log.*` call from a function handler. */
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
+
+    /**
+     * Invoked once per `ctx.metrics.*` measurement. No pre-aggregation happens
+     * upstream, so counter values are deltas for the destination to sum.
+     */
+    onMetric?: (event: MetricEvent, context?: ObservabilitySinkContext) => void;
     /** Invoked once per dispatched RPC (single-shard or fan-out). */
     onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
+
+    /**
+     * Invoked once per `ctx.trace(name, fn)` span, when the span body settles.
+     * Distinct from `onRpc`: that is the one SERVER span per dispatch, this is the
+     * INTERNAL spans a handler creates beneath it.
+     */
+    onSpan?: (event: SpanEvent, context?: ObservabilitySinkContext) => void;
 }
 
 /**
@@ -127,5 +142,13 @@ export const emitLogEvent = (sink: ObservabilitySink | undefined, event: LogEven
     }
 };
 
+// NOTE: there is deliberately no `emitSpanEvent` / `emitMetricEvent` to mirror
+// the two above. Spans and metrics originate in `@lunora/do`, which cannot
+// import this package (the dependency edge runs the other way), and the runtime
+// itself never emits them — so such helpers would have no possible caller. The
+// DO applies the identical swallow inline in its own `recordSpan`/`recordMetric`.
+
 export { type LogEvent } from "../../../shared/log-event";
 export { type LogFields } from "../../../shared/log-fields";
+export { type MetricEvent, type MetricKind } from "../../../shared/metric-event";
+export { type SpanEvent } from "../../../shared/span-event";

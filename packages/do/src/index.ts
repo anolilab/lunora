@@ -40,6 +40,8 @@ export {
     readAuthMetrics,
     recordAuthEvent,
 } from "./auth-metrics";
+export type { ContextMetrics, ContextTracer, MetricsDeps, TraceAnchor, TracerDeps } from "./context-telemetry";
+export { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
 export type {
     BroadcastDelta,
     CdcChange,
@@ -223,6 +225,7 @@ export type {
     ShardDOOptions,
     ShardDOState,
     SubscriptionOutcome,
+    TelemetrySink,
 } from "./shard-do";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do";
 export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";

@@ -43,6 +43,7 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
@@ -50,6 +51,7 @@ interface ActionCtx {
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly storage: Storage;
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
     readonly workflows: Workflows;
 }
@@ -815,10 +817,26 @@ interface LunoraLogger {
 }
 ```
 
+### `LunoraMetrics` (interface)
+
+```ts
+interface LunoraMetrics {
+    readonly count: (name: string, value?: number, attributes?: LogFields) => void;
+    readonly gauge: (name: string, value: number, attributes?: LogFields) => void;
+    readonly record: (name: string, value: number, attributes?: LogFields) => void;
+}
+```
+
 ### `LunoraRouteHandler` (type)
 
 ```ts
 type LunoraRouteHandler = (c: Context<LunoraHttpEnv>) => Promise<Response>;
+```
+
+### `LunoraTracer` (type)
+
+```ts
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 ```
 
 ### `ManyRelation` (interface)
@@ -959,12 +977,14 @@ interface MutationCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly storage: ReadOnlyStorage;
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
     readonly workflows: Workflows;
 }
@@ -1207,10 +1227,12 @@ interface QueryCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly secrets: Secrets;
     readonly storage: ReadOnlyStorage;
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearchReader;
 }
 ```
@@ -3725,6 +3747,7 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
@@ -3732,6 +3755,7 @@ interface ActionCtx {
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly storage: Storage;
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
     readonly workflows: Workflows;
 }
@@ -3979,6 +4003,22 @@ interface LunoraLogger {
 }
 ```
 
+### `LunoraMetrics` (interface)
+
+```ts
+interface LunoraMetrics {
+    readonly count: (name: string, value?: number, attributes?: LogFields) => void;
+    readonly gauge: (name: string, value: number, attributes?: LogFields) => void;
+    readonly record: (name: string, value: number, attributes?: LogFields) => void;
+}
+```
+
+### `LunoraTracer` (type)
+
+```ts
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+```
+
 ### `MutationCtx` (interface)
 
 ```ts
@@ -3988,12 +4028,14 @@ interface MutationCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
     readonly storage: ReadOnlyStorage;
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
     readonly workflows: Workflows;
 }
@@ -4035,10 +4077,12 @@ interface QueryCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
+    readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly secrets: Secrets;
     readonly storage: ReadOnlyStorage;
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearchReader;
 }
 ```

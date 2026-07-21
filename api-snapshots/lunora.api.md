@@ -297,7 +297,15 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LunoraMetrics` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LunoraRouteHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LunoraTracer` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1793,6 +1801,14 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `ContextMetrics` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `ContextTracer` (type)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `CountArgs` (type)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -1981,7 +1997,7 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `LogSink` (interface)
+### `LogSink` (type)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2014,6 +2030,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `MaterializeResult` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `MetricsDeps` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2493,6 +2513,18 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `TelemetrySink` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `TraceAnchor` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `TracerDeps` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `TransactionSqlLike` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2629,11 +2661,19 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `createMetrics` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `createShardCtxDb` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `createSystemReader` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `createTracer` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2646,6 +2686,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `diffExternalSource` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `dispatchRootSpan` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3577,6 +3621,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `MetricEvent` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `MetricKind` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `MigrationFanOutRequest` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -3738,6 +3790,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `ShardingInfo` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `SpanEvent` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4187,7 +4243,15 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LunoraMetrics` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LunoraRouteHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LunoraTracer` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5948,6 +6012,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `LunoraLogger` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LunoraMetrics` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LunoraTracer` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

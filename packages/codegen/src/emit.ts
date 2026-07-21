@@ -4649,6 +4649,13 @@ ${facadeBlock}${paymentsBuild}
             const logFunctionPath = options.functionPath ?? "";
             const log = this.makeLogger(logFunctionPath, observability);
 
+            // \`ctx.trace\` / \`ctx.metrics\`: spans and measurements to the same sink.
+            // The trace anchor is threaded explicitly for the same reason \`identity\`
+            // is — a deferred caller (a subscription re-run) must not inherit the
+            // writing mutation's trace from the shared per-request field.
+            const trace = this.makeTracer(logFunctionPath, observability, options.identity ? undefined : this.getCurrentTrace());
+            const metrics = this.makeMetrics(logFunctionPath, observability);
+
             // \`ctx.now\`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
             // Query/mutation handlers must be deterministic (they may be re-run on
@@ -4666,9 +4673,11 @@ ${facadeBlock}${paymentsBuild}
                 fetch: globalThis.fetch.bind(globalThis),
                 ip: this.getCurrentIp(),
                 log,
+                metrics,
                 now,${ormContextField}
                 scheduler,
-                storage,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${agentsContextField}
+                storage,
+                trace,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${agentsContextField}
             };
 ${isActionLine}${actionOnlyBlock}
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);

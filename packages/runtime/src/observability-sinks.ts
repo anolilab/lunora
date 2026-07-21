@@ -19,8 +19,18 @@
  * if that is a concern.
  */
 import { coerceFieldValue } from "../../../shared/log-fields";
-import { encodeAttribute, mergeHeaders, OTLP_SEVERITY, otlpRandomHex, otlpUnixNano, wrapResourceLogs, wrapResourceSpans } from "../../../shared/otlp";
-import type { LogEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
+import type { OtlpAttribute } from "../../../shared/otlp";
+import {
+    encodeAttribute,
+    mergeHeaders,
+    OTLP_SEVERITY,
+    otlpRandomHex,
+    otlpUnixNano,
+    wrapResourceLogs,
+    wrapResourceMetrics,
+    wrapResourceSpans,
+} from "../../../shared/otlp";
+import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
 
 /** Shared shape for sinks that can be limited to error events only. */
 interface OnlyErrorsOption {
@@ -71,35 +81,148 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
     return wrapResourceSpans(span, "@lunora/runtime", serviceName);
 };
 
+/**
+ * Build the OTLP attribute list shared by every signal: the reserved `lunora.*`
+ * keys, then the caller's own attributes.
+ *
+ * Keyed by name so a caller key that collides with a reserved one **overrides**
+ * it rather than emitting a duplicate `KeyValue` (which a collector resolves
+ * ambiguously). That precedence is a wire contract, and it was previously
+ * re-implemented in the span, log, and metric encoders — three copies of one
+ * rule, free to drift apart. One implementation, asserted once.
+ */
+const encodeSignalAttributes = (
+    reserved: { errorType?: string; functionPath: string; shardKey?: string; userId?: string },
+    caller: Record<string, unknown> | undefined,
+): OtlpAttribute[] => {
+    const byKey = new Map<string, OtlpAttribute>([["lunora.function_path", encodeAttribute("lunora.function_path", reserved.functionPath)]]);
+
+    if (reserved.shardKey !== undefined) {
+        byKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", reserved.shardKey));
+    }
+
+    if (reserved.userId !== undefined) {
+        byKey.set("lunora.user_id", encodeAttribute("lunora.user_id", reserved.userId));
+    }
+
+    if (reserved.errorType !== undefined) {
+        // `error.type` is the OTel semantic-convention key.
+        byKey.set("error.type", encodeAttribute("error.type", reserved.errorType));
+    }
+
+    // Caller values arrive pre-normalized to JSON-safe primitives;
+    // `coerceFieldValue` re-applies for a sink fed a raw event.
+    for (const [key, value] of Object.entries(caller ?? {})) {
+        byKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
+    }
+
+    return [...byKey.values()];
+};
+
+/**
+ * Build the OTLP trace-export body for one user-created `ctx.trace` span.
+ *
+ * The counterpart to {@link otlpTraceBody}: that encodes the one SERVER span per
+ * dispatch, this encodes the INTERNAL spans a handler creates beneath it. The
+ * span carries a real `parentSpanId`, so a collector nests it under its parent
+ * (another `ctx.trace`, or the dispatch's own RPC span) rather than showing a
+ * flat list of orphans.
+ *
+ * Attribute precedence follows {@link encodeSignalAttributes}.
+ */
+const otlpSpanBody = (event: SpanEvent, serviceName: string): unknown => {
+    const span = {
+        attributes: encodeSignalAttributes(
+            { errorType: event.error?.type, functionPath: event.functionPath, shardKey: event.shardKey, userId: event.userId },
+            event.attributes,
+        ),
+        endTimeUnixNano: otlpUnixNano(event.startTs + event.durationMs),
+        // Always SPAN_KIND_INTERNAL: only `ctx.trace` spans reach a sink. The
+        // synthetic dispatch span is buffered for the Studio waterfall and never
+        // exported, because the runtime already emits that dispatch to `onRpc` as
+        // a SERVER span — encoding it here too would duplicate it in every trace.
+        kind: 1,
+        name: event.name,
+        parentSpanId: event.parentSpanId,
+        spanId: event.spanId,
+        startTimeUnixNano: otlpUnixNano(event.startTs),
+        // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
+        status: event.ok ? { code: 1 } : { code: 2, message: event.error?.message ?? "" },
+        traceId: event.traceId,
+    };
+
+    return wrapResourceSpans(span, "@lunora/runtime", serviceName);
+};
+
+/**
+ * Build the OTLP metric-export body for one `ctx.metrics.*` measurement.
+ *
+ * One data point per call — the runtime does no pre-aggregation — so counters
+ * and histograms are exported with **DELTA** temporality (`aggregationTemporality: 1`),
+ * which tells the collector to sum successive exports rather than treat each as
+ * a running total. A gauge has no temporality: it is a reading that replaces the
+ * previous one.
+ *
+ * The histogram carries a single observation in one implicit bucket
+ * (`explicitBounds: []`, `bucketCounts: ["1"]`) — a valid OTLP encoding that lets
+ * the collector build the distribution from the stream of counts/sums, without
+ * the runtime having to pick bucket boundaries for the user.
+ */
+const otlpMetricBody = (event: MetricEvent, serviceName: string): unknown => {
+    const timeUnixNano = otlpUnixNano(event.ts);
+    const attributes = encodeSignalAttributes({ functionPath: event.functionPath, shardKey: event.shardKey }, event.attributes);
+    // `startTimeUnixNano` is deliberately omitted (it is optional). A delta point
+    // covers `(startTimeUnixNano, timeUnixNano]`, so setting both to the same
+    // instant would declare a zero-width aggregation window — which the
+    // `deltatocumulative` processor and Prometheus remote-write paths treat as
+    // invalid and may drop. Omitting it lets the collector infer the interval
+    // from the previous export, which is what it does for a stream of deltas.
+    const dataPoint = { asDouble: event.value, attributes, timeUnixNano };
+
+    if (event.kind === "gauge") {
+        return wrapResourceMetrics({ gauge: { dataPoints: [dataPoint] }, name: event.name }, "@lunora/runtime", serviceName);
+    }
+
+    if (event.kind === "histogram") {
+        return wrapResourceMetrics(
+            {
+                histogram: {
+                    aggregationTemporality: 1,
+                    dataPoints: [
+                        {
+                            attributes,
+                            bucketCounts: ["1"],
+                            count: "1",
+                            explicitBounds: [],
+                            max: event.value,
+                            min: event.value,
+                            // `startTimeUnixNano` omitted for the same reason as
+                            // the Sum data point above — see the comment there.
+                            sum: event.value,
+                            timeUnixNano,
+                        },
+                    ],
+                },
+                name: event.name,
+            },
+            "@lunora/runtime",
+            serviceName,
+        );
+    }
+
+    return wrapResourceMetrics(
+        { name: event.name, sum: { aggregationTemporality: 1, dataPoints: [dataPoint], isMonotonic: true } },
+        "@lunora/runtime",
+        serviceName,
+    );
+};
+
 /** Build the OTLP log-export body for one application log line. */
 const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
-    // Keyed by attribute name so a caller field that reuses a reserved `lunora.*`
-    // key overrides it (as documented) rather than emitting a duplicate `KeyValue`
-    // the collector resolves ambiguously. Reserved keys go in first; caller
-    // fields overwrite.
-    const attributeByKey = new Map<string, ReturnType<typeof encodeAttribute>>([
-        ["lunora.function_path", encodeAttribute("lunora.function_path", event.functionPath)],
-    ]);
-
-    if (event.shardKey !== undefined) {
-        attributeByKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", event.shardKey));
-    }
-
-    if (event.userId !== undefined) {
-        attributeByKey.set("lunora.user_id", encodeAttribute("lunora.user_id", event.userId));
-    }
-
-    // Caller-supplied structured fields become log-record attributes so a
-    // pipeline can filter/index on them. They arrive pre-normalized to JSON-safe
-    // primitives; `coerceFieldValue` re-applies for a sink fed a raw event.
-    if (event.fields) {
-        for (const [key, value] of Object.entries(event.fields)) {
-            attributeByKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
-        }
-    }
-
     const logRecord: Record<string, unknown> = {
-        attributes: [...attributeByKey.values()],
+        // Caller-supplied structured fields become log-record attributes so a
+        // pipeline can filter/index on them; precedence per `encodeSignalAttributes`.
+        attributes: encodeSignalAttributes({ functionPath: event.functionPath, shardKey: event.shardKey, userId: event.userId }, event.fields),
         body: { stringValue: event.message },
         severityNumber: OTLP_SEVERITY[event.level],
         severityText: event.level.toUpperCase(),
@@ -160,6 +283,12 @@ export const consoleSink = (options: OnlyErrorsOption = {}): ObservabilitySink =
                 console.log("[lunora:log]", event.functionPath, event.message);
             }
         },
+        onMetric: (event) => {
+            // Measurements, like log lines, are the developer's own output and so
+            // are never scoped by `onlyErrors`.
+            // eslint-disable-next-line no-console
+            console.log("[lunora:metric]", `${event.name}=${String(event.value)}`, event.kind, event.functionPath);
+        },
         onRpc: (event) => {
             if (shouldSkip(event, onlyErrors)) {
                 return;
@@ -172,6 +301,12 @@ export const consoleSink = (options: OnlyErrorsOption = {}): ObservabilitySink =
                 // eslint-disable-next-line no-console
                 console.error("[lunora:rpc]", event);
             }
+        },
+        onSpan: (event) => {
+            const status = event.ok ? "ok" : `error ${event.error?.type ?? ""}`.trim();
+
+            // eslint-disable-next-line no-console
+            console.log("[lunora:span]", event.name, `${String(event.durationMs)}ms`, status, event.functionPath);
         },
     };
 };
@@ -554,9 +689,11 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
  * side lands in the same collector. Each RPC dispatch becomes one OTLP **span**
  * (`${endpoint}/v1/traces`) named after its `functionPath`, with start/end
  * derived from `durationMs` and status OK/ERROR; each `ctx.log.*` line becomes
- * one OTLP **log record** (`${endpoint}/v1/logs`). Trace/span ids are random
- * per span — real trace correlation (worker→container `traceparent`) is a later
- * phase.
+ * one OTLP **log record** (`${endpoint}/v1/logs`). Spans and log records reuse
+ * the dispatch's `traceId`/`spanId` (minted at dispatch entry and propagated to
+ * the shard and any container as a `traceparent`), so a handler's logs, its RPC
+ * span, and the container spans beneath it all stitch into one trace; ids are
+ * only randomised on paths that carry no trace context.
  *
  * Like {@link webhookSink}, each export is its own `fetch`, registered with the
  * request's `context.waitUntil` when present so it survives isolate teardown,
@@ -584,6 +721,7 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
 
     const tracesUrl = `${base}/v1/traces`;
     const logsUrl = `${base}/v1/logs`;
+    const metricsUrl = `${base}/v1/metrics`;
     // `token` is applied last (inside `mergeHeaders`) so it wins over any
     // authorization in `headers`, matching the container exporter's precedence.
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers, token);
@@ -594,12 +732,23 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
             // RPC span stream, not the developer's `ctx.log` output.
             otlpPost(logsUrl, otlpLogBody(event, serviceName), mergedHeaders, context);
         },
+        onMetric: (event, context) => {
+            // Like logs and spans, a measurement the developer explicitly recorded
+            // is never scoped by `onlyErrors`.
+            otlpPost(metricsUrl, otlpMetricBody(event, serviceName), mergedHeaders, context);
+        },
         onRpc: (event, context) => {
             if (shouldSkip(event, onlyErrors)) {
                 return;
             }
 
             otlpPost(tracesUrl, otlpTraceBody(event, serviceName, Date.now()), mergedHeaders, context);
+        },
+        onSpan: (event, context) => {
+            // `onlyErrors` scopes the RPC span stream; a handler that explicitly
+            // instrumented a sub-operation always gets its span exported, the same
+            // way `ctx.log` output is never scoped by it.
+            otlpPost(tracesUrl, otlpSpanBody(event, serviceName), mergedHeaders, context);
         },
     };
 };
@@ -612,36 +761,43 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
  * @param sinks The sinks to fan out to.
  */
 export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink => {
+    /**
+     * Fan one event out to every child that implements `method`.
+     *
+     * One helper rather than four near-identical loops: "invoke each child in
+     * order, isolate its throws, and forward the per-event context" is a single
+     * policy, not a per-signal one, and there is no reason for the four to
+     * diverge. Forwarding `context` matters — dropping the request's `waitUntil`
+     * would silently degrade every wrapped network sink to fire-and-forget.
+     */
+    const fanOut = (method: "onLog" | "onMetric" | "onRpc" | "onSpan", event: unknown, context?: ObservabilitySinkContext): void => {
+        for (const sink of sinks) {
+            const handler = sink[method] as ((event: unknown, context?: ObservabilitySinkContext) => void) | undefined;
+
+            if (!handler) {
+                continue;
+            }
+
+            try {
+                handler.call(sink, event, context);
+            } catch {
+                // Isolate failures so one bad sink doesn't starve the rest.
+            }
+        }
+    };
+
     return {
         onLog: (event: LogEvent, context?: ObservabilitySinkContext) => {
-            for (const sink of sinks) {
-                if (!sink.onLog) {
-                    continue;
-                }
-
-                try {
-                    // Forward the per-event context (the request's `ctx.waitUntil`)
-                    // so a wrapped network sink can still keep its send alive past
-                    // the response — dropping it would silently degrade every
-                    // combined sink to fire-and-forget.
-                    sink.onLog(event, context);
-                } catch {
-                    // Isolate failures so one bad sink doesn't starve the rest.
-                }
-            }
+            fanOut("onLog", event, context);
         },
-        onRpc: (event, context?: ObservabilitySinkContext) => {
-            for (const sink of sinks) {
-                if (!sink.onRpc) {
-                    continue;
-                }
-
-                try {
-                    sink.onRpc(event, context);
-                } catch {
-                    // Isolate failures so one bad sink doesn't starve the rest.
-                }
-            }
+        onMetric: (event: MetricEvent, context?: ObservabilitySinkContext) => {
+            fanOut("onMetric", event, context);
+        },
+        onRpc: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => {
+            fanOut("onRpc", event, context);
+        },
+        onSpan: (event: SpanEvent, context?: ObservabilitySinkContext) => {
+            fanOut("onSpan", event, context);
         },
     };
 };
