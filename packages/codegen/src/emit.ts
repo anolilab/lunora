@@ -1430,6 +1430,8 @@ interface EmitServerOptions {
     hasImages?: boolean;
     /** A `lunora/` source uses `@lunora/bindings/kv` / `ctx.kv` — wires `ctx.kv` onto every ctx. */
     hasKv?: boolean;
+    /** The project declares `lunora/notify.ts` — wires `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) onto every ctx. */
+    hasNotify?: boolean;
     hasPayments?: boolean;
     /** A `lunora/` source uses `@lunora/bindings/pipelines` / `ctx.pipelines` — wires `ctx.pipelines` onto ActionCtx only. */
     hasPipelines?: boolean;
@@ -1469,6 +1471,7 @@ const emitServer = ({
     hasHyperdrive = false,
     hasImages = false,
     hasKv = false,
+    hasNotify = false,
     hasPayments = false,
     hasPipelines = false,
     hasR2sql = false,
@@ -1608,6 +1611,14 @@ export type Env = CloudflareBindings;`;
     // memoized per request. Gated on the project declaring `lunora/flags.ts`.
     const flagsContextField = hasFlags
         ? `\n    /** Feature-flag evaluation (OpenFeature). Reads are memoized per request; evaluations never throw — a provider error resolves to the supplied default. */\n    readonly flags: import("${base.flags}").LunoraFlags;`
+        : "";
+    // `ctx.notify` + its `ctx.push` alias — multi-channel notifications
+    // (`@lunora/notify`). Typed on EVERY ctx (mirrors `ctx.flags`); the
+    // `notify_send_outside_action` lint — not the type — keeps non-deterministic
+    // sends out of query/mutation handlers. Gated on the project declaring
+    // `lunora/notify.ts`. `@lunora/notify` is an add-on install, never umbrella-remapped.
+    const notifyContextField = hasNotify
+        ? `\n    /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */\n    readonly notify: import("@lunora/notify").LunoraNotify;\n    /** Device push sub-facade — the same object as ctx.notify.push (register / send / broadcast). Sends belong in action handlers. */\n    readonly push: import("@lunora/notify").LunoraPush;`
         : "";
 
     // Workflows live on BOTH MutationCtx and ActionCtx (a workflow can be kicked
@@ -1793,19 +1804,19 @@ type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> |
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${envContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${authContextField}
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 /**
@@ -2441,6 +2452,34 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
         configField: `\n    flags?: (env: Record<string, unknown>) => import("${flagsSpecifier}").Provider;`,
         contextField: `\n                flags,`,
         importLines: [`import { createFlags } from "${flagsSpecifier}";`, `import flagsConfig from "../flags.js";`],
+        stub: "",
+    };
+};
+
+/**
+ * `ctx.notify` / `ctx.push` (`@lunora/notify`) fragments. Mirrors
+ * `emitFlagsFragments`: the definition comes from the project's own
+ * `lunora/notify.ts` (`defineNotify(...)`), imported as `notifyConfig`, and
+ * `createNotify(notifyConfig, env)` builds both facades from the request `env`.
+ * `ctx.push` is the very same object exposed as `ctx.notify.push`, spliced onto
+ * ctx as its own property (the `ctx.push` alias). Wired onto EVERY ctx — like
+ * `ctx.flags` — with the `notify_send_outside_action` lint (not the type) keeping
+ * non-deterministic sends out of query/mutation handlers. `@lunora/notify` is an
+ * add-on install, so — unlike `ctx.flags` — its specifier is never umbrella-
+ * remapped. `createNotify` never throws, so there is no stub fallback.
+ */
+const emitNotifyFragments = (hasNotify: boolean): HelperFragments => {
+    if (!hasNotify) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    return {
+        build: `
+            const { notify, push } = createNotify(notifyConfig, env);
+`,
+        configField: "",
+        contextField: `\n                notify,\n                push,`,
+        importLines: [`import { createNotify } from "@lunora/notify";`, `import notifyConfig from "../notify.js";`],
         stub: "",
     };
 };
@@ -3483,6 +3522,8 @@ interface EmitShardOptions {
     hasImages?: boolean;
     /** A `lunora/` source reads `ctx.kv` — wires `ctx.kv` onto every ctx. */
     hasKv?: boolean;
+    /** The project declares `lunora/notify.ts` — wires `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) onto every ctx. */
+    hasNotify?: boolean;
     hasPayments?: boolean;
     /** A `lunora/` source reads `ctx.pipelines` — wires `ctx.pipelines` onto the ActionCtx only. */
     hasPipelines?: boolean;
@@ -3521,6 +3562,7 @@ const emitShard = ({
     hasHyperdrive = false,
     hasImages = false,
     hasKv = false,
+    hasNotify = false,
     hasPayments = false,
     hasPipelines = false,
     hasR2sql = false,
@@ -3548,6 +3590,7 @@ const emitShard = ({
     const kvFragments = emitKvFragments(hasKv);
     const flagsFragments = emitFlagsFragments(hasFlags, base.flags);
     const flagsOverrides = emitFlagsOverrides(flagKeys, hasFlags, base.flags);
+    const notifyFragments = emitNotifyFragments(hasNotify);
     const envFragments = emitEnvFragments(env);
     const analyticsFragments = emitAnalyticsFragments(hasAnalytics);
     const imagesFragments = emitImagesFragments(hasImages);
@@ -3788,6 +3831,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         ...accessFragments.importLines,
         ...kvFragments.importLines,
         ...flagsFragments.importLines,
+        ...notifyFragments.importLines,
         ...envFragments.importLines,
         ...analyticsFragments.importLines,
         ...imagesFragments.importLines,
@@ -4221,8 +4265,8 @@ ${schema.tables
     const secretsBuild = `
             const secrets = createSecrets(env);
 `;
-    const everyContextBuild = `${accessFragments.build}${kvFragments.build}${flagsFragments.build}${analyticsFragments.build}${envFragments.build}${secretsBuild}`;
-    const everyContextField = `${accessFragments.contextField}${kvFragments.contextField}${flagsFragments.contextField}${analyticsFragments.contextField}${envFragments.contextField}\n                secrets,`;
+    const everyContextBuild = `${accessFragments.build}${kvFragments.build}${flagsFragments.build}${notifyFragments.build}${analyticsFragments.build}${envFragments.build}${secretsBuild}`;
+    const everyContextField = `${accessFragments.contextField}${kvFragments.contextField}${flagsFragments.contextField}${notifyFragments.contextField}${analyticsFragments.contextField}${envFragments.contextField}\n                secrets,`;
 
     // `ctx.images` / `ctx.sql` (Hyperdrive) / `ctx.browser` are ActionCtx-ONLY:
     // external, non-deterministic I/O the typed `ActionCtx` exposes but

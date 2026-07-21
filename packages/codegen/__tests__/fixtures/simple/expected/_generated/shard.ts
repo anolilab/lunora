@@ -5,6 +5,8 @@ import type { AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, LogSink, M
 import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
 import { asBucketStorage, createSecrets, LunoraError } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
+import { createNotify } from "@lunora/notify";
+import notifyConfig from "../notify.js";
 
 import schema from "../schema.js";
 import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js";
@@ -752,6 +754,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
 
+            const { notify, push } = createNotify(notifyConfig, env);
+
             const secrets = createSecrets(env);
 
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
@@ -822,6 +826,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 scheduler,
                 storage,
                 trace,
+                notify,
+                push,
                 secrets,
             };
 

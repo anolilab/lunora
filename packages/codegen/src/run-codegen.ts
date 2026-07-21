@@ -42,6 +42,7 @@ import discoverMutatorWrites from "./discover-mutator-writes";
 import { discoverMutators } from "./discover-mutators";
 import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverNormalizeIdAuthorization from "./discover-normalize-id-authorization";
+import { discoverNotifyCalls, discoverNotifyConfig } from "./discover-notify";
 import discoverOwnerFieldWrites from "./discover-owner-field-writes";
 import discoverPackageDependencies from "./discover-package-dependencies";
 import discoverPaymentWebhooks from "./discover-payment-webhooks";
@@ -458,6 +459,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   mutatorWrites: discoverMutatorWrites(project, lunoraDirectory),
                   nondeterministicCalls: discoverNondeterministicCalls(project, lunoraDirectory),
                   normalizeIdAuthorizations: discoverNormalizeIdAuthorization(project, lunoraDirectory),
+                  notifyCalls: discoverNotifyCalls(project, lunoraDirectory),
+                  notifyConfig: discoverNotifyConfig(project, lunoraDirectory),
                   ownerFieldWrites: discoverOwnerFieldWrites(project, lunoraDirectory),
                   paymentWebhooks: discoverPaymentWebhooks(project, lunoraDirectory),
                   privilegedDispatches: discoverPrivilegedDispatches(project, lunoraDirectory),
@@ -528,6 +531,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // ShardDO's `evaluateFlags` (studio Flags page) + the reactive read override
     // (`useFlag`) iterate these. Only meaningful when a provider is wired.
     const flagKeys = hasFlags ? discoverFlagKeys(project, lunoraDirectory) : [];
+    // `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) is gated on the
+    // project declaring a `lunora/notify.ts` (`defineNotify(...)`), mirroring
+    // `hasFlags`: the generated ShardDO imports that module's default export to
+    // build both facades via `createNotify(notifyConfig, env)`, so wiring the ctx
+    // fields without it would emit a broken import. Notify rides EVERY ctx (like
+    // `ctx.flags`); the `notify_send_outside_action` lint — not the type — keeps
+    // non-deterministic sends out of query/mutation handlers.
+    const hasNotify = existsSync(join(lunoraDirectory, "notify.ts"));
     const hasHyperdrive = featureUsage.hyperdrive;
     // Batteries-included sandbox tools (`@lunora/agent/sandbox`). `browserTool`
     // drives `ctx.browser`, so it flips `hasBrowser` (provisioning the BROWSER
@@ -586,6 +597,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasHyperdrive,
         hasImages,
         hasKv,
+        hasNotify,
         hasPayments,
         hasPipelines,
         hasR2sql,
@@ -612,6 +624,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasHyperdrive,
         hasImages,
         hasKv,
+        hasNotify,
         hasPayments,
         hasPipelines,
         hasR2sql,

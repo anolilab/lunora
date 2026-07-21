@@ -1,4 +1,4 @@
-import type { AdvisorIndex, AdvisorSchema, AdvisorShape, Finding } from "@lunora/advisor";
+import type { AdvisorIndex, AdvisorNotifyCall, AdvisorNotifyConfig, AdvisorSchema, AdvisorShape, Finding } from "@lunora/advisor";
 import { runAdvisor } from "@lunora/advisor";
 
 import type {
@@ -201,6 +201,8 @@ export interface LintSchemaOptions {
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
     normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>;
+    notifyCalls?: ReadonlyArray<AdvisorNotifyCall>;
+    notifyConfig?: AdvisorNotifyConfig;
     ownerFieldWrites?: ReadonlyArray<OwnerFieldWriteIR>;
     paymentWebhooks?: ReadonlyArray<PaymentWebhookIR>;
     privilegedDispatches?: ReadonlyArray<PrivilegedDispatchIR>;
@@ -254,6 +256,8 @@ export const lintSchema = (options: LintSchemaOptions): Finding[] =>
             mutatorWrites: options.mutatorWrites,
             nondeterministicCalls: options.nondeterministicCalls,
             normalizeIdAuthorizations: options.normalizeIdAuthorizations,
+            notifyCalls: options.notifyCalls,
+            notifyConfig: options.notifyConfig,
             ownerFieldWrites: options.ownerFieldWrites,
             paymentWebhooks: options.paymentWebhooks,
             privilegedDispatches: options.privilegedDispatches,
