@@ -164,7 +164,64 @@ const part = await multipart.uploadPart(1, chunk);
 await multipart.complete([part]);
 ```
 
+## End-user uploads (RLS-gated)
+
+The admin studio upload path (`storageUpload` → `/_lunora/admin/storage`) is gated
+by an `adminToken` — right for the file browser, wrong for end users. For
+browser-driven uploads with **live progress, pause/resume, large-file resumable
+and per-part retry**, `@lunora/storage/upload` mounts `@visulima/storage`'s
+resumable upload handlers (TUS / chunked-REST / multipart) behind an app-supplied
+**RLS** gate. Drive it from the client with
+[`@lunora/react/upload`](/docs/packages/react#file-uploads-lunorareactupload)
+(or `@lunora/vue` / `@lunora/solid` / `@lunora/svelte`, or the framework-agnostic
+`@lunora/client/upload`) — Lunora does not hand-roll the uploader.
+
+`createUploadHandler` returns a `fetch(request)` you mount on the route your
+client uploads to. The `authorize` callback is the RLS decision: it runs before
+every request (create, chunk PATCH, resume HEAD, delete) and **denies
+fail-closed** — returning `false` or throwing yields a `403`, never a `500`.
+
+```ts
+import { createR2UploadStorage, createUploadHandler } from "@lunora/storage/upload";
+
+// Back the handler with R2 via the dependency-light `aws-light` provider
+// (aws4fetch, no AWS SDK). Needs `nodejs_compat` in wrangler.jsonc.
+const uploads = createUploadHandler({
+    storage: createR2UploadStorage({
+        accountId: env.CF_ACCOUNT_ID,
+        bucket: "user-uploads",
+        accessKeyId: env.R2_ACCESS_KEY_ID,
+        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+        path: "/upload",
+    }),
+    // RLS: resolve the caller from the request and allow only their own prefix.
+    authorize: async ({ request }) => {
+        const user = await resolveUser(request); // your session/JWT check
+
+        return user !== null;
+    },
+});
+
+export default {
+    async fetch(request: Request): Promise<Response> {
+        const url = new URL(request.url);
+
+        if (url.pathname.startsWith("/upload")) {
+            return uploads.fetch(request);
+        }
+
+        return handleRest(request);
+    },
+};
+```
+
+`protocol` defaults to `"tus"` (the resumable, pause/resume-capable path); pass
+`"chunked-rest"` or `"multipart"` to mount a different one. Use a memory provider
+(`@visulima/storage/provider/memory`) in tests to exercise the whole flow —
+progress, pause/resume, resume-after-drop — without a live bucket.
+
 ## See also
 
 - [@lunora/server](/docs/packages/server)
+- [@lunora/react — file uploads](/docs/packages/react#file-uploads-lunorareactupload)
 - [Architecture](/docs/architecture)

@@ -43,6 +43,10 @@
             "types": "./dist/server.d.ts",
             "import": "./dist/server.mjs"
         },
+        "./upload": {
+            "types": "./dist/upload.d.ts",
+            "import": "./dist/upload.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -67,7 +71,8 @@
     "dependencies": {
         "@lunora/client": "1.0.0-alpha.26",
         "@lunora/errors": "1.0.0-alpha.6",
-        "@lunora/ratelimit": "1.0.0-alpha.9"
+        "@lunora/ratelimit": "1.0.0-alpha.9",
+        "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
         "@babel/core": "catalog:build",
@@ -80,6 +85,7 @@
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
         "@visulima/packem": "catalog:build",
+        "@visulima/storage": "catalog:storage",
         "@vitest/coverage-v8": "catalog:test",
         "babel-plugin-react-compiler": "catalog:build",
         "esbuild": "catalog:build",

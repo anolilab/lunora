@@ -48,6 +48,10 @@
             "types": "./dist/worker.d.ts",
             "import": "./dist/worker.mjs"
         },
+        "./upload": {
+            "types": "./dist/upload.d.ts",
+            "import": "./dist/upload.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -71,7 +75,8 @@
         "@lunora/client": "1.0.0-alpha.26",
         "@lunora/errors": "1.0.0-alpha.6",
         "@lunora/ratelimit": "1.0.0-alpha.9",
-        "@lunora/runtime": "1.0.0-alpha.32"
+        "@lunora/runtime": "1.0.0-alpha.32",
+        "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
         "@types/node": "catalog:types",
