@@ -302,7 +302,7 @@ export const alertRules = sqliteTable("alertRules", {
     enabled: integer("enabled", { mode: "boolean" }).notNull(),
     name: text("name").notNull(),
     organizationId: text("organizationId").references(() => organizations._id).notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime">().notNull(),
     threshold: real("threshold").notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
@@ -322,11 +322,41 @@ export const alerts = sqliteTable("alerts", {
     ruleId: text("ruleId").references(() => alertRules._id).notNull(),
     status: text("status", { mode: "json" }).$type<"firing" | "delivered" | "failed">().notNull(),
     subject: text("subject").notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime">().notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_status: index("by_status").on(t.status),
     by_org: index("by_org").on(t.organizationId),
+}));
+
+export const uptimeChecks = sqliteTable("uptimeChecks", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId").references(() => deployments._id).notNull(),
+    error: text("error"),
+    latencyMs: real("latencyMs"),
+    ok: integer("ok", { mode: "boolean" }).notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    statusCode: real("statusCode"),
+}, (t) => ({
+    by_org_deployment: index("by_org_deployment").on(t.organizationId, t.deploymentId),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const uptimeState = sqliteTable("uptimeState", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    consecutiveFailures: real("consecutiveFailures").notNull(),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId").references(() => deployments._id).notNull(),
+    lastCheckedAt: real("lastCheckedAt").notNull(),
+    lastOk: integer("lastOk", { mode: "boolean" }).notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+    by_deployment: index("by_deployment").on(t.deploymentId),
 }));
 
 export const secrets = sqliteTable("secrets", {

@@ -40,8 +40,13 @@ crons.interval("expire stale builds", { hours: 1 }, internal.builds.expireStale,
 // reusing an existing expression keeps us within Cloudflare's 3-trigger cap.
 crons.interval("purge deleted organizations", { hours: 6 }, internal.organizations.purgeDeleted, {});
 
+// Prune synthetic-uptime probe rows past the retention window (§ Observability)
+// so the time series stays bounded. Rides the 6h bucket — cadence only affects
+// how promptly old rows clear — keeping within Cloudflare's 3-trigger cap.
+crons.interval("prune uptime checks", { hours: 6 }, internal.uptime.prune, {});
+
 // Every-minute heartbeat that emits the `*/1 * * * *` trigger the edge cron
-// fan-out rides on (§2.4) — the job itself is a no-op; see lunora/fanout.ts.
+// fan-out (and the uptime sweep) ride on (§2.4) — the job itself is a no-op; see lunora/fanout.ts.
 crons.interval("tenant cron fan-out tick", { minutes: 1 }, internal.fanout.tick, {});
 
 export default crons;

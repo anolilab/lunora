@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alerts" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -288,7 +288,7 @@ export interface Doc_alertRules {
     enabled: boolean;
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident";
+    target: "issue" | "incident" | "uptime";
     threshold: number;
     updatedAt: number;
 }
@@ -306,7 +306,31 @@ export interface Doc_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident";
+    target: "issue" | "incident" | "uptime";
+    updatedAt: number;
+}
+
+export interface Doc_uptimeChecks {
+    _id: Id<"uptimeChecks">;
+    _creationTime: number;
+    createdAt: number;
+    deploymentId: Id<"deployments">;
+    error?: string;
+    latencyMs?: number;
+    ok: boolean;
+    organizationId: Id<"organizations">;
+    statusCode?: number;
+}
+
+export interface Doc_uptimeState {
+    _id: Id<"uptimeState">;
+    _creationTime: number;
+    consecutiveFailures: number;
+    createdAt: number;
+    deploymentId: Id<"deployments">;
+    lastCheckedAt: number;
+    lastOk: boolean;
+    organizationId: Id<"organizations">;
     updatedAt: number;
 }
 
@@ -405,6 +429,8 @@ export interface DataModel {
     incidents: Doc_incidents;
     alertRules: Doc_alertRules;
     alerts: Doc_alerts;
+    uptimeChecks: Doc_uptimeChecks;
+    uptimeState: Doc_uptimeState;
     secrets: Doc_secrets;
     customers: Doc_customers;
     events: Doc_events;
@@ -439,6 +465,8 @@ export interface IndexNamesByTable {
     incidents: "by_org_hash" | "by_org";
     alertRules: "by_org";
     alerts: "by_status" | "by_org";
+    uptimeChecks: "by_org_deployment" | "by_org";
+    uptimeState: "by_org" | "by_deployment";
     secrets: "by_project_env_name" | "by_project";
     customers: "by_reference" | "by_provider_customer";
     events: "by_provider_event";
@@ -470,6 +498,8 @@ export interface SearchIndexNamesByTable {
     incidents: never;
     alertRules: never;
     alerts: never;
+    uptimeChecks: never;
+    uptimeState: never;
     secrets: never;
     customers: never;
     events: never;
@@ -501,6 +531,8 @@ export interface RankIndexNamesByTable {
     incidents: never;
     alertRules: never;
     alerts: never;
+    uptimeChecks: never;
+    uptimeState: never;
     secrets: never;
     customers: never;
     events: never;
@@ -765,7 +797,7 @@ export interface Insert_alertRules {
     enabled: boolean;
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident";
+    target: "issue" | "incident" | "uptime";
     threshold: number;
     updatedAt: number;
 }
@@ -783,7 +815,31 @@ export interface Insert_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident";
+    target: "issue" | "incident" | "uptime";
+    updatedAt: number;
+}
+
+export interface Insert_uptimeChecks {
+    _id?: Id<"uptimeChecks">;
+    _creationTime?: number;
+    createdAt: number;
+    deploymentId: Id<"deployments">;
+    error?: string;
+    latencyMs?: number;
+    ok: boolean;
+    organizationId: Id<"organizations">;
+    statusCode?: number;
+}
+
+export interface Insert_uptimeState {
+    _id?: Id<"uptimeState">;
+    _creationTime?: number;
+    consecutiveFailures: number;
+    createdAt: number;
+    deploymentId: Id<"deployments">;
+    lastCheckedAt: number;
+    lastOk: boolean;
+    organizationId: Id<"organizations">;
     updatedAt: number;
 }
 
@@ -883,6 +939,8 @@ export interface InsertModel {
     incidents: Insert_incidents;
     alertRules: Insert_alertRules;
     alerts: Insert_alerts;
+    uptimeChecks: Insert_uptimeChecks;
+    uptimeState: Insert_uptimeState;
     secrets: Insert_secrets;
     customers: Insert_customers;
     events: Insert_events;
@@ -929,6 +987,8 @@ export interface Relations {
     incidents: {};
     alertRules: {};
     alerts: {};
+    uptimeChecks: {};
+    uptimeState: {};
     secrets: {};
     customers: {};
     events: {};

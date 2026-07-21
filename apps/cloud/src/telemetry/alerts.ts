@@ -5,16 +5,19 @@
  * how `usage.ingest` delegates to the pure `evaluateSpendCap`.
  */
 
-/** What a rule watches. */
-export type AlertTarget = "incident" | "issue";
+/** What a rule watches. `uptime` is a deployment's consecutive failed synthetic checks. */
+export type AlertTarget = "incident" | "issue" | "uptime";
 
-/** The source (issue/incident) a rule is evaluated against, for rendering. */
+/** The source (issue/incident/uptime) a rule is evaluated against, for rendering. */
 export interface AlertSource {
     count: number;
     culprit: string;
     sampleMessage: string;
     title: string;
 }
+
+/** The human label for a rule's target, used in the notification. */
+const TARGET_LABEL: Record<AlertTarget, string> = { incident: "Incident", issue: "Issue", uptime: "Uptime" };
 
 /**
  * A rule fires the first time a source's count reaches the threshold — i.e. the
@@ -25,9 +28,18 @@ export const crossesThreshold = (before: number, after: number, threshold: numbe
 
 /** Render a fired alert's subject + body from the rule and the tripping source. */
 export const renderAlert = (rule: { name: string; target: AlertTarget }, source: AlertSource): { body: string; subject: string } => {
+    if (rule.target === "uptime") {
+        return {
+            body:
+                `Deployment "${source.title}" (${source.culprit}) failed ${String(source.count)} ` +
+                `consecutive uptime checks on Lunora Cloud.\n\nLast probe: ${source.sampleMessage}`,
+            subject: `[Lunora] ${rule.name}: ${source.title} is down`,
+        };
+    }
+
     return {
         body:
-            `${rule.target === "incident" ? "Incident" : "Issue"} "${source.title}" (${source.culprit}) reached ` +
+            `${TARGET_LABEL[rule.target]} "${source.title}" (${source.culprit}) reached ` +
             `${String(source.count)} events on Lunora Cloud.\n\nSample: ${source.sampleMessage}`,
         subject: `[Lunora] ${rule.name}: ${source.title}`,
     };

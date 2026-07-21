@@ -40,6 +40,7 @@ export const LUNORA_CRONS: Record<string, ReadonlyArray<LunoraCronJob>> = {
         { name: "enforce dunning", functionPath: "billing:enforceDunning", args: {} },
         { name: "prune superseded releases", functionPath: "deployments:pruneSuperseded", args: {} },
         { name: "prune tenant logs", functionPath: "logs:prune", args: {} },
+        { name: "prune uptime checks", functionPath: "uptime:prune", args: {} },
         { name: "purge deleted organizations", functionPath: "organizations:purgeDeleted", args: {} },
     ],
     "*/1 * * * *": [

@@ -436,8 +436,9 @@ export default defineSchema({
         enabled: v.boolean(),
         name: v.string(),
         organizationId: v.id("organizations"),
-        // What the rule watches.
-        target: v.union(v.literal("issue"), v.literal("incident")),
+        // What the rule watches. `uptime` fires when a deployment's consecutive
+        // failed synthetic checks first reach `threshold` (see lunora/uptime.ts).
+        target: v.union(v.literal("issue"), v.literal("incident"), v.literal("uptime")),
         // Fire when the source's count first reaches this value.
         threshold: v.number(),
         updatedAt: v.number(),
@@ -462,12 +463,51 @@ export default defineSchema({
         ruleId: v.id("alertRules"),
         status: v.union(v.literal("firing"), v.literal("delivered"), v.literal("failed")),
         subject: v.string(),
-        target: v.union(v.literal("issue"), v.literal("incident")),
+        target: v.union(v.literal("issue"), v.literal("incident"), v.literal("uptime")),
         updatedAt: v.number(),
     })
         .global()
         .index("by_org", ["organizationId"])
         .index("by_status", ["status"]),
+
+    // Synthetic uptime — one row per external probe of a live deployment's URL,
+    // written by the every-minute uptime sweep (src/uptime/sweep.ts). A bounded,
+    // pruned time series (lunora/uptime.ts `prune`) that backs the Uptime page's
+    // status + latency timeline. The probe runs from the control plane, an
+    // external vantage point a deployment can't self-report from.
+    uptimeChecks: defineTable({
+        createdAt: v.number(),
+        deploymentId: v.id("deployments"),
+        // Transport/timeout error message, when the probe never got a response.
+        error: v.optional(v.string()),
+        // Round-trip time of the probe, in ms.
+        latencyMs: v.optional(v.number()),
+        // `true` when the deployment answered with an HTTP status below 500.
+        ok: v.boolean(),
+        organizationId: v.id("organizations"),
+        statusCode: v.optional(v.number()),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        .index("by_org_deployment", ["organizationId", "deploymentId"]),
+
+    // Per-deployment uptime state — the running consecutive-failure counter the
+    // sweep advances each tick, so an uptime alert fires exactly once when the
+    // count first crosses a rule's threshold (crossesThreshold), not every tick
+    // the deployment stays down. One row per deployment.
+    uptimeState: defineTable({
+        // Failed checks in a row; reset to 0 on the first success.
+        consecutiveFailures: v.number(),
+        createdAt: v.number(),
+        deploymentId: v.id("deployments"),
+        lastCheckedAt: v.number(),
+        lastOk: v.boolean(),
+        organizationId: v.id("organizations"),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_deployment", ["deploymentId"])
+        .index("by_org", ["organizationId"]),
 
     // Tenant environment secrets (§7). Stored AES-256-GCM encrypted at the edge
     // (`src/secrets/crypto.ts`) — only ciphertext + IV live here. Materialized +

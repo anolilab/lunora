@@ -25,6 +25,8 @@ import { createHttpAnalyticsReader } from "./metering/analytics";
 import { runUsageRollback } from "./metering/rollback";
 import type { CronTarget } from "./fanout/cron";
 import { fanOutCron } from "./fanout/cron";
+import { deliverAlert } from "./mail/notify";
+import { runUptimeSweep } from "./uptime/sweep";
 import type { QueueMessage, TenantQueueGroup } from "./fanout/queue";
 import { fanOutQueue, groupByTenant } from "./fanout/queue";
 
@@ -297,6 +299,41 @@ const sweepUsageRollback = async (env: Env): Promise<void> => {
     await runUsageRollback(ports);
 };
 
+/**
+ * Synthetic uptime sweep (§ Observability): probe each live deployment's URL from
+ * outside, record the result, and deliver any uptime alerts a probe fired. The
+ * pure `runUptimeSweep` does the probe→record→fire; the edge supplies the real
+ * `fetch` + D1 and delivers over each alert's channel, stamping the outcome.
+ */
+const sweepUptime = async (env: Env): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const now = Date.now();
+    const { deliveries } = await runUptimeSweep(database, { fetch: globalThis.fetch, now });
+
+    if (deliveries.length === 0) {
+        return;
+    }
+
+    const environmentRecord = env as unknown as Record<string, unknown>;
+
+    // Deliver each fired alert and stamp its row with the true outcome — a thrown
+    // `deliverAlert` (transport failure / SSRF re-rejection) marks the row `failed`.
+    await Promise.all(
+        deliveries.map(async (delivery) => {
+            const status = await deliverAlert(environmentRecord, delivery).then(
+                () => "delivered" as const,
+                () => "failed" as const,
+            );
+
+            await database.patch(delivery.id, { deliveredAt: now, status, updatedAt: now }, "alerts").catch(() => undefined);
+        }),
+    );
+};
+
 /** Script id → per-deployment admin token, for the queue fan-out. */
 const readDeploymentTokens = async (env: Env): Promise<Map<string, string>> => {
     const tokens = new Map<string, string>();
@@ -525,6 +562,12 @@ export default {
                 now: new Date(),
                 targets,
             });
+        }
+
+        // Synthetic uptime: probe every live deployment from the outside once a
+        // minute and page on threshold-crossing outages (§ Observability).
+        if (controller.cron === EVERY_MINUTE) {
+            await sweepUptime(env);
         }
     },
 };

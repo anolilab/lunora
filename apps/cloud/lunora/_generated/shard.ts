@@ -84,6 +84,14 @@ const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {
         "organizationId": "organizations",
         "ruleId": "alertRules"
     },
+    "uptimeChecks": {
+        "deploymentId": "deployments",
+        "organizationId": "organizations"
+    },
+    "uptimeState": {
+        "deploymentId": "deployments",
+        "organizationId": "organizations"
+    },
     "secrets": {
         "organizationId": "organizations",
         "projectId": "projects"
@@ -384,6 +392,39 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
                 "organizationId"
             ],
             "name": "by_org",
+            "type": "index"
+        }
+    ],
+    "uptimeChecks": [
+        {
+            "fields": [
+                "organizationId",
+                "deploymentId"
+            ],
+            "name": "by_org_deployment",
+            "type": "index"
+        },
+        {
+            "fields": [
+                "organizationId"
+            ],
+            "name": "by_org",
+            "type": "index"
+        }
+    ],
+    "uptimeState": [
+        {
+            "fields": [
+                "organizationId"
+            ],
+            "name": "by_org",
+            "type": "index"
+        },
+        {
+            "fields": [
+                "deploymentId"
+            ],
+            "name": "by_deployment",
             "type": "index"
         }
     ],
@@ -1658,6 +1699,106 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
             "type": "number"
         }
     ],
+    "uptimeChecks": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "createdAt",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "deploymentId",
+            "optional": false,
+            "type": "id",
+            "ref": "deployments"
+        },
+        {
+            "name": "error",
+            "optional": true,
+            "type": "string"
+        },
+        {
+            "name": "latencyMs",
+            "optional": true,
+            "type": "number"
+        },
+        {
+            "name": "ok",
+            "optional": false,
+            "type": "boolean"
+        },
+        {
+            "name": "organizationId",
+            "optional": false,
+            "type": "id",
+            "ref": "organizations"
+        },
+        {
+            "name": "statusCode",
+            "optional": true,
+            "type": "number"
+        }
+    ],
+    "uptimeState": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "consecutiveFailures",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "createdAt",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "deploymentId",
+            "optional": false,
+            "type": "id",
+            "ref": "deployments"
+        },
+        {
+            "name": "lastCheckedAt",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "lastOk",
+            "optional": false,
+            "type": "boolean"
+        },
+        {
+            "name": "organizationId",
+            "optional": false,
+            "type": "id",
+            "ref": "organizations"
+        },
+        {
+            "name": "updatedAt",
+            "optional": false,
+            "type": "number"
+        }
+    ],
     "secrets": [
         {
             "name": "_id",
@@ -2079,6 +2220,33 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Duplicate / redundant index"
     },
     {
+        "cacheKey": "duplicate_index:uptimeChecks:by_org",
+        "categories": [
+            "PERFORMANCE"
+        ],
+        "description": "A secondary index is redundant because another index already covers every lookup it serves (its columns are a leading prefix of the other's). The redundant index costs storage and is maintained on every write for no read benefit.",
+        "detail": "Index \"by_org\" on table \"uptimeChecks\" (organizationId) is redundant — index \"by_org_deployment\" (organizationId, deploymentId) already covers its lookups.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "coveredBy": {
+                "fields": [
+                    "organizationId",
+                    "deploymentId"
+                ],
+                "name": "by_org_deployment"
+            },
+            "fields": [
+                "organizationId"
+            ],
+            "index": "by_org",
+            "table": "uptimeChecks"
+        },
+        "name": "duplicate_index",
+        "remediation": "Drop the redundant index; the covering index already serves its lookups.",
+        "title": "Duplicate / redundant index"
+    },
+    {
         "cacheKey": "duplicate_index:secrets:by_project",
         "categories": [
             "PERFORMANCE"
@@ -2149,6 +2317,38 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "level": "INFO",
         "metadata": {
             "table": "incidents"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
+    },
+    {
+        "cacheKey": "table_without_insert:uptimeChecks",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"uptimeChecks\", …)` — table \"uptimeChecks\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "uptimeChecks"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
+    },
+    {
+        "cacheKey": "table_without_insert:uptimeState",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"uptimeState\", …)` — table \"uptimeState\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "uptimeState"
         },
         "name": "table_without_insert",
         "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
@@ -3169,6 +3369,26 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "file": "telemetry",
             "kind": "mutation",
             "line": 231
+        },
+        "name": "nondeterministic_query_mutation",
+        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
+        "title": "Non-deterministic call in query/mutation handler"
+    },
+    {
+        "cacheKey": "nondeterministic_query_mutation:uptime:104:Date.now",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
+        "detail": "`Date.now(…)` in prune (uptime:104) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "callee": "Date.now",
+            "exportName": "prune",
+            "file": "uptime",
+            "kind": "mutation",
+            "line": 104
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
@@ -5971,6 +6191,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             facade["incidents"] = bindTableFacade(db, "incidents");
             facade["alertRules"] = bindTableFacade(db, "alertRules");
             facade["alerts"] = bindTableFacade(db, "alerts");
+            facade["uptimeChecks"] = bindTableFacade(db, "uptimeChecks");
+            facade["uptimeState"] = bindTableFacade(db, "uptimeState");
             facade["secrets"] = bindTableFacade(db, "secrets");
             facade["customers"] = bindTableFacade(db, "customers");
             facade["events"] = bindTableFacade(db, "events");

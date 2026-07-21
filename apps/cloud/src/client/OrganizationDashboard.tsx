@@ -18,6 +18,7 @@ import { MembersSection } from "./MembersSection";
 import { ProjectsSection } from "./ProjectsSection";
 import { SecretsSection } from "./SecretsSection";
 import type { OrgId } from "./types";
+import { UptimeSection } from "./UptimeSection";
 import { UsageSection } from "./UsageSection";
 import type { PaletteCommand } from "./use-command-palette";
 import { useCommandPalette } from "./use-command-palette";
@@ -41,6 +42,7 @@ type Tab =
     | "members"
     | "projects"
     | "secrets"
+    | "uptime"
     | "usage";
 
 const TABS: { id: Tab; label: string }[] = [
@@ -53,6 +55,7 @@ const TABS: { id: Tab; label: string }[] = [
     { id: "logs", label: "Logs" },
     { id: "issues", label: "Issues" },
     { id: "incidents", label: "Incidents" },
+    { id: "uptime", label: "Uptime" },
     { id: "alerts", label: "Alerts" },
     { id: "invitations", label: "Invitations" },
     { id: "usage", label: "Usage" },
@@ -75,6 +78,7 @@ const SECTIONS: Record<Tab, (props: { organizationId: OrgId }) => ReactElement> 
     members: MembersSection,
     projects: ProjectsSection,
     secrets: SecretsSection,
+    uptime: UptimeSection,
     usage: UsageSection,
 };
 
