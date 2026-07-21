@@ -1,7 +1,7 @@
 import type { PipelineLogCursor, PipelineLogQuery, PipelineLogRow } from "@lunora/client";
 import { useLunora } from "@lunora/react";
-import type { ReactElement } from "react";
-import { useEffect, useRef, useState } from "react";
+import type { ChangeEvent, ReactElement } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 
 import { LOG_ARCHIVE_NOT_CONFIGURED } from "../../../../../shared/log-archive";
 import type { ContextLogLevel } from "../../../../../shared/log-event";
@@ -22,6 +22,62 @@ interface ArchiveFeedProps {
     /** The shard to scope the archive read to (empty = the root shard). Threaded from the Logs panel's shard input. */
     readonly shardKey: string;
 }
+
+/** The fetch state machine — one page of the archive plus its loading/error status. */
+interface ArchiveState {
+    /** Cursor for the next page; `undefined` when there is none (last page or not loaded). */
+    cursor: PipelineLogCursor | undefined;
+    /** A genuine read failure to surface inline; `null` when none. */
+    error: null | string;
+    /** A read is in flight. */
+    loading: boolean;
+    /** The operator hasn't wired the archive — renders the "not configured" empty state, not an error. */
+    notConfigured: boolean;
+    /** The loaded rows, or `null` before the first page resolves. */
+    rows: null | PipelineLogRow[];
+}
+
+/**
+ * The transitions the fetch flow drives. `loaded` replaces the page (initial /
+ * refetch); `append` adds the next page (Load more); `failed` clears rows (an
+ * initial failure) while `pageFailed` keeps them (a Load-more failure).
+ */
+type ArchiveAction =
+    | { cursor: PipelineLogCursor | undefined; rows: PipelineLogRow[]; type: "append" }
+    | { cursor: PipelineLogCursor | undefined; rows: PipelineLogRow[]; type: "loaded" }
+    | { message: string; type: "failed" }
+    | { message: string; type: "pageFailed" }
+    | { type: "loading" }
+    | { type: "notConfigured" };
+
+const INITIAL_STATE: ArchiveState = { cursor: undefined, error: null, loading: false, notConfigured: false, rows: null };
+
+/** Fold one {@link ArchiveAction} into the {@link ArchiveState}; every transition is a single dispatched action. */
+const archiveReducer = (state: ArchiveState, action: ArchiveAction): ArchiveState => {
+    switch (action.type) {
+        case "append": {
+            return { ...state, cursor: action.cursor, error: null, loading: false, rows: [...(state.rows ?? []), ...action.rows] };
+        }
+        case "failed": {
+            return { cursor: undefined, error: action.message, loading: false, notConfigured: false, rows: null };
+        }
+        case "loaded": {
+            return { cursor: action.cursor, error: null, loading: false, notConfigured: false, rows: action.rows };
+        }
+        case "loading": {
+            return { ...state, loading: true };
+        }
+        case "notConfigured": {
+            return { cursor: undefined, error: null, loading: false, notConfigured: true, rows: null };
+        }
+        case "pageFailed": {
+            return { ...state, error: action.message, loading: false };
+        }
+        default: {
+            return state;
+        }
+    }
+};
 
 /** One archive row: time · level · path · message (+ fields) · trace · shard · user. */
 const ArchiveRow = ({ row }: { readonly row: PipelineLogRow }): ReactElement => {
@@ -72,11 +128,9 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
     const [userIdFilter, setUserIdFilter] = useState<string>("");
     const [minLevel, setMinLevel] = useState<"" | ContextLogLevel>("");
 
-    const [rows, setRows] = useState<null | PipelineLogRow[]>(null);
-    const [cursor, setCursor] = useState<PipelineLogCursor | undefined>(undefined);
-    const [loading, setLoading] = useState<boolean>(false);
-    const [error, setError] = useState<null | string>(null);
-    const [notConfigured, setNotConfigured] = useState<boolean>(false);
+    // The page + loading/error status move together, so they're one reducer rather
+    // than five `useState`s kept in sync by hand (each fetch is a single dispatch).
+    const [{ cursor, error, loading, notConfigured, rows }, dispatch] = useReducer(archiveReducer, INITIAL_STATE);
 
     const debouncedPathPrefix = useDebounced(pathPrefix.trim(), 400);
     const debouncedUserId = useDebounced(userIdFilter.trim(), 400);
@@ -105,38 +159,23 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
 
         fireAndForget(
             (async (): Promise<void> => {
-                setLoading(true);
+                dispatch({ type: "loading" });
 
-                // No `finally` — the React Compiler bails on a `try` with a finalizer
-                // (see the queues panel). Each branch resets `loading` itself; a
-                // cancelled run skips it, leaving the newer effect to own the flag.
                 // `baseQuery` is the same value `querySignature` is derived from, so
-                // keying the effect on the signature keeps this closure fresh.
+                // keying the effect on the signature keeps this closure fresh. A
+                // cancelled run dispatches nothing, leaving the newer effect to own state.
                 try {
                     const page = await client.queryLogArchive(baseQuery);
 
                     if (!token.cancelled) {
-                        setRows(page.rows);
-                        setCursor(page.nextCursor);
-                        setError(null);
-                        setNotConfigured(false);
-                        setLoading(false);
+                        dispatch({ cursor: page.nextCursor, rows: page.rows, type: "loaded" });
                     }
                 } catch (error_) {
                     if (!token.cancelled) {
-                        setRows(null);
-                        setCursor(undefined);
-
                         // A "not configured" failure is an empty state, not an error spew.
-                        if (errorCode(error_) === LOG_ARCHIVE_NOT_CONFIGURED) {
-                            setNotConfigured(true);
-                            setError(null);
-                        } else {
-                            setNotConfigured(false);
-                            setError(errorMessage(error_));
-                        }
-
-                        setLoading(false);
+                        dispatch(
+                            errorCode(error_) === LOG_ARCHIVE_NOT_CONFIGURED ? { type: "notConfigured" } : { message: errorMessage(error_), type: "failed" },
+                        );
                     }
                 }
             })(),
@@ -159,36 +198,30 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
         // The filter this page-2 fetch belongs to; if it changes mid-flight, drop the result.
         const signature = querySignature;
 
-        setLoading(true);
+        dispatch({ type: "loading" });
 
-        // No `finally` (the React Compiler bails on a finalizer) — both branches
-        // clear `loading` themselves.
         try {
             const page = await client.queryLogArchive({ ...baseQuery, cursor });
 
             if (activeSignatureRef.current === signature) {
-                setRows((current) => [...(current ?? []), ...page.rows]);
-                setCursor(page.nextCursor);
-                setError(null);
-                setLoading(false);
+                dispatch({ cursor: page.nextCursor, rows: page.rows, type: "append" });
             }
         } catch (error_) {
             if (activeSignatureRef.current === signature) {
-                setError(errorMessage(error_));
-                setLoading(false);
+                dispatch({ message: errorMessage(error_), type: "pageFailed" });
             }
         }
     };
 
-    const onPathPrefixChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+    const onPathPrefixChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setPathPrefix(event.target.value);
     };
 
-    const onUserIdChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+    const onUserIdChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setUserIdFilter(event.target.value);
     };
 
-    const onMinLevelChange = (event: React.ChangeEvent<HTMLSelectElement>): void => {
+    const onMinLevelChange = (event: ChangeEvent<HTMLSelectElement>): void => {
         // The <select> only offers "" or a LOG_LEVEL_ORDER value.
         setMinLevel(event.target.value as "" | ContextLogLevel);
     };

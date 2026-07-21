@@ -604,7 +604,9 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                     </button>
                 </div>
                 <ShardInput onChange={setShardKey} testId="lg-shard-input" value={shardKey} />
-                <LiveError message={liveError} prefix="lg" />
+                {/* The Archive feed is HTTP-only (no WS), so it never has a live-connection
+                    status — don't leak the (disabled) Errors feed's `liveError` into it. */}
+                {view !== "archive" && <LiveError message={liveError} prefix="lg" />}
                 <a
                     className="text-sm text-primary underline-offset-4 hover:underline"
                     data-testid="lg-cf-link"
