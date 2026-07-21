@@ -90,6 +90,8 @@ export interface Doc_deployments {
     _id: Id<"deployments">;
     _creationTime: number;
     adminToken?: string;
+    adminTokenCiphertext?: string;
+    adminTokenIv?: string;
     alias?: string;
     branch?: string;
     cronSpecs?: Array<string>;
@@ -599,6 +601,8 @@ export interface Insert_deployments {
     _id?: Id<"deployments">;
     _creationTime?: number;
     adminToken?: string;
+    adminTokenCiphertext?: string;
+    adminTokenIv?: string;
     alias?: string;
     branch?: string;
     cronSpecs?: Array<string>;

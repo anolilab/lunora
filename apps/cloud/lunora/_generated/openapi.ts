@@ -1778,6 +1778,12 @@ export const openApiSpec: Record<string, unknown> = {
                                             "adminToken": {
                                                 "type": "string"
                                             },
+                                            "adminTokenCiphertext": {
+                                                "type": "string"
+                                            },
+                                            "adminTokenIv": {
+                                                "type": "string"
+                                            },
                                             "branch": {
                                                 "type": "string"
                                             },
