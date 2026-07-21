@@ -5109,6 +5109,10 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "items": {},
                                                 "type": "array"
                                             },
+                                            "observations": {
+                                                "items": {},
+                                                "type": "array"
+                                            },
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",

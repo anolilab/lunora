@@ -44,6 +44,10 @@ const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {
     "tenantLogs": {
         "organizationId": "organizations"
     },
+    "observations": {
+        "deploymentId": "deployments",
+        "organizationId": "organizations"
+    },
     "githubInstallations": {
         "organizationId": "organizations"
     },
@@ -221,6 +225,31 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
                 "createdAt"
             ],
             "name": "by_script_time",
+            "type": "index"
+        },
+        {
+            "fields": [
+                "organizationId"
+            ],
+            "name": "by_org",
+            "type": "index"
+        }
+    ],
+    "observations": [
+        {
+            "fields": [
+                "organizationId",
+                "startedAt"
+            ],
+            "name": "by_org_started",
+            "type": "index"
+        },
+        {
+            "fields": [
+                "organizationId",
+                "traceId"
+            ],
+            "name": "by_trace",
             "type": "index"
         },
         {
@@ -1030,6 +1059,101 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
         {
             "name": "userId",
             "optional": true,
+            "type": "string"
+        }
+    ],
+    "observations": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "attributes",
+            "optional": true,
+            "type": "record"
+        },
+        {
+            "name": "createdAt",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "deploymentId",
+            "optional": true,
+            "type": "id",
+            "ref": "deployments"
+        },
+        {
+            "name": "durationMs",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "endedAt",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "functionPath",
+            "optional": true,
+            "type": "string"
+        },
+        {
+            "name": "kind",
+            "optional": false,
+            "type": "union"
+        },
+        {
+            "name": "level",
+            "optional": false,
+            "type": "union"
+        },
+        {
+            "name": "name",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "organizationId",
+            "optional": false,
+            "type": "id",
+            "ref": "organizations"
+        },
+        {
+            "name": "parentSpanId",
+            "optional": true,
+            "type": "string"
+        },
+        {
+            "name": "serviceName",
+            "optional": true,
+            "type": "string"
+        },
+        {
+            "name": "spanId",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "startedAt",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "statusMessage",
+            "optional": true,
+            "type": "string"
+        },
+        {
+            "name": "traceId",
+            "optional": false,
             "type": "string"
         }
     ],
@@ -2133,6 +2257,33 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             ],
             "index": "by_org",
             "table": "tenantLogs"
+        },
+        "name": "duplicate_index",
+        "remediation": "Drop the redundant index; the covering index already serves its lookups.",
+        "title": "Duplicate / redundant index"
+    },
+    {
+        "cacheKey": "duplicate_index:observations:by_org",
+        "categories": [
+            "PERFORMANCE"
+        ],
+        "description": "A secondary index is redundant because another index already covers every lookup it serves (its columns are a leading prefix of the other's). The redundant index costs storage and is maintained on every write for no read benefit.",
+        "detail": "Index \"by_org\" on table \"observations\" (organizationId) is redundant — index \"by_org_started\" (organizationId, startedAt) already covers its lookups.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "coveredBy": {
+                "fields": [
+                    "organizationId",
+                    "startedAt"
+                ],
+                "name": "by_org_started"
+            },
+            "fields": [
+                "organizationId"
+            ],
+            "index": "by_org",
+            "table": "observations"
         },
         "name": "duplicate_index",
         "remediation": "Drop the redundant index; the covering index already serves its lookups.",
@@ -3355,12 +3506,12 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:telemetry:226:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:telemetry:251:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in ingest (telemetry:226) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in ingest (telemetry:251) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -3368,7 +3519,27 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "ingest",
             "file": "telemetry",
             "kind": "mutation",
-            "line": 226
+            "line": 251
+        },
+        "name": "nondeterministic_query_mutation",
+        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
+        "title": "Non-deterministic call in query/mutation handler"
+    },
+    {
+        "cacheKey": "nondeterministic_query_mutation:telemetry:342:Date.now",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
+        "detail": "`Date.now(…)` in pruneObservations (telemetry:342) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "callee": "Date.now",
+            "exportName": "pruneObservations",
+            "file": "telemetry",
+            "kind": "mutation",
+            "line": 342
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
@@ -5574,14 +5745,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `deployKey` of public procedure `ingest` (telemetry:202) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `deployKey` of public procedure `ingest` (telemetry:222) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "deployKey",
             "exportName": "ingest",
             "file": "telemetry",
-            "line": 202
+            "line": 222
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -6199,6 +6370,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             facade["deployKeys"] = bindTableFacade(db, "deployKeys");
             facade["overageDebits"] = bindTableFacade(db, "overageDebits");
             facade["tenantLogs"] = bindTableFacade(db, "tenantLogs");
+            facade["observations"] = bindTableFacade(db, "observations");
             facade["githubInstallations"] = bindTableFacade(db, "githubInstallations");
             facade["builds"] = bindTableFacade(db, "builds");
             facade["buildLogs"] = bindTableFacade(db, "buildLogs");

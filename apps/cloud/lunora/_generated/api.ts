@@ -112,7 +112,7 @@ export interface ApiTypes {
         store: FunctionReference<"mutation", { ciphertext: string; environment?: "all" | "production" | "preview" | "dev"; iv: string; name: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }, Id<"secrets">>;
     };
     telemetry: {
-        ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; organizationId: Id<"organizations"> }, { alerts: { body: string; channel: "email" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
+        ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; observations?: Array<unknown>; organizationId: Id<"organizations"> }, { alerts: { body: string; channel: "email" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
     };
     uptime: {
         recent: FunctionReference<"query", { deploymentId: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }, { _id: Id<"uptimeChecks">; createdAt: number; error?: string; latencyMs?: number; ok: boolean; statusCode?: number }[]>;
@@ -154,6 +154,9 @@ export interface InternalApiTypes {
     organizations: {
         linkCreditsAccount: FunctionReference<"mutation", { creditsAccountId: string; organizationId: Id<"organizations"> }, void>;
         purgeDeleted: FunctionReference<"mutation", {}, { purged: number; }>;
+    };
+    telemetry: {
+        pruneObservations: FunctionReference<"mutation", {}, { pruned: number; }>;
     };
     uptime: {
         prune: FunctionReference<"mutation", {}, { pruned: number; }>;

@@ -246,6 +246,44 @@ export default defineSchema({
         // Fetch every line in a trace (log↔trace correlation), org-scoped.
         .index("by_trace", ["organizationId", "traceId"]),
 
+    // Dispatch spans as **observations** (Traces, GAPS.md B2 — the span store the
+    // Langfuse teardown pointed to). Every OTLP span (not just the error spans the
+    // Issue path keeps) lands here with its real timing + identity, so the Traces
+    // waterfall renders true durations and whatever nesting `parentSpanId` carries.
+    // Retention-pruned like `tenantLogs`.
+    observations: defineTable({
+        // Selected `lunora.*` string span attributes (shard key, user id, …).
+        attributes: v.optional(v.record(v.string(), v.string())),
+        createdAt: v.number(),
+        // The deployment the span ran under, when the sink forwarded it.
+        deploymentId: v.optional(v.id("deployments")),
+        // `endedAt − startedAt`, denormalized so the list/waterfall need no math.
+        durationMs: v.number(),
+        endedAt: v.number(),
+        // `<file>:<function>` (or `container:<name>`), when attributed.
+        functionPath: v.optional(v.string()),
+        // Which instrumentation emitted the span.
+        kind: v.union(v.literal("container"), v.literal("worker")),
+        // `error` when the span's OTLP status was `STATUS_CODE_ERROR`, else `info`.
+        level: v.union(v.literal("error"), v.literal("info")),
+        name: v.string(),
+        organizationId: v.id("organizations"),
+        // Parent span, when the span nests; absent for a root span.
+        parentSpanId: v.optional(v.string()),
+        serviceName: v.optional(v.string()),
+        spanId: v.string(),
+        startedAt: v.number(),
+        // OTLP `status.message`, when the span errored.
+        statusMessage: v.optional(v.string()),
+        traceId: v.string(),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        // The drill-in: every span in one trace (the waterfall / tree), org-scoped.
+        .index("by_trace", ["organizationId", "traceId"])
+        // Recent spans, org-scoped, to roll up into the trace list newest-first.
+        .index("by_org_started", ["organizationId", "startedAt"]),
+
     // GitHub App installations (GAPS.md A4). Two-phase: the webhook *stages* an
     // installation (no org linkage — a spoofed call is harmless), then an org
     // owner/admin *claims* it from the dashboard. Push-to-deploy only accepts

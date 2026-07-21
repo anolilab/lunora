@@ -5,7 +5,7 @@ import type { AlertDelivery as AlertDeliveryBase, FiringRule } from "../src/tele
 import { fireCrossedRules } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { mutation, v } from "./_generated/server.js";
+import { internalMutation, mutation, v } from "./_generated/server.js";
 import { authorizeDeployKey } from "./authz";
 
 /**
@@ -25,6 +25,26 @@ import { authorizeDeployKey } from "./authz";
 
 /** Batch cap per ingest call — the tenant sink flushes well below this. */
 const MAX_EVENTS = 500;
+
+/** Batch cap on the span observations one ingest call may carry. */
+const MAX_OBSERVATIONS = 1000;
+
+/** One decoded span (all spans, not just errors), stored as an observation for Traces — the router's `SpanObservation`. */
+const observationInput = v.object({
+    attributes: v.optional(v.record(v.string(), v.string())),
+    durationMs: v.number(),
+    endedAt: v.number(),
+    functionPath: v.optional(v.string()),
+    kind: v.union(v.literal("container"), v.literal("worker")),
+    level: v.union(v.literal("error"), v.literal("info")),
+    name: v.string(),
+    parentSpanId: v.optional(v.string()),
+    serviceName: v.optional(v.string()),
+    spanId: v.string(),
+    startedAt: v.number(),
+    statusMessage: v.optional(v.string()),
+    traceId: v.string(),
+});
 
 /** A normalized error event, decoded from an OTLP error span by the router. */
 const telemetryEvent = v.object({
@@ -204,6 +224,7 @@ export const ingest = mutation
         deployKey: v.string(),
         deploymentId: v.optional(v.id("deployments")),
         events: v.array(telemetryEvent),
+        observations: v.optional(v.array(observationInput)),
         organizationId: v.id("organizations"),
     })
     .mutation(
@@ -223,7 +244,24 @@ export const ingest = mutation
                 throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_EVENTS)} events)`);
             }
 
+            if ((args.observations?.length ?? 0) > MAX_OBSERVATIONS) {
+                throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_OBSERVATIONS)} observations)`);
+            }
+
             const now = Date.now();
+
+            // Persist every span as an observation (Traces). Additive to the error
+            // fold below — the same OTLP payload feeds both. Best-effort per row so
+            // one bad span never fails the batch or the Issue path.
+            for (const observation of args.observations ?? []) {
+                // eslint-disable-next-line no-await-in-loop -- bounded batch; sequential keeps the writer simple
+                await context.db.insert("observations", {
+                    ...observation,
+                    createdAt: now,
+                    deploymentId: args.deploymentId,
+                    organizationId: args.organizationId,
+                });
+            }
             const { page: rulePage } = await context.db.alertRules.findMany({ where: { organizationId: args.organizationId } });
             const rules: FiringRule[] = (rulePage as unknown as AlertRuleRow[])
                 .filter((rule) => rule.enabled)
@@ -294,3 +332,26 @@ export const ingest = mutation
             return { alerts: firedAlerts, incidents, issues };
         },
     );
+
+/** Span observations older than this are pruned (matches the tenant-log retention window). */
+export const OBSERVATION_RETENTION_MS = 48 * 60 * 60 * 1000;
+
+/** One stored observation row, for the retention scan. */
+interface ObservationRow {
+    _id: Id<"observations">;
+    startedAt: number;
+}
+
+/** Delete span observations past retention (Traces). SYSTEM only (cron dispatch). */
+export const pruneObservations = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
+    const cutoff = Date.now() - OBSERVATION_RETENTION_MS;
+    const { page } = await context.db.observations.findMany({});
+    const stale = (page as unknown as ObservationRow[]).filter((row) => row.startedAt < cutoff);
+
+    for (const row of stale) {
+        // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+        await context.db.delete(row._id);
+    }
+
+    return { pruned: stale.length };
+});

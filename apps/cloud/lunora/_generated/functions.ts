@@ -137,6 +137,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "secrets:remove": lunora_secrets_17.remove as unknown as RegisteredLunoraFunction,
     "secrets:store": lunora_secrets_17.store as unknown as RegisteredLunoraFunction,
     "telemetry:ingest": lunora_telemetry_18.ingest as unknown as RegisteredLunoraFunction,
+    "telemetry:pruneObservations": lunora_telemetry_18.pruneObservations as unknown as RegisteredLunoraFunction,
     "uptime:prune": lunora_uptime_19.prune as unknown as RegisteredLunoraFunction,
     "uptime:recent": lunora_uptime_19.recent as unknown as RegisteredLunoraFunction,
     "uptime:summary": lunora_uptime_19.summary as unknown as RegisteredLunoraFunction,
@@ -833,7 +834,8 @@ export interface Caller {
         store: (args: { ciphertext: string; environment?: "all" | "production" | "preview" | "dev"; iv: string; name: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<Id<"secrets">>;
     };
     telemetry: {
-        ingest: (args: { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; organizationId: Id<"organizations"> }) => Promise<{ alerts: { body: string; channel: "email" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
+        ingest: (args: { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; observations?: Array<unknown>; organizationId: Id<"organizations"> }) => Promise<{ alerts: { body: string; channel: "email" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
+        pruneObservations: (args?: {}) => Promise<{ pruned: number; }>;
     };
     uptime: {
         prune: (args?: {}) => Promise<{ pruned: number; }>;
@@ -986,6 +988,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     telemetry: {
         ingest: (args) => callRegistered(context, "telemetry:ingest", args),
+        pruneObservations: (args) => callRegistered(context, "telemetry:pruneObservations", args),
     },
     uptime: {
         prune: (args) => callRegistered(context, "uptime:prune", args),

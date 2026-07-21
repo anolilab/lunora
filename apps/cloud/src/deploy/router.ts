@@ -13,7 +13,7 @@ import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createCloudflareProvisioner } from "../provision";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
 import type { OtlpTracePayload } from "../telemetry/otlp";
-import { decodeTelemetryEvents } from "../telemetry/otlp";
+import { decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { DeployBackend, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
@@ -551,12 +551,17 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
     }
 
     const events = decodeTelemetryEvents(body);
+    // Every span (not just the error spans `events` keeps) → observations for
+    // Traces. Sliced to the mutation's per-call cap so an oversized batch trims
+    // rather than rejecting the whole ingest (and losing the Issue fold with it).
+    const observations = decodeObservations(body).slice(0, 1000);
 
     try {
         const result = await context.runMutation<{ alerts: AlertDelivery[]; incidents: number; issues: number }>(api.telemetry.ingest, {
             deployKey: body.deployKey,
             deploymentId: body.deploymentId,
             events,
+            observations,
             organizationId: body.organizationId,
         });
 
@@ -902,7 +907,10 @@ export const createDeployRouter = (): HttpRouterLike => {
             handler: handleRollbackRoute,
             method: "POST",
             path: "/v1/deployments/rollback",
-            spec: { auth: "deployKey", mcp: { description: "Roll a project's stable URL back to a retained deployment (needs deploymentId + organizationId)." } },
+            spec: {
+                auth: "deployKey",
+                mcp: { description: "Roll a project's stable URL back to a retained deployment (needs deploymentId + organizationId)." },
+            },
         },
         { handler: handleLogsIngestRoute, method: "POST", path: "/v1/logs/ingest", spec: { auth: "deployKey" } },
         { handler: handleTelemetryRoute, method: "POST", path: "/v1/telemetry", spec: { auth: "deployKey" } },

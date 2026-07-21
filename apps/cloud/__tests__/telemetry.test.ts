@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { crossesThreshold, isSafeWebhookUrl, renderAlert } from "../src/telemetry/alerts";
 import type { OtlpTracePayload } from "../src/telemetry/otlp";
-import { decodeTelemetryEvents } from "../src/telemetry/otlp";
+import { decodeObservations, decodeTelemetryEvents } from "../src/telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../src/telemetry/store";
 import { buildTriagePrompt, MAX_ISSUES } from "../src/telemetry/triage";
 
@@ -270,5 +270,77 @@ describe(buildTriagePrompt, () => {
         // Exactly two fences — the opening and closing ones. The payload's own
         // fence was neutralized rather than smuggled through.
         expect(prompt.split("\n").filter((line) => line === "-----")).toHaveLength(2);
+    });
+});
+
+/** One OK span (status.code 1) with trace/span ids + timing, under the given scope. */
+const span = (options: {
+    attrs?: Record<string, string>;
+    endMs?: number;
+    name?: string;
+    ok?: boolean;
+    parentSpanId?: string;
+    spanId?: string;
+    startMs?: number;
+    traceId?: string;
+}) => {
+    return {
+        attributes: attributes(options.attrs ?? {}),
+        endTimeUnixNano: `${String(options.endMs ?? 1_700_000_000_142)}000000`,
+        name: options.name ?? "messages:send",
+        parentSpanId: options.parentSpanId,
+        spanId: options.spanId ?? "aaaaaaaaaaaaaaaa",
+        startTimeUnixNano: `${String(options.startMs ?? 1_700_000_000_000)}000000`,
+        status: options.ok === false ? { code: 2, message: "boom" } : { code: 1 },
+        traceId: options.traceId ?? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    };
+};
+
+describe(decodeObservations, () => {
+    it("decodes a worker span with real timing + identity", () => {
+        const [observation] = decodeObservations(
+            payload("@lunora/runtime", [span({ attrs: { "lunora.function_path": "messages:send" }, endMs: 1000, startMs: 900 })]),
+        );
+
+        expect(observation).toMatchObject({
+            durationMs: 100,
+            endedAt: 1000,
+            functionPath: "messages:send",
+            kind: "worker",
+            level: "info",
+            spanId: "aaaaaaaaaaaaaaaa",
+            startedAt: 900,
+            traceId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        });
+    });
+
+    it("keeps ALL spans, not just errors, and marks the errored one", () => {
+        const observations = decodeObservations(payload("@lunora/runtime", [span({ ok: true, spanId: "a1" }), span({ ok: false, spanId: "a2" })]));
+
+        expect(observations).toHaveLength(2);
+        expect(observations.map((o) => o.level)).toEqual(["info", "error"]);
+        expect(observations[1]?.statusMessage).toBe("boom");
+    });
+
+    it("carries parentSpanId when the span nests, and drops empty ids", () => {
+        const [child] = decodeObservations(payload("@lunora/runtime", [span({ parentSpanId: "root01", spanId: "child1" })]));
+
+        expect(child?.parentSpanId).toBe("root01");
+
+        const [root] = decodeObservations(payload("@lunora/runtime", [span({ parentSpanId: "", spanId: "root01" })]));
+
+        expect(root?.parentSpanId).toBeUndefined();
+    });
+
+    it("labels a container span by its service name and collects lunora.* attributes", () => {
+        const [observation] = decodeObservations(payload("@lunora/container", [span({ attrs: { "lunora.shard_key": "room-9" } })], "transcoder"));
+
+        expect(observation?.kind).toBe("container");
+        expect(observation?.functionPath).toBe("container:transcoder");
+        expect(observation?.attributes).toEqual({ shard_key: "room-9" });
+    });
+
+    it("skips a span with no trace/span id (it can't be placed in a trace)", () => {
+        expect(decodeObservations(payload("@lunora/runtime", [{ name: "orphan", status: { code: 1 } }]))).toHaveLength(0);
     });
 });

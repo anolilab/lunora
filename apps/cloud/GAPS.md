@@ -184,7 +184,20 @@ Analytics Engine / R2 later without touching consumers. Correlating an
 path doesn't carry `traceId` yet) is the natural follow-up. The Traces tab is a
 **log-reconstructed** timeline (no span durations): the OTLP ingest keeps only
 error spans (→ Issues), so a true span-duration **waterfall** would need a
-separate span store — deferred until the log-derived view proves insufficient.
+separate span store.
+
+**Span store — Phase 1 shipped (a Langfuse-teardown follow-on, cleanroom).** The
+OTLP ingest no longer discards non-error spans: `decodeObservations`
+(`src/telemetry/otlp.ts`, pure + unit-tested) keeps EVERY span with its real
+`startedAt`/`endedAt`→`durationMs` and `traceId`/`spanId`/`parentSpanId`, and
+`telemetry.ingest` persists them to an `observations` table (retention-pruned by
+`pruneObservations`, like `tenantLogs`) — the Langfuse "observations" model,
+reimplemented on our schema (no Langfuse code; it's MIT-except-`ee/`, but a
+Postgres/ClickHouse app doesn't port). **Phase 2 (next):** a `traces.list`/`get`
+over `observations` with real aggregates, and a nested-tree waterfall (reusing
+the framework Studio's own `foldTraces`/`TraceSpan`) to replace the log-derived
+view. True *nesting* also needs the framework to emit `ctx.trace` child spans
+over OTLP — today the runtime emits one flat span per RPC (no `parentSpanId`).
 
 ### B3. Debug header (✅ shipped)
 

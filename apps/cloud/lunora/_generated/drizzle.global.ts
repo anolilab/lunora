@@ -143,6 +143,31 @@ export const tenantLogs = sqliteTable("tenantLogs", {
     by_org: index("by_org").on(t.organizationId),
 }));
 
+export const observations = sqliteTable("observations", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    attributes: text("attributes", { mode: "json" }).$type<Record<string, string>>(),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId").references(() => deployments._id),
+    durationMs: real("durationMs").notNull(),
+    endedAt: real("endedAt").notNull(),
+    functionPath: text("functionPath"),
+    kind: text("kind", { mode: "json" }).$type<"container" | "worker">().notNull(),
+    level: text("level", { mode: "json" }).$type<"error" | "info">().notNull(),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    parentSpanId: text("parentSpanId"),
+    serviceName: text("serviceName"),
+    spanId: text("spanId").notNull(),
+    startedAt: real("startedAt").notNull(),
+    statusMessage: text("statusMessage"),
+    traceId: text("traceId").notNull(),
+}, (t) => ({
+    by_org_started: index("by_org_started").on(t.organizationId, t.startedAt),
+    by_trace: index("by_trace").on(t.organizationId, t.traceId),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
 export const githubInstallations = sqliteTable("githubInstallations", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

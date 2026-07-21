@@ -27,6 +27,9 @@ crons.interval("enforce dunning", { hours: 6 }, internal.billing.enforceDunning,
 // Prune tenant runtime logs past the 48h retention window (GAPS.md B2).
 crons.interval("prune tenant logs", { hours: 6 }, internal.logs.prune, {});
 
+// Span observations backing Traces — same 48 h retention as the logs.
+crons.interval("prune trace observations", { hours: 6 }, internal.telemetry.pruneObservations, {});
+
 // Prune superseded releases past the rollback retention (GAPS.md A1) so
 // dispatch namespaces never accumulate unboundedly.
 crons.interval("prune superseded releases", { hours: 6 }, internal.deployments.pruneSuperseded, {});

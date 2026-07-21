@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -152,6 +152,27 @@ export interface Doc_tenantLogs {
     spanId?: string;
     traceId?: string;
     userId?: string;
+}
+
+export interface Doc_observations {
+    _id: Id<"observations">;
+    _creationTime: number;
+    attributes?: Record<string, string>;
+    createdAt: number;
+    deploymentId?: Id<"deployments">;
+    durationMs: number;
+    endedAt: number;
+    functionPath?: string;
+    kind: "container" | "worker";
+    level: "error" | "info";
+    name: string;
+    organizationId: Id<"organizations">;
+    parentSpanId?: string;
+    serviceName?: string;
+    spanId: string;
+    startedAt: number;
+    statusMessage?: string;
+    traceId: string;
 }
 
 export interface Doc_githubInstallations {
@@ -418,6 +439,7 @@ export interface DataModel {
     deployKeys: Doc_deployKeys;
     overageDebits: Doc_overageDebits;
     tenantLogs: Doc_tenantLogs;
+    observations: Doc_observations;
     githubInstallations: Doc_githubInstallations;
     builds: Doc_builds;
     buildLogs: Doc_buildLogs;
@@ -454,6 +476,7 @@ export interface IndexNamesByTable {
     deployKeys: "by_org" | "by_hash";
     overageDebits: "by_org_period";
     tenantLogs: "by_trace" | "by_script_time" | "by_org";
+    observations: "by_org_started" | "by_trace" | "by_org";
     githubInstallations: "by_org" | "by_installation";
     builds: "by_project_commit" | "by_project";
     buildLogs: "by_build";
@@ -487,6 +510,7 @@ export interface SearchIndexNamesByTable {
     deployKeys: never;
     overageDebits: never;
     tenantLogs: never;
+    observations: never;
     githubInstallations: never;
     builds: never;
     buildLogs: never;
@@ -520,6 +544,7 @@ export interface RankIndexNamesByTable {
     deployKeys: never;
     overageDebits: never;
     tenantLogs: never;
+    observations: never;
     githubInstallations: never;
     builds: never;
     buildLogs: never;
@@ -661,6 +686,27 @@ export interface Insert_tenantLogs {
     spanId?: string;
     traceId?: string;
     userId?: string;
+}
+
+export interface Insert_observations {
+    _id?: Id<"observations">;
+    _creationTime?: number;
+    attributes?: Record<string, string>;
+    createdAt: number;
+    deploymentId?: Id<"deployments">;
+    durationMs: number;
+    endedAt: number;
+    functionPath?: string;
+    kind: "container" | "worker";
+    level: "error" | "info";
+    name: string;
+    organizationId: Id<"organizations">;
+    parentSpanId?: string;
+    serviceName?: string;
+    spanId: string;
+    startedAt: number;
+    statusMessage?: string;
+    traceId: string;
 }
 
 export interface Insert_githubInstallations {
@@ -928,6 +974,7 @@ export interface InsertModel {
     deployKeys: Insert_deployKeys;
     overageDebits: Insert_overageDebits;
     tenantLogs: Insert_tenantLogs;
+    observations: Insert_observations;
     githubInstallations: Insert_githubInstallations;
     builds: Insert_builds;
     buildLogs: Insert_buildLogs;
@@ -976,6 +1023,7 @@ export interface Relations {
     deployKeys: {};
     overageDebits: {};
     tenantLogs: {};
+    observations: {};
     githubInstallations: {};
     builds: {};
     buildLogs: {};
