@@ -99,6 +99,7 @@ export const deployments = sqliteTable("deployments", {
 export const deployKeys = sqliteTable("deployKeys", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
+    capability: text("capability", { mode: "json" }).$type<"deploy" | "ingest">(),
     createdAt: real("createdAt").notNull(),
     hashedKey: text("hashedKey").notNull(),
     lastUsedAt: real("lastUsedAt"),

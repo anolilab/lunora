@@ -119,6 +119,7 @@ export interface Doc_deployments {
 export interface Doc_deployKeys {
     _id: Id<"deployKeys">;
     _creationTime: number;
+    capability?: "deploy" | "ingest";
     createdAt: number;
     hashedKey: string;
     lastUsedAt?: number;
@@ -658,6 +659,7 @@ export interface Insert_deployments {
 export interface Insert_deployKeys {
     _id?: Id<"deployKeys">;
     _creationTime?: number;
+    capability?: "deploy" | "ingest";
     createdAt: number;
     hashedKey: string;
     lastUsedAt?: number;

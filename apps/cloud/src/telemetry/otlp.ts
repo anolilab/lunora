@@ -12,6 +12,7 @@
  * `error.type`, and container spans (scope `@lunora/container`) identify the
  * container via the `service.name` resource attribute.
  */
+import { redactRecord } from "./redact";
 
 /** OTLP `AnyValue` — only the variants Lunora emits are read. */
 interface OtlpAnyValue {
@@ -322,7 +323,7 @@ export const decodeLogRecords = (payload: OtlpLogsPayload): OtlpLogEntry[] => {
 
                 entries.push({
                     createdAt: epochMsFromNano(record.timeUnixNano ?? record.observedTimeUnixNano),
-                    fields: logFields(record.attributes),
+                    fields: redactRecord(logFields(record.attributes)),
                     functionPath: attributeString(record.attributes, "lunora.function_path") ?? attributeString(record.attributes, "code.function"),
                     level: severityToLevel(record.severityNumber, record.severityText),
                     message: typeof body === "string" ? body : body === undefined ? "" : JSON.stringify(body),
@@ -388,7 +389,7 @@ export const decodeObservations = (payload: OtlpTracePayload): SpanObservation[]
                 const isGeneration = kind !== "container" && model !== undefined;
 
                 observations.push({
-                    attributes: lunoraAttributes(span.attributes),
+                    attributes: redactRecord(lunoraAttributes(span.attributes)),
                     ...(isGeneration ? { completionTokens: attributeNumber(span.attributes, "gen_ai.usage.output_tokens") } : {}),
                     durationMs: Math.max(endedAt - startedAt, 0),
                     endedAt,

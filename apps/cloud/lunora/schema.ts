@@ -178,6 +178,11 @@ export default defineSchema({
         .index("by_script", ["scriptName"]),
 
     deployKeys: defineTable({
+        // What the key is allowed to do. Absent = `deploy` (a full deploy key, the
+        // historical default). An `ingest` key can ONLY push telemetry to the OTLP
+        // endpoints — it is rejected by the deploy/admin paths — so the token the
+        // platform injects into a tenant's `otlpSink` can't be used to deploy.
+        capability: v.optional(v.union(v.literal("deploy"), v.literal("ingest"))),
         createdAt: v.number(),
         // Only the hash is stored; the plaintext key is shown once at creation.
         hashedKey: v.string(),

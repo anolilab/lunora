@@ -27,6 +27,7 @@ interface MemberRow {
 
 interface DeployKeyRow {
     _id: Id<"deployKeys">;
+    capability?: "deploy" | "ingest";
     organizationId: Id<"organizations">;
     projectId?: Id<"projects">;
     revokedAt?: number;
@@ -81,6 +82,11 @@ export const authorizeDeployKey = async (
 
     if (!row || row.revokedAt !== undefined || row.organizationId !== organizationId) {
         throw new LunoraError("FORBIDDEN", "invalid deploy key for this organization");
+    }
+
+    // An ingest key is telemetry-only — it must never authorize a deploy/admin write.
+    if (row.capability === "ingest") {
+        throw new LunoraError("FORBIDDEN", "this is a telemetry ingest key, not a deploy key");
     }
 
     if (row.projectId !== undefined && projectId !== undefined && row.projectId !== projectId) {

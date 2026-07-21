@@ -1352,6 +1352,18 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
+                                            "capability": {
+                                                "anyOf": [
+                                                    {
+                                                        "const": "deploy",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "ingest",
+                                                        "type": "string"
+                                                    }
+                                                ]
+                                            },
                                             "name": {
                                                 "type": "string"
                                             },

@@ -6,6 +6,7 @@ import { assertMember, assertRowInOrg } from "./authz";
 /** Public view of a deploy key — never exposes the stored hash. */
 interface DeployKeyView {
     _id: Id<"deployKeys">;
+    capability?: "deploy" | "ingest";
     createdAt: number;
     lastUsedAt?: number;
     name: string;
@@ -31,6 +32,7 @@ export const list = query
         return (page as unknown as DeployKeyRow[]).map((row) => {
             return {
                 _id: row._id,
+                capability: row.capability,
                 createdAt: row.createdAt,
                 lastUsedAt: row.lastUsedAt,
                 name: row.name,
@@ -51,6 +53,8 @@ export const list = query
  */
 export const issue = mutation
     .input({
+        // `ingest` mints a telemetry-only key (OTLP push, no deploy); omitted/`deploy` is a full deploy key.
+        capability: v.optional(v.union(v.literal("deploy"), v.literal("ingest"))),
         name: v.string(),
         organizationId: v.id("organizations"),
         projectId: v.optional(v.id("projects")),
@@ -68,6 +72,9 @@ export const issue = mutation
         const hashedKey = await hashDeployKey(key);
 
         const id = await context.db.insert("deployKeys", {
+            // Store the capability only for ingest keys, so existing/default deploy
+            // rows stay byte-identical (absent = deploy).
+            ...(arguments_.capability === "ingest" ? { capability: "ingest" as const } : {}),
             createdAt: Date.now(),
             hashedKey,
             name: arguments_.name,

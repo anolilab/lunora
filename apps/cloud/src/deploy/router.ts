@@ -955,7 +955,15 @@ export const createDeployRouter = (): HttpRouterLike => {
     // Per-instance, per-IP request cap on the control-plane API. The in-memory
     // store is per-isolate (an acceptable first abuse control); a durable store
     // (`createSqlStore` over the shard) can replace it for cross-isolate limits.
-    const limiter = new RateLimiter({ config: { api: { capacity: 120, kind: "token bucket", period: 60_000, rate: 120 } } });
+    const limiter = new RateLimiter({
+        config: {
+            api: { capacity: 120, kind: "token bucket", period: 60_000, rate: 120 },
+            // Telemetry ingest is high-volume by nature — give it a generous bucket
+            // keyed on the ingest token (per org), so a busy exporter isn't throttled
+            // by the shared per-IP `api` limit and one noisy tenant can't starve others.
+            telemetry: { capacity: 6000, kind: "token bucket", period: 60_000, rate: 6000 },
+        },
+    });
 
     const handleDeployRoute = (request: Request, environment: RouterEnv): Promise<Response> => {
         const context = environment.__lunoraCtx;
@@ -1178,8 +1186,13 @@ export const createDeployRouter = (): HttpRouterLike => {
     const postRoutes = new Map(routes.filter((route) => route.method === "POST").map((route) => [route.path, route.handler]));
     const getRoutes = new Map(routes.filter((route) => route.method === "GET").map((route) => [route.path, route.handler]));
 
-    const rateLimited = async (request: Request): Promise<Response | undefined> => {
-        const verdict = await limiter.limit("api", { key: request.headers.get("cf-connecting-ip") ?? "unknown" });
+    // Standard OTLP + native telemetry ingest → the per-token telemetry tier.
+    const telemetryPaths = new Set(["/v1/logs", "/v1/metrics", "/v1/telemetry", "/v1/traces"]);
+
+    const rateLimited = async (request: Request, pathname: string): Promise<Response | undefined> => {
+        const verdict = telemetryPaths.has(pathname)
+            ? await limiter.limit("telemetry", { key: bearerToken(request) ?? request.headers.get("cf-connecting-ip") ?? "unknown" })
+            : await limiter.limit("api", { key: request.headers.get("cf-connecting-ip") ?? "unknown" });
 
         if (verdict.ok) {
             return undefined;
@@ -1200,7 +1213,7 @@ export const createDeployRouter = (): HttpRouterLike => {
             return jsonError(404, "not found");
         }
 
-        const throttled = await rateLimited(request);
+        const throttled = await rateLimited(request, url.pathname);
 
         if (throttled) {
             return throttled;
