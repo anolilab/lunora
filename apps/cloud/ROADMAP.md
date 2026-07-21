@@ -77,6 +77,9 @@ Lunora Cloud ships in **two phases**, and the roadmap reflects the transition:
   framework's deterministic error-fingerprinting) with alerting.
 - **Billing for the control plane.** Transparent, usage-honest pricing for the
   managed console — separate from your own Cloudflare bill.
+- **Preview environments / database branching.** Per-PR ephemeral backends and
+  branchable state, so review deploys don't touch production — parity with
+  Supabase branching / Convex preview deployments.
 - **A human on support.** Real support channels and response expectations for
   paying teams.
 
@@ -91,6 +94,9 @@ Lunora Cloud ships in **two phases**, and the roadmap reflects the transition:
   BYO (or fully self-hosted) without a rewrite — the no-lock-in promise, enforced
   as a shipped, tested path.
 - **Templates & marketplace.** One-click starters and shareable app templates.
+- **Managed warehouse connectors.** Turn-key Snowflake / BigQuery / Airbyte /
+  Fivetran pipes on top of the framework's change-data export tap (plan 170) —
+  the framework ships the tap, Cloud ships the managed connectors.
 
 ---
 
