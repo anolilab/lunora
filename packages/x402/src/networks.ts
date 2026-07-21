@@ -16,6 +16,8 @@
  * explicit asset.
  */
 
+/* eslint-disable import/exports-last, no-void, sonarjs/void-use -- a data + types module: public types sit next to the consts they describe, and each const's shape is checked with a standalone `void (… satisfies …)` (an inline `as const satisfies` breaks isolatedDeclarations, TS9010). */
+
 /**
  * A CAIP-2 chain identifier, e.g. `"eip155:8453"` (Base) or `"solana:5eyk…"`.
  * @experimental

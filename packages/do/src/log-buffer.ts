@@ -10,7 +10,7 @@ type LogLevel = "debug" | "error" | "info" | "warn";
  */
 interface LogEntry {
     exitCode?: number;
-    /** Structured fields from a `ctx.log.<level>(message, fields)` / `ctx.log.with(fields)` call, when present. */
+    /** Structured fields from a `ctx.log.&lt;level>(message, fields)` / `ctx.log.with(fields)` call, when present. */
     fields?: Record<string, unknown>;
     functionPath?: string;
     instance?: string;

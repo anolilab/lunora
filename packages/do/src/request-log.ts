@@ -24,7 +24,7 @@
 import { fingerprintError } from "@lunora/fingerprint";
 import { redact, standardRules } from "@visulima/redact";
 
-import type { ContextLogLevel, LogEvent } from "../../../shared/log-event";
+import type { LogEvent } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
 import type { SqlCursor, SqlExec } from "./ctx-db";
@@ -382,13 +382,13 @@ const isLogFields = (value: unknown): value is LogFields => {
         return false;
     }
 
-    const proto = Object.getPrototypeOf(value);
+    const proto: unknown = Object.getPrototypeOf(value);
 
     return proto === Object.prototype || proto === null;
 };
 
 /**
- * Split a `ctx.log.<level>(...)` call's raw arguments into a display `message`
+ * Split a `ctx.log.&lt;level>(...)` call's raw arguments into a display `message`
  * and optional structured `fields`. The structured form — a message string plus
  * a plain-object fields bag — is matched only for exactly `(string, object)`;
  * every other shape is console-style and rendered whole (so existing
@@ -696,7 +696,6 @@ export {
 };
 export type {
     AppendRequestLogEntry,
-    ContextLogLevel,
     ErrorIssue,
     IssuesResult,
     LogEventInput,
@@ -707,3 +706,5 @@ export type {
     RequestLogWriteOptions,
     RequestOutcome,
 };
+
+export { type ContextLogLevel } from "../../../shared/log-event";

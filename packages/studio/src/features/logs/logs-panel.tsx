@@ -2,6 +2,9 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+// Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
+// sinks and the dev-terminal formatter (see CLAUDE.md `shared/` rules).
+import { formatLogFields } from "../../../../../shared/log-fields";
 import { ErrorAlert } from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
@@ -17,9 +20,6 @@ import { CLOUDFLARE_OBSERVABILITY_URL } from "../../lib/cf-links";
 import { recordShard } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
 import flooredRectObserver from "../../lib/virtual-rect";
-// Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
-// sinks and the dev-terminal formatter (see CLAUDE.md `shared/` rules).
-import { formatLogFields } from "../../../../../shared/log-fields";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
 const SCROLL_HEIGHT = 400;

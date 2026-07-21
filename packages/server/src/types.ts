@@ -1281,7 +1281,7 @@ interface VectorSearch extends VectorSearchReader {
 
 /**
  * Structured, filterable key/value fields attached to a log line — the second
- * argument of a `ctx.log.<level>(message, fields)` call, or the fields bound by
+ * argument of a `ctx.log.&lt;level>(message, fields)` call, or the fields bound by
  * `ctx.log.with(fields)`. They travel to an `ObservabilitySink`'s `onLog` and,
  * for a network sink, become OTLP log-record attributes a log pipeline (or the
  * Cloud log viewer) can filter and index on. Primitive values pass through;
@@ -1292,10 +1292,8 @@ type LogFields = Record<string, unknown>;
 /**
  * One `ctx.log` severity method. Two call forms:
  *
- * - **Structured** — `ctx.log.info("order placed", { orderId, total })`: a
- *   message string plus a `fields` object. The fields are indexed as attributes.
- * - **Console-style** — `ctx.log.info("state", value, other)`: any number of
- *   values, joined into the display message exactly like `console.log`.
+ * - **Structured** — `ctx.log.info("order placed", { orderId, total })`: a message string plus a `fields` object. The fields are indexed as attributes.
+ * - **Console-style** — `ctx.log.info("state", value, other)`: any number of values, joined into the display message exactly like `console.log`.
  *
  * The structured form is matched when the second argument is a plain object;
  * otherwise the call is treated as console-style, so existing `console`-shaped

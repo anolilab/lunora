@@ -10,7 +10,7 @@ import { ClientQueryStore, createClientQuery } from "../src/client-query-store";
  * `setClientQuery(ref, undefined)` returned `undefined` instead of the
  * default — e.g. a boolean client query would silently collapse to falsy.
  */
-describe("ClientQueryStore reset semantics (CLIENT-04 regression)", () => {
+describe("clientQueryStore reset semantics (CLIENT-04 regression)", () => {
     it("set(ref, undefined) resets to the default, not a stored undefined", () => {
         expect.assertions(3);
 

@@ -12,8 +12,10 @@
  * keep their message-matched hints.
  */
 
+/* eslint-disable import/exports-last -- a data + types module: the public error-code types are declared next to the catalog they describe; grouping all exports at the end would scatter the taxonomy. */
+
 /** Markdown hint: a single string or an array of lines. Shape matches `@visulima/error`'s `hint`. */
-export type ErrorHint = string | readonly string[];
+export type ErrorHint = string | ReadonlyArray<string>;
 
 /** A catalog entry: the fixed metadata for one error `code`. */
 export interface ErrorCatalogEntry {
@@ -128,6 +130,7 @@ export const ERROR_CATALOG = {
 // Shape validation kept as a standalone statement: `as const satisfies …` is not
 // emittable under isolatedDeclarations (TS9010), but `LunoraErrorCode` needs the
 // literal keys, so the catalog stays `as const` and its shape is checked here.
+// eslint-disable-next-line no-void, sonarjs/void-use -- `void` makes the standalone `satisfies` type-check a statement without tripping no-unused-expressions
 void (ERROR_CATALOG satisfies Record<string, ErrorCatalogEntry>);
 
 /** A well-known Lunora error code (a key of {@link ERROR_CATALOG}). */

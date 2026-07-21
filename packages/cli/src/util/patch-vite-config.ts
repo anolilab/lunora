@@ -12,6 +12,7 @@
  * Idempotent: returns `changed: false` when `lunora(` already appears in the
  * source or when no recognisable config shape can be found.
  */
+// eslint-disable-next-line import/no-named-as-default -- magic-string's default export IS the MagicString class; this is the documented, idiomatic import
 import MagicString from "magic-string";
 import type { ObjectLiteralExpression } from "ts-morph";
 import { Project, SyntaxKind } from "ts-morph";

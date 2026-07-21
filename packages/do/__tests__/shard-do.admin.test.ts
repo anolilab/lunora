@@ -1873,7 +1873,7 @@ describe("shardDO admin data migrations", () => {
 
         shard.log("a:b", "info", ["hi"], {
             onLog: (_event, context) => {
-                hasWaitUntilSlot = typeof context === "object" && context !== null && "waitUntil" in context;
+                hasWaitUntilSlot = context !== undefined && "waitUntil" in context;
             },
         });
 

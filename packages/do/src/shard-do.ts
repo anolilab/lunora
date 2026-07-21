@@ -177,7 +177,7 @@ interface LogSink {
  * `LunoraLogger`). Declared locally so `@lunora/do` takes no dependency on
  * `@lunora/server`; the overloaded public method type lives there.
  */
-interface CtxLogger {
+interface ContextLogger {
     debug: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
     fatal: (...args: unknown[]) => void;
@@ -185,7 +185,7 @@ interface CtxLogger {
     log: (...args: unknown[]) => void;
     trace: (...args: unknown[]) => void;
     warn: (...args: unknown[]) => void;
-    with: (fields: LogFields) => CtxLogger;
+    with: (fields: LogFields) => ContextLogger;
 }
 
 /**
@@ -4429,7 +4429,7 @@ abstract class ShardDO {
      * stamps `fields` onto every line. The generated `buildCtx` calls this once
      * per dispatch and assigns the result to `ctx.log`.
      */
-    protected makeLogger(functionPath: string, sink?: LogSink, boundFields?: Record<string, unknown>): CtxLogger {
+    protected makeLogger(functionPath: string, sink?: LogSink, boundFields?: Record<string, unknown>): ContextLogger {
         const emit = (level: ContextLogLevel, args: unknown[]): void => {
             const { fields, message } = parseLogArgs(args, boundFields);
 
@@ -4437,13 +4437,27 @@ abstract class ShardDO {
         };
 
         return {
-            debug: (...args: unknown[]) => emit("debug", args),
-            error: (...args: unknown[]) => emit("error", args),
-            fatal: (...args: unknown[]) => emit("fatal", args),
-            info: (...args: unknown[]) => emit("info", args),
-            log: (...args: unknown[]) => emit("log", args),
-            trace: (...args: unknown[]) => emit("trace", args),
-            warn: (...args: unknown[]) => emit("warn", args),
+            debug: (...args: unknown[]) => {
+                emit("debug", args);
+            },
+            error: (...args: unknown[]) => {
+                emit("error", args);
+            },
+            fatal: (...args: unknown[]) => {
+                emit("fatal", args);
+            },
+            info: (...args: unknown[]) => {
+                emit("info", args);
+            },
+            log: (...args: unknown[]) => {
+                emit("log", args);
+            },
+            trace: (...args: unknown[]) => {
+                emit("trace", args);
+            },
+            warn: (...args: unknown[]) => {
+                emit("warn", args);
+            },
             with: (fields: Record<string, unknown>) => this.makeLogger(functionPath, sink, boundFields ? { ...boundFields, ...fields } : fields),
         };
     }
