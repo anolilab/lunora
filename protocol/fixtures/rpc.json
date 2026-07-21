@@ -1,0 +1,51 @@
+{
+    "$comment": "Golden fixtures for the HTTP RPC envelope (POST /_lunora/rpc). `request` cases assert build_rpc_body(functionPath, args, shardKey) == body (an omitted shardKey is dropped from the body). Typed args are supplied wire-encoded in `argsWire` and decoded to native before building. `responseOk` cases assert encode(parse_response(response)) == response.result (the decoded result re-encodes to the same wire). `responseError` cases assert the raised error carries the given code/message (and encode(error.data) == error.data wire when present).",
+    "request": {
+        "path": "/_lunora/rpc",
+        "method": "POST",
+        "cases": [
+            {
+                "name": "query-no-shard",
+                "functionPath": "messages:list",
+                "args": { "channel": "general", "limit": 50 },
+                "body": { "args": { "channel": "general", "limit": 50 }, "functionPath": "messages:list" }
+            },
+            {
+                "name": "query-with-shard",
+                "functionPath": "messages:get",
+                "args": { "id": "m1" },
+                "shardKey": "room-1",
+                "body": { "args": { "id": "m1" }, "functionPath": "messages:get", "shardKey": "room-1" }
+            },
+            {
+                "name": "mutation-typed-bigint",
+                "functionPath": "ledger:add",
+                "argsWire": { "amount": ["$lunora.wire$", "bigint", "7"] },
+                "body": { "args": { "amount": ["$lunora.wire$", "bigint", "7"] }, "functionPath": "ledger:add" }
+            },
+            {
+                "name": "empty-args",
+                "functionPath": "system:ping",
+                "args": {},
+                "body": { "args": {}, "functionPath": "system:ping" }
+            }
+        ]
+    },
+    "responseOk": [
+        { "name": "plain-object", "response": { "result": { "ok": true, "count": 3 } } },
+        { "name": "typed-bigint", "response": { "result": ["$lunora.wire$", "bigint", "42"] } },
+        { "name": "null-result", "response": { "result": null } },
+        { "name": "with-commit-cursor", "response": { "result": { "id": "m9" }, "commitCursor": 12 } },
+        { "name": "with-last-mutation-id", "response": { "result": { "id": "m9" }, "lastMutationId": 4 } }
+    ],
+    "responseError": [
+        { "name": "coded", "response": { "error": { "code": "NOT_FOUND", "message": "no such row" } }, "code": "NOT_FOUND", "message": "no such row" },
+        {
+            "name": "with-data",
+            "response": { "error": { "code": "TOO_MANY_REQUESTS", "message": "slow down", "data": { "retryAfterMs": 3000 } } },
+            "code": "TOO_MANY_REQUESTS",
+            "message": "slow down",
+            "dataWire": { "retryAfterMs": 3000 }
+        }
+    ]
+}
