@@ -22,7 +22,7 @@ interface AlertRuleRow {
     enabled: boolean;
     name: string;
     organizationId: Id<"organizations">;
-    target: "incident" | "issue";
+    target: "incident" | "issue" | "uptime";
     threshold: number;
 }
 
@@ -34,7 +34,7 @@ interface AlertRow {
     destination: string;
     status: "delivered" | "failed" | "firing";
     subject: string;
-    target: "incident" | "issue";
+    target: "incident" | "issue" | "uptime";
 }
 
 /** An org's alert rules, most-recent first (any member). */
@@ -55,7 +55,7 @@ export const createRule = mutation
         destination: v.string(),
         name: v.string(),
         organizationId: v.id("organizations"),
-        target: v.union(v.literal("issue"), v.literal("incident")),
+        target: v.union(v.literal("issue"), v.literal("incident"), v.literal("uptime")),
         threshold: v.number(),
     })
     .mutation(async ({ ctx: context, args }): Promise<Id<"alertRules">> => {

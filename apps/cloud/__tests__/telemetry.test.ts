@@ -161,6 +161,17 @@ describe(renderAlert, () => {
 
         expect(rendered.body).toContain('Incident "exit 137" (container:transcoder)');
     });
+
+    it("renders an uptime alert as a down notification", () => {
+        const rendered = renderAlert(
+            { name: "prod down", target: "uptime" },
+            { count: 3, culprit: "dep_abc", sampleMessage: "HTTP 503", title: "https://app.example" },
+        );
+
+        expect(rendered.subject).toBe("[Lunora] prod down: https://app.example is down");
+        expect(rendered.body).toContain("failed 3 consecutive uptime checks");
+        expect(rendered.body).toContain("Last probe: HTTP 503");
+    });
 });
 
 describe(isSafeWebhookUrl, () => {

@@ -8,11 +8,11 @@ import type { Id } from "./dataModel.js";
 
 export interface ApiTypes {
     alerts: {
-        createRule: FunctionReference<"mutation", { channel: "email" | "webhook"; destination: string; name: string; organizationId: Id<"organizations">; target: "issue" | "incident"; threshold: number }, Id<"alertRules">>;
+        createRule: FunctionReference<"mutation", { channel: "email" | "webhook"; destination: string; name: string; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime"; threshold: number }, Id<"alertRules">>;
         deleteRule: FunctionReference<"mutation", { id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alerts">; channel: "email" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "delivered" | "failed" | "firing"; subject: string; target: "incident" | "issue" }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alerts">; channel: "email" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "delivered" | "failed" | "firing"; subject: string; target: "incident" | "issue" | "uptime" }[]>;
         markDelivered: FunctionReference<"mutation", { deployKey: string; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }, { delivered: number; }>;
-        rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alertRules">; channel: "email" | "webhook"; createdAt: number; destination: string; enabled: boolean; name: string; organizationId: Id<"organizations">; target: "incident" | "issue"; threshold: number }[]>;
+        rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alertRules">; channel: "email" | "webhook"; createdAt: number; destination: string; enabled: boolean; name: string; organizationId: Id<"organizations">; target: "incident" | "issue" | "uptime"; threshold: number }[]>;
         setRuleEnabled: FunctionReference<"mutation", { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
     };
     audit_log: {
@@ -113,6 +113,10 @@ export interface ApiTypes {
     telemetry: {
         ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; organizationId: Id<"organizations"> }, { alerts: { body: string; channel: "email" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
     };
+    uptime: {
+        recent: FunctionReference<"query", { deploymentId: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }, { _id: Id<"uptimeChecks">; createdAt: number; error?: string; latencyMs?: number; ok: boolean; statusCode?: number }[]>;
+        summary: FunctionReference<"query", { organizationId: Id<"organizations"> }, { avgLatencyMs?: number; consecutiveFailures: number; deploymentId: Id<"deployments">; lastCheckedAt: number; ok: boolean; sampleCount: number; upFraction: number }[]>;
+    };
     usage: {
         ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; periodStart: number; quantity: number }, Id<"platformUsage">>;
         series: FunctionReference<"query", { organizationId: Id<"organizations">; periodStart: number }, { cpuMs: number; day: number; requests: number; }[]>;
@@ -149,6 +153,9 @@ export interface InternalApiTypes {
     organizations: {
         linkCreditsAccount: FunctionReference<"mutation", { creditsAccountId: string; organizationId: Id<"organizations"> }, void>;
         purgeDeleted: FunctionReference<"mutation", {}, { purged: number; }>;
+    };
+    uptime: {
+        prune: FunctionReference<"mutation", {}, { pruned: number; }>;
     };
     usage: {
         enforceSpendCaps: FunctionReference<"mutation", {}, { suspended: number; unsuspended: number; }>;
