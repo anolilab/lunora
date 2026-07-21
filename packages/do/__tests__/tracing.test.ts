@@ -10,8 +10,19 @@ import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import { foldTraces, SpanBuffer } from "../src/span-buffer";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 const ADMIN_TOKEN = "test-admin-token-that-is-long-enough";
+
+/** A shard state backed by a real in-memory SQLite, for the durable metric-history path. */
+const sqliteStateDouble = (database: ReturnType<typeof createSqliteExec>): ShardDOState =>
+    ({
+        acceptWebSocket() {},
+        getWebSockets() {
+            return [];
+        },
+        storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+    }) as unknown as ShardDOState;
 
 /**
  * Drives the shard's own `makeTracer` wiring — used only by the `getTraces`
@@ -533,5 +544,39 @@ describe("ctx.metrics", () => {
         expect(placed?.kind).toBe("counter");
         expect(placed?.count).toBe(2);
         expect(placed?.sum).toBe(5);
+    });
+
+    it("serves durable rollups over the getMetricHistory admin RPC", async () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new TracingShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const metrics = shard.metricRecorder("orders:checkout");
+
+            metrics.count("orders.placed", 2);
+            metrics.count("orders.placed", 3);
+
+            const response = await shard.fetch(
+                new Request("https://shard.internal/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: ADMIN_FUNCTIONS.getMetricHistory }),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+            const body = await response.json<{
+                result: { series: { kind: string; name: string; points: { count: number; sum: number }[] }[] };
+            }>();
+            const [series] = body.result.series;
+
+            expect(body.result.series).toHaveLength(1);
+            expect(series?.name).toBe("orders.placed");
+            // Both increments folded into one minute bucket, persisted to SQLite.
+            expect(series?.points[0]?.count).toBe(2);
+            expect(series?.points[0]?.sum).toBe(5);
+        } finally {
+            database.close();
+        }
     });
 });

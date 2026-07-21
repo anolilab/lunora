@@ -18,11 +18,9 @@
  * arbitrarily many measurements into O(1) state, so the readout stays faithful
  * for a hot counter while staying bounded against high-cardinality dimensions.
  */
+import { stableStringify } from "../../../shared/stable-key";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
-import { stableStringify } from "../../../shared/stable-key";
-
-/* eslint-disable import/exports-last -- a data + types module: the public MetricSeries shape is declared next to the buffer that folds into it; grouping all exports at the end would scatter the contract. */
 
 /** Default number of distinct series retained; least-recently-updated evicted first. */
 const DEFAULT_CAPACITY = 256;
@@ -41,6 +39,8 @@ export interface MetricSeries {
     attributes?: LogFields;
     /** Number of measurements folded into this series. */
     count: number;
+    /** Trace id of the most recent measurement that carried one — the series' exemplar, for linking to a trace. */
+    exemplarTraceId?: string;
     /** Wall-clock millis of the first measurement folded in. */
     firstTs: number;
     /** Function path that recorded the series' most recent measurement. */
@@ -65,11 +65,17 @@ export interface MetricSeries {
 
 /**
  * Stable identity for a series: kind, name, then the code-point-sorted encoding
- * of its dimensions so `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` fold together.
- * `stableStringify` is fed already-normalized JSON-safe `LogFields`, so its
- * fail-loud path is unreachable here; the caller still records best-effort.
+ * of its dimensions so `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` fold together. The
+ * NUL (`\u0000`) separator can't occur in a metric name, so distinct series never
+ * collide. `stableStringify` is fed already-normalized JSON-safe `LogFields`, so
+ * its fail-loud path is unreachable here; the caller still records best-effort.
+ *
+ * Exported and shared with the durable {@link file://./metric-history.ts} rollups:
+ * the live buffer and the history MUST agree byte-for-byte on what "one series"
+ * is, or the studio's live↔history join silently mismatches. One shared function
+ * makes that guarantee structural rather than a comment across two copies.
  */
-const seriesKey = (event: MetricEvent): string => `${event.kind}\u0000${event.name}\u0000${stableStringify(event.attributes ?? {})}`;
+export const metricSeriesKey = (event: MetricEvent): string => `${event.kind}\u0000${event.name}\u0000${stableStringify(event.attributes ?? {})}`;
 
 /**
  * A bounded map of running metric aggregates, keyed by series identity. Eviction
@@ -103,14 +109,12 @@ export class MetricBuffer {
      * update order (tail = newest), so one reverse yields newest-first.
      */
     public entries(): MetricSeries[] {
-        return [...this.series.values()].toReversed().map((s) => {
-            return { ...s };
-        });
+        return [...this.series.values()].reverse().map((s) => ({ ...s }));
     }
 
     /** Fold one measurement into its series, creating or updating the aggregate. */
     public push(event: MetricEvent): void {
-        const key = seriesKey(event);
+        const key = metricSeriesKey(event);
         const existing = this.series.get(key);
 
         if (existing === undefined) {
@@ -127,6 +131,7 @@ export class MetricBuffer {
             this.series.set(key, {
                 ...(event.attributes === undefined ? {} : { attributes: event.attributes }),
                 count: 1,
+                ...(event.traceId === undefined ? {} : { exemplarTraceId: event.traceId }),
                 firstTs: event.ts,
                 functionPath: event.functionPath,
                 kind: event.kind,
@@ -152,6 +157,13 @@ export class MetricBuffer {
         existing.last = event.value;
         existing.lastTs = event.ts;
         existing.functionPath = event.functionPath;
+
+        // Latest exemplar wins: a later measurement carrying a trace replaces the
+        // series' link; one without a trace leaves the prior exemplar intact.
+        if (event.traceId !== undefined) {
+            existing.exemplarTraceId = event.traceId;
+        }
+
         this.series.set(key, existing);
     }
 }

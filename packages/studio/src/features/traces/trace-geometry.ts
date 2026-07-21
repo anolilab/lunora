@@ -61,9 +61,10 @@ export const spanBar = (span: TraceSpan, traceDurationMs: number): SpanBar => {
 
 /**
  * Narrow the trace list by a case-insensitive substring over the trace's root
- * span name and its function path — the two identifiers the list row shows. An
- * empty or whitespace-only term matches everything, so an untouched control
- * never hides a trace.
+ * span name, function path, and full trace id — the identifiers the row shows,
+ * plus the id so a metric exemplar can filter straight to its trace. An empty or
+ * whitespace-only term matches everything, so an untouched control never hides a
+ * trace.
  * @param traces The loaded traces, newest first.
  * @param search The raw search-box value.
  */
@@ -74,7 +75,10 @@ export const filterTraces = (traces: ReadonlyArray<TraceSummary>, search: string
         return [...traces];
     }
 
-    return traces.filter((trace) => trace.rootName.toLowerCase().includes(needle) || trace.functionPath.toLowerCase().includes(needle));
+    return traces.filter(
+        (trace) =>
+            trace.rootName.toLowerCase().includes(needle) || trace.functionPath.toLowerCase().includes(needle) || trace.traceId.toLowerCase().includes(needle),
+    );
 };
 
 /**

@@ -9,6 +9,8 @@ import type {
     FanoutTopicStat,
     FlagEvaluation,
     FlagsResult,
+    MetricHistoryPoint,
+    MetricHistorySeries,
     MetricSeries,
     QueueMessageRow,
     QueueMetadata,
@@ -143,9 +145,38 @@ const TRACE_SUMMARY_KEY_GUARD: KeysMatch<keyof TraceSummary, (typeof TRACE_SUMMA
  * would surface as a silent `undefined` cell; this guard fails the build instead.
  * `attributes`/`shardKey` are optional.
  */
-const METRIC_SERIES_KEYS = ["attributes", "count", "firstTs", "functionPath", "kind", "last", "lastTs", "max", "min", "name", "shardKey", "sum"] as const;
+const METRIC_SERIES_KEYS = [
+    "attributes",
+    "count",
+    "exemplarTraceId",
+    "firstTs",
+    "functionPath",
+    "kind",
+    "last",
+    "lastTs",
+    "max",
+    "min",
+    "name",
+    "shardKey",
+    "sum",
+] as const;
 
 const METRIC_SERIES_KEY_GUARD: KeysMatch<keyof MetricSeries, (typeof METRIC_SERIES_KEYS)[number]> = true;
+
+/**
+ * Canonical key sets of the `getMetricHistory` wire shapes — the durable
+ * per-minute rollups this package hand-mirrors from `@lunora/do`. The Instruments
+ * trend sparkline reads `points`; a dropped mirror key would silently blank the
+ * chart, so these guards fail the build on drift. `exemplarTraceId` (point),
+ * `attributes`/`shardKey` (series) are optional.
+ */
+const METRIC_HISTORY_POINT_KEYS = ["bucketMs", "count", "exemplarTraceId", "last", "max", "min", "sum"] as const;
+
+const METRIC_HISTORY_POINT_KEY_GUARD: KeysMatch<keyof MetricHistoryPoint, (typeof METRIC_HISTORY_POINT_KEYS)[number]> = true;
+
+const METRIC_HISTORY_SERIES_KEYS = ["attributes", "functionPath", "kind", "name", "points", "shardKey"] as const;
+
+const METRIC_HISTORY_SERIES_KEY_GUARD: KeysMatch<keyof MetricHistorySeries, (typeof METRIC_HISTORY_SERIES_KEYS)[number]> = true;
 
 /**
  * Canonical key set of `QueueMessageRow` (the `getQueueMessages` consumed-message
@@ -368,6 +399,7 @@ describe("studio", () => {
         expect([...METRIC_SERIES_KEYS]).toStrictEqual([
             "attributes",
             "count",
+            "exemplarTraceId",
             "firstTs",
             "functionPath",
             "kind",
@@ -379,6 +411,15 @@ describe("studio", () => {
             "shardKey",
             "sum",
         ]);
+    });
+
+    it("keeps the studio's getMetricHistory mirror in lockstep with @lunora/do's contract", () => {
+        expect.assertions(4);
+
+        expect(METRIC_HISTORY_POINT_KEY_GUARD).toBe(true);
+        expect([...METRIC_HISTORY_POINT_KEYS]).toStrictEqual(["bucketMs", "count", "exemplarTraceId", "last", "max", "min", "sum"]);
+        expect(METRIC_HISTORY_SERIES_KEY_GUARD).toBe(true);
+        expect([...METRIC_HISTORY_SERIES_KEYS]).toStrictEqual(["attributes", "functionPath", "kind", "name", "points", "shardKey"]);
     });
 
     it("keeps the studio's QueueMessageRow mirror in lockstep with @lunora/do's contract", () => {

@@ -14,6 +14,22 @@ const event = (over: Partial<MetricEvent> & Pick<MetricEvent, "kind" | "name" | 
 };
 
 describe("metricBuffer", () => {
+    it("carries the latest exemplar traceId, keeping a prior one when a later sample has none", () => {
+        expect.assertions(3);
+
+        const buffer = new MetricBuffer();
+
+        buffer.push(event({ kind: "counter", name: "orders.placed", traceId: "trace-a", value: 1 }));
+        expect(buffer.entries()[0]?.exemplarTraceId).toBe("trace-a");
+
+        buffer.push(event({ kind: "counter", name: "orders.placed", traceId: "trace-b", value: 1 }));
+        expect(buffer.entries()[0]?.exemplarTraceId).toBe("trace-b");
+
+        // A later measurement without a trace leaves the exemplar intact.
+        buffer.push(event({ kind: "counter", name: "orders.placed", value: 1 }));
+        expect(buffer.entries()[0]?.exemplarTraceId).toBe("trace-b");
+    });
+
     it("folds repeated counter measurements into one running series", () => {
         expect.assertions(6);
 

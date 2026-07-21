@@ -1,9 +1,10 @@
 /* eslint-disable vitest/prefer-strict-boolean-matchers -- getByTestId/findByTestId return DOM elements (truthy, not === true); toBeTruthy is the correct matcher and the strict-boolean autofix must not re-convert it */
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { filterTraces, formatSpanDuration, spanBar } from "../../../src/features/traces/trace-geometry";
+import { readPendingTraceFilter, writePendingTraceFilter } from "../../../src/lib/trace-handoff";
 import { TracesPanel } from "../../../src/features/traces/traces-panel";
 import type { TraceSpan, TraceSummary } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
@@ -380,5 +381,36 @@ describe("formatSpanDuration", () => {
         expect.assertions(1);
 
         expect(formatSpanDuration(0.4)).toBe("0.40ms");
+    });
+});
+
+describe("exemplar hand-off", () => {
+    afterEach(() => {
+        sessionStorage.clear();
+    });
+
+    it("round-trips a pending filter and clears it on read (one-shot)", () => {
+        expect.assertions(2);
+
+        writePendingTraceFilter({ shardKey: "room-9", traceId: "trace-send" });
+
+        expect(readPendingTraceFilter()).toStrictEqual({ shardKey: "room-9", traceId: "trace-send" });
+        // Cleared after the first read, so a later manual visit isn't re-filtered.
+        expect(readPendingTraceFilter()).toBeNull();
+    });
+
+    it("seeds the search AND the shard from the hand-off on mount", async () => {
+        expect.assertions(2);
+
+        // A metric exemplar recorded on a non-root shard: both the trace id and its
+        // shard must reach the panel, or Traces would search the wrong ring.
+        writePendingTraceFilter({ shardKey: "room-9", traceId: "trace-send" });
+        render(renderPanel(createClient()));
+
+        await waitFor(() => {
+            expect((screen.getByTestId("tr-search") as HTMLInputElement).value).toBe("trace-send");
+        });
+
+        expect((screen.getByTestId("tr-shard-input") as HTMLInputElement).value).toBe("room-9");
     });
 });

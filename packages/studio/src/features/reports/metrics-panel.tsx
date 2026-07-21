@@ -1,6 +1,9 @@
 import { useLunora } from "@lunora/react";
+import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+
+import { writePendingTraceFilter } from "../../lib/trace-handoff";
 
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
@@ -115,6 +118,16 @@ const StatCard = ({
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
+    const navigate = useNavigate();
+
+    // Exemplar drill-down: stash the trace id — and the shard the series was queried
+    // on, so the Traces panel searches the right ring rather than the root — for the
+    // Traces panel to pick up and pre-filter on mount, then navigate there. A
+    // one-shot handoff keeps the two panels decoupled from the router's search schema.
+    const openTrace = (traceId: string): void => {
+        writePendingTraceFilter({ shardKey: debouncedShard, traceId });
+        fireAndForget(navigate({ to: "/traces" }));
+    };
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     /** Active panel tab: "overview" (default) or "query-insights" (shown when queryStats present). */
@@ -409,7 +422,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
              * this shard. Self-contained (its own live read), renders nothing until a
              * series exists, and sits below the shard-health cards on the overview.
              */}
-            {effectiveTab === "overview" && <InstrumentsTable shardKey={debouncedShard} />}
+            {effectiveTab === "overview" && <InstrumentsTable onOpenTrace={openTrace} shardKey={debouncedShard} />}
 
             {effectiveTab === "overview" && aggregate !== null && shardResults !== null && (
                 <div className="flex flex-col gap-4" data-testid="mt-aggregate-view">

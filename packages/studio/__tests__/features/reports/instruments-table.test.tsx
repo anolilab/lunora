@@ -2,9 +2,11 @@ import { LunoraProvider } from "@lunora/react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { fireEvent } from "@testing-library/react";
+
 import { formatMetricValue, metricHeadline } from "../../../src/features/reports/instrument-format";
 import { InstrumentsTable } from "../../../src/features/reports/instruments-table";
-import type { MetricSeries } from "../../../src/lib/admin";
+import type { MetricHistoryResult, MetricSeries } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
@@ -12,6 +14,7 @@ import { createMockClient } from "../../mock-client";
 const SERIES: MetricSeries[] = [
     {
         count: 5,
+        exemplarTraceId: "trace-checkout-42",
         firstTs: 1_700_000_000_000,
         functionPath: "orders:checkout",
         kind: "counter",
@@ -51,20 +54,39 @@ const SERIES: MetricSeries[] = [
 
 const DEFAULT_RESULT: unknown = { series: SERIES };
 
-const createClient = (result: unknown = DEFAULT_RESULT): MockClientHooks =>
+/** Two-bucket history for orders.placed so the trend sparkline (needs ≥2 points) renders. */
+const HISTORY: MetricHistoryResult = {
+    series: [
+        {
+            functionPath: "orders:checkout",
+            kind: "counter",
+            name: "orders.placed",
+            points: [
+                { bucketMs: 1_700_000_000_000, count: 3, last: 1, max: 1, min: 1, sum: 3 },
+                { bucketMs: 1_700_000_060_000, count: 5, last: 1, max: 1, min: 1, sum: 5 },
+            ],
+        },
+    ],
+};
+
+const createClient = (result: unknown = DEFAULT_RESULT, history: unknown = HISTORY): MockClientHooks =>
     createMockClient({
         query: (reference): unknown => {
             if (reference === ADMIN_FUNCTIONS.getMetricSeries) {
                 return result;
             }
 
-            throw new Error(`unexpected ${reference}`);
+            if (reference === ADMIN_FUNCTIONS.getMetricHistory) {
+                return history;
+            }
+
+            throw new Error(`unexpected ${String(reference)}`);
         },
     });
 
-const renderTable = (mock: MockClientHooks) => (
+const renderTable = (mock: MockClientHooks, onOpenTrace?: (traceId: string) => void) => (
     <LunoraProvider client={mock.asClient}>
-        <InstrumentsTable shardKey="" />
+        <InstrumentsTable onOpenTrace={onOpenTrace} shardKey="" />
     </LunoraProvider>
 );
 
@@ -148,5 +170,73 @@ describe("instrumentsTable", () => {
         await waitFor(() => {
             expect(screen.queryByTestId("mt-instruments")).toBeNull();
         });
+    });
+
+    it("draws a trend sparkline for a series that has ≥2 durable history buckets", async () => {
+        expect.assertions(1);
+
+        render(renderTable(createClient()));
+
+        // orders.placed has two history buckets; the sparkline renders for it.
+        expect(await screen.findByTestId("mt-instrument-trend-orders.placed")).toBeTruthy();
+    });
+
+    it("joins live series to history by canonical key, regardless of attribute order", async () => {
+        expect.assertions(1);
+
+        // The live series carries attributes in caller order; the durable history
+        // round-trips them through the server's sort. A key-order-sensitive join
+        // would miss and blank the sparkline — this guards the canonical-key fix.
+        const live: MetricSeries[] = [
+            {
+                // Caller-insertion order: route first.
+                attributes: { route: "/a", method: "GET" },
+                count: 9,
+                firstTs: 1_700_000_000_000,
+                functionPath: "api:handle",
+                kind: "counter",
+                last: 1,
+                lastTs: 1_700_000_005_000,
+                max: 1,
+                min: 1,
+                name: "http.requests",
+                sum: 9,
+            },
+        ];
+        const history: MetricHistoryResult = {
+            series: [
+                {
+                    // Sorted order, as stableStringify → JSON.parse returns it.
+                    attributes: { method: "GET", route: "/a" },
+                    functionPath: "api:handle",
+                    kind: "counter",
+                    name: "http.requests",
+                    points: [
+                        { bucketMs: 1_700_000_000_000, count: 4, last: 1, max: 1, min: 1, sum: 4 },
+                        { bucketMs: 1_700_000_060_000, count: 5, last: 1, max: 1, min: 1, sum: 5 },
+                    ],
+                },
+            ],
+        };
+
+        render(renderTable(createClient({ series: live }, history)));
+
+        expect(await screen.findByTestId("mt-instrument-trend-http.requests")).toBeTruthy();
+    });
+
+    it("links a series' exemplar trace and opens it on click", async () => {
+        expect.assertions(2);
+
+        const opened: string[] = [];
+
+        render(renderTable(createClient(), (traceId) => opened.push(traceId)));
+
+        const link = await screen.findByTestId("mt-instrument-trace-orders.placed");
+        // The short id is shown; the full id is what the drill-down opens.
+        expect(link.textContent).toBe("trace-ch");
+
+        fireEvent.click(link);
+
+        expect(opened).toStrictEqual(["trace-checkout-42"]);
     });
 });
