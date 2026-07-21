@@ -22,6 +22,7 @@ import { CLOUDFLARE_OBSERVABILITY_URL } from "../../lib/cf-links";
 import { recordShard } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
 import flooredRectObserver from "../../lib/virtual-rect";
+import { ArchiveFeed } from "./archive-feed";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
 const SCROLL_HEIGHT = 400;
@@ -187,7 +188,7 @@ const entriesOf = <T,>(result: unknown): T[] => {
 };
 
 /** Which feed the panel shows: the durable per-request log, or the in-memory error buffer. */
-type LogsView = "errors" | "requests";
+type LogsView = "archive" | "errors" | "requests";
 
 /**
  * Build the server-side `getRequestLog` filter args, dropping empty fields so an
@@ -578,6 +579,11 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         setShowSummary(false);
     };
 
+    const showArchive = (): void => {
+        setView("archive");
+        setShowSummary(false);
+    };
+
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-logs">
             <div className="flex flex-wrap items-center gap-2">
@@ -601,6 +607,16 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                         type="button"
                     >
                         {t("Errors")}
+                    </button>
+                    <button
+                        aria-selected={view === "archive"}
+                        className={cn("px-3 py-1 text-sm", view === "archive" ? "bg-muted font-medium" : "text-muted-foreground")}
+                        data-testid="lg-view-archive"
+                        onClick={showArchive}
+                        role="tab"
+                        type="button"
+                    >
+                        {t("Archive")}
                     </button>
                 </div>
                 <ShardInput onChange={setShardKey} testId="lg-shard-input" value={shardKey} />
@@ -706,9 +722,11 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 </div>
             )}
 
-            {readout === "error" && <ErrorAlert error={errorSource} testId="lg-error" />}
+            {view === "archive" && <ArchiveFeed shardKey={debouncedShard} />}
 
-            {readout === "empty" && (
+            {view !== "archive" && readout === "error" && <ErrorAlert error={errorSource} testId="lg-error" />}
+
+            {view !== "archive" && readout === "empty" && (
                 <EmptyState
                     description={t("Function and request logs for this shard show up here as your app handles traffic.")}
                     icon={
@@ -729,7 +747,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 />
             )}
 
-            {readout === "summary" && (
+            {view !== "archive" && readout === "summary" && (
                 <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4 shadow-xs" data-testid="logs-summary">
                     <p className="text-xs text-muted-foreground" data-testid="logs-summary-total">
                         {t("{count} entries", { count: summary.total })}
@@ -753,7 +771,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 </div>
             )}
 
-            {readout === "list" && (
+            {view !== "archive" && readout === "list" && (
                 <div className="rounded-xl border border-border shadow-xs" data-testid="lg-scroll" ref={scrollRef} style={SCROLL_STYLE}>
                     <div aria-label={t("Recent logs")} data-testid="lg-table" role="grid" style={gridStyle}>
                         {virtualRows.map((virtualRow) =>

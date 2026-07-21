@@ -55,6 +55,8 @@ import type {
     OutboxSink,
     PersistenceAdapter,
     PersistenceErrorContext,
+    PipelineLogPage,
+    PipelineLogQuery,
     QueryCacheAdapter,
     ReconnectOptions,
     ReturnOf,
@@ -167,6 +169,7 @@ const GLOBAL_TABLE_PATH = "/_lunora/admin/global/table";
 const GLOBAL_FACET_PATH = "/_lunora/admin/global/facet";
 const VECTOR_INDEXES_PATH = "/_lunora/admin/vector/indexes";
 const VECTOR_QUERY_PATH = "/_lunora/admin/vector/query";
+const LOG_ARCHIVE_PATH = "/_lunora/admin/logs/archive";
 const KV_NAMESPACES_PATH = "/_lunora/admin/kv/namespaces";
 const KV_KEYS_PATH = "/_lunora/admin/kv/keys";
 const KV_VALUE_PATH = "/_lunora/admin/kv/value";
@@ -2467,6 +2470,28 @@ class LunoraClient {
         const body = (await this.adminFetch(VECTOR_QUERY_PATH, "POST", options)) as { matches?: VectorQueryMatch[] };
 
         return body.matches ?? [];
+    }
+
+    /**
+     * Read one keyset-paginated page of the durable `ctx.log` archive that
+     * `pipelineLogSink` writes to R2. Server-side only — the worker holds the R2
+     * SQL credentials and runs the reader; the browser only sees the decoded
+     * `{ rows, nextCursor }`. Pass the previous page's `nextCursor` as
+     * `query.cursor` to page. Admin-gated. When the operator hasn't wired the
+     * archive, `adminFetch` throws a `LunoraClientError` with `.code ===
+     * "LOG_ARCHIVE_NOT_CONFIGURED"`, so a caller can render a "not configured"
+     * state rather than an error.
+     */
+    public async queryLogArchive(query: PipelineLogQuery = {}): Promise<PipelineLogPage> {
+        if (this.closed) {
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
+        }
+
+        // `PipelineLogQuery` is a named interface (no index signature), so widen it
+        // to the record shape `adminFetch` serializes.
+        const body = (await this.adminFetch(LOG_ARCHIVE_PATH, "POST", query as Record<string, unknown>)) as Partial<PipelineLogPage>;
+
+        return { nextCursor: body.nextCursor, rows: body.rows ?? [] };
     }
 
     // --- KV namespace admin -------------------------------------------------

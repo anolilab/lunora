@@ -1251,6 +1251,30 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `PipelineLogColumnMap` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogCursor` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogField` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogPage` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogQuery` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogRow` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `Preloaded` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -3593,7 +3617,19 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `LOG_ARCHIVE_NOT_CONFIGURED` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `LOG_ARCHIVE_PATH` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ListAuthUsersOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `LogArchiveConfig` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
