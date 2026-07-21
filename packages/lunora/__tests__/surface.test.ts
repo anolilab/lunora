@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 
 describe("lunorash default entry (server authoring API)", () => {
     it("exposes the schema + procedure authoring surface", async () => {
+        expect.assertions(5);
+
         const lunorash: Record<string, unknown> = await import("lunorash");
 
         expect(typeof lunorash.defineSchema).toBe("function");
@@ -17,6 +19,8 @@ describe("lunorash default entry (server authoring API)", () => {
     });
 
     it("builds a working schema through the umbrella", async () => {
+        expect.assertions(1);
+
         const { defineSchema, defineTable, v } = (await import("lunorash")) as unknown as {
             defineSchema: (tables: Record<string, unknown>) => { tables: Record<string, unknown> };
             defineTable: (fields: Record<string, unknown>) => unknown;
@@ -29,6 +33,8 @@ describe("lunorash default entry (server authoring API)", () => {
     });
 
     it("mints the query/mutation/action procedure builders via initLunora", async () => {
+        expect.assertions(19);
+
         const { initLunora } = (await import("lunorash")) as unknown as {
             initLunora: { dataModel: () => { create: () => Record<string, { __lunoraProcedure: string; input: unknown; use: unknown }> } };
         };
@@ -56,6 +62,8 @@ describe("lunorash default entry (server authoring API)", () => {
 
 describe("lunorash subpath load-bearing names", () => {
     it("lunorash/values ships the v validator namespace", async () => {
+        expect.assertions(3);
+
         const { v } = (await import("lunorash/values")) as unknown as { v: Record<string, unknown> };
 
         expect(typeof v.string).toBe("function");
@@ -64,6 +72,8 @@ describe("lunorash subpath load-bearing names", () => {
     });
 
     it("lunorash/client ships LunoraClient (what codegen's FunctionReference client uses)", async () => {
+        expect.assertions(2);
+
         const client: Record<string, unknown> = await import("lunorash/client");
 
         expect(typeof client.LunoraClient).toBe("function");
@@ -71,6 +81,8 @@ describe("lunorash subpath load-bearing names", () => {
     });
 
     it("lunorash/runtime ships the worker entry factories", async () => {
+        expect.assertions(3);
+
         const runtime: Record<string, unknown> = await import("lunorash/runtime");
 
         expect(typeof runtime.createWorker).toBe("function");
@@ -79,6 +91,8 @@ describe("lunorash subpath load-bearing names", () => {
     });
 
     it("lunorash/do ships the Durable Object classes wrangler binds", async () => {
+        expect.assertions(3);
+
         const doModule: Record<string, unknown> = await import("lunorash/do");
 
         expect(typeof doModule.ShardDO).toBe("function");
@@ -87,6 +101,8 @@ describe("lunorash subpath load-bearing names", () => {
     });
 
     it("lunorash/errors forwards a working unified error layer", async () => {
+        expect.assertions(4);
+
         const { LunoraError, toErrorBody } = (await import("lunorash/errors")) as unknown as {
             LunoraError: new (code: string, message?: string) => Error;
             toErrorBody: (error: unknown) => { body: { code: string; message: string }; redacted: boolean; status: number };
@@ -105,6 +121,8 @@ describe("lunorash subpath load-bearing names", () => {
     });
 
     it("lunorash/flags ships defineFlags and each provider under its flattened alias", async () => {
+        expect.assertions(4);
+
         const flags: Record<string, unknown> = await import("lunorash/flags");
         const { memoryProvider } = (await import("lunorash/flags/memory")) as unknown as { memoryProvider: (flags: Record<string, unknown>) => unknown };
         const { envProvider } = (await import("lunorash/flags/env")) as unknown as { envProvider: unknown };
@@ -117,6 +135,8 @@ describe("lunorash subpath load-bearing names", () => {
     });
 
     it("lunorash/ratelimit ships the limiter surface", async () => {
+        expect.assertions(3);
+
         const ratelimit: Record<string, unknown> = await import("lunorash/ratelimit");
 
         expect(typeof ratelimit.rateLimit).toBe("function");
