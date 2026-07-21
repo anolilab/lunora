@@ -446,13 +446,6 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly args: A;
 
     /**
-     * Set on connection-lifecycle hooks (`onConnect` / `onDisconnect`).
-     * Marks the function for the generated `LUNORA_LIFECYCLE_HOOKS` manifest so the
-     * DO dispatches it on socket connect/disconnect rather than via a client RPC.
-     * Absent on ordinary registrations.
-     */
-
-    /**
      * Set by the `.expose({ rest: true })` builder modifier. Marks the procedure
      * as published on the public REST surface (plan 167). Absent on procedures that
      * are reachable only via typed RPC (the default).
@@ -461,6 +454,13 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
 
     readonly kind: Kind;
+
+    /**
+     * Set on connection-lifecycle hooks (`onConnect` / `onDisconnect`).
+     * Marks the function for the generated `LUNORA_LIFECYCLE_HOOKS` manifest so the
+     * DO dispatches it on socket connect/disconnect rather than via a client RPC.
+     * Absent on ordinary registrations.
+     */
     readonly lifecycle?: LifecycleEventKind;
     readonly visibility?: FunctionVisibility;
 
