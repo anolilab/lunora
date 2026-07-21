@@ -71,13 +71,14 @@
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "astro": "7.1.1",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "astro": "^6.0.0"
+        "astro": ">=6.0.0"
     },
     "peerDependenciesMeta": {
         "astro": {
