@@ -283,6 +283,9 @@ catalogs:
     '@visulima/error':
       specifier: 6.0.0
       version: 6.0.0
+    '@visulima/health-check':
+      specifier: 4.0.0
+      version: 4.0.0
     '@visulima/tabular':
       specifier: 4.0.0
       version: 4.0.0
@@ -3117,6 +3120,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@visulima/health-check':
+        specifier: catalog:prod
+        version: 4.0.0
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
@@ -12016,6 +12022,11 @@ packages:
       yaml:
         optional: true
 
+  '@visulima/health-check@4.0.0':
+    resolution: {integrity: sha512-1f1uAqYEb91QLGGWXOc4GvJBgkdXi87YmX9EpIHjYBovpq7zbWEbTBQkhObuKEG78tsdQYyOxeBBtd20XDfmGg==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+    os: [darwin, linux, win32]
+
   '@visulima/humanizer@3.0.1':
     resolution: {integrity: sha512-tE7ztsiogKeLO/ekmSCIDKKzBv20HqtF5iE03DMG97hVEhi/jLvZvaSopLm/w7SJR6CpfMQQ79HKMOhzYog05g==}
     engines: {node: ^22.14.0 || >=24.10.0}
@@ -13905,6 +13916,10 @@ packages:
   cac@7.0.0:
     resolution: {integrity: sha512-tixWYgm5ZoOD+3g6UTea91eow5z6AAHaho3g0V9CNSNb45gM8SmflpAc+GRd1InC4AqN/07Unrgp56Y94N9hJQ==}
     engines: {node: '>=20.19.0'}
+
+  cacheable-lookup@7.0.0:
+    resolution: {integrity: sha512-+qJyx4xiKra8mZrcwhjMRMUhD5NR1R8esPkzIYxX96JiecFoxAXFuz/GpR3+ev4PE1WamHip78wV0vcmPQtp8w==}
+    engines: {node: '>=14.16'}
 
   cached-factory@0.2.0:
     resolution: {integrity: sha512-6XGkilRVhace8gARfWVvkjyWoazCp21VUQXdDyWEcAz3sHSwXji76srbLfJ6BcHRAZveW9ICYprhqsdoRYZ+YQ==}
@@ -19148,6 +19163,10 @@ packages:
   pify@3.0.0:
     resolution: {integrity: sha512-C3FsVNH1udSEX48gGX1xfvwTWfsYWj5U+8/uK15BGzIGrKoUpghX8hWZwa/OFnakBiiVNmBvemTJR5mcy7iPcg==}
     engines: {node: '>=4'}
+
+  pingman@2.2.0:
+    resolution: {integrity: sha512-Y3kjJwmjA96QAjpMUcAg2vPJniRk+NEZcSbUNwHQgP0ybFxWkb8Vs7Vlp8a+4wrX6sUSTy+paptLf/iiUaQQvw==}
+    engines: {node: '>=10'}
 
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
@@ -30970,6 +30989,11 @@ snapshots:
       jsonc-parser: 3.3.1
       yaml: 2.9.0
 
+  '@visulima/health-check@4.0.0':
+    dependencies:
+      cacheable-lookup: 7.0.0
+      pingman: 2.2.0
+
   '@visulima/humanizer@3.0.1': {}
 
   '@visulima/interactive-manager@1.0.0': {}
@@ -33099,6 +33123,8 @@ snapshots:
   cac@6.7.14: {}
 
   cac@7.0.0: {}
+
+  cacheable-lookup@7.0.0: {}
 
   cached-factory@0.2.0: {}
 
@@ -39357,6 +39383,8 @@ snapshots:
   picoquery@2.5.0: {}
 
   pify@3.0.0: {}
+
+  pingman@2.2.0: {}
 
   pkce-challenge@5.0.1: {}
 
