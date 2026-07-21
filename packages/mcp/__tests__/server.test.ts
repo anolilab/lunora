@@ -142,10 +142,10 @@ describe("createLunoraMcpServer request handlers", () => {
 
 /** A client double exposing the mutation/query the agent tools dispatch. */
 const agentClient = (): { asClient: LunoraClient; mutation: ReturnType<typeof vi.fn> } => {
-    const mutation = vi.fn(async () => {
+    const mutation = vi.fn<(reference: unknown, arguments_: Record<string, unknown>) => Promise<{ id: string; threadKey: string }>>(async () => {
         return { id: "wf-1", threadKey: "t-agent" };
     });
-    const query = vi.fn(async (reference: unknown) =>
+    const query = vi.fn<(reference: unknown) => Promise<unknown>>(async (reference: unknown) =>
         (reference as { __lunoraRef: string }).__lunoraRef === "agents:agentMessages" ? [{ content: "answer", role: "assistant" }] : { status: "idle" },
     );
 

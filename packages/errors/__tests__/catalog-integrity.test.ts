@@ -11,6 +11,8 @@ const codes = Object.keys(ERROR_CATALOG) as (keyof typeof ERROR_CATALOG)[];
 // or an inconsistent redaction posture.
 describe("error catalog integrity", () => {
     it("has at least the core transport codes", () => {
+        expect.assertions(7);
+
         expect(codes).toContain("BAD_REQUEST");
         expect(codes).toContain("UNAUTHORIZED");
         expect(codes).toContain("FORBIDDEN");
@@ -21,6 +23,8 @@ describe("error catalog integrity", () => {
     });
 
     it.each(codes)("%s maps to a real HTTP status and a non-empty title", (code) => {
+        expect.assertions(4);
+
         const entry = ERROR_CATALOG[code];
 
         expect(Number.isInteger(entry.status)).toBe(true);
@@ -30,10 +34,14 @@ describe("error catalog integrity", () => {
     });
 
     it.each(codes)("%s is a SCREAMING_SNAKE_CASE machine code", (code) => {
+        expect.assertions(1);
+
         expect(code).toMatch(/^[A-Z][A-Z0-9_]*$/);
     });
 
     it("every internal-flagged code maps to a 5xx status", () => {
+        expect.hasAssertions();
+
         // A redacted code is an internal failure by definition — a 4xx internal
         // code would tell the client "your fault" while hiding why.
         const internalCodes = codes.filter((code) => (ERROR_CATALOG[code] as ErrorCatalogEntry).internal === true);
@@ -46,12 +54,16 @@ describe("error catalog integrity", () => {
     });
 
     it.each(codes)("isInternalCode(%s) agrees with the catalog's internal flag", (code) => {
+        expect.assertions(1);
+
         const entry: ErrorCatalogEntry = ERROR_CATALOG[code];
 
         expect(isInternalCode(code)).toBe(entry.internal === true);
     });
 
     it("keeps INTERNAL, its alias, and RPC_FAILED aligned on status + title", () => {
+        expect.assertions(4);
+
         // INTERNAL_SERVER_ERROR is documented as an alias of INTERNAL; RPC_FAILED
         // presents the same generic face. If they drift, the same failure renders
         // differently depending on which edge mapped it.
@@ -62,6 +74,8 @@ describe("error catalog integrity", () => {
     });
 
     it("every authored hint flattens to non-empty terminal text", () => {
+        expect.hasAssertions();
+
         const hintedCodes = codes.filter((code) => (ERROR_CATALOG[code] as ErrorCatalogEntry).hint !== undefined);
 
         expect(hintedCodes.length).toBeGreaterThan(0);
@@ -74,6 +88,8 @@ describe("error catalog integrity", () => {
     });
 
     it("isInternalCode treats unknown codes as client-safe (author's vouch)", () => {
+        expect.assertions(2);
+
         expect(isInternalCode("SOME_FUTURE_PACKAGE_CODE")).toBe(false);
         expect(isInternalCode("")).toBe(false);
     });
@@ -81,12 +97,16 @@ describe("error catalog integrity", () => {
 
 describe("message solutions integrity", () => {
     it("has unique, stable ids", () => {
+        expect.assertions(1);
+
         const ids = MESSAGE_SOLUTIONS.map((rule) => rule.id);
 
         expect(new Set(ids).size).toBe(ids.length);
     });
 
     it("every rule carries a header, body, and a working matcher", () => {
+        expect.hasAssertions();
+
         for (const rule of MESSAGE_SOLUTIONS) {
             expect(rule.header.trim().length, `${rule.id} has an empty header`).toBeGreaterThan(0);
             expect(rule.body.trim().length, `${rule.id} has an empty body`).toBeGreaterThan(0);
@@ -96,6 +116,8 @@ describe("message solutions integrity", () => {
     });
 
     it("the duplicate-table rule does not false-positive on unrelated 'already exists' messages", () => {
+        expect.assertions(2);
+
         const rule = MESSAGE_SOLUTIONS.find((r) => r.id === "lunora-table-duplicate");
 
         // Anchored on `.extend(` by design — a plain filesystem error with an

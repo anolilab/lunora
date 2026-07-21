@@ -13,12 +13,16 @@ const binPath = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "bin
 // for real — a broken import chain or a missing await would fail here first.
 describe("lunora bin (dist/bin.mjs)", () => {
     it("runs the delegated CLI and exits 0 for --version", async () => {
+        expect.assertions(1);
+
         const { stdout } = await execFileAsync(process.execPath, [binPath, "--version"], { timeout: 60_000 });
 
         expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
     }, 70_000);
 
     it("exits non-zero for an unknown command instead of swallowing the failure", async () => {
+        expect.assertions(1);
+
         const result = await execFileAsync(process.execPath, [binPath, "definitely-not-a-lunora-command"], { timeout: 60_000 }).then(
             () => undefined,
             (error: unknown) => error as { code?: number },

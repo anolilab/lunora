@@ -176,7 +176,7 @@ describe("sandboxComponent().invoke", () => {
     });
 
     it("routes a browser screenshot to ctx.browser and base64-encodes the bytes", async () => {
-        const screenshot = vi.fn(async () => new Uint8Array([1, 2, 3]));
+        const screenshot = vi.fn<(url: string, options: Record<string, unknown>) => Promise<Uint8Array>>(async () => new Uint8Array([1, 2, 3]));
         const result = await invokeSandbox({ browser: { screenshot } }, { kind: "browser", op: "screenshot", url: "https://example.com" });
 
         expect(screenshot).toHaveBeenCalledWith("https://example.com", {});
@@ -185,7 +185,7 @@ describe("sandboxComponent().invoke", () => {
     });
 
     it("routes a browser content op to ctx.browser.content as a plain string", async () => {
-        const content = vi.fn(async () => "<html></html>");
+        const content = vi.fn<(url: string) => Promise<string>>(async () => "<html></html>");
         const result = await invokeSandbox({ browser: { content } }, { kind: "browser", op: "content", url: "https://example.com" });
 
         expect(result).toBe("<html></html>");
@@ -196,7 +196,7 @@ describe("sandboxComponent().invoke", () => {
     });
 
     it("routes a container fetch through ctx.containers[name].any().fetch", async () => {
-        const fetch = vi.fn(async () => {
+        const fetch = vi.fn<(path: string, init: Record<string, unknown>) => Promise<{ text: () => Promise<string> }>>(async () => {
             return { text: async () => "pong" };
         });
         const containers = {
@@ -213,7 +213,7 @@ describe("sandboxComponent().invoke", () => {
     });
 
     it("routes a container exec as a POST to /exec", async () => {
-        const fetch = vi.fn(async () => {
+        const fetch = vi.fn<(path: string, init: Record<string, unknown>) => Promise<{ text: () => Promise<string> }>>(async () => {
             return { text: async () => "done" };
         });
         const containers = {

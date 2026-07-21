@@ -23,6 +23,8 @@ const conditionalEntries = Object.entries(packageJson.exports).filter(
 // manifest tests hold the map, the built dist, and the sources together.
 describe("package.json exports-map integrity", () => {
     it("declares every expected subpath", () => {
+        expect.assertions(9);
+
         const subpaths = Object.keys(packageJson.exports);
 
         // Load-bearing subpaths: codegen emits imports against these when a
@@ -33,6 +35,8 @@ describe("package.json exports-map integrity", () => {
     });
 
     it.each(conditionalEntries)("%s resolves to real files in dist", (subpath, entry) => {
+        expect.assertions(2);
+
         expect(existsSync(join(packageRoot, entry.import)), `${subpath}: missing ${entry.import}`).toBe(true);
         expect(existsSync(join(packageRoot, entry.types)), `${subpath}: missing ${entry.types}`).toBe(true);
     });
@@ -41,12 +45,16 @@ describe("package.json exports-map integrity", () => {
         // Type-only subpaths (e.g. ./server/data-model) legitimately export
         // nothing at runtime — the load-bearing check is that the specifier
         // resolves and the module evaluates.
+        expect.assertions(1);
+
         const specifier = subpath === "." ? "lunorash" : `lunorash/${subpath.slice(2)}`;
 
         await expect(import(specifier)).resolves.toBeDefined();
     });
 
     it.each(conditionalEntries)("%s has a matching source entry module", (subpath) => {
+        expect.assertions(1);
+
         // packem derives dist entries from src/: every declared subpath must map
         // back to src/<subpath>.ts (the "." root maps to src/index.ts).
         const sourcePath = subpath === "." ? "src/index.ts" : `src/${subpath.slice(2)}.ts`;
@@ -55,6 +63,8 @@ describe("package.json exports-map integrity", () => {
     });
 
     it("keeps the top-level main/module/types aligned with the '.' export", () => {
+        expect.assertions(3);
+
         const root = packageJson.exports["."] as { import: string; types: string };
 
         expect(packageJson.main).toBe(root.import);
@@ -65,6 +75,8 @@ describe("package.json exports-map integrity", () => {
 
 describe("lunora bin delegation", () => {
     it("ships the lunora bin pointing at a real, shebanged entry", () => {
+        expect.assertions(3);
+
         expect(packageJson.bin).toStrictEqual({ lunora: "./dist/bin.mjs" });
 
         const binPath = join(packageRoot, packageJson.bin.lunora as string);
@@ -76,6 +88,8 @@ describe("lunora bin delegation", () => {
     });
 
     it("delegates to @lunora/cli's runCli rather than carrying its own CLI", () => {
+        expect.assertions(2);
+
         const source = readFileSync(join(packageRoot, "src/bin.ts"), "utf8");
 
         expect(source).toContain('import { runCli } from "@lunora/cli"');

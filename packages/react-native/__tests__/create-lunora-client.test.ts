@@ -3,10 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createLunoraClient, withAuthHeaders, withAuthWebSocket } from "../src/create-lunora-client";
 
-const makeFetchSpy = () => vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => Promise.resolve(new Response(null, { status: 204 })));
+const makeFetchSpy = () =>
+    vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>((_input, _init) => Promise.resolve(new Response(null, { status: 204 })));
 
 describe("withAuthHeaders", () => {
     it("merges the auth headers under the caller's own headers", async () => {
+        expect.assertions(3);
+
         const spy = makeFetchSpy();
         const wrapped = withAuthHeaders(spy, () => {
             return { Cookie: "session=abc", "X-App": "demo" };
@@ -23,6 +26,8 @@ describe("withAuthHeaders", () => {
     });
 
     it("lets the caller's headers win on a key clash (an explicit bearer beats the factory)", async () => {
+        expect.assertions(1);
+
         const spy = makeFetchSpy();
         const wrapped = withAuthHeaders(spy, () => {
             return { authorization: "Bearer from-factory" }; // secret-scanner:allow -- test fixture, not a real credential
@@ -34,6 +39,8 @@ describe("withAuthHeaders", () => {
     });
 
     it("passes the request straight through when the factory returns undefined (signed out)", async () => {
+        expect.assertions(1);
+
         const spy = makeFetchSpy();
         const init: RequestInit = { headers: { "Content-Type": "application/json" } };
         const wrapped = withAuthHeaders(spy, () => undefined);
@@ -45,6 +52,8 @@ describe("withAuthHeaders", () => {
     });
 
     it("re-reads the factory on every call so a refreshed credential takes effect", async () => {
+        expect.assertions(2);
+
         const spy = makeFetchSpy();
         let cookie = "session=first";
         const wrapped = withAuthHeaders(spy, () => {
@@ -77,6 +86,8 @@ describe("withAuthWebSocket", () => {
     };
 
     it("injects the current headers onto the upgrade request", () => {
+        expect.assertions(3);
+
         const { calls, FakeWebSocket } = makeFakeWebSocket();
         const Wrapped = withAuthWebSocket(FakeWebSocket, () => {
             return { Cookie: "session=abc" };
@@ -90,6 +101,8 @@ describe("withAuthWebSocket", () => {
     });
 
     it("passes no options object when signed out", () => {
+        expect.assertions(2);
+
         const { calls, FakeWebSocket } = makeFakeWebSocket();
         const Wrapped = withAuthWebSocket(FakeWebSocket, () => undefined);
 
@@ -100,6 +113,8 @@ describe("withAuthWebSocket", () => {
     });
 
     it("re-reads the factory per socket so a reconnect picks up a new token", () => {
+        expect.assertions(4);
+
         const { calls, FakeWebSocket } = makeFakeWebSocket();
         let cookie = "session=first";
         const Wrapped = withAuthWebSocket(FakeWebSocket, () => {
@@ -121,6 +136,8 @@ describe("withAuthWebSocket", () => {
 
 describe("createLunoraClient", () => {
     it("constructs a LunoraClient with the given url", () => {
+        expect.assertions(2);
+
         const client = createLunoraClient({ url: "https://api.example.com" });
 
         expect(client).toBeInstanceOf(LunoraClient);
@@ -128,6 +145,8 @@ describe("createLunoraClient", () => {
     });
 
     it("derives an AsyncStorage persistence adapter from `storage`", () => {
+        expect.assertions(1);
+
         const store = new Map<string, string>();
         const storage = {
             getItem: async (key: string) => store.get(key) ?? null,
@@ -145,6 +164,8 @@ describe("createLunoraClient", () => {
     });
 
     it("honours an explicit `persistence: false` over `storage`", () => {
+        expect.assertions(1);
+
         const store = new Map<string, string>();
         const storage = {
             getItem: async (key: string) => store.get(key) ?? null,

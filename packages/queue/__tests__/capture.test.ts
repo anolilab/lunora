@@ -161,7 +161,7 @@ describe("createQueueCaptureSink", () => {
         expect.assertions(2);
 
         const inner = namespace();
-        const jurisdiction = vi.fn(() => {
+        const jurisdiction = vi.fn<(jurisdiction: string) => { get: typeof inner.get; idFromName: typeof inner.idFromName }>(() => {
             return { get: inner.get, idFromName: inner.idFromName };
         });
         const outer = namespace();

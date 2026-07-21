@@ -69,7 +69,12 @@ const makeStepWithWaits = (waits: ReadonlyArray<{ payload?: BranchOutcome; throw
 
 /** A no-op structured logger double whose channels are spies. */
 const makeLog = (): { debug: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn>; info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> } => {
-    return { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    return {
+        debug: vi.fn<(...args: unknown[]) => void>(),
+        error: vi.fn<(...args: unknown[]) => void>(),
+        info: vi.fn<(...args: unknown[]) => void>(),
+        warn: vi.fn<(...args: unknown[]) => void>(),
+    };
 };
 
 /** Build fan-out deps over a single shared binding double, with a deterministic id counter. */
