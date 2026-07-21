@@ -86,6 +86,14 @@ const pushAttribute = (attributes: OtlpAttribute[], key: string, value: unknown)
  *
  * Each export is fire-and-forget (registered with `waitUntil` when supplied);
  * every rejection is swallowed so a flaky collector never surfaces to the run.
+ *
+ * Two deliberate differences from the SDK-backed integrations (`sentryTelemetry`
+ * / `braintrustTelemetry`), which delegate to a host tracer:
+ * - **No `onError`.** A failed call already emits a span with `status.code === 2`,
+ *   so the failure is on the trace; there is no host client to also notify.
+ * - **Flat, not nested.** Every span gets `traceId` (shared when `traceId` is set)
+ *   but no `parentSpanId`, so model-call and tool spans are siblings under the run
+ *   rather than a tree — OTLP has no ambient span context to parent to here.
  * @param options `endpoint` (+ optional `token`/`headers`/`serviceName`),
  * `traceId` to group a run's spans, `waitUntil`, and the `recordInputs`/
  * `recordOutputs` privacy flags.

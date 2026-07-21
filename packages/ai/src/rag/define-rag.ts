@@ -249,10 +249,12 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         const tracer = typeof context.trace === "function" ? (context.trace as EmbedTracer) : undefined;
 
         const embedText = async (text: string): Promise<ReadonlyArray<number>> => {
-            model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
+            // Resolve once and bind to a local `const`, so the nested `run` closure
+            // sees a non-nullable model without a cast.
+            const resolvedModel = (model ??= resolveEmbeddingModel(config.embeddingModel, context.ai));
 
             const run = async (): Promise<ReadonlyArray<number>> => {
-                const { embedding } = await aiEmbed({ model: model as EmbeddingModel, value: text });
+                const { embedding } = await aiEmbed({ model: resolvedModel, value: text });
 
                 return embedding;
             };
@@ -265,7 +267,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // attributes at span start — so the span carries the model id (known
             // up front); token/cost belong on the model-call spans the agent's
             // OTLP telemetry emits, not on a cheap embed.
-            const modelId = modelIdOf(model);
+            const modelId = modelIdOf(resolvedModel);
 
             return tracer("ai.embed", run, {
                 "gen_ai.operation.name": "embeddings",
