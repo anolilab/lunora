@@ -67,11 +67,13 @@
     },
     "dependencies": {
         "@bomb.sh/tab": "0.0.19",
+        "@lunora/bindings": "1.0.0-alpha.9",
         "@lunora/codegen": "1.0.0-alpha.48",
         "@lunora/config": "1.0.0-alpha.72",
         "@lunora/container": "1.0.0-alpha.13",
         "@lunora/d1": "1.0.0-alpha.34",
         "@lunora/errors": "1.0.0-alpha.6",
+        "@lunora/runtime": "1.0.0-alpha.30",
         "@lunora/seed": "1.0.0-alpha.28",
         "@visulima/cerebro": "3.0.0",
         "@visulima/error": "catalog:prod",
