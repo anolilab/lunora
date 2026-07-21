@@ -69,6 +69,7 @@
         "limits",
         "versioning",
         "---Reference---",
+        "concepts/wire-protocol",
         "packages"
     ]
 }
