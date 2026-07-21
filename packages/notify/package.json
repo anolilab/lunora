@@ -1,0 +1,78 @@
+{
+    "name": "@lunora/notify",
+    "version": "1.0.0-alpha.0",
+    "description": "Multi-channel notifications for Lunora — ctx.notify / ctx.push over @visulima/notification: edge-safe Web Push + FCM, plus chat, in-app inbox and webhook channels, with subscription storage and queue-backed fan-out",
+    "keywords": [
+        "cloudflare",
+        "fcm",
+        "lunora",
+        "notifications",
+        "push",
+        "vapid",
+        "web-push",
+        "workers"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/notify"
+    },
+    "files": [
+        "./dist",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./web": {
+            "types": "./dist/web.d.ts",
+            "import": "./dist/web.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@lunora/errors": "1.0.0-alpha.6",
+        "@visulima/notification": "catalog:notify"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}
