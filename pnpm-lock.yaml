@@ -106,6 +106,16 @@ catalogs:
     playwright:
       specifier: ^1.61.1
       version: 1.61.1
+  email:
+    '@visulima/disposable-email-domains':
+      specifier: 1.0.1
+      version: 1.0.1
+    '@visulima/email-verifier':
+      specifier: 1.0.1
+      version: 1.0.1
+    '@visulima/free-email-domains':
+      specifier: 1.0.0
+      version: 1.0.0
   flags:
     '@cloudflare/flagship':
       specifier: ^0.4.2
@@ -1859,6 +1869,18 @@ importers:
       '@lunora/values':
         specifier: workspace:*
         version: link:../values
+      '@visulima/disposable-email-domains':
+        specifier: catalog:email
+        version: 1.0.1
+      '@visulima/email-verifier':
+        specifier: catalog:email
+        version: 1.0.1
+      '@visulima/free-email-domains':
+        specifier: catalog:email
+        version: 1.0.0
+      '@visulima/redact':
+        specifier: catalog:redact
+        version: 3.0.0
       better-auth:
         specifier: catalog:auth
         version: 1.6.23(cc563d2b2e753fed45a5b59bfab9f362)
@@ -11898,6 +11920,18 @@ packages:
     resolution: {integrity: sha512-5N/GyXctpHOyJZEbkQA46fWRulYSy6wby3LSmqkd4YZNbexi5RhD7rtdA196XCBjagKTxXX4MH87bfuG6r7t/g==}
     engines: {node: ^22.14.0 || >= 24.10.0}
 
+  '@visulima/disposable-email-domains@1.0.1':
+    resolution: {integrity: sha512-G5YIQOqr6np1aOpIJiI0Tk63i4cRcXMY3HtEapguu32eyUizUyg/ICjMvn15mP7sWjm7a2xWEvtYlVJAIH7guQ==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+
+  '@visulima/email-provider-mx@1.0.0':
+    resolution: {integrity: sha512-ado7nF5ow9tozAgYioHCeFs56T0yGP3QT/4Ta6928/GAyJJqKakWCAguIqzQvDUW+W7aYLC9sSIWTTa0FxSWvw==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+
+  '@visulima/email-verifier@1.0.1':
+    resolution: {integrity: sha512-GqIELl0Cud0vpcUPlH0Lcoy/FYp8cpggkJwn4sivH9Ar69p5SK9VrPWy4sRPptiaAO5CL1unfRDn1hmSlh0YdQ==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+
   '@visulima/email@2.1.1':
     resolution: {integrity: sha512-HMvn+WJb+gH0nDfbsBi5bSbsBlfwApCiJLtXbdrOW1ug5kn1+OHgdHEjLxbJjccDmR+Cmmo4p7W/+XT6iReb0A==}
     engines: {node: ^22.14.0 || >=24.10.0}
@@ -11960,6 +11994,10 @@ packages:
 
   '@visulima/find-cache-dir@3.0.0':
     resolution: {integrity: sha512-tGyvK/xP1COXXyi73kdetUuPPHefQcwQ5bNgVT6+rxv4lGMmaBI59rd7g5mKE0H5c3rQNQcXuGMF2G80Kenn7Q==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+
+  '@visulima/free-email-domains@1.0.0':
+    resolution: {integrity: sha512-PZ8dXsi5brBcY0SUwjeUVvRf3+6hH4jQGAWtKGYrwS07m2r9JJUWKmfQzljxptDt5ex/6kE3oImQ6UyY0ed2rw==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
   '@visulima/fs@4.1.0':
@@ -30914,6 +30952,17 @@ snapshots:
 
   '@visulima/css-style-inject@1.0.0-alpha.19': {}
 
+  '@visulima/disposable-email-domains@1.0.1': {}
+
+  '@visulima/email-provider-mx@1.0.0': {}
+
+  '@visulima/email-verifier@1.0.1':
+    dependencies:
+      '@visulima/disposable-email-domains': 1.0.1
+      '@visulima/email-provider-mx': 1.0.0
+      '@visulima/free-email-domains': 1.0.0
+      lru-cache: 11.5.1
+
   '@visulima/email@2.1.1(@opentelemetry/api@1.9.1)(@react-email/render@2.1.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/node@26.1.1)(asn1js@3.0.10)(dayjs@1.11.21)(handlebars@4.7.9)(luxon@3.7.2)(moment@2.30.1)(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(db0@0.3.4(@electric-sql/pglite@0.5.4)(better-sqlite3@12.11.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260719.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.0(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.23.0(@types/node@26.1.1)))(ioredis@5.11.1(supports-color@10.2.2)))':
     dependencies:
       html-to-text: 10.0.0
@@ -30944,6 +30993,8 @@ snapshots:
   '@visulima/find-ai-runner@1.0.0': {}
 
   '@visulima/find-cache-dir@3.0.0': {}
+
+  '@visulima/free-email-domains@1.0.0': {}
 
   '@visulima/fs@4.1.0(yaml@2.9.0)':
     dependencies:

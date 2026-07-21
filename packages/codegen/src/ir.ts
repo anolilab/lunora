@@ -959,6 +959,8 @@ export interface ProcedureMiddlewareIR {
     unboundedAiGeneration: boolean;
     /** `true` when the chain carries `.use(verifyTurnstile(...))` or a `protectPublic({ captcha })` bundle. */
     usesCaptcha: boolean;
+    /** `true` when the chain carries `.use(emailGateMiddleware(...))` (`@lunora/auth`). Feeds the `signup_mutation_without_disposable_gating` lint. */
+    usesEmailGate: boolean;
     /** `true` when the handler calls `ctx.db.insertManyUnsafe(...)`, bypassing validators and triggers. Feeds the `insert_many_unsafe_user_data` lint. */
     usesInsertManyUnsafe: boolean;
     /** `true` when the chain carries `.use(mask(...))`. */
