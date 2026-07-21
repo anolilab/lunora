@@ -46,5 +46,9 @@ Design constraint: everything must route **through procedures** so RLS/auth
 
 ## Non-goals
 
+The RPC-first boundary is documented on the
+[Design boundaries](../apps/docs/src/content/docs/non-goals.mdx) page
+(`/docs/non-goals`, "RPC-first, not REST-first") — state it there, not inline.
+
 - REST/GraphQL becoming the primary contract — typed RPC stays primary.
 - Auto-CRUD directly on tables (would bypass RLS) — always via procedures.

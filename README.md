@@ -263,6 +263,7 @@ Full documentation lives at **[lunora.sh/docs](https://lunora.sh/docs)** — gui
 - [Queries, mutations & actions](https://lunora.sh/docs/concepts/queries-mutations) — the core authoring model
 - [Real-time](https://lunora.sh/docs/concepts/realtime) · [Sharding](https://lunora.sh/docs/concepts/sharding) · [RLS](https://lunora.sh/docs/concepts/rls) — the concepts that make it scale
 - [Architecture](https://lunora.sh/docs/architecture) — how the Worker, Durable Objects, and storage fit together
+- [Design boundaries](https://lunora.sh/docs/non-goals) — what Lunora deliberately does not do, and the escape hatch for each
 - [Deployment](https://lunora.sh/docs/deployment) — ship to your own Cloudflare account
 - [Packages](https://lunora.sh/packages) — every `@lunora/*` adapter and add-on
 
