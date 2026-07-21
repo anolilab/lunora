@@ -49,12 +49,14 @@ export const ADMIN_FUNCTIONS = {
     listTableIndexes: "__lunora_admin__:listTableIndexes",
     listWorkflows: "__lunora_admin__:listWorkflows",
     getLogs: "__lunora_admin__:getLogs",
+    getMetricSeries: "__lunora_admin__:getMetricSeries",
     getMetrics: "__lunora_admin__:getMetrics",
     getPitrBookmark: "__lunora_admin__:getPitrBookmark",
     getQueueMessages: "__lunora_admin__:getQueueMessages",
     getRequestLog: "__lunora_admin__:getRequestLog",
     getSecurityAudit: "__lunora_admin__:getSecurityAudit",
     getSettings: "__lunora_admin__:getSettings",
+    getTraces: "__lunora_admin__:getTraces",
     // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
     getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus",
     importShard: "__lunora_admin__:importShard",
@@ -670,8 +672,12 @@ export interface WorkflowInstanceStatusResult {
 }
 /* eslint-enable no-secrets/no-secrets */
 
-/** Severity of a buffered log entry, mirroring `@lunora/do`'s `LogLevel`. */
-export type LogLevel = "debug" | "error" | "info" | "warn";
+/**
+ * Severity of a buffered log entry, mirroring `@lunora/do`'s `LogLevel` — the
+ * full seven-tier `ctx.log` ramp (`trace`→`fatal`). A worker predating the
+ * un-folded buffer only ever sends the four console tiers, which are a subset.
+ */
+export type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
 
 /**
  * One buffered log line returned by `__lunora_admin__:getLogs`. `functionPath`
@@ -902,6 +908,132 @@ export interface IssuesQuery {
     limit?: number;
     shardKey?: string;
     userId?: string;
+}
+
+/**
+ * One span of a folded trace returned by `__lunora_admin__:getTraces`, mirroring
+ * `@lunora/do`'s `TraceSpan` (produced by its pure `foldTraces`). Already
+ * flattened for rendering: `depth` is the span's nesting level under the trace
+ * root and `offsetMs` its start relative to the trace start, so a waterfall row
+ * is a pure function of the record — indent by `depth`, draw the bar from
+ * `offsetMs` to `offsetMs + durationMs` — with no client-side tree math.
+ */
+export interface TraceSpan {
+    /** Structured attributes the `ctx.trace(name, fn, attributes)` caller attached; absent when none. */
+    attributes?: Record<string, unknown>;
+    /** Nesting level under the trace root; the root span is 0. */
+    depth: number;
+    /** Wall-clock duration of the span body, in milliseconds. */
+    durationMs: number;
+    /** Populated when the span body threw: `type` is the error's constructor name (or `LunoraError` code). */
+    error?: {
+        message: string;
+        type: string;
+    };
+    /** Caller-supplied span name, e.g. `"stripe.charge"`. */
+    name: string;
+    /** Start of this span relative to the trace's start, in ms. Clamped at 0 server-side. */
+    offsetMs: number;
+    /** `true` when the span body returned without throwing. */
+    ok: boolean;
+    /** Span id of the enclosing span; `""` for the synthetic dispatch root. */
+    parentSpanId: string;
+    /** This span's own id (16-hex). */
+    spanId: string;
+}
+
+/**
+ * One folded `ctx.trace` waterfall returned by `__lunora_admin__:getTraces`,
+ * mirroring `@lunora/do`'s `TraceSummary`. The dispatch's synthetic root span
+ * plus every `ctx.trace` span recorded beneath it, already ordered by
+ * `(offsetMs, depth)` — a valid pre-order traversal of the span tree, so this
+ * panel renders rows in the given order and indents by `depth`.
+ *
+ * Sourced from the shard's bounded, in-memory span ring, so it resets on
+ * hibernation/restart and can be legitimately partial (an evicted parent, or a
+ * trace read mid-dispatch). It is a "recent traces on this instance" readout for
+ * local development, NOT a durable trace store.
+ */
+export interface TraceSummary {
+    /** Wall-clock span of the whole trace (root start → last span end), in ms. May be 0. */
+    durationMs: number;
+    /** The `&lt;file>:&lt;function>` the trace's root span was recorded under. */
+    functionPath: string;
+    /** `false` when the root or any descendant span errored. */
+    ok: boolean;
+    /** Display name of the trace — the root span's name. */
+    rootName: string;
+    /** Shard key for single-shard calls; absent for the unnamed root DO. */
+    shardKey?: string;
+
+    /**
+     * Spans ordered by `(offsetMs, depth)`, ready to render as waterfall rows.
+     * Start time alone cannot order them: spans are recorded on completion, and
+     * at millisecond resolution a parent and its child routinely tie.
+     */
+    spans: TraceSpan[];
+    /** Epoch-ms the trace's anchor span started. */
+    startTs: number;
+    /** Trace id (32-hex) — shared with the dispatch's log lines. */
+    traceId: string;
+}
+
+/** Payload of a `__lunora_admin__:getTraces` call: the folded waterfalls, newest trace first. */
+export interface TracesResult {
+    /**
+     * Distinct traces available in the span ring — the denominator for the
+     * "showing N of M" affordance. Optional: a worker predating the field omits
+     * it, and the panel then shows no truncation notice.
+     */
+    total?: number;
+    traces: TraceSummary[];
+}
+
+/** Instrument kind of a metric series, mirroring `@lunora/do`'s `MetricKind`. */
+export type MetricKind = "counter" | "gauge" | "histogram";
+
+/**
+ * One aggregated `ctx.metrics.*` series returned by
+ * `__lunora_admin__:getMetricSeries`, mirroring `@lunora/do`'s `MetricSeries`.
+ * Every measurement sharing a `(name, kind, attributes)` identity folded into a
+ * running summary — `sum` is a counter's running total and a histogram's sum,
+ * `last` a gauge's current reading, `sum / count` a histogram's mean.
+ *
+ * Sourced from the shard's in-memory metric fold, so it resets on
+ * hibernation/restart. A "recent metrics on this instance" readout for local
+ * development, NOT a durable metric store — production aggregation ships to a
+ * collector via the sink.
+ */
+export interface MetricSeries {
+    /** The series' dimensions, if any — the attributes that made it distinct. */
+    attributes?: Record<string, unknown>;
+    /** Number of measurements folded into this series. */
+    count: number;
+    /** Epoch-ms of the first measurement folded in. */
+    firstTs: number;
+    /** Function path that recorded the series' most recent measurement. */
+    functionPath: string;
+    /** Instrument kind; decides which projection the panel shows. */
+    kind: MetricKind;
+    /** Most recent measured value — the current reading for a `gauge`. */
+    last: number;
+    /** Epoch-ms of the most recent measurement. */
+    lastTs: number;
+    /** Largest measured value seen. */
+    max: number;
+    /** Smallest measured value seen. */
+    min: number;
+    /** Instrument name, e.g. `"orders.placed"`. */
+    name: string;
+    /** Shard key for single-shard calls; absent for the unnamed root DO. */
+    shardKey?: string;
+    /** Sum of measured values — a `counter`'s total, a `histogram`'s sum. */
+    sum: number;
+}
+
+/** Payload of a `__lunora_admin__:getMetricSeries` call: the aggregated series, most-recently-updated first. */
+export interface MetricSeriesResult {
+    series: MetricSeries[];
 }
 
 /**

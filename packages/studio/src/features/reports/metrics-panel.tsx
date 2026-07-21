@@ -15,6 +15,7 @@ import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_DURABLE_OBJECTS_URL } from "../../lib/cf-links";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatBytes } from "../../lib/internal";
 import { loadRecentShards, recordShard } from "../../lib/shard-history";
+import { InstrumentsTable } from "./instruments-table";
 import type { ShardMetricsResult } from "./metrics-aggregate";
 import { aggregateMetrics, computeLatencyPercentiles, enrichQueryStats, shardsToAggregate } from "./metrics-aggregate";
 import { QueryInsights } from "./query-insights";
@@ -402,6 +403,13 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             )}
 
             {effectiveTab === "overview" && metrics === null && null}
+
+            {/*
+             * The third observability signal: aggregated `ctx.metrics.*` series for
+             * this shard. Self-contained (its own live read), renders nothing until a
+             * series exists, and sits below the shard-health cards on the overview.
+             */}
+            {effectiveTab === "overview" && <InstrumentsTable shardKey={debouncedShard} />}
 
             {effectiveTab === "overview" && aggregate !== null && shardResults !== null && (
                 <div className="flex flex-col gap-4" data-testid="mt-aggregate-view">

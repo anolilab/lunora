@@ -1,15 +1,20 @@
 ---
 title: Observability
-description: Ship Lunora's RPC and log telemetry to any OTLP collector — the otlpSink worker option, the zero-config container exporter, and the one wire contract they share.
+description: Ship Lunora's logs, traces, and metrics to any OTLP collector — the otlpSink worker option, ctx.log/ctx.trace/ctx.metrics, the zero-config container exporter, and the one wire contract they share.
 ---
 
-Every Lunora function call produces two kinds of telemetry: an **RPC event** (one
-per query/mutation/action — path, duration, ok/error, shard, fan-out) and **log
-events** (the lines your handlers emit). A _sink_ receives them. Locally, the
-Studio groups error events into an **Issues** view with no setup. To watch a
-deployed app you point a sink at an [OpenTelemetry](https://opentelemetry.io/)
-collector — your own, a vendor's, or the Lunora cloud — and the worker **and** any
-container ship the same telemetry over one protocol.
+Every Lunora function call produces telemetry across all three OpenTelemetry
+signals: an **RPC event** (one per query/mutation/action — path, duration,
+ok/error, shard, fan-out), **log events** ([`ctx.log`](#structured-logging-with-ctxlog)),
+**spans** ([`ctx.trace`](#tracing-sub-operations-with-ctxtrace)), and **metrics**
+([`ctx.metrics`](#application-metrics-with-ctxmetrics)). A _sink_ receives them.
+
+Locally, none of it needs setup: the Studio groups error events into an
+**Issues** view, streams log lines in **Logs**, and renders `ctx.trace`
+waterfalls in **Traces**. To watch a deployed app you point a sink at an
+[OpenTelemetry](https://opentelemetry.io/) collector — your own, a vendor's, or
+the Lunora cloud — and the worker **and** any container ship the same telemetry
+over one protocol.
 
 ## Sinks
 
@@ -128,6 +133,118 @@ args of a console-style call reach only the in-process `onLog` sink you control.
 A two-argument call whose second argument is a plain object — `ctx.log.info("saved", user)` — is now the **structured** form: the message is `"saved"` and `user` becomes `fields`, instead of being rendered into the message as `saved {…}`. Calls with a non-object second argument, or three or more arguments, are unchanged. If you relied on the object being folded into the message text, pass it as a third argument (`ctx.log.info("saved", "-", user)`) or pre-render it.
 :::
 
+## Tracing sub-operations with `ctx.trace`
+
+Every dispatch is already one **span**, named after the function path. That tells
+you a request took 900ms; it doesn't tell you _which part_ took 900ms. `ctx.trace`
+wraps a sub-operation so it becomes its own span nested under the request:
+
+```ts
+export const checkout = action({
+    handler: async (ctx, args) => {
+        const cart = await ctx.trace("cart.load", () => loadCart(args.cartId));
+
+        // Attributes are structured like log fields, and become span attributes.
+        const charge = await ctx.trace("stripe.charge", () => stripe.charges.create({ amount: cart.total }), { cartId: cart._id });
+
+        // Nesting is explicit: the body receives a tracer bound to its own span,
+        // and calling that is what makes a child.
+        await ctx.trace("fulfil", async (trace) => {
+            await Promise.all([trace("reserve.stock", () => reserve(cart)), trace("email.receipt", () => sendReceipt(charge))]);
+        });
+    },
+});
+```
+
+The body's value is returned unchanged, and a throw is recorded as an error span
+and then **re-thrown** — this is instrumentation, never flow control. Recording is
+best-effort: a failing sink can't turn a working handler into a broken one.
+
+:::note[Why the tracer is passed in, rather than nesting being implicit]
+It would read nicer if a bare `ctx.trace` inside another span's body were
+automatically its child. That can't be done correctly here: with
+`Promise.all([trace("a", …), trace("b", …)])`, `b` starts while `a` is still
+open, so an "innermost currently-open span" rule records `b` as a **child** of
+`a` rather than its sibling — and parallel fan-out is one of the main things a
+tracer is for. Telling "called inside `a`" apart from "called concurrently with
+`a`" needs `AsyncLocalStorage`, which Lunora's Durable Objects deliberately
+don't require. Passing the parent is correct in every case, and visible where it
+happens.
+
+Calling `ctx.trace` inside a body instead of the passed tracer isn't an error —
+that span is just parented to the request rather than the enclosing span.
+:::
+
+A span created inside a function invoked via `ctx.runQuery` / `runMutation` /
+`runAction` is attributed to the **outer** entrypoint's function path, since the
+composed call reuses its context — the same rule `ctx.log` follows.
+
+Spans share the dispatch's trace id with its `ctx.log` lines and with any
+container the handler calls (the same `traceparent` is propagated), so one trace
+stitches together worker, shard, and container.
+
+:::tip[Keep span names low-cardinality]
+Put the varying part in the attributes, not the name — `ctx.trace("stripe.charge", …, { orderId })`, never a name interpolated from the order id. A name
+built from an id makes every span its own group in a collector, which is exactly
+what attributes exist to avoid.
+:::
+
+Locally, the **Traces** panel in the Studio renders recent waterfalls from an
+in-memory ring on the shard — recent activity on this instance, reset on
+hibernation. It is a development readout, not a trace store: for retention and
+cross-instance search, point [`otlpSink`](#otlpsink) at a real collector, where
+each span is exported as an OTLP `INTERNAL` span carrying its `parentSpanId`.
+
+## Application metrics with `ctx.metrics`
+
+The third signal, alongside logs and traces. A trace tells you what one request
+did; a metric tells you what a _million_ requests did.
+
+```ts
+export const checkout = action({
+    handler: async (ctx, args) => {
+        const started = Date.now();
+
+        // "How many" — summed over time.
+        ctx.metrics.count("orders.placed", 1, { plan: user.plan });
+
+        // "How many right now" — replaces the previous reading.
+        ctx.metrics.gauge("cart.items", cart.items.length);
+
+        // "What's the distribution" — percentiles, not just a mean.
+        ctx.metrics.record("checkout.latency_ms", Date.now() - started);
+    },
+});
+```
+
+| Method   | Instrument | Use for                                    |
+| -------- | ---------- | ------------------------------------------ |
+| `count`  | counter    | requests, retries, bytes — things you add  |
+| `gauge`  | gauge      | queue depth, cache size — current readings |
+| `record` | histogram  | latency, payload size — distributions      |
+
+Each becomes an OTLP metric at `POST {endpoint}/v1/metrics`: a monotonic `Sum`, a
+`Gauge`, or a `Histogram`.
+
+:::caution[Keep attributes low-cardinality]
+Attributes are the metric's **dimensions**, and every distinct combination is a
+separate time series. `{ plan: user.plan }` is a handful of series; `{ userId }`
+is one per user, which is how a metrics bill gets out of hand. Identifiers belong
+on a log line or a span — that's what they're for.
+:::
+
+Nothing is pre-aggregated: one call is one exported measurement, with counter and
+histogram values carrying **delta** temporality for the collector to aggregate.
+That keeps the sink model identical to logs and spans, at the cost of one export
+per call — so in a hot loop, sum locally and record once at the end rather than
+calling per iteration.
+
+Metrics have no local buffer and no Studio panel: their value is in the aggregate
+over time, which an in-memory ring on a hibernating instance can't represent.
+`consoleSink` prints them in dev; for anything real, point `otlpSink` at a
+collector. (The Studio's **Metrics** page shows framework-level per-function
+metrics, which are collected separately and always on.)
+
 ## Container telemetry
 
 Code running **inside** a [container](/docs/packages/container) can't use a worker
@@ -182,10 +299,11 @@ without special-casing.
 with **JSON** encoding (not protobuf). Two endpoints, derived from the configured
 base `endpoint` (trailing slashes are tolerated):
 
-| Signal | Request                     |
-| ------ | --------------------------- |
-| Spans  | `POST {endpoint}/v1/traces` |
-| Logs   | `POST {endpoint}/v1/logs`   |
+| Signal  | Request                      | Emitted by                                                     |
+| ------- | ---------------------------- | -------------------------------------------------------------- |
+| Spans   | `POST {endpoint}/v1/traces`  | each RPC dispatch (`SERVER`) and each `ctx.trace` (`INTERNAL`) |
+| Logs    | `POST {endpoint}/v1/logs`    | each `ctx.log.*` call                                          |
+| Metrics | `POST {endpoint}/v1/metrics` | each `ctx.metrics.*` call                                      |
 
 **Headers.**
 
