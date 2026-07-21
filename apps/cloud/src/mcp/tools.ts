@@ -36,64 +36,21 @@ export interface McpTool {
 
 const toolName = (path: string): string => path.replace(/^\/v1\//, "").replaceAll("/", ".");
 
+/** A tool paired with the route it dispatches to — the MCP handler's dispatch table. */
+export interface McpToolRoute<Handler> {
+    route: RegisteredRoute<Handler>;
+    tool: McpTool;
+}
+
 /**
- * The tools an agent may call: routes that opt in via `spec.mcp`, are
- * bearer-callable, and are not hard-denied. Deny + auth checks win over the
- * opt-in, so a mistaken `mcp` block on a sensitive route is inert.
+ * The tools an agent may call, paired with their routes: routes that opt in via
+ * `spec.mcp`, are bearer-callable, and are not hard-denied. Deny + auth checks
+ * win over the opt-in, so a mistaken `mcp` block on a sensitive route is inert.
  */
-export const buildMcpTools = <Handler>(routes: readonly RegisteredRoute<Handler>[]): McpTool[] =>
+export const mcpToolRoutes = <Handler>(routes: readonly RegisteredRoute<Handler>[]): McpToolRoute<Handler>[] =>
     routes
         .filter((route) => route.spec.mcp !== undefined && TOOLABLE_AUTH.has(route.spec.auth) && !MCP_DENY_PATHS.has(route.path))
-        .map((route) => ({ description: route.spec.mcp?.description ?? "", method: route.method, name: toolName(route.path), path: route.path }));
+        .map((route) => ({ route, tool: { description: route.spec.mcp?.description ?? "", method: route.method, name: toolName(route.path), path: route.path } }));
 
-/** Minimal router surface the dispatcher drives — the control-plane `fetch`. */
-export interface McpRouterLike {
-    fetch: (request: Request, environment?: unknown) => Promise<Response>;
-}
-
-export interface McpToolCall {
-    /** JSON arguments forwarded as the route's request body (POST) or ignored (GET). */
-    arguments?: Record<string, unknown>;
-    /** The caller's bearer credential (deploy key / admin token) — reused for the inner route call. */
-    credential: string;
-    /** Tool id from {@link buildMcpTools}. */
-    name: string;
-}
-
-export interface McpToolResult {
-    body: unknown;
-    /** True when the underlying route returned < 400. */
-    ok: boolean;
-    status: number;
-}
-
-/**
- * Invoke a tool by dispatching through the real router with the caller's own
- * credential, so authorization is exactly what an HTTP caller would get — the
- * MCP layer adds no privilege. Returns a structural result; an unknown tool name
- * is a 404 (never a silent pass to an un-tooled route).
- */
-export const dispatchMcpTool = async (
-    router: McpRouterLike,
-    tools: readonly McpTool[],
-    call: McpToolCall,
-    options: { environment?: unknown; origin?: string } = {},
-): Promise<McpToolResult> => {
-    const tool = tools.find((candidate) => candidate.name === call.name);
-
-    if (!tool) {
-        return { body: { error: `unknown tool: ${call.name}` }, ok: false, status: 404 };
-    }
-
-    const origin = options.origin ?? "https://cloud";
-    const request = new Request(`${origin}${tool.path}`, {
-        ...(tool.method === "POST" ? { body: JSON.stringify(call.arguments ?? {}) } : {}),
-        headers: { authorization: `Bearer ${call.credential}`, "content-type": "application/json" },
-        method: tool.method,
-    });
-
-    const response = await router.fetch(request, options.environment);
-    const body: unknown = await response.json().catch(() => null);
-
-    return { body, ok: response.status < 400, status: response.status };
-};
+/** The opted-in tool descriptors (without their routes) — for `tools/list`. */
+export const buildMcpTools = <Handler>(routes: readonly RegisteredRoute<Handler>[]): McpTool[] => mcpToolRoutes(routes).map((entry) => entry.tool);

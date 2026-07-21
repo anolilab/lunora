@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createDeployRouter } from "../src/deploy/router";
 import type { RegisteredRoute } from "../src/deploy/route-registry";
-import type { McpRouterLike, McpTool } from "../src/mcp/tools";
-import { buildMcpTools, dispatchMcpTool } from "../src/mcp/tools";
+import { createMcpRouteHandler } from "../src/mcp/handler";
+import { buildMcpTools } from "../src/mcp/tools";
 
 const noop = (): Promise<Response> => Promise.resolve(new Response());
 
@@ -49,112 +49,88 @@ describe(buildMcpTools, () => {
     });
 });
 
-describe(dispatchMcpTool, () => {
-    const tools: McpTool[] = [{ description: "rollback", method: "POST", name: "deployments.rollback", path: "/v1/deployments/rollback" }];
+const jsonError = (status: number, message: string): Response => Response.json({ error: message }, { status });
 
-    it("dispatches through the router with the caller's credential and forwards arguments", async () => {
-        let seen: { authorization: string | null; body: unknown; path: string } | undefined;
-        const router: McpRouterLike = {
-            fetch: async (request) => {
-                seen = { authorization: request.headers.get("authorization"), body: await request.json(), path: new URL(request.url).pathname };
+describe(createMcpRouteHandler, () => {
+    const rollbackRoute = route("/v1/deployments/rollback", { auth: "deployKey", mcp: { description: "rollback" } });
 
-                return Response.json({ ok: true }, { status: 200 });
-            },
-        };
-
-        const result = await dispatchMcpTool(router, tools, {
-            arguments: { deploymentId: "dep_1", organizationId: "org_1" },
-            credential: "dk_secret",
-            name: "deployments.rollback",
+    const rpc = (method: string, params?: unknown): Request =>
+        new Request("https://cloud/v1/mcp", {
+            body: JSON.stringify({ id: 1, jsonrpc: "2.0", method, params }),
+            headers: { authorization: "Bearer dk_agent", "cf-connecting-ip": "203.0.113.7", "content-type": "application/json" },
+            method: "POST",
         });
-
-        expect(seen).toStrictEqual({
-            authorization: "Bearer dk_secret",
-            body: { deploymentId: "dep_1", organizationId: "org_1" },
-            path: "/v1/deployments/rollback",
-        });
-        expect(result).toStrictEqual({ body: { ok: true }, ok: true, status: 200 });
-    });
-
-    it("returns 404 for an unknown tool (never falls through to an un-tooled route)", async () => {
-        let called = false;
-        const router: McpRouterLike = {
-            fetch: () => {
-                called = true;
-
-                return Promise.resolve(new Response());
-            },
-        };
-
-        const result = await dispatchMcpTool(router, tools, { credential: "dk", name: "nope" });
-
-        expect(called).toBe(false);
-        expect(result).toMatchObject({ ok: false, status: 404 });
-    });
-
-    it("reports the underlying route's failure as not-ok", async () => {
-        const router: McpRouterLike = { fetch: () => Promise.resolve(Response.json({ error: "denied" }, { status: 403 })) };
-
-        const result = await dispatchMcpTool(router, tools, { credential: "dk", name: "deployments.rollback" });
-
-        expect(result).toMatchObject({ ok: false, status: 403 });
-    });
-});
-
-describe("/v1/mcp endpoint", () => {
-    it("tools/list returns the opted-in rollback tool", async () => {
-        const router = createDeployRouter();
-        const response = await router.fetch(
-            new Request("https://cloud/v1/mcp", {
-                body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "tools/list" }),
-                headers: { authorization: "Bearer dk_agent", "content-type": "application/json" },
-                method: "POST",
-            }),
-        );
-
-        expect(response.status).toBe(200);
-        const payload = (await response.json()) as { result: { tools: { name: string }[] } };
-
-        expect(payload.result.tools.map((tool) => tool.name)).toContain("deployments.rollback");
-        // The surface never lists itself or any sensitive route.
-        expect(payload.result.tools.map((tool) => tool.name)).not.toContain("mcp");
-        expect(payload.result.tools.map((tool) => tool.name)).not.toContain("secrets");
-    });
 
     it("401s without a bearer credential", async () => {
-        const router = createDeployRouter();
-        const response = await router.fetch(
-            new Request("https://cloud/v1/mcp", {
-                body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "tools/list" }),
-                headers: { "content-type": "application/json" },
-                method: "POST",
-            }),
-        );
+        const handler = createMcpRouteHandler({ jsonError, routes: [rollbackRoute], verifyKey: () => Promise.resolve(true) });
+        const response = await handler(new Request("https://cloud/v1/mcp", { body: "{}", method: "POST" }), {});
 
         expect(response.status).toBe(401);
     });
 
-    it("tools/call dispatches to the tool's route (reaches the handler)", async () => {
+    it("403s when the deploy key is invalid — before exposing tools/list", async () => {
+        const verifyKey = vi.fn(() => Promise.resolve(false));
+        const handler = createMcpRouteHandler({ jsonError, routes: [rollbackRoute], verifyKey });
+        const response = await handler(rpc("tools/list"), {});
+
+        expect(response.status).toBe(403);
+        expect(verifyKey).toHaveBeenCalledWith("dk_agent", {});
+    });
+
+    it("lists only opted-in tools once the key is valid", async () => {
+        const handler = createMcpRouteHandler({ jsonError, routes: [rollbackRoute, route("/v1/secrets", { auth: "session" })], verifyKey: () => Promise.resolve(true) });
+        const payload = (await (await handler(rpc("tools/list"), {})).json()) as { result: { tools: { name: string }[] } };
+
+        expect(payload.result.tools.map((tool) => tool.name)).toStrictEqual(["deployments.rollback"]);
+    });
+
+    it("tools/call dispatches to the tool route with the credential + forwarded client IP", async () => {
+        let seen: { authorization: string | null; body: unknown; ip: string | null; path: string } | undefined;
+        const capturing: RegisteredRoute<(request: Request) => Promise<Response>> = {
+            handler: async (request) => {
+                seen = {
+                    authorization: request.headers.get("authorization"),
+                    body: await request.json(),
+                    ip: request.headers.get("cf-connecting-ip"),
+                    path: new URL(request.url).pathname,
+                };
+
+                return Response.json({ ok: true }, { status: 200 });
+            },
+            method: "POST",
+            path: "/v1/deployments/rollback",
+            spec: { auth: "deployKey", mcp: { description: "rollback" } },
+        };
+
+        const handler = createMcpRouteHandler({ jsonError, routes: [capturing], verifyKey: () => Promise.resolve(true) });
+        const payload = (await (await handler(rpc("tools/call", { arguments: { deploymentId: "dep_1", organizationId: "org_1" }, name: "deployments.rollback" }), {})).json()) as {
+            result: { isError: boolean };
+        };
+
+        expect(seen).toStrictEqual({
+            authorization: "Bearer dk_agent",
+            body: { deploymentId: "dep_1", organizationId: "org_1" },
+            ip: "203.0.113.7",
+            path: "/v1/deployments/rollback",
+        });
+        expect(payload.result.isError).toBe(false);
+    });
+
+    it("reports isError for an unknown tool without dispatching anywhere", async () => {
+        const handler = createMcpRouteHandler({ jsonError, routes: [rollbackRoute], verifyKey: () => Promise.resolve(true) });
+        const payload = (await (await handler(rpc("tools/call", { name: "nope" }), {})).json()) as { result: { isError: boolean } };
+
+        expect(payload.result.isError).toBe(true);
+    });
+});
+
+describe("/v1/mcp endpoint (wired in the real router)", () => {
+    it("constructs and 401s a tools/list with no bearer (deploy-key gated)", async () => {
         const router = createDeployRouter();
         const response = await router.fetch(
-            new Request("https://cloud/v1/mcp", {
-                body: JSON.stringify({
-                    id: 2,
-                    jsonrpc: "2.0",
-                    method: "tools/call",
-                    params: { arguments: { deploymentId: "dep_1", organizationId: "org_1" }, name: "deployments.rollback" },
-                }),
-                headers: { authorization: "Bearer dk_agent", "content-type": "application/json" },
-                method: "POST",
-            }),
+            new Request("https://cloud/v1/mcp", { body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "tools/list" }), headers: { "content-type": "application/json" }, method: "POST" }),
         );
 
-        // No lunora action context is injected in this unit test, so the rollback
-        // handler returns its 500 — but reaching it proves the tool dispatched
-        // through the real router (same path an HTTP caller takes).
-        const payload = (await response.json()) as { result: { isError: boolean } };
-
-        expect(response.status).toBe(200);
-        expect(payload.result.isError).toBe(true);
+        expect(response.status).toBe(401);
     });
 });

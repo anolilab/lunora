@@ -21,8 +21,7 @@ import type { DeployBackend, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
-import type { McpTool } from "../mcp/tools";
-import { buildMcpTools, dispatchMcpTool } from "../mcp/tools";
+import { createMcpRouteHandler } from "../mcp/handler";
 import { CellScheduler } from "./scheduler";
 import { cloudflareAccountBudget } from "./token-bucket";
 
@@ -856,66 +855,14 @@ export const createDeployRouter = (): HttpRouterLike => {
         }
     };
 
-    // MCP surface (GAPS.md Ring-3 #8): agents reach opted-in routes as tools,
-    // dispatched back through this same router so every tool call runs the
-    // identical auth + rate-limit + function-authz path. `routerHolder` lets the
-    // tool dispatcher re-enter the router that is only assembled at the end of
-    // construction; `mcpTools` is filled once the classified route list exists.
-    let mcpTools: McpTool[] = [];
-    const routerHolder: HttpRouterLike = { fetch: () => Promise.resolve(jsonError(500, "router not initialized")) };
-
-    const handleMcpRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-        const authorization = request.headers.get("authorization") ?? "";
-        const credential = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
-
-        if (!credential) {
-            return jsonError(401, "missing bearer credential");
-        }
-
-        let rpc: { id?: number | string | null; method?: string; params?: { arguments?: Record<string, unknown>; name?: string } };
-
-        try {
-            rpc = await request.json();
-        } catch {
-            return jsonError(400, "invalid JSON body");
-        }
-
-        const id = rpc.id ?? null;
-
-        if (rpc.method === "tools/list") {
-            return Response.json({
-                id,
-                jsonrpc: "2.0",
-                result: { tools: mcpTools.map((tool) => ({ description: tool.description, inputSchema: { type: "object" }, name: tool.name })) },
-            });
-        }
-
-        if (rpc.method === "tools/call") {
-            const name = rpc.params?.name;
-
-            if (!name) {
-                return Response.json({ error: { code: -32602, message: "params.name is required" }, id, jsonrpc: "2.0" });
-            }
-
-            // The agent's own bearer credential drives the inner call — the MCP
-            // layer adds no privilege; authorization is exactly the route's.
-            const result = await dispatchMcpTool(routerHolder, mcpTools, { arguments: rpc.params?.arguments, credential, name }, { environment });
-
-            return Response.json({
-                id,
-                jsonrpc: "2.0",
-                result: { content: [{ text: JSON.stringify(result.body), type: "text" }], isError: !result.ok },
-            });
-        }
-
-        return Response.json({ error: { code: -32601, message: `unknown method: ${String(rpc.method)}` }, id, jsonrpc: "2.0" });
-    };
-
     // Every route carries an explicit auth classification; `assertRoutesClassified`
     // (below) fails construction if any is missing — an unclassified route can
     // never ship. The dispatch tables are derived from this one checked list.
     type RouteHandler = (request: Request, environment: RouterEnv) => Promise<Response>;
-    const routes: RegisteredRoute<RouteHandler>[] = [
+
+    // The tool-eligible routes — everything except the `/v1/mcp` surface itself,
+    // so the MCP handler (which dispatches into these) is never in its own table.
+    const toolRoutes: RegisteredRoute<RouteHandler>[] = [
         // deployKey — CI/deploy callers (no session); the delegated mutation `authorizeDeployKey`s.
         { handler: handleDeployRoute, method: "POST", path: "/v1/deploy", spec: { auth: "deployKey" } },
         {
@@ -927,8 +874,6 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleLogsIngestRoute, method: "POST", path: "/v1/logs/ingest", spec: { auth: "deployKey" } },
         { handler: handleTelemetryRoute, method: "POST", path: "/v1/telemetry", spec: { auth: "deployKey" } },
         { handler: handleUsageRoute, method: "POST", path: "/v1/usage", spec: { auth: "deployKey" } },
-        // The MCP surface itself — deploy-key gated, never a tool (deny-listed).
-        { handler: handleMcpRoute, method: "POST", path: "/v1/mcp", spec: { auth: "deployKey" } },
         // session — dashboard callers; the delegated mutation `assertMember`s.
         { handler: handleAdminRoute, method: "POST", path: "/v1/admin", spec: { auth: "session" } },
         { handler: handleDomainAddRoute, method: "POST", path: "/v1/domains", spec: { auth: "session" } },
@@ -946,11 +891,24 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
     ];
 
+    // The MCP surface (GAPS.md Ring-3 #8): opted-in tool routes are exposed to
+    // agents and dispatched directly to their handlers (no router re-entry). It
+    // validates the deploy key before anything (tools/list included) and is
+    // itself deploy-key gated + deny-listed (never a tool).
+    const handleMcpRoute = createMcpRouteHandler<RouterEnv>({
+        jsonError,
+        routes: toolRoutes,
+        verifyKey: async (key, environment) => {
+            const context = environment.__lunoraCtx;
+
+            return context ? (await context.runMutation<DeployTarget | null>(api.deploy_keys.verify, { key })) !== null : false;
+        },
+    });
+
+    const routes: RegisteredRoute<RouteHandler>[] = [...toolRoutes, { handler: handleMcpRoute, method: "POST", path: "/v1/mcp", spec: { auth: "deployKey" } }];
+
     // Boot scanner: throws here (at construction) if a route is unclassified.
     assertRoutesClassified(routes);
-
-    // Derive the MCP tool list from the checked routes (opt-in + deny-list applied).
-    mcpTools = buildMcpTools(routes);
 
     const postRoutes = new Map(routes.filter((route) => route.method === "POST").map((route) => [route.path, route.handler]));
     const getRoutes = new Map(routes.filter((route) => route.method === "GET").map((route) => [route.path, route.handler]));
@@ -970,25 +928,27 @@ export const createDeployRouter = (): HttpRouterLike => {
         );
     };
 
-    routerHolder.fetch = async (request, environment) => {
-        const url = new URL(request.url);
+    const router: HttpRouterLike = {
+        async fetch(request, environment) {
+            const url = new URL(request.url);
 
-        if (!url.pathname.startsWith("/v1/")) {
-            return jsonError(404, "not found");
-        }
+            if (!url.pathname.startsWith("/v1/")) {
+                return jsonError(404, "not found");
+            }
 
-        const throttled = await rateLimited(request);
+            const throttled = await rateLimited(request);
 
-        if (throttled) {
-            return throttled;
-        }
+            if (throttled) {
+                return throttled;
+            }
 
-        const routerEnv = (environment as RouterEnv | undefined) ?? {};
-        const table = request.method === "GET" ? getRoutes : request.method === "POST" ? postRoutes : undefined;
-        const handler = table?.get(url.pathname);
+            const routerEnv = (environment as RouterEnv | undefined) ?? {};
+            const table = request.method === "GET" ? getRoutes : request.method === "POST" ? postRoutes : undefined;
+            const handler = table?.get(url.pathname);
 
-        return handler ? handler(request, routerEnv) : jsonError(404, "not found");
+            return handler ? handler(request, routerEnv) : jsonError(404, "not found");
+        },
     };
 
-    return routerHolder;
+    return router;
 };
