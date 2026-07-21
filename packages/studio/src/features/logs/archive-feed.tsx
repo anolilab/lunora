@@ -65,7 +65,11 @@ const archiveReducer = (state: ArchiveState, action: ArchiveAction): ArchiveStat
             return { cursor: action.cursor, error: null, loading: false, notConfigured: false, rows: action.rows };
         }
         case "loading": {
-            return { ...state, loading: true };
+            // Clear a prior error/not-configured on a fresh fetch (matches the kv
+            // reducers' `submitStart`), so a retry shows the loading placeholder
+            // instead of the stale error line. `rows` is kept — paging and
+            // filter-change refetches shouldn't blank the table mid-load.
+            return { ...state, error: null, loading: true, notConfigured: false };
         }
         case "notConfigured": {
             return { cursor: undefined, error: null, loading: false, notConfigured: true, rows: null };
