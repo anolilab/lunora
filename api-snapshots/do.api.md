@@ -31,6 +31,7 @@ const ADMIN_FUNCTIONS: {
     readonly getFanoutMetrics: "__lunora_admin__:getFanoutMetrics";
     readonly getFunctionStats: "__lunora_admin__:getFunctionStats";
     readonly getIssues: "__lunora_admin__:getIssues";
+    readonly getMetricSeries: "__lunora_admin__:getMetricSeries";
     readonly listSubscriptions: "__lunora_admin__:listSubscriptions";
     readonly listTableIndexes: "__lunora_admin__:listTableIndexes";
     readonly getLogs: "__lunora_admin__:getLogs";
