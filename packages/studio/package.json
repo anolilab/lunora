@@ -59,7 +59,7 @@
         "build:css": "pnpm exec tailwindcss --input ./src/styles.css --output ./dist/styles.css --minify",
         "build:standalone": "node ./scripts/build-standalone.mjs",
         "build:prod": "pnpm exec packem build --production && pnpm run build:css && pnpm run build:standalone",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",

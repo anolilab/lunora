@@ -11,7 +11,7 @@
         "copy-docs": "node scripts/copy-package-docs.js",
         "dev": "node scripts/generate-packages.js && node scripts/copy-package-docs.js && vite dev",
         "lint:doc-imports": "node scripts/check-doc-imports.mjs",
-        "lint:eslint": "eslint src",
+        "lint:eslint": "eslint src --max-warnings=0",
         "lint:eslint:fix": "eslint src --fix",
         "lint:prettier": "prettier --config=prettier.config.js --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --config=prettier.config.js --write . --ignore-path ../../.prettierignore",
