@@ -30,12 +30,18 @@ unit tests, verified by codegen + tsc + vitest):
   no `new_sqlite_classes` migration tag — a real Lunora app (always exports
   ShardDO) could never boot. The deploy request now carries the app's binding
   manifest (CLI reads it from `wrangler.jsonc`), floored to ShardDO server-side.
-- **Resource teardown (✅ wired, scripts; 🌐 D1/R2).** The lifecycle crons only
-  marked deployments `destroyed`; nothing deleted the Cloudflare dispatch script,
-  so namespaces grew unboundedly (the leak Ring-2 claimed to have closed). A
-  `teardownAt`-checkpointed sweep (`src/deploy/teardown.ts`) now deletes the
-  script in `scheduled()`. Per-tenant **D1/R2** teardown-by-id still needs
-  resource-id persistence — a real follow-up (🌐/🔨).
+- **Resource teardown (✅ wired).** The lifecycle crons only marked deployments
+  `destroyed`; nothing deleted the Cloudflare dispatch script, so namespaces grew
+  unboundedly (the leak Ring-2 claimed to have closed). A `teardownAt`-checkpointed
+  sweep (`src/deploy/teardown.ts`) now deletes the script in `scheduled()`.
+  Per-tenant **D1/R2** are named from the project's stable **alias** (not the
+  versioned script), so tenant `.global()` data persists across deploys and a
+  rollback sees the same database; they are torn down **only when the alias has no
+  remaining non-destroyed deployment** (project/org deletion) — never on a routine
+  version prune. R2 delete is best-effort (a non-empty bucket needs an S3-API
+  object purge this context lacks — logged for follow-up). **Caveat:** previews
+  that reuse the production alias would share its D1; give previews a distinct
+  alias for data isolation.
 - **Metering readback (✅ wired).** The dispatcher wrote one Analytics-Engine
   data point per request, but `createHttpAnalyticsReader` had no caller, so
   `platformUsage` stayed empty and spend caps / usage views evaluated nothing.

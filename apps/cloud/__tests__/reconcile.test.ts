@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ControlPlaneDb } from "../src/deploy/sweeps";
+import type { ControlPlaneDb } from "../src/store";
 import type { CreditsLedgerPort } from "../src/billing/overage";
 import { buildOverageReconcileData, overageFleetPorts } from "../src/billing/reconcile";
 

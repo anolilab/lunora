@@ -23,7 +23,7 @@ import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcil
 import { createHttpCloudflareApi } from "./cloudflare/api";
 import { resolveAdminToken } from "./deploy/admin-token";
 import { createDeployRouter } from "./deploy/router";
-import type { ControlPlaneDb } from "./deploy/sweeps";
+import type { ControlPlaneDb } from "./store";
 import { teardownPorts, usageRollbackPorts } from "./deploy/sweeps";
 import { createResourceTeardown, runTeardownSweep } from "./deploy/teardown";
 import { createHttpAnalyticsReader } from "./metering/analytics";
@@ -216,6 +216,10 @@ const deployRouter = createDeployRouter();
 // to (the "tenant cron fan-out tick" heartbeat in lunora/crons.ts).
 const EVERY_MINUTE = "*/1 * * * *";
 
+// The hourly expression `crons.interval({ hours: 1 })` compiles to. Teardown +
+// usage rollback ride this ONE trigger (see the collision note in scheduled()).
+const EVERY_HOUR = "0 */1 * * *";
+
 // The 6-hourly expression `crons.interval({ hours: 6 })` compiles to — the
 // bucket the overage reconciliation rides (paces Creem credits API calls).
 const EVERY_SIX_HOURS = "0 */6 * * *";
@@ -385,16 +389,35 @@ const sweepUptime = async (env: Env): Promise<void> => {
     );
 };
 
+/**
+ * Which sweeps ride which cron bucket — declarative, so "what runs on which
+ * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
+ * env isn't configured. Teardown + usage rollback ride the *hourly* expression
+ * ONLY (never `!== EVERY_MINUTE`): the hourly and 6-hourly expressions both
+ * match at 00/06/12/18:00 UTC and Cloudflare delivers them as two separate
+ * scheduled() invocations, so a broader gate would run the usage rollback twice
+ * and double-insert that window into `platformUsage` (over-billing overage). The
+ * tenant cron fan-out is *not* here — it needs env.DISPATCHER and stays a
+ * separate branch in scheduled().
+ */
+const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
+    { cron: EVERY_HOUR, run: sweepTeardown },
+    { cron: EVERY_HOUR, run: sweepUsageRollback },
+    { cron: EVERY_SIX_HOURS, run: sweepOverageReconciliation },
+    { cron: EVERY_MINUTE, run: sweepUptime },
+];
+
 /** Script id → per-deployment admin token (decrypted in-process), for the queue fan-out. */
 const readDeploymentTokens = async (env: Env): Promise<Map<string, string>> => {
+    const live = await readLiveDeployments(env);
+    const resolved = await Promise.all(
+        live.map(async (row) => ({ adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY), scriptName: row.scriptName })),
+    );
     const tokens = new Map<string, string>();
 
-    for (const row of await readLiveDeployments(env)) {
-        // eslint-disable-next-line no-await-in-loop -- small set; sequential decrypt keeps the map build simple
-        const adminToken = await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY);
-
-        if (adminToken) {
-            tokens.set(row.scriptName, adminToken);
+    for (const row of resolved) {
+        if (row.adminToken) {
+            tokens.set(row.scriptName, row.adminToken);
         }
     }
 
@@ -594,26 +617,18 @@ export default {
         // The control plane's own code crons fire on their declared expression.
         await worker.scheduled(controller, env, context);
 
-        // After the lifecycle crons mark deployments `destroyed`, delete their
-        // Cloudflare dispatch scripts (§2.3). Rides the hourly/6-hourly buckets
-        // the prune/cleanup/purge crons fire on — never the every-minute tick.
-        if (controller.cron !== EVERY_MINUTE) {
-            await sweepTeardown(env);
-            // Fold AE tenant request counts into the platformUsage ledger (§4)
-            // so spend caps / usage views have data. Delta-read; safe to re-run.
-            await sweepUsageRollback(env);
-        }
-
-        // Reconcile prepaid-credit overage on the 6-hourly bucket (§4 C3): the
-        // usage rollup above runs on the same tick, so the ledger is current
-        // before we debit. Idempotent via the watermark.
-        if (controller.cron === EVERY_SIX_HOURS) {
-            await sweepOverageReconciliation(env);
+        // Run the sweeps whose bucket this tick matches (see SCHEDULED_SWEEPS).
+        for (const sweep of SCHEDULED_SWEEPS) {
+            if (controller.cron === sweep.cron) {
+                // eslint-disable-next-line no-await-in-loop -- sweeps run sequentially; each is independent + no-ops when unconfigured
+                await sweep.run(env);
+            }
         }
 
         // Tenant cron fan-out (§2.4): the every-minute trigger ticks each tenant
         // whose cron is due. WfP drops `triggers.crons` for namespaced workers, so
-        // this is the only path that fires their cron jobs.
+        // this is the only path that fires their cron jobs. Special-cased (not in
+        // SCHEDULED_SWEEPS) because it needs env.DISPATCHER.
         if (controller.cron === EVERY_MINUTE && env.DISPATCHER) {
             const dispatcher = env.DISPATCHER;
             const targets = await readCronTargets(env);
@@ -623,12 +638,6 @@ export default {
                 now: new Date(),
                 targets,
             });
-        }
-
-        // Synthetic uptime: probe every live deployment from the outside once a
-        // minute and page on threshold-crossing outages (§ Observability).
-        if (controller.cron === EVERY_MINUTE) {
-            await sweepUptime(env);
         }
     },
 };

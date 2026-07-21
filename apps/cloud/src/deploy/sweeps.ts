@@ -7,21 +7,17 @@
  * ledger insert, and the per-cell checkpoint are testable against a fake store
  * (server.ts just supplies the real ctx-db + Cloudflare clients).
  */
+import type { ControlPlaneDb } from "../store";
 import type { AnalyticsUsageReader } from "../metering/analytics";
 import type { UsageAttribution, UsageRollbackPorts } from "../metering/rollback";
 import type { TeardownPorts } from "./teardown";
 
-/** The minimal control-plane store surface the sweeps use (structurally the D1 ctx-db). */
-export interface ControlPlaneDb {
-    findMany: (table: string, args?: { where?: Record<string, unknown> }) => Promise<{ page: unknown[] }>;
-    insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
-    patch: (id: string, patch: Record<string, unknown>, table?: string) => Promise<unknown>;
-}
-
 interface TeardownRow {
     _id: string;
+    alias?: string;
     kind: string;
     scriptName: string;
+    status: string;
     teardownAt?: number;
 }
 
@@ -30,15 +26,40 @@ interface TeardownRow {
  * been torn down (dispatch namespace derived as `lunora-{kind}`, mirroring the
  * deploy router), and the `teardownAt` stamp. `destroy` is supplied by the
  * caller (the composite Cloudflare teardown).
+ *
+ * `deleteResources` is true only when the alias has no remaining non-destroyed
+ * deployment — so the per-project D1/R2 are reclaimed on project/org deletion
+ * but never on a routine version prune (which would delete the live version's
+ * database). Reads the full deployments set once to evaluate that.
  */
 export const teardownPorts = (database: ControlPlaneDb, destroy: TeardownPorts["destroy"], now: number): TeardownPorts => ({
     destroy,
     listPending: async () => {
-        const { page } = await database.findMany("deployments", { where: { status: "destroyed" } });
+        const { page } = await database.findMany("deployments", {});
+        const rows = page as TeardownRow[];
 
-        return (page as TeardownRow[])
-            .filter((row) => row.teardownAt === undefined)
-            .map((row) => ({ dispatchNamespace: `lunora-${row.kind}`, id: row._id, scriptName: row.scriptName }));
+        // Aliases that still have a live/superseded/etc (non-destroyed) deployment.
+        const aliveAliases = new Set<string>();
+
+        for (const row of rows) {
+            if (row.status !== "destroyed" && row.alias !== undefined) {
+                aliveAliases.add(row.alias);
+            }
+        }
+
+        return rows
+            .filter((row) => row.status === "destroyed" && row.teardownAt === undefined)
+            .map((row) => {
+                const alias = row.alias ?? row.scriptName;
+
+                return {
+                    alias,
+                    deleteResources: row.alias === undefined ? false : !aliveAliases.has(alias),
+                    dispatchNamespace: `lunora-${row.kind}`,
+                    id: row._id,
+                    scriptName: row.scriptName,
+                };
+            });
     },
     markTornDown: async (id) => {
         await database.patch(id, { teardownAt: now, updatedAt: now }, "deployments");

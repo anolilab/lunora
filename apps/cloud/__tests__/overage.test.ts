@@ -93,6 +93,33 @@ describe(reconcileOverage, () => {
 
         await expect(reconcileOverage({ ...input, usage: { cpuMs: 0, requests: 1 } }, ledger)).resolves.toStrictEqual({ status: "none" });
     });
+
+    it("commits the watermark BEFORE debiting (fail-safe: under-bill, never double-charge)", async () => {
+        const order: string[] = [];
+        const ledger: CreditsLedgerPort = {
+            balance: () => Promise.resolve(500),
+            debit: () => {
+                order.push("debit");
+
+                return Promise.resolve();
+            },
+        };
+        const commitWatermark = (owed: number): Promise<void> => {
+            order.push(`watermark:${String(owed)}`);
+
+            return Promise.resolve();
+        };
+
+        await reconcileOverage(input, ledger, commitWatermark);
+
+        expect(order).toStrictEqual(["watermark:100", "debit"]);
+    });
+
+    it("does not debit when the pre-debit watermark commit fails (clean retry next run)", async () => {
+        const ledger: CreditsLedgerPort = { balance: () => Promise.resolve(500), debit: () => Promise.reject(new Error("must not be called")) };
+
+        await expect(reconcileOverage(input, ledger, () => Promise.reject(new Error("d1 down")))).rejects.toThrow("d1 down");
+    });
 });
 
 describe(reconcileAllOverages, () => {
