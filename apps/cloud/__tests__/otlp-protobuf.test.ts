@@ -101,3 +101,17 @@ describe(decodeMetricsPayloadProto, () => {
         expect(point).toMatchObject({ kind: "sum", name: "queue.depth", value: 42.5 });
     });
 });
+
+describe("protobuf decoder hardening", () => {
+    it("throws (→ 400) on an unterminated varint instead of consuming the whole buffer", () => {
+        // A body of all-0xFF bytes is one never-terminating varint — the 10-byte
+        // cap must reject it rather than build an O(n²) BigInt (CPU-exhaustion DoS).
+        const bomb = new Uint8Array(1024).fill(0xff);
+
+        expect(() => decodeTracePayloadProto(bomb)).toThrow();
+    });
+
+    it("decodes an empty body to an empty payload", () => {
+        expect(decodeTracePayloadProto(new Uint8Array())).toStrictEqual({ resourceSpans: [] });
+    });
+});

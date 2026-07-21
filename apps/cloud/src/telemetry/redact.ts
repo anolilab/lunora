@@ -16,8 +16,14 @@ export const REDACTED = "[redacted]";
 
 // A key is sensitive when it contains any of these tokens (case-insensitive).
 // Simple alternation — no nested quantifiers, so it can't ReDoS.
+//
+// `token` and `secret` match as SUBSTRINGS (not `\b`-bounded), because `_`/camelCase
+// have no word boundary — so `auth_token`, `id_token`, `authToken`, `bearerToken`
+// are caught, where a bounded `\btoken\b` silently leaked them. `key` stays scoped
+// to credential-ish prefixes so an innocuous `shard_key` / `idempotency_key` is not
+// redacted.
 const SENSITIVE_KEY =
-    /authorization|password|passwd|secret|api[-_]?key|access[-_]?token|refresh[-_]?token|\btoken\b|\bcookie\b|set-cookie|session|credential|private[-_]?key/i;
+    /authorization|password|passwd|secret|credential|(?:api|access|private|secret|client|encryption)[-_]?key|token|\bcookie\b|set-cookie|session/i;
 
 /** True when a field/attribute key names something secret and its value should be scrubbed. */
 export const isSensitiveKey = (key: string): boolean => SENSITIVE_KEY.test(key);

@@ -53,18 +53,30 @@ class Reader {
         return this.pos >= this.bytes.length;
     }
 
-    /** Read a base-128 varint as a BigInt (safe for 64-bit ints/tags). */
+    /**
+     * Read a base-128 varint as a BigInt (safe for 64-bit ints/tags). Capped at
+     * 10 bytes (a 64-bit varint's max): an unterminated/oversized varint throws
+     * rather than consuming the whole buffer — otherwise an adversarial all-`0xFF`
+     * body drives O(n²) BigInt work (a CPU-exhaustion DoS on the shared isolate).
+     * The route's decode `try/catch` turns the throw into a 400.
+     */
     public varint(): bigint {
         let result = 0n;
         let shift = 0n;
         let byte = 0;
+        let read = 0;
 
         do {
-            byte = this.bytes[this.pos] ?? 0;
+            if (this.pos >= this.bytes.length || read >= 10) {
+                throw new Error("malformed OTLP protobuf: varint overflows 64 bits or runs past end");
+            }
+
+            byte = this.bytes[this.pos] as number;
             this.pos += 1;
+            read += 1;
             result |= BigInt(byte & 0x7f) << shift;
             shift += 7n;
-        } while ((byte & 0x80) !== 0 && this.pos < this.bytes.length);
+        } while ((byte & 0x80) !== 0);
 
         return result;
     }
@@ -288,41 +300,9 @@ export const decodeTracePayloadProto = (bytes: Uint8Array): OtlpTracePayload => 
     return { resourceSpans } as OtlpTracePayload;
 };
 
-const readResourceSpans = (reader: Reader): Record<string, unknown> => {
-    const entry: { resource?: { attributes: KeyValue[] }; scopeSpans: unknown[] } = { scopeSpans: [] };
+const readScopeSpans = (reader: Reader): Record<string, unknown> => readScopeEnvelope(reader, "spans", readSpan);
 
-    eachField(reader, (field, wire) => {
-        if (field === 1 && wire === WIRE_LEN) {
-            entry.resource = { attributes: readAttributes(reader.message(), 1) };
-        } else if (field === 2 && wire === WIRE_LEN) {
-            entry.scopeSpans.push(readScopeSpans(reader.message()));
-        } else {
-            return false;
-        }
-
-        return true;
-    });
-
-    return entry;
-};
-
-const readScopeSpans = (reader: Reader): Record<string, unknown> => {
-    const entry: { scope?: { name?: string }; spans: unknown[] } = { spans: [] };
-
-    eachField(reader, (field, wire) => {
-        if (field === 1 && wire === WIRE_LEN) {
-            entry.scope = readScope(reader.message());
-        } else if (field === 2 && wire === WIRE_LEN) {
-            entry.spans.push(readSpan(reader.message()));
-        } else {
-            return false;
-        }
-
-        return true;
-    });
-
-    return entry;
-};
+const readResourceSpans = (reader: Reader): Record<string, unknown> => readResourceEnvelope(reader, "scopeSpans", readScopeSpans);
 
 const readScope = (reader: Reader): { name?: string } => {
     const scope: { name?: string } = {};
@@ -338,6 +318,62 @@ const readScope = (reader: Reader): { name?: string } => {
     });
 
     return scope;
+};
+
+/**
+ * A `ResourceX` message (`ResourceSpans`/`ResourceLogs`/`ResourceMetrics`): field 1
+ * is the resource (attributes), field 2 the repeated `scopeX` child. Identical
+ * across all three signals — parameterized by the output key + the child reader.
+ */
+const readResourceEnvelope = (reader: Reader, scopeKey: string, readScopeChild: (reader: Reader) => unknown): Record<string, unknown> => {
+    const children: unknown[] = [];
+    const entry: Record<string, unknown> = { [scopeKey]: children };
+
+    eachField(reader, (field, wire) => {
+        if (field === 1 && wire === WIRE_LEN) {
+            entry.resource = { attributes: readAttributes(reader.message(), 1) };
+
+            return true;
+        }
+
+        if (field === 2 && wire === WIRE_LEN) {
+            children.push(readScopeChild(reader.message()));
+
+            return true;
+        }
+
+        return false;
+    });
+
+    return entry;
+};
+
+/**
+ * A `ScopeX` message (`ScopeSpans`/`ScopeLogs`/`ScopeMetrics`): field 1 is the
+ * instrumentation scope, field 2 the repeated item (span/log/metric). Identical
+ * across all three signals — parameterized by the item key + the item reader.
+ */
+const readScopeEnvelope = (reader: Reader, itemKey: string, readItem: (reader: Reader) => unknown): Record<string, unknown> => {
+    const items: unknown[] = [];
+    const entry: Record<string, unknown> = { [itemKey]: items };
+
+    eachField(reader, (field, wire) => {
+        if (field === 1 && wire === WIRE_LEN) {
+            entry.scope = readScope(reader.message());
+
+            return true;
+        }
+
+        if (field === 2 && wire === WIRE_LEN) {
+            items.push(readItem(reader.message()));
+
+            return true;
+        }
+
+        return false;
+    });
+
+    return entry;
 };
 
 // ── Logs ────────────────────────────────────────────────────────────────────
@@ -370,41 +406,9 @@ const readLogRecord = (reader: Reader): Record<string, unknown> => {
     return record;
 };
 
-const readScopeLogs = (reader: Reader): Record<string, unknown> => {
-    const entry: { logRecords: unknown[]; scope?: { name?: string } } = { logRecords: [] };
+const readScopeLogs = (reader: Reader): Record<string, unknown> => readScopeEnvelope(reader, "logRecords", readLogRecord);
 
-    eachField(reader, (field, wire) => {
-        if (field === 1 && wire === WIRE_LEN) {
-            entry.scope = readScope(reader.message());
-        } else if (field === 2 && wire === WIRE_LEN) {
-            entry.logRecords.push(readLogRecord(reader.message()));
-        } else {
-            return false;
-        }
-
-        return true;
-    });
-
-    return entry;
-};
-
-const readResourceLogs = (reader: Reader): Record<string, unknown> => {
-    const entry: { resource?: { attributes: KeyValue[] }; scopeLogs: unknown[] } = { scopeLogs: [] };
-
-    eachField(reader, (field, wire) => {
-        if (field === 1 && wire === WIRE_LEN) {
-            entry.resource = { attributes: readAttributes(reader.message(), 1) };
-        } else if (field === 2 && wire === WIRE_LEN) {
-            entry.scopeLogs.push(readScopeLogs(reader.message()));
-        } else {
-            return false;
-        }
-
-        return true;
-    });
-
-    return entry;
-};
+const readResourceLogs = (reader: Reader): Record<string, unknown> => readResourceEnvelope(reader, "scopeLogs", readScopeLogs);
 
 /** Decode an OTLP/protobuf `ExportLogsServiceRequest` into the JSON payload shape. */
 export const decodeLogsPayloadProto = (bytes: Uint8Array): OtlpLogsPayload => {
@@ -506,41 +510,9 @@ const readMetric = (reader: Reader): Record<string, unknown> => {
     return metric;
 };
 
-const readScopeMetrics = (reader: Reader): Record<string, unknown> => {
-    const entry: { metrics: unknown[]; scope?: { name?: string } } = { metrics: [] };
+const readScopeMetrics = (reader: Reader): Record<string, unknown> => readScopeEnvelope(reader, "metrics", readMetric);
 
-    eachField(reader, (field, wire) => {
-        if (field === 1 && wire === WIRE_LEN) {
-            entry.scope = readScope(reader.message());
-        } else if (field === 2 && wire === WIRE_LEN) {
-            entry.metrics.push(readMetric(reader.message()));
-        } else {
-            return false;
-        }
-
-        return true;
-    });
-
-    return entry;
-};
-
-const readResourceMetrics = (reader: Reader): Record<string, unknown> => {
-    const entry: { resource?: { attributes: KeyValue[] }; scopeMetrics: unknown[] } = { scopeMetrics: [] };
-
-    eachField(reader, (field, wire) => {
-        if (field === 1 && wire === WIRE_LEN) {
-            entry.resource = { attributes: readAttributes(reader.message(), 1) };
-        } else if (field === 2 && wire === WIRE_LEN) {
-            entry.scopeMetrics.push(readScopeMetrics(reader.message()));
-        } else {
-            return false;
-        }
-
-        return true;
-    });
-
-    return entry;
-};
+const readResourceMetrics = (reader: Reader): Record<string, unknown> => readResourceEnvelope(reader, "scopeMetrics", readScopeMetrics);
 
 /** Decode an OTLP/protobuf `ExportMetricsServiceRequest` into the JSON payload shape. */
 export const decodeMetricsPayloadProto = (bytes: Uint8Array): OtlpMetricsPayload => {

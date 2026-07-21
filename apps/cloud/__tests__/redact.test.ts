@@ -18,13 +18,24 @@ describe(isSensitiveKey, () => {
             "sessionId",
             "credential",
             "private_key",
+            // Previously LEAKED (bounded \btoken\b / camelCase) — must now be caught.
+            "auth_token",
+            "id_token",
+            "authToken",
+            "apiToken",
+            "idToken",
+            "bearerToken",
+            "jwtToken",
+            "accessKey",
+            "clientSecret",
+            "encryption_key",
         ]) {
             expect(isSensitiveKey(key)).toBe(true);
         }
     });
 
-    it("leaves ordinary keys alone", () => {
-        for (const key of ["shard_key", "user_id", "function_path", "status", "durationMs", "region"]) {
+    it("leaves ordinary keys alone (incl. non-credential *_key names)", () => {
+        for (const key of ["shard_key", "idempotency_key", "user_id", "function_path", "status", "durationMs", "region"]) {
             expect(isSensitiveKey(key)).toBe(false);
         }
     });

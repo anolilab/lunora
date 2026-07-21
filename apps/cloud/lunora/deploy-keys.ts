@@ -127,7 +127,11 @@ export const verify = mutation.input({ key: v.string() }).mutation(
         const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
         const row = (page as unknown as DeployKeyRow[])[0];
 
-        if (!row || row.revokedAt !== undefined) {
+        // Reject a telemetry `ingest` key here too — this is the guard the deploy
+        // route actually runs (`verifyKey`), so without it a scoped ingest token
+        // would still be able to deploy. `authorizeDeployKey` blocks it on the
+        // per-mutation paths; this blocks it at the deploy entrypoint.
+        if (!row || row.revokedAt !== undefined || row.capability === "ingest") {
             return null;
         }
 
@@ -151,6 +155,14 @@ interface IngestKeyRow {
 }
 
 /**
+ * The org's live ingest key, if any — the single definition of "what counts as
+ * the active ingest key" (an `ingest`-capability, non-revoked row that carries
+ * its encrypted secret), so the reader and the writer can never drift apart.
+ */
+const findActiveIngestKey = (rows: IngestKeyRow[]): IngestKeyRow | undefined =>
+    rows.find((candidate) => candidate.capability === "ingest" && candidate.revokedAt === undefined && candidate.encryptedSecret !== undefined);
+
+/**
  * The org's platform-managed ingest key ciphertext, for the deploy path to
  * re-inject into a tenant's `otlpSink`. Deploy-key authorized (the caller is a
  * live deploy holding the org's deploy key). Returns the envelope only — never
@@ -163,11 +175,8 @@ export const ingestKeyCipher = query
         await authorizeDeployKey(context, organizationId, deployKey);
 
         const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
-        const row = (page as unknown as IngestKeyRow[]).find(
-            (candidate) => candidate.capability === "ingest" && candidate.revokedAt === undefined && candidate.encryptedSecret !== undefined,
-        );
 
-        return row?.encryptedSecret ?? null;
+        return findActiveIngestKey(page as unknown as IngestKeyRow[])?.encryptedSecret ?? null;
     });
 
 /**
@@ -187,9 +196,7 @@ export const recordIngestKey = mutation
         await authorizeDeployKey(context, organizationId, deployKey);
 
         const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
-        const existing = (page as unknown as IngestKeyRow[]).find(
-            (candidate) => candidate.capability === "ingest" && candidate.revokedAt === undefined && candidate.encryptedSecret !== undefined,
-        );
+        const existing = findActiveIngestKey(page as unknown as IngestKeyRow[]);
 
         if (existing?.encryptedSecret) {
             return existing.encryptedSecret; // a racing deploy already provisioned it

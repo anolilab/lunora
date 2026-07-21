@@ -6,7 +6,7 @@ import { fireCrossedRules } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server.js";
-import { authorizeDeployKey, resolveDeployKeyOrg } from "./authz";
+import { authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
 
 /**
  * Telemetry ingest for the Cloud Observability pipeline (superlog model). The
@@ -243,7 +243,7 @@ export const ingest = mutation
             incidents: number;
             issues: number;
         }> => {
-            await authorizeDeployKey(context, args.organizationId, args.deployKey);
+            await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
 
             if (args.events.length > MAX_EVENTS) {
                 throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_EVENTS)} events)`);

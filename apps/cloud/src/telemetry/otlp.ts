@@ -388,26 +388,34 @@ export const decodeObservations = (payload: OtlpTracePayload): SpanObservation[]
                 const model = attributeString(span.attributes, "gen_ai.request.model");
                 const isGeneration = kind !== "container" && model !== undefined;
 
-                observations.push({
+                const observation: SpanObservation = {
                     attributes: redactRecord(lunoraAttributes(span.attributes)),
-                    ...(isGeneration ? { completionTokens: attributeNumber(span.attributes, "gen_ai.usage.output_tokens") } : {}),
                     durationMs: Math.max(endedAt - startedAt, 0),
                     endedAt,
                     functionPath: kind === "container" ? `container:${serviceName ?? "container"}` : workerPath,
-                    ...(isGeneration ? { input: truncateText(attributeString(span.attributes, "gen_ai.prompt")) } : {}),
                     kind: isGeneration ? "generation" : kind,
                     level: errored ? "error" : "info",
-                    ...(isGeneration ? { model } : {}),
                     name: span.name ?? workerPath ?? "span",
-                    ...(isGeneration ? { output: truncateText(attributeString(span.attributes, "gen_ai.completion")) } : {}),
                     parentSpanId: span.parentSpanId === "" ? undefined : span.parentSpanId,
-                    ...(isGeneration ? { promptTokens: attributeNumber(span.attributes, "gen_ai.usage.input_tokens") } : {}),
                     serviceName,
                     spanId: span.spanId,
                     startedAt,
                     statusMessage: errored ? span.status?.message : undefined,
                     traceId: span.traceId,
-                });
+                };
+
+                // One decision, all its consequences in one place — the gen_ai.*
+                // extraction, kept off the base object so a worker/container span
+                // carries none of these fields.
+                if (isGeneration) {
+                    observation.model = model;
+                    observation.promptTokens = attributeNumber(span.attributes, "gen_ai.usage.input_tokens");
+                    observation.completionTokens = attributeNumber(span.attributes, "gen_ai.usage.output_tokens");
+                    observation.input = truncateText(attributeString(span.attributes, "gen_ai.prompt"));
+                    observation.output = truncateText(attributeString(span.attributes, "gen_ai.completion"));
+                }
+
+                observations.push(observation);
             }
         }
     }

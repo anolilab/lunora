@@ -177,6 +177,14 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
                                 className={`trace-wrow trace-wrow-click${row.level === "error" ? " trace-wrow-err" : ""}${row.spanId === selectedSpanId ? " active" : ""}`}
                                 key={row.spanId}
                                 onClick={() => setSelectedSpanId(row.spanId === selectedSpanId ? "" : row.spanId)}
+                                onKeyDown={(event) => {
+                                    if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        setSelectedSpanId(row.spanId === selectedSpanId ? "" : row.spanId);
+                                    }
+                                }}
+                                role="button"
+                                tabIndex={0}
                             >
                                 <span className="trace-off">+{String(row.offsetMs)}ms</span>
                                 <div className="trace-track" title={`${formatMs(row.durationMs)} at +${String(row.offsetMs)}ms`}>
