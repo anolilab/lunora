@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { defineQueue } from "../src/define-queue";
-import type { CapturedQueueMessage } from "../src/dispatch";
+import type { CapturedQueueMessage, QueueCaptureSink } from "../src/dispatch";
 import { dispatchQueueBatch } from "../src/dispatch";
 import type { MessageBatchLike, MessageLike } from "../src/types";
 
@@ -138,7 +138,7 @@ describe("dispatchQueueBatch capture", () => {
     it("records an implicit ack for a clean handler return", async () => {
         expect.assertions(2);
 
-        const capture = vi.fn();
+        const capture = vi.fn<QueueCaptureSink>();
         const queue = defineQueue({ handler: () => {} });
         const m = captureMessage({ ok: true });
 
@@ -154,7 +154,7 @@ describe("dispatchQueueBatch capture", () => {
     it("records an explicit retry and does not mutate the original message", async () => {
         expect.assertions(4);
 
-        const capture = vi.fn();
+        const capture = vi.fn<QueueCaptureSink>();
         let handlerSaw: MessageLike | undefined;
         const queue = defineQueue({
             handler: (_context, b) => {
@@ -180,7 +180,7 @@ describe("dispatchQueueBatch capture", () => {
     it("records an error and re-throws so workerd still retries the batch", async () => {
         expect.assertions(2);
 
-        const capture = vi.fn();
+        const capture = vi.fn<QueueCaptureSink>();
         const boom = new Error("handler blew up");
         const queue = defineQueue({
             handler: () => {
@@ -199,7 +199,7 @@ describe("dispatchQueueBatch capture", () => {
     it("re-throws the handler's original error even when it can't be JSON-encoded (cyclic)", async () => {
         expect.assertions(2);
 
-        const capture = vi.fn();
+        const capture = vi.fn<QueueCaptureSink>();
         const cyclic: Record<string, unknown> = {};
 
         cyclic["self"] = cyclic;
@@ -225,7 +225,7 @@ describe("dispatchQueueBatch capture", () => {
     it("records error and re-throws even when the handler throws a falsy value (throw undefined)", async () => {
         expect.assertions(2);
 
-        const capture = vi.fn();
+        const capture = vi.fn<QueueCaptureSink>();
         const queue = defineQueue({
             handler: () => {
                 // eslint-disable-next-line @typescript-eslint/only-throw-error -- exercise the falsy-throw path: `throw undefined` reaches the catch with `undefined`, which `handlerError !== undefined` would misread as a clean return
@@ -247,7 +247,7 @@ describe("dispatchQueueBatch capture", () => {
     it("does not flag deadLettered while a retry still remains (attempts === maxRetries)", async () => {
         expect.assertions(1);
 
-        const capture = vi.fn();
+        const capture = vi.fn<QueueCaptureSink>();
         const queue = defineQueue({
             handler: (_context, b) => {
                 b.messages[0]?.retry();
@@ -268,7 +268,7 @@ describe("dispatchQueueBatch capture", () => {
     it("flags deadLettered once attempts exceeds maxRetries (retries exhausted)", async () => {
         expect.assertions(1);
 
-        const capture = vi.fn();
+        const capture = vi.fn<QueueCaptureSink>();
         const queue = defineQueue({
             handler: (_context, b) => {
                 b.messages[0]?.retry();
@@ -287,7 +287,7 @@ describe("dispatchQueueBatch capture", () => {
     it("never flags deadLettered for an ack, even past maxRetries", async () => {
         expect.assertions(1);
 
-        const capture = vi.fn();
+        const capture = vi.fn<QueueCaptureSink>();
         const queue = defineQueue({
             handler: (_context, b) => {
                 b.messages[0]?.ack();
@@ -306,7 +306,7 @@ describe("dispatchQueueBatch capture", () => {
     it("fills undecided messages from ackAll / retryAll", async () => {
         expect.assertions(2);
 
-        const ackCapture = vi.fn();
+        const ackCapture = vi.fn<QueueCaptureSink>();
         const ackQueue = defineQueue({
             handler: (_context, b) => {
                 b.ackAll();
@@ -322,7 +322,7 @@ describe("dispatchQueueBatch capture", () => {
 
         expect(ackRecords.every((record) => record.outcome === "ack")).toBe(true);
 
-        const retryCapture = vi.fn();
+        const retryCapture = vi.fn<QueueCaptureSink>();
         const retryQueue = defineQueue({
             handler: (_context, b) => {
                 b.retryAll();
@@ -342,7 +342,7 @@ describe("dispatchQueueBatch capture", () => {
     it("swallows a capture-sink rejection so delivery semantics are unchanged", async () => {
         expect.assertions(2);
 
-        const capture = vi.fn(() => Promise.reject(new Error("sink down")));
+        const capture = vi.fn<QueueCaptureSink>(() => Promise.reject(new Error("sink down")));
         const m = captureMessage({ ok: true });
         const queue = defineQueue({ handler: () => {} });
 
@@ -368,7 +368,7 @@ describe("dispatchQueueBatch capture", () => {
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         try {
-            const capture = vi.fn(() => Promise.reject(new Error("sink down")));
+            const capture = vi.fn<QueueCaptureSink>(() => Promise.reject(new Error("sink down")));
             const queue = defineQueue({ handler: () => {} });
 
             // A silently-swallowed sink failure (stale admin token / shard error) used
