@@ -293,6 +293,8 @@ catalogs:
     "@visulima/email": 2.1.1
     "@react-email/render": 2.1.0
     "postal-mime": 2.7.5
+  notify:
+    "@visulima/notification": 1.0.5
   mcp:
     "@modelcontextprotocol/sdk": ^1.29.0
   # Client-side upload SDK (@lunora/storage /upload handler + framework upload
