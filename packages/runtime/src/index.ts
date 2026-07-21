@@ -69,6 +69,8 @@ export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynami
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";
 export type { LunoraErrorBody } from "./errors";
 export { LunoraError, toErrorResponse } from "./errors";
+export type { LogArchiveConfig } from "./log-archive-admin-routes";
+export { LOG_ARCHIVE_NOT_CONFIGURED, LOG_ARCHIVE_PATH } from "./log-archive-admin-routes";
 export type {
     LogEvent,
     LogFields,

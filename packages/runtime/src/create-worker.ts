@@ -22,6 +22,8 @@ import { streamingImport } from "./import-stream";
 import { buildIntrospectionAdminRoutes } from "./introspection-admin-routes";
 import type { KvIntrospector } from "./kv-admin-routes";
 import { buildKvAdminRoutes, KV_VALUE_MAX_BODY_BYTES, KV_VALUE_PATH } from "./kv-admin-routes";
+import type { LogArchiveConfig } from "./log-archive-admin-routes";
+import { buildLogArchiveAdminRoutes } from "./log-archive-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 import { emitRpcEvent } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
@@ -732,6 +734,16 @@ interface WorkerOptions {
      * Omit it and those endpoints respond `KV_NOT_CONFIGURED`.
      */
     kvIntrospector?: KvIntrospector;
+
+    /**
+     * The durable log archive's read config — the R2 Data Catalog (Iceberg)
+     * table `pipelineLogSink` writes to, so the studio Logs panel's Archive feed
+     * (and the `/_lunora/admin/logs/archive` route) can read it back via R2 SQL.
+     * The R2 SQL credentials come from `env` (`R2_SQL_ACCOUNT_ID` / `R2_SQL_TOKEN`
+     * / `R2_SQL_BUCKET`); this only names the table (+ optional namespace / column
+     * overrides). Absent → the Archive feed reports "not configured".
+     */
+    logArchive?: LogArchiveConfig;
 
     /**
      * Optional telemetry sink. When supplied, the worker emits one
@@ -2265,6 +2277,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         requireAdminOption,
     });
 
+    const logArchiveAdminRoutes = buildLogArchiveAdminRoutes({
+        logArchive: options.logArchive,
+        readJsonBody: readJsonBodyWithLimit,
+        requireAdminOption,
+    });
+
     const introspectionAdminRoutes = buildIntrospectionAdminRoutes({
         assertAdmin: assertAdminAuthorized,
         options: {
@@ -3502,6 +3520,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         ...storageAdminRoutes,
         ...vectorAdminRoutes,
         ...kvAdminRoutes,
+        ...logArchiveAdminRoutes,
         ...introspectionAdminRoutes,
         // `/_lunora/admin/auth/*` — the whole user-management plane, one route per
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
