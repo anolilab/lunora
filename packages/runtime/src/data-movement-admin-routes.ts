@@ -19,6 +19,8 @@ import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage } from "./con
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
 import { LunoraError } from "./errors";
 import type { ExportRow } from "./export-stream";
+import type { ExportCursorStore, ExportSink } from "./export-tap";
+import { runExportTap } from "./export-tap";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
@@ -27,6 +29,8 @@ const IMPORT_PATH = "/_lunora/admin/import";
 const SYNC_PATH = "/_lunora/admin/sync";
 const CONNECTOR_SYNC_PATH = "/_lunora/admin/connector/sync";
 const APPLY_PATH = "/_lunora/admin/apply";
+/** Server-owned continuous CDC export tap drain (plan 170). Distinct from the STATELESS `/sync` + `/connector/sync` pulls. */
+const EXPORT_TAP_RUN_PATH = "/_lunora/admin/export-tap/run";
 
 /** Per-row import failure surfaced back to the caller. */
 type ImportRowError = { code: string; line: number; message: string; table: string };
@@ -80,6 +84,10 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
 interface DataMovementAdminRouteDeps {
     /** Apply `.global()` (D1) CDC changes; absent when no global plane is configured. */
     applyGlobals?: (request: { changes: ReadonlyArray<Record<string, unknown>> }) => Promise<number>;
+    /** Durable per-shard cursor store backing the continuous export tap; absent → the tap route reports not-configured. */
+    exportCursorStore?: ExportCursorStore;
+    /** Named export sinks (webhook / R2 / custom) the tap can drain to; absent / empty → the tap route reports not-configured. */
+    exportSinks?: Record<string, ExportSink>;
     /** Admin-token gate predicate (header bearer check). */
     isAdmin: (request: Request) => boolean;
     /** Best-effort enumeration of known tables for the auto-discovery path (bound to the worker's table resolver). */
@@ -113,7 +121,7 @@ interface DataMovementAdminRouteDeps {
 
 /** Build the data-movement route map merged into the worker's internal route table. */
 const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
-    const { applyGlobals, isAdmin, knownTables, queryCoordinator, resolveForwardContext, shardDO, streamExportRows, streamingImport, syncGlobals } = deps;
+    const { applyGlobals, exportCursorStore, exportSinks, isAdmin, knownTables, queryCoordinator, resolveForwardContext, shardDO, streamExportRows, streamingImport, syncGlobals } = deps;
 
     const handleExport = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
@@ -348,14 +356,76 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         });
     };
 
+    /**
+     * Drive one drain pass of the continuous CDC export tap (plan 170) for a named
+     * sink. Server-owned + stateful (the OPPOSITE of `/sync` + `/connector/sync`,
+     * where the consumer owns the cursor): the tap reads the durable per-shard
+     * cursor, pulls the op-log change feed, delivers each shard's ordered batch to
+     * the sink with retry/backoff, and persists the advanced cursor — at-least-once.
+     *
+     * Request: `{ sink: string, limit?: number }`. Response: the {@link runExportTap}
+     * result (`delivered`, `cursors`, `failures`, `hasMore`, `shards`). Intended to
+     * be poked by a cron or an external scheduler; safe to call repeatedly.
+     */
+    const handleExportTapRun = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new LunoraError("Export-tap endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!isAdmin(request)) {
+            throw new LunoraError("admin export-tap endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        const coordinator = queryCoordinator;
+
+        if (!coordinator) {
+            throw new LunoraError("Export-tap endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        if (exportSinks === undefined || Object.keys(exportSinks).length === 0 || exportCursorStore === undefined) {
+            throw new LunoraError("Export-tap endpoint requires `exportSinks` + `exportCursorStore` on the worker", { code: "EXPORT_TAP_NOT_CONFIGURED", status: 400 });
+        }
+
+        const raw = await readJsonBodyWithLimit(request);
+        const sinkName = typeof raw["sink"] === "string" ? raw["sink"] : undefined;
+        const limit = typeof raw["limit"] === "number" && raw["limit"] > 0 ? raw["limit"] : undefined;
+        const requestedTables = Array.isArray(raw["tables"]) ? raw["tables"].filter((table): table is string => typeof table === "string") : undefined;
+
+        if (sinkName === undefined) {
+            throw new LunoraError("Export-tap `sink` must name a configured sink", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const sink = exportSinks[sinkName];
+
+        if (sink === undefined) {
+            throw new LunoraError(`Export-tap sink "${sinkName}" is not configured`, { code: "NOT_FOUND", status: 404 });
+        }
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
+        const probeTables = requestedTables ?? knownTables();
+
+        const result = await runExportTap({
+            coordinator,
+            cursorStore: exportCursorStore,
+            headers: forwardedHeaders,
+            limit,
+            shardDO,
+            sink,
+            tables: probeTables,
+        });
+
+        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
     return {
         [APPLY_PATH]: handleApplyCdc,
         [CONNECTOR_SYNC_PATH]: handleConnectorSync,
         [EXPORT_PATH]: handleExport,
+        [EXPORT_TAP_RUN_PATH]: handleExportTapRun,
         [IMPORT_PATH]: handleImport,
         [SYNC_PATH]: handleCdcSync,
     };
 };
 
 export type { DataMovementAdminRouteDeps };
-export { APPLY_PATH, buildDataMovementAdminRoutes, CONNECTOR_SYNC_PATH, EXPORT_PATH, IMPORT_PATH, SYNC_PATH };
+export { APPLY_PATH, buildDataMovementAdminRoutes, CONNECTOR_SYNC_PATH, EXPORT_PATH, EXPORT_TAP_RUN_PATH, IMPORT_PATH, SYNC_PATH };
