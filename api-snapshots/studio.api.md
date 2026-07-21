@@ -13,6 +13,7 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ```ts
 const ADMIN_FUNCTIONS: {
+    readonly assignIssue: "__lunora_admin__:assignIssue";
     readonly clearCapturedMail: "__lunora_admin__:clearCapturedMail";
     readonly clearQueueMessages: "__lunora_admin__:clearQueueMessages";
     readonly clearTable: "__lunora_admin__:clearTable";
@@ -44,6 +45,7 @@ const ADMIN_FUNCTIONS: {
     readonly getSettings: "__lunora_admin__:getSettings";
     readonly getTraces: "__lunora_admin__:getTraces";
     readonly getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus";
+    readonly ignoreIssue: "__lunora_admin__:ignoreIssue";
     readonly importShard: "__lunora_admin__:importShard";
     readonly listTables: "__lunora_admin__:listTables";
     readonly maskPolicies: "__lunora_admin__:maskPolicies";
@@ -51,12 +53,14 @@ const ADMIN_FUNCTIONS: {
     readonly pitrRestore: "__lunora_admin__:pitrRestore";
     readonly readTablePage: "__lunora_admin__:readTablePage";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
+    readonly resolveIssue: "__lunora_admin__:resolveIssue";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
     readonly runAs: "__lunora_admin__:runAs";
     readonly runMigration: "__lunora_admin__:runMigration";
     readonly runSql: "__lunora_admin__:runSql";
     readonly sendQueueMessage: "__lunora_admin__:sendQueueMessage";
     readonly sendTestMail: "__lunora_admin__:sendTestMail";
+    readonly setIssueSeverity: "__lunora_admin__:setIssueSeverity";
     readonly storageOrphans: "__lunora_admin__:storageOrphans";
     readonly storageReferences: "__lunora_admin__:storageReferences";
     readonly storageRules: "__lunora_admin__:storageRules";

@@ -3445,6 +3445,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `DEFAULT_LOG_COLUMNS` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `DEFAULT_LOG_LIMIT` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `DEFAULT_REGISTRY_CACHE_TTL_MS` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -3661,6 +3669,38 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `PipelineLogColumnMap` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogCursor` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogField` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogPage` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogQuery` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogReader` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogReaderOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogRow` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `PipelineLogSinkOptions` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -3862,6 +3902,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `createLunoraHandler` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `createPipelineLogReader` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
