@@ -306,6 +306,7 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         // feature itself is a DX bug — a stale admin token or shard error would
         // leave the studio Queues panel empty with no diagnostic anywhere — so
         // log it (delivery is unaffected: the handler-error re-throw is below).
+        // eslint-disable-next-line no-console -- last-resort diagnostic for a swallowed capture-sink failure; no injected logger on the dispatch path
         console.warn("@lunora/queue: capture sink failed (delivery unaffected):", captureError);
     }
 

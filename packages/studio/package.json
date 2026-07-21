@@ -1,6 +1,6 @@
 {
     "name": "@lunora/studio",
-    "version": "1.0.0-alpha.54",
+    "version": "1.0.0-alpha.56",
     "description": "The Lunora Studio: a local admin UI for your schema, data, logs, and advisors",
     "keywords": [
         "admin-ui",
@@ -59,7 +59,7 @@
         "build:css": "pnpm exec tailwindcss --input ./src/styles.css --output ./dist/styles.css --minify",
         "build:standalone": "node ./scripts/build-standalone.mjs",
         "build:prod": "pnpm exec packem build --production && pnpm run build:css && pnpm run build:standalone",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
@@ -77,7 +77,7 @@
         "@hugeicons/react": "catalog:ui",
         "@lingui/core": "catalog:i18n",
         "@lingui/message-utils": "catalog:i18n",
-        "@lunora/advisor": "1.0.0-alpha.31",
+        "@lunora/advisor": "1.0.0-alpha.32",
         "@lunora/bindings": "1.0.0-alpha.9",
         "@lunora/client": "1.0.0-alpha.25",
         "@lunora/errors": "1.0.0-alpha.6",

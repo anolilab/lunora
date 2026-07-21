@@ -17,6 +17,7 @@ import type {
     StudioFeaturesResult,
 } from "../src/introspect";
 import { ADMIN_FUNCTIONS } from "../src/introspect";
+import type { MetricSeries } from "../src/metric-buffer";
 import type { QueueMessageRow, RecordQueueMessageInput } from "../src/queue-catcher";
 import type { RankIndexDefinitionLike, ShardRankPageResult } from "../src/rank";
 import { rankKeyFromDoc } from "../src/rank";
@@ -31,6 +32,7 @@ import type {
     ShardDOState,
 } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
+import type { TraceSpan, TraceSummary } from "../src/span-buffer";
 import type { SocketAttachment } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -70,6 +72,32 @@ const STUDIO_FEATURES_KEY_GUARD: KeysMatch<keyof StudioFeaturesResult, (typeof S
 const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name"] as const;
 
 const QUEUE_METADATA_KEY_GUARD: KeysMatch<keyof QueueMetadata, (typeof QUEUE_METADATA_KEYS)[number]> = true;
+
+/**
+ * Canonical key sets of `TraceSpan` / `TraceSummary` — the `getTraces` wire
+ * shapes `@lunora/studio` hand-mirrors (it can't import `@lunora/do`) and
+ * duplicates in its own drift guard. `lint:types` fails here if a key moves
+ * without the tuple moving — and there if the studio copy drifts — so the
+ * waterfall renderer can't silently fall behind the fold that feeds it.
+ */
+const TRACE_SPAN_KEYS = ["attributes", "depth", "durationMs", "error", "name", "offsetMs", "ok", "parentSpanId", "spanId"] as const;
+
+const TRACE_SPAN_KEY_GUARD: KeysMatch<keyof TraceSpan, (typeof TRACE_SPAN_KEYS)[number]> = true;
+
+const TRACE_SUMMARY_KEYS = ["durationMs", "functionPath", "ok", "rootName", "shardKey", "spans", "startTs", "traceId"] as const;
+
+const TRACE_SUMMARY_KEY_GUARD: KeysMatch<keyof TraceSummary, (typeof TRACE_SUMMARY_KEYS)[number]> = true;
+
+/**
+ * Canonical key set of `MetricSeries` — the `getMetricSeries` wire shape
+ * `@lunora/studio` hand-mirrors (it can't import `@lunora/do`) and duplicates in
+ * its own drift guard. `lint:types` fails here if a key moves without the tuple
+ * moving — and there if the studio copy drifts — so the Instruments table can't
+ * silently fall behind the fold that feeds it. `attributes`/`shardKey` optional.
+ */
+const METRIC_SERIES_KEYS = ["attributes", "count", "firstTs", "functionPath", "kind", "last", "lastTs", "max", "min", "name", "shardKey", "sum"] as const;
+
+const METRIC_SERIES_KEY_GUARD: KeysMatch<keyof MetricSeries, (typeof METRIC_SERIES_KEYS)[number]> = true;
 
 /**
  * Canonical key set of `QueueMessageRow` (the `getQueueMessages` consumed-message
@@ -599,6 +627,36 @@ describe("shardDO admin introspection", () => {
 
         expect(QUEUE_METADATA_KEY_GUARD).toBe(true);
         expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name"]);
+    });
+
+    it("keeps the getTraces wire shapes in lockstep with the studio's hand-mirror", () => {
+        expect.assertions(3);
+
+        // The compile-time guards are what actually fail the build on drift; these
+        // assert the tuples match the wire shapes at runtime too.
+        expect(TRACE_SPAN_KEY_GUARD).toBe(true);
+        expect(TRACE_SUMMARY_KEY_GUARD).toBe(true);
+        expect([...TRACE_SUMMARY_KEYS]).toStrictEqual(["durationMs", "functionPath", "ok", "rootName", "shardKey", "spans", "startTs", "traceId"]);
+    });
+
+    it("keeps the getMetricSeries wire shape in lockstep with the studio's hand-mirror", () => {
+        expect.assertions(2);
+
+        expect(METRIC_SERIES_KEY_GUARD).toBe(true);
+        expect([...METRIC_SERIES_KEYS]).toStrictEqual([
+            "attributes",
+            "count",
+            "firstTs",
+            "functionPath",
+            "kind",
+            "last",
+            "lastTs",
+            "max",
+            "min",
+            "name",
+            "shardKey",
+            "sum",
+        ]);
     });
 
     it("keeps QueueMessageRow's keys in lockstep with the studio's hand-mirror", () => {
@@ -1873,7 +1931,7 @@ describe("shardDO admin data migrations", () => {
 
         shard.log("a:b", "info", ["hi"], {
             onLog: (_event, context) => {
-                hasWaitUntilSlot = typeof context === "object" && context !== null && "waitUntil" in context;
+                hasWaitUntilSlot = context !== undefined && "waitUntil" in context;
             },
         });
 
@@ -1989,19 +2047,28 @@ describe("shardDO admin data migrations", () => {
         vi.restoreAllMocks();
     });
 
-    it("folds the bare `log` level onto info for the studio buffer", async () => {
+    it("keeps the full severity ramp on the studio buffer instead of folding it", async () => {
         expect.assertions(1);
 
+        vi.spyOn(console, "debug").mockImplementation(() => {});
+        vi.spyOn(console, "error").mockImplementation(() => {});
         vi.spyOn(console, "log").mockImplementation(() => {});
+
         const shard = new LoggingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
+        // `log`/`trace`/`fatal` used to fold onto `info`/`debug`/`error`, which made
+        // the three tiers unreadable in the Studio Logs panel. Each is now buffered
+        // at the level the caller actually logged at.
         shard.log("a:b", "log", ["hi"]);
+        shard.log("a:b", "trace", ["deep"]);
+        shard.log("a:b", "fatal", ["boom"]);
         vi.restoreAllMocks();
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}));
         const body = await response.json<{ result: { entries: { level: string }[] } }>();
 
-        expect(body.result.entries[0]!.level).toBe("info");
+        // `entries()` is newest-first, so the buffer reads back in reverse order.
+        expect(body.result.entries.map((entry) => entry.level)).toStrictEqual(["fatal", "trace", "log"]);
     });
 });
 

@@ -7,8 +7,8 @@
  * severity union were hand-mirrored (and widened in lockstep) in both packages.
  * Hosting them here (inlined into each `dist`, like {@link file://./otlp.ts})
  * makes the cross-package `onLog` call structurally guaranteed instead of
- * coincidentally compatible, and gives the level union + buffer fold a single
- * source of truth. Keep genuinely zero-dependency so inlining stays sound.
+ * coincidentally compatible, and gives the level union + its severity ordering a
+ * single source of truth. Keep genuinely zero-dependency so inlining stays sound.
  */
 import type { LogFields } from "./log-fields";
 
@@ -63,15 +63,8 @@ export interface LogEvent {
 }
 
 /**
- * Fold the seven `ctx.log` severities onto the four tiers the in-memory
- * `LogBuffer` (and the Studio Logs panel) render — it has no `log`/`trace`/`fatal`.
+ * The seven severities in ascending order, so a renderer (the Studio Logs panel's
+ * level chips and its grouped summary) can present them ramp-ordered without
+ * re-deriving the ordering from the alphabetically-sorted union.
  */
-export const BUFFER_LEVEL: Record<ContextLogLevel, "debug" | "error" | "info" | "warn"> = {
-    debug: "debug",
-    error: "error",
-    fatal: "error",
-    info: "info",
-    log: "info",
-    trace: "debug",
-    warn: "warn",
-};
+export const LOG_LEVEL_ORDER: readonly ContextLogLevel[] = ["trace", "debug", "log", "info", "warn", "error", "fatal"];

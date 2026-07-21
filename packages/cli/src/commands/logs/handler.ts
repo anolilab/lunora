@@ -6,6 +6,7 @@ import { detectPackageManager, execArgsFor } from "../../util/detect-package-man
 import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
+import { runDurableLogsCommand } from "./durable";
 import type { LogsOptions } from "./index";
 
 /** Output formats `wrangler tail` understands. */
@@ -106,8 +107,30 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
 };
 
 /** `lunora logs [worker]` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argument, cwd, logger, options }) =>
-    runLogsCommand({
+const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argument, cwd, logger, options }) => {
+    // `--durable` switches from tailing a live Worker to reading the persisted
+    // `ctx.log` archive (pipelineLogSink → R2) back via R2 SQL — a different data
+    // path with its own credentials, so it forks here before touching wrangler.
+    if (options.durable === true) {
+        return runDurableLogsCommand({
+            cursor: options.cursor,
+            functionPrefix: options.functionPrefix,
+            level: options.level,
+            limit: options.limit,
+            logger,
+            minLevel: options.minLevel,
+            namespace: options.namespace,
+            ndjson: options.ndjson === true,
+            shardKey: options.shardKey,
+            since: options.since,
+            table: options.table,
+            traceId: options.traceId,
+            until: options.until,
+            userId: options.userId,
+        });
+    }
+
+    return runLogsCommand({
         cwd,
         env: options.env,
         format: options.format,
@@ -116,8 +139,8 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argum
         status: options.status,
         temporary: options.temporary === true,
         worker: argument[0],
-    }),
-);
+    });
+});
 
 export { execute };
 export type { LogsCommandOptions, LogsCommandResult };

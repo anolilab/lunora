@@ -8,9 +8,9 @@ const REF: FunctionReference = { __lunoraRef: "messages:list" };
 /** A minimal client whose three RPC methods echo which one was invoked. */
 const makeClient = (): Pick<LunoraClient, "action" | "mutation" | "query"> =>
     ({
-        action: vi.fn(async () => "action-result"),
-        mutation: vi.fn(async () => "mutation-result"),
-        query: vi.fn(async () => "query-result"),
+        action: vi.fn<(...args: unknown[]) => Promise<string>>(async () => "action-result"),
+        mutation: vi.fn<(...args: unknown[]) => Promise<string>>(async () => "mutation-result"),
+        query: vi.fn<(...args: unknown[]) => Promise<string>>(async () => "query-result"),
     }) as unknown as Pick<LunoraClient, "action" | "mutation" | "query">;
 
 describe("dispatchByKind", () => {

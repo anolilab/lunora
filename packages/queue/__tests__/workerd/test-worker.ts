@@ -8,8 +8,8 @@
  */
 import { defineQueue, queueDefaultName } from "../../src/define-queue";
 import type { QueueRegistry } from "../../src/dispatch";
-import type { QueueDefinition } from "../../src/types";
 import { dispatchQueueBatch } from "../../src/dispatch";
+import type { QueueDefinition } from "../../src/types";
 
 interface SmokeBody {
     text: string;

@@ -9,7 +9,7 @@ import { createStderrLogger } from "./logger";
  * Mirrors the `logs` command's `--format` contract (option name `format`, type
  * String) so every command that grew a `--format` flag validates identically.
  */
-const OUTPUT_FORMATS: Set<string> = new Set(["json", "pretty"]);
+const OUTPUT_FORMATS = new Set<string>(["json", "pretty"]);
 
 /**
  * Validate a `--format` value the same way `logs` does. Returns an error

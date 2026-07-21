@@ -1,6 +1,6 @@
 {
     "name": "@lunora/runtime",
-    "version": "1.0.0-alpha.29",
+    "version": "1.0.0-alpha.31",
     "description": "Lunora Worker runtime: the RPC router, shard resolver, and query coordinator",
     "keywords": [
         "cloudflare",
@@ -48,7 +48,7 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
@@ -61,13 +61,14 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@lunora/bindings": "1.0.0-alpha.9",
         "@lunora/errors": "1.0.0-alpha.6"
     },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.34",
+        "@lunora/do": "1.0.0-alpha.36",
         "@lunora/workflow": "1.0.0-alpha.11",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

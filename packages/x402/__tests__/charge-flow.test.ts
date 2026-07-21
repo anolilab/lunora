@@ -41,10 +41,6 @@ const stubFacilitator = (): ReturnType<typeof vi.fn> => {
     return fetchMock;
 };
 
-afterEach(() => {
-    vi.unstubAllGlobals();
-});
-
 /** A minimal `payment-verified` result — enough for `handle` to reach settlement. */
 const paymentVerifiedResult = {
     cancellationDispatcher: { cancel: vi.fn<() => Promise<void>>() },
@@ -70,6 +66,10 @@ const failureSettlement = {
 } as const;
 
 describe("createChargeMiddleware", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("challenges an unpaid request with 402 and never runs the handler", async () => {
         const fetchMock = stubFacilitator();
         const middleware = await createChargeMiddleware(chargeConfig);
@@ -185,6 +185,10 @@ describe("createChargeMiddleware", () => {
 });
 
 describe("withX402", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("gates a Lunora HTTP-action handler and memoises the middleware", async () => {
         stubFacilitator();
         const handler = vi.fn<(context: { id: string }, request: Request) => Response>(() => new Response("secret"));

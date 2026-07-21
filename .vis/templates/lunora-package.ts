@@ -38,7 +38,7 @@ const pkgJson = (name: string, description: string): string => `{
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check .",
         "lint:prettier:fix": "prettier --write .",
