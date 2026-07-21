@@ -109,6 +109,9 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
             (async (): Promise<void> => {
                 setLoading(true);
 
+                // No `finally` — the React Compiler bails on a `try` with a finalizer
+                // (see the queues panel). Each branch resets `loading` itself; a
+                // cancelled run skips it, leaving the newer effect to own the flag.
                 try {
                     const page = await client.queryLogArchive(JSON.parse(querySignature) as PipelineLogQuery);
 
@@ -117,6 +120,7 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
                         setCursor(page.nextCursor);
                         setError(null);
                         setNotConfigured(false);
+                        setLoading(false);
                     }
                 } catch (error_) {
                     if (!token.cancelled) {
@@ -131,9 +135,7 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
                             setNotConfigured(false);
                             setError(errorMessage(error_));
                         }
-                    }
-                } finally {
-                    if (!token.cancelled) {
+
                         setLoading(false);
                     }
                 }
@@ -152,15 +154,17 @@ export const ArchiveFeed = ({ shardKey }: ArchiveFeedProps): ReactElement => {
 
         setLoading(true);
 
+        // No `finally` (the React Compiler bails on a finalizer) — both branches
+        // clear `loading` themselves.
         try {
             const page = await client.queryLogArchive({ ...baseQuery, cursor });
 
             setRows((current) => [...(current ?? []), ...page.rows]);
             setCursor(page.nextCursor);
             setError(null);
+            setLoading(false);
         } catch (error_) {
             setError(errorMessage(error_));
-        } finally {
             setLoading(false);
         }
     };
