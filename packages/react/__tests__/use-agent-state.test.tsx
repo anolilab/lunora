@@ -45,6 +45,7 @@ const Harness = ({ onReady, options }: HarnessProps): ReactElement => {
     // Expose the latest committed result to the test from an effect — invoking a
     // prop callback during render is impure (React may replay/discard renders).
     useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-pass-data-to-parent -- test harness: the hook must run inside a component, so the effect is the only channel to surface its result to the test.
         onReady(result);
     });
 

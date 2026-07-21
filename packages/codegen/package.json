@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.47",
+    "version": "1.0.0-alpha.48",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -48,7 +48,7 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
@@ -61,8 +61,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/advisor": "1.0.0-alpha.31",
-        "@lunora/agent": "1.0.0-alpha.5",
+        "@lunora/advisor": "1.0.0-alpha.32",
+        "@lunora/agent": "1.0.0-alpha.6",
         "@lunora/container": "1.0.0-alpha.13",
         "@lunora/errors": "1.0.0-alpha.6",
         "@lunora/queue": "1.0.0-alpha.9",
@@ -73,8 +73,8 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.34",
-        "@lunora/server": "1.0.0-alpha.28",
+        "@lunora/do": "1.0.0-alpha.35",
+        "@lunora/server": "1.0.0-alpha.29",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

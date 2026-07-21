@@ -144,7 +144,7 @@ const fakeDatabase = (auth?: { userId?: string }): { ctx: { auth: { userId?: str
                 if (row) {
                     for (const [key, value] of Object.entries(patch)) {
                         if (value === undefined) {
-                            delete row[key];
+                            Reflect.deleteProperty(row, key);
                         } else {
                             row[key] = value;
                         }

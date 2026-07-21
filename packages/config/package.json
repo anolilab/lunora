@@ -1,6 +1,6 @@
 {
     "name": "@lunora/config",
-    "version": "1.0.0-alpha.71",
+    "version": "1.0.0-alpha.72",
     "description": "Internal shared CLI + Vite config layer for Lunora: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding",
     "keywords": [
         "bindings",
@@ -52,7 +52,7 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
@@ -64,10 +64,10 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/codegen": "1.0.0-alpha.47",
+        "@lunora/codegen": "1.0.0-alpha.48",
         "@lunora/container": "1.0.0-alpha.13",
         "@lunora/errors": "1.0.0-alpha.6",
-        "@lunora/seed": "1.0.0-alpha.27",
+        "@lunora/seed": "1.0.0-alpha.28",
         "@visulima/colorize": "2.0.0",
         "@visulima/find-ai-runner": "1.0.0",
         "dockerode": "catalog:tooling",

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/hyperdrive",
-    "version": "1.0.0-alpha.33",
+    "version": "1.0.0-alpha.34",
     "description": "Bring-your-own Postgres/MySQL for Lunora via Cloudflare Hyperdrive: a driver-agnostic, action-only ctx.sql",
     "keywords": [
         "cloudflare",
@@ -52,7 +52,7 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
@@ -64,9 +64,9 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/do": "1.0.0-alpha.34",
+        "@lunora/do": "1.0.0-alpha.35",
         "@lunora/errors": "1.0.0-alpha.6",
-        "@lunora/sql-store": "1.0.0-alpha.34",
+        "@lunora/sql-store": "1.0.0-alpha.35",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {

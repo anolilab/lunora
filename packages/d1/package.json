@@ -1,6 +1,6 @@
 {
     "name": "@lunora/d1",
-    "version": "1.0.0-alpha.33",
+    "version": "1.0.0-alpha.34",
     "description": "D1 adapter for Lunora .global() tables, wrapping the Sessions API for read-your-writes",
     "keywords": [
         "cloudflare",
@@ -52,7 +52,7 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
@@ -65,9 +65,9 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/do": "1.0.0-alpha.34",
+        "@lunora/do": "1.0.0-alpha.35",
         "@lunora/errors": "1.0.0-alpha.6",
-        "@lunora/sql-store": "1.0.0-alpha.34",
+        "@lunora/sql-store": "1.0.0-alpha.35",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {

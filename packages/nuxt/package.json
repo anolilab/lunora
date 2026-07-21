@@ -1,6 +1,6 @@
 {
     "name": "@lunora/nuxt",
-    "version": "1.0.0-alpha.34",
+    "version": "1.0.0-alpha.35",
     "description": "Nuxt module for Lunora — single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers",
     "keywords": [
         "cloudflare",
@@ -53,7 +53,7 @@
     "scripts": {
         "build": "packem build --development",
         "build:prod": "nuxt-module-build build",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
@@ -66,7 +66,7 @@
     },
     "dependencies": {
         "@lunora/client": "1.0.0-alpha.25",
-        "@lunora/runtime": "1.0.0-alpha.29",
+        "@lunora/runtime": "1.0.0-alpha.30",
         "@nuxt/kit": "^4.4.8"
     },
     "devDependencies": {

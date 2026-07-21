@@ -126,7 +126,7 @@ const ownedRuntime = (userId: string): { rows: Map<string, FakeRow[]>; run: Agen
                 if (row) {
                     for (const [key, value] of Object.entries(patch)) {
                         if (value === undefined) {
-                            delete row[key];
+                            Reflect.deleteProperty(row, key);
                         } else {
                             row[key] = value;
                         }

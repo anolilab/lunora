@@ -1,6 +1,6 @@
 {
     "name": "@lunora/cli",
-    "version": "1.0.0-alpha.90",
+    "version": "1.0.0-alpha.91",
     "description": "The Lunora CLI: init, dev, deploy, codegen, run, reset, and migrate commands",
     "keywords": [
         "agent-skills",
@@ -53,7 +53,7 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
@@ -67,12 +67,12 @@
     },
     "dependencies": {
         "@bomb.sh/tab": "0.0.19",
-        "@lunora/codegen": "1.0.0-alpha.47",
-        "@lunora/config": "1.0.0-alpha.71",
+        "@lunora/codegen": "1.0.0-alpha.48",
+        "@lunora/config": "1.0.0-alpha.72",
         "@lunora/container": "1.0.0-alpha.13",
-        "@lunora/d1": "1.0.0-alpha.33",
+        "@lunora/d1": "1.0.0-alpha.34",
         "@lunora/errors": "1.0.0-alpha.6",
-        "@lunora/seed": "1.0.0-alpha.27",
+        "@lunora/seed": "1.0.0-alpha.28",
         "@visulima/cerebro": "3.0.0",
         "@visulima/error": "catalog:prod",
         "@visulima/fs": "5.0.4",

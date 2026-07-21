@@ -801,7 +801,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
                 toToken: "target-token",
                 toUrl: "https://new.example.com",
             }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(/import batch failed/);
 
         const dumpDirsAfter = readdirSync(tmpdir()).filter((name) => name.startsWith("lunora-d1ps-"));
 

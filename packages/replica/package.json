@@ -1,6 +1,6 @@
 {
     "name": "@lunora/replica",
-    "version": "1.0.0-alpha.6",
+    "version": "1.0.0-alpha.7",
     "description": "Local-first replica runtime + local SQLite mirror for Lunora",
     "keywords": [
         "cloudflare",
@@ -64,7 +64,7 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
@@ -73,7 +73,7 @@
         "test:coverage": "vitest run --coverage"
     },
     "devDependencies": {
-        "@lunora/server": "1.0.0-alpha.28",
+        "@lunora/server": "1.0.0-alpha.29",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@visulima/packem": "catalog:build",
