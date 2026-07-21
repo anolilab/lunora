@@ -22,18 +22,60 @@ const formatSpan = (startedAt: number, endedAt: number): string => {
     return ms < 1000 ? `${String(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 };
 
+/** One log line, as the waterfall reads it (a subset of the `logs.list` row). */
+interface TraceLine {
+    createdAt: number;
+    fields?: Record<string, unknown>;
+    functionPath?: string;
+    level: string;
+    message: string;
+    spanId?: string;
+}
+
+/** One positioned waterfall row: a log line placed on the trace's timeline. */
+interface WaterfallRow extends TraceLine {
+    /** Right edge of the bar, as a percent of the trace span. */
+    endPct: number;
+    /** Offset from the trace start, in ms. */
+    offsetMs: number;
+    /** Left edge of the bar, as a percent of the trace span. */
+    startPct: number;
+}
+
+/**
+ * Lay each log line out on the trace's timeline: its bar starts at its offset and
+ * runs to the next line's offset (the time that elapsed before the next log) — so
+ * the lines cascade like a span waterfall. The last line (and a zero-span trace)
+ * gets a small fixed tail so it stays visible. Lines are sorted oldest-first.
+ */
+const buildWaterfall = (lines: ReadonlyArray<TraceLine>, startMs: number, spanMs: number): WaterfallRow[] => {
+    const sorted = [...lines].toSorted((a, b) => a.createdAt - b.createdAt);
+    const pct = (ms: number): number => (spanMs > 0 ? Math.min((Math.max(ms, 0) / spanMs) * 100, 100) : 0);
+
+    return sorted.map((line, index) => {
+        const offsetMs = Math.max(line.createdAt - startMs, 0);
+        const startPct = pct(offsetMs);
+        const next = sorted[index + 1];
+        const rawEnd = next === undefined ? startPct + 4 : pct(next.createdAt - startMs);
+
+        return { ...line, endPct: Math.min(Math.max(rawEnd, startPct + 1.2), 100), offsetMs, startPct };
+    });
+};
+
 /**
  * Traces tab (GAPS.md B2 follow-up — log↔trace correlation). Pick a project, then
- * a deployment; the recent dispatch traces render newest-active first, each one a
- * fold of the tenant log lines sharing a `traceId` — its root function, span of
- * time, line count, and peak severity (a red row saw an `error`/`fatal`). Select
- * a trace to drill into its timeline: every line it emitted, in order, with the
- * offset from the trace start — reusing the same `logs.list` read the Logs tab
- * uses (filtered to the one `traceId`). Both queries are live.
+ * a deployment; the recent dispatch traces render newest-active first, each a fold
+ * of the tenant log lines sharing a `traceId` — root function, a duration bar
+ * (relative to the longest trace on screen), line count, and peak severity (a red
+ * row saw an `error`/`fatal`). Select a trace to drill into its **waterfall**:
+ * each line is a bar placed on the trace's timeline, so the dispatch cascades top
+ * to bottom — reusing the same `logs.list` read the Logs tab uses (filtered to the
+ * one `traceId`). Both queries are live.
  *
- * The cloud stores no OpenTelemetry spans (durations), so this is a
- * log-reconstructed trace timeline, not a span waterfall — a true span view would
- * need a separate span store (noted in GAPS.md).
+ * The cloud stores no OpenTelemetry span durations (the OTLP path keeps only error
+ * spans → Issues), so a bar runs from a line's offset to the *next* line's — the
+ * gap until the next log, not a true span duration. A real span waterfall would
+ * need a span store (noted in GAPS.md).
  */
 export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElement => {
     const projects = useQuery(api.projects.listByOrg, { organizationId });
@@ -50,6 +92,12 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
     const selected = (traces ?? []).find((trace) => trace.traceId === traceId);
     // Lines come back newest-first; the trace starts at the oldest.
     const traceStart = selected?.startedAt ?? (lines && lines.length > 0 ? Math.min(...lines.map((line) => line.createdAt)) : 0);
+    const traceEnd = selected?.endedAt ?? (lines && lines.length > 0 ? Math.max(...lines.map((line) => line.createdAt)) : traceStart);
+    const spanMs = Math.max(traceEnd - traceStart, 0);
+    const waterfall = buildWaterfall(lines ?? [], traceStart, spanMs);
+
+    // The longest trace on screen, so each list row's duration bar reads relative to it.
+    const maxSpan = Math.max(1, ...(traces ?? []).map((trace) => trace.endedAt - trace.startedAt));
 
     return (
         <div className="stack">
@@ -121,7 +169,17 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
                                     <td className="trace-id">{trace.traceId.slice(0, 12)}</td>
                                     <td className="log-fn">{trace.functionPath ?? "—"}</td>
                                     <td>{trace.lineCount}</td>
-                                    <td className="muted">{formatSpan(trace.startedAt, trace.endedAt)}</td>
+                                    <td>
+                                        <div className="trace-dur">
+                                            <div className="trace-dur-track">
+                                                <div
+                                                    className={`trace-dur-fill trace-fill-${trace.maxLevel}`}
+                                                    style={{ width: `${String(Math.max(((trace.endedAt - trace.startedAt) / maxSpan) * 100, 3))}%` }}
+                                                />
+                                            </div>
+                                            <span className="muted trace-dur-label">{formatSpan(trace.startedAt, trace.endedAt)}</span>
+                                        </div>
+                                    </td>
                                     <td>
                                         <span className={`log-badge log-badge-${trace.maxLevel}`}>{trace.maxLevel}</span>
                                     </td>
@@ -137,26 +195,48 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
             ) : null}
 
             {traceId ? (
-                <section className="card">
-                    <h4>
-                        Trace {traceId.slice(0, 12)}
-                        {selected ? ` · ${String(selected.lineCount)} lines · ${formatSpan(selected.startedAt, selected.endedAt)}` : ""}
-                    </h4>
-                    <pre className="log-view">
-                        {[...(lines ?? [])]
-                            .toSorted((a, b) => a.createdAt - b.createdAt)
-                            .map((entry, index) => (
-                                <span className={`log-line log-line-${entry.level}`} key={`${String(entry.createdAt)}-${String(index)}`}>
-                                    <span className="log-time">+{String(Math.max(entry.createdAt - traceStart, 0))}ms</span>{" "}
-                                    <span className={`log-badge log-badge-${entry.level}`}>{entry.level}</span>{" "}
-                                    {entry.spanId ? <span className="trace-span-id">{entry.spanId.slice(0, 8)}</span> : null}{" "}
-                                    {entry.functionPath ? <span className="log-fn">{entry.functionPath}</span> : null} {entry.message}
-                                    {entry.fields ? <span className="log-fields"> {renderFields(entry.fields as Record<string, unknown>)}</span> : null}
-                                    {"\n"}
+                <section className="card trace-detail">
+                    <header className="trace-detail-head">
+                        <div>
+                            <span className="trace-detail-id">{traceId.slice(0, 16)}</span>
+                            {selected ? (
+                                <span className="trace-detail-meta">
+                                    {selected.lineCount} spans · {formatSpan(selected.startedAt, selected.endedAt)}
+                                    {selected.hasError ? <span className="trace-detail-err"> · errored</span> : null}
                                 </span>
-                            ))}
-                        {lines?.length === 0 ? "No lines for this trace in the retention window." : null}
-                    </pre>
+                            ) : null}
+                        </div>
+                        <button className="trace-close" onClick={() => setTraceId("")} type="button">
+                            Close
+                        </button>
+                    </header>
+
+                    {lines === undefined ? <p className="muted">Loading…</p> : null}
+                    {lines?.length === 0 ? <p className="muted">No lines for this trace in the retention window.</p> : null}
+
+                    <div className="trace-waterfall">
+                        {waterfall.map((row, index) => (
+                            <div
+                                className={`trace-wrow${row.level === "error" || row.level === "fatal" ? " trace-wrow-err" : ""}`}
+                                key={`${String(row.createdAt)}-${String(index)}`}
+                            >
+                                <span className="trace-off">+{String(row.offsetMs)}ms</span>
+                                <div className="trace-track" title={`+${String(row.offsetMs)}ms`}>
+                                    <div
+                                        className={`trace-bar trace-fill-${row.level}`}
+                                        style={{ left: `${String(row.startPct)}%`, width: `${String(Math.max(row.endPct - row.startPct, 0.8))}%` }}
+                                    />
+                                </div>
+                                <div className="trace-wmeta">
+                                    <span className={`log-badge log-badge-${row.level}`}>{row.level}</span>{" "}
+                                    {row.spanId ? <span className="trace-span-id">{row.spanId.slice(0, 8)}</span> : null}{" "}
+                                    {row.functionPath ? <span className="log-fn">{row.functionPath}</span> : null}{" "}
+                                    <span className="trace-msg">{row.message}</span>
+                                    {row.fields ? <span className="log-fields"> {renderFields(row.fields)}</span> : null}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 </section>
             ) : null}
         </div>

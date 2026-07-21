@@ -575,8 +575,32 @@ button.link.danger {
     padding: 8px 14px;
 }
 
-/* Traces tab — clickable trace rows + the drill-in timeline. Reuses `.table`,
-   `.log-badge-*`, `.log-fn`, `.log-view`, and `.muted`. */
+/* Traces tab. A best-in-class OTel-dashboard feel on the app's own dark tokens —
+   a trace list with relative duration bars, and a drill-in *waterfall* where each
+   log line is a span placed on the trace's timeline. Reuses `.table`,
+   `.log-badge-*`, `.log-fn`, `.log-fields`, and `.muted`. */
+
+/* Severity fill palette (bars) — the `ctx.log` ramp, quiet → loud. */
+.trace-fill-trace,
+.trace-fill-debug {
+    background: var(--muted);
+}
+
+.trace-fill-log,
+.trace-fill-info {
+    background: var(--primary);
+}
+
+.trace-fill-warn {
+    background: #d29922;
+}
+
+.trace-fill-error,
+.trace-fill-fatal {
+    background: var(--danger);
+}
+
+/* — Trace list — */
 .trace-clickable {
     cursor: pointer;
 }
@@ -597,4 +621,131 @@ button.link.danger {
 .trace-span-id {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     color: var(--muted);
+}
+
+/* Relative duration bar in the list's Span column. */
+.trace-dur {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 120px;
+}
+
+.trace-dur-track {
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: rgb(127 127 127 / 16%);
+    overflow: hidden;
+}
+
+.trace-dur-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 200ms ease;
+}
+
+.trace-dur-label {
+    font-size: 12px;
+    min-width: 44px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* — Drill-in detail — */
+.trace-detail-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.trace-detail-id {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.trace-detail-meta {
+    margin-left: 10px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.trace-detail-err {
+    color: var(--danger);
+}
+
+.trace-close {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.trace-close:hover {
+    color: var(--text);
+    border-color: var(--primary);
+}
+
+/* The waterfall: [offset] [timeline track with a positioned bar] [meta]. */
+.trace-waterfall {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 12px;
+}
+
+.trace-wrow {
+    display: grid;
+    grid-template-columns: 64px minmax(120px, 1fr) minmax(0, 2fr);
+    align-items: center;
+    gap: 10px;
+    padding: 3px 6px;
+    border-radius: 5px;
+}
+
+.trace-wrow:hover {
+    background: var(--surface-2);
+}
+
+.trace-wrow-err {
+    box-shadow: inset 2px 0 0 var(--danger);
+}
+
+.trace-off {
+    color: var(--muted);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.trace-track {
+    position: relative;
+    height: 10px;
+    border-radius: 3px;
+    background: rgb(127 127 127 / 10%);
+}
+
+.trace-bar {
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    min-width: 3px;
+    border-radius: 3px;
+    opacity: 0.9;
+}
+
+.trace-wmeta {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.trace-msg {
+    color: var(--text);
 }
