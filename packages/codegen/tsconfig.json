@@ -1,8 +1,11 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "dist",
-        "rootDir": ".",
+        // Intentionally no `outDir`/`rootDir` (unlike most sibling packages): the OpenAPI
+        // emitter inlines `../../../shared/rest-surface` (the shared REST-surface contract,
+        // bundled in at build time), and a set `rootDir` would raise TS6059 for that
+        // out-of-package file under `tsc --noEmit`. packem drives the real build from
+        // package.json exports, so neither option is load-bearing here. See shared/rest-surface.ts.
         "moduleResolution": "bundler",
         "types": ["node"]
     },

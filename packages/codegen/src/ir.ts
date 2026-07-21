@@ -219,6 +219,15 @@ export interface SchemaIR {
 export interface FunctionIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
+
+    /**
+     * Set by the `.expose({ rest: true })` builder modifier (plan 167). When
+     * `rest` is `true` the function is published on the public REST surface, so the
+     * OpenAPI emitter describes it as a real `/_lunora/rest/&lt;namespace>/&lt;fn>` path
+     * (the single source of truth the runtime router also derives from). Absent →
+     * RPC-only (the default; not on the REST surface).
+     */
+    expose?: { rest?: boolean };
     /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "messages". */
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";

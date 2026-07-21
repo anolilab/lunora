@@ -97,6 +97,7 @@ export type {
     DatabaseReader,
     DatabaseWriter,
     DurableObjectJurisdiction,
+    ExposeConfig,
     FunctionKind,
     FunctionVisibility,
     IndexDefinition,

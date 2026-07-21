@@ -380,10 +380,21 @@ interface X402ProcedureConfig {
     readonly price: number | string;
 }
 
+/**
+ * Opt-in public-surface tag attached by the `.expose({ rest: true })` builder
+ * modifier (plan 167). Marks a procedure as deliberately published over the
+ * public REST surface: the runtime mints a `/_lunora/rest/&lt;namespace>/&lt;fn>` route
+ * that dispatches THROUGH the procedure (so `ctx.auth` / RLS / validators are
+ * enforced), and the generated OpenAPI describes it. Everything is default-closed
+ * — a procedure without this tag is unreachable over REST.
+ */
+interface ExposeConfig {
+    /** Publish this procedure over the public REST surface. */
+    readonly rest?: boolean;
+}
+
 interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
     readonly args: A;
-    readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
-    readonly kind: Kind;
 
     /**
      * Set on connection-lifecycle hooks (`onConnect` / `onDisconnect`).
@@ -391,6 +402,16 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      * DO dispatches it on socket connect/disconnect rather than via a client RPC.
      * Absent on ordinary registrations.
      */
+
+    /**
+     * Set by the `.expose({ rest: true })` builder modifier. Marks the procedure
+     * as published on the public REST surface (plan 167). Absent on procedures that
+     * are reachable only via typed RPC (the default).
+     */
+    readonly expose?: ExposeConfig;
+    readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
+
+    readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
     readonly visibility?: FunctionVisibility;
 
@@ -1673,6 +1694,7 @@ export type {
     DatabaseReader,
     DatabaseWriter,
     DurableObjectJurisdiction,
+    ExposeConfig,
     ExternalSourceCursor,
     ExternalSourceDefinition,
     ExternalSourceMode,
