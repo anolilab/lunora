@@ -1,13 +1,14 @@
+/* eslint-disable unicorn/prefer-single-call -- `buffer.push` is SpanBuffer's single-arg method, not Array#push; combining the calls would silently drop all but the first event */
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import type { MetricEvent } from "../../../shared/metric-event";
 import type { SpanEvent } from "../../../shared/span-event";
+import type { ContextMetrics, ContextTracer } from "../src/context-telemetry";
+import { createMetrics, createTracer } from "../src/context-telemetry";
 import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { CtxMetrics, CtxTracer } from "../src/ctx-telemetry";
-import { createMetrics, createTracer } from "../src/ctx-telemetry";
 import { foldTraces, SpanBuffer } from "../src/span-buffer";
 
 const ADMIN_TOKEN = "test-admin-token-that-is-long-enough";
@@ -37,7 +38,7 @@ class TracingShard extends ShardDO {
  * where the shard would buffer + fan out to a sink; the factory itself only
  * decides what a span *is*, so a test needs no Durable Object.
  */
-const tracerInto = (seen: SpanEvent[]): CtxTracer =>
+const tracerInto = (seen: SpanEvent[]): ContextTracer =>
     createTracer({
         anchor: { rootSpanId: "00000000000000a1", traceId: "0af7651916cd43dd8448eb211c80319c" },
         functionPath: "a:b",
@@ -46,14 +47,21 @@ const tracerInto = (seen: SpanEvent[]): CtxTracer =>
         userId: () => "u1",
     });
 
-const stateDouble = (): ShardDOState =>
-    ({
+const stateDouble = (): ShardDOState => {
+    return {
         acceptWebSocket() {},
         getWebSockets() {
             return [];
         },
-        storage: { sql: { exec: () => ({ toArray: () => [] }) } },
-    }) as unknown as ShardDOState;
+        storage: {
+            sql: {
+                exec: () => {
+                    return { toArray: () => [] };
+                },
+            },
+        },
+    };
+};
 
 /** Minimal span, overridable per case. */
 const span = (overrides: Partial<SpanEvent> & Pick<SpanEvent, "name" | "spanId">): SpanEvent => {
@@ -313,6 +321,7 @@ describe("ctx.trace", () => {
         attributes.step = "mutated";
 
         expect(seen[0]?.attributes).toStrictEqual({ step: "start" });
+
         // Non-primitives are coerced to JSON-safe values, like log fields.
         await trace("other", () => undefined, { count: 1n });
 
@@ -363,7 +372,7 @@ describe("ctx.trace", () => {
 });
 
 describe("ctx.metrics", () => {
-    const recorderFor = (): { metrics: CtxMetrics; seen: MetricEvent[] } => {
+    const recorderFor = (): { metrics: ContextMetrics; seen: MetricEvent[] } => {
         const seen: MetricEvent[] = [];
 
         return {

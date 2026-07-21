@@ -19,6 +19,8 @@ import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import { buildBatchEntryRequest } from "./batch";
+import type { ContextMetrics, ContextTracer, TraceAnchor } from "./context-telemetry";
+import { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
 import type { CdcChange, SqlExec } from "./ctx-db";
 import {
     advanceClientWatermark,
@@ -95,13 +97,9 @@ import {
 } from "./introspect";
 import type { LogEntry } from "./log-buffer";
 import { LogBuffer } from "./log-buffer";
-import type { CtxMetrics, CtxTracer, TraceAnchor } from "./ctx-telemetry";
-import { createMetrics, createTracer, dispatchRootSpan } from "./ctx-telemetry";
-import { MetricBuffer } from "./metric-buffer";
-import { foldTraces, SpanBuffer } from "./span-buffer";
-import { resolveTraceAnchor } from "./trace-context";
 import type { RecordMailInput } from "./mail-catcher";
 import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
+import { MetricBuffer } from "./metric-buffer";
 import { armRestore, readBookmark } from "./pitr";
 import type { QueryStatEntry } from "./query-metrics";
 import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
@@ -128,9 +126,11 @@ import { buildSettings, isDevEnvironment } from "./settings";
 import type { ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 import { buildPokeFrames, diffGlobalMembership, projectColumns } from "./shape-global-diff";
 import { runSocketPool } from "./socket-pool";
+import { foldTraces, SpanBuffer } from "./span-buffer";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
 import { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
+import { resolveTraceAnchor } from "./trace-context";
 import type { TransactionSqlLike } from "./transaction";
 import { ConflictError } from "./transaction";
 import type {
@@ -173,6 +173,7 @@ const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes
  * `@lunora/do` takes no dependency on `@lunora/runtime`; the event is the same
  * {@link LogEventInput} shape `emitLogEvent` consumes, built once per call.
  */
+
 /**
  * The sink surface the DO hands its three signals to: `ctx.log` lines, `ctx.trace`
  * spans, and `ctx.metrics` measurements. Structurally compatible with
@@ -189,7 +190,7 @@ interface TelemetrySink {
  * `LunoraLogger`). Declared locally so `@lunora/do` takes no dependency on
  * `@lunora/server`; the overloaded public method type lives there.
  */
-interface CtxLogger {
+interface ContextLogger {
     debug: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
     fatal: (...args: unknown[]) => void;
@@ -197,7 +198,7 @@ interface CtxLogger {
     log: (...args: unknown[]) => void;
     trace: (...args: unknown[]) => void;
     warn: (...args: unknown[]) => void;
-    with: (fields: LogFields) => CtxLogger;
+    with: (fields: LogFields) => ContextLogger;
 }
 
 /**
@@ -1963,14 +1964,14 @@ abstract class ShardDO {
     /**
      * Recent `ctx.trace` spans (plus the synthetic per-dispatch root), powering
      * the studio's Traces panel. In-memory and hibernation-volatile like
-     * {@link logs} — production tracing ships to a collector via `otlpSink`.
+     * `logs` — production tracing ships to a collector via `otlpSink`.
      */
     private readonly spans = new SpanBuffer();
 
     /**
      * Running aggregates of `ctx.metrics.*` measurements, powering the studio's
-     * Metrics panel. In-memory and hibernation-volatile like {@link logs} and
-     * {@link spans}, but folds samples into per-series totals rather than ringing
+     * Metrics panel. In-memory and hibernation-volatile like `logs` and
+     * `spans`, but folds samples into per-series totals rather than ringing
      * raw events — production aggregation ships to a collector via the sink.
      */
     private readonly metricSeries = new MetricBuffer();
@@ -2081,6 +2082,7 @@ abstract class ShardDO {
      * Worker-side fetch entry point. Handles WebSocket upgrades and the
      * shard-local RPC endpoint forwarded by `@lunora/runtime`.
      */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- the DO's central request router; #149 added the trace-anchor capture and root-span record, tipping it to 16. Splitting the request lifecycle across helpers would hurt readability more than the +1 costs.
     public async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
 
@@ -4498,7 +4500,7 @@ abstract class ShardDO {
      * stamps `fields` onto every line. The generated `buildCtx` calls this once
      * per dispatch and assigns the result to `ctx.log`.
      */
-    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): CtxLogger {
+    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger {
         const emit = (level: ContextLogLevel, args: unknown[]): void => {
             const { fields, message } = parseLogArgs(args, boundFields);
 
@@ -4539,11 +4541,12 @@ abstract class ShardDO {
      * Thin wiring over {@link createTracer}, which owns the span semantics (see
      * there for why nesting is explicit rather than ambient). Everything it needs
      * from the shard is passed explicitly.
-     * @param anchor The trace this ctx's spans belong to. Omit for a ctx with no
+     *
+     * `anchor` is the trace this ctx's spans belong to; omit it for a ctx with no
      * owning dispatch (an alarm, a subscription re-run) to mint a fresh anchor, so
      * `ctx.trace` still yields a coherent self-contained trace there.
      */
-    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): CtxTracer {
+    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer {
         return createTracer({
             anchor: anchor ?? resolveTraceAnchor(undefined),
             functionPath,
@@ -4559,7 +4562,7 @@ abstract class ShardDO {
      * Build the `ctx.metrics` recorder for one dispatched function. Thin wiring
      * over {@link createMetrics}, which owns the instrument semantics.
      */
-    protected makeMetrics(functionPath: string, sink?: TelemetrySink): CtxMetrics {
+    protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics {
         return createMetrics({
             functionPath,
             record: (event) => {
@@ -4604,9 +4607,10 @@ abstract class ShardDO {
      * the call site): every request minting a root would fill the bounded ring
      * with single-bar traces from uninstrumented handlers and evict the
      * instrumented ones the panel exists to show.
-     * @param anchor The dispatch's trace ids, captured at entry rather than read
-     * from `this` here — this runs after the handler's awaits, where the shared
-     * field may already belong to an interleaved dispatch.
+     *
+     * `anchor` carries the dispatch's trace ids, captured at entry rather than
+     * read from `this` here — this runs after the handler's awaits, where the
+     * shared field may already belong to an interleaved dispatch.
      */
     private recordDispatchRootSpan(functionPath: string, startedAt: number, failure: { thrown: unknown } | undefined, anchor: TraceAnchor): void {
         try {
@@ -4632,6 +4636,7 @@ abstract class ShardDO {
      * a span is recorded *after* its body already settled, so letting a telemetry
      * failure escape here would turn a succeeded operation into a failed request.
      */
+    // eslint-disable-next-line @typescript-eslint/member-ordering -- kept in the span-recording cluster (next to recordDispatchRootSpan) for cohesion rather than hoisted above every private member
     protected recordSpan(span: SpanEvent, sink?: TelemetrySink): void {
         try {
             this.spans.push(span);
@@ -6113,6 +6118,7 @@ abstract class ShardDO {
      * wraps each in the {@link ADMIN_WILDCARD} sentinel, keeping that one fact in
      * a single place and `readAdminOp` under its complexity budget.
      */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- a flat admin-RPC dispatch chain (one trivial branch per function); #149 added the getTraces/getMetrics branches. A lookup table would obscure the 1:1 path→reader mapping this deliberately keeps.
     private readAdminWildcardOp(functionPath: string): unknown {
         if (functionPath === ADMIN_FUNCTIONS.listTables) {
             return listTables(this.state.storage.sql as unknown as SqlExec);
@@ -8379,20 +8385,20 @@ abstract class ShardDO {
     }
 }
 
-export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
-// Re-exported so existing import sites (`./index`, tests) keep their path; the
-// canonical home is `./subscription-delivery`.
-export { subscriptionListDeltas } from "./subscription-delivery";
 /**
  * @deprecated Renamed to {@link TelemetrySink} — it carries spans and metrics as
  * well as logs. Kept as an alias so existing import sites keep working.
  */
 type LogSink = TelemetrySink;
 
+export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
+// Re-exported so existing import sites (`./index`, tests) keep their path; the
+// canonical home is `./subscription-delivery`.
+export { subscriptionListDeltas } from "./subscription-delivery";
+
 export type {
     HibernatableWebSocket,
     LogSink,
-    TelemetrySink,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
     RunShardBulkDeleteArgs,
@@ -8407,4 +8413,5 @@ export type {
     ShardDOOptions,
     ShardDOState,
     SubscriptionOutcome,
+    TelemetrySink,
 };

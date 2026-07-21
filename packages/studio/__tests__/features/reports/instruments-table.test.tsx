@@ -49,14 +49,16 @@ const SERIES: MetricSeries[] = [
     },
 ];
 
-const createClient = (result: unknown = { series: SERIES }): MockClientHooks =>
+const DEFAULT_RESULT: unknown = { series: SERIES };
+
+const createClient = (result: unknown = DEFAULT_RESULT): MockClientHooks =>
     createMockClient({
         query: (reference): unknown => {
             if (reference === ADMIN_FUNCTIONS.getMetricSeries) {
                 return result;
             }
 
-            throw new Error(`unexpected ${String(reference)}`);
+            throw new Error(`unexpected ${reference}`);
         },
     });
 

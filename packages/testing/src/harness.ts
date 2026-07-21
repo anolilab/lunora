@@ -255,7 +255,8 @@ const stubProxy = (surface: string): unknown =>
  * the body must still execute and its result and any throw must pass through
  * untouched, or instrumenting a handler would change what the test observes.
  */
-const passthroughTrace: LunoraTracer = async <T>(_name: string, fn: (trace: LunoraTracer) => Promise<T> | T): Promise<T> => await fn(passthroughTrace);
+const passthroughTrace: LunoraTracer = async <T>(_name: string, function_: (trace: LunoraTracer) => Promise<T> | T): Promise<T> =>
+    await function_(passthroughTrace);
 
 /** `ctx.metrics` under test: accepts every measurement and records nothing. */
 const noopMetrics: LunoraMetrics = {

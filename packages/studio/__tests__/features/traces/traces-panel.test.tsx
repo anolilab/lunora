@@ -1,3 +1,4 @@
+/* eslint-disable vitest/prefer-strict-boolean-matchers -- getByTestId/findByTestId return DOM elements (truthy, not === true); toBeTruthy is the correct matcher and the strict-boolean autofix must not re-convert it */
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -131,7 +132,7 @@ describe("tracesPanel", () => {
                     return { total: 3, traces: [TRACES[0]] };
                 }
 
-                throw new Error(`unexpected ${String(reference)}`);
+                throw new Error(`unexpected ${reference}`);
             },
         });
 
@@ -158,7 +159,7 @@ describe("tracesPanel", () => {
 
         render(renderPanel(createClient([])));
 
-        expect(await screen.findByTestId("tr-empty")).toBeTruthy();
+        await expect(screen.findByTestId("tr-empty")).resolves.toBeTruthy();
     });
 
     it("keeps waterfalls collapsed until a trace is selected", async () => {
@@ -294,15 +295,17 @@ describe("tracesPanel", () => {
 });
 
 describe("spanBar", () => {
-    const span = (offsetMs: number, durationMs: number): TraceSpan => ({
-        depth: 0,
-        durationMs,
-        name: "s",
-        offsetMs,
-        ok: true,
-        parentSpanId: "",
-        spanId: "s",
-    });
+    const span = (offsetMs: number, durationMs: number): TraceSpan => {
+        return {
+            depth: 0,
+            durationMs,
+            name: "s",
+            offsetMs,
+            ok: true,
+            parentSpanId: "",
+            spanId: "s",
+        };
+    };
 
     it("converts offset and duration into percentages of the trace duration", () => {
         expect.assertions(1);

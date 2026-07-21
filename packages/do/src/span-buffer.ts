@@ -11,6 +11,8 @@
 import type { LogFields } from "../../../shared/log-fields";
 import type { SpanEvent } from "../../../shared/span-event";
 
+/* eslint-disable import/exports-last -- a data + types module: the public TraceSpan/TraceSummary shapes are declared next to the ring buffer and fold that produce them; grouping all exports at the end would scatter the contract. */
+
 const DEFAULT_CAPACITY = 500;
 
 /**
@@ -46,6 +48,7 @@ export interface TraceSummary {
     /** Display name of the trace — the root span's name. */
     rootName: string;
     shardKey?: string;
+
     /**
      * Spans ordered by `(offsetMs, depth)`, ready to render as waterfall rows.
      * Start time alone is not enough to order them: spans are recorded on
@@ -112,7 +115,7 @@ export class SpanBuffer {
 export const DEFAULT_TRACE_LIMIT = 50;
 
 /** Bucket spans by their trace id, preserving arrival order within each group. */
-const groupByTrace = (spans: readonly SpanEvent[]): Map<string, SpanEvent[]> => {
+const groupByTrace = (spans: ReadonlyArray<SpanEvent>): Map<string, SpanEvent[]> => {
     const byTrace = new Map<string, SpanEvent[]>();
 
     for (const span of spans) {
@@ -132,27 +135,21 @@ const groupByTrace = (spans: readonly SpanEvent[]): Map<string, SpanEvent[]> => 
  * Pick the span a trace hangs off, in three explicitly-ordered cases:
  *
  * 1. The synthetic dispatch span, when it is present.
- * 2. Otherwise the earliest span whose parent is **absent** from the group. Its
- *    parent was evicted from the ring or hasn't settled yet, which makes it the
- *    outermost span actually present. Both are routine for a bounded ring, not
- *    corruption.
- * 3. Otherwise the earliest span. Reachable only when *every* span's parent is
- *    present, which requires a parent cycle — impossible from the tracer, but a
- *    replayed or hand-built stream could carry one. `depthOf` breaks the cycle;
- *    this just guarantees an anchor exists.
+ * 2. Otherwise the earliest span whose parent is **absent** from the group — its parent was evicted from the ring or hasn't settled yet, which makes it the outermost span actually present. Both are routine for a bounded ring, not corruption.
+ * 3. Otherwise the earliest span. Reachable only when *every* span's parent is present, which requires a parent cycle — impossible from the tracer, but a replayed or hand-built stream could carry one. `depthOf` breaks the cycle; this just guarantees an anchor exists.
  *
  * Structure decides this, not timing: spans are recorded on completion and
  * `startTs` has millisecond resolution, so a parent and its child routinely look
  * simultaneous.
  */
-const selectAnchor = (group: readonly SpanEvent[], byId: ReadonlyMap<string, SpanEvent>): SpanEvent | undefined => {
+const selectAnchor = (group: ReadonlyArray<SpanEvent>, byId: ReadonlyMap<string, SpanEvent>): SpanEvent | undefined => {
     const declaredRoot = group.find((span) => span.dispatch === true);
 
     if (declaredRoot !== undefined) {
         return declaredRoot;
     }
 
-    const byStart = [...group].sort((a, b) => a.startTs - b.startTs);
+    const byStart = group.toSorted((a, b) => a.startTs - b.startTs);
 
     return byStart.find((span) => !byId.has(span.parentSpanId)) ?? byStart[0];
 };
@@ -177,10 +174,13 @@ const depthResolver = (anchor: SpanEvent, byId: ReadonlyMap<string, SpanEvent>):
         // memoized on the way back down.
         const chain: SpanEvent[] = [];
         const seen = new Set<string>();
-        let current: SpanEvent | undefined = span;
+        // Never undefined: the walk `break`s before it would assign an absent
+        // parent (see the `parent === undefined` guard below), so the loop is
+        // driven entirely by its internal `break`s rather than a head condition.
+        let current = span;
         let base = 0;
 
-        while (current !== undefined) {
+        for (;;) {
             const known = cache.get(current.spanId);
 
             if (known !== undefined) {
@@ -210,7 +210,7 @@ const depthResolver = (anchor: SpanEvent, byId: ReadonlyMap<string, SpanEvent>):
         // ancestor we stopped at, or the anchor (depth 0) when the walk ran out
         // of parents. So the outermost unresolved span sits one below it, and
         // each subsequent one another level down.
-        for (const [index, entry] of [...chain].reverse().entries()) {
+        for (const [index, entry] of chain.toReversed().entries()) {
             cache.set(entry.spanId, base + index + 1);
         }
 
@@ -236,7 +236,7 @@ export interface FoldedTraces {
  * @param spans Buffered spans, in arrival order.
  * @param limit Maximum number of traces to return, newest first.
  */
-export const foldTraces = (spans: readonly SpanEvent[], limit = DEFAULT_TRACE_LIMIT): FoldedTraces => {
+export const foldTraces = (spans: ReadonlyArray<SpanEvent>, limit = DEFAULT_TRACE_LIMIT): FoldedTraces => {
     const byTrace = groupByTrace(spans);
 
     // Newest-first and truncated to `limit` BEFORE folding, so a full ring only
@@ -247,7 +247,7 @@ export const foldTraces = (spans: readonly SpanEvent[], limit = DEFAULT_TRACE_LI
         .map(([traceId, group]) => {
             return { group, startTs: Math.min(...group.map((span) => span.startTs)), traceId };
         })
-        .sort((a, b) => b.startTs - a.startTs)
+        .toSorted((a, b) => b.startTs - a.startTs)
         .slice(0, limit);
 
     const summaries: TraceSummary[] = [];
@@ -261,7 +261,7 @@ export const foldTraces = (spans: readonly SpanEvent[], limit = DEFAULT_TRACE_LI
         }
 
         const depthOf = depthResolver(anchor, byId);
-        const startTs = anchor.startTs;
+        const { startTs } = anchor;
         const endTs = Math.max(...group.map((span) => span.startTs + span.durationMs));
 
         const rows: TraceSpan[] = group
@@ -285,7 +285,7 @@ export const foldTraces = (spans: readonly SpanEvent[], limit = DEFAULT_TRACE_LI
             // a child is buffered before its parent, and at millisecond resolution
             // the two routinely share a `startTs` — without it a child would sort
             // above the parent it belongs under.
-            .sort((a, b) => a.offsetMs - b.offsetMs || a.depth - b.depth);
+            .toSorted((a, b) => a.offsetMs - b.offsetMs || a.depth - b.depth);
 
         summaries.push({
             durationMs: endTs - startTs,
@@ -303,5 +303,5 @@ export const foldTraces = (spans: readonly SpanEvent[], limit = DEFAULT_TRACE_LI
     // earliest span, which is the anchor in the normal case but not when the
     // group is partial. `total` is the distinct-trace count BEFORE the `limit`
     // slice, so the panel can flag when older traces exist but weren't returned.
-    return { total: byTrace.size, traces: summaries.sort((a, b) => b.startTs - a.startTs) };
+    return { total: byTrace.size, traces: summaries.toSorted((a, b) => b.startTs - a.startTs) };
 };

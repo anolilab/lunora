@@ -95,9 +95,7 @@ const encodeSignalAttributes = (
     reserved: { errorType?: string; functionPath: string; shardKey?: string; userId?: string },
     caller: Record<string, unknown> | undefined,
 ): OtlpAttribute[] => {
-    const byKey = new Map<string, OtlpAttribute>();
-
-    byKey.set("lunora.function_path", encodeAttribute("lunora.function_path", reserved.functionPath));
+    const byKey = new Map<string, OtlpAttribute>([["lunora.function_path", encodeAttribute("lunora.function_path", reserved.functionPath)]]);
 
     if (reserved.shardKey !== undefined) {
         byKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", reserved.shardKey));
@@ -772,9 +770,9 @@ export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink =
      * diverge. Forwarding `context` matters — dropping the request's `waitUntil`
      * would silently degrade every wrapped network sink to fire-and-forget.
      */
-    const fanOut = <E>(method: "onLog" | "onMetric" | "onRpc" | "onSpan", event: E, context?: ObservabilitySinkContext): void => {
+    const fanOut = (method: "onLog" | "onMetric" | "onRpc" | "onSpan", event: unknown, context?: ObservabilitySinkContext): void => {
         for (const sink of sinks) {
-            const handler = sink[method] as ((event: E, context?: ObservabilitySinkContext) => void) | undefined;
+            const handler = sink[method] as ((event: unknown, context?: ObservabilitySinkContext) => void) | undefined;
 
             if (!handler) {
                 continue;
@@ -789,9 +787,17 @@ export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink =
     };
 
     return {
-        onLog: (event: LogEvent, context?: ObservabilitySinkContext) => fanOut("onLog", event, context),
-        onMetric: (event: MetricEvent, context?: ObservabilitySinkContext) => fanOut("onMetric", event, context),
-        onRpc: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => fanOut("onRpc", event, context),
-        onSpan: (event: SpanEvent, context?: ObservabilitySinkContext) => fanOut("onSpan", event, context),
+        onLog: (event: LogEvent, context?: ObservabilitySinkContext) => {
+            fanOut("onLog", event, context);
+        },
+        onMetric: (event: MetricEvent, context?: ObservabilitySinkContext) => {
+            fanOut("onMetric", event, context);
+        },
+        onRpc: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => {
+            fanOut("onRpc", event, context);
+        },
+        onSpan: (event: SpanEvent, context?: ObservabilitySinkContext) => {
+            fanOut("onSpan", event, context);
+        },
     };
 };

@@ -333,6 +333,22 @@ class ConflictError extends LunoraError {
 }
 ```
 
+### `ContextMetrics` (interface)
+
+```ts
+interface ContextMetrics {
+    count: (name: string, value?: number, attributes?: LogFields) => void;
+    gauge: (name: string, value: number, attributes?: LogFields) => void;
+    record: (name: string, value: number, attributes?: LogFields) => void;
+}
+```
+
+### `ContextTracer` (type)
+
+```ts
+type ContextTracer = <T>(name: string, function_: (trace: ContextTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+```
+
 ### `CountArgs` (type)
 
 ```ts
@@ -369,22 +385,6 @@ interface CtxDbOptions {
     sql: SqlExec;
     storage?: SystemReaderStorageLike;
 }
-```
-
-### `CtxMetrics` (interface)
-
-```ts
-interface CtxMetrics {
-    count: (name: string, value?: number, attributes?: LogFields) => void;
-    gauge: (name: string, value: number, attributes?: LogFields) => void;
-    record: (name: string, value: number, attributes?: LogFields) => void;
-}
-```
-
-### `CtxTracer` (type)
-
-```ts
-type CtxTracer = <T>(name: string, fn: (trace: CtxTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 ```
 
 ### `DATA_MIGRATION_STATE_TABLE` (const)
@@ -1905,9 +1905,9 @@ abstract class ShardDO {
     protected recordChangedTable(table: string): void;
     protected flushMigrationProgress(): Promise<void>;
     protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink): void;
-    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): CtxLogger;
-    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): CtxTracer;
-    protected makeMetrics(functionPath: string, sink?: TelemetrySink): CtxMetrics;
+    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger;
+    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer;
+    protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics;
     protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void;
     protected recordSpan(span: SpanEvent, sink?: TelemetrySink): void;
     protected isIdentityIndependent(functionPath: string): boolean;
@@ -2574,7 +2574,7 @@ const createDependencyTracker: () => DependencyTracker;
 ### `createMetrics` (const)
 
 ```ts
-const createMetrics: (deps: MetricsDeps) => CtxMetrics;
+const createMetrics: (deps: MetricsDeps) => ContextMetrics;
 ```
 
 ### `createShardCtxDb` (const)
@@ -2592,7 +2592,7 @@ const createSystemReader: (options?: SystemReaderOptions) => SystemDatabaseReade
 ### `createTracer` (const)
 
 ```ts
-const createTracer: (deps: TracerDeps) => CtxTracer;
+const createTracer: (deps: TracerDeps) => ContextTracer;
 ```
 
 ### `decodeCursor` (const)

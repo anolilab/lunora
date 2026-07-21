@@ -965,6 +965,7 @@ export interface TraceSummary {
     rootName: string;
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey?: string;
+
     /**
      * Spans ordered by `(offsetMs, depth)`, ready to render as waterfall rows.
      * Start time alone cannot order them: spans are recorded on completion, and

@@ -833,12 +833,10 @@ interface LunoraMetrics {
 type LunoraRouteHandler = (c: Context<LunoraHttpEnv>) => Promise<Response>;
 ```
 
-### `LunoraTracer` (interface)
+### `LunoraTracer` (type)
 
 ```ts
-interface LunoraTracer {
-    <T>(name: string, fn: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields): Promise<T>;
-}
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 ```
 
 ### `ManyRelation` (interface)
@@ -4015,12 +4013,10 @@ interface LunoraMetrics {
 }
 ```
 
-### `LunoraTracer` (interface)
+### `LunoraTracer` (type)
 
 ```ts
-interface LunoraTracer {
-    <T>(name: string, fn: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields): Promise<T>;
-}
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 ```
 
 ### `MutationCtx` (interface)

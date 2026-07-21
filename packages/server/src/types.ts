@@ -1385,9 +1385,7 @@ interface LunoraLogger {
  * @param attributes Structured attributes to stamp on the span, normalized like
  * a log line's `fields`.
  */
-interface LunoraTracer {
-    <T>(name: string, fn: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields): Promise<T>;
-}
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 
 /**
  * Application metrics on every function `ctx` — the third signal alongside
@@ -1421,11 +1419,13 @@ interface LunoraMetrics {
      * bytes sent. The collector sums successive deltas.
      */
     readonly count: (name: string, value?: number, attributes?: LogFields) => void;
+
     /**
      * Report a point-in-time reading that replaces the previous one — queue
      * depth, cache size, connections open.
      */
     readonly gauge: (name: string, value: number, attributes?: LogFields) => void;
+
     /**
      * Observe one sample of a distribution — latency, payload size. Use this,
      * not a counter, when percentiles matter.

@@ -1,6 +1,9 @@
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
+// Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
+// sinks and the dev-terminal formatter (see CLAUDE.md `shared/` rules).
+import { formatLogFields } from "../../../../../shared/log-fields";
 import { ErrorAlert } from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
@@ -10,15 +13,12 @@ import { Input } from "../../components/ui/input";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
-import type { TraceSpan, TraceSummary, TracesResult } from "../../lib/admin";
+import type { TraceSpan, TracesResult, TraceSummary } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
 import { filterTraces, formatSpanDuration, spanBar } from "./trace-geometry";
-// Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
-// sinks and the dev-terminal formatter (see CLAUDE.md `shared/` rules).
-import { formatLogFields } from "../../../../../shared/log-fields";
 
 /** Pixels of indent per nesting level of a span row. */
 const INDENT_PER_DEPTH = 14;
@@ -223,7 +223,6 @@ export const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement
     // so a shard visited here shows up in every other panel's autocomplete —
     // matching the nine other shard-scoped panels.
     useEffect(() => {
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- recording the browsed shard is derived from the resolved read (a value, not a discrete event); writing it when the data lands is the correct pattern.
         if (data !== undefined) {
             recordShard(debouncedShard);
         }

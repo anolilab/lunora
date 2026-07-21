@@ -305,7 +305,7 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `LunoraTracer` (interface)
+### `LunoraTracer` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1801,6 +1801,14 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `ContextMetrics` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `ContextTracer` (type)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `CountArgs` (type)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -1810,14 +1818,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `CtxDbOptions` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `CtxMetrics` (interface)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `CtxTracer` (type)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -4251,7 +4251,7 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `LunoraTracer` (interface)
+### `LunoraTracer` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6019,7 +6019,7 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `LunoraTracer` (interface)
+### `LunoraTracer` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

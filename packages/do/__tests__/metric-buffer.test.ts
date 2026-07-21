@@ -1,14 +1,17 @@
+/* eslint-disable unicorn/prefer-single-call -- `buffer.push` is MetricBuffer's single-arg method, not Array#push; combining the calls would silently drop all but the first event */
 import { describe, expect, it } from "vitest";
 
 import type { MetricEvent } from "../../../shared/metric-event";
 import { MetricBuffer } from "../src/metric-buffer";
 
 /** Build a MetricEvent with sensible defaults so each test states only what it exercises. */
-const event = (over: Partial<MetricEvent> & Pick<MetricEvent, "kind" | "name" | "value">): MetricEvent => ({
-    functionPath: "orders:checkout",
-    ts: 1000,
-    ...over,
-});
+const event = (over: Partial<MetricEvent> & Pick<MetricEvent, "kind" | "name" | "value">): MetricEvent => {
+    return {
+        functionPath: "orders:checkout",
+        ts: 1000,
+        ...over,
+    };
+};
 
 describe("metricBuffer", () => {
     it("folds repeated counter measurements into one running series", () => {

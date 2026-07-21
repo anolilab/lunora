@@ -340,9 +340,6 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 ],
             };
         }
-        case ADMIN_FUNCTIONS.getMetricSeries: {
-            return { series: METRIC_SERIES };
-        }
         case ADMIN_FUNCTIONS.getMetrics: {
             return {
                 cache: { bytes: 1_048_576, entries: 312, evictions: 4, hits: 8421, misses: 311 },
@@ -355,6 +352,9 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 sinceMs: now - 3_600_000,
                 uptimeMs: 5_400_000,
             };
+        }
+        case ADMIN_FUNCTIONS.getMetricSeries: {
+            return { series: METRIC_SERIES };
         }
         case ADMIN_FUNCTIONS.getPitrBookmark: {
             return { current: "0000003f-0000000a" };

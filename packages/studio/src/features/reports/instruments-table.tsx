@@ -1,5 +1,8 @@
 import type { ReactElement } from "react";
 
+// Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
+// sinks and the other observability panels (see CLAUDE.md `shared/` rules).
+import { formatLogFields } from "../../../../../shared/log-fields";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -8,9 +11,6 @@ import { useT } from "../../i18n/i18n-context";
 import type { MetricKind, MetricSeries, MetricSeriesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatMetricValue, metricHeadline } from "./instrument-format";
-// Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
-// sinks and the other observability panels (see CLAUDE.md `shared/` rules).
-import { formatLogFields } from "../../../../../shared/log-fields";
 
 interface InstrumentsTableProps {
     /** Shard key the series are read from — already debounced by the parent. */

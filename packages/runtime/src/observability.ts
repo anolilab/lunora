@@ -87,6 +87,7 @@ export type ObservabilitySinkContext = LogSinkContext;
 export interface ObservabilitySink {
     /** Invoked once per `ctx.log.*` call from a function handler. */
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
+
     /**
      * Invoked once per `ctx.metrics.*` measurement. No pre-aggregation happens
      * upstream, so counter values are deltas for the destination to sum.
@@ -94,6 +95,7 @@ export interface ObservabilitySink {
     onMetric?: (event: MetricEvent, context?: ObservabilitySinkContext) => void;
     /** Invoked once per dispatched RPC (single-shard or fan-out). */
     onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
+
     /**
      * Invoked once per `ctx.trace(name, fn)` span, when the span body settles.
      * Distinct from `onRpc`: that is the one SERVER span per dispatch, this is the

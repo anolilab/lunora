@@ -1,11 +1,11 @@
-import type { CtxMetrics, CtxTracer } from "@lunora/do";
+import type { ContextMetrics, ContextTracer } from "@lunora/do";
 import type { LunoraMetrics, LunoraTracer } from "@lunora/server";
 import { describe, expect, it } from "vitest";
 
 /**
  * Cross-package drift guard for the `ctx.trace` / `ctx.metrics` contracts.
  *
- * `@lunora/do` declares `CtxTracer`/`CtxMetrics` structurally rather than
+ * `@lunora/do` declares `ContextTracer`/`ContextMetrics` structurally rather than
  * importing `@lunora/server`, because the dependency edge runs the other way —
  * the DO is the lower tier. That leaves two hand-mirrored definitions of one
  * contract, and a mirror with no guard drifts (the studio's `TraceSummary` copy
@@ -30,18 +30,18 @@ import { describe, expect, it } from "vitest";
 /** `true` only when `A` and `B` are mutually assignable. */
 type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 
-const TRACER_CONTRACT_GUARD: MutuallyAssignable<CtxTracer, LunoraTracer> = true;
+const TRACER_CONTRACT_GUARD: MutuallyAssignable<ContextTracer, LunoraTracer> = true;
 
-const METRICS_CONTRACT_GUARD: MutuallyAssignable<CtxMetrics, LunoraMetrics> = true;
+const METRICS_CONTRACT_GUARD: MutuallyAssignable<ContextMetrics, LunoraMetrics> = true;
 
 describe("ctx telemetry contract", () => {
-    it("keeps @lunora/do's CtxTracer in lockstep with @lunora/server's LunoraTracer", () => {
+    it("keeps @lunora/do's ContextTracer in lockstep with @lunora/server's LunoraTracer", () => {
         expect.assertions(1);
 
         expect(TRACER_CONTRACT_GUARD).toBe(true);
     });
 
-    it("keeps @lunora/do's CtxMetrics in lockstep with @lunora/server's LunoraMetrics", () => {
+    it("keeps @lunora/do's ContextMetrics in lockstep with @lunora/server's LunoraMetrics", () => {
         expect.assertions(1);
 
         expect(METRICS_CONTRACT_GUARD).toBe(true);

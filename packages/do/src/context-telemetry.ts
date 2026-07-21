@@ -27,10 +27,10 @@ import { toErrorType } from "./trace-context";
  * dependency on `@lunora/server`; a cross-package assignability guard in
  * `@lunora/testing` fails the build if the two drift apart.
  */
-export type CtxTracer = <T>(name: string, fn: (trace: CtxTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+export type ContextTracer = <T>(name: string, function_: (trace: ContextTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 
 /** Structural shape of the `ctx.metrics` recorder (see the server `LunoraMetrics`). */
-export interface CtxMetrics {
+export interface ContextMetrics {
     count: (name: string, value?: number, attributes?: LogFields) => void;
     gauge: (name: string, value: number, attributes?: LogFields) => void;
     record: (name: string, value: number, attributes?: LogFields) => void;
@@ -82,15 +82,15 @@ export interface MetricsDeps {
  *
  * The anchor is passed in for the same reason. `ShardDO.currentRequestTrace` is
  * cleared in the dispatch `finally`, and a subscription re-run builds its ctx
- * *during* the writing mutation's flush — so reading that shared field at span
+ * during* the writing mutation's flush — so reading that shared field at span
  * time would file the re-run's spans under the mutation's trace.
  */
-export const createTracer = (deps: TracerDeps): CtxTracer => {
+export const createTracer = (deps: TracerDeps): ContextTracer => {
     const { anchor, functionPath, record, shardKey, userId } = deps;
 
     const tracerFor =
-        (parentSpanId: string): CtxTracer =>
-        async <T>(name: string, fn: (trace: CtxTracer) => Promise<T> | T, attributes?: LogFields): Promise<T> => {
+        (parentSpanId: string): ContextTracer =>
+        async <T>(name: string, function_: (trace: ContextTracer) => Promise<T> | T, attributes?: LogFields): Promise<T> => {
             const spanId = otlpRandomHex(8);
             const startTs = Date.now();
             // Normalized once, before the body runs, so a caller mutating the
@@ -103,19 +103,19 @@ export const createTracer = (deps: TracerDeps): CtxTracer => {
             try {
                 // The body gets a tracer bound to THIS span, so anything it opens
                 // is a child of it — under `Promise.all` too.
-                return await fn(tracerFor(spanId));
-            } catch (caught) {
+                return await function_(tracerFor(spanId));
+            } catch (error_) {
                 // Record the failure, then re-throw untouched: `ctx.trace` is
                 // instrumentation, never flow control.
                 ok = false;
                 error = {
-                    message: caught instanceof Error ? caught.message : String(caught),
+                    message: error_ instanceof Error ? error_.message : String(error_),
                     // Prefer a LunoraError's stable `code` over the class name so
                     // spans group by the same taxonomy the RPC spans use.
-                    type: toErrorType(caught),
+                    type: toErrorType(error_),
                 };
 
-                throw caught;
+                throw error_;
             } finally {
                 // Guarded here, not only in the injected `record`: the span is
                 // recorded *after* the body already settled, so a telemetry
@@ -157,7 +157,7 @@ export const createTracer = (deps: TracerDeps): CtxTracer => {
  * distribution) — so the runtime stays a transport and the collector, which is
  * built for exactly this, does the aggregation.
  */
-export const createMetrics = (deps: MetricsDeps): CtxMetrics => {
+export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
     const { functionPath, record, shardKey } = deps;
 
     const emit = (kind: MetricKind, name: string, value: number, attributes?: LogFields): void => {
@@ -186,9 +186,15 @@ export const createMetrics = (deps: MetricsDeps): CtxMetrics => {
     };
 
     return {
-        count: (name: string, value = 1, attributes?: LogFields) => emit("counter", name, value, attributes),
-        gauge: (name: string, value: number, attributes?: LogFields) => emit("gauge", name, value, attributes),
-        record: (name: string, value: number, attributes?: LogFields) => emit("histogram", name, value, attributes),
+        count: (name: string, value = 1, attributes?: LogFields) => {
+            emit("counter", name, value, attributes);
+        },
+        gauge: (name: string, value: number, attributes?: LogFields) => {
+            emit("gauge", name, value, attributes);
+        },
+        record: (name: string, value: number, attributes?: LogFields) => {
+            emit("histogram", name, value, attributes);
+        },
     };
 };
 
