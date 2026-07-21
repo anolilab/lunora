@@ -413,3 +413,129 @@ export const decodeObservations = (payload: OtlpTracePayload): SpanObservation[]
 
     return observations;
 };
+
+// ── OTLP metrics ────────────────────────────────────────────────────────────
+// The tenant `otlpSink` POSTs `ctx.metrics.*` measurements as an OTLP
+// `ExportMetricsServiceRequest` to `/v1/metrics`. We flatten each data point to
+// a `MetricPoint` the store writes to Analytics Engine (queryable via AE SQL) —
+// so a measurement lands somewhere rather than 404-ing.
+
+/** One OTLP numeric data point (gauge/sum) — the variants Lunora emits. */
+interface OtlpNumberDataPoint {
+    asDouble?: number;
+    asInt?: string;
+    attributes?: OtlpKeyValue[];
+    timeUnixNano?: string;
+}
+
+/** One OTLP histogram data point — only its `sum` is read. */
+interface OtlpHistogramDataPoint {
+    attributes?: OtlpKeyValue[];
+    sum?: number;
+    timeUnixNano?: string;
+}
+
+interface OtlpMetric {
+    gauge?: { dataPoints?: OtlpNumberDataPoint[] };
+    histogram?: { dataPoints?: OtlpHistogramDataPoint[] };
+    name?: string;
+    sum?: { dataPoints?: OtlpNumberDataPoint[] };
+}
+
+interface OtlpScopeMetrics {
+    metrics?: OtlpMetric[];
+    scope?: { name?: string };
+}
+
+interface OtlpResourceMetrics {
+    resource?: { attributes?: OtlpKeyValue[] };
+    scopeMetrics?: OtlpScopeMetrics[];
+}
+
+/** The subset of an OTLP `ExportMetricsServiceRequest` the ingest reads. */
+export interface OtlpMetricsPayload {
+    resourceMetrics?: OtlpResourceMetrics[];
+}
+
+/** One flattened metric measurement, as the store writes it. */
+export interface MetricPoint {
+    /** Selected `lunora.*` string attributes on the data point. */
+    attributes?: Record<string, string>;
+    /** The `lunora.function_path` attribute, when the measurement was attributed. */
+    functionPath?: string;
+    /** The instrument kind. */
+    kind: "gauge" | "histogram" | "sum";
+    /** The metric name (e.g. `queue.depth`). */
+    name: string;
+    /** The `service.name` resource attribute, when set. */
+    serviceName?: string;
+    /** The measured value (double, int→number, or a histogram's sum). */
+    value: number;
+}
+
+/** Read a numeric data point's value (`asDouble`, then `asInt`, then a histogram `sum`). */
+const dataPointValue = (dataPoint: OtlpHistogramDataPoint & OtlpNumberDataPoint): number | undefined => {
+    if (typeof dataPoint.asDouble === "number" && Number.isFinite(dataPoint.asDouble)) {
+        return dataPoint.asDouble;
+    }
+
+    if (dataPoint.asInt !== undefined) {
+        const parsed = Number(dataPoint.asInt);
+
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    return typeof dataPoint.sum === "number" && Number.isFinite(dataPoint.sum) ? dataPoint.sum : undefined;
+};
+
+/** Flatten every data point of an OTLP metrics payload into {@link MetricPoint}s. Tolerant — a valueless point is skipped. */
+export const decodeMetricPoints = (payload: OtlpMetricsPayload): MetricPoint[] => {
+    const points: MetricPoint[] = [];
+
+    for (const resourceMetrics of payload.resourceMetrics ?? []) {
+        const serviceName = attributeString(resourceMetrics.resource?.attributes, "service.name");
+
+        for (const scopeMetrics of resourceMetrics.scopeMetrics ?? []) {
+            for (const metric of scopeMetrics.metrics ?? []) {
+                const name = metric.name;
+
+                if (name === undefined || name === "") {
+                    continue;
+                }
+
+                const emit = (kind: MetricPoint["kind"], dataPoints: (OtlpHistogramDataPoint & OtlpNumberDataPoint)[] | undefined): void => {
+                    for (const dataPoint of dataPoints ?? []) {
+                        const value = dataPointValue(dataPoint);
+
+                        if (value === undefined) {
+                            continue;
+                        }
+
+                        points.push({
+                            attributes: lunoraAttributes(dataPoint.attributes),
+                            functionPath: attributeString(dataPoint.attributes, "lunora.function_path"),
+                            kind,
+                            name,
+                            serviceName,
+                            value,
+                        });
+                    }
+                };
+
+                if (metric.gauge) {
+                    emit("gauge", metric.gauge.dataPoints);
+                }
+
+                if (metric.sum) {
+                    emit("sum", metric.sum.dataPoints);
+                }
+
+                if (metric.histogram) {
+                    emit("histogram", metric.histogram.dataPoints);
+                }
+            }
+        }
+    }
+
+    return points;
+};

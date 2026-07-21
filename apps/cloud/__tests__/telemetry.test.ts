@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { crossesThreshold, isSafeWebhookUrl, renderAlert } from "../src/telemetry/alerts";
 import type { OtlpTracePayload } from "../src/telemetry/otlp";
-import { decodeLogRecords, decodeObservations, decodeTelemetryEvents } from "../src/telemetry/otlp";
+import { decodeLogRecords, decodeMetricPoints, decodeObservations, decodeTelemetryEvents } from "../src/telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../src/telemetry/store";
 import { buildTriagePrompt, MAX_ISSUES } from "../src/telemetry/triage";
 
@@ -440,5 +440,36 @@ describe(decodeLogRecords, () => {
 
         expect(entry?.level).toBe("info");
         expect(decodeLogRecords({})).toHaveLength(0);
+    });
+});
+
+describe(decodeMetricPoints, () => {
+    it("flattens gauge / sum / histogram data points to metric points", () => {
+        const points = decodeMetricPoints({
+            resourceMetrics: [
+                {
+                    resource: { attributes: [{ key: "service.name", value: { stringValue: "orders" } }] },
+                    scopeMetrics: [
+                        {
+                            metrics: [
+                                { gauge: { dataPoints: [{ asDouble: 7 }] }, name: "queue.depth" },
+                                { name: "requests", sum: { dataPoints: [{ asInt: "12" }] } },
+                                { histogram: { dataPoints: [{ sum: 340 }] }, name: "latency" },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        });
+
+        expect(points).toEqual([
+            { attributes: undefined, functionPath: undefined, kind: "gauge", name: "queue.depth", serviceName: "orders", value: 7 },
+            { attributes: undefined, functionPath: undefined, kind: "sum", name: "requests", serviceName: "orders", value: 12 },
+            { attributes: undefined, functionPath: undefined, kind: "histogram", name: "latency", serviceName: "orders", value: 340 },
+        ]);
+    });
+
+    it("skips a data point with no numeric value", () => {
+        expect(decodeMetricPoints({ resourceMetrics: [{ scopeMetrics: [{ metrics: [{ gauge: { dataPoints: [{}] }, name: "x" }] }] }] })).toHaveLength(0);
     });
 });

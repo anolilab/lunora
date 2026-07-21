@@ -17,7 +17,7 @@ import { createAnalytics } from "@lunora/bindings/analytics";
 import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { createPipelines } from "@lunora/bindings/pipelines";
 
-import type { TelemetryEvent } from "./otlp";
+import type { MetricPoint, TelemetryEvent } from "./otlp";
 
 /** Per-ingest counts, recorded as one metric point for dashboards/alerts. */
 export interface TelemetryCounts {
@@ -26,12 +26,17 @@ export interface TelemetryCounts {
     organizationId: string;
 }
 
+/** Max metric data points written to AE per ingest (bounds the fan-out). */
+const MAX_METRIC_WRITES = 500;
+
 /** The non-relational telemetry sink — metrics + raw archival. */
 export interface TelemetryStore {
     /** Archive the raw decoded events (Pipeline → R2). No-op without the binding. */
     archiveEvents: (events: ReadonlyArray<TelemetryEvent>) => Promise<void>;
     /** Record one ingest's issue/incident counts as an AE data point. */
     recordCounts: (counts: TelemetryCounts) => void;
+    /** Write each `ctx.metrics.*` measurement to AE (`/v1/metrics`). No-op without the binding. */
+    recordMetrics: (points: ReadonlyArray<MetricPoint>, organizationId: string) => void;
 }
 
 /** The telemetry bindings the store reads off the worker env (all optional). */
@@ -66,6 +71,22 @@ export const createCloudflareTelemetryStore = (env: TelemetryStoreEnv): Telemetr
                 doubles: [counts.issues, counts.incidents],
                 indexes: [counts.organizationId],
             });
+        },
+        recordMetrics: (points, organizationId) => {
+            if (!env.TELEMETRY || points.length === 0) {
+                return;
+            }
+
+            const analytics = createAnalytics(env.TELEMETRY);
+
+            for (const point of points.slice(0, MAX_METRIC_WRITES)) {
+                analytics.writeDataPoint({
+                    blobs: [point.name, point.kind, point.functionPath ?? "", organizationId, point.serviceName ?? ""],
+                    doubles: [point.value],
+                    // Sample per metric name so AE keeps per-metric resolution.
+                    indexes: [point.name],
+                });
+            }
         },
     };
 };
