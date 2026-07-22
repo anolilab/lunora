@@ -2,15 +2,15 @@ import { useLunora } from "@lunora/react";
 // Reuse the runtime's health response contract (type-only, so no runtime code is
 // pulled into the browser bundle) — the panel must never redefine the wire shape.
 import type { HealthBody } from "@lunora/runtime";
+import { useQuery } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Skeleton } from "../../components/ui/skeleton";
 import { useT } from "../../i18n/i18n-context";
-import { fireAndForget } from "../../lib/internal";
+import { formatTimestamp } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 
 // The two public probe routes. Kept as local string constants (rather than
@@ -61,32 +61,30 @@ const joinHealthUrl = (base: string, path: string): string => (base.endsWith("/"
 const useDefaultProbe = (): DeploymentHealthProbe => {
     const client = useLunora();
 
-    return useCallback<DeploymentHealthProbe>(
-        async (kind) => {
-            const path = kind === "ready" ? HEALTH_READY_PATH : HEALTH_PATH;
-            const token = client.getAuthToken();
-            const url = joinHealthUrl(client.url, path);
+    // A plain closure — React Compiler memoizes it on `client`, so no useCallback.
+    return async (kind) => {
+        const path = kind === "ready" ? HEALTH_READY_PATH : HEALTH_PATH;
+        const token = client.getAuthToken();
+        const url = joinHealthUrl(client.url, path);
+
+        try {
+            const response = await fetch(url, {
+                headers: token === null ? {} : { authorization: `Bearer ${token}` },
+            });
+
+            let body: HealthBody | null = null;
 
             try {
-                const response = await fetch(url, {
-                    headers: token === null ? {} : { authorization: `Bearer ${token}` },
-                });
-
-                let body: HealthBody | null = null;
-
-                try {
-                    body = (await response.json()) as HealthBody;
-                } catch {
-                    body = null;
-                }
-
-                return { body, ok: response.ok, status: response.status };
-            } catch (error: unknown) {
-                return { body: null, error: error instanceof Error ? error.message : String(error), ok: false, status: 0 };
+                body = (await response.json()) as HealthBody;
+            } catch {
+                body = null;
             }
-        },
-        [client],
-    );
+
+            return { body, ok: response.ok, status: response.status };
+        } catch (error: unknown) {
+            return { body: null, error: error instanceof Error ? error.message : String(error), ok: false, status: 0 };
+        }
+    };
 };
 
 /** Overall severity, driving the status dot/ring colours. */
@@ -141,39 +139,24 @@ export const DeploymentHealthPanel = ({ probe }: DeploymentHealthPanelProps): Re
     const defaultProbe = useDefaultProbe();
     const runProbe = probe ?? defaultProbe;
 
-    const [live, setLive] = useState<ProbeSnapshot | null>(null);
-    const [ready, setReady] = useState<ProbeSnapshot | null>(null);
-    const [loading, setLoading] = useState(true);
+    // Fetch both probes through the query cache — no manual effect + setState
+    // (which trips react-doctor's set-state-in-effect / stale-deps), and React
+    // Query handles unmount so there's no `mountedRef`. `runProbe` is closed into
+    // `queryFn`; the stable key means an injected test `probe` runs exactly once.
+    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- `runProbe` is a stable injected/compiler-memoized fetcher, not a data input; keying the query on a function would be an anti-pattern (and would refetch on every render)
+    const { data, isPending } = useQuery({
+        queryFn: async (): Promise<{ live: ProbeSnapshot; ready: ProbeSnapshot }> => {
+            const [liveResult, readyResult] = await Promise.all([runProbe("live"), runProbe("ready")]);
 
-    const mountedRef = useRef(true);
+            return { live: liveResult, ready: readyResult };
+        },
+        queryKey: ["deployment-health"],
+    });
 
-    useEffect(() => {
-        mountedRef.current = true;
+    const live = data?.live ?? null;
+    const ready = data?.ready ?? null;
 
-        return () => {
-            mountedRef.current = false;
-        };
-    }, []);
-
-    const refresh = useCallback(async (): Promise<void> => {
-        setLoading(true);
-
-        const [liveResult, readyResult] = await Promise.all([runProbe("live"), runProbe("ready")]);
-
-        if (!mountedRef.current) {
-            return;
-        }
-
-        setLive(liveResult);
-        setReady(readyResult);
-        setLoading(false);
-    }, [runProbe]);
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    if (loading && live === null) {
+    if (isPending) {
         return (
             <div className="flex flex-col gap-4" data-testid="deployment-health-loading">
                 <Skeleton className="h-16 w-full" />
@@ -247,7 +230,7 @@ export const DeploymentHealthPanel = ({ probe }: DeploymentHealthPanelProps): Re
                     <div className="text-end">
                         <div className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{t("Checked")}</div>
                         <time className="text-[13px] text-muted-foreground" data-testid="dh-timestamp">
-                            {new Date(body.timestamp).toLocaleString()}
+                            {formatTimestamp(body.timestamp)}
                         </time>
                     </div>
                 </div>

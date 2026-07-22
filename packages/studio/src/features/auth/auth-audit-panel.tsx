@@ -1,5 +1,5 @@
 import type { ChangeEvent, ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
@@ -37,27 +37,23 @@ const AuthAuditPanel = (): ReactElement => {
     // `live` — Refresh re-runs the read.
     const { data, error, errorSource, isLoading, refetch } = useAdminQuery<AuthAuditLogResult>(ADMIN_FUNCTIONS.getAuthAuditLog, {});
 
-    const entries = useMemo<AuthAuditEntry[]>(() => data?.entries ?? [], [data]);
+    const entries: AuthAuditEntry[] = data?.entries ?? [];
 
     // Client-side substring filter (case-insensitive) over the already-fetched
     // entries — matching event type, actor id/email, IP, and outcome. Never
-    // triggers a refetch.
-    const filtered = useMemo<AuthAuditEntry[]>(() => {
-        const needle = search.trim().toLowerCase();
-
-        if (needle === "") {
-            return entries;
-        }
-
-        return entries.filter(
-            (entry) =>
-                entry.event.toLowerCase().includes(needle) ||
-                (entry.actorId ?? "").toLowerCase().includes(needle) ||
-                (entry.actorEmail ?? "").toLowerCase().includes(needle) ||
-                (entry.ip ?? "").toLowerCase().includes(needle) ||
-                entry.outcome.toLowerCase().includes(needle),
-        );
-    }, [entries, search]);
+    // triggers a refetch. (React Compiler memoizes this derivation — no useMemo.)
+    const needle = search.trim().toLowerCase();
+    const filtered: AuthAuditEntry[] =
+        needle === ""
+            ? entries
+            : entries.filter(
+                  (entry) =>
+                      entry.event.toLowerCase().includes(needle) ||
+                      (entry.actorId ?? "").toLowerCase().includes(needle) ||
+                      (entry.actorEmail ?? "").toLowerCase().includes(needle) ||
+                      (entry.ip ?? "").toLowerCase().includes(needle) ||
+                      entry.outcome.toLowerCase().includes(needle),
+              );
 
     const onSearchChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);

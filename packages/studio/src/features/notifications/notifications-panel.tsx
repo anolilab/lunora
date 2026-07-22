@@ -1,5 +1,5 @@
 import type { ChangeEvent, ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
@@ -66,25 +66,23 @@ const NotificationsPanel = (): ReactElement => {
     // manual Refresh button.
     const { data, error, errorSource, isLoading, refetch } = useAdminQuery<PushSubscriptionsResult>(ADMIN_FUNCTIONS.listPushSubscriptions, {});
 
-    const devices = useMemo<PushSubscriptionDevice[]>(() => data?.subscriptions ?? [], [data]);
+    const devices: PushSubscriptionDevice[] = data?.subscriptions ?? [];
 
     // Client-side kind + substring filter over the already-fetched devices — never
     // triggers a refetch. The substring matches the target endpoint/id and owner.
-    const filtered = useMemo<PushSubscriptionDevice[]>(() => {
-        const needle = search.trim().toLowerCase();
+    // (React Compiler memoizes this derivation — no useMemo.)
+    const needle = search.trim().toLowerCase();
+    const filtered: PushSubscriptionDevice[] = devices.filter((device) => {
+        if (kind !== "all" && device.kind !== kind) {
+            return false;
+        }
 
-        return devices.filter((device) => {
-            if (kind !== "all" && device.kind !== kind) {
-                return false;
-            }
+        if (needle === "") {
+            return true;
+        }
 
-            if (needle === "") {
-                return true;
-            }
-
-            return `${deviceTarget(device)} ${device.userId ?? ""}`.toLowerCase().includes(needle);
-        });
-    }, [devices, kind, search]);
+        return `${deviceTarget(device)} ${device.userId ?? ""}`.toLowerCase().includes(needle);
+    });
 
     const onSearchChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);
