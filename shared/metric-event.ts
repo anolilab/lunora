@@ -51,6 +51,13 @@ export interface MetricEvent {
     name: string;
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey?: string;
+    /**
+     * Trace id of the dispatch that recorded this measurement, when it ran inside
+     * one — the measurement's **exemplar**, letting a consumer jump from a metric
+     * point to a trace that produced it (OpenTelemetry's exemplar model). Stamped
+     * by the shard from the current request's trace context, not by the caller.
+     */
+    traceId?: string;
     /** Wall-clock millis when the measurement was recorded. */
     ts: number;
     /**

@@ -18,16 +18,22 @@ import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
 import { otlpRandomHex } from "../../../shared/otlp";
-import type { SpanEvent } from "../../../shared/span-event";
+import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { toErrorType } from "./trace-context";
+
+export type { SpanHandle } from "../../../shared/span-event";
 
 /**
  * Structural shape of the `ctx.trace` span factory (see the server
  * `LunoraTracer`). Declared here rather than imported so `@lunora/do` takes no
  * dependency on `@lunora/server`; a cross-package assignability guard in
  * `@lunora/testing` fails the build if the two drift apart.
+ *
+ * The body's second argument is the enclosing span's {@link SpanHandle}, through
+ * which it can attach attributes only known *after* it resolves (post-hoc). It is
+ * a trailing parameter, so a `(trace) => …` body that ignores it still conforms.
  */
-export type ContextTracer = <T>(name: string, function_: (trace: ContextTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+export type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 
 /** Structural shape of the `ctx.metrics` recorder (see the server `LunoraMetrics`). */
 export interface ContextMetrics {
@@ -90,20 +96,35 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
 
     const tracerFor =
         (parentSpanId: string): ContextTracer =>
-        async <T>(name: string, function_: (trace: ContextTracer) => Promise<T> | T, attributes?: LogFields): Promise<T> => {
+        async <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields): Promise<T> => {
             const spanId = otlpRandomHex(8);
             const startTs = Date.now();
             // Normalized once, before the body runs, so a caller mutating the
             // attributes object mid-span can't alter what gets recorded.
             const normalized = normalizeLogFields(attributes);
 
+            // Post-hoc attributes the body sets through its `SpanHandle` — merged
+            // over `normalized` at record time (post-hoc wins on a key clash).
+            // Each write is normalized through the same field coercer as the start
+            // attributes, so the merged bag stays JSON-safe.
+            const collected: Record<string, LogFields[string]> = {};
+            const spanHandle: SpanHandle = {
+                setAttribute: (key, value) => {
+                    Object.assign(collected, normalizeLogFields({ [key]: value }));
+                },
+                setAttributes: (fields) => {
+                    Object.assign(collected, normalizeLogFields(fields));
+                },
+            };
+
             let ok = true;
             let error: SpanEvent["error"];
 
             try {
                 // The body gets a tracer bound to THIS span, so anything it opens
-                // is a child of it — under `Promise.all` too.
-                return await function_(tracerFor(spanId));
+                // is a child of it — under `Promise.all` too — plus the span's
+                // handle for post-hoc attributes.
+                return await function_(tracerFor(spanId), spanHandle);
             } catch (error_) {
                 // Record the failure, then re-throw untouched: `ctx.trace` is
                 // instrumentation, never flow control.
@@ -124,8 +145,14 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                 // telemetry one. Owning the invariant at the point where it is
                 // promised means a caller injecting a raw `record` can't lose it.
                 try {
+                    // Merge start attributes with anything the body attached
+                    // post-hoc; post-hoc wins on a key clash. Emit `attributes`
+                    // only when the merged bag is non-empty, so a span with
+                    // neither doesn't ride an empty object.
+                    const merged = { ...normalized, ...collected };
+
                     record({
-                        ...(normalized === undefined ? {} : { attributes: normalized }),
+                        ...(Object.keys(merged).length === 0 ? {} : { attributes: merged }),
                         durationMs: Date.now() - startTs,
                         ...(error === undefined ? {} : { error }),
                         functionPath,

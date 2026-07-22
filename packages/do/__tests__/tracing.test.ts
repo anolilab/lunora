@@ -10,8 +10,20 @@ import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import { foldTraces, SpanBuffer } from "../src/span-buffer";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 const ADMIN_TOKEN = "test-admin-token-that-is-long-enough";
+
+/** A shard state backed by a real in-memory SQLite, for the durable metric-history path. */
+const sqliteStateDouble = (database: ReturnType<typeof createSqliteExec>): ShardDOState => {
+    return {
+        acceptWebSocket() {},
+        getWebSockets() {
+            return [];
+        },
+        storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+    };
+};
 
 /**
  * Drives the shard's own `makeTracer` wiring — used only by the `getTraces`
@@ -328,6 +340,63 @@ describe("ctx.trace", () => {
         expect(seen[1]?.attributes).toStrictEqual({ count: "1" });
     });
 
+    it("merges post-hoc attributes set through the span handle after an await", async () => {
+        expect.assertions(2);
+
+        const seen: SpanEvent[] = [];
+        const trace = tracerInto(seen);
+
+        // Token usage / cost is only known after the async body resolves — the
+        // classic case the span handle exists for.
+        await trace(
+            "ai.embed",
+            async (_child, handle) => {
+                await Promise.resolve();
+                handle.setAttribute("gen_ai.usage.input_tokens", 12);
+                handle.setAttributes({ cost: 0.0004, ok: true });
+            },
+            { "gen_ai.request.model": "@cf/baai/bge-base-en-v1.5" },
+        );
+
+        expect(seen[0]?.attributes).toStrictEqual({
+            "gen_ai.request.model": "@cf/baai/bge-base-en-v1.5",
+            "gen_ai.usage.input_tokens": 12,
+            cost: 0.0004,
+            ok: true,
+        });
+        // Non-primitive post-hoc values are coerced to JSON-safe primitives, exactly like start attributes.
+        expect(seen[0]?.attributes?.["cost"]).toBe(0.0004);
+    });
+
+    it("lets a post-hoc attribute win over a start attribute on a key clash", async () => {
+        expect.assertions(1);
+
+        const seen: SpanEvent[] = [];
+        const trace = tracerInto(seen);
+
+        await trace(
+            "work",
+            (_child, handle) => {
+                handle.setAttribute("status", "done");
+            },
+            { status: "pending" },
+        );
+
+        expect(seen[0]?.attributes).toStrictEqual({ status: "done" });
+    });
+
+    it("keeps a legacy body that ignores the span handle working unchanged", async () => {
+        expect.assertions(2);
+
+        const seen: SpanEvent[] = [];
+        const trace = tracerInto(seen);
+
+        // A `(trace) => …` body that never touches the second arg — the pre-existing
+        // call shape — records exactly its start attributes and nothing more.
+        await expect(trace("work", () => 7, { a: 1 })).resolves.toBe(7);
+        expect(seen[0]?.attributes).toStrictEqual({ a: 1 });
+    });
+
     it("survives a throwing recorder without failing the traced body", async () => {
         expect.assertions(1);
 
@@ -476,5 +545,39 @@ describe("ctx.metrics", () => {
         expect(placed?.kind).toBe("counter");
         expect(placed?.count).toBe(2);
         expect(placed?.sum).toBe(5);
+    });
+
+    it("serves durable rollups over the getMetricHistory admin RPC", async () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new TracingShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const metrics = shard.metricRecorder("orders:checkout");
+
+            metrics.count("orders.placed", 2);
+            metrics.count("orders.placed", 3);
+
+            const response = await shard.fetch(
+                new Request("https://shard.internal/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: ADMIN_FUNCTIONS.getMetricHistory }),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+            const body = await response.json<{
+                result: { series: { kind: string; name: string; points: { count: number; sum: number }[] }[] };
+            }>();
+            const [series] = body.result.series;
+
+            expect(body.result.series).toHaveLength(1);
+            expect(series?.name).toBe("orders.placed");
+            // Both increments folded into one minute bucket, persisted to SQLite.
+            expect(series?.points[0]?.count).toBe(2);
+            expect(series?.points[0]?.sum).toBe(5);
+        } finally {
+            database.close();
+        }
     });
 });

@@ -1453,6 +1453,22 @@ interface LunoraLogger {
 }
 
 /**
+ * Handle the enclosing `ctx.trace` span hands its body, so the body can attach
+ * attributes only known *after* it resolves (an AI call's token usage / dollar
+ * cost, a downstream status, a computed count). Declared structurally here to
+ * mirror `shared/span-event.ts`'s `SpanHandle` and `@lunora/do`'s implementation;
+ * a cross-package assignability guard in `@lunora/testing` fails the build if the
+ * three drift apart. Start attributes are snapshotted before the body runs;
+ * handle writes are merged over them at record time, post-hoc winning on a clash.
+ */
+interface SpanHandle {
+    /** Set one attribute on the enclosing span (merged at record time; post-hoc wins on key clash). */
+    setAttribute: (key: string, value: LogFields[string]) => void;
+    /** Merge attributes onto the enclosing span (post-hoc wins on key clash). */
+    setAttributes: (fields: LogFields) => void;
+}
+
+/**
  * Span factory on every function `ctx`. Wraps a sub-operation so it becomes its
  * own **span** nested under the dispatch's RPC span, giving a trace real shape:
  * without it a slow request is one opaque bar, with it you see which part was
@@ -1485,15 +1501,26 @@ interface LunoraLogger {
  * unchanged. A throw is recorded as an error span and then **re-thrown** — this
  * is instrumentation, never flow control. Recording is best-effort: a failing
  * sink can't turn a working handler into a broken one.
+ *
+ * **Post-hoc attributes.** The body also receives a {@link SpanHandle} as its
+ * second argument. The `attributes` passed here are stamped at span start (and
+ * snapshotted, so a later mutation can't rewrite them); anything the body sets
+ * through the handle — `span.setAttribute(k, v)` / `span.setAttributes({…})` — is
+ * merged over that snapshot when the span is recorded, so a value known only once
+ * the body has resolved (an AI call's token usage / dollar cost, a computed
+ * count) still lands on the span. Post-hoc wins on a key clash. The handle is a
+ * trailing parameter, so every existing `(trace) => …` body keeps working
+ * unchanged.
  * @param name Span name, e.g. `"stripe.charge"`. Prefer a low-cardinality name
  * and put the varying part in `attributes` — a name built from an id makes every
  * span its own group in a collector.
  * @param fn The body to time, receiving a tracer bound to this span for any
- * nested spans. May be sync or async; the result is awaited.
- * @param attributes Structured attributes to stamp on the span, normalized like
- * a log line's `fields`.
+ * nested spans and the enclosing span's {@link SpanHandle} for post-hoc
+ * attributes. May be sync or async; the result is awaited.
+ * @param attributes Structured attributes to stamp on the span at start,
+ * normalized like a log line's `fields`.
  */
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 
 /**
  * Application metrics on every function `ctx` — the third signal alongside
@@ -1827,6 +1854,7 @@ export type {
     Secrets,
     SecretsStoreSecretLike,
     ShardMode,
+    SpanHandle,
     Storage,
     StorageMetadata,
     SystemDatabaseReader,

@@ -202,6 +202,8 @@ const TRACES = [
 const METRIC_SERIES = [
     {
         count: 642,
+        // Links to the seeded `trace-checkout` waterfall — the exemplar drill-down.
+        exemplarTraceId: "trace-checkout",
         firstTs: now - 3_600_000,
         functionPath: "orders:checkout",
         kind: "counter",
@@ -215,6 +217,7 @@ const METRIC_SERIES = [
     {
         attributes: { route: "/api/messages" },
         count: 2009,
+        exemplarTraceId: "trace-send",
         firstTs: now - 3_600_000,
         functionPath: "messages:list",
         kind: "counter",
@@ -289,6 +292,50 @@ const METRIC_SERIES = [
     },
 ];
 
+// Durable per-minute rollups for the Instruments trend sparklines — the shape
+// `@lunora/do`'s `readMetricHistory` returns: one series per identity, buckets
+// oldest-first. A deterministic sine wave gives a readable trend without any
+// runtime randomness. `exemplarTraceId` on the last bucket seeds the point→trace
+// link for the two series that carry an exemplar in the live snapshot above.
+//
+// The plotted value is the trend the panel projects per kind, so the bucket must
+// be built so that projection recovers it: a counter plots `sum`, a gauge `last`,
+// a histogram `sum / count` (the mean). Building all three with `sum === count`
+// would flatten the histogram to a constant 1, so a histogram spreads the value
+// across a fixed sample count.
+const HISTOGRAM_SAMPLES = 20;
+
+const historyPoints = (n: number, amplitude: number, base: number, kind: "counter" | "gauge" | "histogram", exemplar?: string): Record<string, unknown>[] =>
+    Array.from({ length: n }, (_, index) => {
+        const value = Math.round(base + amplitude * (1 + Math.sin(index / 3)));
+        const count = kind === "histogram" ? HISTOGRAM_SAMPLES : value;
+
+        return {
+            bucketMs: now - (n - index) * 60_000,
+            count,
+            ...(exemplar !== undefined && index === n - 1 ? { exemplarTraceId: exemplar } : {}),
+            last: value,
+            max: value + amplitude,
+            min: Math.max(0, value - amplitude),
+            // A counter plots its per-bucket total (`sum = value`); a histogram plots
+            // its mean (`sum / count = value` ⇒ `sum = value * count`).
+            sum: kind === "histogram" ? value * count : value,
+        };
+    });
+
+const METRIC_HISTORY = [
+    { functionPath: "orders:checkout", kind: "counter", name: "orders.placed", points: historyPoints(30, 6, 8, "counter", "trace-checkout") },
+    {
+        attributes: { route: "/api/messages" },
+        functionPath: "messages:list",
+        kind: "counter",
+        name: "http.requests",
+        points: historyPoints(30, 20, 40, "counter", "trace-send"),
+    },
+    { functionPath: "orders:checkout", kind: "gauge", name: "cart.items", points: historyPoints(30, 3, 3, "gauge") },
+    { functionPath: "orders:checkout", kind: "histogram", name: "checkout.ms", points: historyPoints(30, 120, 160, "histogram") },
+];
+
 const minuteBuckets = (n: number, base: number, jitter: number): { bucketMs: number; calls: number; errors: number; path: string }[] =>
     Array.from({ length: n }, (_, index) => {
         return {
@@ -339,6 +386,9 @@ const dataFor = (reference: string, args: unknown): unknown => {
                     { level: "debug", message: "Reactive cache warm (312 entries)", timestamp: now - 22_000 },
                 ],
             };
+        }
+        case ADMIN_FUNCTIONS.getMetricHistory: {
+            return { series: METRIC_HISTORY };
         }
         case ADMIN_FUNCTIONS.getMetrics: {
             return {

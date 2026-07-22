@@ -67,6 +67,7 @@ const ADMIN_FUNCTIONS = {
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     getIssues: "__lunora_admin__:getIssues",
+    getMetricHistory: "__lunora_admin__:getMetricHistory",
     getMetricSeries: "__lunora_admin__:getMetricSeries",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
