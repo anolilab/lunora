@@ -350,7 +350,7 @@ interface ContextMetrics {
 ### `ContextTracer` (type)
 
 ```ts
-type ContextTracer = <T>(name: string, function_: (trace: ContextTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 ```
 
 ### `CountArgs` (type)
@@ -2083,6 +2083,15 @@ interface SourceCursorLike {
 type SourceRefresh = "manual" | {
     everyMs: number;
 };
+```
+
+### `SpanHandle` (interface)
+
+```ts
+interface SpanHandle {
+    setAttribute: (key: string, value: LogFields[string]) => void;
+    setAttributes: (fields: LogFields) => void;
+}
 ```
 
 ### `SqlConsoleResult` (interface)
