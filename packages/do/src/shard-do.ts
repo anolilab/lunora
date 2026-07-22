@@ -10,6 +10,7 @@ import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
+import { parseTraceparent } from "../../../shared/otlp";
 import type { SpanEvent } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -1794,6 +1795,32 @@ abstract class ShardDO {
     private currentRequestTrace: { rootSpanId: string; traceId: string } | undefined;
 
     /**
+     * Head-sampling verdict for the in-flight dispatch, read from the inbound
+     * `traceparent` sampled flag the runtime set from its per-trace decision.
+     * Defaults to `true` (keep) so a dispatch with no inbound flag — an alarm, a
+     * subscription re-run, a non-Lunora caller — is exported exactly as before.
+     * When `false`, the dispatch's `ctx.trace` INTERNAL spans are held out of the
+     * live export and re-decided in the `finally` (tail bias — see
+     * `flushSampledOutTrace`).
+     */
+    private currentTraceSampled = true;
+
+    /**
+     * Tail-bias toggle for the in-flight dispatch, read from the runtime's
+     * `x-lunora-sample-errors` header (`alwaysSampleErrors`). When `true`
+     * (default), a sampled-out trace that produced an error span is still exported
+     * whole; when `false`, a sampled-out trace is dropped even if it errored.
+     */
+    private currentTraceKeepErrors = true;
+
+    /**
+     * The span sink captured when a sampled-out span is held back, so the dispatch
+     * `finally` can flush the trace's held spans to it on error without threading
+     * the sink (resolved in the generated `buildCtx`) down to that choke point.
+     */
+    private currentDispatchSink: TelemetrySink | undefined;
+
+    /**
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
      * `x-lunora-mutation-id` header. When set, the dispatch path dedups the call
      * by `(currentRequestUserId, mutationId)`: a replay short-circuits to the
@@ -2203,6 +2230,13 @@ abstract class ShardDO {
         // the synthetic root span recorded on the way out agree on the ids even
         // when there is no inbound `traceparent` to derive them from.
         this.currentRequestTrace = resolveTraceAnchor(this.currentRequestTraceparent);
+        // Trace-sampling verdict propagated by the runtime: the `traceparent`
+        // sampled flag carries the head decision (absent → keep, so this path is
+        // unchanged for alarms / subscription re-runs / non-Lunora callers) and
+        // `x-lunora-sample-errors` carries the tail-bias toggle. Both are consumed
+        // by `recordSpan` / the `finally` to gate `ctx.trace` span export.
+        this.currentTraceSampled = parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true;
+        this.currentTraceKeepErrors = request.headers.get("x-lunora-sample-errors") !== "0";
         // Captured into a local as well: the `finally` below runs after the
         // handler's awaits, by which point an interleaved dispatch may have
         // re-set the shared field — reading it there would file this dispatch's
@@ -2401,6 +2435,14 @@ abstract class ShardDO {
             if (this.spans.hasTrace(dispatchTrace.traceId)) {
                 this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace);
             }
+            // Export boundary for a sampled-out trace: now that the dispatch has
+            // settled we know whether it errored, so flush its held `ctx.trace`
+            // spans (tail bias) or drop them. A no-op for sampled-in traces (their
+            // spans already streamed live).
+            this.flushSampledOutTrace(dispatchTrace, dispatchError !== undefined);
+            this.currentTraceSampled = true;
+            this.currentTraceKeepErrors = true;
+            this.currentDispatchSink = undefined;
             this.currentRequestTrace = undefined;
             this.currentRequestBookmark = undefined;
             this.currentResponseBookmark = undefined;
@@ -4689,6 +4731,15 @@ abstract class ShardDO {
      * `sink.onSpan`. Best-effort throughout, exactly like {@link recordUserLog}:
      * a span is recorded *after* its body already settled, so letting a telemetry
      * failure escape here would turn a succeeded operation into a failed request.
+     *
+     * The span is ALWAYS buffered locally (the Studio Traces panel is a full
+     * "recent traces on this instance" readout, unaffected by sampling). Only the
+     * export to the sink is sampled: when the active dispatch's trace was sampled
+     * OUT (its inbound `traceparent` flag was `00`), the span is held back rather
+     * than streamed — the dispatch `finally` re-decides once the trace's error
+     * status is known ({@link flushSampledOutTrace}), so an errored trace is still
+     * exported whole (tail bias). Spans from a sampled-in dispatch, or from another
+     * trace (a subscription re-run mints its own anchor), stream immediately.
      */
     // eslint-disable-next-line @typescript-eslint/member-ordering -- kept in the span-recording cluster (next to recordDispatchRootSpan) for cohesion rather than hoisted above every private member
     protected recordSpan(span: SpanEvent, sink?: TelemetrySink): void {
@@ -4698,14 +4749,69 @@ abstract class ShardDO {
             // Best-effort — never let span capture fail the handler.
         }
 
-        if (sink?.onSpan) {
-            try {
-                // Thread the DO's `waitUntil` so a network sink (otlpSink) can keep
-                // its export alive past the response, matching the log path.
-                sink.onSpan(span, { waitUntil: this.state.waitUntil?.bind(this.state) });
-            } catch {
-                // A buggy span sink must not break the handler.
-            }
+        if (!sink?.onSpan) {
+            return;
+        }
+
+        if (!this.currentTraceSampled && span.traceId === this.currentRequestTrace?.traceId) {
+            // Sampled out: hold this span back and remember the sink so the
+            // `finally` can flush the trace's held spans if it turns out to error.
+            this.currentDispatchSink = sink;
+
+            return;
+        }
+
+        this.emitSpan(span, sink);
+    }
+
+    /**
+     * Hand one span to `sink.onSpan`, swallowing sink throws. The DO's `waitUntil`
+     * is threaded so a network sink (otlpSink) can keep its export alive past the
+     * response, matching the log path. Extracted so both the live-stream path in
+     * {@link recordSpan} and the deferred error-keep flush in
+     * {@link flushSampledOutTrace} share one guarded emit.
+     */
+    private emitSpan(span: SpanEvent, sink: TelemetrySink): void {
+        if (!sink.onSpan) {
+            return;
+        }
+
+        try {
+            sink.onSpan(span, { waitUntil: this.state.waitUntil?.bind(this.state) });
+        } catch {
+            // A buggy span sink must not break the handler.
+        }
+    }
+
+    /**
+     * Export-boundary decision for a sampled-out trace, run from the dispatch
+     * `finally` once the error status is known. A sampled-in trace already
+     * streamed live, so this returns early for it; a sampled-out trace exports its
+     * held `ctx.trace` spans only when `alwaysSampleErrors` is set AND the trace
+     * errored (the dispatch threw, or a held span settled `ok: false`) — the tail
+     * bias — and otherwise drops them. Held spans are read back from the local ring
+     * (excluding the synthetic dispatch root, which never goes to `onSpan`).
+     */
+    private flushSampledOutTrace(trace: { traceId: string }, dispatchFailed: boolean): void {
+        if (this.currentTraceSampled || !this.currentTraceKeepErrors) {
+            return;
+        }
+
+        const sink = this.currentDispatchSink;
+
+        if (!sink?.onSpan) {
+            return;
+        }
+
+        const held = this.spans.entries().filter((span) => span.traceId === trace.traceId && span.dispatch !== true);
+        const traceHasError = dispatchFailed || held.some((span) => !span.ok);
+
+        if (!traceHasError) {
+            return;
+        }
+
+        for (const span of held) {
+            this.emitSpan(span, sink);
         }
     }
 

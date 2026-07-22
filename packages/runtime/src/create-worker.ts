@@ -6,6 +6,8 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
+import type { TraceSamplingConfig } from "../../../shared/sampling";
+import { resolveTraceSampling } from "../../../shared/sampling";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
@@ -852,6 +854,26 @@ interface WorkerOptions {
      * first.
      */
     routes?: Record<string, Route>;
+
+    /**
+     * Trace-sampling policy for the observability pipeline, mirroring Cloudflare
+     * Workers' `head_sampling_rate`. Governs only trace spans (the per-dispatch
+     * SERVER span and the `ctx.trace` INTERNAL spans beneath it) — never metrics
+     * or `ctx.log` lines.
+     *
+     * The decision is deterministic per trace: a stable value derived from the
+     * `traceId` is compared to `headRate`, so the same trace is kept or dropped
+     * as a whole on the worker and on every shard/container it fans out to (no
+     * half traces). The head decision is propagated to shards via the
+     * `traceparent` sampled flag, so they drop the matching `ctx.trace` spans
+     * coherently.
+     *
+     * With `alwaysSampleErrors` (default `true`), a trace that produced an error
+     * span is kept whole regardless of the head decision — the tail bias, so
+     * failures are never sampled away even at an aggressive `headRate`. Omit the
+     * option (or leave `headRate` at its default `1`) to keep every trace.
+     */
+    sampling?: TraceSamplingConfig;
 
     /**
      * Namespace binding for the `SchedulerDO` (typically `env.SCHEDULER`). When
@@ -2698,7 +2720,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         sinkContext?: ObservabilitySinkContext,
     ): Promise<Response> => {
         const rpcStartedAt = Date.now();
-        const { observability } = options;
+        const { observability, sampling } = options;
 
         // Trace context for this dispatch, generated at entry (before the shard
         // runs the handler) so it can both ride the dispatch's own span and reach
@@ -2707,10 +2729,21 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const traceId = otlpRandomHex(16);
         const spanId = otlpRandomHex(8);
 
+        // Head-sampling decision for this trace, made once here where the id is
+        // minted and propagated to the shard so it drops the matching `ctx.trace`
+        // spans coherently: the `traceparent` sampled flag carries the head
+        // verdict; `x-lunora-sample-errors` carries the tail-bias toggle so a
+        // sampled-out trace that errors is still kept whole on both sides.
+        const decision = resolveTraceSampling(sampling, traceId);
+
         // Re-emit the RPC body to the shard at its `/rpc` route.
         const forwarded = new Request(`https://shard.internal/rpc`, {
             body: JSON.stringify({ args, functionPath }),
-            headers: { ...forwardedHeaders, traceparent: buildTraceparent(traceId, spanId) },
+            headers: {
+                ...forwardedHeaders,
+                traceparent: buildTraceparent(traceId, spanId, decision.isTraced),
+                "x-lunora-sample-errors": decision.keepErrors ? "1" : "0",
+            },
             method: "POST",
         });
 
@@ -2732,6 +2765,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
                 },
                 sinkContext,
+                sampling,
             );
 
             // The DO's `x-d1-bookmark` header (which lets the client pin reads
@@ -2741,7 +2775,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // (and would drop `statusText`).
             return response;
         } catch (error) {
-            emitRpcEvent(observability, { ...buildErrorEvent(functionPath, Date.now() - rpcStartedAt, error, { shardKey }), spanId, traceId }, sinkContext);
+            emitRpcEvent(
+                observability,
+                { ...buildErrorEvent(functionPath, Date.now() - rpcStartedAt, error, { shardKey }), spanId, traceId },
+                sinkContext,
+                sampling,
+            );
             throw error;
         }
     };
