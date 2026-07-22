@@ -1,6 +1,8 @@
 import { generateText } from "@lunora/ai";
 import { LunoraError } from "@lunora/server";
 
+import type { EvidenceLogRow, EvidenceSpanRow, GeneratePort, InvestigationIncident, InvestigationResult } from "../src/telemetry/investigation";
+import { buildEvidenceBundle, resolveInvestigationRunner } from "../src/telemetry/investigation";
 import type { TriageIncident, TriageIssue } from "../src/telemetry/triage";
 import { buildTriagePrompt, MAX_ISSUES } from "../src/telemetry/triage";
 import type { Id } from "./_generated/dataModel.js";
@@ -18,6 +20,21 @@ import { orgEntitlements } from "./entitlements";
 
 const incidentStatus = v.union(v.literal("open"), v.literal("resolved"));
 
+/**
+ * The stored investigation result, mirrored locally so codegen inlines it into
+ * both the `list` return type and the `investigate` action return type. Shape
+ * matches `InvestigationResult` (src/telemetry/investigation.ts).
+ */
+interface InvestigationView {
+    by: "deterministic" | "llm";
+    confidence: "high" | "low" | "medium";
+    evidenceNote: string;
+    relatedTraceIds: string[];
+    rootCauseHypothesis: string;
+    suggestedRemediation: string;
+    summary: string;
+}
+
 /** An incident row as the dashboard consumes it. */
 interface IncidentRow {
     _id: Id<"incidents">;
@@ -25,6 +42,8 @@ interface IncidentRow {
     container?: string;
     count: number;
     instance?: string;
+    investigatedAt?: number;
+    investigation?: InvestigationView;
     kind: "crash_loop" | "error_spike" | "oom";
     lastSeen: number;
     openedAt: number;
@@ -83,12 +102,7 @@ interface RelatedIssue extends TriageIssue {
  * issue set for a container is unbounded, and dragging all of it into the isolate
  * just to slice 10 off in the prompt builder is the wrong layer for the cap.
  */
-const relatedIssues = async (
-    context: ActionContext,
-    organizationId: Id<"organizations">,
-    container: string,
-    selfHash: string,
-): Promise<TriageIssue[]> => {
+const relatedIssues = async (context: ActionContext, organizationId: Id<"organizations">, container: string, selfHash: string): Promise<TriageIssue[]> => {
     const { page } = await context.db.issues.findMany({ where: { culprit: `container:${container}`, organizationId } });
 
     return (page as unknown as RelatedIssue[])
@@ -148,4 +162,147 @@ export const triage = action
         });
 
         return { summary: text };
+    });
+
+/** Recent error spans scanned to build an incident's evidence bundle (bounded). */
+const EVIDENCE_SPAN_SCAN = 300;
+
+/** Max correlated log lines fetched per related trace (bounded). */
+const EVIDENCE_LOG_SCAN_PER_TRACE = 50;
+
+/** An `observations` row, reduced to the fields the evidence builder reads. */
+interface ObservationRow extends EvidenceSpanRow {
+    _id: Id<"observations">;
+}
+
+/** A `tenantLogs` row, reduced to the fields the evidence builder reads. */
+interface LogRow extends EvidenceLogRow {
+    _id: Id<"tenantLogs">;
+}
+
+/**
+ * Gather the read-only evidence bundle for an incident: recent error spans for
+ * the org (bounded), correlated to the incident's container by the pure
+ * {@link buildEvidenceBundle}, then the error/fatal log lines belonging to those
+ * spans' traces (fetched per related trace via the `by_trace` index). Two
+ * bundle-builds — the first to learn the related trace ids, the second (with the
+ * fetched logs) to produce the bundle the runner reasons over.
+ */
+const gatherEvidence = async (context: ActionContext, organizationId: Id<"organizations">, incident: InvestigationIncident) => {
+    const { page: spanPage } = await context.db.observations.findMany({
+        limit: EVIDENCE_SPAN_SCAN,
+        orderBy: [{ startedAt: "desc" }],
+        where: { organizationId },
+    });
+
+    const spans = spanPage as unknown as ObservationRow[];
+
+    // First pass: correlate spans → related trace ids (no logs yet).
+    const preliminary = buildEvidenceBundle({ incident, logs: [], spans });
+
+    // Fetch the error/fatal logs for each related trace via the `by_trace` index.
+    const logs: LogRow[] = [];
+
+    for (const traceId of preliminary.relatedTraceIds) {
+        const { page: logPage } = await context.db.tenantLogs.findMany({
+            limit: EVIDENCE_LOG_SCAN_PER_TRACE,
+            where: { organizationId, traceId },
+        });
+
+        logs.push(...(logPage as unknown as LogRow[]));
+    }
+
+    return buildEvidenceBundle({ incident, logs, spans });
+};
+
+/**
+ * Investigate an incident with the pluggable agentic runner (GAPS.md Ring 3
+ * backlog #1) — the investigate-and-suggest-remediation loop that supersedes the
+ * single-shot {@link triage}. It gathers a read-only evidence bundle (related
+ * error spans + correlated logs + a counts/timeline rollup), runs the resolved
+ * runner over it, and **persists** the structured result on the incident row
+ * (`investigation` + `investigatedAt`) so the dashboard renders it without
+ * re-spending inference.
+ *
+ * Pluggable + fail-closed: the resolver picks the LLM runner (Workers AI) when AI
+ * is configured, and the deterministic ("none") runner — a rule-based evidence
+ * summary with no model call — otherwise. The LLM runner also degrades to the
+ * deterministic result internally if generation throws, so an investigation
+ * always returns something actionable.
+ *
+ * Same cost/authz controls as {@link triage}: `logStreams` entitlement enforced
+ * here (not just the dashboard), viewers excluded (spending inference is a
+ * write-shaped act), bounded evidence + a capped completion, and the interpolated
+ * telemetry is fenced + clamped as untrusted data.
+ */
+export const investigate = action
+    .input({ id: v.id("incidents"), organizationId: v.id("organizations") })
+    .action(async ({ ctx: context, args: { id, organizationId } }): Promise<InvestigationView> => {
+        await assertMember(context, organizationId, ["owner", "admin", "member"]);
+        await assertRowInOrg(context, id, organizationId, "incident");
+
+        const entitlements = await orgEntitlements(context, organizationId);
+
+        if (!entitlements.has("logStreams")) {
+            throw new LunoraError("FORBIDDEN", "AI investigation requires a plan with the logStreams feature");
+        }
+
+        const incident = (await context.db.get(id)) as IncidentDocument | null;
+
+        if (!incident) {
+            throw new LunoraError("NOT_FOUND", "incident not found");
+        }
+
+        const target: InvestigationIncident = {
+            container: incident.container,
+            count: incident.count,
+            kind: incident.kind,
+            title: incident.title,
+        };
+
+        const bundle = await gatherEvidence(context, organizationId, target);
+
+        // The `generate` port: present only when Workers AI is configured. Absent →
+        // the resolver falls closed to the deterministic runner (no billed call).
+        const generate: GeneratePort | undefined =
+            typeof context.ai?.model === "function"
+                ? async (prompt) => {
+                      const { text } = await generateText({
+                          maxOutputTokens: TRIAGE_MAX_OUTPUT_TOKENS,
+                          model: context.ai.model(TRIAGE_MODEL),
+                          prompt,
+                      });
+
+                      return text;
+                  }
+                : undefined;
+
+        const runner = resolveInvestigationRunner({ generate });
+        const result: InvestigationResult = await runner.investigate(bundle);
+
+        const now = Date.now();
+
+        await context.db.patch(id, {
+            investigatedAt: now,
+            investigation: {
+                by: result.by,
+                confidence: result.confidence,
+                evidenceNote: result.evidenceNote,
+                relatedTraceIds: [...result.relatedTraceIds],
+                rootCauseHypothesis: result.rootCauseHypothesis,
+                suggestedRemediation: result.suggestedRemediation,
+                summary: result.summary,
+            },
+            updatedAt: now,
+        });
+
+        return {
+            by: result.by,
+            confidence: result.confidence,
+            evidenceNote: result.evidenceNote,
+            relatedTraceIds: [...result.relatedTraceIds],
+            rootCauseHypothesis: result.rootCauseHypothesis,
+            suggestedRemediation: result.suggestedRemediation,
+            summary: result.summary,
+        };
     });

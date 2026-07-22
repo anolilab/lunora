@@ -114,7 +114,7 @@ describe(reconcileAllOverages, () => {
         expect(suspended).toStrictEqual(["org_b"]);
     });
 
-    it("isolates one org's provider failure — the fleet keeps going, its watermark never moves", async () => {
+    it("isolates one org's provider failure — the fleet keeps going; the failed org under-bills, never double-bills", async () => {
         const watermarks: string[] = [];
         const summary = await reconcileAllOverages([org("org_a", 11_000_000), org("org_b", 11_000_000)], {
             advanceWatermark: (id, periodStart, credits) => {
@@ -129,7 +129,11 @@ describe(reconcileAllOverages, () => {
             onExhausted: () => Promise.resolve(),
         });
 
+        // org_a's debit throws → only org_b counts toward the summary.
         expect(summary).toStrictEqual({ debitedCredits: 100, debitedOrgs: 1, exhausted: 0 });
-        expect(watermarks).toStrictEqual(["org_b:1000:100"]);
+        // The watermark is advanced BEFORE the debit (fail-safe ordering), so both
+        // orgs' watermarks moved — org_a's failed debit means it is *under*-billed
+        // for this delta, never charged twice on a retry after usage grows.
+        expect(watermarks).toStrictEqual(["org_a:1000:100", "org_b:1000:100"]);
     });
 });
