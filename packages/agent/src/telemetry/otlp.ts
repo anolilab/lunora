@@ -5,6 +5,50 @@ import { encodeAttribute, mergeHeaders, otlpRandomHex, otlpUnixNano, wrapResourc
 import type { CommonOptions } from "./common";
 import { contentText, readField, summarizeUsage, toolInputOf, toolNameOf } from "./common";
 
+/** Push one attribute, skipping nullish values and JSON-stringifying non-primitives. */
+const pushAttribute = (attributes: OtlpAttribute[], key: string, value: unknown): void => {
+    if (value === undefined || value === null) {
+        return;
+    }
+
+    if (typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+        attributes.push(encodeAttribute(key, value satisfies OtlpAttributeValue));
+
+        return;
+    }
+
+    // Objects/arrays (a recorded prompt, tool input) — serialize so the
+    // collector stores a queryable string rather than dropping the attribute.
+    attributes.push(encodeAttribute(key, JSON.stringify(value)));
+};
+
+/**
+ * Run `onSettle` once when `promise` settles — `(true, undefined, result)` on
+ * success, `(false, message, undefined)` on rejection — as a **detached** observer
+ * (not awaited/returned into the caller's chain). Only the `await` is guarded, so
+ * a throw from `onSettle` on the success path can't be mis-caught and recorded as a
+ * failure (the earlier `try { emit(true, await p) } catch { emit(false) }` did that);
+ * the trailing `.catch` keeps the detached chain from floating. The caller's own
+ * `promise` is returned untouched, so it still rejects for them.
+ */
+const observeSettled = (promise: PromiseLike<unknown>, onSettle: (ok: boolean, message: string | undefined, result: unknown) => void): void => {
+    const run = async (): Promise<void> => {
+        let result: unknown;
+
+        try {
+            result = await promise;
+        } catch (error) {
+            onSettle(false, error instanceof Error ? error.message : String(error), undefined);
+
+            return;
+        }
+
+        onSettle(true, undefined, result);
+    };
+
+    run().catch(() => undefined);
+};
+
 /**
  * Options for {@link otlpTelemetry}.
  * @experimental
@@ -49,27 +93,10 @@ export interface OtlpTelemetryOptions extends CommonOptions {
     waitUntil?: (promise: Promise<unknown>) => void;
 }
 
-/** Push one attribute, skipping nullish values and JSON-stringifying non-primitives. */
-const pushAttribute = (attributes: OtlpAttribute[], key: string, value: unknown): void => {
-    if (value === undefined || value === null) {
-        return;
-    }
-
-    if (typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
-        attributes.push(encodeAttribute(key, value satisfies OtlpAttributeValue));
-
-        return;
-    }
-
-    // Objects/arrays (a recorded prompt, tool input) — serialize so the
-    // collector stores a queryable string rather than dropping the attribute.
-    attributes.push(encodeAttribute(key, JSON.stringify(value)));
-};
-
 /**
  * An OTLP-over-HTTP telemetry integration for `@lunora/agent`.
  *
- * The OTLP counterpart to {@link sentryTelemetry} / {@link braintrustTelemetry}:
+ * The OTLP counterpart to the `sentryTelemetry` / `braintrustTelemetry` bridges:
  * it wraps each language-model call and tool execution in an OTLP **span**
  * (`gen_ai.*` semantic-convention attributes — model, provider, token usage,
  * tool name) and ships it to a collector, so agent generations land in the same
@@ -87,13 +114,13 @@ const pushAttribute = (attributes: OtlpAttribute[], key: string, value: unknown)
  * Each export is fire-and-forget (registered with `waitUntil` when supplied);
  * every rejection is swallowed so a flaky collector never surfaces to the run.
  *
- * Two deliberate differences from the SDK-backed integrations (`sentryTelemetry`
- * / `braintrustTelemetry`), which delegate to a host tracer:
- * - **No `onError`.** A failed call already emits a span with `status.code === 2`,
- *   so the failure is on the trace; there is no host client to also notify.
- * - **Flat, not nested.** Every span gets `traceId` (shared when `traceId` is set)
- *   but no `parentSpanId`, so model-call and tool spans are siblings under the run
- *   rather than a tree — OTLP has no ambient span context to parent to here.
+ * Two deliberate differences from the SDK-backed bridges, which delegate to a
+ * host tracer. First, no `onError`: a failed call already emits a span with
+ * `status.code === 2`, so the failure is on the trace and there is no host client
+ * to also notify. Second, flat not nested: every span gets `traceId` (shared when
+ * `traceId` is set) but no `parentSpanId`, so model-call and tool spans are
+ * siblings under the run rather than a tree — OTLP has no ambient span context to
+ * parent to here.
  * @param options `endpoint` (+ optional `token`/`headers`/`serviceName`),
  * `traceId` to group a run's spans, `waitUntil`, and the `recordInputs`/
  * `recordOutputs` privacy flags.
@@ -182,14 +209,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
                 emitSpan(typeof modelId === "string" ? `chat ${modelId}` : "language_model_call", startTs, ok, message, attributes);
             };
 
-            promise.then(
-                (result) => {
-                    emit(true, undefined, result);
-                },
-                (error: unknown) => {
-                    emit(false, error instanceof Error ? error.message : String(error), undefined);
-                },
-            );
+            observeSettled(promise, emit);
 
             return promise;
         },
@@ -213,14 +233,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
                 emitSpan(typeof toolName === "string" ? `execute_tool ${toolName}` : "execute_tool", startTs, ok, message, attributes);
             };
 
-            promise.then(
-                () => {
-                    emit(true, undefined);
-                },
-                (error: unknown) => {
-                    emit(false, error instanceof Error ? error.message : String(error));
-                },
-            );
+            observeSettled(promise, emit);
 
             return promise;
         },
