@@ -9,6 +9,8 @@ import { relayName } from "../../../shared/relay-name";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
+import type { AuthAuditReader } from "./auth-audit-rpc";
+import { buildGetAuthAuditLog, GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
 import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
@@ -567,6 +569,18 @@ interface WorkerOptions {
      * every `/auth/*` endpoint responds `AUTH_NOT_CONFIGURED`.
      */
     authAdmin?: AuthAdmin;
+
+    /**
+     * The auth/security audit read plane backing the studio's "Security / audit"
+     * page (the `__lunora_admin__:getAuthAuditLog` admin RPC). The audit trail
+     * lives in the auth D1 database (via `@lunora/auth`'s `SqlExecutor`), not in a
+     * shard's DO SQLite, so — unlike the other `__lunora_admin__:*` ops — the RPC
+     * is served here at the worker, admin-gated, through this reader. Wire it with
+     * `@lunora/auth`'s `createAuthAuditReader(d1Executor(env.DB))`. Omit it and the
+     * RPC responds `AUTH_AUDIT_NOT_CONFIGURED`; a caller without a valid admin
+     * bearer always gets `ADMIN_FORBIDDEN` first (default-closed).
+     */
+    authAuditReader?: AuthAuditReader;
 
     /**
      * Base path the auth routes are mounted under (default `/api/auth`). Used
@@ -2291,6 +2305,51 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return value;
     };
 
+    // The `__lunora_admin__:getAuthAuditLog` handler. Unlike the shard-forwarded
+    // `__lunora_admin__:*` ops, the auth audit trail is D1-backed (via
+    // `@lunora/auth`'s `SqlExecutor`), so it is intercepted in `handleRpc` and
+    // served HERE — admin-gated (`assertAdminAuthorized`, default-closed) through
+    // the injected `authAuditReader`.
+    const getAuthAuditLog = buildGetAuthAuditLog({
+        assertAdmin: assertAdminAuthorized,
+        getReader: () => options.authAuditReader,
+    });
+
+    /**
+     * Handle the reserved single-shard RPCs the worker serves itself rather than
+     * forwarding to a shard. Returns a `Response` to short-circuit `handleRpc`
+     * (the D1-backed auth-audit read), throws for the fan-out-only relation
+     * prefix, or returns `undefined` to let normal shard dispatch proceed. A
+     * fan-out envelope is never worker-served — it falls through to the coordinator.
+     */
+    const serveReservedWorkerRpc = async (request: Request, envelope: RpcEnvelope): Promise<Response | undefined> => {
+        if (envelope.fanOut) {
+            return undefined;
+        }
+
+        // Reserved cross-shard relation reads are fan-out-only; a single-shard
+        // envelope naming the prefix would bypass the `authorizeFanOut` gate and
+        // read one shard's raw rows directly, so refuse it. The literal prefix is
+        // inlined (not imported from `@lunora/do`) to keep the runtime free of a
+        // hard `@lunora/do` dependency.
+        if (envelope.functionPath.startsWith("__lunora_relation__:")) {
+            throw new LunoraError("`__lunora_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
+                code: "FORBIDDEN",
+                status: 403,
+            });
+        }
+
+        // The auth/security audit trail lives in the auth D1 database (not a
+        // shard's DO SQLite), so — unlike its `__lunora_admin__:*` siblings — it is
+        // served HERE, admin-gated through the injected `authAuditReader`. A
+        // non-admin caller is rejected with `ADMIN_FORBIDDEN` (default-closed).
+        if (envelope.functionPath === GET_AUTH_AUDIT_LOG_OP) {
+            return getAuthAuditLog(request, envelope.args ?? {});
+        }
+
+        return undefined;
+    };
+
     // The data-movement admin routes (export / sync / connector-sync / apply /
     // import) live in a sibling module; the export/import row producers are
     // injected because they close over the worker options and are shared with
@@ -2930,19 +2989,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
         }
 
-        // Reserved cross-shard relation reads (reverse cross-backend relations)
-        // are fan-out-only. A single-shard envelope naming the
-        // `__lunora_relation__:` prefix would bypass the `authorizeFanOut` gate
-        // and read one shard's raw rows directly, so refuse it — the only
-        // legitimate caller is the coordinator's fan-out, which carries a
-        // `fanOut` spec and is authorized through `authorizeRpcEnvelope`. The
-        // literal prefix is inlined (not imported from `@lunora/do`) to keep the
-        // runtime free of a hard `@lunora/do` dependency.
-        if (!envelope.fanOut && envelope.functionPath.startsWith("__lunora_relation__:")) {
-            throw new LunoraError("`__lunora_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
-                code: "FORBIDDEN",
-                status: 403,
-            });
+        // Reserved single-shard RPCs handled at the worker boundary instead of
+        // being forwarded to a shard: the fan-out-only relation guard (throws) and
+        // the D1-backed auth-audit read (served here, admin-gated). A returned
+        // Response short-circuits dispatch; `undefined` continues normal routing.
+        const reservedResponse = await serveReservedWorkerRpc(request, envelope);
+
+        if (reservedResponse !== undefined) {
+            return reservedResponse;
         }
 
         // Refuse fan-out envelopes that arrive without a coordinator
@@ -4119,6 +4173,8 @@ export type {
     AuthUserFieldSpec,
     ListAuthUsersOptions,
 } from "./auth-admin-routes";
+export type { AuthAuditEntry, AuthAuditLogResult, AuthAuditOutcome, AuthAuditReader, ReadAuthAuditQuery } from "./auth-audit-rpc";
+export { GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
 export type {
     AdminTableResolver,
     BackupManifest,
