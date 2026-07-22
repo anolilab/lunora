@@ -1811,30 +1811,23 @@ abstract class ShardDO {
     private currentRequestTrace: { rootSpanId: string; traceId: string } | undefined;
 
     /**
-     * Head-sampling verdict for the in-flight dispatch, read from the inbound
-     * `traceparent` sampled flag the runtime set from its per-trace decision.
-     * Defaults to `true` (keep) so a dispatch with no inbound flag — an alarm, a
-     * subscription re-run, a non-Lunora caller — is exported exactly as before.
-     * When `false`, the dispatch's `ctx.trace` INTERNAL spans are held out of the
-     * live export and re-decided in the `finally` (tail bias — see
-     * `flushSampledOutTrace`).
+     * Per-trace head-sampling state, keyed by `traceId` so concurrent dispatches on
+     * the same DO instance can't clobber each other's decision. A DO interleaves
+     * dispatches across `await` points, and the span-recording and error-flush
+     * choke points run after a span body (or the whole dispatch) settles — by which
+     * point a flat per-instance field could have been overwritten by a sibling
+     * dispatch (the same hazard `dispatchTrace` guards against for the trace anchor).
+     * Each entry holds `sampled` (the inbound `traceparent` flag; absent means keep,
+     * so alarms, subscription re-runs and non-Lunora callers export exactly as
+     * before — when false, `ctx.trace` INTERNAL spans are held out of the live export
+     * and re-decided in the dispatch `finally` as a tail bias), `keepErrors` (the
+     * runtime's `x-lunora-sample-errors` / `alwaysSampleErrors` toggle — a sampled-out
+     * trace that errored is still exported whole unless off), and `sink` (captured
+     * when a sampled-out span is first held, so the `finally` can flush the trace's
+     * held spans). Registered at dispatch entry by the dispatch's own `traceId`, read
+     * by `span.traceId`, and deleted in the `finally`.
      */
-    private currentTraceSampled = true;
-
-    /**
-     * Tail-bias toggle for the in-flight dispatch, read from the runtime's
-     * `x-lunora-sample-errors` header (`alwaysSampleErrors`). When `true`
-     * (default), a sampled-out trace that produced an error span is still exported
-     * whole; when `false`, a sampled-out trace is dropped even if it errored.
-     */
-    private currentTraceKeepErrors = true;
-
-    /**
-     * The span sink captured when a sampled-out span is held back, so the dispatch
-     * `finally` can flush the trace's held spans to it on error without threading
-     * the sink (resolved in the generated `buildCtx`) down to that choke point.
-     */
-    private currentDispatchSink: TelemetrySink | undefined;
+    private traceSampling = new Map<string, { keepErrors: boolean; sampled: boolean; sink?: TelemetrySink }>();
 
     /**
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
@@ -2246,18 +2239,21 @@ abstract class ShardDO {
         // the synthetic root span recorded on the way out agree on the ids even
         // when there is no inbound `traceparent` to derive them from.
         this.currentRequestTrace = resolveTraceAnchor(this.currentRequestTraceparent);
-        // Trace-sampling verdict propagated by the runtime: the `traceparent`
-        // sampled flag carries the head decision (absent → keep, so this path is
-        // unchanged for alarms / subscription re-runs / non-Lunora callers) and
-        // `x-lunora-sample-errors` carries the tail-bias toggle. Both are consumed
-        // by `recordSpan` / the `finally` to gate `ctx.trace` span export.
-        this.currentTraceSampled = parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true;
-        this.currentTraceKeepErrors = request.headers.get("x-lunora-sample-errors") !== "0";
         // Captured into a local as well: the `finally` below runs after the
         // handler's awaits, by which point an interleaved dispatch may have
         // re-set the shared field — reading it there would file this dispatch's
         // root span under another request's trace (and leave that one rootless).
         const dispatchTrace = this.currentRequestTrace;
+        // Trace-sampling verdict propagated by the runtime: the `traceparent`
+        // sampled flag carries the head decision (absent → keep, so this path is
+        // unchanged for alarms / subscription re-runs / non-Lunora callers) and
+        // `x-lunora-sample-errors` carries the tail-bias toggle. Registered keyed by
+        // THIS dispatch's `traceId` (not a flat field) so a concurrent dispatch's
+        // `recordSpan` / `finally` reads its own verdict — see `traceSampling`.
+        this.traceSampling.set(dispatchTrace.traceId, {
+            keepErrors: request.headers.get("x-lunora-sample-errors") !== "0",
+            sampled: parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true,
+        });
         // Reset the per-request read/cache capture (filled by `runCachedQuery`
         // for cached query paths) so a previous dispatch can't leak into this
         // entry's logged read set / cache-hit flag.
@@ -2456,9 +2452,7 @@ abstract class ShardDO {
             // spans (tail bias) or drop them. A no-op for sampled-in traces (their
             // spans already streamed live).
             this.flushSampledOutTrace(dispatchTrace, dispatchError !== undefined);
-            this.currentTraceSampled = true;
-            this.currentTraceKeepErrors = true;
-            this.currentDispatchSink = undefined;
+            this.traceSampling.delete(dispatchTrace.traceId);
             this.currentRequestTrace = undefined;
             this.currentRequestBookmark = undefined;
             this.currentResponseBookmark = undefined;
@@ -4874,10 +4868,14 @@ abstract class ShardDO {
             return;
         }
 
-        if (!this.currentTraceSampled && span.traceId === this.currentRequestTrace?.traceId) {
+        // Look the verdict up by the SPAN's own `traceId` (not the shared
+        // `currentRequestTrace`, which a sibling dispatch may have overwritten by now).
+        const sampling = this.traceSampling.get(span.traceId);
+
+        if (sampling && !sampling.sampled) {
             // Sampled out: hold this span back and remember the sink so the
             // `finally` can flush the trace's held spans if it turns out to error.
-            this.currentDispatchSink = sink;
+            sampling.sink = sink;
 
             return;
         }
@@ -4914,11 +4912,15 @@ abstract class ShardDO {
      * (excluding the synthetic dispatch root, which never goes to `onSpan`).
      */
     private flushSampledOutTrace(trace: { traceId: string }, dispatchFailed: boolean): void {
-        if (this.currentTraceSampled || !this.currentTraceKeepErrors) {
+        // Read THIS trace's own verdict + held sink (keyed by traceId), so an
+        // interleaved sibling dispatch's state can't drop this trace's error spans.
+        const sampling = this.traceSampling.get(trace.traceId);
+
+        if (!sampling || sampling.sampled || !sampling.keepErrors) {
             return;
         }
 
-        const sink = this.currentDispatchSink;
+        const { sink } = sampling;
 
         if (!sink?.onSpan) {
             return;

@@ -8,6 +8,8 @@ import createSqliteExec from "./_helpers/node-sqlite";
 
 // A fixed W3C trace id + parent span id used to build the inbound `traceparent`.
 const TRACE_ID = "0af7651916cd43dd8448eb211c80319c";
+// A second, distinct trace id for the interleaved-dispatch race test.
+const TRACE_ID_B = "1bb7652917de54ee9559fc322d91420d";
 const PARENT_SPAN_ID = "b7ad6b7169203331";
 
 /**
@@ -20,8 +22,9 @@ class SamplingShard extends ShardDO {
     public readonly exportedSpans: SpanEvent[] = [];
 
     // Assigned by each test before `fetch`; a definite-assignment field rather than
-    // an arrow default (which trips `class-methods-use-this`).
-    public plan!: (trace: ContextTracer) => Promise<void>;
+    // an arrow default (which trips `class-methods-use-this`). `functionPath` lets a
+    // plan branch per dispatch (used by the interleaved-dispatch race test).
+    public plan!: (trace: ContextTracer, functionPath: string) => Promise<void>;
 
     public override async handleRpc(functionPath: string): Promise<unknown> {
         const trace = this.makeTracer(
@@ -34,7 +37,7 @@ class SamplingShard extends ShardDO {
             this.getCurrentTrace(),
         );
 
-        await this.plan(trace);
+        await this.plan(trace, functionPath);
 
         return { ok: true };
     }
@@ -55,10 +58,10 @@ const makeState = (database: ReturnType<typeof createSqliteExec>): ShardDOState 
  * sampled flag (`01` in / `00` out) and the `x-lunora-sample-errors` tail-bias
  * header. Omitting `keepErrors` leaves the header off (defaulting to keep).
  */
-const request = (functionPath: string, options: { keepErrors?: boolean; sampled: boolean }): Request => {
+const request = (functionPath: string, options: { keepErrors?: boolean; sampled: boolean; traceId?: string }): Request => {
     const headers: Record<string, string> = {
         "content-type": "application/json",
-        traceparent: `00-${TRACE_ID}-${PARENT_SPAN_ID}-${options.sampled ? "01" : "00"}`,
+        traceparent: `00-${options.traceId ?? TRACE_ID}-${PARENT_SPAN_ID}-${options.sampled ? "01" : "00"}`,
     };
 
     if (options.keepErrors !== undefined) {
@@ -164,6 +167,63 @@ describe("shardDO trace sampling", () => {
             await shard.fetch(request("a:b", { keepErrors: false, sampled: false }));
 
             expect(shard.exportedSpans).toHaveLength(0);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("keeps a slow sampled-out error trace even when a sibling dispatch's finally interleaves", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            let markRecorded!: () => void;
+            const slowRecorded = new Promise<void>((resolve) => {
+                markRecorded = resolve;
+            });
+            let releaseSlow!: () => void;
+            const slowGate = new Promise<void>((resolve) => {
+                releaseSlow = resolve;
+            });
+
+            shard.plan = async (trace, functionPath) => {
+                if (functionPath === "slow:out") {
+                    // Sampled out + errors: the span is held and the sink captured.
+                    await trace("slow-error", () => {
+                        throw new Error("boom");
+                    }).catch(() => undefined);
+                    markRecorded();
+                    // Park before returning, so this dispatch's `finally` (which
+                    // flushes the held error span) runs AFTER the sibling below.
+                    await slowGate;
+
+                    return;
+                }
+
+                await trace("fast-ok", () => undefined);
+            };
+
+            // Start the slow sampled-out+error dispatch (its own traceId) and let it
+            // hold its error span, then park on the gate.
+            const slow = shard.fetch(request("slow:out", { keepErrors: true, sampled: false, traceId: TRACE_ID }));
+
+            await slowRecorded;
+
+            // Run a sibling sampled-in dispatch (a DIFFERENT traceId) to completion.
+            // Its `finally` must not wipe the slow trace's held sink/verdict — the
+            // race the per-instance fields used to lose. It streams its own span live.
+            await shard.fetch(request("fast:in", { sampled: true, traceId: TRACE_ID_B }));
+
+            // Now let the slow dispatch finish; its `finally` must still flush its
+            // own held error span (keyed by its traceId), not silently drop it.
+            releaseSlow();
+            await slow;
+
+            expect(shard.exportedSpans.filter((span) => span.traceId === TRACE_ID).map((span) => span.name)).toContain("slow-error");
+            expect(shard.exportedSpans.filter((span) => span.traceId === TRACE_ID_B).map((span) => span.name)).toContain("fast-ok");
         } finally {
             database.close();
         }
