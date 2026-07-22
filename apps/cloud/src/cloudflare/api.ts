@@ -14,7 +14,8 @@
 export type ScriptBinding =
     | { id: string; name: string; type: "d1" }
     | { bucket_name: string; name: string; type: "r2_bucket" }
-    | { class_name: string; name: string; type: "durable_object_namespace" };
+    | { class_name: string; name: string; type: "durable_object_namespace" }
+    | { name: string; text: string; type: "plain_text" };
 
 export interface PutScriptInput {
     bindings: ScriptBinding[];
@@ -26,7 +27,11 @@ export interface PutScriptInput {
     namespace: string;
     newSqliteClasses?: string[];
     scriptName: string;
+    /** Service names to set as `tail_consumers` (e.g. the log-tail worker). */
+    tailConsumers?: string[];
     tags: string[];
+    /** Plain env vars to attach as `plain_text` bindings (non-secret config). */
+    vars?: Record<string, string>;
 }
 
 export interface CloudflareApi {
@@ -36,8 +41,18 @@ export interface CloudflareApi {
     createD1Database: (name: string) => Promise<{ uuid: string }>;
     /** Create an R2 bucket (idempotent at the call site — caller ignores "exists"). */
     createR2Bucket: (name: string) => Promise<void>;
+    /** Delete a D1 database by uuid (teardown). 404-tolerant (already gone). */
+    deleteD1Database: (uuid: string) => Promise<void>;
     /** Remove a dispatch-namespace script (preview teardown / project deletion). */
     deleteDispatchScript: (input: { namespace: string; scriptName: string }) => Promise<void>;
+    /**
+     * Delete an R2 bucket by name (teardown). 404-tolerant. Throws if the bucket
+     * is non-empty — R2's REST delete requires an empty bucket, and object purge
+     * needs the S3/data API (a separate credential the teardown context lacks).
+     */
+    deleteR2Bucket: (name: string) => Promise<void>;
+    /** Resolve a D1 database uuid by its name (teardown), or null if none exists. */
+    findD1DatabaseByName: (name: string) => Promise<null | { uuid: string }>;
     /** Upload (create/update) a user Worker into a dispatch namespace. */
     putDispatchScript: (input: PutScriptInput) => Promise<void>;
     /** Set a secret on a dispatch-namespace script. */
@@ -138,7 +153,34 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
             return { uuid: result.uuid };
         },
         createR2Bucket: async (name) => {
-            await callJson("/r2/buckets", "POST", { name });
+            const response = await fetchImpl(`${base}/r2/buckets`, {
+                body: JSON.stringify({ name }),
+                headers: { authorization: authHeader, "content-type": "application/json" },
+                method: "POST",
+            });
+
+            // Idempotent: a bucket that already exists (409 / CF code 10004 "bucket
+            // already exists") is reused, so a re-deploy of the same project works.
+            if (response.ok || response.status === 409) {
+                return;
+            }
+
+            const data = (await response.json().catch(() => ({}))) as CloudflareEnvelope;
+
+            if ((data.errors ?? []).some((error) => error.code === 10004)) {
+                return;
+            }
+
+            throw new Error(
+                `cloudflare create R2 bucket failed: ${data.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`}`,
+            );
+        },
+        deleteD1Database: async (uuid) => {
+            const response = await fetchImpl(`${base}/d1/database/${uuid}`, { headers: { authorization: authHeader }, method: "DELETE" });
+
+            if (!response.ok && response.status !== 404) {
+                throw new Error(`cloudflare delete D1 failed: HTTP ${String(response.status)}`);
+            }
         },
         deleteDispatchScript: async ({ namespace, scriptName }) => {
             const response = await fetchImpl(`${base}/workers/dispatch/namespaces/${namespace}/scripts/${scriptName}`, {
@@ -150,17 +192,39 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
                 throw new Error(`cloudflare delete script failed: HTTP ${String(response.status)}`);
             }
         },
+        deleteR2Bucket: async (name) => {
+            const response = await fetchImpl(`${base}/r2/buckets/${name}`, { headers: { authorization: authHeader }, method: "DELETE" });
+
+            if (!response.ok && response.status !== 404) {
+                const detail = await response.text().catch(() => "");
+
+                throw new Error(`cloudflare delete R2 bucket failed: HTTP ${String(response.status)}${detail ? `: ${detail}` : ""}`);
+            }
+        },
+        findD1DatabaseByName: async (name) => {
+            const result = (await callJson(`/d1/database?name=${encodeURIComponent(name)}`, "GET", undefined)) as
+                { name?: string; uuid?: string }[] | undefined;
+            const match = (result ?? []).find((database) => database.name === name && typeof database.uuid === "string");
+
+            return match?.uuid ? { uuid: match.uuid } : null;
+        },
         putDispatchScript: async (input) => {
             // Workers-for-Platforms multipart upload: a `metadata` part (bindings,
             // main_module, migrations, tags) + the bundle module part.
+            // Plain env vars ride the bindings array as `plain_text` entries.
+            const varBindings: ScriptBinding[] = Object.entries(input.vars ?? {}).map(([name, text]) => ({ name, text, type: "plain_text" }));
+
             const metadata = {
-                bindings: input.bindings,
+                bindings: [...input.bindings, ...varBindings],
                 compatibility_date: "2026-06-10",
                 compatibility_flags: ["nodejs_compat"],
                 main_module: input.mainModule,
                 ...(input.newSqliteClasses && input.newSqliteClasses.length > 0
                     ? { migrations: { new_sqlite_classes: input.newSqliteClasses, new_tag: input.migrationTag ?? "v1" } }
                     : {}),
+                // The dispatch-namespace tail worker (log ingest, GAPS.md B2) —
+                // wired here at deploy time, per the tail worker's own contract.
+                ...(input.tailConsumers && input.tailConsumers.length > 0 ? { tail_consumers: input.tailConsumers.map((service) => ({ service })) } : {}),
                 tags: input.tags,
             };
 

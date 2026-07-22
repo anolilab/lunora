@@ -14,27 +14,36 @@ import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
  * hosted `AlertsSection`; reads are members-only.
  */
 
+/** Every rule target — count-crossing (`issue`/`incident`/`uptime`) + metric-window. */
+type RuleTarget = "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
+
+/** Metric-window targets, which additionally require `windowMinutes` (+ optional comparator/scope). */
+const METRIC_TARGETS = new Set<RuleTarget>(["error_rate", "latency_p95", "llm_cost"]);
+
 interface AlertRuleRow {
     _id: Id<"alertRules">;
-    channel: "email" | "webhook";
+    channel: "email" | "pagerduty" | "slack" | "webhook";
+    comparator?: "gt" | "lt";
     createdAt: number;
     destination: string;
     enabled: boolean;
+    functionPath?: string;
     name: string;
     organizationId: Id<"organizations">;
-    target: "incident" | "issue";
+    target: RuleTarget;
     threshold: number;
+    windowMinutes?: number;
 }
 
 interface AlertRow {
     _id: Id<"alerts">;
-    channel: "email" | "webhook";
+    channel: "email" | "pagerduty" | "slack" | "webhook";
     createdAt: number;
     deliveredAt?: number;
     destination: string;
     status: "delivered" | "failed" | "firing";
     subject: string;
-    target: "incident" | "issue";
+    target: RuleTarget;
 }
 
 /** An org's alert rules, most-recent first (any member). */
@@ -51,23 +60,51 @@ export const rules = query
 /** Create an alert rule (owners/admins). New rules start enabled. */
 export const createRule = mutation
     .input({
-        channel: v.union(v.literal("email"), v.literal("webhook")),
+        channel: v.union(v.literal("email"), v.literal("webhook"), v.literal("slack"), v.literal("pagerduty")),
+        // Metric targets only: how the window value is compared to `threshold`. Default `gt`.
+        comparator: v.optional(v.union(v.literal("gt"), v.literal("lt"))),
         destination: v.string(),
+        // Metric targets only: optional function-path scope for the window.
+        functionPath: v.optional(v.string()),
         name: v.string(),
         organizationId: v.id("organizations"),
-        target: v.union(v.literal("issue"), v.literal("incident")),
+        target: v.union(
+            v.literal("issue"),
+            v.literal("incident"),
+            v.literal("uptime"),
+            v.literal("error_rate"),
+            v.literal("latency_p95"),
+            v.literal("llm_cost"),
+        ),
         threshold: v.number(),
+        // Metric targets only: rolling window length in minutes (required for them).
+        windowMinutes: v.optional(v.number()),
     })
     .mutation(async ({ ctx: context, args }): Promise<Id<"alertRules">> => {
         await assertMember(context, args.organizationId, ["owner", "admin"]);
 
-        if (args.threshold < 1) {
-            throw new LunoraError("BAD_REQUEST", "threshold must be at least 1");
+        const isMetric = METRIC_TARGETS.has(args.target);
+
+        // Count-crossing thresholds are event counts (≥ 1); metric thresholds are
+        // percentages / ms / cost budgets and may legitimately be fractional (≥ 0).
+        if (isMetric ? args.threshold < 0 : args.threshold < 1) {
+            throw new LunoraError("BAD_REQUEST", isMetric ? "threshold must be at least 0" : "threshold must be at least 1");
         }
 
-        // SSRF guard: the edge `fetch`es a webhook destination when the alert fires.
-        if (args.channel === "webhook" && !isSafeWebhookUrl(args.destination)) {
-            throw new LunoraError("BAD_REQUEST", "webhook destination must be an https:// URL to a public host");
+        if (isMetric && (args.windowMinutes === undefined || args.windowMinutes < 1)) {
+            throw new LunoraError("BAD_REQUEST", "windowMinutes must be at least 1 for a metric rule");
+        }
+
+        // SSRF guard: the edge `fetch`es a `webhook`/`slack` destination when the
+        // alert fires, so both must be an https URL to a public host. `pagerduty`'s
+        // destination is an integration (routing) key posted to PagerDuty's own
+        // fixed endpoint — it just has to be non-empty.
+        if ((args.channel === "webhook" || args.channel === "slack") && !isSafeWebhookUrl(args.destination)) {
+            throw new LunoraError("BAD_REQUEST", `${args.channel} destination must be an https:// URL to a public host`);
+        }
+
+        if (args.channel === "pagerduty" && args.destination.trim() === "") {
+            throw new LunoraError("BAD_REQUEST", "pagerduty destination must be an integration (routing) key");
         }
 
         const now = Date.now();
@@ -82,6 +119,11 @@ export const createRule = mutation
             target: args.target,
             threshold: args.threshold,
             updatedAt: now,
+            // Only persist the metric-only fields for metric rules, so a count
+            // rule stays exactly as before (no stray comparator/window columns).
+            ...(isMetric
+                ? { comparator: args.comparator ?? "gt", windowMinutes: args.windowMinutes, ...(args.functionPath ? { functionPath: args.functionPath } : {}) }
+                : {}),
         });
     });
 

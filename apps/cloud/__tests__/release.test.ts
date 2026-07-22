@@ -64,7 +64,7 @@ describe("orchestrator verify phase", () => {
     it("fails the deployment when the health check fails — never reports live", async () => {
         const phases: string[] = [];
         const outcome = await runDeployment(
-            { bindings: {}, bundle: new ArrayBuffer(0), cell: "c", dispatchNamespace: "ns", scriptName: "s", secrets: {}, tags: [] },
+            { alias: "s", bindings: {}, bundle: new ArrayBuffer(0), cell: "c", dispatchNamespace: "ns", scriptName: "s", secrets: {}, tags: [] },
             {
                 onProgress: (progress) => {
                     phases.push(progress.phase);
@@ -83,7 +83,7 @@ describe("orchestrator verify phase", () => {
     it("goes live after a passing health check", async () => {
         const phases: string[] = [];
         const outcome = await runDeployment(
-            { bindings: {}, bundle: new ArrayBuffer(0), cell: "c", dispatchNamespace: "ns", scriptName: "s", secrets: {}, tags: [] },
+            { alias: "s", bindings: {}, bundle: new ArrayBuffer(0), cell: "c", dispatchNamespace: "ns", scriptName: "s", secrets: {}, tags: [] },
             {
                 onProgress: (progress) => {
                     phases.push(progress.phase);

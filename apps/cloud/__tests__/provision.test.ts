@@ -5,11 +5,12 @@ import type { TenantDeploymentSpec } from "../src/provision";
 import { createCloudflareProvisioner } from "../src/provision";
 
 const spec: TenantDeploymentSpec = {
+    alias: "org__project",
     bindings: { d1: { binding: "DB" }, durableObjects: [{ binding: "SHARD", className: "ShardDO" }], r2: { binding: "FILES" } },
     bundle: new TextEncoder().encode("export default {}").buffer,
     cell: "cell-1",
     dispatchNamespace: "lunora-production",
-    scriptName: "org__project",
+    scriptName: "org__project-v1",
     secrets: { LUNORA_ADMIN_TOKEN: "s3cret" },
     tags: ["org:org", "project:project", "env:production"],
 };
@@ -28,9 +29,12 @@ const fakeApi = (): { api: CloudflareApi; deletes: string[]; puts: PutScriptInpu
                 return { uuid: "d1-uuid-123" };
             }),
             createR2Bucket: vi.fn(async () => undefined),
+            deleteD1Database: vi.fn(async () => undefined),
             deleteDispatchScript: vi.fn(async ({ scriptName }) => {
                 deletes.push(scriptName);
             }),
+            deleteR2Bucket: vi.fn(async () => undefined),
+            findD1DatabaseByName: vi.fn(async () => null),
             putDispatchScript: vi.fn(async (input) => {
                 puts.push(input);
             }),
@@ -51,8 +55,10 @@ describe(createCloudflareProvisioner, () => {
 
         const result = await provisioner.deploy(spec);
 
-        expect(result).toMatchObject({ scriptName: "org__project", url: "https://org__project.lunora.app" });
+        // The uploaded script is the versioned id; D1/R2 are named from the stable alias.
+        expect(result).toMatchObject({ scriptName: "org__project-v1", url: "https://org__project-v1.lunora.app" });
         expect(result.bundleHash).toMatch(/^[0-9a-f]{64}$/u);
+        expect(api.findD1DatabaseByName).toHaveBeenCalledWith("org__project-db");
         expect(api.createD1Database).toHaveBeenCalledWith("org__project-db");
         expect(api.createR2Bucket).toHaveBeenCalledWith("org__project-files");
 

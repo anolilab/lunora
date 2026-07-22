@@ -4,14 +4,23 @@
  * consumes the NDJSON progress stream, invoking `onEvent` per line. Pure: the
  * `fetch` is injectable, so the streaming consumer is unit-testable.
  */
+import type { TenantBindingSpec } from "../provision";
 
 export type DeployEvent = Record<string, unknown>;
 
 export interface DeployClientOptions {
     apiUrl: string;
+    /**
+     * The tenant's binding manifest, read from its `wrangler.jsonc` (DO classes,
+     * and whether the app provisions a per-tenant D1 / R2). The server floors it
+     * to ShardDO, so omitting it still yields a bootable single-DO worker.
+     */
+    bindings?: TenantBindingSpec;
     branch?: string;
     /** Base64-encoded prebuilt worker module (the app's Vite build output). */
     bundle: string;
+    /** The tenant's cron expressions (wrangler `triggers.crons`) for the fan-out (§2.4). */
+    cronSpecs?: string[];
     deployKey: string;
     fetch?: typeof globalThis.fetch;
     kind?: "dev" | "preview" | "production";
@@ -70,8 +79,10 @@ export const deployToCloud = async (options: DeployClientOptions, onEvent: (even
 
     const response = await fetchImpl(`${stripTrailingSlashes(options.apiUrl)}/v1/deploy`, {
         body: JSON.stringify({
+            ...(options.bindings ? { bindings: options.bindings } : {}),
             branch: options.branch,
             bundle: options.bundle,
+            ...(options.cronSpecs && options.cronSpecs.length > 0 ? { cronSpecs: options.cronSpecs } : {}),
             kind: options.kind,
             projectId: options.projectId, // secret-scanner:allow -- domain field name
             scriptName: options.scriptName,

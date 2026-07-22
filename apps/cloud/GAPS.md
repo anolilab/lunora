@@ -6,8 +6,56 @@
 > attribution). Each gap states what exists today in `apps/cloud`, the design on
 > our Workers-for-Platforms substrate, and its build status.
 
-Legend: ✅ shipped here · 🔨 code-tractable now (no live infra needed) ·
-🌐 needs live Cloudflare/Creem/GitHub credentials · 🧭 decision, not code.
+Legend: ✅ wired end-to-end here · 🧩 pure module, tested, **no production caller
+yet** (logic exists; the wiring doesn't) · 🔨 code-tractable now (no live infra
+needed) · 🌐 needs live Cloudflare/Creem/GitHub credentials · 🧭 decision, not code.
+
+> **Legend note (2026-07-21).** An earlier revision used a single ✅ that
+> conflated two very different states: "the pure evaluator/planner/port exists
+> and is unit-tested" versus "the feature is actually wired and runs." Several
+> ✅ items were in fact 🧩 — a tested function reachable only from `__tests__/`.
+> The 🧩 marker now names that state explicitly. See the wiring pass below for
+> the items that were 🧩 and have since been wired.
+
+---
+
+## Wiring pass — 2026-07-21
+
+A review found the deploy pipeline could not produce a bootable tenant and that
+the metering loop never closed. Four fixes (each: pure port-injected logic +
+unit tests, verified by codegen + tsc + vitest):
+
+- **Tenant bindings (✅ wired).** `POST /v1/deploy` built the provisioner spec
+  with `bindings: {}`, so every uploaded Worker had no Durable Object binding and
+  no `new_sqlite_classes` migration tag — a real Lunora app (always exports
+  ShardDO) could never boot. The deploy request now carries the app's binding
+  manifest (CLI reads it from `wrangler.jsonc`), floored to ShardDO server-side.
+- **Resource teardown (✅ wired).** The lifecycle crons only marked deployments
+  `destroyed`; nothing deleted the Cloudflare dispatch script, so namespaces grew
+  unboundedly (the leak Ring-2 claimed to have closed). A `teardownAt`-checkpointed
+  sweep (`src/deploy/teardown.ts`) now deletes the script in `scheduled()`.
+  Per-tenant **D1/R2** are named from the project's stable **alias** (not the
+  versioned script), so tenant `.global()` data persists across deploys and a
+  rollback sees the same database; they are torn down **only when the alias has no
+  remaining non-destroyed deployment** (project/org deletion) — never on a routine
+  version prune. R2 delete is best-effort (a non-empty bucket needs an S3-API
+  object purge this context lacks — logged for follow-up). **Caveat:** previews
+  that reuse the production alias would share its D1; give previews a distinct
+  alias for data isolation.
+- **Metering readback (✅ wired).** The dispatcher wrote one Analytics-Engine
+  data point per request, but `createHttpAnalyticsReader` had no caller, so
+  `platformUsage` stayed empty and spend caps / usage views evaluated nothing.
+  A per-cell `usageReadAtMs`-checkpointed delta rollback
+  (`src/metering/rollback.ts`) now folds AE counts into the ledger in
+  `scheduled()` (no double-count; under-count-not-over-bill on failure).
+- **Build dispatcher (🧩 → logic wired, 🌐 execution).** `builds.claimNext` had
+  no caller, so enqueued builds sat until the 24h expiry cron failed them. The
+  claim→run→drain loop now exists and is tested (`src/builds/dispatch.ts`), but
+  its production activation stays gated on the runner's 🌐 seams — `execute` (a
+  Cloudflare Container running `lunora build`) and `fetchSource` (GitHub App
+  tarball). Claiming builds with no executor would only burn them, so it is not
+  yet wired into `scheduled()`. This is the one gap whose blocker is genuinely
+  infra, not code.
 
 ---
 
@@ -43,7 +91,14 @@ bad deploy replaces the good one instantly and there is nothing to roll back to.
 `updateStatus`. Queue time, provision time, and time-to-live become dashboard
 columns for free.
 
-### A3. Server-side builds + build logs (✅ core shipped, 🌐 execution)
+### A3. Server-side builds + build logs (✅ queue + dispatcher; 🌐 execution)
+
+> **2026-07-21:** the claim→run→drain **dispatcher** (`src/builds/dispatch.ts`)
+> now exists and is tested — `builds.claimNext` finally has a caller at the logic
+> layer. It is not yet wired into `scheduled()`: activation is gated on the
+> runner's container `execute` seam (below), and claiming with no executor would
+> only burn builds. Everything around execution (queue, lease, dedup, log
+> streaming, dispatcher) is code-complete; the container build itself is the 🌐.
 
 **Today:** builds happen on the developer's machine; the platform never builds.
 GitHub webhook only parses PR events into preview _intents_.
@@ -116,9 +171,14 @@ upgraded to consume them:**
   index for tailing and a `(org, traceId)` index for log↔trace correlation.
 - **Query.** `logs.list` gained server-side filters — `levels`, `functionPath`,
   `traceId`, free-text `search` (message / function / field values), a cursor,
-  and a bounded `limit` — returning newest-first.
-- **UI.** the studio Logs tab renders severity chips (filter), a search box,
-  structured fields, and a short trace id per line.
+  and a bounded `limit` — returning newest-first. `logs.listTraces` folds the
+  recent lines by `traceId` (`src/telemetry/traces.ts`, pure + unit-tested) into
+  per-trace summaries (root function, time span, line count, peak severity).
+- **UI.** the Logs tab renders severity chips (filter), a search box, structured
+  fields, and a short trace id per line. A **Traces tab** lists recent dispatch
+  traces (newest-active first, red when a line erred) and drills each one into
+  its timeline — every line in the trace, ordered, with the offset from the trace
+  start (reusing `logs.list` filtered to the `traceId`).
 
 **Still 🌐 (needs live infra):** the provisioner setting
 `tail_consumers: [{ service: "lunora-log-tail" }]` on each tenant script (or the
@@ -126,7 +186,55 @@ namespace) at deploy time, and an end-to-end run against a live dispatch
 namespace. D1 is fine at launch volume; the ingest seam still lets us re-point to
 Analytics Engine / R2 later without touching consumers. Correlating an
 `error`/`fatal` log line to the OTLP-derived Issue by `traceId` (the telemetry
-path doesn't carry `traceId` yet) is the natural follow-up.
+path doesn't carry `traceId` yet) is the natural follow-up. The Traces tab is a
+**log-reconstructed** timeline (no span durations): the OTLP ingest keeps only
+error spans (→ Issues), so a true span-duration **waterfall** would need a
+separate span store.
+
+**Span store — Phase 1 shipped (a Langfuse-teardown follow-on, cleanroom).** The
+OTLP ingest no longer discards non-error spans: `decodeObservations`
+(`src/telemetry/otlp.ts`, pure + unit-tested) keeps EVERY span with its real
+`startedAt`/`endedAt`→`durationMs` and `traceId`/`spanId`/`parentSpanId`, and
+`telemetry.ingest` persists them to an `observations` table (retention-pruned by
+`pruneObservations`, like `tenantLogs`) — the Langfuse "observations" model,
+reimplemented on our schema (no Langfuse code; it's MIT-except-`ee/`, but a
+Postgres/ClickHouse app doesn't port). **Phase 2 shipped:** `traces.list`/`get`
+over `observations` (`lunora/traces.ts`) with real aggregates (latency, span +
+error counts), and the Traces tab now renders a **real-duration nested
+waterfall** — `buildTraceTree` (`src/telemetry/trace-tree.ts`, pure +
+unit-tested) lays each span out by its true start/duration and indents it by its
+depth under `parentSpanId`. The log-derived view (`logs.listTraces`) was removed.
+
+**Full OpenTelemetry integration — shipped (branch `feat/cloud-otlp-full`,
+2026-07-21).** The standard OTLP ingest is now complete and hardened, and the
+framework emits deep + AI telemetry the cloud captures end-to-end:
+
+- **Deep waterfalls (framework, already on alpha).** `ctx.trace` emits nested
+  child spans with a real `parentSpanId` + timestamps, `ctx.metrics` → `/v1/metrics`
+  — so the earlier "one flat span per RPC" note is obsolete; trees are deep.
+- **AI generations (framework PR #160 → alpha).** `@lunora/ai` traces RAG embeds
+  as `generation` spans; `@lunora/agent` gains an `otlpTelemetry` integration
+  shipping `gen_ai.*` model/tool spans. The cloud store gained a `generation`
+  observation kind (model, prompt/completion tokens, opt-in input/output); the
+  Traces waterfall shows a `gen` chip + a **span-detail pane** (model/tokens/io/attrs).
+- **Full OTLP transports.** `/v1/traces|logs|metrics` accept **protobuf** (a
+  Worker-safe hand-rolled decoder — protobufjs needs eval, blocked in Workers)
+  _and_ JSON (+ gzip), return `partialSuccess` when a batch is capped, and write
+  metrics to Analytics Engine. gRPC stays out (Workers can't host it).
+- **Hardened ingest.** A scoped `ingest` deploy-key capability (telemetry-only,
+  can't deploy) + a per-org telemetry rate-limit tier + key-based PII redaction
+  of span attributes / log fields.
+- **Deploy-time wiring.** The provisioner injects `LUNORA_OTLP_ENDPOINT`/token +
+  `tail_consumers` into each tenant (the long-documented gap), minting a per-org
+  ingest key stored envelope-encrypted for re-injection.
+- **Scale.** Spans tier to the columnar archive (Pipeline → R2/Iceberg) via
+  `archiveSpans`, alongside D1's hot window.
+
+**Still 🌐 / follow-on:** the R2-SQL **read-back** of archived spans (an action over
+the Iceberg table, like the raw-event archive); a live end-to-end run against a
+dispatch namespace with `LUNORA_OTLP_ENDPOINT` configured; cross-tab UI links
+(trace→logs, error-span→Issue — needs dashboard tab-state + the framework carrying
+`traceId` into `getIssues`); OTLP gzip on the framework's own POST (marginal).
 
 ### B3. Debug header (✅ shipped)
 
@@ -163,7 +271,7 @@ platform never inherits worldwide tax compliance. Product-based checkout
 (Creem product ids in `LUNORA_CLOUD_PLANS.priceIds`), hosted billing portal,
 `creem-signature` webhooks, sandbox via `CREEM_TEST_MODE`.
 
-**Overage billing = prepaid credits (✅ core shipped).** Creem has no metered
+**Overage billing = prepaid credits (✅ reconciliation wired; 🌐 self-serve purchase).** Creem has no metered
 subscription pricing (products are `recurring`/`onetime` only), but ships a
 first-party credits ledger (per-customer accounts, idempotent credit/debit by
 `reference`, balance/freeze) built for API metering. So overage is prepaid:
@@ -178,10 +286,18 @@ ledger adapter (`src/billing/creem-credits.ts`: balance/debit over
 `customerCredits`, `applyCreditPurchase` creating the account seeded on first
 buy), the fleet reconciliation driver (`reconcileAllOverages`: per-org failure
 isolation, watermark-after-debit ordering, exhausted → suspension hook), the
-`organizations.creditsAccountId` linkage, and 6 more tests are ✅. 🌐 remaining:
-create the credit-pack products, schedule the reconciliation against live
-credentials, and map pack purchases in the billing webhook to
-`applyCreditPurchase`.
+`organizations.creditsAccountId` linkage. **Reconciliation is now wired**
+(2026-07-21): `sweepOverageReconciliation` runs on the 6-hourly bucket
+(`src/billing/reconcile.ts` builds the per-org inputs + fleet ports over the
+control-plane store; the Creem credits ledger is built from `CREEM_API_KEY`),
+debiting each org's period overage, suspending the exhausted (`suspendedReason:
+"overage"`), and lifting overage suspensions once a balance is restored
+(`onRecovered`, self-healing). No-ops without Creem keys. **Still 🧩/🌐:**
+`applyCreditPurchase` (self-serve credit-pack _purchase_) is not wired — the
+billing webhook delegates wholly to `ctx.payments.handleWebhook`, and mapping a
+pack purchase needs the live credit-pack **product ids** (the genuine 🌐) plus a
+Creem-event seam. Until that lands, accounts are funded out-of-band; the
+enforcement + recovery engine above already reacts to whatever balance exists.
 
 ## D. Data & trust
 
@@ -321,25 +437,41 @@ Shipped in this pass (own implementations):
 Backlog (ranked; all our-own-code):
 
 1. **Alerting pillar** — rules (error-rate/latency/health on deployments),
-   incidents, notification destinations (email/webhook). A whole product
-   pillar; design against the platformUsage + tenantLogs streams.
-2. **Deployment health charts on the project page** — request volume / error
-   rate per deployment (needs status-code capture in the dispatcher metering
-   first: add `outcome` blob to the AE data point).
-3. **Log viewer upgrade** — severity chips, filter bar, virtualized list,
-   log↔deployment correlation links.
-4. **Design-system pass** — dark-first token palette, severity color ramp,
-   consistent empty states with actionable copy (Maple's DESIGN.md rigor is
-   the bar, not the source).
-5. **Onboarding checklist** — first-run "create project → issue key → first
-   deploy → see it live" checklist on the dashboard, replacing bare empty
-   tabs.
-6. **Time-range picker** — shared presets (1h/24h/7d/30d) across usage/logs
-   once the data streams carry enough resolution.
-7. **Deploy-key roll UX** — one-click roll (issue+revoke atomically) in the
-   keys tab.
-8. **MCP surface** — expose the control plane to agents (list projects,
-   deployments, logs, trigger rollback) via `@lunora/mcp`; strong
-   differentiator and cheap given the framework ships an MCP package.
-9. **Integrations hub** — OAuth connect cards (GitHub App install, Creem
-   portal) instead of bare settings fields.
+   incidents, notification destinations. A whole product pillar; design against
+   the platformUsage + tenantLogs streams.
+    - _Shipped:_ count-crossing rules (issue/incident/uptime) + metric-window
+      rules (`error_rate`/`latency_p95`/`llm_cost`, edge-triggered). Metric rules
+      evaluate both inline on telemetry ingest (fast feedback) **and** on a
+      periodic every-minute sweep (`src/telemetry/sweep.ts`) over a shared
+      `alertRuleState` latch, so a window that goes quiet (error rate falling to 0
+      with no fresh spans) still fires/clears rather than latching forever.
+      Delivery channels: `email`, `webhook`, `slack` (incoming-webhook JSON), and
+      `pagerduty` (Events API v2) — the webhook-family channels reuse the
+      `isSafeWebhookUrl` SSRF guard.
+
+#### Infra-level alerts: lean on Cloudflare Notifications + Health Checks
+
+The rules above are **app-semantic** — they watch the telemetry a tenant's code
+emits (error fingerprints, span metrics, LLM spend, synthetic uptime). For
+**infra-level** signals — Worker script errors/exceptions, CPU-time limit
+overruns, sustained 5xx, origin/health-check failures — don't rebuild what the
+platform already delivers: configure **Cloudflare Notifications** (Workers alerts
+on error rate / CPU / invocation-limit, and **Health Checks** on a deployment's
+URL) with email / PagerDuty / webhook destinations at the account level. The two
+layers compose: Cloudflare Notifications + Health Checks cover the infrastructure
+floor (is the Worker up, is it erroring at the edge), while these app-semantic
+rules run on top (is _this function_ over its error/latency/cost budget). This
+also gives an independent out-of-band path — an alert about the platform doesn't
+depend on the platform's own telemetry pipeline being healthy. 2. **Deployment health charts on the project page** — request volume / error
+rate per deployment (needs status-code capture in the dispatcher metering
+first: add `outcome` blob to the AE data point). 3. **Log viewer upgrade** — severity chips, filter bar, virtualized list,
+log↔deployment correlation links. 4. **Design-system pass** — dark-first token palette, severity color ramp,
+consistent empty states with actionable copy (Maple's DESIGN.md rigor is
+the bar, not the source). 5. **Onboarding checklist** — first-run "create project → issue key → first
+deploy → see it live" checklist on the dashboard, replacing bare empty
+tabs. 6. **Time-range picker** — shared presets (1h/24h/7d/30d) across usage/logs
+once the data streams carry enough resolution. 7. **Deploy-key roll UX** — one-click roll (issue+revoke atomically) in the
+keys tab. 8. **MCP surface** — expose the control plane to agents (list projects,
+deployments, logs, trigger rollback) via `@lunora/mcp`; strong
+differentiator and cheap given the framework ships an MCP package. 9. **Integrations hub** — OAuth connect cards (GitHub App install, Creem
+portal) instead of bare settings fields.

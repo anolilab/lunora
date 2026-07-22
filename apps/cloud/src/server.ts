@@ -16,9 +16,24 @@ import { openApiSpec } from "../lunora/_generated/openapi.js";
 import { createShardDO } from "../lunora/_generated/shard.js";
 import schema from "../lunora/schema.js";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
+import type { CreemCreditsClientLike } from "./billing/creem-credits";
+import { createCreemCreditsLedger } from "./billing/creem-credits";
+import { reconcileAllOverages } from "./billing/overage";
+import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcile";
+import { createHttpCloudflareApi } from "./cloudflare/api";
+import { resolveAdminToken } from "./deploy/admin-token";
 import { createDeployRouter } from "./deploy/router";
+import type { ControlPlaneDb } from "./store";
+import { teardownPorts, usageRollbackPorts } from "./deploy/sweeps";
+import { createResourceTeardown, runTeardownSweep } from "./deploy/teardown";
+import { createHttpAnalyticsReader } from "./metering/analytics";
+import { runUsageRollback } from "./metering/rollback";
 import type { CronTarget } from "./fanout/cron";
 import { fanOutCron } from "./fanout/cron";
+import { deliverAlert } from "./mail/notify";
+import type { AlertDelivery } from "./telemetry/alerts";
+import { runAlertSweep } from "./telemetry/sweep";
+import { runUptimeSweep } from "./uptime/sweep";
 import type { QueueMessage, TenantQueueGroup } from "./fanout/queue";
 import { fanOutQueue, groupByTenant } from "./fanout/queue";
 
@@ -143,6 +158,10 @@ interface Env {
     AUTH_SECRET?: string;
     /** Base URL better-auth resolves callbacks against. */
     AUTH_URL?: string;
+    /** Cloudflare account hosting this cell — the teardown sweep's REST target (§2.5). */
+    CLOUDFLARE_ACCOUNT_ID?: string;
+    /** Scoped Cloudflare API token; absent → resource teardown is skipped. */
+    CLOUDFLARE_API_TOKEN?: string;
     /** Creem (MoR) billing secrets (§4). Absent → billing reads work, live calls fail. */
     CREEM_API_KEY?: string;
     CREEM_TEST_MODE?: string;
@@ -151,6 +170,12 @@ interface Env {
     DB: unknown;
     /** Dispatch namespace — used by the cron fan-out to tick tenants (§2.4). */
     DISPATCHER?: { get: (scriptName: string) => { fetch: (request: Request) => Promise<Response> } };
+    /** This cell's name (`cells.name`) — keys the metering readback checkpoint. */
+    LUNORA_CELL?: string;
+    /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
+    SECRET_ENCRYPTION_KEY?: string;
+    /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
+    USAGE_ANALYTICS_DATASET?: string;
     /** Optional GitHub OAuth app for studio social sign-in. */
     GITHUB_CLIENT_ID?: string;
     GITHUB_CLIENT_SECRET?: string;
@@ -193,8 +218,18 @@ const deployRouter = createDeployRouter();
 // to (the "tenant cron fan-out tick" heartbeat in lunora/crons.ts).
 const EVERY_MINUTE = "*/1 * * * *";
 
+// The hourly expression `crons.interval({ hours: 1 })` compiles to. Teardown +
+// usage rollback ride this ONE trigger (see the collision note in scheduled()).
+const EVERY_HOUR = "0 */1 * * *";
+
+// The 6-hourly expression `crons.interval({ hours: 6 })` compiles to — the
+// bucket the overage reconciliation rides (paces Creem credits API calls).
+const EVERY_SIX_HOURS = "0 */6 * * *";
+
 interface LiveDeploymentRow {
     adminToken?: string;
+    adminTokenCiphertext?: string;
+    adminTokenIv?: string;
     cronSpecs?: string[];
     scriptName: string;
 }
@@ -211,25 +246,212 @@ const readLiveDeployments = async (env: Env): Promise<LiveDeploymentRow[]> => {
     return page as unknown as LiveDeploymentRow[];
 };
 
-/** Live deployments that declare cron expressions, shaped for the cron fan-out. */
+/**
+ * Live deployments that declare cron expressions, shaped for the cron fan-out.
+ * The stored admin token is sealed at rest (§7), so it is decrypted in-process
+ * here with the master key before it becomes the tenant Bearer.
+ */
 const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
     const live = await readLiveDeployments(env);
+    const resolved = await Promise.all(
+        live.map(async (row) => ({
+            adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY),
+            cronSpecs: row.cronSpecs,
+            scriptName: row.scriptName,
+        })),
+    );
+    const targets: CronTarget[] = [];
 
-    return live
-        .filter(
-            (row): row is LiveDeploymentRow & { adminToken: string; cronSpecs: string[] } =>
-                Boolean(row.adminToken) && Array.isArray(row.cronSpecs) && row.cronSpecs.length > 0,
-        )
-        .map((row) => {
-            return { adminToken: row.adminToken, cronSpecs: row.cronSpecs, scriptName: row.scriptName };
-        });
+    for (const row of resolved) {
+        if (row.adminToken && Array.isArray(row.cronSpecs) && row.cronSpecs.length > 0) {
+            targets.push({ adminToken: row.adminToken, cronSpecs: row.cronSpecs, scriptName: row.scriptName });
+        }
+    }
+
+    return targets;
 };
 
-/** Script id → per-deployment admin token, for the queue fan-out. */
+/** The control-plane D1 as the structural {@link ControlPlaneDb} the sweeps use. */
+const controlPlaneDb = (database: D1DatabaseLike): ControlPlaneDb =>
+    createD1CtxDb({ exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] }) as unknown as ControlPlaneDb;
+
+/**
+ * Delete the Cloudflare dispatch scripts (+ tenant D1 / best-effort R2) of
+ * deployments the lifecycle crons marked `destroyed` (§2.3 / GAPS.md A1) so
+ * dispatch namespaces don't grow unboundedly. No-ops without Cloudflare
+ * credentials; the `teardownAt` stamp makes the sweep crash-safe idempotent.
+ */
+const sweepTeardown = async (env: Env): Promise<void> => {
+    if (!env.DB || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+        return;
+    }
+
+    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const api = createHttpCloudflareApi({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.CLOUDFLARE_API_TOKEN });
+
+    // script + tenant D1 + tenant R2 (best-effort; a non-empty bucket is logged
+    // and left for a follow-up purge).
+    const destroy = createResourceTeardown(api, (bucket, error) => {
+        // eslint-disable-next-line no-console -- surface non-empty R2 teardown for the follow-up purge
+        console.warn("[teardown] R2 bucket not deleted (needs object purge):", bucket, error);
+    });
+
+    await runTeardownSweep(teardownPorts(database, destroy, Date.now()));
+};
+
+/** Epoch ms for the first instant of the current UTC month — the usage period bucket (§4). */
+const currentPeriodStart = (): number => {
+    const now = new Date();
+
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+};
+
+/**
+ * Fold Analytics-Engine tenant request counts into the `platformUsage` ledger
+ * (§4) so spend caps, the usage summary, and the usage chart have data to read.
+ * Delta-read off this cell's `usageReadAtMs` checkpoint (no double counting);
+ * no-ops without Cloudflare credentials.
+ */
+const sweepUsageRollback = async (env: Env): Promise<void> => {
+    if (!env.DB || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+        return;
+    }
+
+    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const reader = createHttpAnalyticsReader({
+        accountId: env.CLOUDFLARE_ACCOUNT_ID,
+        apiToken: env.CLOUDFLARE_API_TOKEN,
+        dataset: env.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage",
+    });
+
+    const ports = await usageRollbackPorts(database, reader, { cellName: env.LUNORA_CELL ?? "default", now: Date.now(), periodStart: currentPeriodStart() });
+
+    await runUsageRollback(ports);
+};
+
+/**
+ * Reconcile prepaid-credit overage for the fleet (GAPS.md C3): debit each org's
+ * period overage against its Creem credits balance, suspend the exhausted, and
+ * lift overage suspensions once a balance is restored. Runs on Creem's credits
+ * API — no-ops without `CREEM_API_KEY`. (Self-serve credit-pack *purchase* — the
+ * webhook that funds these accounts — still needs the live credit-pack product
+ * ids; this is the enforcement + recovery half.)
+ */
+const sweepOverageReconciliation = async (env: Env): Promise<void> => {
+    if (!env.DB || !env.CREEM_API_KEY) {
+        return;
+    }
+
+    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const periodStart = currentPeriodStart();
+    const { accounts, inputs, suspension } = await buildOverageReconcileData(database, periodStart);
+
+    const creem = new Creem({ apiKey: env.CREEM_API_KEY, ...(env.CREEM_TEST_MODE === "true" ? { server: "test" as const } : {}) });
+    const ledger = createCreemCreditsLedger({
+        client: creem as unknown as CreemCreditsClientLike,
+        resolveAccountId: (organizationId) => Promise.resolve(accounts.get(organizationId) ?? null),
+    });
+
+    await reconcileAllOverages(inputs, overageFleetPorts(database, ledger, Date.now(), suspension));
+};
+
+/**
+ * Deliver fired alerts (uptime or metric sweep) over each one's channel and stamp
+ * its row with the true outcome — a thrown `deliverAlert` (transport failure /
+ * SSRF re-rejection) marks the row `failed`. `deliveredAt` is stamped only on
+ * success (an undelivered alert has no delivery time), unlike the deploy-key
+ * `markDelivered` path which only ever records `delivered`; a sweep runs in a
+ * trusted system context, so it patches directly.
+ */
+const deliverFiredAlerts = async (env: Env, database: ControlPlaneDb, deliveries: readonly AlertDelivery[], now: number): Promise<void> => {
+    if (deliveries.length === 0) {
+        return;
+    }
+
+    const environmentRecord = env as unknown as Record<string, unknown>;
+
+    await Promise.all(
+        deliveries.map(async (delivery) => {
+            const delivered = await deliverAlert(environmentRecord, delivery).then(
+                () => true,
+                () => false,
+            );
+
+            await database
+                .patch(delivery.id, { ...(delivered ? { deliveredAt: now } : {}), status: delivered ? "delivered" : "failed", updatedAt: now }, "alerts")
+                .catch(() => undefined);
+        }),
+    );
+};
+
+/**
+ * Synthetic uptime sweep (§ Observability): probe each live deployment's URL from
+ * outside, record the result, and deliver any uptime alerts a probe fired. The
+ * pure `runUptimeSweep` does the probe→record→fire; the edge supplies the real
+ * `fetch` + D1 and delivers over each alert's channel, stamping the outcome.
+ */
+const sweepUptime = async (env: Env): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const now = Date.now();
+    const { deliveries } = await runUptimeSweep(database, { fetch: globalThis.fetch, now });
+
+    await deliverFiredAlerts(env, database, deliveries, now);
+};
+
+/**
+ * Metric-alert sweep (§ Observability): re-evaluate every enabled metric-window
+ * rule over its window and fire/clear as its latch crosses, catching quiet
+ * windows the ingest-time path never re-examines (e.g. an error rate that fell to
+ * 0 with no new spans). The pure `runAlertSweep` does the evaluate→fire/clear over
+ * the shared `alertRuleState` latch; the edge supplies the real D1 and delivers.
+ */
+const sweepAlerts = async (env: Env): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const now = Date.now();
+    const { deliveries } = await runAlertSweep(database, { now });
+
+    await deliverFiredAlerts(env, database, deliveries, now);
+};
+
+/**
+ * Which sweeps ride which cron bucket — declarative, so "what runs on which
+ * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
+ * env isn't configured. Teardown + usage rollback ride the *hourly* expression
+ * ONLY (never `!== EVERY_MINUTE`): the hourly and 6-hourly expressions both
+ * match at 00/06/12/18:00 UTC and Cloudflare delivers them as two separate
+ * scheduled() invocations, so a broader gate would run the usage rollback twice
+ * and double-insert that window into `platformUsage` (over-billing overage). The
+ * tenant cron fan-out is *not* here — it needs env.DISPATCHER and stays a
+ * separate branch in scheduled().
+ */
+const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
+    { cron: EVERY_HOUR, run: sweepTeardown },
+    { cron: EVERY_HOUR, run: sweepUsageRollback },
+    { cron: EVERY_SIX_HOURS, run: sweepOverageReconciliation },
+    { cron: EVERY_MINUTE, run: sweepUptime },
+    // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
+    // minute so quiet windows the ingest never re-examines still fire/clear —
+    // rides the existing every-minute trigger (no new cron, stays within the cap).
+    { cron: EVERY_MINUTE, run: sweepAlerts },
+];
+
+/** Script id → per-deployment admin token (decrypted in-process), for the queue fan-out. */
 const readDeploymentTokens = async (env: Env): Promise<Map<string, string>> => {
+    const live = await readLiveDeployments(env);
+    const resolved = await Promise.all(
+        live.map(async (row) => ({ adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY), scriptName: row.scriptName })),
+    );
     const tokens = new Map<string, string>();
 
-    for (const row of await readLiveDeployments(env)) {
+    for (const row of resolved) {
         if (row.adminToken) {
             tokens.set(row.scriptName, row.adminToken);
         }
@@ -431,9 +653,18 @@ export default {
         // The control plane's own code crons fire on their declared expression.
         await worker.scheduled(controller, env, context);
 
+        // Run the sweeps whose bucket this tick matches (see SCHEDULED_SWEEPS).
+        for (const sweep of SCHEDULED_SWEEPS) {
+            if (controller.cron === sweep.cron) {
+                // eslint-disable-next-line no-await-in-loop -- sweeps run sequentially; each is independent + no-ops when unconfigured
+                await sweep.run(env);
+            }
+        }
+
         // Tenant cron fan-out (§2.4): the every-minute trigger ticks each tenant
         // whose cron is due. WfP drops `triggers.crons` for namespaced workers, so
-        // this is the only path that fires their cron jobs.
+        // this is the only path that fires their cron jobs. Special-cased (not in
+        // SCHEDULED_SWEEPS) because it needs env.DISPATCHER.
         if (controller.cron === EVERY_MINUTE && env.DISPATCHER) {
             const dispatcher = env.DISPATCHER;
             const targets = await readCronTargets(env);

@@ -1,4 +1,4 @@
-import type { DeployEvent, DeployResult } from "../deploy/client";
+import type { DeployClientOptions, DeployEvent, DeployResult } from "../deploy/client";
 import { deployToCloud, rollbackDeployment } from "../deploy/client";
 import type { CliConfig, ConfigStore } from "./config";
 
@@ -38,7 +38,17 @@ export const status = (config: CliConfig): { linked: boolean; loggedIn: boolean 
  */
 export const deploy = async (
     store: ConfigStore,
-    input: { branch?: string; bundle: string; kind?: "dev" | "preview" | "production"; scriptName: string },
+    input: {
+        // Binding manifest + cron expressions from the app's wrangler.jsonc
+        // (`parseWranglerManifest`), so the deploy provisions what the Worker
+        // needs and the fan-out ticks the tenant's crons (§2.1 / §2.4).
+        bindings?: DeployClientOptions["bindings"];
+        branch?: string;
+        bundle: string;
+        cronSpecs?: string[];
+        kind?: "dev" | "preview" | "production";
+        scriptName: string;
+    },
     onEvent: (event: DeployEvent) => void,
     deployFunction: typeof deployToCloud = deployToCloud,
 ): Promise<DeployResult> => {
@@ -55,8 +65,10 @@ export const deploy = async (
     return deployFunction(
         {
             apiUrl: config.apiUrl,
+            ...(input.bindings ? { bindings: input.bindings } : {}),
             branch: input.branch,
             bundle: input.bundle,
+            ...(input.cronSpecs && input.cronSpecs.length > 0 ? { cronSpecs: input.cronSpecs } : {}),
             deployKey: config.deployKey,
             kind: input.kind,
             projectId: config.projectId, // secret-scanner:allow -- domain field name
