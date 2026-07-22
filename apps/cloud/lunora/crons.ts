@@ -27,6 +27,9 @@ crons.interval("enforce dunning", { hours: 6 }, internal.billing.enforceDunning,
 // Prune tenant runtime logs past the 48h retention window (GAPS.md B2).
 crons.interval("prune tenant logs", { hours: 6 }, internal.logs.prune, {});
 
+// Span observations backing Traces — same 48 h retention as the logs.
+crons.interval("prune trace observations", { hours: 6 }, internal.telemetry.pruneObservations, {});
+
 // Prune superseded releases past the rollback retention (GAPS.md A1) so
 // dispatch namespaces never accumulate unboundedly.
 crons.interval("prune superseded releases", { hours: 6 }, internal.deployments.pruneSuperseded, {});
@@ -46,7 +49,10 @@ crons.interval("purge deleted organizations", { hours: 6 }, internal.organizatio
 crons.interval("prune uptime checks", { hours: 6 }, internal.uptime.prune, {});
 
 // Every-minute heartbeat that emits the `*/1 * * * *` trigger the edge cron
-// fan-out (and the uptime sweep) ride on (§2.4) — the job itself is a no-op; see lunora/fanout.ts.
+// fan-out, the uptime sweep, AND the metric-alert sweep (src/telemetry/sweep.ts —
+// re-evaluates error_rate/latency_p95/llm_cost rules so quiet windows still
+// fire/clear) all ride on (§2.4) — the job itself is a no-op; see lunora/fanout.ts.
+// Folding these onto this one trigger keeps us within Cloudflare's 3-trigger cap.
 crons.interval("tenant cron fan-out tick", { minutes: 1 }, internal.fanout.tick, {});
 
 export default crons;

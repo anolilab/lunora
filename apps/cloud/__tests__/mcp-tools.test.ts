@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeployRouter } from "../src/deploy/router";
 import type { RegisteredRoute } from "../src/deploy/route-registry";
 import { createMcpRouteHandler } from "../src/mcp/handler";
-import { buildMcpTools } from "../src/mcp/tools";
-
+import type { McpRouterLike, McpTool } from "../src/mcp/tools";
+import { buildMcpTools, dispatchMcpTool } from "../src/mcp/tools";
 const noop = (): Promise<Response> => Promise.resolve(new Response());
 
 const route = (path: string, spec: RegisteredRoute<typeof noop>["spec"], method: "GET" | "POST" = "POST"): RegisteredRoute<typeof noop> => ({
@@ -49,6 +49,58 @@ describe(buildMcpTools, () => {
     });
 });
 
+describe(dispatchMcpTool, () => {
+    const tools: McpTool[] = [{ description: "rollback", method: "POST", name: "deployments.rollback", path: "/v1/deployments/rollback" }];
+
+    it("dispatches through the router with the caller's credential and forwards arguments", async () => {
+        let seen: { authorization: string | null; body: unknown; path: string } | undefined;
+        const router: McpRouterLike = {
+            fetch: async (request) => {
+                seen = { authorization: request.headers.get("authorization"), body: await request.json(), path: new URL(request.url).pathname };
+
+                return Response.json({ ok: true }, { status: 200 });
+            },
+        };
+
+        const result = await dispatchMcpTool(router, tools, {
+            arguments: { deploymentId: "dep_1", organizationId: "org_1" },
+            credential: "dk_secret",
+            name: "deployments.rollback",
+        });
+
+        expect(seen).toStrictEqual({
+            authorization: "Bearer dk_secret",
+            body: { deploymentId: "dep_1", organizationId: "org_1" },
+            path: "/v1/deployments/rollback",
+        });
+        expect(result).toStrictEqual({ body: { ok: true }, ok: true, status: 200 });
+    });
+
+    it("returns 404 for an unknown tool (never falls through to an un-tooled route)", async () => {
+        let called = false;
+        const router: McpRouterLike = {
+            fetch: () => {
+                called = true;
+
+                return Promise.resolve(new Response());
+            },
+        };
+
+        const result = await dispatchMcpTool(router, tools, { credential: "dk", name: "nope" });
+
+        expect(called).toBe(false);
+        expect(result).toMatchObject({ ok: false, status: 404 });
+    });
+
+    it("reports the underlying route's failure as not-ok", async () => {
+        const router: McpRouterLike = { fetch: () => Promise.resolve(Response.json({ error: "denied" }, { status: 403 })) };
+
+        const result = await dispatchMcpTool(router, tools, { credential: "dk", name: "deployments.rollback" });
+
+        expect(result).toMatchObject({ ok: false, status: 403 });
+    });
+});
+
 const jsonError = (status: number, message: string): Response => Response.json({ error: message }, { status });
 
 describe(createMcpRouteHandler, () => {
@@ -78,7 +130,11 @@ describe(createMcpRouteHandler, () => {
     });
 
     it("lists only opted-in tools once the key is valid", async () => {
-        const handler = createMcpRouteHandler({ jsonError, routes: [rollbackRoute, route("/v1/secrets", { auth: "session" })], verifyKey: () => Promise.resolve(true) });
+        const handler = createMcpRouteHandler({
+            jsonError,
+            routes: [rollbackRoute, route("/v1/secrets", { auth: "session" })],
+            verifyKey: () => Promise.resolve(true),
+        });
         const payload = (await (await handler(rpc("tools/list"), {})).json()) as { result: { tools: { name: string }[] } };
 
         expect(payload.result.tools.map((tool) => tool.name)).toStrictEqual(["deployments.rollback"]);
@@ -103,7 +159,9 @@ describe(createMcpRouteHandler, () => {
         };
 
         const handler = createMcpRouteHandler({ jsonError, routes: [capturing], verifyKey: () => Promise.resolve(true) });
-        const payload = (await (await handler(rpc("tools/call", { arguments: { deploymentId: "dep_1", organizationId: "org_1" }, name: "deployments.rollback" }), {})).json()) as {
+        const payload = (await (
+            await handler(rpc("tools/call", { arguments: { deploymentId: "dep_1", organizationId: "org_1" }, name: "deployments.rollback" }), {})
+        ).json()) as {
             result: { isError: boolean };
         };
 
@@ -128,7 +186,11 @@ describe("/v1/mcp endpoint (wired in the real router)", () => {
     it("constructs and 401s a tools/list with no bearer (deploy-key gated)", async () => {
         const router = createDeployRouter();
         const response = await router.fetch(
-            new Request("https://cloud/v1/mcp", { body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "tools/list" }), headers: { "content-type": "application/json" }, method: "POST" }),
+            new Request("https://cloud/v1/mcp", {
+                body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "tools/list" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
         );
 
         expect(response.status).toBe(401);

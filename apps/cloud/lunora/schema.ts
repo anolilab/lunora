@@ -181,7 +181,17 @@ export default defineSchema({
         .index("by_script", ["scriptName"]),
 
     deployKeys: defineTable({
+        // What the key is allowed to do. Absent = `deploy` (a full deploy key, the
+        // historical default). An `ingest` key can ONLY push telemetry to the OTLP
+        // endpoints — it is rejected by the deploy/admin paths — so the token the
+        // platform injects into a tenant's `otlpSink` can't be used to deploy.
+        capability: v.optional(v.union(v.literal("deploy"), v.literal("ingest"))),
         createdAt: v.number(),
+        // Envelope-encrypted plaintext (AES-256-GCM). ONLY set for platform-managed
+        // `ingest` keys, so the deploy path can re-inject the token into a tenant's
+        // `otlpSink` on every deploy without re-minting. User deploy keys never
+        // store this — their plaintext is shown once and is unrecoverable.
+        encryptedSecret: v.optional(v.object({ ciphertext: v.string(), iv: v.string() })),
         // Only the hash is stored; the plaintext key is shown once at creation.
         hashedKey: v.string(),
         lastUsedAt: v.optional(v.number()),
@@ -248,6 +258,70 @@ export default defineSchema({
         .index("by_script_time", ["scriptName", "createdAt"])
         // Fetch every line in a trace (log↔trace correlation), org-scoped.
         .index("by_trace", ["organizationId", "traceId"]),
+
+    // Dispatch spans as **observations** (Traces, GAPS.md B2 — the span store the
+    // Langfuse teardown pointed to). Every OTLP span (not just the error spans the
+    // Issue path keeps) lands here with its real timing + identity, so the Traces
+    // waterfall renders true durations and whatever nesting `parentSpanId` carries.
+    // Retention-pruned like `tenantLogs`.
+    observations: defineTable({
+        // Selected `lunora.*` string span attributes (shard key, user id, …).
+        attributes: v.optional(v.record(v.string(), v.string())),
+        // Generation spans (`kind: "generation"`): completion token count.
+        completionTokens: v.optional(v.number()),
+        createdAt: v.number(),
+        // The deployment the span ran under, when the sink forwarded it.
+        deploymentId: v.optional(v.id("deployments")),
+        // `endedAt − startedAt`, denormalized so the list/waterfall need no math.
+        durationMs: v.number(),
+        endedAt: v.number(),
+        // Generation spans: eval scores decoded from `gen_ai.evaluation.*` (opt-in
+        // on the emitter), rendered in the span-detail pane. Absent until the
+        // framework's eval work lands.
+        evaluations: v.optional(v.array(v.object({ label: v.optional(v.string()), name: v.string(), score: v.number() }))),
+        // `<file>:<function>` (or `container:<name>`), when attributed.
+        functionPath: v.optional(v.string()),
+        // Generation spans: the recorded prompt/input (only when the emitter opted
+        // into input recording — off by default), truncated.
+        input: v.optional(v.string()),
+        // Which instrumentation emitted the span. `generation` = an AI model call
+        // (carries `gen_ai.*`), from `@lunora/ai`/`@lunora/agent`.
+        kind: v.union(v.literal("container"), v.literal("generation"), v.literal("worker")),
+        // `error` when the span's OTLP status was `STATUS_CODE_ERROR`, else `info`.
+        level: v.union(v.literal("error"), v.literal("info")),
+        // Generation spans: the model id (`gen_ai.request.model`).
+        model: v.optional(v.string()),
+        name: v.string(),
+        organizationId: v.id("organizations"),
+        // Generation spans: the recorded completion/output (opt-in only), truncated.
+        output: v.optional(v.string()),
+        // Parent span, when the span nests; absent for a root span.
+        parentSpanId: v.optional(v.string()),
+        // Generation spans: prompt token count.
+        promptTokens: v.optional(v.number()),
+        serviceName: v.optional(v.string()),
+        // Generation spans: the conversation/thread id (`gen_ai.conversation.id`)
+        // that groups turns into a session (LLM sessions/threads view). Absent
+        // until the framework emits it — no session id → no session grouping.
+        sessionId: v.optional(v.string()),
+        spanId: v.string(),
+        startedAt: v.number(),
+        // OTLP `status.message`, when the span errored.
+        statusMessage: v.optional(v.string()),
+        traceId: v.string(),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        // The drill-in: every span in one trace (the waterfall / tree), org-scoped.
+        .index("by_trace", ["organizationId", "traceId"])
+        // Recent spans, org-scoped, to roll up into the trace list newest-first.
+        .index("by_org_started", ["organizationId", "startedAt"])
+        // Every generation turn in one session — the sessions drill-in, org-scoped.
+        .index("by_org_session", ["organizationId", "sessionId"])
+        // Recent spans for ONE deployment — so a deployment-scoped trace list scans
+        // that deployment's own spans (not the global recent window, where a quiet
+        // deployment's older traces would fall off the end).
+        .index("by_org_deployment_started", ["organizationId", "deploymentId", "startedAt"]),
 
     // GitHub App installations (GAPS.md A4). Two-phase: the webhook *stages* an
     // installation (no org linkage — a spoofed call is harmless), then an org
@@ -388,6 +462,8 @@ export default defineSchema({
         organizationId: v.id("organizations"),
         // A representative raw message for the group (last seen).
         sampleMessage: v.string(),
+        // A sample trace id (the latest error span's), to jump to the trace.
+        sampleTraceId: v.optional(v.string()),
         status: v.union(v.literal("open"), v.literal("resolved")),
         title: v.string(),
         updatedAt: v.number(),
@@ -415,6 +491,24 @@ export default defineSchema({
         hash: v.string(),
         // Container DO instance id, when known.
         instance: v.optional(v.string()),
+        // When the last investigation ran (`incidents.investigate`); absent until
+        // one has. Distinct from `status` (open/resolved) — an incident can be
+        // investigated while still open.
+        investigatedAt: v.optional(v.number()),
+        // The last structured investigation result (agentic runner output), stored
+        // so the dashboard renders it without re-spending inference. Shape mirrors
+        // `InvestigationResult` (src/telemetry/investigation.ts).
+        investigation: v.optional(
+            v.object({
+                by: v.union(v.literal("deterministic"), v.literal("llm")),
+                confidence: v.union(v.literal("high"), v.literal("medium"), v.literal("low")),
+                evidenceNote: v.string(),
+                relatedTraceIds: v.array(v.string()),
+                rootCauseHypothesis: v.string(),
+                suggestedRemediation: v.string(),
+                summary: v.string(),
+            }),
+        ),
         kind: v.union(v.literal("crash_loop"), v.literal("oom"), v.literal("error_spike")),
         lastSeen: v.number(),
         openedAt: v.number(),
@@ -427,26 +521,78 @@ export default defineSchema({
         .index("by_org", ["organizationId"])
         .index("by_org_hash", ["organizationId", "hash"], { unique: true }),
 
-    // Alert rules (Observability "watches while you sleep"). A rule fires the
-    // first time a matching issue/incident's event count reaches `threshold`,
-    // delivering to `destination` over `channel`. Configured from the dashboard;
-    // evaluated (pure) inside the telemetry ingest.
+    // Alert rules (Observability "watches while you sleep"). Two firing models:
+    //  • Count-crossing targets (`issue`/`incident`/`uptime`) fire once when a
+    //    monotone counter first reaches `threshold`.
+    //  • Metric-window targets (`error_rate`/`latency_p95`/`llm_cost`) compute an
+    //    app-semantic / budget value over the last `windowMinutes` of span
+    //    observations and fire (edge-triggered) when it breaches `threshold`
+    //    under `comparator`. Optionally scoped to one `functionPath`.
+    // Configured from the dashboard; evaluated (pure) inside the telemetry ingest
+    // (metric rules) / uptime sweep (uptime).
     alertRules: defineTable({
-        channel: v.union(v.literal("email"), v.literal("webhook")),
+        // Delivery channel. `email` via the mailer; `webhook`/`slack`/`pagerduty`
+        // are typed JSON POSTs (Slack incoming-webhook JSON, PagerDuty Events v2).
+        channel: v.union(v.literal("email"), v.literal("webhook"), v.literal("slack"), v.literal("pagerduty")),
+        // How the metric value is compared to `threshold` (metric targets only).
+        // Absent ⇒ `gt`; irrelevant for count-crossing targets.
+        comparator: v.optional(v.union(v.literal("gt"), v.literal("lt"))),
         createdAt: v.number(),
         // Email address (channel "email") or URL (channel "webhook").
         destination: v.string(),
         enabled: v.boolean(),
+        // Optional scope for a metric rule: evaluate only spans from this
+        // function path (e.g. `messages:send`). Absent ⇒ the whole org.
+        functionPath: v.optional(v.string()),
         name: v.string(),
         organizationId: v.id("organizations"),
-        // What the rule watches. `uptime` fires when a deployment's consecutive
-        // failed synthetic checks first reach `threshold` (see lunora/uptime.ts).
-        target: v.union(v.literal("issue"), v.literal("incident"), v.literal("uptime")),
-        // Fire when the source's count first reaches this value.
+        // What the rule watches. Count-crossing: `issue`/`incident` (a fingerprint
+        // group's event count), `uptime` (a deployment's consecutive failed
+        // synthetic checks, see lunora/uptime.ts). Metric-window: `error_rate`
+        // (% error spans), `latency_p95` (p95 durationMs), `llm_cost` (summed
+        // generation cost) over `windowMinutes`.
+        target: v.union(
+            v.literal("issue"),
+            v.literal("incident"),
+            v.literal("uptime"),
+            v.literal("error_rate"),
+            v.literal("latency_p95"),
+            v.literal("llm_cost"),
+        ),
+        // Count-crossing: fire when the source's count first reaches this value.
+        // Metric-window: the value the window metric is compared against.
         threshold: v.number(),
+        updatedAt: v.number(),
+        // Rolling window length for a metric target, in minutes. Required for
+        // metric targets; ignored for count-crossing targets.
+        windowMinutes: v.optional(v.number()),
+    })
+        .global()
+        .index("by_org", ["organizationId"]),
+
+    // Per-rule firing state for METRIC-window rules (error_rate/latency_p95/llm_cost)
+    // — the level-triggered latch behind the alert sweep (src/telemetry/sweep.ts),
+    // analogous to `uptimeState` for uptime. A metric rule's window value rises and
+    // falls, so — unlike a monotone count crossing — it needs remembered state to
+    // fire once on a breach and re-arm on recovery. Both the ingest path and the
+    // periodic sweep read/advance this latch, so a sustained breach alerts once and
+    // a window that goes quiet still clears (and can fire again later). One row per
+    // rule; count-crossing/uptime rules don't use it.
+    alertRuleState: defineTable({
+        createdAt: v.number(),
+        // `true` while the rule's window is over threshold (already alerted).
+        firing: v.boolean(),
+        // When the sweep/ingest last evaluated this rule (freshness/debugging).
+        lastEvaluatedAt: v.number(),
+        // The window metric value at the last evaluation (audit/debugging).
+        lastValue: v.number(),
+        organizationId: v.id("organizations"),
+        ruleId: v.id("alertRules"),
         updatedAt: v.number(),
     })
         .global()
+        // One state row per rule; the ingest/sweep upsert through this index.
+        .index("by_rule", ["ruleId"], { unique: true })
         .index("by_org", ["organizationId"]),
 
     // Fired alerts — the audit trail + delivery state for each rule trip. The
@@ -456,7 +602,7 @@ export default defineSchema({
     alerts: defineTable({
         // Rendered notification content, denormalized at fire time.
         body: v.string(),
-        channel: v.union(v.literal("email"), v.literal("webhook")),
+        channel: v.union(v.literal("email"), v.literal("webhook"), v.literal("slack"), v.literal("pagerduty")),
         createdAt: v.number(),
         deliveredAt: v.optional(v.number()),
         destination: v.string(),
@@ -466,7 +612,14 @@ export default defineSchema({
         ruleId: v.id("alertRules"),
         status: v.union(v.literal("firing"), v.literal("delivered"), v.literal("failed")),
         subject: v.string(),
-        target: v.union(v.literal("issue"), v.literal("incident"), v.literal("uptime")),
+        target: v.union(
+            v.literal("issue"),
+            v.literal("incident"),
+            v.literal("uptime"),
+            v.literal("error_rate"),
+            v.literal("latency_p95"),
+            v.literal("llm_cost"),
+        ),
         updatedAt: v.number(),
     })
         .global()
@@ -530,6 +683,36 @@ export default defineSchema({
         .global()
         .index("by_project", ["projectId"])
         .index("by_project_env_name", ["projectId", "environment", "name"], { unique: true }),
+
+    // User-defined custom dashboards (Tier 2 observability). A named, per-org
+    // collection of saved panels — each panel a saved query over telemetry the
+    // console already serves (a metric trend, a single-stat number, or a saved
+    // Traces/Logs filter shortcut). Grafana-style boards composed from the
+    // existing read paths; no new telemetry backend. Panels are stored inline as
+    // a JSON array (low cardinality, always read whole with the board).
+    dashboards: defineTable({
+        createdAt: v.number(),
+        name: v.string(),
+        organizationId: v.id("organizations"),
+        // Ordered panels. `kind` selects the widget; `config` carries only the
+        // keys that kind uses (`metricName` for metric/stat, `stat` for a stat's
+        // aggregation, `filter` for a traces/logs deep-link shortcut).
+        panels: v.array(
+            v.object({
+                config: v.object({
+                    filter: v.optional(v.string()),
+                    metricName: v.optional(v.string()),
+                    stat: v.optional(v.union(v.literal("last"), v.literal("first"), v.literal("count"))),
+                }),
+                id: v.string(),
+                kind: v.union(v.literal("metric"), v.literal("stat"), v.literal("traces"), v.literal("logs")),
+                title: v.string(),
+            }),
+        ),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_org", ["organizationId"]),
 
     // ── @lunora/payment tables (§4 billing) ───────────────────────────────────
     // Declared inline (codegen parses this file's AST and can't resolve a cross-

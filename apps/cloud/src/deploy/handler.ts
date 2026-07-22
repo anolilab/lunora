@@ -66,6 +66,15 @@ export interface DeployHandlerDeps {
     /** Probe the uploaded script's URL before release (GAPS.md A1); `false` fails the deployment without touching the active pointer. Omit to skip health gating. */
     healthCheck?: (url: string) => Promise<boolean>;
     provisioner: Provisioner;
+    /**
+     * Resolve the telemetry config injected into a tenant Worker: the OTLP ingest
+     * endpoint (set as a `LUNORA_OTLP_ENDPOINT` var), a scoped ingest token (set
+     * as a `LUNORA_OTLP_TOKEN` secret, so a tenant's `otlpSink` ships to the
+     * cloud), and the tail-consumer service to wire. Omit — or return undefined —
+     * to deploy without telemetry (everything still works). Best-effort: a throw
+     * is swallowed and the deploy proceeds untelemetered.
+     */
+    resolveTelemetry?: (input: { key: string; organizationId: string }) => Promise<undefined | { endpoint: string; tailConsumer?: string; token: string }>;
     scheduler: CellScheduler;
 }
 
@@ -112,7 +121,9 @@ const isBindingRef = (value: unknown): value is { binding: string } =>
 const normalizeBindings = (requested: TenantBindingSpec | undefined): TenantBindingSpec => {
     const declared = Array.isArray(requested?.durableObjects) ? requested.durableObjects : [];
     const durableObjects = declared
-        .filter((entry): entry is { binding: string; className: string } => isBindingRef(entry) && typeof (entry as { className?: unknown }).className === "string")
+        .filter(
+            (entry): entry is { binding: string; className: string } => isBindingRef(entry) && typeof (entry as { className?: unknown }).className === "string",
+        )
         .slice(0, MAX_DURABLE_OBJECTS)
         .map((entry) => ({ binding: entry.binding, className: entry.className }));
 
@@ -257,6 +268,17 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 return;
             }
 
+            // Resolve the telemetry config to inject (endpoint var + ingest-token
+            // secret + tail consumer). Best-effort — a failure here must not fail
+            // the deploy, so the tenant just ships untelemetered.
+            let telemetry: undefined | { endpoint: string; tailConsumer?: string; token: string };
+
+            try {
+                telemetry = await deps.resolveTelemetry?.({ key, organizationId: target.organizationId });
+            } catch {
+                telemetry = undefined;
+            }
+
             const spec: TenantDeploymentSpec = {
                 // The stable project label (pre-versioning) keys per-tenant D1/R2,
                 // so data persists across deploys; the versioned releaseScriptName
@@ -267,8 +289,10 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 cell: deps.cell,
                 dispatchNamespace: deps.dispatchNamespace(kind),
                 scriptName: releaseScriptName,
-                secrets: { ...tenantSecrets, LUNORA_ADMIN_TOKEN: adminToken },
+                secrets: { ...tenantSecrets, LUNORA_ADMIN_TOKEN: adminToken, ...(telemetry ? { LUNORA_OTLP_TOKEN: telemetry.token } : {}) },
+                ...(telemetry?.tailConsumer ? { tailConsumers: [telemetry.tailConsumer] } : {}),
                 tags: [`org:${target.organizationId}`, `project:${projectId}`, `env:${kind}`],
+                ...(telemetry ? { vars: { LUNORA_OTLP_ENDPOINT: telemetry.endpoint } } : {}),
             };
 
             const { healthCheck } = deps;

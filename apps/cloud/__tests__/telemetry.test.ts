@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 
 import { crossesThreshold, isSafeWebhookUrl, renderAlert } from "../src/telemetry/alerts";
 import type { OtlpTracePayload } from "../src/telemetry/otlp";
-import { decodeTelemetryEvents } from "../src/telemetry/otlp";
-import { createCloudflareTelemetryStore } from "../src/telemetry/store";
+import { decodeLogRecords, decodeMetricPoints, decodeObservations, decodeTelemetryEvents } from "../src/telemetry/otlp";
+import { createCloudflareTelemetryStore, spanArchiveRecord } from "../src/telemetry/store";
 import { buildTriagePrompt, MAX_ISSUES } from "../src/telemetry/triage";
 
 /** Build an OTLP `KeyValue[]` from a flat string map. */
@@ -270,5 +270,303 @@ describe(buildTriagePrompt, () => {
         // Exactly two fences — the opening and closing ones. The payload's own
         // fence was neutralized rather than smuggled through.
         expect(prompt.split("\n").filter((line) => line === "-----")).toHaveLength(2);
+    });
+});
+
+/** One OK span (status.code 1) with trace/span ids + timing, under the given scope. */
+const span = (options: {
+    attrs?: Record<string, string>;
+    endMs?: number;
+    name?: string;
+    ok?: boolean;
+    parentSpanId?: string;
+    spanId?: string;
+    startMs?: number;
+    traceId?: string;
+}) => {
+    return {
+        attributes: attributes(options.attrs ?? {}),
+        endTimeUnixNano: `${String(options.endMs ?? 1_700_000_000_142)}000000`,
+        name: options.name ?? "messages:send",
+        parentSpanId: options.parentSpanId,
+        spanId: options.spanId ?? "aaaaaaaaaaaaaaaa",
+        startTimeUnixNano: `${String(options.startMs ?? 1_700_000_000_000)}000000`,
+        status: options.ok === false ? { code: 2, message: "boom" } : { code: 1 },
+        traceId: options.traceId ?? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    };
+};
+
+describe(decodeObservations, () => {
+    it("decodes a worker span with real timing + identity", () => {
+        const [observation] = decodeObservations(
+            payload("@lunora/runtime", [span({ attrs: { "lunora.function_path": "messages:send" }, endMs: 1000, startMs: 900 })]),
+        );
+
+        expect(observation).toMatchObject({
+            durationMs: 100,
+            endedAt: 1000,
+            functionPath: "messages:send",
+            kind: "worker",
+            level: "info",
+            spanId: "aaaaaaaaaaaaaaaa",
+            startedAt: 900,
+            traceId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        });
+    });
+
+    it("keeps ALL spans, not just errors, and marks the errored one", () => {
+        const observations = decodeObservations(payload("@lunora/runtime", [span({ ok: true, spanId: "a1" }), span({ ok: false, spanId: "a2" })]));
+
+        expect(observations).toHaveLength(2);
+        expect(observations.map((o) => o.level)).toEqual(["info", "error"]);
+        expect(observations[1]?.statusMessage).toBe("boom");
+    });
+
+    it("carries parentSpanId when the span nests, and drops empty ids", () => {
+        const [child] = decodeObservations(payload("@lunora/runtime", [span({ parentSpanId: "root01", spanId: "child1" })]));
+
+        expect(child?.parentSpanId).toBe("root01");
+
+        const [root] = decodeObservations(payload("@lunora/runtime", [span({ parentSpanId: "", spanId: "root01" })]));
+
+        expect(root?.parentSpanId).toBeUndefined();
+    });
+
+    it("labels a container span by its service name and collects lunora.* attributes", () => {
+        const [observation] = decodeObservations(payload("@lunora/container", [span({ attrs: { "lunora.shard_key": "room-9" } })], "transcoder"));
+
+        expect(observation?.kind).toBe("container");
+        expect(observation?.functionPath).toBe("container:transcoder");
+        expect(observation?.attributes).toEqual({ shard_key: "room-9" });
+    });
+
+    it("skips a span with no trace/span id (it can't be placed in a trace)", () => {
+        expect(decodeObservations(payload("@lunora/runtime", [{ name: "orphan", status: { code: 1 } }]))).toHaveLength(0);
+    });
+
+    it("promotes a gen_ai model span to a generation observation with model + tokens", () => {
+        const [observation] = decodeObservations(
+            payload("@lunora/agent", [
+                {
+                    attributes: [
+                        { key: "gen_ai.request.model", value: { stringValue: "@cf/meta/llama" } },
+                        // OTLP int64 on the wire is a decimal string (`intValue`).
+                        { key: "gen_ai.usage.input_tokens", value: { intValue: "12" } },
+                        { key: "gen_ai.usage.output_tokens", value: { intValue: "34" } },
+                        { key: "gen_ai.prompt", value: { stringValue: "hello" } },
+                        { key: "gen_ai.completion", value: { stringValue: "hi there" } },
+                    ],
+                    endTimeUnixNano: "1700000000200000000",
+                    name: "chat @cf/meta/llama",
+                    spanId: "cccccccccccccccc",
+                    startTimeUnixNano: "1700000000000000000",
+                    status: { code: 1 },
+                    traceId: "dddddddddddddddddddddddddddddddd",
+                },
+            ]),
+        );
+
+        expect(observation).toMatchObject({
+            completionTokens: 34,
+            input: "hello",
+            kind: "generation",
+            model: "@cf/meta/llama",
+            output: "hi there",
+            promptTokens: 12,
+        });
+    });
+
+    it("leaves a plain worker span as kind:worker with no generation fields", () => {
+        const [observation] = decodeObservations(payload("@lunora/runtime", [span({ spanId: "w1" })]));
+
+        expect(observation?.kind).toBe("worker");
+        expect(observation?.model).toBeUndefined();
+        expect(observation?.promptTokens).toBeUndefined();
+    });
+
+    it("extracts sessionId + evaluations from a generation span when the attributes are present", () => {
+        const [observation] = decodeObservations(
+            payload("@lunora/agent", [
+                {
+                    attributes: [
+                        { key: "gen_ai.request.model", value: { stringValue: "@cf/meta/llama" } },
+                        { key: "gen_ai.conversation.id", value: { stringValue: "thread_42" } },
+                        { key: "gen_ai.evaluation.helpfulness.score", value: { doubleValue: 0.92 } },
+                        { key: "gen_ai.evaluation.helpfulness.label", value: { stringValue: "pass" } },
+                        // A score with no label — kept, label omitted.
+                        { key: "gen_ai.evaluation.toxicity.score", value: { intValue: "0" } },
+                        // A lone label with no score — dropped (no numeric score).
+                        { key: "gen_ai.evaluation.coherence.label", value: { stringValue: "ok" } },
+                    ],
+                    endTimeUnixNano: "1700000000200000000",
+                    name: "chat @cf/meta/llama",
+                    spanId: "eeeeeeeeeeeeeeee",
+                    startTimeUnixNano: "1700000000000000000",
+                    status: { code: 1 },
+                    traceId: "ffffffffffffffffffffffffffffffff",
+                },
+            ]),
+        );
+
+        expect(observation?.sessionId).toBe("thread_42");
+        expect(observation?.evaluations).toEqual([
+            { label: "pass", name: "helpfulness", score: 0.92 },
+            { name: "toxicity", score: 0 },
+        ]);
+    });
+
+    it("omits sessionId + evaluations when the generation span carries neither", () => {
+        const [observation] = decodeObservations(
+            payload("@lunora/agent", [
+                {
+                    attributes: [{ key: "gen_ai.request.model", value: { stringValue: "@cf/meta/llama" } }],
+                    endTimeUnixNano: "1700000000200000000",
+                    name: "chat",
+                    spanId: "1111111111111111",
+                    startTimeUnixNano: "1700000000000000000",
+                    status: { code: 1 },
+                    traceId: "22222222222222222222222222222222",
+                },
+            ]),
+        );
+
+        expect(observation?.kind).toBe("generation");
+        expect(observation?.sessionId).toBeUndefined();
+        expect(observation?.evaluations).toBeUndefined();
+    });
+
+    it("never sets sessionId on a non-generation worker span even if it carries a conversation id", () => {
+        const [observation] = decodeObservations(payload("@lunora/runtime", [span({ attrs: { "gen_ai.conversation.id": "thread_stray" }, spanId: "w9" })]));
+
+        expect(observation?.kind).toBe("worker");
+        expect(observation?.sessionId).toBeUndefined();
+    });
+});
+
+/** Wrap OTLP log records into an ExportLogsServiceRequest with one resource + scope. */
+const logsPayload = (records: unknown[], serviceName?: string) => {
+    return {
+        resourceLogs: [
+            {
+                resource: serviceName === undefined ? {} : { attributes: attributes({ "service.name": serviceName }) },
+                scopeLogs: [{ logRecords: records as never }],
+            },
+        ],
+    };
+};
+
+describe(decodeLogRecords, () => {
+    it("maps severityNumber bands to the ctx.log ramp", () => {
+        const levels = [3, 7, 10, 14, 18, 22].map(
+            (severityNumber) => decodeLogRecords(logsPayload([{ body: { stringValue: "x" }, severityNumber, timeUnixNano: "1700000000000000000" }]))[0]?.level,
+        );
+
+        expect(levels).toEqual(["trace", "debug", "info", "warn", "error", "fatal"]);
+    });
+
+    it("decodes body, functionPath, ids, and non-lunora attributes as fields", () => {
+        const [entry] = decodeLogRecords(
+            logsPayload(
+                [
+                    {
+                        attributes: attributes({ "lunora.function_path": "messages:send", orderId: "ord_1" }),
+                        body: { stringValue: "order placed" },
+                        severityText: "info",
+                        spanId: "aaaa",
+                        timeUnixNano: "1700000000123000000",
+                        traceId: "bbbb",
+                    },
+                ],
+                "chat-prod",
+            ),
+        );
+
+        expect(entry).toMatchObject({
+            createdAt: 1_700_000_000_123,
+            fields: { orderId: "ord_1" },
+            functionPath: "messages:send",
+            level: "info",
+            message: "order placed",
+            serviceName: "chat-prod",
+            spanId: "aaaa",
+            traceId: "bbbb",
+        });
+    });
+
+    it("falls back to info + wall clock and tolerates an empty payload", () => {
+        const [entry] = decodeLogRecords(logsPayload([{ body: { stringValue: "no severity" } }]));
+
+        expect(entry?.level).toBe("info");
+        expect(decodeLogRecords({})).toHaveLength(0);
+    });
+});
+
+describe(decodeMetricPoints, () => {
+    it("flattens gauge / sum / histogram data points to metric points", () => {
+        const points = decodeMetricPoints({
+            resourceMetrics: [
+                {
+                    resource: { attributes: [{ key: "service.name", value: { stringValue: "orders" } }] },
+                    scopeMetrics: [
+                        {
+                            metrics: [
+                                { gauge: { dataPoints: [{ asDouble: 7 }] }, name: "queue.depth" },
+                                { name: "requests", sum: { dataPoints: [{ asInt: "12" }] } },
+                                { histogram: { dataPoints: [{ sum: 340 }] }, name: "latency" },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        });
+
+        expect(points).toEqual([
+            { attributes: undefined, functionPath: undefined, kind: "gauge", name: "queue.depth", serviceName: "orders", value: 7 },
+            { attributes: undefined, functionPath: undefined, kind: "sum", name: "requests", serviceName: "orders", value: 12 },
+            { attributes: undefined, functionPath: undefined, kind: "histogram", name: "latency", serviceName: "orders", value: 340 },
+        ]);
+    });
+
+    it("skips a data point with no numeric value", () => {
+        expect(decodeMetricPoints({ resourceMetrics: [{ scopeMetrics: [{ metrics: [{ gauge: { dataPoints: [{}] }, name: "x" }] }] }] })).toHaveLength(0);
+    });
+});
+
+describe(spanArchiveRecord, () => {
+    it("tags the record with recordType + organizationId for the shared archive table", () => {
+        expect(
+            spanArchiveRecord(
+                { durationMs: 5, endedAt: 105, kind: "worker", level: "info", name: "a:b", spanId: "s1", startedAt: 100, traceId: "t1" },
+                "org_9",
+            ),
+        ).toMatchObject({ durationMs: 5, kind: "worker", name: "a:b", organizationId: "org_9", recordType: "span", spanId: "s1", traceId: "t1" });
+    });
+});
+
+describe("TelemetryStore.archiveSpans", () => {
+    it("no-ops without a pipeline binding", async () => {
+        await expect(
+            createCloudflareTelemetryStore({}).archiveSpans(
+                [{ durationMs: 1, endedAt: 2, kind: "worker", level: "info", name: "a", spanId: "s", startedAt: 1, traceId: "t" }],
+                "org_1",
+            ),
+        ).resolves.toBeUndefined();
+    });
+
+    it("sends tagged span records through the pipeline binding", async () => {
+        const batches: Record<string, unknown>[][] = [];
+        const TELEMETRY_PIPELINE = {
+            send: async (records: Record<string, unknown>[]) => {
+                batches.push(records);
+            },
+        } as unknown as Parameters<typeof createCloudflareTelemetryStore>[0]["TELEMETRY_PIPELINE"];
+
+        await createCloudflareTelemetryStore({ TELEMETRY_PIPELINE }).archiveSpans(
+            [{ durationMs: 1, endedAt: 2, kind: "generation", level: "info", model: "m", name: "chat", spanId: "s", startedAt: 1, traceId: "t" }],
+            "org_1",
+        );
+
+        expect(batches).toHaveLength(1);
+        expect(batches[0]?.[0]).toMatchObject({ kind: "generation", model: "m", organizationId: "org_1", recordType: "span" });
     });
 });

@@ -22,6 +22,7 @@ interface IssueRow {
     lastSeen: number;
     organizationId: Id<"organizations">;
     sampleMessage: string;
+    sampleTraceId?: string;
     status: "open" | "resolved";
     title: string;
 }

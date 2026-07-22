@@ -8,11 +8,11 @@ import type { Id } from "./dataModel.js";
 
 export interface ApiTypes {
     alerts: {
-        createRule: FunctionReference<"mutation", { channel: "email" | "webhook"; destination: string; name: string; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime"; threshold: number }, Id<"alertRules">>;
+        createRule: FunctionReference<"mutation", { channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: string; functionPath?: string; name: string; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost"; threshold: number; windowMinutes?: number }, Id<"alertRules">>;
         deleteRule: FunctionReference<"mutation", { id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alerts">; channel: "email" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "delivered" | "failed" | "firing"; subject: string; target: "incident" | "issue" | "uptime" }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alerts">; channel: "email" | "pagerduty" | "slack" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "delivered" | "failed" | "firing"; subject: string; target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime" }[]>;
         markDelivered: FunctionReference<"mutation", { deployKey: string; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }, { delivered: number; }>;
-        rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alertRules">; channel: "email" | "webhook"; createdAt: number; destination: string; enabled: boolean; name: string; organizationId: Id<"organizations">; target: "incident" | "issue" | "uptime"; threshold: number }[]>;
+        rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alertRules">; channel: "email" | "pagerduty" | "slack" | "webhook"; comparator?: "gt" | "lt"; createdAt: number; destination: string; enabled: boolean; functionPath?: string; name: string; organizationId: Id<"organizations">; target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime"; threshold: number; windowMinutes?: number }[]>;
         setRuleEnabled: FunctionReference<"mutation", { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
     };
     audit_log: {
@@ -35,9 +35,18 @@ export interface ApiTypes {
         list: FunctionReference<"query", {}, { _id: Id<"cells">; cloudflareAccountId: string; createdAt: number; dispatchNamespacePrefix: string; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
         register: FunctionReference<"mutation", { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }, Id<"cells">>;
     };
+    dashboards: {
+        create: FunctionReference<"mutation", { name: string; organizationId: Id<"organizations">; panels?: Array<unknown> }, Id<"dashboards">>;
+        get: FunctionReference<"query", { id: Id<"dashboards">; organizationId: Id<"organizations"> }, null | { _id: Id<"dashboards">; createdAt: number; name: string; panels: { config: { filter?: string; metricName?: string; stat?: "count" | "first" | "last"; }; id: string; kind: "logs" | "metric" | "stat" | "traces"; title: string }[]; updatedAt: number }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"dashboards">; createdAt: number; name: string; panels: { config: { filter?: string; metricName?: string; stat?: "count" | "first" | "last"; }; id: string; kind: "logs" | "metric" | "stat" | "traces"; title: string }[]; updatedAt: number }[]>;
+        remove: FunctionReference<"mutation", { id: Id<"dashboards">; organizationId: Id<"organizations"> }, Id<"dashboards">>;
+        update: FunctionReference<"mutation", { id: Id<"dashboards">; name?: string; organizationId: Id<"organizations">; panels?: Array<unknown> }, Id<"dashboards">>;
+    };
     deploy_keys: {
-        issue: FunctionReference<"mutation", { name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }, { id: Id<"deployKeys">; key: string; }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"deployKeys">; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
+        ingestKeyCipher: FunctionReference<"query", { deployKey: string; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
+        issue: FunctionReference<"mutation", { capability?: "deploy" | "ingest"; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }, { id: Id<"deployKeys">; key: string; }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"deployKeys">; capability?: "deploy" | "ingest"; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
+        recordIngestKey: FunctionReference<"mutation", { deployKey: string; encryptedSecret: { ciphertext: string; iv: string }; hashedKey: string; organizationId: Id<"organizations"> }, { ciphertext: string; iv: string }>;
         revoke: FunctionReference<"mutation", { id: Id<"deployKeys">; organizationId: Id<"organizations"> }, void>;
         verify: FunctionReference<"mutation", { key: string }, { deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
     };
@@ -66,7 +75,8 @@ export interface ApiTypes {
         remove: FunctionReference<"mutation", { installationId: number }, void>;
     };
     incidents: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
+        investigate: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { by: "deterministic" | "llm"; confidence: "high" | "low" | "medium"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; investigatedAt?: number; investigation?: { by: "deterministic" | "llm"; confidence: "high" | "low" | "medium"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
         setStatus: FunctionReference<"mutation", { id: Id<"incidents">; organizationId: Id<"organizations">; status: unknown }, Id<"incidents">>;
         triage: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { summary: string; }>;
     };
@@ -77,18 +87,21 @@ export interface ApiTypes {
         revoke: FunctionReference<"mutation", { id: Id<"invitations">; organizationId: Id<"organizations"> }, void>;
     };
     issues: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"issues">; count: number; culprit: string; firstSeen: number; hash: string; lastSeen: number; organizationId: Id<"organizations">; sampleMessage: string; status: "open" | "resolved"; title: string }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"issues">; count: number; culprit: string; firstSeen: number; hash: string; lastSeen: number; organizationId: Id<"organizations">; sampleMessage: string; sampleTraceId?: string; status: "open" | "resolved"; title: string }[]>;
         setStatus: FunctionReference<"mutation", { id: Id<"issues">; organizationId: Id<"organizations">; status: unknown }, Id<"issues">>;
     };
     logs: {
         ingest: FunctionReference<"mutation", { deployKey: string; lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }, { ingested: number; }>;
-        list: FunctionReference<"query", { afterCreatedAt?: number; functionPath?: string; levels?: Array<unknown>; limit?: number; organizationId: Id<"organizations">; scriptName: string; search?: string; traceId?: string }, { createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
+        list: FunctionReference<"query", { afterCreatedAt?: number; from?: number; functionPath?: string; levels?: Array<unknown>; limit?: number; organizationId: Id<"organizations">; scriptName: string; search?: string; to?: number; traceId?: string }, { createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "info" | "error" | "trace" | "debug" | "log" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
     };
     members: {
         add: FunctionReference<"mutation", { organizationId: Id<"organizations">; userId: string }, Id<"members">>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"members">; createdAt: number; organizationId: Id<"organizations">; role: "admin" | "member" | "owner" | "viewer"; userId: string }[]>;
         remove: FunctionReference<"mutation", { id: Id<"members">; organizationId: Id<"organizations"> }, void>;
         setRole: FunctionReference<"mutation", { id: Id<"members">; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }, void>;
+    };
+    metrics: {
+        list: FunctionReference<"action", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
     };
     organizations: {
         cancelDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
@@ -110,8 +123,17 @@ export interface ApiTypes {
         remove: FunctionReference<"mutation", { id: Id<"secrets">; organizationId: Id<"organizations"> }, void>;
         store: FunctionReference<"mutation", { ciphertext: string; environment?: "all" | "production" | "preview" | "dev"; iv: string; name: string; organizationId: Id<"organizations">; projectId: Id<"projects"> }, Id<"secrets">>;
     };
+    sessions: {
+        get: FunctionReference<"query", { organizationId: Id<"organizations">; sessionId: string }, { completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; level: "info" | "error"; model?: string; name: string; promptTokens?: number; spanId: string; startedAt: number; traceId: string }[]>;
+        list: FunctionReference<"query", { limit?: number; organizationId: Id<"organizations"> }, { completionTokens: number; errorCount: number; firstSeen: number; lastSeen: number; models: string[]; promptTokens: number; sessionId: string; totalTokens: number; turnCount: number }[]>;
+    };
     telemetry: {
-        ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; organizationId: Id<"organizations"> }, { alerts: { body: string; channel: "email" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
+        ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; events: Array<unknown>; observations?: Array<unknown>; organizationId: Id<"organizations"> }, { alerts: { body: string; channel: "email" | "pagerduty" | "slack" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
+    };
+    traces: {
+        get: FunctionReference<"query", { organizationId: Id<"organizations">; traceId: string }, { attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
+        getArchived: FunctionReference<"action", { organizationId: Id<"organizations">; traceId: string }, { attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
+        list: FunctionReference<"query", { deploymentId?: Id<"deployments">; errorOnly?: boolean; from?: number; functionPath?: string; limit?: number; minDurationMs?: number; organizationId: Id<"organizations">; to?: number }, { durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
     };
     uptime: {
         recent: FunctionReference<"query", { deploymentId: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }, { _id: Id<"uptimeChecks">; createdAt: number; error?: string; latencyMs?: number; ok: boolean; statusCode?: number }[]>;
@@ -153,6 +175,10 @@ export interface InternalApiTypes {
     organizations: {
         linkCreditsAccount: FunctionReference<"mutation", { creditsAccountId: string; organizationId: Id<"organizations"> }, void>;
         purgeDeleted: FunctionReference<"mutation", {}, { purged: number; }>;
+    };
+    telemetry: {
+        orgForDeployKey: FunctionReference<"query", { deployKey: string }, { organizationId: Id<"organizations">; } | null>;
+        pruneObservations: FunctionReference<"mutation", {}, { pruned: number; }>;
     };
     uptime: {
         prune: FunctionReference<"mutation", {}, { pruned: number; }>;

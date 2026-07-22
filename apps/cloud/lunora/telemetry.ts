@@ -1,12 +1,12 @@
 import { fingerprintError } from "@lunora/fingerprint";
 import { LunoraError } from "@lunora/server";
 
-import type { AlertDelivery as AlertDeliveryBase, FiringRule } from "../src/telemetry/alerts";
-import { fireCrossedRules } from "../src/telemetry/alerts";
+import type { AlertChannel, AlertDelivery as AlertDeliveryBase, FiringRule, MetricObservation, MetricRule, MetricTarget } from "../src/telemetry/alerts";
+import { fireCrossedRules, fireMetricRules } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { mutation, v } from "./_generated/server.js";
-import { authorizeDeployKey } from "./authz";
+import { internalMutation, internalQuery, mutation, v } from "./_generated/server.js";
+import { authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
 
 /**
  * Telemetry ingest for the Cloud Observability pipeline (superlog model). The
@@ -26,6 +26,35 @@ import { authorizeDeployKey } from "./authz";
 /** Batch cap per ingest call — the tenant sink flushes well below this. */
 const MAX_EVENTS = 500;
 
+/** Batch cap on the span observations one ingest call may carry. */
+const MAX_OBSERVATIONS = 1000;
+
+/** One decoded span (all spans, not just errors), stored as an observation for Traces — the router's `SpanObservation`. */
+const observationInput = v.object({
+    attributes: v.optional(v.record(v.string(), v.string())),
+    completionTokens: v.optional(v.number()),
+    durationMs: v.number(),
+    endedAt: v.number(),
+    // Generation spans: eval scores from `gen_ai.evaluation.*` (defensive — absent today).
+    evaluations: v.optional(v.array(v.object({ label: v.optional(v.string()), name: v.string(), score: v.number() }))),
+    functionPath: v.optional(v.string()),
+    input: v.optional(v.string()),
+    kind: v.union(v.literal("container"), v.literal("generation"), v.literal("worker")),
+    level: v.union(v.literal("error"), v.literal("info")),
+    model: v.optional(v.string()),
+    name: v.string(),
+    output: v.optional(v.string()),
+    parentSpanId: v.optional(v.string()),
+    promptTokens: v.optional(v.number()),
+    serviceName: v.optional(v.string()),
+    // Generation spans: conversation/thread id (`gen_ai.conversation.id`) grouping turns into a session.
+    sessionId: v.optional(v.string()),
+    spanId: v.string(),
+    startedAt: v.number(),
+    statusMessage: v.optional(v.string()),
+    traceId: v.string(),
+});
+
 /** A normalized error event, decoded from an OTLP error span by the router. */
 const telemetryEvent = v.object({
     // The Lunora error code, when the span carried `error.type` (metadata only).
@@ -38,6 +67,8 @@ const telemetryEvent = v.object({
     instance: v.optional(v.string()),
     kind: v.union(v.literal("error"), v.literal("container")),
     message: v.string(),
+    // The error span's trace id — carried onto the Issue as a sample link.
+    traceId: v.optional(v.string()),
     // Event time in epoch ms (decoded from the span's end time).
     ts: v.number(),
 });
@@ -56,13 +87,37 @@ interface IncidentRow {
 
 interface AlertRuleRow {
     _id: Id<"alertRules">;
-    channel: "email" | "webhook";
+    channel: AlertChannel;
+    comparator?: "gt" | "lt";
     destination: string;
     enabled: boolean;
+    functionPath?: string;
     name: string;
-    target: "incident" | "issue";
+    target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
     threshold: number;
+    windowMinutes?: number;
 }
+
+/** A metric rule's persisted firing latch (alertRuleState), read + advanced by the ingest. */
+interface AlertRuleStateRow {
+    _id: Id<"alertRuleState">;
+    firing: boolean;
+    ruleId: Id<"alertRules">;
+}
+
+/** Count-crossing rule targets the ingest evaluates via `fireCrossedRules`. */
+const COUNT_TARGETS = new Set(["incident", "issue"]);
+
+/** Metric-window rule targets the ingest evaluates via `fireMetricRules`. */
+const METRIC_TARGETS = new Set<MetricTarget>(["error_rate", "latency_p95", "llm_cost"]);
+
+/** One stored observation row, as the metric-rule window read consumes it. */
+interface MetricObservationRow extends MetricObservation {
+    organizationId: Id<"organizations">;
+}
+
+/** Recent spans scanned when a metric rule needs its window (bounds the read). */
+const METRIC_SCAN_LIMIT = 2000;
 
 /** A fired alert the router should deliver (email/webhook) then mark delivered — the shared shape at this store's branded id. */
 export type AlertDelivery = AlertDeliveryBase<Id<"alerts">>;
@@ -77,6 +132,8 @@ interface EventGroup {
     kind: "container" | "error";
     lastTs: number;
     sampleMessage: string;
+    /** A sample trace id (the latest event's), so the Issue links to a trace. */
+    sampleTraceId?: string;
     title: string;
 }
 
@@ -89,7 +146,16 @@ const detectIncidentKind = (message: string): "crash_loop" | "error_spike" | "oo
 
 /** Fold a batch of events into one pre-aggregated group per fingerprint hash. */
 const groupEvents = (
-    events: { code?: string; container?: string; functionPath: string; instance?: string; kind: "container" | "error"; message: string; ts: number }[],
+    events: {
+        code?: string;
+        container?: string;
+        functionPath: string;
+        instance?: string;
+        kind: "container" | "error";
+        message: string;
+        traceId?: string;
+        ts: number;
+    }[],
 ): Map<string, EventGroup> => {
     const groups = new Map<string, EventGroup>();
 
@@ -101,6 +167,7 @@ const groupEvents = (
             group.count += 1;
             group.lastTs = Math.max(group.lastTs, event.ts);
             group.sampleMessage = event.message;
+            group.sampleTraceId = event.traceId ?? group.sampleTraceId;
         } else {
             groups.set(fingerprint.hash, {
                 container: event.container,
@@ -111,6 +178,7 @@ const groupEvents = (
                 kind: event.kind,
                 lastTs: event.ts,
                 sampleMessage: event.message,
+                sampleTraceId: event.traceId,
                 title: fingerprint.title,
             });
         }
@@ -136,6 +204,8 @@ const upsertIssue = async (
             count: before + group.count,
             lastSeen: Math.max(existing.lastSeen, group.lastTs),
             sampleMessage: group.sampleMessage,
+            // Only refresh the sample trace when this batch carried one.
+            ...(group.sampleTraceId ? { sampleTraceId: group.sampleTraceId } : {}),
             updatedAt: now,
         });
     } else {
@@ -149,6 +219,7 @@ const upsertIssue = async (
             lastSeen: group.lastTs,
             organizationId,
             sampleMessage: group.sampleMessage,
+            sampleTraceId: group.sampleTraceId,
             status: "open",
             title: group.title,
             updatedAt: now,
@@ -204,6 +275,7 @@ export const ingest = mutation
         deployKey: v.string(),
         deploymentId: v.optional(v.id("deployments")),
         events: v.array(telemetryEvent),
+        observations: v.optional(v.array(observationInput)),
         organizationId: v.id("organizations"),
     })
     .mutation(
@@ -211,29 +283,64 @@ export const ingest = mutation
             ctx: context,
             args,
         }): Promise<{
-            // Inlined (not `AlertDelivery[]`) so codegen serializes the return type
+            // Inlined (not `AlertDelivery[]`, and the channel union spelled out not
+            // via the `AlertChannel` alias) so codegen serializes the return type
             // without an unresolved type reference — see `members.ts`.
-            alerts: { body: string; channel: "email" | "webhook"; destination: string; id: Id<"alerts">; subject: string }[];
+            alerts: { body: string; channel: "email" | "pagerduty" | "slack" | "webhook"; destination: string; id: Id<"alerts">; subject: string }[];
             incidents: number;
             issues: number;
         }> => {
-            await authorizeDeployKey(context, args.organizationId, args.deployKey);
+            await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
 
             if (args.events.length > MAX_EVENTS) {
                 throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_EVENTS)} events)`);
             }
 
+            if ((args.observations?.length ?? 0) > MAX_OBSERVATIONS) {
+                throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_OBSERVATIONS)} observations)`);
+            }
+
             const now = Date.now();
+
+            // Persist every span as an observation (Traces). Additive to the error
+            // fold below — the same OTLP payload feeds both. Best-effort per row so
+            // one bad span never fails the batch or the Issue path.
+            for (const observation of args.observations ?? []) {
+                // eslint-disable-next-line no-await-in-loop -- bounded batch; sequential keeps the writer simple
+                await context.db.insert("observations", {
+                    ...observation,
+                    createdAt: now,
+                    deploymentId: args.deploymentId,
+                    organizationId: args.organizationId,
+                });
+            }
             const { page: rulePage } = await context.db.alertRules.findMany({ where: { organizationId: args.organizationId } });
-            const rules: FiringRule[] = (rulePage as unknown as AlertRuleRow[])
-                .filter((rule) => rule.enabled)
+            const enabledRules = (rulePage as unknown as AlertRuleRow[]).filter((rule) => rule.enabled);
+            // Count-crossing rules (issue/incident) evaluated per upserted group below.
+            const rules: FiringRule[] = enabledRules
+                .filter((rule) => COUNT_TARGETS.has(rule.target))
                 .map((rule) => ({
                     channel: rule.channel,
                     destination: rule.destination,
                     name: rule.name,
                     ruleId: rule._id,
+                    target: rule.target as "incident" | "issue",
+                    threshold: rule.threshold,
+                }));
+            // Metric-window rules (error_rate/latency_p95/llm_cost) evaluated once
+            // over the freshly-ingested observation window, after the loop.
+            const metricRules: MetricRule[] = enabledRules
+                .filter((rule): rule is AlertRuleRow & { target: MetricTarget } => METRIC_TARGETS.has(rule.target as MetricTarget))
+                .map((rule) => ({
+                    channel: rule.channel,
+                    comparator: rule.comparator ?? "gt",
+                    destination: rule.destination,
+                    functionPath: rule.functionPath,
+                    name: rule.name,
+                    ruleId: rule._id,
                     target: rule.target,
                     threshold: rule.threshold,
+                    windowMinutes: rule.windowMinutes ?? 60,
                 }));
             const firedAlerts: AlertDelivery[] = [];
 
@@ -291,6 +398,88 @@ export const ingest = mutation
                 });
             }
 
+            // Metric-window rules — evaluated over the org's recent observations
+            // (this batch's spans are already persisted above), only when such a
+            // rule exists so the common no-metric-rules path pays nothing. This is
+            // the fast-feedback path; the level-triggered latch in `alertRuleState`
+            // (shared with the periodic sweep in `src/telemetry/sweep.ts`) makes a
+            // sustained breach alert once and lets a quiet window still clear + re-arm.
+            if (metricRules.length > 0) {
+                const { page: observationPage } = await context.db.observations.findMany({
+                    limit: METRIC_SCAN_LIMIT,
+                    orderBy: [{ startedAt: "desc" }],
+                    where: { organizationId: args.organizationId },
+                });
+                const windowObservations = observationPage as unknown as MetricObservationRow[];
+                const { page: statePage } = await context.db.alertRuleState.findMany({ where: { organizationId: args.organizationId } });
+                const stateByRule = new Map((statePage as unknown as AlertRuleStateRow[]).map((row) => [row.ruleId as string, row]));
+
+                const outcome = await fireMetricRules(
+                    metricRules,
+                    windowObservations,
+                    args.organizationId,
+                    {
+                        insertAlert,
+                        wasFiring: (ruleId) => stateByRule.get(ruleId)?.firing ?? false,
+                        writeState: async (ruleId, firing, value) => {
+                            const existing = stateByRule.get(ruleId);
+
+                            await (existing
+                                ? context.db.patch(existing._id, { firing, lastEvaluatedAt: now, lastValue: value, updatedAt: now })
+                                : context.db.insert("alertRuleState", {
+                                      createdAt: now,
+                                      firing,
+                                      lastEvaluatedAt: now,
+                                      lastValue: value,
+                                      organizationId: args.organizationId,
+                                      ruleId: ruleId as Id<"alertRules">,
+                                      updatedAt: now,
+                                  }));
+                        },
+                    },
+                    now,
+                );
+
+                firedAlerts.push(...outcome.deliveries);
+            }
+
             return { alerts: firedAlerts, incidents, issues };
         },
     );
+
+/** Span observations older than this are pruned (matches the tenant-log retention window). */
+export const OBSERVATION_RETENTION_MS = 48 * 60 * 60 * 1000;
+
+/** One stored observation row, for the retention scan. */
+interface ObservationRow {
+    _id: Id<"observations">;
+    startedAt: number;
+}
+
+/** Delete span observations past retention (Traces). SYSTEM only (cron dispatch). */
+export const pruneObservations = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
+    const cutoff = Date.now() - OBSERVATION_RETENTION_MS;
+    const { page } = await context.db.observations.findMany({});
+    const stale = (page as unknown as ObservationRow[]).filter((row) => row.startedAt < cutoff);
+
+    for (const row of stale) {
+        // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+        await context.db.delete(row._id);
+    }
+
+    return { pruned: stale.length };
+});
+
+/**
+ * Resolve the org that owns a deploy key, for the standard OTLP ingest endpoints
+ * (`/v1/traces`, `/v1/logs`) — a stock OpenTelemetry exporter sends only an
+ * `Authorization: Bearer <key>` header, so the route resolves the org from the
+ * key before delegating to the deploy-key-authorized ingest. SYSTEM only.
+ */
+export const orgForDeployKey = internalQuery
+    .input({ deployKey: v.string() })
+    .query(async ({ ctx: context, args }): Promise<{ organizationId: Id<"organizations"> } | null> => {
+        const organizationId = await resolveDeployKeyOrg(context, args.deployKey);
+
+        return organizationId ? { organizationId } : null;
+    });

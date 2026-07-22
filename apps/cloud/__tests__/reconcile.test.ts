@@ -53,10 +53,7 @@ describe(overageFleetPorts, () => {
     it("inserts a fresh watermark, and advances an existing one only forward", async () => {
         const insert = vi.fn(() => Promise.resolve("id"));
         const patch = vi.fn(() => Promise.resolve(undefined));
-        const database = fakeDb(
-            { overageDebits: [{ _id: "w1", debitedCredits: 30, organizationId: "org_a", periodStart: 500 }] },
-            { insert, patch },
-        );
+        const database = fakeDb({ overageDebits: [{ _id: "w1", debitedCredits: 30, organizationId: "org_a", periodStart: 500 }] }, { insert, patch });
 
         const ports = overageFleetPorts(database, noopLedger, 1000, new Map());
 
@@ -91,7 +88,15 @@ describe(overageFleetPorts, () => {
 
     it("lifts only an overage suspension on recovery", async () => {
         const patch = vi.fn(() => Promise.resolve(undefined));
-        const ports = overageFleetPorts(fakeDb({}, { patch }), noopLedger, 1000, new Map([["org_over", "overage"], ["org_dun", "dunning"]]));
+        const ports = overageFleetPorts(
+            fakeDb({}, { patch }),
+            noopLedger,
+            1000,
+            new Map([
+                ["org_over", "overage"],
+                ["org_dun", "dunning"],
+            ]),
+        );
 
         await ports.onRecovered?.("org_over");
         expect(patch).toHaveBeenCalledWith("org_over", { suspendedAt: undefined, suspendedReason: undefined }, "organizations");

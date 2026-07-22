@@ -31,6 +31,8 @@ import { runUsageRollback } from "./metering/rollback";
 import type { CronTarget } from "./fanout/cron";
 import { fanOutCron } from "./fanout/cron";
 import { deliverAlert } from "./mail/notify";
+import type { AlertDelivery } from "./telemetry/alerts";
+import { runAlertSweep } from "./telemetry/sweep";
 import { runUptimeSweep } from "./uptime/sweep";
 import type { QueueMessage, TenantQueueGroup } from "./fanout/queue";
 import { fanOutQueue, groupByTenant } from "./fanout/queue";
@@ -252,7 +254,11 @@ const readLiveDeployments = async (env: Env): Promise<LiveDeploymentRow[]> => {
 const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
     const live = await readLiveDeployments(env);
     const resolved = await Promise.all(
-        live.map(async (row) => ({ adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY), cronSpecs: row.cronSpecs, scriptName: row.scriptName })),
+        live.map(async (row) => ({
+            adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY),
+            cronSpecs: row.cronSpecs,
+            scriptName: row.scriptName,
+        })),
     );
     const targets: CronTarget[] = [];
 
@@ -350,6 +356,35 @@ const sweepOverageReconciliation = async (env: Env): Promise<void> => {
 };
 
 /**
+ * Deliver fired alerts (uptime or metric sweep) over each one's channel and stamp
+ * its row with the true outcome — a thrown `deliverAlert` (transport failure /
+ * SSRF re-rejection) marks the row `failed`. `deliveredAt` is stamped only on
+ * success (an undelivered alert has no delivery time), unlike the deploy-key
+ * `markDelivered` path which only ever records `delivered`; a sweep runs in a
+ * trusted system context, so it patches directly.
+ */
+const deliverFiredAlerts = async (env: Env, database: ControlPlaneDb, deliveries: readonly AlertDelivery[], now: number): Promise<void> => {
+    if (deliveries.length === 0) {
+        return;
+    }
+
+    const environmentRecord = env as unknown as Record<string, unknown>;
+
+    await Promise.all(
+        deliveries.map(async (delivery) => {
+            const delivered = await deliverAlert(environmentRecord, delivery).then(
+                () => true,
+                () => false,
+            );
+
+            await database
+                .patch(delivery.id, { ...(delivered ? { deliveredAt: now } : {}), status: delivered ? "delivered" : "failed", updatedAt: now }, "alerts")
+                .catch(() => undefined);
+        }),
+    );
+};
+
+/**
  * Synthetic uptime sweep (§ Observability): probe each live deployment's URL from
  * outside, record the result, and deliver any uptime alerts a probe fired. The
  * pure `runUptimeSweep` does the probe→record→fire; the edge supplies the real
@@ -364,29 +399,26 @@ const sweepUptime = async (env: Env): Promise<void> => {
     const now = Date.now();
     const { deliveries } = await runUptimeSweep(database, { fetch: globalThis.fetch, now });
 
-    if (deliveries.length === 0) {
+    await deliverFiredAlerts(env, database, deliveries, now);
+};
+
+/**
+ * Metric-alert sweep (§ Observability): re-evaluate every enabled metric-window
+ * rule over its window and fire/clear as its latch crosses, catching quiet
+ * windows the ingest-time path never re-examines (e.g. an error rate that fell to
+ * 0 with no new spans). The pure `runAlertSweep` does the evaluate→fire/clear over
+ * the shared `alertRuleState` latch; the edge supplies the real D1 and delivers.
+ */
+const sweepAlerts = async (env: Env): Promise<void> => {
+    if (!env.DB) {
         return;
     }
 
-    const environmentRecord = env as unknown as Record<string, unknown>;
+    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const now = Date.now();
+    const { deliveries } = await runAlertSweep(database, { now });
 
-    // Deliver each fired alert and stamp its row with the true outcome — a thrown
-    // `deliverAlert` (transport failure / SSRF re-rejection) marks the row `failed`.
-    // `deliveredAt` is stamped only on success (an undelivered alert has no delivery
-    // time), unlike the deploy-key `markDelivered` path which only ever records
-    // `delivered`; the sweep runs in a trusted system context, so it patches directly.
-    await Promise.all(
-        deliveries.map(async (delivery) => {
-            const delivered = await deliverAlert(environmentRecord, delivery).then(
-                () => true,
-                () => false,
-            );
-
-            await database
-                .patch(delivery.id, { ...(delivered ? { deliveredAt: now } : {}), status: delivered ? "delivered" : "failed", updatedAt: now }, "alerts")
-                .catch(() => undefined);
-        }),
-    );
+    await deliverFiredAlerts(env, database, deliveries, now);
 };
 
 /**
@@ -405,6 +437,10 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     { cron: EVERY_HOUR, run: sweepUsageRollback },
     { cron: EVERY_SIX_HOURS, run: sweepOverageReconciliation },
     { cron: EVERY_MINUTE, run: sweepUptime },
+    // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
+    // minute so quiet windows the ingest never re-examines still fire/clear —
+    // rides the existing every-minute trigger (no new cron, stays within the cap).
+    { cron: EVERY_MINUTE, run: sweepAlerts },
 ];
 
 /** Script id → per-deployment admin token (decrypted in-process), for the queue fan-out. */

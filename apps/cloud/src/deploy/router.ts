@@ -12,8 +12,10 @@ import { handleGitHubWebhook } from "../github/webhook";
 import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createCloudflareProvisioner } from "../provision";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
-import type { OtlpTracePayload } from "../telemetry/otlp";
-import { decodeTelemetryEvents } from "../telemetry/otlp";
+import { resolveTelemetryConfig } from "../telemetry/ingest-key";
+import type { OtlpLogEntry, OtlpLogsPayload, OtlpMetricsPayload, OtlpTracePayload } from "../telemetry/otlp";
+import { decodeLogRecords, decodeMetricPoints, decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
+import { decodeLogsPayloadProto, decodeMetricsPayloadProto, decodeTracePayloadProto } from "../telemetry/otlp-protobuf";
 import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { StoredAdminToken } from "./admin-token";
 import { resolveAdminToken, sealAdminToken } from "./admin-token";
@@ -41,6 +43,8 @@ interface RouterEnv {
     LUNORA_ADMIN_TOKEN?: string;
     LUNORA_APP_DOMAIN?: string;
     LUNORA_CELL?: string;
+    /** OTLP ingest base injected into tenant Workers (`LUNORA_OTLP_ENDPOINT`); telemetry is off when unset. */
+    LUNORA_OTLP_ENDPOINT?: string;
     /** Shared secret the dispatch-namespace tail worker presents to `POST /v1/logs/tail`. */
     LUNORA_TAIL_SECRET?: string;
     /** Sender address for invitation email; the mailer reads the rest of env too. */
@@ -565,12 +569,17 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
     }
 
     const events = decodeTelemetryEvents(body);
+    // Every span (not just the error spans `events` keeps) → observations for
+    // Traces. Sliced to the mutation's per-call cap so an oversized batch trims
+    // rather than rejecting the whole ingest (and losing the Issue fold with it).
+    const observations = decodeObservations(body).slice(0, 1000);
 
     try {
         const result = await context.runMutation<{ alerts: AlertDelivery[]; incidents: number; issues: number }>(api.telemetry.ingest, {
             deployKey: body.deployKey,
             deploymentId: body.deploymentId,
             events,
+            observations,
             organizationId: body.organizationId,
         });
 
@@ -578,6 +587,8 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
 
         store.recordCounts({ incidents: result.incidents, issues: result.issues, organizationId: body.organizationId });
         await store.archiveEvents(events).catch(() => undefined);
+        // Tier every span to the columnar archive (scales past D1's hot window).
+        await store.archiveSpans(observations, body.organizationId ?? "").catch(() => undefined);
 
         // Deliver any alerts the ingest fired (best-effort), then stamp them delivered.
         if (result.alerts.length > 0) {
@@ -598,6 +609,262 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
         return jsonError(403, error instanceof Error ? error.message : "telemetry rejected");
     }
 };
+
+/** Extract the deploy key from a standard OTLP `Authorization` header (`Bearer <key>` or a bare token). */
+const bearerToken = (request: Request): string | undefined => {
+    const header = request.headers.get("authorization");
+
+    if (header === null || header === "") {
+        return undefined;
+    }
+
+    return header.startsWith("Bearer ") ? header.slice(7) : header;
+};
+
+/**
+ * Decompressed-size ceiling for an OTLP body. Bounds a `Content-Encoding: gzip`
+ * "bomb" (a tiny body that inflates to GBs) — reading the stream in chunks and
+ * aborting past this cap keeps a single request from OOMing the shared isolate.
+ */
+const MAX_OTLP_BODY_BYTES = 32 * 1024 * 1024;
+
+/** Drain a byte stream to a single buffer, throwing once the running total exceeds {@link MAX_OTLP_BODY_BYTES}. */
+const readAllCapped = async (stream: ReadableStream<Uint8Array> | null): Promise<Uint8Array> => {
+    if (!stream) {
+        return new Uint8Array();
+    }
+
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+
+    try {
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- sequential stream drain
+            const { done, value } = await reader.read();
+
+            if (done) {
+                break;
+            }
+
+            total += value.byteLength;
+
+            if (total > MAX_OTLP_BODY_BYTES) {
+                throw new Error("OTLP body exceeds the decompressed size limit");
+            }
+
+            chunks.push(value);
+        }
+    } finally {
+        reader.releaseLock();
+    }
+
+    if (chunks.length === 1) {
+        return chunks[0] as Uint8Array;
+    }
+
+    const out = new Uint8Array(total);
+    let offset = 0;
+
+    for (const chunk of chunks) {
+        out.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+
+    return out;
+};
+
+/**
+ * Read an OTLP body into the JSON payload shape the `decode*` functions consume.
+ * Handles both transports — `application/json` (optionally `gzip`) and
+ * `application/x-protobuf` (decoded by the Worker-safe `otlp-protobuf` module) —
+ * so any OpenTelemetry SDK or Collector (which defaults to protobuf) can ship.
+ * Every transport is drained through {@link readAllCapped}, so a decompression
+ * bomb is bounded; an over-cap or malformed body throws → the handler returns 400.
+ */
+const readOtlpBody = async (request: Request, signal: "logs" | "metrics" | "traces"): Promise<unknown> => {
+    const contentType = request.headers.get("content-type") ?? "";
+    const gzipped = (request.headers.get("content-encoding") ?? "").includes("gzip");
+    const stream = gzipped && request.body ? request.body.pipeThrough(new DecompressionStream("gzip")) : request.body;
+    const bytes = await readAllCapped(stream);
+
+    if (contentType.includes("protobuf")) {
+        if (signal === "traces") {
+            return decodeTracePayloadProto(bytes);
+        }
+
+        return signal === "logs" ? decodeLogsPayloadProto(bytes) : decodeMetricsPayloadProto(bytes);
+    }
+
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+};
+
+/** The resolved OTLP caller — its bearer key and the org it's scoped to (looked up once). */
+interface OtlpAuth {
+    key: string;
+    organizationId: string;
+}
+
+/**
+ * Resolve the OTLP request's bearer to `{ key, organizationId }` (one org lookup,
+ * reused by the handler), or a `Response` (401) to short-circuit. Capability-
+ * agnostic here — an `ingest` or a legacy `deploy` key both authenticate; the
+ * per-org scoping is enforced by the ingest mutation via `authorizeTelemetryKey`.
+ */
+const otlpAuthorize = async (request: Request, context: LunoraActionContext): Promise<OtlpAuth | Response> => {
+    const key = bearerToken(request);
+
+    if (key === undefined) {
+        return jsonError(401, "missing Authorization: Bearer <ingest key>");
+    }
+
+    const org = await context.runQuery<{ organizationId: string } | null>(internal.telemetry.orgForDeployKey, { deployKey: key });
+
+    return org ? { key, organizationId: org.organizationId } : jsonError(401, "invalid or revoked ingest key");
+};
+
+/** Per-request caps; excess is dropped and reported via OTLP `partialSuccess`. */
+const MAX_OTLP_OBSERVATIONS = 1000;
+const MAX_OTLP_LOG_RECORDS = 500;
+const MAX_OTLP_METRIC_POINTS = 500;
+
+/**
+ * OTLP success response. An empty body is full success; when the batch was capped
+ * we return `partialSuccess` with the rejected count (per the OTLP spec), so an
+ * exporter learns some points were dropped rather than seeing a silent success.
+ */
+const otlpAccepted = (rejected: number, rejectedField: "rejectedDataPoints" | "rejectedLogRecords" | "rejectedSpans"): Response => {
+    const body =
+        rejected > 0 ? { partialSuccess: { errorMessage: `accepted with ${String(rejected)} rejected (batch cap exceeded)`, [rejectedField]: rejected } } : {};
+
+    return Response.json(body, { headers: { "content-type": "application/json" }, status: 200 });
+};
+
+/** Strip the routing-only `serviceName` off a decoded OTLP log entry, leaving the `logs.ingest` line shape. */
+const toLogLine = ({ serviceName: _serviceName, ...line }: OtlpLogEntry): Omit<OtlpLogEntry, "serviceName"> => line;
+
+/**
+ * The shared preamble for every standard OTLP ingest endpoint: context check →
+ * authorize (bearer → org, once) → read the body (JSON or protobuf, size-capped)
+ * → run the signal's own ingest → respond with `partialSuccess` for the returned
+ * rejected count. Each route below is then just its genuinely-unique body.
+ */
+const withOtlpIngest = async (
+    request: Request,
+    environment: RouterEnv,
+    signal: "logs" | "metrics" | "traces",
+    rejectedField: "rejectedDataPoints" | "rejectedLogRecords" | "rejectedSpans",
+    ingest: (payload: unknown, auth: OtlpAuth, context: LunoraActionContext) => Promise<number>,
+): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const auth = await otlpAuthorize(request, context);
+
+    if (auth instanceof Response) {
+        return auth;
+    }
+
+    let payload: unknown;
+
+    try {
+        payload = await readOtlpBody(request, signal);
+    } catch {
+        return jsonError(400, "malformed or oversized OTLP body");
+    }
+
+    try {
+        return otlpAccepted(await ingest(payload, auth, context), rejectedField);
+    } catch (error) {
+        return jsonError(500, error instanceof Error ? error.message : "ingest failed");
+    }
+};
+
+/**
+ * `POST /v1/traces` — the **standard OTLP** trace ingest (mirrors Maple's /
+ * Langfuse's OTLP endpoint), so any OpenTelemetry SDK or Collector can ship
+ * traces — not only Lunora's own `otlpSink`. Every span is stored as an
+ * observation (Traces) + tiered to the archive; error spans fold into Issues.
+ */
+const handleOtlpTracesRoute = (request: Request, environment: RouterEnv): Promise<Response> =>
+    withOtlpIngest(request, environment, "traces", "rejectedSpans", async (payload, auth, context) => {
+        const body = payload as OtlpTracePayload;
+        const decoded = decodeObservations(body);
+        const observations = decoded.slice(0, MAX_OTLP_OBSERVATIONS);
+
+        await context.runMutation(api.telemetry.ingest, {
+            deployKey: auth.key,
+            events: decodeTelemetryEvents(body),
+            observations,
+            organizationId: auth.organizationId,
+        });
+
+        // Tier the spans to the columnar archive (fire-and-forget; scales past D1).
+        await createCloudflareTelemetryStore(environment)
+            .archiveSpans(observations, auth.organizationId)
+            .catch(() => undefined);
+
+        return decoded.length - observations.length;
+    });
+
+/**
+ * `POST /v1/logs` — the **standard OTLP** logs ingest. Records decode to tenant
+ * log lines, grouped by `service.name` (→ script), stored via `logs.ingest`.
+ */
+const handleOtlpLogsRoute = (request: Request, environment: RouterEnv): Promise<Response> =>
+    withOtlpIngest(request, environment, "logs", "rejectedLogRecords", async (payload, auth, context) => {
+        const decoded = decodeLogRecords(payload as OtlpLogsPayload);
+        const kept = decoded.slice(0, MAX_OTLP_LOG_RECORDS);
+
+        // OTLP logs carry `service.name` per resource; the store keys lines by
+        // script, so group the batch by service and ingest one call per script.
+        const byScript = new Map<string, OtlpLogEntry[]>();
+
+        for (const entry of kept) {
+            const script = entry.serviceName ?? "unknown";
+            const group = byScript.get(script);
+
+            if (group) {
+                group.push(entry);
+            } else {
+                byScript.set(script, [entry]);
+            }
+        }
+
+        for (const [scriptName, entries] of byScript) {
+            // eslint-disable-next-line no-await-in-loop -- one call per script; a batch spans few
+            await context.runMutation(api.logs.ingest, {
+                deployKey: auth.key,
+                lines: entries.map((entry) => toLogLine(entry)),
+                organizationId: auth.organizationId,
+                scriptName,
+            });
+        }
+
+        return decoded.length - kept.length;
+    });
+
+/**
+ * `POST /v1/metrics` — the **standard OTLP** metrics ingest. Each data point is
+ * flattened and written to the Analytics Engine telemetry dataset (AE SQL).
+ */
+const handleOtlpMetricsRoute = (request: Request, environment: RouterEnv): Promise<Response> =>
+    withOtlpIngest(request, environment, "metrics", "rejectedDataPoints", (payload, auth) => {
+        const decoded = decodeMetricPoints(payload as OtlpMetricsPayload);
+        const kept = decoded.slice(0, MAX_OTLP_METRIC_POINTS);
+
+        // Best-effort — AE writes are fire-and-forget; a missing/throwing binding no-ops.
+        try {
+            createCloudflareTelemetryStore(environment).recordMetrics(kept, auth.organizationId);
+        } catch {
+            // A throwing/absent dataset binding must not fail the ingest.
+        }
+
+        return Promise.resolve(decoded.length - kept.length);
+    });
 
 interface DomainBody {
     hostname?: string;
@@ -733,7 +1000,15 @@ export const createDeployRouter = (): HttpRouterLike => {
     // Per-instance, per-IP request cap on the control-plane API. The in-memory
     // store is per-isolate (an acceptable first abuse control); a durable store
     // (`createSqlStore` over the shard) can replace it for cross-isolate limits.
-    const limiter = new RateLimiter({ config: { api: { capacity: 120, kind: "token bucket", period: 60_000, rate: 120 } } });
+    const limiter = new RateLimiter({
+        config: {
+            api: { capacity: 120, kind: "token bucket", period: 60_000, rate: 120 },
+            // Telemetry ingest is high-volume by nature — give it a generous bucket
+            // keyed on the ingest token (per org), so a busy exporter isn't throttled
+            // by the shared per-IP `api` limit and one noisy tenant can't starve others.
+            telemetry: { capacity: 6000, kind: "token bucket", period: 60_000, rate: 6000 },
+        },
+    });
 
     const handleDeployRoute = (request: Request, environment: RouterEnv): Promise<Response> => {
         const context = environment.__lunoraCtx;
@@ -810,7 +1085,17 @@ export const createDeployRouter = (): HttpRouterLike => {
             }
         };
 
-        return handleDeployRequest(request, { backend, cell, dispatchNamespace: (kind) => `lunora-${kind}`, healthCheck, provisioner, scheduler });
+        return handleDeployRequest(request, {
+            backend,
+            cell,
+            dispatchNamespace: (kind) => `lunora-${kind}`,
+            healthCheck,
+            provisioner,
+            // Provision (once per org) the scoped ingest key + hand the tenant its
+            // OTLP endpoint/token/tail-consumer (src/telemetry/ingest-key).
+            resolveTelemetry: (input) => resolveTelemetryConfig(context, environment, input),
+            scheduler,
+        });
     };
 
     // POST /v1/deployments/rollback — swap the stable URL back to a retained
@@ -869,10 +1154,17 @@ export const createDeployRouter = (): HttpRouterLike => {
             handler: handleRollbackRoute,
             method: "POST",
             path: "/v1/deployments/rollback",
-            spec: { auth: "deployKey", mcp: { description: "Roll a project's stable URL back to a retained deployment (needs deploymentId + organizationId)." } },
+            spec: {
+                auth: "deployKey",
+                mcp: { description: "Roll a project's stable URL back to a retained deployment (needs deploymentId + organizationId)." },
+            },
         },
         { handler: handleLogsIngestRoute, method: "POST", path: "/v1/logs/ingest", spec: { auth: "deployKey" } },
         { handler: handleTelemetryRoute, method: "POST", path: "/v1/telemetry", spec: { auth: "deployKey" } },
+        // Standard OTLP/HTTP+JSON ingest (bearer-authed) — any OTel SDK/Collector.
+        { handler: handleOtlpTracesRoute, method: "POST", path: "/v1/traces", spec: { auth: "deployKey" } },
+        { handler: handleOtlpLogsRoute, method: "POST", path: "/v1/logs", spec: { auth: "deployKey" } },
+        { handler: handleOtlpMetricsRoute, method: "POST", path: "/v1/metrics", spec: { auth: "deployKey" } },
         { handler: handleUsageRoute, method: "POST", path: "/v1/usage", spec: { auth: "deployKey" } },
         // session — dashboard callers; the delegated mutation `assertMember`s.
         { handler: handleAdminRoute, method: "POST", path: "/v1/admin", spec: { auth: "session" } },
@@ -913,8 +1205,13 @@ export const createDeployRouter = (): HttpRouterLike => {
     const postRoutes = new Map(routes.filter((route) => route.method === "POST").map((route) => [route.path, route.handler]));
     const getRoutes = new Map(routes.filter((route) => route.method === "GET").map((route) => [route.path, route.handler]));
 
-    const rateLimited = async (request: Request): Promise<Response | undefined> => {
-        const verdict = await limiter.limit("api", { key: request.headers.get("cf-connecting-ip") ?? "unknown" });
+    // Standard OTLP + native telemetry ingest → the per-token telemetry tier.
+    const telemetryPaths = new Set(["/v1/logs", "/v1/metrics", "/v1/telemetry", "/v1/traces"]);
+
+    const rateLimited = async (request: Request, pathname: string): Promise<Response | undefined> => {
+        const verdict = telemetryPaths.has(pathname)
+            ? await limiter.limit("telemetry", { key: bearerToken(request) ?? request.headers.get("cf-connecting-ip") ?? "unknown" })
+            : await limiter.limit("api", { key: request.headers.get("cf-connecting-ip") ?? "unknown" });
 
         if (verdict.ok) {
             return undefined;
@@ -936,7 +1233,7 @@ export const createDeployRouter = (): HttpRouterLike => {
                 return jsonError(404, "not found");
             }
 
-            const throttled = await rateLimited(request);
+            const throttled = await rateLimited(request, url.pathname);
 
             if (throttled) {
                 return throttled;

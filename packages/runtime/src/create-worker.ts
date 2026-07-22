@@ -843,6 +843,14 @@ interface WorkerOptions {
     queue?: QueueConsumerHandler;
 
     /**
+     * Queue-batch handler (CLOUD-PLAN §2.4). WfP namespaced Workers can't be
+     * queue consumers, so a platform-owned consumer forwards batches to the
+     * admin-gated `POST /_lunora/queue` endpoint, which invokes this. Return the
+     * message ids to retry; the rest are acked. Omit if the app has no queues.
+     */
+    queueHandler?: QueueForwardHandler;
+
+    /**
      * Enforce the ephemeral WS admin token: when `true`,
      * the worker's WS admin gate rejects the raw master admin token in the
      * `?token=` query parameter — only a short-lived sub-token minted by
@@ -1060,6 +1068,15 @@ const STATUS_PATH = "/_lunora/status";
 
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
+// Admin-gated HTTP entrypoint that runs a cron expression's jobs exactly as the
+// native `scheduled()` trigger would. Cloudflare silently drops `triggers.crons`
+// for Workers uploaded into a Workers-for-Platforms dispatch namespace, so a
+// platform fans cron ticks out to its tenants by POSTing here (CLOUD-PLAN §2.4).
+const SCHEDULED_TICK_PATH = "/_lunora/scheduled";
+// Admin-gated HTTP entrypoint that processes a forwarded queue batch. Namespaced
+// WfP Workers can't be queue consumers, so a platform-owned consumer forwards
+// batches here, where the app's `queueHandler` runs (CLOUD-PLAN §2.4).
+const QUEUE_DISPATCH_PATH = "/_lunora/queue";
 
 /**
  * Env values that read as "on" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`. Mirrors
@@ -1087,15 +1104,6 @@ const readForwardedIdentity = (request: Request): { identity?: string; userId?: 
     };
 };
 
-// Admin-gated HTTP entrypoint that runs a cron expression's jobs exactly as the
-// native `scheduled()` trigger would. Cloudflare silently drops `triggers.crons`
-// for Workers uploaded into a Workers-for-Platforms dispatch namespace, so a
-// platform fans cron ticks out to its tenants by POSTing here (CLOUD-PLAN §2.4).
-const SCHEDULED_TICK_PATH = "/_lunora/scheduled";
-// Admin-gated HTTP entrypoint that processes a forwarded queue batch. Namespaced
-// WfP Workers can't be queue consumers, so a platform-owned consumer forwards
-// batches here, where the app's `queueHandler` runs (CLOUD-PLAN §2.4).
-const QUEUE_DISPATCH_PATH = "/_lunora/queue";
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
 // + `pitr`, data-movement (`export` / `import` / `sync` / `connector/sync` /
 // `apply`), static-introspection (`functions` / `cron-jobs` / `openapi` /

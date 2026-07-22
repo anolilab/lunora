@@ -14,7 +14,8 @@
 export type ScriptBinding =
     | { id: string; name: string; type: "d1" }
     | { bucket_name: string; name: string; type: "r2_bucket" }
-    | { class_name: string; name: string; type: "durable_object_namespace" };
+    | { class_name: string; name: string; type: "durable_object_namespace" }
+    | { name: string; text: string; type: "plain_text" };
 
 export interface PutScriptInput {
     bindings: ScriptBinding[];
@@ -26,7 +27,11 @@ export interface PutScriptInput {
     namespace: string;
     newSqliteClasses?: string[];
     scriptName: string;
+    /** Service names to set as `tail_consumers` (e.g. the log-tail worker). */
+    tailConsumers?: string[];
     tags: string[];
+    /** Plain env vars to attach as `plain_text` bindings (non-secret config). */
+    vars?: Record<string, string>;
 }
 
 export interface CloudflareApi {
@@ -166,7 +171,9 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
                 return;
             }
 
-            throw new Error(`cloudflare create R2 bucket failed: ${data.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`}`);
+            throw new Error(
+                `cloudflare create R2 bucket failed: ${data.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`}`,
+            );
         },
         deleteD1Database: async (uuid) => {
             const response = await fetchImpl(`${base}/d1/database/${uuid}`, { headers: { authorization: authHeader }, method: "DELETE" });
@@ -195,7 +202,8 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
             }
         },
         findD1DatabaseByName: async (name) => {
-            const result = (await callJson(`/d1/database?name=${encodeURIComponent(name)}`, "GET", undefined)) as { name?: string; uuid?: string }[] | undefined;
+            const result = (await callJson(`/d1/database?name=${encodeURIComponent(name)}`, "GET", undefined)) as
+                { name?: string; uuid?: string }[] | undefined;
             const match = (result ?? []).find((database) => database.name === name && typeof database.uuid === "string");
 
             return match?.uuid ? { uuid: match.uuid } : null;
@@ -203,14 +211,20 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
         putDispatchScript: async (input) => {
             // Workers-for-Platforms multipart upload: a `metadata` part (bindings,
             // main_module, migrations, tags) + the bundle module part.
+            // Plain env vars ride the bindings array as `plain_text` entries.
+            const varBindings: ScriptBinding[] = Object.entries(input.vars ?? {}).map(([name, text]) => ({ name, text, type: "plain_text" }));
+
             const metadata = {
-                bindings: input.bindings,
+                bindings: [...input.bindings, ...varBindings],
                 compatibility_date: "2026-06-10",
                 compatibility_flags: ["nodejs_compat"],
                 main_module: input.mainModule,
                 ...(input.newSqliteClasses && input.newSqliteClasses.length > 0
                     ? { migrations: { new_sqlite_classes: input.newSqliteClasses, new_tag: input.migrationTag ?? "v1" } }
                     : {}),
+                // The dispatch-namespace tail worker (log ingest, GAPS.md B2) —
+                // wired here at deploy time, per the tail worker's own contract.
+                ...(input.tailConsumers && input.tailConsumers.length > 0 ? { tail_consumers: input.tailConsumers.map((service) => ({ service })) } : {}),
                 tags: input.tags,
             };
 

@@ -8,6 +8,7 @@ import { AlertsSection } from "./AlertsSection";
 import { BillingSection } from "./BillingSection";
 import { BuildsSection } from "./BuildsSection";
 import { CommandPalette } from "./CommandPalette";
+import { DashboardsSection } from "./DashboardsSection";
 import { DeployKeysSection } from "./DeployKeysSection";
 import { DomainsSection } from "./DomainsSection";
 import { IncidentsSection } from "./IncidentsSection";
@@ -15,8 +16,12 @@ import { InvitationsSection } from "./InvitationsSection";
 import { IssuesSection } from "./IssuesSection";
 import { LogsSection } from "./LogsSection";
 import { MembersSection } from "./MembersSection";
+import { MetricsSection } from "./MetricsSection";
 import { ProjectsSection } from "./ProjectsSection";
 import { SecretsSection } from "./SecretsSection";
+import { SessionsSection } from "./SessionsSection";
+import { TimeRangeProvider } from "./TimeRangeProvider";
+import { TracesSection } from "./TracesSection";
 import type { OrgId } from "./types";
 import { UptimeSection } from "./UptimeSection";
 import { UsageSection } from "./UsageSection";
@@ -33,6 +38,7 @@ type Tab =
     | "alerts"
     | "billing"
     | "builds"
+    | "dashboards"
     | "domains"
     | "incidents"
     | "invitations"
@@ -40,10 +46,24 @@ type Tab =
     | "keys"
     | "logs"
     | "members"
+    | "metrics"
     | "projects"
     | "secrets"
+    | "sessions"
+    | "traces"
     | "uptime"
     | "usage";
+
+/**
+ * Props every section receives. Beyond `organizationId`, sections may use
+ * `openTab` to deep-link to another tab (e.g. an Issue → its trace), and
+ * `focusTraceId` — the trace/trace-filter the target tab should open on.
+ */
+export interface SectionProps {
+    focusTraceId?: string;
+    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
+    organizationId: OrgId;
+}
 
 const TABS: { id: Tab; label: string }[] = [
     { id: "projects", label: "Projects" },
@@ -53,6 +73,10 @@ const TABS: { id: Tab; label: string }[] = [
     { id: "domains", label: "Domains" },
     { id: "builds", label: "Builds" },
     { id: "logs", label: "Logs" },
+    { id: "traces", label: "Traces" },
+    { id: "sessions", label: "Sessions" },
+    { id: "metrics", label: "Metrics" },
+    { id: "dashboards", label: "Dashboards" },
     { id: "issues", label: "Issues" },
     { id: "incidents", label: "Incidents" },
     { id: "uptime", label: "Uptime" },
@@ -64,11 +88,12 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 /** Tab → live section. Every section mounts against the same `organizationId`. */
-const SECTIONS: Record<Tab, (props: { organizationId: OrgId }) => ReactElement> = {
+const SECTIONS: Record<Tab, (props: SectionProps) => ReactElement> = {
     activity: ActivitySection,
     alerts: AlertsSection,
     billing: BillingSection,
     builds: BuildsSection,
+    dashboards: DashboardsSection,
     domains: DomainsSection,
     incidents: IncidentsSection,
     invitations: InvitationsSection,
@@ -76,8 +101,11 @@ const SECTIONS: Record<Tab, (props: { organizationId: OrgId }) => ReactElement> 
     keys: DeployKeysSection,
     logs: LogsSection,
     members: MembersSection,
+    metrics: MetricsSection,
     projects: ProjectsSection,
     secrets: SecretsSection,
+    sessions: SessionsSection,
+    traces: TracesSection,
     uptime: UptimeSection,
     usage: UsageSection,
 };
@@ -121,6 +149,20 @@ const OrgBanners = ({ org }: { org: OrgFlags }): ReactElement | null => {
 export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDashboardProps): ReactElement => {
     const organizations = useQuery(api.organizations.list, {});
     const [tab, setTab] = useState<Tab>("projects");
+    // Cross-tab deep-link. `seq` bumps on EVERY navigation so the target section
+    // remounts each time (via its `key`) — a one-shot: it consumes `traceId` in
+    // its state initializer, never a `useEffect` sync. A manual tab click bumps
+    // `seq` with no `traceId`, so a stale trace can't re-open, and deep-linking the
+    // SAME trace twice still re-focuses (the seq — hence the key — changed).
+    const [focus, setFocus] = useState<{ seq: number; traceId?: string }>({ seq: 0 });
+    const navigate = (target: Tab): void => {
+        setFocus((previous) => ({ seq: previous.seq + 1 }));
+        setTab(target);
+    };
+    const onOpenTab = (target: "logs" | "traces", context?: { traceId?: string }): void => {
+        setFocus((previous) => ({ seq: previous.seq + 1, traceId: context?.traceId }));
+        setTab(target);
+    };
     const palette = useCommandPalette();
 
     const org = organizations?.find((candidate) => candidate._id === organizationId);
@@ -133,6 +175,7 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
                     id: `tab:${entry.id}`,
                     label: entry.label,
                     run: () => {
+                        setFocus((previous) => ({ seq: previous.seq + 1 }));
                         setTab(entry.id);
                     },
                 };
@@ -158,20 +201,20 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
 
             <nav className="tabs">
                 {TABS.map((entry) => (
-                    <button
-                        className={entry.id === tab ? "tab active" : "tab"}
-                        key={entry.id}
-                        onClick={() => {
-                            setTab(entry.id);
-                        }}
-                        type="button"
-                    >
+                    <button className={entry.id === tab ? "tab active" : "tab"} key={entry.id} onClick={() => navigate(entry.id)} type="button">
                         {entry.label}
                     </button>
                 ))}
             </nav>
 
-            <ActiveSection organizationId={organizationId} />
+            <TimeRangeProvider>
+                <ActiveSection
+                    focusTraceId={tab === "logs" || tab === "traces" ? focus.traceId : undefined}
+                    key={`${tab}:${String(focus.seq)}`}
+                    onOpenTab={onOpenTab}
+                    organizationId={organizationId}
+                />
+            </TimeRangeProvider>
         </div>
     );
 };
