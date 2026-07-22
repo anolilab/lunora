@@ -33,8 +33,8 @@ const LOS_ANGELES = { lat: 34.0522, lng: -118.2437 };
 
 let harness: ReturnType<typeof createSqliteExec>;
 
-const setupWriter = (): DatabaseWriterLike => {
-    runShardMigrations(harness.sql, geoSchema);
+const setupWriter = (schema: SchemaLike = geoSchema): DatabaseWriterLike => {
+    runShardMigrations(harness.sql, schema);
 
     let now = 1_700_000_000_000;
     let counter = 0;
@@ -51,7 +51,24 @@ const setupWriter = (): DatabaseWriterLike => {
         return `p${String(counter)}`;
     };
 
-    return createShardContextDatabase({ clock, idGenerator, schema: geoSchema, sql: harness.sql });
+    return createShardContextDatabase({ clock, idGenerator, schema, sql: harness.sql });
+};
+
+// A geo table that also declares `.softDelete()` — exercises the companion
+// removal on soft delete and its re-add on restore.
+const softGeoSchema: SchemaLike = {
+    tables: {
+        spots: {
+            geoIndexes: [{ field: "location", name: "by_location" }],
+            indexes: [],
+            shape: {
+                deletedAt: { kind: "number" },
+                location: { kind: "geoPoint" },
+                name: { kind: "string" },
+            },
+            softDeleteMode: { field: "deletedAt" },
+        },
+    },
 };
 
 describe("ctx-db geo", () => {
@@ -158,5 +175,91 @@ describe("ctx-db geo", () => {
             .take(2);
 
         expect(results.map((document) => document["name"])).toStrictEqual(["times-square", "brooklyn"]);
+    });
+
+    it("drops a point from geo results when it is hard-deleted", async () => {
+        expect.assertions(2);
+
+        const writer = setupWriter();
+
+        const id = await writer.insert("places", { location: TIMES_SQUARE, name: "times-square" });
+        await writer.insert("places", { location: BROOKLYN, name: "brooklyn" });
+
+        const before = await writer
+            .query("places")
+            .withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, 20_000))
+            .collect();
+
+        expect(before.map((document) => document["name"])).toStrictEqual(["times-square", "brooklyn"]);
+
+        // Deleting removes the geohash companion row (syncGeo(..., undefined)).
+        await writer.delete(id);
+
+        const after = await writer
+            .query("places")
+            .withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, 20_000))
+            .collect();
+
+        expect(after.map((document) => document["name"])).toStrictEqual(["brooklyn"]);
+    });
+
+    it("re-syncs the companion when a point is replaced", async () => {
+        expect.assertions(2);
+
+        const writer = setupWriter();
+
+        const id = await writer.insert("places", { location: LOS_ANGELES, name: "mover" });
+
+        const before = await writer
+            .query("places")
+            .withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, 5000))
+            .collect();
+
+        expect(before).toStrictEqual([]);
+
+        // A full replace (not a patch) must also re-sync the companion.
+        await writer.replace(id, { location: TIMES_SQUARE, name: "mover" });
+
+        const after = await writer
+            .query("places")
+            .withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, 5000))
+            .collect();
+
+        expect(after.map((document) => document["name"])).toStrictEqual(["mover"]);
+    });
+
+    it("hides a soft-deleted point and re-adds it on restore", async () => {
+        expect.assertions(3);
+
+        const writer = setupWriter(softGeoSchema);
+
+        const id = await writer.insert("spots", { location: TIMES_SQUARE, name: "cafe" });
+
+        const initial = await writer
+            .query("spots")
+            .withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, 5000))
+            .collect();
+
+        expect(initial.map((document) => document["name"])).toStrictEqual(["cafe"]);
+
+        // Soft delete removes the companion row so the point drops out of geo reads.
+        await writer.delete(id);
+
+        const deleted = await writer
+            .query("spots")
+            .withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, 5000))
+            .collect();
+
+        expect(deleted).toStrictEqual([]);
+
+        // Restore clears the marker via patch, which re-adds the companion row.
+        await writer.restore?.(id);
+
+        const restored = await writer
+            .query("spots")
+            .withGeoIndex("by_location", (q) => q.near(TIMES_SQUARE, 5000))
+            .collect();
+
+        expect(restored.map((document) => document["name"])).toStrictEqual(["cafe"]);
     });
 });
