@@ -174,17 +174,20 @@ describe("studioPlugin", () => {
     });
 
     it("serves studio assets with revalidation headers and honours a matching ETag", () => {
-        // Assertion count is environment-dependent: the ETag branch only runs
-        // when @lunora/studio is built (200); an unbuilt studio (501) skips it.
-        expect.hasAssertions();
-
         const middleware = installMiddleware("localhost");
         const next = vi.fn<() => void>();
         const { response } = makeResponse();
 
         middleware({ url: `${STUDIO_PATH}/studio.js` }, response, next);
 
-        // No built studio (501) → no asset bytes to cache; skip.
+        // The route is owned by the plugin either way: 200 when @lunora/studio is
+        // built, 501 when it isn't (e.g. the affected-test CI env, where the studio
+        // dist isn't produced). This unconditional assertion documents both valid
+        // states AND keeps the test from reporting "no assertions" on the 501 path,
+        // where the ETag branch below legitimately can't run.
+        expect([200, 501]).toContain(response.statusCode);
+
+        // No built studio (501) → no asset bytes to cache; the ETag branch can't run.
         // eslint-disable-next-line vitest/no-conditional-in-test -- environment guard: skip when @lunora/studio isn't built (501)
         if (response.statusCode !== 200) {
             return;
