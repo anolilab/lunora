@@ -430,6 +430,7 @@ interface StudioFeaturesResult {
     kv: boolean;
     /** `@lunora/mail` is imported by a `lunora/` source or a declared dependency. */
     mail: boolean;
+
     /**
      * `@lunora/payment` is used (import or `ctx.payments`), or the app declares the store's
      * `subscriptions`/`events` tables that the Payments panel reads. Unlike the other flags this
