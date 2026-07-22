@@ -23,6 +23,33 @@ const pushAttribute = (attributes: OtlpAttribute[], key: string, value: unknown)
 };
 
 /**
+ * Run `onSettle` once when `promise` settles — `(true, undefined, result)` on
+ * success, `(false, message, undefined)` on rejection — as a **detached** observer
+ * (not awaited/returned into the caller's chain). Only the `await` is guarded, so
+ * a throw from `onSettle` on the success path can't be mis-caught and recorded as a
+ * failure (the earlier `try { emit(true, await p) } catch { emit(false) }` did that);
+ * the trailing `.catch` keeps the detached chain from floating. The caller's own
+ * `promise` is returned untouched, so it still rejects for them.
+ */
+const observeSettled = (promise: PromiseLike<unknown>, onSettle: (ok: boolean, message: string | undefined, result: unknown) => void): void => {
+    const run = async (): Promise<void> => {
+        let result: unknown;
+
+        try {
+            result = await promise;
+        } catch (error) {
+            onSettle(false, error instanceof Error ? error.message : String(error), undefined);
+
+            return;
+        }
+
+        onSettle(true, undefined, result);
+    };
+
+    run().catch(() => undefined);
+};
+
+/**
  * Options for {@link otlpTelemetry}.
  * @experimental
  */
@@ -182,18 +209,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
                 emitSpan(typeof modelId === "string" ? `chat ${modelId}` : "language_model_call", startTs, ok, message, attributes);
             };
 
-            // Detached observer: emit the span once the call settles, without
-            // awaiting or returning it into the caller's chain. The `.catch` keeps
-            // it from floating; the caller's own `promise` still rejects for them.
-            const observe = async (): Promise<void> => {
-                try {
-                    emit(true, undefined, await promise);
-                } catch (error) {
-                    emit(false, error instanceof Error ? error.message : String(error), undefined);
-                }
-            };
-
-            observe().catch(() => undefined);
+            observeSettled(promise, emit);
 
             return promise;
         },
@@ -217,17 +233,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
                 emitSpan(typeof toolName === "string" ? `execute_tool ${toolName}` : "execute_tool", startTs, ok, message, attributes);
             };
 
-            // Detached observer — see `executeLanguageModelCall`.
-            const observe = async (): Promise<void> => {
-                try {
-                    await promise;
-                    emit(true, undefined);
-                } catch (error) {
-                    emit(false, error instanceof Error ? error.message : String(error));
-                }
-            };
-
-            observe().catch(() => undefined);
+            observeSettled(promise, emit);
 
             return promise;
         },
