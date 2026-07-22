@@ -1,8 +1,8 @@
 import { fingerprintError } from "@lunora/fingerprint";
 import { LunoraError } from "@lunora/server";
 
-import type { AlertDelivery as AlertDeliveryBase, FiringRule } from "../src/telemetry/alerts";
-import { fireCrossedRules } from "../src/telemetry/alerts";
+import type { AlertDelivery as AlertDeliveryBase, FiringRule, MetricObservation, MetricRule, MetricTarget } from "../src/telemetry/alerts";
+import { fireCrossedRules, fireMetricRules } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server.js";
@@ -84,12 +84,29 @@ interface IncidentRow {
 interface AlertRuleRow {
     _id: Id<"alertRules">;
     channel: "email" | "webhook";
+    comparator?: "gt" | "lt";
     destination: string;
     enabled: boolean;
+    functionPath?: string;
     name: string;
-    target: "incident" | "issue";
+    target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
     threshold: number;
+    windowMinutes?: number;
 }
+
+/** Count-crossing rule targets the ingest evaluates via `fireCrossedRules`. */
+const COUNT_TARGETS = new Set(["incident", "issue"]);
+
+/** Metric-window rule targets the ingest evaluates via `fireMetricRules`. */
+const METRIC_TARGETS = new Set<MetricTarget>(["error_rate", "latency_p95", "llm_cost"]);
+
+/** One stored observation row, as the metric-rule window read consumes it. */
+interface MetricObservationRow extends MetricObservation {
+    organizationId: Id<"organizations">;
+}
+
+/** Recent spans scanned when a metric rule needs its window (bounds the read). */
+const METRIC_SCAN_LIMIT = 2000;
 
 /** A fired alert the router should deliver (email/webhook) then mark delivered — the shared shape at this store's branded id. */
 export type AlertDelivery = AlertDeliveryBase<Id<"alerts">>;
@@ -286,15 +303,32 @@ export const ingest = mutation
                 });
             }
             const { page: rulePage } = await context.db.alertRules.findMany({ where: { organizationId: args.organizationId } });
-            const rules: FiringRule[] = (rulePage as unknown as AlertRuleRow[])
-                .filter((rule) => rule.enabled)
+            const enabledRules = (rulePage as unknown as AlertRuleRow[]).filter((rule) => rule.enabled);
+            // Count-crossing rules (issue/incident) evaluated per upserted group below.
+            const rules: FiringRule[] = enabledRules
+                .filter((rule) => COUNT_TARGETS.has(rule.target))
                 .map((rule) => ({
                     channel: rule.channel,
                     destination: rule.destination,
                     name: rule.name,
                     ruleId: rule._id,
+                    target: rule.target as "incident" | "issue",
+                    threshold: rule.threshold,
+                }));
+            // Metric-window rules (error_rate/latency_p95/llm_cost) evaluated once
+            // over the freshly-ingested observation window, after the loop.
+            const metricRules: MetricRule[] = enabledRules
+                .filter((rule): rule is AlertRuleRow & { target: MetricTarget } => METRIC_TARGETS.has(rule.target as MetricTarget))
+                .map((rule) => ({
+                    channel: rule.channel,
+                    comparator: rule.comparator ?? "gt",
+                    destination: rule.destination,
+                    functionPath: rule.functionPath,
+                    name: rule.name,
+                    ruleId: rule._id,
                     target: rule.target,
                     threshold: rule.threshold,
+                    windowMinutes: rule.windowMinutes ?? 60,
                 }));
             const firedAlerts: AlertDelivery[] = [];
 
@@ -350,6 +384,25 @@ export const ingest = mutation
                     sampleMessage: group.sampleMessage,
                     title: group.title,
                 });
+            }
+
+            // Metric-window rules — evaluated once over the org's recent
+            // observations (this batch's spans are already persisted above), only
+            // when such a rule exists so the common no-metric-rules path pays
+            // nothing. Edge-triggered inside `fireMetricRules`, so a sustained
+            // breach alerts once, not every ingest. FOLLOW-UP: windows with no
+            // fresh ingest (e.g. error_rate falling to 0) aren't re-evaluated
+            // here — a periodic sweep (like the uptime sweep) would close that.
+            if (metricRules.length > 0) {
+                const { page: observationPage } = await context.db.observations.findMany({
+                    limit: METRIC_SCAN_LIMIT,
+                    orderBy: [{ startedAt: "desc" }],
+                    where: { organizationId: args.organizationId },
+                });
+                const windowObservations = observationPage as unknown as MetricObservationRow[];
+                const metricFired = await fireMetricRules(metricRules, windowObservations, args.organizationId, insertAlert, now);
+
+                firedAlerts.push(...metricFired);
             }
 
             return { alerts: firedAlerts, incidents, issues };

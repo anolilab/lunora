@@ -314,14 +314,17 @@ export interface Doc_alertRules {
     _id: Id<"alertRules">;
     _creationTime: number;
     channel: "email" | "webhook";
+    comparator?: "gt" | "lt";
     createdAt: number;
     destination: string;
     enabled: boolean;
+    functionPath?: string;
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
     threshold: number;
     updatedAt: number;
+    windowMinutes?: number;
 }
 
 export interface Doc_alerts {
@@ -337,7 +340,7 @@ export interface Doc_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
     updatedAt: number;
 }
 
@@ -858,14 +861,17 @@ export interface Insert_alertRules {
     _id?: Id<"alertRules">;
     _creationTime?: number;
     channel: "email" | "webhook";
+    comparator?: "gt" | "lt";
     createdAt: number;
     destination: string;
     enabled: boolean;
+    functionPath?: string;
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
     threshold: number;
     updatedAt: number;
+    windowMinutes?: number;
 }
 
 export interface Insert_alerts {
@@ -881,7 +887,7 @@ export interface Insert_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
     updatedAt: number;
 }
 

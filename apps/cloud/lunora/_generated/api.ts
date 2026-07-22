@@ -8,11 +8,11 @@ import type { Id } from "./dataModel.js";
 
 export interface ApiTypes {
     alerts: {
-        createRule: FunctionReference<"mutation", { channel: "email" | "webhook"; destination: string; name: string; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime"; threshold: number }, Id<"alertRules">>;
+        createRule: FunctionReference<"mutation", { channel: "email" | "webhook"; comparator?: "gt" | "lt"; destination: string; functionPath?: string; name: string; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost"; threshold: number; windowMinutes?: number }, Id<"alertRules">>;
         deleteRule: FunctionReference<"mutation", { id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alerts">; channel: "email" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "delivered" | "failed" | "firing"; subject: string; target: "incident" | "issue" | "uptime" }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alerts">; channel: "email" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "delivered" | "failed" | "firing"; subject: string; target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime" }[]>;
         markDelivered: FunctionReference<"mutation", { deployKey: string; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }, { delivered: number; }>;
-        rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alertRules">; channel: "email" | "webhook"; createdAt: number; destination: string; enabled: boolean; name: string; organizationId: Id<"organizations">; target: "incident" | "issue" | "uptime"; threshold: number }[]>;
+        rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alertRules">; channel: "email" | "webhook"; comparator?: "gt" | "lt"; createdAt: number; destination: string; enabled: boolean; functionPath?: string; name: string; organizationId: Id<"organizations">; target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime"; threshold: number; windowMinutes?: number }[]>;
         setRuleEnabled: FunctionReference<"mutation", { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
     };
     audit_log: {
