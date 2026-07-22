@@ -67,6 +67,12 @@ export const spanArchiveRecord = (observation: SpanObservation, organizationId: 
 export interface TelemetryStoreEnv {
     /** Account id for the R2-SQL read-back endpoint. */
     CLOUDFLARE_ACCOUNT_ID?: string;
+    /**
+     * `fetch` implementation for the R2-SQL read-back. Defaults to the global
+     * `fetch`; an action injects `ctx.fetch` (and tests inject a double), so the
+     * archive read never touches the network in unit tests.
+     */
+    fetch?: typeof globalThis.fetch;
     /** Bearer token for R2 SQL (read the span archive). Absent → read-back no-ops. */
     R2_SQL_TOKEN?: string;
     TELEMETRY?: AnalyticsEngineDatasetLike;
@@ -117,7 +123,12 @@ export const createCloudflareTelemetryStore = (env: TelemetryStoreEnv): Telemetr
             }
 
             try {
-                const client = createR2Sql({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.R2_SQL_TOKEN, bucket: env.TELEMETRY_BUCKET_NAME });
+                const client = createR2Sql({
+                    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+                    apiToken: env.R2_SQL_TOKEN,
+                    bucket: env.TELEMETRY_BUCKET_NAME,
+                    ...(env.fetch ? { fetch: env.fetch } : {}),
+                });
                 // The table name is trusted config, but `tableRef` still validates it
                 // (a `namespace.table` shape) before `raw` splices it verbatim — so a
                 // fat-fingered env var throws here (caught below → D1-only fallback)

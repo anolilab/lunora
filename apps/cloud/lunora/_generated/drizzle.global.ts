@@ -315,6 +315,8 @@ export const incidents = sqliteTable("incidents", {
     deploymentId: text("deploymentId").references(() => deployments._id),
     hash: text("hash").notNull(),
     instance: text("instance"),
+    investigatedAt: real("investigatedAt"),
+    investigation: text("investigation", { mode: "json" }).$type<{ by: "deterministic" | "llm"; confidence: "high" | "medium" | "low"; evidenceNote: string; relatedTraceIds: Array<string>; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>(),
     kind: text("kind", { mode: "json" }).$type<"crash_loop" | "oom" | "error_spike">().notNull(),
     lastSeen: real("lastSeen").notNull(),
     openedAt: real("openedAt").notNull(),

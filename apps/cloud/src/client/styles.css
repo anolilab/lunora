@@ -901,3 +901,128 @@ button.link.danger {
 .trace-filter input {
     accent-color: var(--primary);
 }
+
+/* --- Shared time-range picker (observability tabs) -------------------------- */
+.metrics-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.time-range {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+}
+
+.time-range-btn {
+    padding: 3px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.time-range-btn.active {
+    background: var(--primary);
+    color: var(--primary-ink);
+}
+
+/* --- Metrics trend tiles ---------------------------------------------------- */
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+}
+
+.metric-tile {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    background: var(--surface-2);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.metric-tile-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.metric-tile-id {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.metric-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.metric-kind {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.metric-tile-value {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.metric-last {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+.metric-trend {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.metric-trend-up {
+    color: var(--ok);
+}
+
+.metric-trend-down {
+    color: var(--danger);
+}
+
+.metric-trend-flat {
+    color: var(--muted);
+}
+
+.metric-spark {
+    width: 100%;
+    height: 40px;
+    stroke: var(--primary);
+    fill: var(--primary);
+}
+
+.metric-spark-empty {
+    height: 40px;
+    border-bottom: 1px dashed var(--border);
+}
+
+.trace-archive-badge {
+    margin-left: 8px;
+    background: var(--surface-2);
+    color: var(--muted);
+    border: 1px solid var(--border);
+}
