@@ -1,4 +1,13 @@
-import type { AdvisorIndex, AdvisorNotifyCall, AdvisorNotifyConfig, AdvisorSchema, AdvisorShape, Finding } from "@lunora/advisor";
+import type {
+    AdvisorExportSink,
+    AdvisorGeoIndexUsage,
+    AdvisorIndex,
+    AdvisorNotifyCall,
+    AdvisorNotifyConfig,
+    AdvisorSchema,
+    AdvisorShape,
+    Finding,
+} from "@lunora/advisor";
 import { runAdvisor } from "@lunora/advisor";
 
 import type {
@@ -187,8 +196,10 @@ export interface LintSchemaOptions {
     containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
+    exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
     flagSecurityDefaults?: ReadonlyArray<FlagSecurityDefaultIR>;
+    geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<HttpActionGuardIR>;
     httpHeaderWrites?: ReadonlyArray<HttpHeaderWriteIR>;
     identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>;
@@ -242,8 +253,10 @@ export const lintSchema = (options: LintSchemaOptions): Finding[] =>
             containerKeyAccesses: options.containerKeyAccesses,
             containerOverrides: options.containerOverrides,
             containers: options.containers,
+            exportSinks: options.exportSinks,
             failOpenGuards: options.failOpenGuards,
             flagSecurityDefaults: options.flagSecurityDefaults,
+            geoIndexUsages: options.geoIndexUsages,
             httpActionGuards: options.httpActionGuards,
             httpHeaderWrites: options.httpHeaderWrites,
             identityClaimReads: options.identityClaimReads,

@@ -33,12 +33,14 @@ import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-e
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
+import exportSinkMisconfigured from "./lints/static/export-sink-misconfigured";
 import externalSourceIncrementalNoDeletePath from "./lints/static/external-source-incremental-no-delete-path";
 import externalSourceOnGlobal from "./lints/static/external-source-on-global";
 import externalSourceUnscoped from "./lints/static/external-source-unscoped";
 import filterWithoutIndex from "./lints/static/filter-without-index";
 import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-security-with-unsafe-default";
 import geoIndexFieldNotGeopoint from "./lints/static/geo-index-field-not-geopoint";
+import geoIndexUnused from "./lints/static/geo-index-unused";
 import hardcodedSecret from "./lints/static/hardcoded-secret";
 import httpActionMissingAuthGuard from "./lints/static/http-action-missing-auth-guard";
 import httpActionResponseHeaderInjection from "./lints/static/http-action-response-header-injection";
@@ -114,8 +116,10 @@ export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainerOverride } from "./container-overrides";
 export type { AdvisorContainer } from "./containers";
 export { dedupeCacheKeys } from "./dedupe-cache-keys";
+export type { AdvisorExportSink } from "./export-sinks";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
 export type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
+export type { AdvisorGeoIndexUsage } from "./geo-index-usages";
 export type { AdvisorHttpActionGuard } from "./http-action-guards";
 export type { AdvisorHttpHeaderWrite } from "./http-header-writes";
 export type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
@@ -149,12 +153,14 @@ export { default as containerRuntimeEgressRelaxation } from "./lints/static/cont
 export { default as containerStartEnableInternetOverride } from "./lints/static/container-start-enable-internet-override";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
+export { default as exportSinkMisconfigured } from "./lints/static/export-sink-misconfigured";
 export { default as externalSourceIncrementalNoDeletePath } from "./lints/static/external-source-incremental-no-delete-path";
 export { default as externalSourceOnGlobal } from "./lints/static/external-source-on-global";
 export { default as externalSourceUnscoped } from "./lints/static/external-source-unscoped";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
 export { default as flagGatesSecurityWithUnsafeDefault } from "./lints/static/flag-gates-security-with-unsafe-default";
 export { default as geoIndexFieldNotGeopoint } from "./lints/static/geo-index-field-not-geopoint";
+export { default as geoIndexUnused } from "./lints/static/geo-index-unused";
 export { default as hardcodedSecret } from "./lints/static/hardcoded-secret";
 export { default as httpActionMissingAuthGuard } from "./lints/static/http-action-missing-auth-guard";
 export { default as httpActionResponseHeaderInjection } from "./lints/static/http-action-response-header-injection";
@@ -264,6 +270,8 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     externalSourceUnscoped,
     emptyIndex,
     geoIndexFieldNotGeopoint,
+    geoIndexUnused,
+    exportSinkMisconfigured,
     ttlFieldNotTimestamp,
     circularFk,
     unindexedForeignKey,

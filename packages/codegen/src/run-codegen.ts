@@ -22,11 +22,13 @@ import discoverContainerOverrides from "./discover-container-overrides";
 import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
 import { discoverEnv } from "./discover-env";
+import discoverExportSinks from "./discover-export-sinks";
 import discoverFailOpenGuards from "./discover-fail-open-guards";
 import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
 import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
 import { discoverFlagKeys } from "./discover-flags";
 import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
+import discoverGeoIndexUsages from "./discover-geo-index-usages";
 import discoverHttpActionGuards from "./discover-http-action-guards";
 import discoverHttpHeaderWrites from "./discover-http-header-writes";
 import discoverHttpRoutes from "./discover-http-routes";
@@ -445,8 +447,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   containerKeyAccesses: discoverContainerKeyAccesses(project, lunoraDirectory),
                   containerOverrides: discoverContainerOverrides(project, lunoraDirectory),
                   containers,
+                  exportSinks: discoverExportSinks(project, lunoraDirectory),
                   failOpenGuards: discoverFailOpenGuards(project, lunoraDirectory),
                   flagSecurityDefaults: discoverFlagSecurityDefaults(project, lunoraDirectory),
+                  geoIndexUsages: discoverGeoIndexUsages(project, lunoraDirectory),
                   httpActionGuards: discoverHttpActionGuards(project, lunoraDirectory),
                   httpHeaderWrites: discoverHttpHeaderWrites(project, lunoraDirectory),
                   identityClaimReads: discoverIdentityClaimReads(project, lunoraDirectory),
