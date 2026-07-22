@@ -490,24 +490,49 @@ export default defineSchema({
         .index("by_org", ["organizationId"])
         .index("by_org_hash", ["organizationId", "hash"], { unique: true }),
 
-    // Alert rules (Observability "watches while you sleep"). A rule fires the
-    // first time a matching issue/incident's event count reaches `threshold`,
-    // delivering to `destination` over `channel`. Configured from the dashboard;
-    // evaluated (pure) inside the telemetry ingest.
+    // Alert rules (Observability "watches while you sleep"). Two firing models:
+    //  • Count-crossing targets (`issue`/`incident`/`uptime`) fire once when a
+    //    monotone counter first reaches `threshold`.
+    //  • Metric-window targets (`error_rate`/`latency_p95`/`llm_cost`) compute an
+    //    app-semantic / budget value over the last `windowMinutes` of span
+    //    observations and fire (edge-triggered) when it breaches `threshold`
+    //    under `comparator`. Optionally scoped to one `functionPath`.
+    // Configured from the dashboard; evaluated (pure) inside the telemetry ingest
+    // (metric rules) / uptime sweep (uptime).
     alertRules: defineTable({
         channel: v.union(v.literal("email"), v.literal("webhook")),
+        // How the metric value is compared to `threshold` (metric targets only).
+        // Absent ⇒ `gt`; irrelevant for count-crossing targets.
+        comparator: v.optional(v.union(v.literal("gt"), v.literal("lt"))),
         createdAt: v.number(),
         // Email address (channel "email") or URL (channel "webhook").
         destination: v.string(),
         enabled: v.boolean(),
+        // Optional scope for a metric rule: evaluate only spans from this
+        // function path (e.g. `messages:send`). Absent ⇒ the whole org.
+        functionPath: v.optional(v.string()),
         name: v.string(),
         organizationId: v.id("organizations"),
-        // What the rule watches. `uptime` fires when a deployment's consecutive
-        // failed synthetic checks first reach `threshold` (see lunora/uptime.ts).
-        target: v.union(v.literal("issue"), v.literal("incident"), v.literal("uptime")),
-        // Fire when the source's count first reaches this value.
+        // What the rule watches. Count-crossing: `issue`/`incident` (a fingerprint
+        // group's event count), `uptime` (a deployment's consecutive failed
+        // synthetic checks, see lunora/uptime.ts). Metric-window: `error_rate`
+        // (% error spans), `latency_p95` (p95 durationMs), `llm_cost` (summed
+        // generation cost) over `windowMinutes`.
+        target: v.union(
+            v.literal("issue"),
+            v.literal("incident"),
+            v.literal("uptime"),
+            v.literal("error_rate"),
+            v.literal("latency_p95"),
+            v.literal("llm_cost"),
+        ),
+        // Count-crossing: fire when the source's count first reaches this value.
+        // Metric-window: the value the window metric is compared against.
         threshold: v.number(),
         updatedAt: v.number(),
+        // Rolling window length for a metric target, in minutes. Required for
+        // metric targets; ignored for count-crossing targets.
+        windowMinutes: v.optional(v.number()),
     })
         .global()
         .index("by_org", ["organizationId"]),
@@ -529,7 +554,14 @@ export default defineSchema({
         ruleId: v.id("alertRules"),
         status: v.union(v.literal("firing"), v.literal("delivered"), v.literal("failed")),
         subject: v.string(),
-        target: v.union(v.literal("issue"), v.literal("incident"), v.literal("uptime")),
+        target: v.union(
+            v.literal("issue"),
+            v.literal("incident"),
+            v.literal("uptime"),
+            v.literal("error_rate"),
+            v.literal("latency_p95"),
+            v.literal("llm_cost"),
+        ),
         updatedAt: v.number(),
     })
         .global()

@@ -331,14 +331,17 @@ export const alertRules = sqliteTable("alertRules", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     channel: text("channel", { mode: "json" }).$type<"email" | "webhook">().notNull(),
+    comparator: text("comparator", { mode: "json" }).$type<"gt" | "lt">(),
     createdAt: real("createdAt").notNull(),
     destination: text("destination").notNull(),
     enabled: integer("enabled", { mode: "boolean" }).notNull(),
+    functionPath: text("functionPath"),
     name: text("name").notNull(),
     organizationId: text("organizationId").references(() => organizations._id).notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost">().notNull(),
     threshold: real("threshold").notNull(),
     updatedAt: real("updatedAt").notNull(),
+    windowMinutes: real("windowMinutes"),
 }, (t) => ({
     by_org: index("by_org").on(t.organizationId),
 }));
@@ -356,7 +359,7 @@ export const alerts = sqliteTable("alerts", {
     ruleId: text("ruleId").references(() => alertRules._id).notNull(),
     status: text("status", { mode: "json" }).$type<"firing" | "delivered" | "failed">().notNull(),
     subject: text("subject").notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost">().notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_status: index("by_status").on(t.status),

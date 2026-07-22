@@ -10,6 +10,22 @@ interface AlertsSectionProps {
     organizationId: OrgId;
 }
 
+/** Every alert-rule target — count-crossing + app-semantic / budget metric windows. */
+type RuleTarget = "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
+
+/** Metric-window targets, which take a rolling window (+ comparator + optional scope). */
+const METRIC_TARGETS = new Set<RuleTarget>(["error_rate", "latency_p95", "llm_cost"]);
+
+/** Human labels for each target in the create form. */
+const TARGET_LABELS: Record<RuleTarget, string> = {
+    error_rate: "Error rate (%)",
+    incident: "Incident count",
+    issue: "Issue count",
+    latency_p95: "Latency p95 (ms)",
+    llm_cost: "LLM cost budget",
+    uptime: "Uptime failures",
+};
+
 /**
  * Cloud Observability "Alerts" — the watches-while-you-sleep tier. Owners/admins
  * configure rules (fire when an issue/incident's event count crosses a
@@ -27,11 +43,16 @@ export const AlertsSection = ({ organizationId }: AlertsSectionProps): ReactElem
     const deleteRule = useMutation(api.alerts.deleteRule);
 
     const [name, setName] = useState("");
-    const [target, setTarget] = useState<"incident" | "issue">("issue");
+    const [target, setTarget] = useState<RuleTarget>("issue");
     const [threshold, setThreshold] = useState("5");
+    const [comparator, setComparator] = useState<"gt" | "lt">("gt");
+    const [windowMinutes, setWindowMinutes] = useState("15");
+    const [functionPath, setFunctionPath] = useState("");
     const [channel, setChannel] = useState<"email" | "webhook">("email");
     const [destination, setDestination] = useState("");
     const [error, setError] = useState<string | null>(null);
+
+    const isMetric = METRIC_TARGETS.has(target);
 
     if (gated) {
         return (
@@ -54,7 +75,9 @@ export const AlertsSection = ({ organizationId }: AlertsSectionProps): ReactElem
                                 <li className="row" key={rule._id}>
                                     <span className="row-title">{rule.name}</span>
                                     <span className="muted">
-                                        {rule.target} ≥ {rule.threshold} → {rule.channel} {rule.destination}
+                                        {rule.target} {rule.comparator === "lt" ? "<" : METRIC_TARGETS.has(rule.target) ? ">" : "≥"} {rule.threshold}
+                                        {rule.windowMinutes ? ` / ${rule.windowMinutes}m` : ""}
+                                        {rule.functionPath ? ` @ ${rule.functionPath}` : ""} → {rule.channel} {rule.destination}
                                     </span>
                                     <span className="badge">{rule.enabled ? "on" : "off"}</span>
                                     <button
@@ -88,9 +111,26 @@ export const AlertsSection = ({ organizationId }: AlertsSectionProps): ReactElem
                         setError(null);
 
                         const run = async (): Promise<void> => {
-                            await createRule.mutate({ channel, destination, name, organizationId, target, threshold: Number(threshold) });
+                            await createRule.mutate({
+                                channel,
+                                destination,
+                                name,
+                                organizationId,
+                                target,
+                                threshold: Number(threshold),
+                                // Metric rules carry a comparator + window (+ optional scope);
+                                // count rules send none of these.
+                                ...(isMetric
+                                    ? {
+                                          comparator,
+                                          windowMinutes: Number(windowMinutes),
+                                          ...(functionPath ? { functionPath } : {}),
+                                      }
+                                    : {}),
+                            });
                             setName("");
                             setDestination("");
+                            setFunctionPath("");
                         };
 
                         void run().catch((error_: unknown) => {
@@ -110,22 +150,59 @@ export const AlertsSection = ({ organizationId }: AlertsSectionProps): ReactElem
                     <select
                         aria-label="Target"
                         onChange={(event) => {
-                            setTarget(event.target.value as "incident" | "issue");
+                            setTarget(event.target.value as RuleTarget);
                         }}
                         value={target}
                     >
-                        <option value="issue">Issue</option>
-                        <option value="incident">Incident</option>
+                        {(Object.keys(TARGET_LABELS) as RuleTarget[]).map((value) => (
+                            <option key={value} value={value}>
+                                {TARGET_LABELS[value]}
+                            </option>
+                        ))}
                     </select>
+                    {isMetric ? (
+                        <select
+                            aria-label="Comparator"
+                            onChange={(event) => {
+                                setComparator(event.target.value as "gt" | "lt");
+                            }}
+                            value={comparator}
+                        >
+                            <option value="gt">above</option>
+                            <option value="lt">below</option>
+                        </select>
+                    ) : null}
                     <input
                         aria-label="Threshold"
-                        min={1}
+                        min={isMetric ? 0 : 1}
                         onChange={(event) => {
                             setThreshold(event.target.value);
                         }}
                         type="number"
                         value={threshold}
                     />
+                    {isMetric ? (
+                        <input
+                            aria-label="Window (minutes)"
+                            min={1}
+                            onChange={(event) => {
+                                setWindowMinutes(event.target.value);
+                            }}
+                            placeholder="window (min)"
+                            type="number"
+                            value={windowMinutes}
+                        />
+                    ) : null}
+                    {isMetric ? (
+                        <input
+                            aria-label="Function path (optional)"
+                            onChange={(event) => {
+                                setFunctionPath(event.target.value);
+                            }}
+                            placeholder="function path (optional)"
+                            value={functionPath}
+                        />
+                    ) : null}
                     <select
                         aria-label="Channel"
                         onChange={(event) => {

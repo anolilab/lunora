@@ -90,7 +90,22 @@ export const openApiSpec: Record<string, unknown> = {
                                                     }
                                                 ]
                                             },
+                                            "comparator": {
+                                                "anyOf": [
+                                                    {
+                                                        "const": "gt",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "lt",
+                                                        "type": "string"
+                                                    }
+                                                ]
+                                            },
                                             "destination": {
+                                                "type": "string"
+                                            },
+                                            "functionPath": {
                                                 "type": "string"
                                             },
                                             "name": {
@@ -114,10 +129,25 @@ export const openApiSpec: Record<string, unknown> = {
                                                     {
                                                         "const": "uptime",
                                                         "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "error_rate",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "latency_p95",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "llm_cost",
+                                                        "type": "string"
                                                     }
                                                 ]
                                             },
                                             "threshold": {
+                                                "type": "number"
+                                            },
+                                            "windowMinutes": {
                                                 "type": "number"
                                             }
                                         },
