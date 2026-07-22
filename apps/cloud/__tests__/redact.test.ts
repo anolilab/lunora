@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isSensitiveKey, REDACTED, redactRecord } from "../src/telemetry/redact";
+import { isSensitiveKey, REDACTED, redactRecord, redactText } from "../src/telemetry/redact";
 
 describe(isSensitiveKey, () => {
     it("flags credential-ish keys, case-insensitively", () => {
@@ -58,5 +58,20 @@ describe(redactRecord, () => {
 
     it("passes undefined through", () => {
         expect(redactRecord(undefined)).toBeUndefined();
+    });
+});
+
+describe(redactText, () => {
+    it("scrubs secret-shaped substrings from free text", () => {
+        expect(redactText("call with Authorization: Bearer sk_live_abcdefgh12345678")).toContain("Bearer [redacted]");
+        expect(redactText("here is my key sk-ABCDEFGHIJKLMNOP1234")).toContain(REDACTED);
+        expect(redactText("token=supersecretvalue123 in the log")).toBe(`token=${REDACTED} in the log`);
+    });
+
+    it("leaves ordinary prose untouched and passes undefined through", () => {
+        const prose = "The user asked about the weather in Berlin.";
+
+        expect(redactText(prose)).toBe(prose);
+        expect(redactText(undefined)).toBeUndefined();
     });
 });

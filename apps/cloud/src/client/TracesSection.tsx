@@ -4,9 +4,14 @@ import { useState } from "react";
 
 import { buildTraceTree } from "../telemetry/trace-tree";
 import { api } from "../../lunora/_generated/api.js";
+import { CrossTabLink } from "./CrossTabLink";
 import type { DeploymentId, OrgId, ProjectId } from "./types";
 
 interface TracesSectionProps {
+    /** Deep-link: when set (e.g. from an Issue or a log line), open this trace's waterfall. */
+    focusTraceId?: string;
+    /** Deep-link out to another tab (e.g. this trace's logs). */
+    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
     organizationId: OrgId;
 }
 
@@ -23,12 +28,17 @@ const formatMs = (ms: number): string => (ms < 1000 ? `${String(Math.round(ms))}
  * indented by its depth under `parentSpanId` — a true span waterfall, not a
  * log-gap timeline. Both queries are live.
  */
-export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElement => {
+export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: TracesSectionProps): ReactElement => {
     const projects = useQuery(api.projects.listByOrg, { organizationId });
     const [projectId, setProjectId] = useState<ProjectId | "">("");
     const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId } : "skip");
     const [deploymentId, setDeploymentId] = useState<DeploymentId | "">("");
-    const [traceId, setTraceId] = useState("");
+    // Deep-link in: open the focused trace's waterfall directly (`traces.get`
+    // needs only org + traceId, so no project/deployment pick is required). This
+    // is a one-shot state seed — the dashboard remounts the section on each
+    // deep-link (via a `key`), so `focusTraceId` is consumed here, not synced in
+    // a `useEffect` that would re-fire a stale trace on unrelated re-renders.
+    const [traceId, setTraceId] = useState(focusTraceId ?? "");
     const [errorOnly, setErrorOnly] = useState(false);
     const [selectedSpanId, setSelectedSpanId] = useState("");
 
@@ -162,9 +172,16 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
                                 </span>
                             ) : null}
                         </div>
-                        <button className="trace-close" onClick={() => setTraceId("")} type="button">
-                            Close
-                        </button>
+                        <div className="trace-detail-actions">
+                            {onOpenTab ? (
+                                <CrossTabLink onOpenTab={onOpenTab} target="logs" traceId={traceId}>
+                                    View logs
+                                </CrossTabLink>
+                            ) : null}
+                            <button className="trace-close" onClick={() => setTraceId("")} type="button">
+                                Close
+                            </button>
+                        </div>
                     </header>
 
                     {spans === undefined ? <p className="muted">Loading…</p> : null}

@@ -16,7 +16,9 @@ import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 import { createAnalytics } from "@lunora/bindings/analytics";
 import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { createPipelines } from "@lunora/bindings/pipelines";
+import { createR2Sql, raw, sql, tableRef } from "@lunora/bindings/r2sql";
 
+import { archiveRowToObservation, DEFAULT_SPAN_ARCHIVE_TABLE } from "./archive-read";
 import type { MetricPoint, SpanObservation, TelemetryEvent } from "./otlp";
 
 /** Per-ingest counts, recorded as one metric point for dashboards/alerts. */
@@ -40,6 +42,14 @@ export interface TelemetryStore {
      * and carries its `organizationId` so the archive is one queryable table.
      */
     archiveSpans: (observations: ReadonlyArray<SpanObservation>, organizationId: string) => Promise<void>;
+    /**
+     * Read one trace's spans back from the columnar archive (R2 SQL over Iceberg),
+     * for traces older than D1's hot window. Returns `[]` when R2 SQL isn't
+     * configured (no `R2_SQL_TOKEN`/bucket) or on any query failure — a best-effort
+     * fallback, never a hard error. Requires the archive Pipeline to have landed
+     * spans (🌐 per-cell provisioning).
+     */
+    readArchivedTrace: (input: { organizationId: string; traceId: string }) => Promise<SpanObservation[]>;
     /** Record one ingest's issue/incident counts as an AE data point. */
     recordCounts: (counts: TelemetryCounts) => void;
     /** Write each `ctx.metrics.*` measurement to AE (`/v1/metrics`). No-op without the binding. */
@@ -53,10 +63,18 @@ export const spanArchiveRecord = (observation: SpanObservation, organizationId: 
     recordType: "span",
 });
 
-/** The telemetry bindings the store reads off the worker env (all optional). */
+/** The telemetry bindings + config the store reads off the worker env (all optional). */
 export interface TelemetryStoreEnv {
+    /** Account id for the R2-SQL read-back endpoint. */
+    CLOUDFLARE_ACCOUNT_ID?: string;
+    /** Bearer token for R2 SQL (read the span archive). Absent → read-back no-ops. */
+    R2_SQL_TOKEN?: string;
     TELEMETRY?: AnalyticsEngineDatasetLike;
+    /** R2 bucket name backing the span archive's Iceberg table. */
+    TELEMETRY_BUCKET_NAME?: string;
     TELEMETRY_PIPELINE?: PipelineBindingLike;
+    /** Iceberg table the span archive lands in (`namespace.table`); defaults to `default.telemetry_spans`. */
+    TELEMETRY_SPAN_TABLE?: string;
 }
 
 /**
@@ -92,6 +110,28 @@ export const createCloudflareTelemetryStore = (env: TelemetryStoreEnv): Telemetr
                 doubles: [counts.issues, counts.incidents],
                 indexes: [counts.organizationId],
             });
+        },
+        readArchivedTrace: async ({ organizationId, traceId }) => {
+            if (!env.R2_SQL_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID || !env.TELEMETRY_BUCKET_NAME) {
+                return [];
+            }
+
+            try {
+                const client = createR2Sql({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.R2_SQL_TOKEN, bucket: env.TELEMETRY_BUCKET_NAME });
+                // The table name is trusted config, but `tableRef` still validates it
+                // (a `namespace.table` shape) before `raw` splices it verbatim — so a
+                // fat-fingered env var throws here (caught below → D1-only fallback)
+                // rather than forming odd SQL. Values stay bound via the escaping `sql` tag.
+                const table = tableRef(env.TELEMETRY_SPAN_TABLE ?? DEFAULT_SPAN_ARCHIVE_TABLE);
+                const result = await client.query(
+                    sql`SELECT * FROM ${raw(table)} WHERE recordType = ${"span"} AND organizationId = ${organizationId} AND traceId = ${traceId} ORDER BY startedAt`,
+                );
+
+                return (result.rows ?? []).map((row) => archiveRowToObservation(row));
+            } catch {
+                // R2 SQL unreachable / table absent — degrade to the D1-only view.
+                return [];
+            }
         },
         recordMetrics: (points, organizationId) => {
             if (!env.TELEMETRY || points.length === 0) {

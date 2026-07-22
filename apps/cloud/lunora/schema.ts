@@ -449,6 +449,8 @@ export default defineSchema({
         organizationId: v.id("organizations"),
         // A representative raw message for the group (last seen).
         sampleMessage: v.string(),
+        // A sample trace id (the latest error span's), to jump to the trace.
+        sampleTraceId: v.optional(v.string()),
         status: v.union(v.literal("open"), v.literal("resolved")),
         title: v.string(),
         updatedAt: v.number(),

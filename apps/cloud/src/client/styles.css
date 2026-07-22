@@ -852,6 +852,41 @@ button.link.danger {
     word-break: break-word;
 }
 
+/* Shared cross-tab deep-link button (Issue → trace, trace → logs, log → trace). */
+.cross-tab-link {
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--primary);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.cross-tab-link:hover {
+    border-color: var(--primary);
+}
+
+/* Inline variant — sits within a log line, so it inherits the mono line font. */
+.cross-tab-link-inline {
+    margin-left: 6px;
+    font-family: inherit;
+}
+
+.trace-detail-actions {
+    display: inline-flex;
+    gap: 8px;
+}
+
+.log-trace-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
 /* Trace-list filter row (errors-only, …). */
 .trace-filter {
     display: inline-flex;

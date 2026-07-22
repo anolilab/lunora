@@ -295,6 +295,7 @@ export const issues = sqliteTable("issues", {
     lastSeen: real("lastSeen").notNull(),
     organizationId: text("organizationId").references(() => organizations._id).notNull(),
     sampleMessage: text("sampleMessage").notNull(),
+    sampleTraceId: text("sampleTraceId"),
     status: text("status", { mode: "json" }).$type<"open" | "resolved">().notNull(),
     title: text("title").notNull(),
     updatedAt: real("updatedAt").notNull(),

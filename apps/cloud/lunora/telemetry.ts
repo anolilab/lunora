@@ -63,6 +63,8 @@ const telemetryEvent = v.object({
     instance: v.optional(v.string()),
     kind: v.union(v.literal("error"), v.literal("container")),
     message: v.string(),
+    // The error span's trace id — carried onto the Issue as a sample link.
+    traceId: v.optional(v.string()),
     // Event time in epoch ms (decoded from the span's end time).
     ts: v.number(),
 });
@@ -102,6 +104,8 @@ interface EventGroup {
     kind: "container" | "error";
     lastTs: number;
     sampleMessage: string;
+    /** A sample trace id (the latest event's), so the Issue links to a trace. */
+    sampleTraceId?: string;
     title: string;
 }
 
@@ -114,7 +118,16 @@ const detectIncidentKind = (message: string): "crash_loop" | "error_spike" | "oo
 
 /** Fold a batch of events into one pre-aggregated group per fingerprint hash. */
 const groupEvents = (
-    events: { code?: string; container?: string; functionPath: string; instance?: string; kind: "container" | "error"; message: string; ts: number }[],
+    events: {
+        code?: string;
+        container?: string;
+        functionPath: string;
+        instance?: string;
+        kind: "container" | "error";
+        message: string;
+        traceId?: string;
+        ts: number;
+    }[],
 ): Map<string, EventGroup> => {
     const groups = new Map<string, EventGroup>();
 
@@ -126,6 +139,7 @@ const groupEvents = (
             group.count += 1;
             group.lastTs = Math.max(group.lastTs, event.ts);
             group.sampleMessage = event.message;
+            group.sampleTraceId = event.traceId ?? group.sampleTraceId;
         } else {
             groups.set(fingerprint.hash, {
                 container: event.container,
@@ -136,6 +150,7 @@ const groupEvents = (
                 kind: event.kind,
                 lastTs: event.ts,
                 sampleMessage: event.message,
+                sampleTraceId: event.traceId,
                 title: fingerprint.title,
             });
         }
@@ -161,6 +176,8 @@ const upsertIssue = async (
             count: before + group.count,
             lastSeen: Math.max(existing.lastSeen, group.lastTs),
             sampleMessage: group.sampleMessage,
+            // Only refresh the sample trace when this batch carried one.
+            ...(group.sampleTraceId ? { sampleTraceId: group.sampleTraceId } : {}),
             updatedAt: now,
         });
     } else {
@@ -174,6 +191,7 @@ const upsertIssue = async (
             lastSeen: group.lastTs,
             organizationId,
             sampleMessage: group.sampleMessage,
+            sampleTraceId: group.sampleTraceId,
             status: "open",
             title: group.title,
             updatedAt: now,

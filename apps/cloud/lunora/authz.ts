@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
+import { isDeployCapable } from "../src/deploy/capability";
 import { hashDeployKey } from "../src/deploy/keys";
 import type { Id, TableName } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
@@ -97,7 +98,7 @@ export const authorizeDeployKey = async (
     const row = await resolveKeyRow(context, organizationId, key);
 
     // An ingest key is telemetry-only — it must never authorize a deploy/admin write.
-    if (row.capability === "ingest") {
+    if (!isDeployCapable(row)) {
         throw new LunoraError("FORBIDDEN", "this is a telemetry ingest key, not a deploy key");
     }
 
