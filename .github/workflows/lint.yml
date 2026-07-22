@@ -240,6 +240,12 @@
             - "name": "Lint (prettier)"
               "run": "pnpm run lint:prettier"
 
+            # The auth-ui-* registry items are generated from @lunora/auth-ui's
+            # source by scripts/sync-auth-ui-registry.mjs; fail if they've drifted
+            # (someone edited src without re-running the sync).
+            - "name": "Lint (auth-ui registry sync)"
+              "run": "pnpm run lint:registry:sync"
+
     "package-json-sort":
         "name": "Lint (package.json sort)"
         "if": "needs.files-changed.outputs.package_json_lintable == 'true'"
