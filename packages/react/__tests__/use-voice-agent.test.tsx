@@ -319,7 +319,7 @@ describe(useVoiceAgent, () => {
         // A `WebSocket`-shaped constructor standing in for the client's configured
         // impl (on React Native this would be the auth-headers-injecting subclass).
         const openedUrls: string[] = [];
-        const FakeWebSocketImpl = vi.fn(function FakeWebSocketImpl(this: FakeSocket, url: string) {
+        const FakeWebSocketImpl = vi.fn<(this: FakeSocket, url: string) => void>(function FakeWebSocketImpl(this: FakeSocket, url: string) {
             openedUrls.push(url);
             Object.assign(this, {
                 binaryType: "blob",

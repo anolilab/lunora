@@ -42,11 +42,11 @@ const stubFacilitator = (): ReturnType<typeof vi.fn> => {
 /** The RPC endpoint every paid procedure POSTs to — the URL alone can't tell two paid functions apart. */
 const rpcRequest = (): Request => new Request("https://api.example/_lunora/rpc", { method: "POST" });
 
-afterEach(() => {
-    vi.unstubAllGlobals();
-});
-
 describe("createProcedureChargeGate", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("challenges an unpaid paid procedure with 402 and never dispatches", async () => {
         const fetchMock = stubFacilitator();
         const gate = createProcedureChargeGate(gateConfig);

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/agent",
-    "version": "1.0.0-alpha.5",
+    "version": "1.0.0-alpha.6",
     "description": "Durable AI agents for Lunora: defineAgent compiles a replay-safe tool-loop onto Cloudflare Workflows, with DO SQLite threads and live message subscriptions",
     "keywords": [
         "agent",
@@ -78,7 +78,7 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "pnpm exec eslint .",
+        "lint:eslint": "pnpm exec eslint . --max-warnings=0",
         "lint:eslint:fix": "pnpm exec eslint . --fix",
         "lint:prettier": "pnpm exec prettier --check .",
         "lint:prettier:fix": "pnpm exec prettier --write .",
@@ -90,7 +90,7 @@
         "@lunora/ai": "1.0.0-alpha.17",
         "@lunora/errors": "1.0.0-alpha.6",
         "@lunora/mail": "1.0.0-alpha.16",
-        "@lunora/server": "1.0.0-alpha.28",
+        "@lunora/server": "1.0.0-alpha.29",
         "@lunora/values": "1.0.0-alpha.9",
         "@lunora/workflow": "1.0.0-alpha.11",
         "@modelcontextprotocol/sdk": "catalog:mcp",

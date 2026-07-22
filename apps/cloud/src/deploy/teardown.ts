@@ -17,6 +17,14 @@ import { tenantD1Name, tenantR2Bucket } from "../provision";
 
 /** A destroyed deployment whose Cloudflare dispatch script is still live. */
 export interface TeardownTarget {
+    /** The project's stable label — keys the per-project D1/R2 to delete. */
+    alias: string;
+    /**
+     * Whether to also delete the per-project D1/R2. True only when this is the
+     * *last* remaining deployment of its alias (no live/superseded sibling), so a
+     * routine version prune never destroys the database the active version uses.
+     */
+    deleteResources: boolean;
     /** Dispatch namespace the script lives in (`lunora-{kind}`). */
     dispatchNamespace: string;
     /** Deployment row id, stamped `teardownAt` once the script is gone. */
@@ -26,8 +34,8 @@ export interface TeardownTarget {
 }
 
 export interface TeardownPorts {
-    /** Delete the dispatch script (the provisioner's `destroy`; 404-tolerant). */
-    destroy: (reference: { dispatchNamespace: string; scriptName: string }) => Promise<void>;
+    /** Delete the dispatch script (+ per-project D1/R2 when {@link ResourceRef.deleteResources}). */
+    destroy: (reference: ResourceRef) => Promise<void>;
     /** The destroyed deployments whose script has not yet been torn down. */
     listPending: () => Promise<TeardownTarget[]>;
     /** Record that a deployment's Cloudflare resources are gone (stamps `teardownAt`). */
@@ -54,7 +62,12 @@ export const runTeardownSweep = async (ports: TeardownPorts): Promise<TeardownRe
     for (const target of targets) {
         try {
             // eslint-disable-next-line no-await-in-loop -- sequential teardown paces Cloudflare API work; volumes are small
-            await ports.destroy({ dispatchNamespace: target.dispatchNamespace, scriptName: target.scriptName });
+            await ports.destroy({
+                alias: target.alias,
+                deleteResources: target.deleteResources,
+                dispatchNamespace: target.dispatchNamespace,
+                scriptName: target.scriptName,
+            });
             // eslint-disable-next-line no-await-in-loop -- must mark before moving on so a mid-sweep crash doesn't re-delete
             await ports.markTornDown(target.id);
             tornDown += 1;
@@ -68,36 +81,44 @@ export const runTeardownSweep = async (ports: TeardownPorts): Promise<TeardownRe
     return { failed, tornDown };
 };
 
-/** Reference to a deployment's Cloudflare resources, all derived from its script id. */
+/** Reference to a deployment's Cloudflare resources for teardown. */
 export interface ResourceRef {
+    /** Project label keying the per-project D1/R2 (only used when {@link deleteResources}). */
+    alias: string;
+    /** Delete the per-project D1/R2 too (only when this is the alias's last deployment). */
+    deleteResources: boolean;
     dispatchNamespace: string;
     scriptName: string;
 }
 
 /**
- * Build the composite `destroy` the sweep calls per target: delete the dispatch
- * script, then the tenant D1 database (resolved by its conventional name), then
- * the tenant R2 bucket. Script + D1 deletion throw on a real error so the target
- * stays pending and retries (both are 404-tolerant, so retries are safe). R2 is
- * **best-effort**: a non-empty bucket can't be deleted through the REST API
- * (object purge needs the S3/data credential this context lacks), so an R2
- * failure is swallowed rather than blocking script/D1 teardown forever — a
- * non-empty tenant bucket is the one resource that still needs a follow-up
- * purge. D1 (every `.global()` app has one) and empty R2 buckets are fully torn
- * down here.
+ * Build the composite `destroy` the sweep calls per target. The versioned
+ * dispatch script is always deleted (404-tolerant, so retries are safe). The
+ * per-project D1/R2 are deleted **only when `deleteResources` is set** — i.e.
+ * this is the last remaining deployment of its alias (org/project deletion), so
+ * a routine version prune never destroys the database the active version still
+ * serves from. D1 delete is retryable; R2 is best-effort: a non-empty bucket
+ * can't be deleted through the REST API (object purge needs the S3/data
+ * credential this context lacks), so an R2 failure is logged rather than
+ * blocking the rest of teardown forever — a non-empty tenant bucket is the one
+ * resource that still needs a follow-up purge.
  */
 export const createResourceTeardown =
     (api: CloudflareApi, onR2Error?: (bucket: string, error: unknown) => void) =>
     async (reference: ResourceRef): Promise<void> => {
         await api.deleteDispatchScript({ namespace: reference.dispatchNamespace, scriptName: reference.scriptName });
 
-        const database = await api.findD1DatabaseByName(tenantD1Name(reference.scriptName));
+        if (!reference.deleteResources) {
+            return;
+        }
+
+        const database = await api.findD1DatabaseByName(tenantD1Name(reference.alias));
 
         if (database) {
             await api.deleteD1Database(database.uuid);
         }
 
-        const bucket = tenantR2Bucket(reference.scriptName);
+        const bucket = tenantR2Bucket(reference.alias);
 
         try {
             await api.deleteR2Bucket(bucket);

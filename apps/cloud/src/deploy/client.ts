@@ -4,6 +4,7 @@
  * consumes the NDJSON progress stream, invoking `onEvent` per line. Pure: the
  * `fetch` is injectable, so the streaming consumer is unit-testable.
  */
+import type { TenantBindingSpec } from "../provision";
 
 export type DeployEvent = Record<string, unknown>;
 
@@ -14,11 +15,7 @@ export interface DeployClientOptions {
      * and whether the app provisions a per-tenant D1 / R2). The server floors it
      * to ShardDO, so omitting it still yields a bootable single-DO worker.
      */
-    bindings?: {
-        d1?: { binding: string };
-        durableObjects?: { binding: string; className: string }[];
-        r2?: { binding: string };
-    };
+    bindings?: TenantBindingSpec;
     branch?: string;
     /** Base64-encoded prebuilt worker module (the app's Vite build output). */
     bundle: string;

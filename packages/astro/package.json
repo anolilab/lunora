@@ -1,6 +1,6 @@
 {
     "name": "@lunora/astro",
-    "version": "1.0.0-alpha.40",
+    "version": "1.0.0-alpha.43",
     "description": "Astro integration for Lunora — single-worker composition plus reactive-loader server helpers",
     "keywords": [
         "astro",
@@ -52,7 +52,7 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
@@ -65,19 +65,20 @@
     },
     "dependencies": {
         "@lunora/client": "1.0.0-alpha.25",
-        "@lunora/runtime": "1.0.0-alpha.29"
+        "@lunora/runtime": "1.0.0-alpha.31"
     },
     "devDependencies": {
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "astro": "7.1.1",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "astro": "^6.0.0"
+        "astro": ">=6.0.0"
     },
     "peerDependenciesMeta": {
         "astro": {

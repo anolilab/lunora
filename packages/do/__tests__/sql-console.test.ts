@@ -51,7 +51,7 @@ describe("assertReadonly", () => {
 
         expect(() => {
             assertReadonly(` ${"/*".repeat(50_000)}`);
-        }).toThrow();
+        }).toThrow(/read-only/);
         expect(performance.now() - start).toBeLessThan(1000);
     });
 

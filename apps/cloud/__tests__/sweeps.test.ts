@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AnalyticsUsageReader } from "../src/metering/analytics";
-import type { ControlPlaneDb } from "../src/deploy/sweeps";
+import type { ControlPlaneDb } from "../src/store";
 import { teardownPorts, usageRollbackPorts } from "../src/deploy/sweeps";
 
 /** A fake ControlPlaneDb whose findMany answers per-table from the given pages. */
@@ -16,15 +16,29 @@ describe(teardownPorts, () => {
     it("lists only destroyed-and-not-torn-down rows, mapped to lunora-{kind} targets", async () => {
         const database = fakeDb({
             deployments: [
-                { _id: "d1", kind: "preview", scriptName: "a-v1" }, // pending
-                { _id: "d2", kind: "production", scriptName: "b-v2", teardownAt: 123 }, // already torn down
+                { _id: "d1", alias: "a", kind: "preview", scriptName: "a-v1", status: "destroyed" }, // pending, alias fully destroyed
+                { _id: "d2", alias: "b", kind: "production", scriptName: "b-v2", status: "destroyed", teardownAt: 123 }, // already torn down
             ],
         });
 
         const ports = teardownPorts(database, () => Promise.resolve(), 1000);
         const pending = await ports.listPending();
 
-        expect(pending).toStrictEqual([{ dispatchNamespace: "lunora-preview", id: "d1", scriptName: "a-v1" }]);
+        // Only "a" is fully destroyed with no live sibling → deleteResources true.
+        expect(pending).toStrictEqual([{ alias: "a", deleteResources: true, dispatchNamespace: "lunora-preview", id: "d1", scriptName: "a-v1" }]);
+    });
+
+    it("keeps per-project resources when the alias still has a non-destroyed deployment (version prune)", async () => {
+        const database = fakeDb({
+            deployments: [
+                { _id: "v1", alias: "app", kind: "production", scriptName: "app-v1", status: "destroyed" }, // pruned old version
+                { _id: "v2", alias: "app", kind: "production", scriptName: "app-v2", status: "live" }, // active — shares the DB
+            ],
+        });
+
+        const pending = await teardownPorts(database, () => Promise.resolve(), 1000).listPending();
+
+        expect(pending).toStrictEqual([{ alias: "app", deleteResources: false, dispatchNamespace: "lunora-production", id: "v1", scriptName: "app-v1" }]);
     });
 
     it("stamps teardownAt + updatedAt on the deployments table when marking torn down", async () => {

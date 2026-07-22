@@ -16,6 +16,8 @@ const INTERNAL_DETAIL = "SELECT * FROM users WHERE id = 7 -- INTERNAL_LEAK_MARKE
 // entire catalog so adding a code automatically extends the guarantee.
 describe("toErrorBody redaction sweep", () => {
     it.each(internalCodes)("%s never leaks message, hint, data, or docsUrl", (code) => {
+        expect.assertions(9);
+
         const error = new LunoraError(code, INTERNAL_DETAIL, {
             data: { secretPath: "/etc/shadow" },
             docsUrl: "https://internal.example/runbook",
@@ -36,6 +38,8 @@ describe("toErrorBody redaction sweep", () => {
     });
 
     it.each(publicCodes)("%s echoes its message (the author's vouch that it is client-safe)", (code) => {
+        expect.assertions(4);
+
         const { body, redacted, status } = toErrorBody(new LunoraError(code, "client-safe detail"));
 
         expect(redacted).toBe(false);
@@ -45,6 +49,8 @@ describe("toErrorBody redaction sweep", () => {
     });
 
     it("redacts an internal code carried by a wire-decoded twin, not just a real LunoraError", () => {
+        expect.assertions(4);
+
         // A DO→worker hop decodes to a plain Error with copied own props; the
         // redaction must key off the structural shape, not the class.
         const twin = Object.assign(new Error(INTERNAL_DETAIL), { code: "INTERNAL", status: 500, type: "VisimaError" });
@@ -61,6 +67,8 @@ describe("toErrorBody redaction sweep", () => {
     });
 
     it("echoes a wire-decoded twin's public code with its data and docsUrl", () => {
+        expect.assertions(5);
+
         const twin = Object.assign(new Error("stale write"), {
             code: "CONFLICT",
             data: { retryAfterMs: 25 },
@@ -80,6 +88,8 @@ describe("toErrorBody redaction sweep", () => {
 
 describe("toErrorBody fallback path", () => {
     it("redacts every non-LunoraError throw to the INTERNAL default", () => {
+        expect.hasAssertions();
+
         for (const thrown of [new Error(INTERNAL_DETAIL), INTERNAL_DETAIL, 42, null, undefined, { message: INTERNAL_DETAIL }, new TypeError(INTERNAL_DETAIL)]) {
             const { body, redacted, status } = toErrorBody(thrown);
 
@@ -91,6 +101,8 @@ describe("toErrorBody fallback path", () => {
     });
 
     it("honours fallbackCode and redactedMessage overrides together", () => {
+        expect.assertions(2);
+
         const { body } = toErrorBody("boom", { fallbackCode: "RPC_FAILED", redactedMessage: "something went wrong" });
 
         expect(body.code).toBe("RPC_FAILED");
@@ -98,6 +110,8 @@ describe("toErrorBody fallback path", () => {
     });
 
     it("applies redactedMessage to the internal-coded branch too", () => {
+        expect.assertions(2);
+
         const { body } = toErrorBody(new LunoraError("ENV_INVALID", "MISSING: STRIPE_INTERNAL_DETAIL_KEY"), { redactedMessage: "config error" });
 
         expect(body.message).toBe("config error");
@@ -105,6 +119,8 @@ describe("toErrorBody fallback path", () => {
     });
 
     it("a foreign error with code+status but no brand is never echoed", () => {
+        expect.assertions(3);
+
         // The `type: "VisulimaError"` brand is the vouch. A pg/driver error with
         // its own `code` must not ride the echo path.
         const driverError = Object.assign(new Error(INTERNAL_DETAIL), { code: "23505", status: 409 });
@@ -118,12 +134,16 @@ describe("toErrorBody fallback path", () => {
 
 describe("toErrorBody data encoding", () => {
     it("drops data without an encoder, even on the echo path", () => {
+        expect.assertions(1);
+
         const error = new LunoraError("VALIDATION_ERROR", "bad field", { data: { bigCount: 1n } });
 
         expect(toErrorBody(error).body.data).toBeUndefined();
     });
 
     it("runs the injected encoder over the data verbatim", () => {
+        expect.assertions(1);
+
         const error = new LunoraError("VALIDATION_ERROR", "bad field", { data: { bigCount: 1n } });
         const { body } = toErrorBody(error, {
             encodeData: (d) => {
@@ -135,6 +155,8 @@ describe("toErrorBody data encoding", () => {
     });
 
     it("does not call the encoder when data is undefined", () => {
+        expect.assertions(2);
+
         let called = 0;
         const { body } = toErrorBody(new LunoraError("NOT_FOUND", "gone"), {
             encodeData: (d) => {
@@ -151,6 +173,8 @@ describe("toErrorBody data encoding", () => {
 
 describe("lunora error wire shape", () => {
     it("serializes every transport field as own-enumerable JSON", () => {
+        expect.assertions(6);
+
         const error = new LunoraError("CONFLICT", "stale", { data: { v: 2 }, docsUrl: "https://lunora.sh/docs" });
         // Own-enumerable props are exactly what the wire codec copies.
         const parsed = Object.fromEntries(Object.entries(error)) as Record<string, unknown>;
@@ -164,6 +188,8 @@ describe("lunora error wire shape", () => {
     });
 
     it("a spread-and-rebuilt error is still recognized and redacts identically", () => {
+        expect.assertions(4);
+
         // Round-trip the own props the wire codec copies onto a fresh Error —
         // exactly what happens across the DO↔worker RPC boundary.
         const original = new LunoraError("RUN_DEPTH_EXCEEDED", INTERNAL_DETAIL);

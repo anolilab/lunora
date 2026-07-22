@@ -2335,6 +2335,12 @@
                       "adminToken": {
                         "type": "string"
                       },
+                      "adminTokenCiphertext": {
+                        "type": "string"
+                      },
+                      "adminTokenIv": {
+                        "type": "string"
+                      },
                       "branch": {
                         "type": "string"
                       },

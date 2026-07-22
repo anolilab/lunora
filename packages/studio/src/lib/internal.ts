@@ -50,6 +50,23 @@ export const callOptions = (shardKey: string): { shardKey?: string } => {
 export const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
+ * Extract the error `code` carried on a thrown value — a `LunoraClientError`
+ * reconstructed from the server envelope exposes the catalog `code` (e.g.
+ * `"LOG_ARCHIVE_NOT_CONFIGURED"`), letting a caller branch on a specific failure
+ * (a "not configured" empty state vs. a real error). Returns `undefined` when the
+ * value carries no string `code`.
+ */
+export const errorCode = (error: unknown): string | undefined => {
+    if (error === null || typeof error !== "object" || !("code" in error)) {
+        return undefined;
+    }
+
+    const { code } = error as { code?: unknown };
+
+    return typeof code === "string" ? code : undefined;
+};
+
+/**
  * Extract an actionable hint (Markdown) carried on a thrown value — a
  * `LunoraClientError` reconstructed from the server envelope exposes `hint` as a
  * string or an array of lines. Returns `undefined` when the error carries none.

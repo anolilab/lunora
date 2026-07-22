@@ -78,22 +78,14 @@ export interface DeployHandlerDeps {
     scheduler: CellScheduler;
 }
 
-/**
- * The tenant's binding manifest, as declared by the deploy request. The CLI
- * reads it from the app's `wrangler.jsonc` (DO classes, and whether the app
- * uses a per-tenant D1 / R2), so the control plane provisions exactly what the
- * uploaded bundle expects. Mirrors {@link TenantBindingSpec}; normalized (and
- * floored to ShardDO) by {@link normalizeBindings} before provisioning.
- */
-interface DeployBindings {
-    d1?: { binding: string };
-    durableObjects?: { binding: string; className: string }[];
-    r2?: { binding: string };
-}
-
 interface DeployBody {
-    /** Per-tenant binding manifest (DO classes / D1 / R2); ShardDO is always ensured. */
-    bindings?: DeployBindings;
+    /**
+     * Per-tenant binding manifest (DO classes / D1 / R2), as declared by the
+     * deploy request — the CLI reads it from the app's `wrangler.jsonc`. The
+     * canonical {@link TenantBindingSpec} shape; {@link normalizeBindings} floors
+     * it to ShardDO before provisioning.
+     */
+    bindings?: TenantBindingSpec;
     branch?: string;
     /** The tenant's cron expressions (wrangler `triggers.crons`) for the fan-out (§2.4). */
     cronSpecs?: string[];
@@ -126,7 +118,7 @@ const isBindingRef = (value: unknown): value is { binding: string } =>
  * entirely). Malformed entries are dropped rather than trusted, and the DO list
  * is capped.
  */
-const normalizeBindings = (requested: DeployBindings | undefined): TenantBindingSpec => {
+const normalizeBindings = (requested: TenantBindingSpec | undefined): TenantBindingSpec => {
     const declared = Array.isArray(requested?.durableObjects) ? requested.durableObjects : [];
     const durableObjects = declared
         .filter(
@@ -288,6 +280,10 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
             }
 
             const spec: TenantDeploymentSpec = {
+                // The stable project label (pre-versioning) keys per-tenant D1/R2,
+                // so data persists across deploys; the versioned releaseScriptName
+                // is the immutable per-deployment worker script id.
+                alias: scriptName,
                 bindings: normalizeBindings(body.bindings),
                 bundle,
                 cell: deps.cell,

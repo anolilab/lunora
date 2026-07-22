@@ -63,11 +63,11 @@ const stubFacilitator = (): ReturnType<typeof vi.fn> => {
     return fetchMock;
 };
 
-afterEach(() => {
-    vi.unstubAllGlobals();
-});
-
 describe("@lunora/x402 (workerd)", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("withX402 boots in a real worker fetch handler and challenges unpaid requests with 402", async () => {
         expect.hasAssertions();
 

@@ -28,8 +28,8 @@ const bracketTool = (order: string[], label: string): Telemetry => {
 
 describe(combineTelemetry, () => {
     it("fans a value callback out to every integration", async () => {
-        const a = vi.fn();
-        const b = vi.fn();
+        const a = vi.fn<(event: unknown) => void>();
+        const b = vi.fn<(event: unknown) => void>();
         const combined = combineTelemetry({ onStepEnd: a }, { onStepEnd: b });
 
         const event = evt({ finishReason: "stop", stepNumber: 1 });
@@ -41,9 +41,9 @@ describe(combineTelemetry, () => {
     });
 
     it("wires the deprecated-alias and object-generation value callbacks", async () => {
-        const onStepFinish = vi.fn();
-        const onObjectStepStart = vi.fn();
-        const onObjectStepEnd = vi.fn();
+        const onStepFinish = vi.fn<(event: unknown) => void>();
+        const onObjectStepStart = vi.fn<(event: unknown) => void>();
+        const onObjectStepEnd = vi.fn<(event: unknown) => void>();
         const combined = combineTelemetry({ onObjectStepEnd, onObjectStepStart, onStepFinish });
 
         const event = evt({ stepNumber: 0 });
@@ -58,7 +58,7 @@ describe(combineTelemetry, () => {
     });
 
     it("isolates a synchronously-throwing integration from its siblings", async () => {
-        const sibling = vi.fn();
+        const sibling = vi.fn<(event: unknown) => void>();
         const buggy: Telemetry = {
             onError: () => {
                 throw new Error("boom");
@@ -74,7 +74,7 @@ describe(combineTelemetry, () => {
     });
 
     it("isolates a rejecting integration from its siblings", async () => {
-        const sibling = vi.fn();
+        const sibling = vi.fn<(event: unknown) => void>();
         const buggy: Telemetry = {
             onStepEnd: () => Promise.reject(new Error("boom")),
         };
@@ -88,6 +88,7 @@ describe(combineTelemetry, () => {
         const seen: string[] = [];
         const slow: Telemetry = {
             onError: async (error) => {
+                // eslint-disable-next-line promise/no-promise-in-callback -- onError is a Promise-returning telemetry hook by contract; this deliberate microtask yield is what proves combineTelemetry awaits async callbacks.
                 await Promise.resolve();
                 seen.push(`slow:${String(error)}`);
             },
@@ -105,7 +106,7 @@ describe(combineTelemetry, () => {
     });
 
     it("skips integrations that do not define a given callback", async () => {
-        const onlyB = vi.fn();
+        const onlyB = vi.fn<(event: unknown) => void>();
 
         // First integration has no onStepEnd; must not throw when fanning out.
         const combined = combineTelemetry({}, { onStepEnd: onlyB });

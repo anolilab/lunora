@@ -54,8 +54,8 @@ const makeHarness = (pageContent = "<html></html>"): Harness => {
 
 /** A fake `Route` (with spied `abort`/`continue`) for a single intercepted request. */
 const makeRoute = (url: string, isNavigation: boolean) => {
-    const abort = vi.fn(async () => {});
-    const continueFn = vi.fn(async () => {});
+    const abort = vi.fn<(errorCode?: string) => Promise<void>>(async () => {});
+    const continueFn = vi.fn<() => Promise<void>>(async () => {});
 
     const route: RouteLike = {
         abort,
@@ -70,6 +70,8 @@ const makeRoute = (url: string, isNavigation: boolean) => {
 
 describe("createBrowser SSRF redirect guard (finding #6)", () => {
     it("registers the redirect interceptor when allowPrivateTargets is true AND allowedHosts is set", async () => {
+        expect.assertions(1);
+
         const harness = makeHarness();
         const browser = createBrowser({
             allowedHosts: ["example.com"],
@@ -84,6 +86,8 @@ describe("createBrowser SSRF redirect guard (finding #6)", () => {
     });
 
     it("does NOT register the interceptor when allowPrivateTargets is true and allowedHosts is unset (no regression)", async () => {
+        expect.assertions(1);
+
         const harness = makeHarness();
         const browser = createBrowser({
             allowPrivateTargets: true,
@@ -97,6 +101,8 @@ describe("createBrowser SSRF redirect guard (finding #6)", () => {
     });
 
     it("aborts a redirect hop to an off-allowlist host under allowPrivateTargets + allowedHosts", async () => {
+        expect.assertions(3);
+
         const harness = makeHarness();
         const browser = createBrowser({
             allowedHosts: ["example.com"],
@@ -118,6 +124,8 @@ describe("createBrowser SSRF redirect guard (finding #6)", () => {
     });
 
     it("continues a redirect hop that stays on the allowlist", async () => {
+        expect.assertions(2);
+
         const harness = makeHarness();
         const browser = createBrowser({
             allowedHosts: ["example.com"],
@@ -137,6 +145,8 @@ describe("createBrowser SSRF redirect guard (finding #6)", () => {
     });
 
     it("does not run a per-hop DoH lookup when allowPrivateTargets is true (resolveDns gating companion edit)", async () => {
+        expect.assertions(2);
+
         const fetchSpy = vi.spyOn(globalThis, "fetch");
 
         try {
@@ -170,6 +180,8 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
     const defaultBrowser = (harness: Harness) => createBrowser({ binding, launch: harness.launch });
 
     it("aborts a sub-resource request to a private/link-local host", async () => {
+        expect.assertions(3);
+
         const harness = makeHarness();
 
         await defaultBrowser(harness).content("https://example.com/");
@@ -185,6 +197,8 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
     });
 
     it("aborts a sub-resource request to a loopback / localhost host", async () => {
+        expect.assertions(2);
+
         const harness = makeHarness();
 
         await defaultBrowser(harness).content("https://example.com/");
@@ -200,6 +214,8 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
     });
 
     it("continues a sub-resource request to a public host", async () => {
+        expect.assertions(2);
+
         const harness = makeHarness();
 
         await defaultBrowser(harness).content("https://example.com/");
@@ -213,6 +229,8 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
     });
 
     it("continues non-http(s) sub-resources (data:/blob:) so inline assets keep rendering", async () => {
+        expect.assertions(4);
+
         const harness = makeHarness();
 
         await defaultBrowser(harness).content("https://example.com/");
@@ -230,6 +248,8 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
     });
 
     it("aborts a public but off-allowlist sub-resource when allowedHosts is configured", async () => {
+        expect.assertions(3);
+
         const harness = makeHarness();
         const browser = createBrowser({ allowedHosts: ["example.com"], binding, launch: harness.launch });
 
@@ -249,6 +269,8 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
 
 describe("createBrowser operation timeout (finding #1)", () => {
     it("rejects when a post-navigation operation exceeds the timeout budget", async () => {
+        expect.assertions(1);
+
         // A hostile page that traps the evaluated function: `page.evaluate` never
         // resolves. `page.goto` returns fine, so only the outer deadline bounds it.
         const page: PageLike = {
@@ -268,6 +290,8 @@ describe("createBrowser operation timeout (finding #1)", () => {
     });
 
     it("closes the browser when the deadline rejects (no leaked session)", async () => {
+        expect.assertions(2);
+
         let closed = false;
         const page: PageLike = {
             content: () => new Promise<never>(() => {}),
@@ -294,6 +318,8 @@ describe("createBrowser operation timeout (finding #1)", () => {
 
 describe("createBrowser URL-boundary error codes (finding #2)", () => {
     it("rejects a private/internal target as a FORBIDDEN 403 (message intact, not a redacted 500)", async () => {
+        expect.assertions(2);
+
         const harness = makeHarness();
         const browser = createBrowser({ binding, launch: harness.launch });
 
@@ -302,6 +328,8 @@ describe("createBrowser URL-boundary error codes (finding #2)", () => {
     });
 
     it("rejects a non-http(s) scheme as a BAD_REQUEST 400", async () => {
+        expect.assertions(1);
+
         const harness = makeHarness();
         const browser = createBrowser({ binding, launch: harness.launch });
 
@@ -309,6 +337,8 @@ describe("createBrowser URL-boundary error codes (finding #2)", () => {
     });
 
     it("rejects embedded credentials as a BAD_REQUEST 400", async () => {
+        expect.assertions(1);
+
         const harness = makeHarness();
         const browser = createBrowser({ binding, launch: harness.launch });
 

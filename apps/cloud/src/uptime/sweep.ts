@@ -14,7 +14,7 @@
  */
 import type { AlertDelivery, FiringRule } from "../telemetry/alerts";
 import { fireCrossedRules, isSafeWebhookUrl } from "../telemetry/alerts";
-import type { ControlPlaneDb } from "../deploy/sweeps";
+import type { ControlPlaneDb } from "../store";
 import { nextConsecutiveFailures, probeDeployment, type UptimeProbe } from "./probe";
 
 /** A live deployment the sweep probes. */

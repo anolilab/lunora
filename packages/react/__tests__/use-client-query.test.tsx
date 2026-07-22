@@ -3,7 +3,7 @@ import { createClientQuery } from "@lunora/client";
 import { act, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useEffect } from "react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import useClientQuery from "../src/use-client-query";
@@ -73,7 +73,7 @@ const createFakeClientQueryClient = (): {
 
 const sidebarOpen = createClientQuery("sidebarOpen", true);
 
-let renderCount = 0;
+let renderCount: number;
 let setOpenHandle: ((value: boolean) => void) | undefined;
 
 const Display = (): ReactElement => {
@@ -95,6 +95,10 @@ const Display = (): ReactElement => {
 };
 
 describe("useClientQuery", () => {
+    beforeEach(() => {
+        renderCount = 0;
+    });
+
     it("reads the default synchronously and updates on setClientQuery", () => {
         expect.assertions(2);
 
@@ -117,8 +121,6 @@ describe("useClientQuery", () => {
 
     it("keeps the store subscription stable across re-renders (REACT-02 regression)", () => {
         expect.assertions(3);
-
-        renderCount = 0;
 
         const fake = createFakeClientQueryClient();
 

@@ -153,7 +153,27 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
             return { uuid: result.uuid };
         },
         createR2Bucket: async (name) => {
-            await callJson("/r2/buckets", "POST", { name });
+            const response = await fetchImpl(`${base}/r2/buckets`, {
+                body: JSON.stringify({ name }),
+                headers: { authorization: authHeader, "content-type": "application/json" },
+                method: "POST",
+            });
+
+            // Idempotent: a bucket that already exists (409 / CF code 10004 "bucket
+            // already exists") is reused, so a re-deploy of the same project works.
+            if (response.ok || response.status === 409) {
+                return;
+            }
+
+            const data = (await response.json().catch(() => ({}))) as CloudflareEnvelope;
+
+            if ((data.errors ?? []).some((error) => error.code === 10004)) {
+                return;
+            }
+
+            throw new Error(
+                `cloudflare create R2 bucket failed: ${data.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`}`,
+            );
         },
         deleteD1Database: async (uuid) => {
             const response = await fetchImpl(`${base}/d1/database/${uuid}`, { headers: { authorization: authHeader }, method: "DELETE" });

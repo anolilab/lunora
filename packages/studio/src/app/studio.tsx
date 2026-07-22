@@ -121,6 +121,7 @@ const SettingsPanel = lazyNamed(() => import("../features/settings/settings-pane
 const SqlEditorPanel = lazyNamed(() => import("../features/sql/sql-editor-panel"), "SqlEditorPanel");
 const FileBrowser = lazyNamed(() => import("../features/storage/file-browser"), "FileBrowser");
 const StorageRulesPanel = lazyNamed(() => import("../features/storage/storage-rules-panel"), "StorageRulesPanel");
+const TracesPanel = lazyNamed(() => import("../features/traces/traces-panel"), "TracesPanel");
 const VectorBrowser = lazyNamed(() => import("../features/vectors/vector-browser"), "VectorBrowser");
 const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"));
 
@@ -163,6 +164,7 @@ type StudioTab =
     | "settings"
     | "sql"
     | "storageRules"
+    | "traces"
     | "users"
     | "vectors"
     | "workflows";
@@ -342,6 +344,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     sql: <path d="M4 5h16v14H4V5Zm3 4 3 3-3 3m6 0h4" />,
     storageRules: <path d="M7 10V7a5 5 0 0 1 10 0v3m-11 0h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1Zm6 4v2" />,
     security: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-2.5 8.5 2 2 4-4" />,
+    traces: <path d="M3 6h9M6 12h12M10 18h7" />,
     settings: (
         <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6H10.5l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
     ),
@@ -367,7 +370,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "functions", tabs: ["functions", "api", "workflows", "agents", "queues"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
-    { key: "observability", tabs: ["issues", "logs", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health"] },
+    { key: "observability", tabs: ["issues", "logs", "traces", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health"] },
     { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
     { key: "operations", tabs: ["schedule", "mail", "drains", "payments", "flags"] },
     { key: "settings", tabs: ["settings"] },
@@ -467,6 +470,7 @@ const TABS = exhaustiveRouteTabs([
     "insights",
     "issues",
     "logs",
+    "traces",
     "realtime",
     "fanout",
     "mail",
@@ -848,6 +852,7 @@ const StudioLayout = (): ReactElement => {
             security: t("Security"),
             settings: t("Settings"),
             sql: t("SQL editor"),
+            traces: t("Traces"),
             storageRules: t("Access Rules"),
             users: t("Users"),
             vectors: t("Vectors"),
@@ -906,6 +911,7 @@ const StudioLayout = (): ReactElement => {
         sql: t("Run read-only SQL against a shard."),
         kv: t("Browse and edit key-value pairs in your Workers KV namespaces."),
         storageRules: t("Inspect storage access rules — per bucket, operation, and key prefix."),
+        traces: t("Recent ctx.trace waterfalls for this shard — the drill-down from a log line."),
         users: t("Manage auth users — roles, bans, sessions, and identity."),
         vectors: t("Browse Vectorize indexes and run similarity searches."),
         workflows: t("Inspect declared Cloudflare Workflows and their bindings."),
@@ -1108,6 +1114,7 @@ const buildRouter = ({
         insights: <InsightsPanel initialShardKey={initialShardKey} />,
         issues: <IssuesPanel initialShardKey={initialShardKey} />,
         logs: <LogsPanel initialShardKey={initialShardKey} />,
+        traces: <TracesPanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
         organizations: <OrganizationsPanel />,

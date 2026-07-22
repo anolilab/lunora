@@ -111,8 +111,8 @@ describe(sentryTelemetry, () => {
     });
 
     it("passes the caller's Sentry namespace through (dependency injection)", async () => {
-        const startSpan = vi.fn((_context: unknown, callback: (span: unknown) => unknown) => callback({}));
-        const Sentry = { captureException: vi.fn(), startSpan } as unknown as SentryLike;
+        const startSpan = vi.fn<(context: unknown, callback: (span: unknown) => unknown) => unknown>((_context, callback) => callback({}));
+        const Sentry = { captureException: vi.fn<(error: unknown) => void>(), startSpan } as unknown as SentryLike;
 
         await sentryTelemetry({ Sentry }).executeTool?.({
             callId: "c",

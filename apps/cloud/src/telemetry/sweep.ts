@@ -17,7 +17,7 @@
  * fake store. The edge (`src/server.ts`) supplies the real D1 and delivers the
  * returned alerts.
  */
-import type { ControlPlaneDb } from "../deploy/sweeps";
+import type { ControlPlaneDb } from "../store";
 import type { AlertChannel, AlertDelivery, MetricObservation, MetricRule, MetricTarget } from "./alerts";
 import { fireMetricRules } from "./alerts";
 

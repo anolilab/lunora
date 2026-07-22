@@ -114,7 +114,7 @@ describe(braintrustTelemetry, () => {
     });
 
     it("passes the caller's logger through (dependency injection)", async () => {
-        const traced = vi.fn(<T>(callback: (span: BraintrustSpan) => T) => callback({ log: () => undefined }));
+        const traced = vi.fn<(callback: (span: BraintrustSpan) => unknown) => unknown>((callback) => callback({ log: () => undefined }));
         const logger = { traced } as unknown as BraintrustLike;
 
         await braintrustTelemetry({ logger }).executeLanguageModelCall?.({

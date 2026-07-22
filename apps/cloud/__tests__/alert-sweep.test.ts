@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ControlPlaneDb } from "../src/deploy/sweeps";
+import type { ControlPlaneDb } from "../src/store";
 import type { MetricObservation } from "../src/telemetry/alerts";
 import { runAlertSweep } from "../src/telemetry/sweep";
 

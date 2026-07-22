@@ -24,24 +24,28 @@ const mockClient = (
     query: ReturnType<typeof vi.fn>;
 } => {
     let threadPoll = 0;
-    const mutation = vi.fn(async () => options.runResult ?? { id: "wf-run-1", threadKey: "t-x" });
-    const query = vi.fn(async (reference: unknown, args: Record<string, unknown>) => {
-        const path = refPath(reference);
+    const mutation = vi.fn<(reference: unknown, arguments_: Record<string, unknown>) => Promise<{ id: string; threadKey: string }>>(
+        async () => options.runResult ?? { id: "wf-run-1", threadKey: "t-x" },
+    );
+    const query = vi.fn<(reference: unknown, arguments_: Record<string, unknown>) => Promise<unknown>>(
+        async (reference: unknown, args: Record<string, unknown>) => {
+            const path = refPath(reference);
 
-        if (path === "agents:agentThread") {
-            const index = Math.min(threadPoll, options.threads.length - 1);
+            if (path === "agents:agentThread") {
+                const index = Math.min(threadPoll, options.threads.length - 1);
 
-            threadPoll += 1;
+                threadPoll += 1;
 
-            return options.threads[index];
-        }
+                return options.threads[index];
+            }
 
-        if (path === "agents:agentMessages") {
-            return options.messages ?? [];
-        }
+            if (path === "agents:agentMessages") {
+                return options.messages ?? [];
+            }
 
-        throw new Error(`unexpected query path ${path} with ${JSON.stringify(args)}`);
-    });
+            throw new Error(`unexpected query path ${path} with ${JSON.stringify(args)}`);
+        },
+    );
 
     const client = { mutation, query } as unknown as LunoraClient;
 
@@ -68,6 +72,8 @@ const parseText = (result: { content: { text: string }[] }): Record<string, unkn
 
 describe(parseAgentsEnv, () => {
     it("parses name:description pairs, keeping colons in the description", () => {
+        expect.assertions(1);
+
         expect(parseAgentsEnv("support:Handles support: questions;billing:Billing help")).toStrictEqual([
             { description: "Handles support: questions", name: "support" },
             { description: "Billing help", name: "billing" },
@@ -75,6 +81,8 @@ describe(parseAgentsEnv, () => {
     });
 
     it("returns an empty list for undefined and skips malformed entries", () => {
+        expect.assertions(2);
+
         expect(parseAgentsEnv(undefined)).toStrictEqual([]);
         expect(parseAgentsEnv(";  ;support:;:desc;valid:ok")).toStrictEqual([{ description: "ok", name: "valid" }]);
     });
@@ -82,14 +90,20 @@ describe(parseAgentsEnv, () => {
 
 describe(agentToolDefinitions, () => {
     it("advertises no agent tools when allowAgents is false", () => {
+        expect.assertions(1);
+
         expect(agentToolDefinitions(exposures, false)).toStrictEqual([]);
     });
 
     it("advertises no agent tools when there are no exposures", () => {
+        expect.assertions(1);
+
         expect(agentToolDefinitions([], true)).toStrictEqual([]);
     });
 
     it("advertises one tool per agent plus the generic status tool when opted in", () => {
+        expect.assertions(4);
+
         const tools = agentToolDefinitions(exposures, true);
         const names = tools.map((tool) => tool.name);
 
@@ -100,18 +114,24 @@ describe(agentToolDefinitions, () => {
     });
 
     it("honours a toolName override", () => {
+        expect.assertions(1);
+
         const tools = agentToolDefinitions([{ description: "d", name: "support", toolName: "ask_support" }], true);
 
         expect(tools[0]?.name).toBe("ask_support");
     });
 
     it("rejects a non-boolean truthy allowAgents (fail-closed)", () => {
+        expect.assertions(1);
+
         expect(agentToolDefinitions(exposures, "true" as unknown as boolean)).toStrictEqual([]);
     });
 });
 
 describe(finalAnswer, () => {
     it("returns the last assistant turn with no pending tool calls", () => {
+        expect.assertions(1);
+
         expect(
             finalAnswer([
                 { content: "thinking", role: "assistant", toolCalls: [{ id: "1", input: {}, name: "search" }] },
@@ -122,12 +142,16 @@ describe(finalAnswer, () => {
     });
 
     it("returns an empty string when there is no clean assistant turn", () => {
+        expect.assertions(1);
+
         expect(finalAnswer([{ content: "hi", role: "user" }])).toBe("");
     });
 });
 
 describe(callAgentTool, () => {
     it("starts a run via agents:agentRun and returns the final answer once terminal", async () => {
+        expect.assertions(3);
+
         const { asClient, mutation } = mockClient({
             messages: [{ content: "resolved!", role: "assistant" }],
             threads: [{ status: "idle" }],
@@ -141,6 +165,8 @@ describe(callAgentTool, () => {
     });
 
     it("mints a fresh mcp-<uuid> threadKey when none is provided", async () => {
+        expect.assertions(2);
+
         const { asClient, mutation } = mockClient({ messages: [{ content: "hi", role: "assistant" }], threads: [{ status: "idle" }] });
 
         const result = await callAgentTool(asClient, "agent_support", { prompt: "hi" }, baseOptions());
@@ -151,6 +177,8 @@ describe(callAgentTool, () => {
     });
 
     it("polls until the thread reaches a terminal status", async () => {
+        expect.assertions(2);
+
         const { asClient, query } = mockClient({
             messages: [{ content: "done", role: "assistant" }],
             threads: [{ status: "running" }, { status: "running" }, { status: "idle" }],
@@ -164,6 +192,8 @@ describe(callAgentTool, () => {
     });
 
     it("returns a non-error pending payload when the wait budget is exhausted", async () => {
+        expect.assertions(2);
+
         const { asClient } = mockClient({ runResult: { id: "wf-9", threadKey: "t-9" }, threads: [{ status: "running" }] });
 
         const result = await callAgentTool(
@@ -183,6 +213,8 @@ describe(callAgentTool, () => {
     });
 
     it("surfaces the thread error field on a terminal error status", async () => {
+        expect.assertions(1);
+
         const { asClient } = mockClient({ messages: [], threads: [{ error: "model blew up", status: "error" }] });
 
         const result = await callAgentTool(asClient, "agent_support", { prompt: "x", threadKey: "t-e" }, baseOptions());
@@ -191,6 +223,8 @@ describe(callAgentTool, () => {
     });
 
     it("refuses fail-closed at dispatch when allowAgents is not exactly true", async () => {
+        expect.assertions(3);
+
         const { asClient, mutation } = mockClient({ threads: [{ status: "idle" }] });
 
         const result = await callAgentTool(asClient, "agent_support", { prompt: "hi" }, baseOptions({ allowAgents: "true" as unknown as boolean }));
@@ -201,6 +235,8 @@ describe(callAgentTool, () => {
     });
 
     it("errors when the named agent is not among the exposures", async () => {
+        expect.assertions(3);
+
         const { asClient, mutation } = mockClient({ threads: [{ status: "idle" }] });
 
         const result = await callAgentTool(asClient, "agent_unknown", { prompt: "hi" }, baseOptions());
@@ -211,6 +247,8 @@ describe(callAgentTool, () => {
     });
 
     it("errors when prompt is missing", async () => {
+        expect.assertions(3);
+
         const { asClient, mutation } = mockClient({ threads: [{ status: "idle" }] });
 
         const result = await callAgentTool(asClient, "agent_support", {}, baseOptions());
@@ -221,6 +259,8 @@ describe(callAgentTool, () => {
     });
 
     it("lunora_agent_status reads the current status and answer for a threadKey", async () => {
+        expect.assertions(2);
+
         const { asClient, mutation } = mockClient({ messages: [{ content: "final", role: "assistant" }], threads: [{ status: "idle" }] });
 
         const result = await callAgentTool(asClient, "lunora_agent_status", { threadKey: "t-1" }, baseOptions());
@@ -230,6 +270,8 @@ describe(callAgentTool, () => {
     });
 
     it("lunora_agent_status reports a still-running thread", async () => {
+        expect.assertions(1);
+
         const { asClient } = mockClient({ threads: [{ status: "running" }] });
 
         const result = await callAgentTool(asClient, "lunora_agent_status", { threadKey: "t-1" }, baseOptions());

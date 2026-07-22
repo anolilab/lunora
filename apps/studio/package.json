@@ -8,7 +8,7 @@
     "scripts": {
         "build": "vite build",
         "dev": "vite",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:types": "tsc --noEmit",
         "preview": "vite preview",

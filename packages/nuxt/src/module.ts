@@ -28,6 +28,8 @@
  * export { ShardDO } from "./lunora/server";
  * ```
  */
+
+/* eslint-disable import/exports-last -- the public ModuleOptions type is declared next to the module definition it configures rather than grouped at the file end */
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -113,7 +115,7 @@ export interface ModuleOptions {
 }
 
 /**
- * Return type of `defineNuxtModule<ModuleOptions>({...})` — the value overload of
+ * Return type of `defineNuxtModule&lt;ModuleOptions>({...})` — the value overload of
  * `defineNuxtModule` (the one taking a definition), extracted structurally so the
  * default export has a locally-nameable type under `isolatedDeclarations` without
  * importing `NuxtModule` from `@nuxt/schema` (not a resolvable dependency here).

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/payment",
-    "version": "1.0.0-alpha.28",
+    "version": "1.0.0-alpha.29",
     "description": "Provider-agnostic payments for Lunora: Stripe-first adapter, webhook sync, and subscription/payment state machine",
     "keywords": [
         "billing",
@@ -73,7 +73,7 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
@@ -86,7 +86,7 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.6",
-        "@lunora/server": "1.0.0-alpha.28",
+        "@lunora/server": "1.0.0-alpha.29",
         "@lunora/values": "1.0.0-alpha.9",
         "dinero.js": "2.0.2"
     },

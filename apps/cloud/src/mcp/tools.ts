@@ -36,15 +36,27 @@ export interface McpTool {
 
 const toolName = (path: string): string => path.replace(/^\/v1\//, "").replaceAll("/", ".");
 
+/** A tool paired with the route it dispatches to — the MCP handler's dispatch table. */
+export interface McpToolRoute<Handler> {
+    route: RegisteredRoute<Handler>;
+    tool: McpTool;
+}
+
 /**
- * The tools an agent may call: routes that opt in via `spec.mcp`, are
- * bearer-callable, and are not hard-denied. Deny + auth checks win over the
- * opt-in, so a mistaken `mcp` block on a sensitive route is inert.
+ * The tools an agent may call, paired with their routes: routes that opt in via
+ * `spec.mcp`, are bearer-callable, and are not hard-denied. Deny + auth checks
+ * win over the opt-in, so a mistaken `mcp` block on a sensitive route is inert.
  */
-export const buildMcpTools = <Handler>(routes: readonly RegisteredRoute<Handler>[]): McpTool[] =>
+export const mcpToolRoutes = <Handler>(routes: readonly RegisteredRoute<Handler>[]): McpToolRoute<Handler>[] =>
     routes
         .filter((route) => route.spec.mcp !== undefined && TOOLABLE_AUTH.has(route.spec.auth) && !MCP_DENY_PATHS.has(route.path))
-        .map((route) => ({ description: route.spec.mcp?.description ?? "", method: route.method, name: toolName(route.path), path: route.path }));
+        .map((route) => ({
+            route,
+            tool: { description: route.spec.mcp?.description ?? "", method: route.method, name: toolName(route.path), path: route.path },
+        }));
+
+/** The opted-in tool descriptors (without their routes) — for `tools/list`. */
+export const buildMcpTools = <Handler>(routes: readonly RegisteredRoute<Handler>[]): McpTool[] => mcpToolRoutes(routes).map((entry) => entry.tool);
 
 /** Minimal router surface the dispatcher drives — the control-plane `fetch`. */
 export interface McpRouterLike {

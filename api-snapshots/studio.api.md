@@ -13,6 +13,7 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ```ts
 const ADMIN_FUNCTIONS: {
+    readonly assignIssue: "__lunora_admin__:assignIssue";
     readonly clearCapturedMail: "__lunora_admin__:clearCapturedMail";
     readonly clearQueueMessages: "__lunora_admin__:clearQueueMessages";
     readonly clearTable: "__lunora_admin__:clearTable";
@@ -35,13 +36,16 @@ const ADMIN_FUNCTIONS: {
     readonly listTableIndexes: "__lunora_admin__:listTableIndexes";
     readonly listWorkflows: "__lunora_admin__:listWorkflows";
     readonly getLogs: "__lunora_admin__:getLogs";
+    readonly getMetricSeries: "__lunora_admin__:getMetricSeries";
     readonly getMetrics: "__lunora_admin__:getMetrics";
     readonly getPitrBookmark: "__lunora_admin__:getPitrBookmark";
     readonly getQueueMessages: "__lunora_admin__:getQueueMessages";
     readonly getRequestLog: "__lunora_admin__:getRequestLog";
     readonly getSecurityAudit: "__lunora_admin__:getSecurityAudit";
     readonly getSettings: "__lunora_admin__:getSettings";
+    readonly getTraces: "__lunora_admin__:getTraces";
     readonly getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus";
+    readonly ignoreIssue: "__lunora_admin__:ignoreIssue";
     readonly importShard: "__lunora_admin__:importShard";
     readonly listTables: "__lunora_admin__:listTables";
     readonly maskPolicies: "__lunora_admin__:maskPolicies";
@@ -49,12 +53,14 @@ const ADMIN_FUNCTIONS: {
     readonly pitrRestore: "__lunora_admin__:pitrRestore";
     readonly readTablePage: "__lunora_admin__:readTablePage";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
+    readonly resolveIssue: "__lunora_admin__:resolveIssue";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
     readonly runAs: "__lunora_admin__:runAs";
     readonly runMigration: "__lunora_admin__:runMigration";
     readonly runSql: "__lunora_admin__:runSql";
     readonly sendQueueMessage: "__lunora_admin__:sendQueueMessage";
     readonly sendTestMail: "__lunora_admin__:sendTestMail";
+    readonly setIssueSeverity: "__lunora_admin__:setIssueSeverity";
     readonly storageOrphans: "__lunora_admin__:storageOrphans";
     readonly storageReferences: "__lunora_admin__:storageReferences";
     readonly storageRules: "__lunora_admin__:storageRules";
@@ -607,7 +613,7 @@ interface LogEntry {
 ### `LogLevel` (type)
 
 ```ts
-type LogLevel = "debug" | "error" | "info" | "warn";
+type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
 ```
 
 ### `LogsPanel` (const)
@@ -1023,7 +1029,7 @@ interface StudioProps {
 ### `StudioTab` (type)
 
 ```ts
-type StudioTab = "agents" | "analytics" | "api" | "audit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "realtime" | "rls" | "schedule" | "schema" | "security" | "settings" | "sql" | "storageRules" | "users" | "vectors" | "workflows";
+type StudioTab = "agents" | "analytics" | "api" | "audit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "realtime" | "rls" | "schedule" | "schema" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
 ```
 
 ### `TFunction` (type)

@@ -1,0 +1,129 @@
+# Lunora Framework — Roadmap
+
+Lunora is a type-safe, real-time backend on your own Cloudflare account, with a
+Vite-first developer experience. This document is our **public, living roadmap**
+for the open-source framework. For the managed offering, see the
+[Lunora Cloud roadmap](./apps/cloud/ROADMAP.md).
+
+> **How to read this.** Items are grouped **Now / Next / Later** by priority and
+> readiness — **not by date**. Ordering is a signal of intent, not a commitment
+> to a schedule; priorities shift as we learn. Nothing here is a promise of a
+> ship date. When something lands, it moves to **Recently shipped** at the
+> bottom. Track live progress on the
+> [GitHub roadmap board](https://github.com/anolilab/lunora/projects) and in
+> [`plans/`](./plans).
+
+## Why you can trust this roadmap
+
+We know a pre-1.0 framework asks for trust. Here is what backs it:
+
+- **A real path to 1.0, machine-guarded.** The public API surface of every
+  stable-tier package is snapshotted and diffed in CI
+  ([`api-snapshots/`](./api-snapshots), `pnpm api:check`). After 1.0, a breaking
+  change **fails a required check** — it cannot ship as a patch by accident. The
+  full program is tracked in [`plans/135-stable-1.0-roadmap.md`](./plans/135-stable-1.0-roadmap.md).
+- **No rug-pull on licensing.** Lunora is **FSL-1.1-Apache-2.0**
+  ([Functional Source License](./LICENSE.md)): source-available today, and every
+  release **automatically converts to Apache 2.0 two years after it ships**. The
+  code you build on becomes fully open — that outcome is written into the license,
+  not our goodwill.
+- **The runtime is verified where it runs.** The real Cloudflare `workerd`
+  runtime — the entire point of the product — runs on a **required merge gate**,
+  not just on laptops. Coverage floors, a nightly full-matrix run, and an
+  end-to-end `init → codegen → deploy` smoke back every release.
+- **We ship in the open.** Every change is planned in [`plans/`](./plans) and
+  driven by Conventional Commits and independent per-package semantic-release.
+  The "Recently shipped" list below is regenerated from real merged work.
+
+---
+
+## Now — converging on stable 1.0
+
+The verification, API-guard, docs, and promotion machinery for 1.0 have largely
+landed (see **Recently shipped**). What remains before the release train is
+deliberate, and mostly a set of go/no-go decisions:
+
+- **Ratify the stability tiers.** Publicly commit each package to a tier so users
+  know exactly what the SemVer promise covers:
+    - **Core (full SemVer at 1.0):** `server`, `values`, `errors`, `runtime`, `do`,
+      `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`, and the
+      `lunorash` umbrella.
+    - **Stable adapters (1.0 if they pass the same gates):** `vue`, `solid`,
+      `svelte`, `astro`, `nuxt`, `auth`, `storage`, `scheduler`, `mail`,
+      `ratelimit`, `seed`, `db`, `studio`, `advisor`, `mcp`, `bindings`,
+      `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`, `fingerprint`.
+    - **Experimental (excluded from the 1.0 promise, iterating on their own track):**
+      `agent`, `replica`, `x402`, `react-native`, `angular`, `ai`, `browser`,
+      `container`, `payment`.
+- **Cut the beta channel.** Feature-freeze the Core + Stable-adapter tiers and
+  promote `alpha → beta`; the experimental tier keeps iterating on `alpha`.
+- **Bake and dogfood.** Run a real application (the playground plus at least one
+  external, production-shaped deployment) against the beta channel for a bake
+  period; bug-fix-only on beta.
+
+## Next — the 1.0.0 release
+
+- **RC → 1.0.0 on `main`.** Run the (already rehearsed) release train that
+  promotes all publishable packages together, with coordinated peer-range
+  re-pins, and publishes stable `1.0.0` to the `latest` dist-tag.
+- **Turn on the public SemVer + API-stability guarantee.** From 1.0, Core and
+  Stable-adapter packages are covered by SemVer, enforced by the API-snapshot
+  gate. Publish the guarantee and the deprecation policy.
+- **Verify the onboarding path against stable.** `lunora init` end-to-end against
+  npm `latest`, and publish the alpha→1.0 migration guide as the canonical
+  upgrade path.
+- **Announce the tiers and the stability policy** so adopters can make an
+  informed bet on 1.0.
+
+## Later — post-1.0 direction
+
+- **Promote the experimental tier on published criteria.** Define and publish the
+  bar each experimental package must clear (tests, workerd verification, docs,
+  API stability) to earn a SemVer commitment — then graduate `agent`, `replica`,
+  `x402`, `ai`, `browser`, `container`, `payment`, `react-native`, and `angular`
+  one at a time.
+- **Deferred capability plans** (designs already written in [`plans/`](./plans)):
+    - Streaming: port the HTTP-SSE `useHttpStream` surface to Vue/Solid/Svelte,
+      plus reconnect / POST-body / OpenAPI follow-ups ([`052`](./plans/052-streaming-hook-design.md), [`033`](./plans/033-stream.md)).
+    - Real-time calls over WebRTC ([`037`](./plans/037-realtime-calls-webrtc.md)).
+    - Promise pipelining / batched round-trips ([`089`](./plans/089-promise-pipelining-batch.md)).
+    - Custom scalar types ([`078`](./plans/078-custom-scalar-types.md)).
+    - Live CDC and DO-consumes-DO composition ([`133`](./plans/133-live-cdc-and-do-consumes-do.md)).
+- **Run beyond Cloudflare.** A platform-abstraction layer ([`114`](./plans/114-platform-abstraction-layer.md))
+  and additional deploy targets such as AWS ([`115`](./plans/115-aws-deploy-target.md)) — so
+  "your own account" isn't limited to one provider.
+- **Open governance.** A public RFC process for surface-changing proposals, a
+  contributor guide, and transparent stability-tier and deprecation decisions.
+
+---
+
+## Recently shipped
+
+Concrete evidence the project is actively maintained and hardening toward
+production. Each of these is merged, not planned:
+
+- **Workerd integration CI gate** — a required check exercises the real
+  Cloudflare runtime across a 10-package matrix (runtime, do, d1, storage,
+  scheduler, client, queue, workflow, container, x402 boot-smoke).
+- **Public API-snapshot guard** — per-package `.d.ts` surface snapshots diffed in
+  CI so breaking changes can't slip in as patches.
+- **Coverage ratchets + Codecov patch gate** — default 80% line / 70% branch
+  floors; new code can't land untested.
+- **Unconditional end-to-end suite** — no skip escape hatch; covers
+  `init → codegen → tsc`, offline-queue replay ordering, auth + RLS over live
+  WebSocket, and shard convergence. Plus a nightly full-matrix run.
+- **Security: ephemeral WebSocket admin tokens** — short-lived HMAC-signed tokens
+  replace raw master-token exposure in the connection URL.
+- **Production-readiness docs** — versioning & stability policy, a
+  production-checklist, the alpha→1.0 upgrade guide, and migration guides from
+  Convex, Firebase, and Supabase.
+- **Promotion mechanics** — exact-version sibling peer pins replaced with
+  promotion-safe ranges, guarded by a repo check, and the full release train
+  dry-run rehearsed.
+- **Observability** — request traces and a metrics buffer/panel surfaced in
+  Studio (in progress on `feat/observability-traces-metrics`).
+
+---
+
+_Questions, disagreements, or a capability you need prioritized? Open a
+discussion or an issue — this roadmap is meant to be argued with._

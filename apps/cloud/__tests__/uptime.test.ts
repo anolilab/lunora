@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ControlPlaneDb } from "../src/deploy/sweeps";
+import type { ControlPlaneDb } from "../src/store";
 import { nextConsecutiveFailures, probeDeployment, summarizeUptime } from "../src/uptime/probe";
 import type { UptimeProbe } from "../src/uptime/probe";
 import { runUptimeSweep } from "../src/uptime/sweep";

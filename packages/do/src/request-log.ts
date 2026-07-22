@@ -24,10 +24,12 @@
 import { fingerprintError } from "@lunora/fingerprint";
 import { redact, standardRules } from "@visulima/redact";
 
-import type { ContextLogLevel, LogEvent } from "../../../shared/log-event";
+import type { LogEvent } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
 import type { SqlCursor, SqlExec } from "./ctx-db";
+import type { IssueSeverity, IssueStatus } from "./issue-state";
+import { readIssueStates } from "./issue-state";
 
 /** Reserved append-only table backing the studio Logs tab. Auto-hidden from the data browser by the `__lunora` prefix. */
 const REQUEST_LOG_TABLE = "__lunora_reqlog__";
@@ -128,6 +130,8 @@ interface RequestLogResult {
  * object.
  */
 interface ErrorIssue {
+    /** Assignee (a userId or a name) from the persisted triage state; absent when unassigned. */
+    assignee?: string;
     /** Number of `error` rows folded into this Issue within the scanned window. */
     count: number;
     /** The `&lt;file>:&lt;function>` (or `container:&lt;name>`) the errors came from. */
@@ -140,6 +144,23 @@ interface ErrorIssue {
     lastSeen: number;
     /** A representative raw error message — taken from the most recent folded row. */
     sampleMessage: string;
+    /** Developer-tagged severity from the persisted triage state; absent when untriaged. */
+    severity?: IssueSeverity;
+
+    /**
+     * Wall-clock millis the persisted triage state was last changed; absent when
+     * the Issue has never been triaged. Compared against `lastSeen` to detect a
+     * regression (a new error after a resolve).
+     */
+    stateUpdatedAt?: number;
+
+    /**
+     * Triage status folded in from the persisted state (`open` by default). A
+     * `resolved` Issue whose `lastSeen` is newer than `stateUpdatedAt` is
+     * auto-reopened to `open` here (a regression), so a fresh occurrence never
+     * hides behind a stale resolution; `ignored` stays sticky by design.
+     */
+    status: IssueStatus;
     /** Human-readable title (first line of the sample message, capped). */
     title: string;
 }
@@ -157,6 +178,8 @@ interface ReadIssuesOptions {
     limit?: number;
     /** Exact shard-key match. */
     shardKey?: string;
+    /** Keep only Issues in this triage status, applied AFTER the persisted-state fold + auto-reopen. */
+    status?: IssueStatus;
     /** Exact acting-userId match. */
     userId?: string;
 }
@@ -382,13 +405,13 @@ const isLogFields = (value: unknown): value is LogFields => {
         return false;
     }
 
-    const proto = Object.getPrototypeOf(value);
+    const proto: unknown = Object.getPrototypeOf(value);
 
     return proto === Object.prototype || proto === null;
 };
 
 /**
- * Split a `ctx.log.<level>(...)` call's raw arguments into a display `message`
+ * Split a `ctx.log.&lt;level>(...)` call's raw arguments into a display `message`
  * and optional structured `fields`. The structured form — a message string plus
  * a plain-object fields bag — is matched only for exactly `(string, object)`;
  * every other shape is console-style and rendered whole (so existing
@@ -618,6 +641,38 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
  * which the fold reads. The `getIssues` subscription carries the admin wildcard,
  * so it re-runs on every write-flush; keeping this read lean matters.
  */
+
+/**
+ * Join each derived Issue with its persisted triage state, in place. A hash with
+ * no state row keeps the implicit `open` default; otherwise status/assignee/
+ * severity/`stateUpdatedAt` are folded in — with the auto-reopen rule: a
+ * `resolved` Issue that erred again AFTER it was resolved surfaces as `open` (a
+ * regression, so the fix isn't silently undone), while `ignored` stays sticky.
+ */
+const applyIssueStates = (sql: SqlExec, issues: Map<string, ErrorIssue>): void => {
+    const states = readIssueStates(sql, [...issues.keys()]);
+
+    for (const issue of issues.values()) {
+        const state = states.get(issue.hash);
+
+        if (state === undefined) {
+            continue;
+        }
+
+        issue.stateUpdatedAt = state.updatedAt;
+
+        if (state.assignee !== undefined) {
+            issue.assignee = state.assignee;
+        }
+
+        if (state.severity !== undefined) {
+            issue.severity = state.severity;
+        }
+
+        issue.status = state.status === "resolved" && issue.lastSeen > state.updatedAt ? "open" : state.status;
+    }
+};
+
 const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIssue[] => {
     ensureRequestLogTable(sql);
 
@@ -660,7 +715,8 @@ const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIs
         const existing = issues.get(hash);
 
         if (existing === undefined) {
-            issues.set(hash, { count: 1, culprit, firstSeen: row.ts, hash, lastSeen: row.ts, sampleMessage: message, title });
+            // `status` seeds to `open`; the persisted-state fold below overrides it.
+            issues.set(hash, { count: 1, culprit, firstSeen: row.ts, hash, lastSeen: row.ts, sampleMessage: message, status: "open", title });
             sampleTs.set(hash, row.ts);
 
             continue;
@@ -678,7 +734,14 @@ const readErrorIssues = (sql: SqlExec, options: ReadIssuesOptions = {}): ErrorIs
         }
     }
 
-    return [...issues.values()].toSorted((a, b) => b.lastSeen - a.lastSeen);
+    // Fold in the persisted triage state, batched over the folded hash set so the
+    // subscription's per-flush re-run stays a single extra `WHERE hash IN (...)`.
+    applyIssueStates(sql, issues);
+
+    const folded = [...issues.values()];
+    const filtered = options.status === undefined ? folded : folded.filter((issue) => issue.status === options.status);
+
+    return filtered.toSorted((a, b) => b.lastSeen - a.lastSeen);
 };
 
 export {
@@ -696,7 +759,6 @@ export {
 };
 export type {
     AppendRequestLogEntry,
-    ContextLogLevel,
     ErrorIssue,
     IssuesResult,
     LogEventInput,
@@ -707,3 +769,9 @@ export type {
     RequestLogWriteOptions,
     RequestOutcome,
 };
+export { type ContextLogLevel } from "../../../shared/log-event";
+
+// Re-exported straight from their source module (they're also imported above for
+// local use in `ErrorIssue`/`ReadIssuesOptions`); `export…from` keeps the single
+// source of truth per `unicorn/prefer-export-from`.
+export type { IssueSeverity, IssueStatus } from "./issue-state";

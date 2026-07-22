@@ -11,7 +11,7 @@ vi.mock(import("ai"), async (importOriginal) => {
 
     return {
         ...actual,
-        generateText: vi.fn(async () => {
+        generateText: vi.fn<() => Promise<{ text: string; toolCalls: never[]; usage: undefined }>>(async () => {
             return { text: "ok", toolCalls: [], usage: undefined };
         }) as unknown as typeof actual.generateText,
     };
@@ -22,7 +22,7 @@ const fakeModel = { specificationVersion: "v2" } as unknown as LanguageModel;
 
 describe(createAgentGenerate, () => {
     it("threads repairToolCall into the generateText request as experimental_repairToolCall", async () => {
-        const repair = vi.fn();
+        const repair = vi.fn<() => void>();
         const agent = defineAgent({ model: fakeModel, repairToolCall: repair as never });
 
         await createAgentGenerate(agent, {})({ messages: [] });

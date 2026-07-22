@@ -489,6 +489,18 @@ interface CsrfOptions {
 }
 ```
 
+### `DEFAULT_LOG_COLUMNS` (const)
+
+```ts
+const DEFAULT_LOG_COLUMNS: Readonly<Record<PipelineLogField, string>>;
+```
+
+### `DEFAULT_LOG_LIMIT` (const)
+
+```ts
+const DEFAULT_LOG_LIMIT: number;
+```
+
 ### `DEFAULT_REGISTRY_CACHE_TTL_MS` (const)
 
 ```ts
@@ -893,6 +905,18 @@ interface KvValueResult {
 }
 ```
 
+### `LOG_ARCHIVE_NOT_CONFIGURED` (const)
+
+```ts
+const LOG_ARCHIVE_NOT_CONFIGURED = "LOG_ARCHIVE_NOT_CONFIGURED";
+```
+
+### `LOG_ARCHIVE_PATH` (const)
+
+```ts
+const LOG_ARCHIVE_PATH = "/_lunora/admin/logs/archive";
+```
+
 ### `ListAuthUsersOptions` (interface)
 
 ```ts
@@ -905,6 +929,16 @@ interface ListAuthUsersOptions {
     searchField?: string;
     sortBy?: string;
     sortDirection?: "asc" | "desc";
+}
+```
+
+### `LogArchiveConfig` (interface)
+
+```ts
+interface LogArchiveConfig {
+    columnMap?: PipelineLogColumnMap;
+    namespace?: string;
+    table: string;
 }
 ```
 
@@ -1003,6 +1037,26 @@ type MergeStrategy = {
 };
 ```
 
+### `MetricEvent` (interface)
+
+```ts
+interface MetricEvent {
+    attributes?: LogFields;
+    functionPath: string;
+    kind: MetricKind;
+    name: string;
+    shardKey?: string;
+    ts: number;
+    value: number;
+}
+```
+
+### `MetricKind` (type)
+
+```ts
+type MetricKind = "counter" | "gauge" | "histogram";
+```
+
 ### `MigrationFanOutRequest` (interface)
 
 ```ts
@@ -1061,7 +1115,9 @@ interface ObservabilityEvent {
 ```ts
 interface ObservabilitySink {
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
+    onMetric?: (event: MetricEvent, context?: ObservabilitySinkContext) => void;
     onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
+    onSpan?: (event: SpanEvent, context?: ObservabilitySinkContext) => void;
 }
 ```
 
@@ -1090,11 +1146,93 @@ interface PipelineLike {
 }
 ```
 
+### `PipelineLogColumnMap` (type)
+
+```ts
+type PipelineLogColumnMap = Partial<Record<PipelineLogField, string>>;
+```
+
+### `PipelineLogCursor` (interface)
+
+```ts
+interface PipelineLogCursor {
+    ts: number;
+}
+```
+
+### `PipelineLogField` (type)
+
+```ts
+type PipelineLogField = keyof typeof DEFAULT_COLUMNS;
+```
+
+### `PipelineLogPage` (interface)
+
+```ts
+interface PipelineLogPage {
+    nextCursor?: PipelineLogCursor;
+    rows: PipelineLogRow[];
+}
+```
+
+### `PipelineLogQuery` (interface)
+
+```ts
+interface PipelineLogQuery {
+    cursor?: PipelineLogCursor;
+    functionPath?: string;
+    functionPathPrefix?: string;
+    level?: ContextLogLevel;
+    limit?: number;
+    minLevel?: ContextLogLevel;
+    shardKey?: string;
+    sinceTs?: number;
+    traceId?: string;
+    untilTs?: number;
+    userId?: string;
+}
+```
+
+### `PipelineLogReader` (interface)
+
+```ts
+interface PipelineLogReader {
+    query: (query?: PipelineLogQuery) => Promise<PipelineLogPage>;
+}
+```
+
+### `PipelineLogReaderOptions` (interface)
+
+```ts
+interface PipelineLogReaderOptions {
+    columnMap?: PipelineLogColumnMap;
+    namespace?: string;
+    table: string;
+}
+```
+
+### `PipelineLogRow` (interface)
+
+```ts
+interface PipelineLogRow {
+    fields?: unknown;
+    functionPath: string;
+    level: ContextLogLevel;
+    message: string;
+    shardKey?: string;
+    spanId?: string;
+    traceId?: string;
+    ts: number;
+    userId?: string;
+}
+```
+
 ### `PipelineLogSinkOptions` (interface)
 
 ```ts
 interface PipelineLogSinkOptions {
     pipeline: PipelineLike;
+    serializeFields?: boolean;
 }
 ```
 
@@ -1446,6 +1584,29 @@ interface ShardingInfo {
 }
 ```
 
+### `SpanEvent` (interface)
+
+```ts
+interface SpanEvent {
+    attributes?: LogFields;
+    durationMs: number;
+    error?: {
+        message: string;
+        type: string;
+    };
+    functionPath: string;
+    name: string;
+    ok: boolean;
+    parentSpanId: string;
+    dispatch?: boolean;
+    shardKey?: string;
+    spanId: string;
+    startTs: number;
+    traceId: string;
+    userId?: string;
+}
+```
+
 ### `StorageListFn` (type)
 
 ```ts
@@ -1560,6 +1721,7 @@ interface WorkerOptions {
     importGlobals?: GlobalImportFunction;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
+    logArchive?: LogArchiveConfig;
     observability?: ObservabilitySink;
     openApiSpec?: unknown;
     openRpcSpec?: unknown;
@@ -1639,6 +1801,12 @@ const createDynamicShardRegistry: (options: DynamicShardRegistryOptions) => Dyna
 
 ```ts
 const createLunoraHandler: (options?: LunoraHandlerOptions) => ((request: Request, env: unknown, context?: ExecutionContextLike) => Promise<Response>);
+```
+
+### `createPipelineLogReader` (const)
+
+```ts
+const createPipelineLogReader: (client: R2SqlClient, options: PipelineLogReaderOptions) => PipelineLogReader;
 ```
 
 ### `createQueryCoordinator` (const)

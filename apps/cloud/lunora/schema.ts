@@ -119,9 +119,12 @@ export default defineSchema({
 
     deployments: defineTable({
         // Tenant admin bearer the platform set on the deployed worker; lets the
-        // hosted-studio admin proxy (§3) call its /_lunora/admin/*. Should be
-        // envelope-encrypted at rest (§7) — stored plain here for the scaffold.
+        // hosted-studio admin proxy (§3) call its /_lunora/admin/*. Sealed at rest
+        // with SECRET_ENCRYPTION_KEY (§7): ciphertext + IV below. `adminToken`
+        // (plaintext) is the dev-only fallback written when no master key is set.
         adminToken: v.optional(v.string()),
+        adminTokenCiphertext: v.optional(v.string()),
+        adminTokenIv: v.optional(v.string()),
         // Stable (unversioned) script label — the project's public subdomain.
         // The dispatcher resolves alias → the project's active versioned script.
         alias: v.optional(v.string()),

@@ -10,7 +10,7 @@
         "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit",
         "test": "vitest run",

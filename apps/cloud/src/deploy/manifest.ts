@@ -9,15 +9,11 @@
  * uploaded Worker needs and the crons the fan-out must drive.
  */
 
-/** The binding manifest the deploy request carries (mirrors the handler's `DeployBindings`). */
-export interface DeployManifestBindings {
-    d1?: { binding: string };
-    durableObjects?: { binding: string; className: string }[];
-    r2?: { binding: string };
-}
+import type { TenantBindingSpec } from "../provision";
 
 export interface DeployManifest {
-    bindings: DeployManifestBindings;
+    /** The binding manifest the deploy request carries (the canonical provisioner shape). */
+    bindings: TenantBindingSpec;
     /** The tenant's compiled cron expressions (wrangler `triggers.crons`). */
     cronSpecs: string[];
 }
