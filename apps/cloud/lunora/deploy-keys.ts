@@ -1,3 +1,4 @@
+import { isDeployCapable } from "../src/deploy/capability";
 import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
@@ -130,8 +131,9 @@ export const verify = mutation.input({ key: v.string() }).mutation(
         // Reject a telemetry `ingest` key here too — this is the guard the deploy
         // route actually runs (`verifyKey`), so without it a scoped ingest token
         // would still be able to deploy. `authorizeDeployKey` blocks it on the
-        // per-mutation paths; this blocks it at the deploy entrypoint.
-        if (!row || row.revokedAt !== undefined || row.capability === "ingest") {
+        // per-mutation paths; this blocks it at the deploy entrypoint (same
+        // predicate, so they can't disagree).
+        if (!row || row.revokedAt !== undefined || !isDeployCapable(row)) {
             return null;
         }
 

@@ -22,8 +22,7 @@ export const REDACTED = "[redacted]";
 // are caught, where a bounded `\btoken\b` silently leaked them. `key` stays scoped
 // to credential-ish prefixes so an innocuous `shard_key` / `idempotency_key` is not
 // redacted.
-const SENSITIVE_KEY =
-    /authorization|password|passwd|secret|credential|(?:api|access|private|secret|client|encryption)[-_]?key|token|\bcookie\b|set-cookie|session/i;
+const SENSITIVE_KEY = /authorization|password|passwd|secret|credential|(?:api|access|private|client|encryption)[_-]?key|token|\bcookie\b|set-cookie|session/i;
 
 /** True when a field/attribute key names something secret and its value should be scrubbed. */
 export const isSensitiveKey = (key: string): boolean => SENSITIVE_KEY.test(key);
@@ -33,11 +32,11 @@ export const isSensitiveKey = (key: string): boolean => SENSITIVE_KEY.test(key);
 // nested quantifiers, so no ReDoS. Case-insensitive.
 const SECRET_IN_TEXT = new RegExp(
     [
-        "(bearer\\s+)[A-Za-z0-9._~+/-]{8,}={0,2}", // Authorization: Bearer <token>
-        "\\bsk-[A-Za-z0-9]{16,}\\b", // OpenAI-style api keys
-        "\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{6,}", // JWTs
-        "\\bAKIA[0-9A-Z]{16}\\b", // AWS access key ids
-        "((?:password|passwd|secret|token|api[_-]?key)\\s*[=:]\\s*)\\S+", // key=value / key: value
+        String.raw`(bearer\s+)[\w.~+/=-]{8,}`, // Authorization: Bearer <token>
+        String.raw`\bsk-[a-z\d]{16,}\b`, // OpenAI-style api keys
+        String.raw`\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{6,}`, // JWTs
+        String.raw`\bAKIA[a-z\d]{16}\b`, // AWS access key ids
+        String.raw`((?:password|passwd|secret|token|api[_-]?key)\s*[=:]\s*)\S+`, // key=value / key: value
     ].join("|"),
     "gi",
 );
@@ -56,7 +55,7 @@ export const redactText = (text: string | undefined): string | undefined => {
 
     // The regex has two prefix-capturing alternatives — `(bearer )` and
     // `(key=)` — so use whichever one matched (the rest capture nothing).
-    return text.replace(SECRET_IN_TEXT, (_match, bearerPrefix?: string, keyPrefix?: string) => `${bearerPrefix ?? keyPrefix ?? ""}${REDACTED}`);
+    return text.replaceAll(SECRET_IN_TEXT, (_match, bearerPrefix?: string, keyPrefix?: string) => `${bearerPrefix ?? keyPrefix ?? ""}${REDACTED}`);
 };
 
 /**
