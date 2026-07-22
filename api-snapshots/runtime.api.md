@@ -2127,6 +2127,7 @@ interface WorkerOptions {
     passThroughOnException?: boolean;
     queryCoordinator?: QueryCoordinator;
     queue?: QueueConsumerHandler;
+    queueHandler?: QueueForwardHandler;
     requireEphemeralWsToken?: boolean;
     resolveIdentity?: (request: Request, env: unknown) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
     resolveTableSharding?: AdminTableResolver;

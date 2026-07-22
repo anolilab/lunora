@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/server";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { assertMember, authorizeDeployKey } from "./authz";
+import { assertMember, authorizeTelemetryKey } from "./authz";
 
 /**
  * Tenant runtime logs (GAPS.md B2) — full log management. The dispatch-namespace
@@ -170,7 +170,7 @@ export const ingest = mutation
         scriptName: v.string(),
     })
     .mutation(async ({ ctx: context, args: { deployKey, lines, organizationId, scriptName } }): Promise<{ ingested: number }> => {
-        await authorizeDeployKey(context, organizationId, deployKey);
+        await authorizeTelemetryKey(context, organizationId, deployKey);
 
         if (lines.length > MAX_BATCH) {
             throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_BATCH)} lines)`);
@@ -224,19 +224,22 @@ export const ingestInternal = internalMutation
  * A script's log lines, newest first, with server-side filtering: `levels`
  * (severity allow-set), `functionPath` (exact), `traceId` (exact — every line in
  * one trace), `search` (case-insensitive over message / function / field
- * values), and `afterCreatedAt` (only newer than a cursor, for incremental
- * tailing). Bounded by `limit` (default {@link DEFAULT_LIMIT}, capped at
- * {@link MAX_LIMIT}). Members only.
+ * values), `afterCreatedAt` (only newer than a cursor, for incremental tailing),
+ * and a `from`/`to` time window (the shared dashboard time-range picker — lines
+ * created within `[from, to]`). Bounded by `limit` (default {@link DEFAULT_LIMIT},
+ * capped at {@link MAX_LIMIT}). Members only.
  */
 export const list = query
     .input({
         afterCreatedAt: v.optional(v.number()),
+        from: v.optional(v.number()),
         functionPath: v.optional(v.string()),
         levels: v.optional(v.array(logLevel)),
         limit: v.optional(v.number()),
         organizationId: v.id("organizations"),
         scriptName: v.string(),
         search: v.optional(v.string()),
+        to: v.optional(v.number()),
         traceId: v.optional(v.string()),
     })
     .query(async ({ ctx: context, args }): Promise<TenantLogView[]> => {
@@ -263,6 +266,8 @@ export const list = query
         const { page } = await context.db.tenantLogs.findMany({ limit: MAX_LIMIT, orderBy: [{ createdAt: "desc" }], where });
 
         const cursor = args.afterCreatedAt ?? Number.NEGATIVE_INFINITY;
+        const from = args.from ?? Number.NEGATIVE_INFINITY;
+        const to = args.to ?? Number.POSITIVE_INFINITY;
         const levelSet = args.levels && args.levels.length > 0 ? new Set<LogLevel>(args.levels) : undefined;
         const needle = args.search?.trim().toLowerCase();
 
@@ -270,6 +275,10 @@ export const list = query
 
         for (const row of page as unknown as TenantLogRow[]) {
             if (row.createdAt <= cursor) {
+                continue;
+            }
+
+            if (row.createdAt < from || row.createdAt > to) {
                 continue;
             }
 

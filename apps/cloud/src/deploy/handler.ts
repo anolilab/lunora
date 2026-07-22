@@ -1,4 +1,4 @@
-import type { Provisioner, TenantDeploymentSpec } from "../provision";
+import type { Provisioner, TenantBindingSpec, TenantDeploymentSpec } from "../provision";
 import { randomSecret } from "./keys";
 import type { DeployProgress } from "./orchestrator";
 import { runDeployment } from "./orchestrator";
@@ -37,6 +37,8 @@ export interface DeployBackend {
     createDeployment: (input: {
         adminToken: string;
         branch?: string;
+        /** The tenant's compiled cron expressions for the WfP cron fan-out (§2.4). */
+        cronSpecs?: string[];
         key: string;
         kind: DeployKind;
         organizationId: string;
@@ -64,17 +66,77 @@ export interface DeployHandlerDeps {
     /** Probe the uploaded script's URL before release (GAPS.md A1); `false` fails the deployment without touching the active pointer. Omit to skip health gating. */
     healthCheck?: (url: string) => Promise<boolean>;
     provisioner: Provisioner;
+    /**
+     * Resolve the telemetry config injected into a tenant Worker: the OTLP ingest
+     * endpoint (set as a `LUNORA_OTLP_ENDPOINT` var), a scoped ingest token (set
+     * as a `LUNORA_OTLP_TOKEN` secret, so a tenant's `otlpSink` ships to the
+     * cloud), and the tail-consumer service to wire. Omit — or return undefined —
+     * to deploy without telemetry (everything still works). Best-effort: a throw
+     * is swallowed and the deploy proceeds untelemetered.
+     */
+    resolveTelemetry?: (input: { key: string; organizationId: string }) => Promise<undefined | { endpoint: string; tailConsumer?: string; token: string }>;
     scheduler: CellScheduler;
 }
 
 interface DeployBody {
+    /**
+     * Per-tenant binding manifest (DO classes / D1 / R2), as declared by the
+     * deploy request — the CLI reads it from the app's `wrangler.jsonc`. The
+     * canonical {@link TenantBindingSpec} shape; {@link normalizeBindings} floors
+     * it to ShardDO before provisioning.
+     */
+    bindings?: TenantBindingSpec;
     branch?: string;
+    /** The tenant's cron expressions (wrangler `triggers.crons`) for the fan-out (§2.4). */
+    cronSpecs?: string[];
     /** Base64-encoded prebuilt worker module (the app's Vite build output — never built here). */
     bundle?: string;
     kind?: DeployKind;
     projectId?: string;
     scriptName?: string;
 }
+
+/**
+ * Every Lunora tenant worker exports `ShardDO` (binding `SHARD`); without its
+ * binding and the matching `new_sqlite_classes` migration tag the uploaded
+ * dispatch script cannot boot (`putDispatchScript` omits the DO migration and
+ * the worker's `ShardDO` export has nowhere to bind). This is the floor the
+ * whole deploy path was missing — the spec was previously built with an empty
+ * binding set, so a real tenant could never come up.
+ */
+const SHARD_DO_BINDING = { binding: "SHARD", className: "ShardDO" } as const;
+
+/** Cap the declared DO classes so a malformed/abusive manifest can't balloon the upload metadata. */
+const MAX_DURABLE_OBJECTS = 25;
+
+const isBindingRef = (value: unknown): value is { binding: string } =>
+    typeof value === "object" && value !== null && typeof (value as { binding?: unknown }).binding === "string";
+
+/**
+ * Resolve the request's binding manifest into the provisioner spec, guaranteeing
+ * the ShardDO floor even when the caller under-declares (or omits `bindings`
+ * entirely). Malformed entries are dropped rather than trusted, and the DO list
+ * is capped.
+ */
+const normalizeBindings = (requested: TenantBindingSpec | undefined): TenantBindingSpec => {
+    const declared = Array.isArray(requested?.durableObjects) ? requested.durableObjects : [];
+    const durableObjects = declared
+        .filter(
+            (entry): entry is { binding: string; className: string } => isBindingRef(entry) && typeof (entry as { className?: unknown }).className === "string",
+        )
+        .slice(0, MAX_DURABLE_OBJECTS)
+        .map((entry) => ({ binding: entry.binding, className: entry.className }));
+
+    if (!durableObjects.some((entry) => entry.className === SHARD_DO_BINDING.className)) {
+        durableObjects.unshift({ ...SHARD_DO_BINDING });
+    }
+
+    return {
+        ...(isBindingRef(requested?.d1) ? { d1: { binding: requested.d1.binding } } : {}),
+        ...(isBindingRef(requested?.r2) ? { r2: { binding: requested.r2.binding } } : {}),
+        durableObjects,
+    };
+};
 
 const json = (status: number, data: unknown): Response => Response.json(data, { headers: { "content-type": "application/json" }, status });
 
@@ -146,6 +208,8 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
 
     const kind = body.kind ?? target.type;
     const { branch, projectId, scriptName } = body;
+    // Tenant cron expressions to fan out (§2.4). Defensive: only strings, capped.
+    const cronSpecs = Array.isArray(body.cronSpecs) ? body.cronSpecs.filter((cron): cron is string => typeof cron === "string").slice(0, 50) : undefined;
 
     // The platform-minted tenant admin token: recorded on the deployment (for the
     // admin proxy) and set as the worker's LUNORA_ADMIN_TOKEN secret.
@@ -161,6 +225,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
         const created = await deps.backend.createDeployment({
             adminToken,
             branch,
+            ...(cronSpecs && cronSpecs.length > 0 ? { cronSpecs } : {}),
             key,
             kind,
             organizationId: target.organizationId,
@@ -203,14 +268,31 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 return;
             }
 
+            // Resolve the telemetry config to inject (endpoint var + ingest-token
+            // secret + tail consumer). Best-effort — a failure here must not fail
+            // the deploy, so the tenant just ships untelemetered.
+            let telemetry: undefined | { endpoint: string; tailConsumer?: string; token: string };
+
+            try {
+                telemetry = await deps.resolveTelemetry?.({ key, organizationId: target.organizationId });
+            } catch {
+                telemetry = undefined;
+            }
+
             const spec: TenantDeploymentSpec = {
-                bindings: {},
+                // The stable project label (pre-versioning) keys per-tenant D1/R2,
+                // so data persists across deploys; the versioned releaseScriptName
+                // is the immutable per-deployment worker script id.
+                alias: scriptName,
+                bindings: normalizeBindings(body.bindings),
                 bundle,
                 cell: deps.cell,
                 dispatchNamespace: deps.dispatchNamespace(kind),
                 scriptName: releaseScriptName,
-                secrets: { ...tenantSecrets, LUNORA_ADMIN_TOKEN: adminToken },
+                secrets: { ...tenantSecrets, LUNORA_ADMIN_TOKEN: adminToken, ...(telemetry ? { LUNORA_OTLP_TOKEN: telemetry.token } : {}) },
+                ...(telemetry?.tailConsumer ? { tailConsumers: [telemetry.tailConsumer] } : {}),
                 tags: [`org:${target.organizationId}`, `project:${projectId}`, `env:${kind}`],
+                ...(telemetry ? { vars: { LUNORA_OTLP_ENDPOINT: telemetry.endpoint } } : {}),
             };
 
             const { healthCheck } = deps;
