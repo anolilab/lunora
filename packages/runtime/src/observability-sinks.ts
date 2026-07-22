@@ -243,13 +243,33 @@ const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
     return wrapResourceLogs(logRecord, "@lunora/runtime", serviceName);
 };
 
-/** POST an OTLP payload fire-and-forget, keeping it alive past the response when a request context is present. */
+/** Above this serialized size, an OTLP body is gzipped; tiny single-span posts skip it (the CPU isn't worth the few saved bytes). */
+const OTLP_GZIP_THRESHOLD = 1024;
+
+/** gzip a UTF-8 string to an `ArrayBuffer` (a `BodyInit`) via the platform `CompressionStream` (no dependency). */
+const gzipEncode = async (text: string): Promise<ArrayBuffer> => {
+    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+
+    return new Response(stream).arrayBuffer();
+};
+
+/**
+ * POST an OTLP payload fire-and-forget, keeping it alive past the response when a
+ * request context is present. Bodies past {@link OTLP_GZIP_THRESHOLD} are gzipped
+ * (`Content-Encoding: gzip`) — standard OTLP/HTTP, which every collector (and the
+ * Lunora cloud ingest) decodes.
+ */
 const otlpPost = (url: string, body: unknown, headers: Record<string, string>, context?: ObservabilitySinkContext): void => {
     try {
+        const json = JSON.stringify(body);
         // `.catch` swallows any rejection so a failed export can never reject
         // into the dispatch path.
-        const sent = fetch(url, { body: JSON.stringify(body), headers, method: "POST" }).catch(() => {
-            // Network error / non-OK response — intentionally ignored.
+        const sent = (
+            json.length < OTLP_GZIP_THRESHOLD
+                ? fetch(url, { body: json, headers, method: "POST" })
+                : gzipEncode(json).then((gz) => fetch(url, { body: gz, headers: { ...headers, "content-encoding": "gzip" }, method: "POST" }))
+        ).catch(() => {
+            // Network error / non-OK response / gzip failure — intentionally ignored.
         });
 
         if (context?.waitUntil) {
