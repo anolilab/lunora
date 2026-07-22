@@ -20,7 +20,7 @@ import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import { buildBatchEntryRequest } from "./batch";
-import type { ContextMetrics, ContextTracer, TraceAnchor } from "./context-telemetry";
+import type { CloudflareTracingLike, ContextMetrics, ContextTracer, TraceAnchor } from "./context-telemetry";
 import { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
 import type { CdcChange, SqlExec } from "./ctx-db";
 import {
@@ -186,10 +186,65 @@ const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes
  * `@lunora/runtime`'s `ObservabilitySink` without taking a dependency on it.
  */
 interface TelemetrySink {
+    /**
+     * **Opt-in, EXPERIMENTAL, default off.** When `true`, each `ctx.trace` span is
+     * ALSO emitted as a Cloudflare **custom span** (`tracing.enterSpan` from
+     * `cloudflare:workers`, GA 2026-06-16) so it nests inside CF's native trace
+     * tree on the hosted path — capability-probed, and a safe no-op off-CF / on an
+     * older compat date / when unsampled. This only ADDS a CF-side span; the
+     * `onSpan` event below (our `SpanBuffer`/`otlpSink`) is unchanged and stays the
+     * source of truth. Mirror of `@lunora/runtime`'s `ObservabilitySink`
+     * `fuseCloudflareTraces`; see {@link createTracer} for the double-export caveat.
+     */
+    fuseCloudflareTraces?: boolean;
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
 }
+
+/**
+ * Memoized resolution of CF's `tracing` namespace, or `undefined` when custom
+ * spans are unavailable. Backs the opt-in `makeTracer` Cloudflare custom-spans
+ * bridge (see {@link createTracer}).
+ *
+ * Deliberately a guarded DYNAMIC import, not a top-level
+ * `import { tracing } from "cloudflare:workers"`. A static named import of
+ * `tracing` would be a module link-time dependency — on a compat date predating
+ * custom spans the binding may not exist, and `@lunora/do` is also imported in
+ * plain Node (the `@lunora/testing` harness), where `cloudflare:workers` cannot
+ * resolve at all. The dynamic import runs ONLY when the bridge is enabled
+ * (default off), and its `catch` turns any absence into a safe `undefined`.
+ * `enterSpan` is additionally feature-probed (`typeof … === "function"`) so an
+ * older runtime exposing a partial `tracing` still no-ops rather than throwing.
+ *
+ * Resolved at most once per isolate and cached (including the "unavailable"
+ * verdict), so the import cost is paid a single time.
+ */
+let cloudflareTracingResolved = false;
+
+let cloudflareTracing: CloudflareTracingLike | undefined;
+
+const resolveCloudflareTracing = async (): Promise<CloudflareTracingLike | undefined> => {
+    if (!cloudflareTracingResolved) {
+        cloudflareTracingResolved = true;
+
+        try {
+            const cloudflareModule = (await import("cloudflare:workers")) as { tracing?: unknown };
+            const candidate = cloudflareModule.tracing;
+
+            cloudflareTracing =
+                candidate !== null && typeof candidate === "object" && typeof (candidate as CloudflareTracingLike).enterSpan === "function"
+                    ? (candidate as CloudflareTracingLike)
+                    : undefined;
+        } catch {
+            // Off-Cloudflare (e.g. the Node test harness) or a runtime without the
+            // module — custom spans simply aren't available. A safe no-op.
+            cloudflareTracing = undefined;
+        }
+    }
+
+    return cloudflareTracing;
+};
 
 /**
  * Structural shape of the `ctx.log` logger the DO builds (see the server
@@ -4731,14 +4786,19 @@ abstract class ShardDO {
      * `anchor` is the trace this ctx's spans belong to; omit it for a ctx with no
      * owning dispatch (an alarm, a subscription re-run) to mint a fresh anchor, so
      * `ctx.trace` still yields a coherent self-contained trace there.
+     *
+     * The Cloudflare custom-spans bridge is threaded here but stays off unless the
+     * resolved sink sets `fuseCloudflareTraces` (see {@link resolveCloudflareTracing}).
      */
     protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer {
         return createTracer({
             anchor: anchor ?? resolveTraceAnchor(undefined),
+            fuseCloudflareSpans: sink?.fuseCloudflareTraces === true,
             functionPath,
             record: (span) => {
                 this.recordSpan(span, sink);
             },
+            resolveCloudflareTracing,
             shardKey: this.state.id?.name,
             userId: () => this.getCurrentUserId(),
         });
