@@ -40,7 +40,7 @@ export {
     readAuthMetrics,
     recordAuthEvent,
 } from "./auth-metrics";
-export type { ContextMetrics, ContextTracer, MetricsDeps, TraceAnchor, TracerDeps } from "./context-telemetry";
+export type { ContextMetrics, ContextTracer, MetricsDeps, SpanHandle, TraceAnchor, TracerDeps } from "./context-telemetry";
 export { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
 export type {
     BroadcastDelta,

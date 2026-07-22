@@ -328,6 +328,63 @@ describe("ctx.trace", () => {
         expect(seen[1]?.attributes).toStrictEqual({ count: "1" });
     });
 
+    it("merges post-hoc attributes set through the span handle after an await", async () => {
+        expect.assertions(2);
+
+        const seen: SpanEvent[] = [];
+        const trace = tracerInto(seen);
+
+        // Token usage / cost is only known after the async body resolves — the
+        // classic case the span handle exists for.
+        await trace(
+            "ai.embed",
+            async (_child, handle) => {
+                await Promise.resolve();
+                handle.setAttribute("gen_ai.usage.input_tokens", 12);
+                handle.setAttributes({ cost: 0.0004, ok: true });
+            },
+            { "gen_ai.request.model": "@cf/baai/bge-base-en-v1.5" },
+        );
+
+        expect(seen[0]?.attributes).toStrictEqual({
+            "gen_ai.request.model": "@cf/baai/bge-base-en-v1.5",
+            "gen_ai.usage.input_tokens": 12,
+            cost: 0.0004,
+            ok: true,
+        });
+        // Non-primitive post-hoc values are coerced to JSON-safe primitives, exactly like start attributes.
+        expect(seen[0]?.attributes?.["cost"]).toBe(0.0004);
+    });
+
+    it("lets a post-hoc attribute win over a start attribute on a key clash", async () => {
+        expect.assertions(1);
+
+        const seen: SpanEvent[] = [];
+        const trace = tracerInto(seen);
+
+        await trace(
+            "work",
+            (_child, handle) => {
+                handle.setAttribute("status", "done");
+            },
+            { status: "pending" },
+        );
+
+        expect(seen[0]?.attributes).toStrictEqual({ status: "done" });
+    });
+
+    it("keeps a legacy body that ignores the span handle working unchanged", async () => {
+        expect.assertions(2);
+
+        const seen: SpanEvent[] = [];
+        const trace = tracerInto(seen);
+
+        // A `(trace) => …` body that never touches the second arg — the pre-existing
+        // call shape — records exactly its start attributes and nothing more.
+        await expect(trace("work", () => 7, { a: 1 })).resolves.toBe(7);
+        expect(seen[0]?.attributes).toStrictEqual({ a: 1 });
+    });
+
     it("survives a throwing recorder without failing the traced body", async () => {
         expect.assertions(1);
 
