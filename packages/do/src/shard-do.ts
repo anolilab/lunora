@@ -102,6 +102,7 @@ import { LogBuffer } from "./log-buffer";
 import type { RecordMailInput } from "./mail-catcher";
 import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 import { MetricBuffer } from "./metric-buffer";
+import { readMetricHistory, recordMetricHistory } from "./metric-history";
 import { armRestore, readBookmark } from "./pitr";
 import type { QueryStatEntry } from "./query-metrics";
 import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
@@ -4735,18 +4736,43 @@ abstract class ShardDO {
      * cross-instance aggregation is still the sink's job.
      */
     protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void {
-        try {
-            this.metricSeries.push(event);
-        } catch {
-            // Folding is best-effort: a malformed event must not break the handler.
-        }
+        // Stamp the exemplar: the measurement inherits the recording dispatch's
+        // trace id (when it ran inside one), so a metric point can link to a trace.
+        // Owned here, not by `createMetrics` — the shard is what knows the current
+        // request's trace context.
+        const exemplarTraceId = this.currentRequestTrace?.traceId;
+        const stamped: MetricEvent = exemplarTraceId === undefined ? event : { ...event, traceId: exemplarTraceId };
 
-        if (sink?.onMetric) {
+        // Every target is best-effort: recording a measurement must never break the
+        // handler that recorded it (a malformed event, a SQLite write failure, a
+        // buggy sink). One swallow so the policy is stated once, not per target.
+        const bestEffort = (run: () => void): void => {
             try {
-                sink.onMetric(event, { waitUntil: this.state.waitUntil?.bind(this.state) });
+                run();
             } catch {
-                // A buggy metric sink must not break the handler.
+                // Telemetry is best-effort — see above.
             }
+        };
+
+        // Live in-memory fold (the "recent on this instance" readout).
+        bestEffort(() => {
+            this.metricSeries.push(stamped);
+        });
+
+        // Durable per-minute rollups. Use the RAW storage handle, NOT `this.sql`:
+        // the getter instruments statements into the Query Insights leaderboard
+        // during a dispatch, and these housekeeping writes would be misattributed
+        // to the user function that recorded the metric (matching recordFunctionMetric
+        // et al., which all write through the raw handle for the same reason).
+        const rawSql = this.state.storage.sql as unknown as SqlExec;
+
+        bestEffort(() => {
+            recordMetricHistory(rawSql, stamped, exemplarTraceId);
+        });
+
+        // Optional export sink (the durable, cross-instance path).
+        if (sink?.onMetric) {
+            bestEffort(() => sink.onMetric?.(stamped, { waitUntil: this.state.waitUntil?.bind(this.state) }));
         }
     }
 
@@ -6382,6 +6408,16 @@ abstract class ShardDO {
             // for the third signal — a "recent metrics on this instance" readout that
             // resets on hibernation; durable aggregation is the sink's job.
             return { series: this.metricSeries.entries() };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getMetricHistory) {
+            // Durable per-minute rollups of `ctx.metrics.*` from the shard's SQLite,
+            // grouped per series with buckets oldest-first — the trend counterpart to
+            // getMetricSeries' live snapshot. Survives hibernation; each bucket carries
+            // an exemplar traceId so the panel can link a point to a trace. Read whole
+            // (clamped by the module's row limit) and windowed client-side, like the
+            // getMetrics history the metrics panel already charts.
+            return readMetricHistory(this.sql as SqlExec);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getSettings) {

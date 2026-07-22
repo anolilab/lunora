@@ -1,5 +1,5 @@
-import type { ContextMetrics, ContextTracer } from "@lunora/do";
-import type { LunoraMetrics, LunoraTracer } from "@lunora/server";
+import type { ContextMetrics, ContextTracer, SpanHandle as DoSpanHandle } from "@lunora/do";
+import type { LunoraMetrics, LunoraTracer, SpanHandle as ServerSpanHandle } from "@lunora/server";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -34,6 +34,13 @@ const TRACER_CONTRACT_GUARD: MutuallyAssignable<ContextTracer, LunoraTracer> = t
 
 const METRICS_CONTRACT_GUARD: MutuallyAssignable<ContextMetrics, LunoraMetrics> = true;
 
+// The `SpanHandle` the tracer's body receives (post-hoc attributes). `@lunora/do`
+// re-exports the shared/bundler-inlined shape; `@lunora/server` mirrors it
+// structurally — this fails the build if the two drift. Unlike the tracer guard,
+// `SpanHandle`'s members are non-optional, so a widened/renamed/dropped method is
+// caught outright (no trailing-optional blind spot).
+const SPAN_HANDLE_CONTRACT_GUARD: MutuallyAssignable<DoSpanHandle, ServerSpanHandle> = true;
+
 describe("ctx telemetry contract", () => {
     it("keeps @lunora/do's ContextTracer in lockstep with @lunora/server's LunoraTracer", () => {
         expect.assertions(1);
@@ -45,5 +52,11 @@ describe("ctx telemetry contract", () => {
         expect.assertions(1);
 
         expect(METRICS_CONTRACT_GUARD).toBe(true);
+    });
+
+    it("keeps @lunora/do's SpanHandle in lockstep with @lunora/server's SpanHandle", () => {
+        expect.assertions(1);
+
+        expect(SPAN_HANDLE_CONTRACT_GUARD).toBe(true);
     });
 });

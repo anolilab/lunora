@@ -16,6 +16,7 @@ import type {
     RegisteredMutation,
     RegisteredQuery,
     Schema,
+    SpanHandle,
     TableDefinition,
 } from "@lunora/server";
 
@@ -250,13 +251,23 @@ const stubProxy = (surface: string): unknown =>
     });
 
 /**
+ * A no-op {@link SpanHandle} for the harness: post-hoc attributes have nowhere
+ * to go without a sink, so accept and drop them (like `noopMetrics`).
+ */
+const noopSpan: SpanHandle = {
+    setAttribute: () => undefined,
+    setAttributes: () => undefined,
+};
+
+/**
  * `ctx.trace` under test: runs the body and returns its value, recording
  * nothing. There is no sink in the harness, so a span has nowhere to go — but
  * the body must still execute and its result and any throw must pass through
- * untouched, or instrumenting a handler would change what the test observes.
+ * untouched, or instrumenting a handler would change what the test observes. The
+ * body still receives a (no-op) span handle so post-hoc attributes are accepted.
  */
-const passthroughTrace: LunoraTracer = async <T>(_name: string, function_: (trace: LunoraTracer) => Promise<T> | T): Promise<T> =>
-    await function_(passthroughTrace);
+const passthroughTrace: LunoraTracer = async <T>(_name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T): Promise<T> =>
+    await function_(passthroughTrace, noopSpan);
 
 /** `ctx.metrics` under test: accepts every measurement and records nothing. */
 const noopMetrics: LunoraMetrics = {

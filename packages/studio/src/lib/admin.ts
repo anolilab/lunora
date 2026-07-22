@@ -57,6 +57,7 @@ export const ADMIN_FUNCTIONS = {
     listTableIndexes: "__lunora_admin__:listTableIndexes",
     listWorkflows: "__lunora_admin__:listWorkflows",
     getLogs: "__lunora_admin__:getLogs",
+    getMetricHistory: "__lunora_admin__:getMetricHistory",
     getMetricSeries: "__lunora_admin__:getMetricSeries",
     getMetrics: "__lunora_admin__:getMetrics",
     getPitrBookmark: "__lunora_admin__:getPitrBookmark",
@@ -1084,6 +1085,8 @@ export interface MetricSeries {
     attributes?: Record<string, unknown>;
     /** Number of measurements folded into this series. */
     count: number;
+    /** Trace id of the most recent measurement that carried one — the series' exemplar, for linking to a trace. */
+    exemplarTraceId?: string;
     /** Epoch-ms of the first measurement folded in. */
     firstTs: number;
     /** Function path that recorded the series' most recent measurement. */
@@ -1109,6 +1112,43 @@ export interface MetricSeries {
 /** Payload of a `__lunora_admin__:getMetricSeries` call: the aggregated series, most-recently-updated first. */
 export interface MetricSeriesResult {
     series: MetricSeries[];
+}
+
+/**
+ * One time-bucket sample of a series' durable history, mirroring `@lunora/do`'s
+ * `MetricHistoryPoint`: the per-minute aggregate over `[bucketMs, bucketMs + 60s)`,
+ * persisted in the shard's SQLite so it survives hibernation. `exemplarTraceId`
+ * (when present) links the point to a trace that produced a measurement in it.
+ */
+export interface MetricHistoryPoint {
+    bucketMs: number;
+    count: number;
+    exemplarTraceId?: string;
+    last: number;
+    max: number;
+    min: number;
+    sum: number;
+}
+
+/**
+ * One series' durable history returned by `__lunora_admin__:getMetricHistory`,
+ * mirroring `@lunora/do`'s `MetricHistorySeries`: the same `(name, kind,
+ * attributes)` identity as {@link MetricSeries}, with its buckets in ascending
+ * time order — ready to chart as a trend line. The durable trend complement to
+ * getMetricSeries' live snapshot.
+ */
+export interface MetricHistorySeries {
+    attributes?: Record<string, unknown>;
+    functionPath: string;
+    kind: MetricKind;
+    name: string;
+    points: MetricHistoryPoint[];
+    shardKey?: string;
+}
+
+/** Payload of a `__lunora_admin__:getMetricHistory` call: every tracked series with its time-ordered buckets. */
+export interface MetricHistoryResult {
+    series: MetricHistorySeries[];
 }
 
 /**
