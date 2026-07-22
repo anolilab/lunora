@@ -3,6 +3,7 @@ import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
+import { CrossTabLink } from "./CrossTabLink";
 import type { OrgId } from "./types";
 
 interface IssuesSectionProps {
@@ -58,9 +59,9 @@ export const IssuesSection = ({ onOpenTab, organizationId }: IssuesSectionProps)
                                     <td>{issue.status}</td>
                                     <td>
                                         {issue.sampleTraceId && onOpenTab ? (
-                                            <button className="trace-link" onClick={() => onOpenTab("traces", { traceId: issue.sampleTraceId })} type="button">
+                                            <CrossTabLink onOpenTab={onOpenTab} target="traces" traceId={issue.sampleTraceId}>
                                                 View trace
-                                            </button>
+                                            </CrossTabLink>
                                         ) : (
                                             <span className="muted">—</span>
                                         )}

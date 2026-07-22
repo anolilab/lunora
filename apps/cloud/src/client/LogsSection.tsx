@@ -1,8 +1,9 @@
 import { useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
+import { CrossTabLink } from "./CrossTabLink";
 import type { OrgId, ProjectId } from "./types";
 
 interface LogsSectionProps {
@@ -40,14 +41,11 @@ export const LogsSection = ({ focusTraceId, onOpenTab, organizationId }: LogsSec
     const [scriptName, setScriptName] = useState("");
     const [levels, setLevels] = useState<Set<LogLevel>>(new Set());
     const [search, setSearch] = useState("");
+    // Deep-link in: adopt an incoming trace filter (from a trace's "View logs")
+    // as a one-shot state seed. The dashboard remounts the section on each
+    // deep-link (via a `key`), so `focusTraceId` is consumed here rather than
+    // synced in a `useEffect` that would re-apply a stale filter on re-render.
     const [traceFilter, setTraceFilter] = useState<string | undefined>(focusTraceId);
-
-    // Deep-link in: adopt an incoming trace filter (from a trace's "View logs").
-    useEffect(() => {
-        if (focusTraceId) {
-            setTraceFilter(focusTraceId);
-        }
-    }, [focusTraceId]);
 
     const logs = useQuery(
         api.logs.list,
@@ -125,7 +123,7 @@ export const LogsSection = ({ focusTraceId, onOpenTab, organizationId }: LogsSec
                     {traceFilter ? (
                         <div className="log-trace-filter">
                             Filtering by trace <code>{traceFilter.slice(0, 12)}</code>
-                            <button className="trace-link" onClick={() => setTraceFilter(undefined)} type="button">
+                            <button className="cross-tab-link" onClick={() => setTraceFilter(undefined)} type="button">
                                 clear
                             </button>
                         </div>
@@ -163,9 +161,9 @@ export const LogsSection = ({ focusTraceId, onOpenTab, organizationId }: LogsSec
                                 {entry.fields ? <span className="log-fields"> {renderFields(entry.fields)}</span> : null}
                                 {entry.traceId ? (
                                     onOpenTab ? (
-                                        <button className="log-trace-link" onClick={() => onOpenTab("traces", { traceId: entry.traceId })} type="button">
+                                        <CrossTabLink onOpenTab={onOpenTab} target="traces" traceId={entry.traceId} variant="inline">
                                             trace={entry.traceId.slice(0, 8)}
-                                        </button>
+                                        </CrossTabLink>
                                     ) : (
                                         <span className="log-trace"> trace={entry.traceId.slice(0, 8)}</span>
                                     )

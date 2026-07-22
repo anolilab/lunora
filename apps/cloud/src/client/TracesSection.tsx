@@ -1,9 +1,10 @@
 import { useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { buildTraceTree } from "../telemetry/trace-tree";
 import { api } from "../../lunora/_generated/api.js";
+import { CrossTabLink } from "./CrossTabLink";
 import type { DeploymentId, OrgId, ProjectId } from "./types";
 
 interface TracesSectionProps {
@@ -32,18 +33,14 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
     const [projectId, setProjectId] = useState<ProjectId | "">("");
     const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId } : "skip");
     const [deploymentId, setDeploymentId] = useState<DeploymentId | "">("");
-    const [traceId, setTraceId] = useState("");
+    // Deep-link in: open the focused trace's waterfall directly (`traces.get`
+    // needs only org + traceId, so no project/deployment pick is required). This
+    // is a one-shot state seed — the dashboard remounts the section on each
+    // deep-link (via a `key`), so `focusTraceId` is consumed here, not synced in
+    // a `useEffect` that would re-fire a stale trace on unrelated re-renders.
+    const [traceId, setTraceId] = useState(focusTraceId ?? "");
     const [errorOnly, setErrorOnly] = useState(false);
     const [selectedSpanId, setSelectedSpanId] = useState("");
-
-    // Deep-link in: open the focused trace's waterfall directly (`traces.get`
-    // needs only org + traceId, so no project/deployment pick is required).
-    useEffect(() => {
-        if (focusTraceId) {
-            setTraceId(focusTraceId);
-            setSelectedSpanId("");
-        }
-    }, [focusTraceId]);
 
     const traces = useQuery(api.traces.list, deploymentId ? { deploymentId, errorOnly, organizationId } : "skip");
     const spans = useQuery(api.traces.get, traceId ? { organizationId, traceId } : "skip");
@@ -177,9 +174,9 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
                         </div>
                         <div className="trace-detail-actions">
                             {onOpenTab ? (
-                                <button className="trace-link" onClick={() => onOpenTab("logs", { traceId })} type="button">
+                                <CrossTabLink onOpenTab={onOpenTab} target="logs" traceId={traceId}>
                                     View logs
-                                </button>
+                                </CrossTabLink>
                             ) : null}
                             <button className="trace-close" onClick={() => setTraceId("")} type="button">
                                 Close

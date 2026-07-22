@@ -16,7 +16,7 @@ import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 import { createAnalytics } from "@lunora/bindings/analytics";
 import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { createPipelines } from "@lunora/bindings/pipelines";
-import { createR2Sql, raw, sql } from "@lunora/bindings/r2sql";
+import { createR2Sql, raw, sql, tableRef } from "@lunora/bindings/r2sql";
 
 import { archiveRowToObservation, DEFAULT_SPAN_ARCHIVE_TABLE } from "./archive-read";
 import type { MetricPoint, SpanObservation, TelemetryEvent } from "./otlp";
@@ -118,8 +118,11 @@ export const createCloudflareTelemetryStore = (env: TelemetryStoreEnv): Telemetr
 
             try {
                 const client = createR2Sql({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.R2_SQL_TOKEN, bucket: env.TELEMETRY_BUCKET_NAME });
-                // The table name is trusted config → `raw`; values are bound via `sql`.
-                const table = env.TELEMETRY_SPAN_TABLE ?? DEFAULT_SPAN_ARCHIVE_TABLE;
+                // The table name is trusted config, but `tableRef` still validates it
+                // (a `namespace.table` shape) before `raw` splices it verbatim — so a
+                // fat-fingered env var throws here (caught below → D1-only fallback)
+                // rather than forming odd SQL. Values stay bound via the escaping `sql` tag.
+                const table = tableRef(env.TELEMETRY_SPAN_TABLE ?? DEFAULT_SPAN_ARCHIVE_TABLE);
                 const result = await client.query(
                     sql`SELECT * FROM ${raw(table)} WHERE recordType = ${"span"} AND organizationId = ${organizationId} AND traceId = ${traceId} ORDER BY startedAt`,
                 );

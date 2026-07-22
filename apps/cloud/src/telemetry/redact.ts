@@ -32,11 +32,11 @@ export const isSensitiveKey = (key: string): boolean => SENSITIVE_KEY.test(key);
 // nested quantifiers, so no ReDoS. Case-insensitive.
 const SECRET_IN_TEXT = new RegExp(
     [
-        String.raw`(bearer\s+)[\w.~+/=-]{8,}`, // Authorization: Bearer <token>
+        String.raw`(?<bearer>bearer\s+)[\w.~+/=-]{8,}`, // Authorization: Bearer <token>
         String.raw`\bsk-[a-z\d]{16,}\b`, // OpenAI-style api keys
         String.raw`\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{6,}`, // JWTs
         String.raw`\bAKIA[a-z\d]{16}\b`, // AWS access key ids
-        String.raw`((?:password|passwd|secret|token|api[_-]?key)\s*[=:]\s*)\S+`, // key=value / key: value
+        String.raw`(?<kv>(?:password|passwd|secret|token|api[_-]?key)\s*[=:]\s*)\S+`, // key=value / key: value
     ].join("|"),
     "gi",
 );
@@ -53,9 +53,15 @@ export const redactText = (text: string | undefined): string | undefined => {
         return undefined;
     }
 
-    // The regex has two prefix-capturing alternatives — `(bearer )` and
-    // `(key=)` — so use whichever one matched (the rest capture nothing).
-    return text.replaceAll(SECRET_IN_TEXT, (_match, bearerPrefix?: string, keyPrefix?: string) => `${bearerPrefix ?? keyPrefix ?? ""}${REDACTED}`);
+    // The regex has two prefix-capturing alternatives — a named `bearer ` and a
+    // named `key=` group — so keep whichever one matched (the other alternatives
+    // capture nothing) and drop only the secret that follows. Named groups arrive
+    // as the final `groups` argument, robust to alternatives being reordered.
+    return text.replaceAll(SECRET_IN_TEXT, (...arguments_: unknown[]) => {
+        const groups = arguments_.at(-1) as { bearer?: string; kv?: string } | undefined;
+
+        return `${groups?.bearer ?? groups?.kv ?? ""}${REDACTED}`;
+    });
 };
 
 /**

@@ -29,34 +29,48 @@ const asNumber = (value: unknown): number | undefined => {
 /** Coerce an archive cell to a non-empty string. */
 const asString = (value: unknown): string | undefined => (typeof value === "string" && value !== "" ? value : undefined);
 
+/** Drop keys whose value is `undefined` so optional fields are omitted, not set to `undefined` (exactOptionalPropertyTypes). */
+const compact = <T extends Record<string, unknown>>(record: T): T => {
+    const out: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(record)) {
+        if (value !== undefined) {
+            out[key] = value;
+        }
+    }
+
+    return out as T;
+};
+
 /**
  * Map one archived row (the flat record `spanArchiveRecord` wrote) back to a
  * {@link SpanObservation}. Tolerant: a missing/mistyped column is dropped rather
  * than thrown on, and required fields fall back so a partial row still places on
- * the waterfall.
+ * the waterfall. Each cell is coerced exactly once, then {@link compact} strips
+ * the optional fields that came back `undefined`.
  */
 export const archiveRowToObservation = (row: Record<string, unknown>): SpanObservation => {
     const startedAt = asNumber(row.startedAt) ?? 0;
     const endedAt = asNumber(row.endedAt) ?? startedAt;
     const kind = row.kind === "container" || row.kind === "generation" ? row.kind : "worker";
 
-    return {
-        ...(asNumber(row.completionTokens) === undefined ? {} : { completionTokens: asNumber(row.completionTokens) }),
+    return compact({
+        completionTokens: asNumber(row.completionTokens),
         durationMs: asNumber(row.durationMs) ?? Math.max(endedAt - startedAt, 0),
         endedAt,
-        ...(asString(row.functionPath) === undefined ? {} : { functionPath: asString(row.functionPath) }),
-        ...(asString(row.input) === undefined ? {} : { input: asString(row.input) }),
+        functionPath: asString(row.functionPath),
+        input: asString(row.input),
         kind,
         level: row.level === "error" ? "error" : "info",
-        ...(asString(row.model) === undefined ? {} : { model: asString(row.model) }),
+        model: asString(row.model),
         name: asString(row.name) ?? "span",
-        ...(asString(row.output) === undefined ? {} : { output: asString(row.output) }),
-        ...(asString(row.parentSpanId) === undefined ? {} : { parentSpanId: asString(row.parentSpanId) }),
-        ...(asNumber(row.promptTokens) === undefined ? {} : { promptTokens: asNumber(row.promptTokens) }),
-        ...(asString(row.serviceName) === undefined ? {} : { serviceName: asString(row.serviceName) }),
+        output: asString(row.output),
+        parentSpanId: asString(row.parentSpanId),
+        promptTokens: asNumber(row.promptTokens),
+        serviceName: asString(row.serviceName),
         spanId: asString(row.spanId) ?? "",
         startedAt,
-        ...(asString(row.statusMessage) === undefined ? {} : { statusMessage: asString(row.statusMessage) }),
+        statusMessage: asString(row.statusMessage),
         traceId: asString(row.traceId) ?? "",
-    };
+    }) as SpanObservation;
 };

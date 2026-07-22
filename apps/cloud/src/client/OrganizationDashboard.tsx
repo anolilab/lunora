@@ -136,11 +136,18 @@ const OrgBanners = ({ org }: { org: OrgFlags }): ReactElement | null => {
 export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDashboardProps): ReactElement => {
     const organizations = useQuery(api.organizations.list, {});
     const [tab, setTab] = useState<Tab>("projects");
-    // Cross-tab deep-link: a section calls `onOpenTab` to jump to Traces/Logs
-    // focused on a trace (an Issue → its trace, a trace → its logs).
-    const [focusTraceId, setFocusTraceId] = useState<string>();
+    // Cross-tab deep-link. `seq` bumps on EVERY navigation so the target section
+    // remounts each time (via its `key`) — a one-shot: it consumes `traceId` in
+    // its state initializer, never a `useEffect` sync. A manual tab click bumps
+    // `seq` with no `traceId`, so a stale trace can't re-open, and deep-linking the
+    // SAME trace twice still re-focuses (the seq — hence the key — changed).
+    const [focus, setFocus] = useState<{ seq: number; traceId?: string }>({ seq: 0 });
+    const navigate = (target: Tab): void => {
+        setFocus((previous) => ({ seq: previous.seq + 1 }));
+        setTab(target);
+    };
     const onOpenTab = (target: "logs" | "traces", context?: { traceId?: string }): void => {
-        setFocusTraceId(context?.traceId);
+        setFocus((previous) => ({ seq: previous.seq + 1, traceId: context?.traceId }));
         setTab(target);
     };
     const palette = useCommandPalette();
@@ -155,6 +162,7 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
                     id: `tab:${entry.id}`,
                     label: entry.label,
                     run: () => {
+                        setFocus((previous) => ({ seq: previous.seq + 1 }));
                         setTab(entry.id);
                     },
                 };
@@ -180,20 +188,18 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
 
             <nav className="tabs">
                 {TABS.map((entry) => (
-                    <button
-                        className={entry.id === tab ? "tab active" : "tab"}
-                        key={entry.id}
-                        onClick={() => {
-                            setTab(entry.id);
-                        }}
-                        type="button"
-                    >
+                    <button className={entry.id === tab ? "tab active" : "tab"} key={entry.id} onClick={() => navigate(entry.id)} type="button">
                         {entry.label}
                     </button>
                 ))}
             </nav>
 
-            <ActiveSection focusTraceId={tab === "logs" || tab === "traces" ? focusTraceId : undefined} onOpenTab={onOpenTab} organizationId={organizationId} />
+            <ActiveSection
+                focusTraceId={tab === "logs" || tab === "traces" ? focus.traceId : undefined}
+                key={`${tab}:${String(focus.seq)}`}
+                onOpenTab={onOpenTab}
+                organizationId={organizationId}
+            />
         </div>
     );
 };
