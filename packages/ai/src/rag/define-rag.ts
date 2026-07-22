@@ -176,6 +176,7 @@ const resolveEmbeddingModel = (input: RagConfig["embeddingModel"], ai: RagContex
  * needs no `env.AI` binding (bind any context carrying just `vectors`).
  * @experimental
  */
+
 /**
  * Structural slice of `ctx.trace` (see the server `LunoraTracer`) — enough to
  * wrap one embed. Declared here rather than imported so `@lunora/ai/rag` takes
@@ -251,7 +252,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         const embedText = async (text: string): Promise<ReadonlyArray<number>> => {
             // Resolve once and bind to a local `const`, so the nested `run` closure
             // sees a non-nullable model without a cast.
-            const resolvedModel = (model ??= resolveEmbeddingModel(config.embeddingModel, context.ai));
+            model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
+            const resolvedModel = model;
 
             const run = async (): Promise<ReadonlyArray<number>> => {
                 const { embedding } = await aiEmbed({ model: resolvedModel, value: text });
