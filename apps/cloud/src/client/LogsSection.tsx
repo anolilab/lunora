@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
+import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import type { OrgId, ProjectId } from "./types";
 
 interface LogsSectionProps {
@@ -35,6 +36,7 @@ const renderFields = (fields: Record<string, unknown>): string =>
  * on its own — no polling.
  */
 export const LogsSection = ({ focusTraceId, onOpenTab, organizationId }: LogsSectionProps): ReactElement => {
+    const { from, to } = useTimeRange();
     const projects = useQuery(api.projects.listByOrg, { organizationId });
     const [projectId, setProjectId] = useState<ProjectId | "">("");
     const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId } : "skip");
@@ -51,10 +53,12 @@ export const LogsSection = ({ focusTraceId, onOpenTab, organizationId }: LogsSec
         api.logs.list,
         scriptName
             ? {
+                  from,
                   levels: levels.size > 0 ? [...levels] : undefined,
                   organizationId,
                   scriptName,
                   search: search.trim() === "" ? undefined : search.trim(),
+                  to,
                   traceId: traceFilter,
               }
             : "skip",
@@ -77,7 +81,10 @@ export const LogsSection = ({ focusTraceId, onOpenTab, organizationId }: LogsSec
     return (
         <div className="stack">
             <section className="card">
-                <h3>Runtime logs</h3>
+                <div className="metrics-head">
+                    <h3>Runtime logs</h3>
+                    <TimeRangePicker />
+                </div>
                 <label htmlFor="logs-project">
                     Project
                     <select
