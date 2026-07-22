@@ -97,8 +97,13 @@ export type {
     DatabaseReader,
     DatabaseWriter,
     DurableObjectJurisdiction,
+    ExposeConfig,
     FunctionKind,
     FunctionVisibility,
+    GeoBoundingBox,
+    GeoFilterBuilder,
+    GeoIndexDefinition,
+    GeoPointInput,
     IndexDefinition,
     IndexRangeBuilder,
     InferArgs,
@@ -160,6 +165,7 @@ export type {
     TriggerRow,
     TriggerTiming,
     TriggerUpdateEvent,
+    TtlDefinition,
     VectorEmbedder,
     VectorIndexDefinition,
     VectorMatch,
@@ -182,7 +188,7 @@ export { anyApi } from "./types";
 // package alongside query/mutation/action (it lives in @lunora/scheduler).
 export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule } from "@lunora/scheduler";
 export { cronJobs } from "@lunora/scheduler";
-export type { ColumnValidator, Id, Infer, Validator, ValidatorKind } from "@lunora/values";
+export type { ColumnValidator, GeoPoint, Id, Infer, Validator, ValidatorKind } from "@lunora/values";
 export { v } from "@lunora/values";
 export { ValidationError } from "@lunora/values";
 

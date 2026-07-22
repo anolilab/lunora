@@ -327,6 +327,10 @@ interface RedirectTarget {
 type RedirectTrigger = () => Promise<RedirectTarget>;
 ```
 
+### `RestrictionError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
 ### `ReturnOf` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -353,6 +357,26 @@ interface Subscription {
 ```ts
 const Unauthenticated: ({ children }: AuthGateProps) => ReactNode;
 ```
+
+### `UploadControl` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadMethod` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadRestrictions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadResult` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ### `UseAgentApi` (interface)
 
@@ -509,6 +533,22 @@ interface UseCheckoutResult {
 }
 ```
 
+### `UseChunkedRestUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseChunkedRestUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseFileInputOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseFileInputReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
 ### `UseHttpStreamOptions` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -539,6 +579,14 @@ interface UseInfiniteQueryResult<T> {
 }
 ```
 
+### `UseMultipartUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseMultipartUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
 ### `UseMutationCallOptions` (interface)
 
 ```ts
@@ -568,6 +616,14 @@ interface UsePaginatedQueryResult<T> {
     status: PaginationStatus;
 }
 ```
+
+### `UsePasteUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UsePasteUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ### `UsePresenceOptions` (interface)
 
@@ -656,6 +712,22 @@ interface UseSubscriptionResult<T> {
     error: Error | undefined;
 }
 ```
+
+### `UseTusUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseTusUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ### `UseVoiceAgentOptions` (interface)
 
@@ -799,6 +871,10 @@ const useAuthState: () => AuthState;
 const useCheckout: (trigger: RedirectTrigger) => UseCheckoutResult;
 ```
 
+### `useChunkedRestUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
 ### `useClientQuery` (const)
 
 ```ts
@@ -813,6 +889,10 @@ const useClientQuery: <T extends unknown>(ref: ClientQueryRef<T>) => [
 ```ts
 const useConnectionStatus: () => ConnectionStatus;
 ```
+
+### `useFileInput` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ### `useFlag` (const)
 
@@ -842,6 +922,10 @@ const useInfiniteQuery: <F extends FunctionReference>(function_: F, args: "skip"
 const useLunora: () => LunoraClient;
 ```
 
+### `useMultipartUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
 ### `useMutation` (const)
 
 ```ts
@@ -859,6 +943,10 @@ const useMutator: <TArgs = Record<string, unknown>>(handle: MutatorHandle<TArgs>
 ```ts
 const usePaginatedQuery: <F extends FunctionReference>(function_: F, args: "skip" | PaginatedArgs<F>, options: UsePaginatedQueryOptions) => UsePaginatedQueryResult<PageItemOf<F>>;
 ```
+
+### `usePasteUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ### `usePreloadedQuery` (const)
 
@@ -895,6 +983,14 @@ const useStream: <F extends FunctionReference<"stream">>(function_: F, args: "sk
 ```ts
 const useSubscription: <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options?: UseQueryOptions) => UseSubscriptionResult<ReturnOf<F>>;
 ```
+
+### `useTusUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `useUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ### `useVoiceAgent` (const)
 
@@ -1019,3 +1115,101 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `serializePreloaded` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
+
+## `@lunora/react/upload`
+
+### `RestrictionError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadControl` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadMethod` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadRestrictions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadResult` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseChunkedRestUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseChunkedRestUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseFileInputOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseFileInputReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseMultipartUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseMultipartUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UsePasteUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UsePasteUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseTusUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseTusUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `useChunkedRestUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `useFileInput` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `useMultipartUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `usePasteUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `useTusUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `useUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.

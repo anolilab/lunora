@@ -1,0 +1,15 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-example-notify-demo",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    // `d1SubscriptionStore(env.DB)` persists Web Push / FCM device subscriptions
+    // (the subscription table is created lazily, so no migration is needed for it).
+    "d1_databases": [{ "binding": "DB", "database_name": "notify-demo", "database_id": "00000000-0000-0000-0000-000000000000" }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+}

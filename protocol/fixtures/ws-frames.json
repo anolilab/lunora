@@ -1,0 +1,66 @@
+{
+    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path.",
+    "clientFrames": {
+        "connect": { "clientId": "client-test", "id": "connect", "type": "connect" },
+        "connect-with-context": { "clientId": "client-test", "id": "connect", "type": "connect", "context": { "roomId": "general" } },
+        "subscribe-cold": {
+            "id": "sub_1",
+            "query": { "args": { "channel": "general" }, "functionPath": "messages:list", "table": "messages:list" },
+            "type": "subscribe"
+        },
+        "subscribe-resume": {
+            "id": "sub_1",
+            "query": { "args": { "channel": "general" }, "functionPath": "messages:list", "table": "messages:list", "sinceSeq": 12, "sinceEpoch": "e1" },
+            "type": "subscribe"
+        },
+        "unsubscribe": { "id": "sub_1", "type": "unsubscribe" }
+    },
+    "serverFrames": [
+        { "name": "ack", "frame": { "id": "sub_1", "type": "ack" }, "expect": { "kind": "ack", "id": "sub_1" } },
+        {
+            "name": "data-plain",
+            "frame": { "id": "sub_1", "type": "data", "data": { "messages": ["hi", "there"] }, "cursor": 5, "epoch": "e1" },
+            "expect": { "kind": "data", "id": "sub_1", "valueWire": { "messages": ["hi", "there"] }, "cursor": 5, "epoch": "e1" }
+        },
+        {
+            "name": "data-typed",
+            "frame": { "id": "sub_1", "type": "data", "data": ["$lunora.wire$", "bigint", "9"] },
+            "expect": { "kind": "data", "id": "sub_1", "valueWire": ["$lunora.wire$", "bigint", "9"] }
+        },
+        {
+            "name": "error",
+            "frame": { "id": "sub_1", "type": "error", "error": { "code": "FORBIDDEN_SHARD", "message": "nope" } },
+            "expect": { "kind": "error", "id": "sub_1", "code": "FORBIDDEN_SHARD", "message": "nope" }
+        },
+        {
+            "name": "resume",
+            "frame": { "id": "sub_1", "type": "resume", "cursor": 20, "epoch": "e1" },
+            "expect": { "kind": "resume", "id": "sub_1", "cursor": 20 }
+        },
+        {
+            "name": "settled",
+            "frame": { "id": "sub_1", "type": "settled", "cursor": 21, "lastMutationId": 3 },
+            "expect": { "kind": "settled", "id": "sub_1", "cursor": 21, "lastMutationId": 3 }
+        }
+    ],
+    "shape": {
+        "shape-subscribe-cold": { "id": "shape_1", "shape": { "name": "roomMessages", "args": { "room": "general" } }, "type": "shape_subscribe" },
+        "pokeSequence": [
+            { "type": "pokeStart", "pokeId": "p1", "baseCheckpoint": 0, "epoch": "e1" },
+            {
+                "type": "pokePart",
+                "pokeId": "p1",
+                "shapeId": "shape_1",
+                "rowsPatch": [
+                    { "op": "insert", "key": "m1", "table": "messages", "value": { "_id": "m1", "text": "hi" } },
+                    { "op": "insert", "key": "m2", "table": "messages", "value": { "_id": "m2", "text": "yo" } }
+                ]
+            },
+            { "type": "pokeEnd", "pokeId": "p1", "checkpoint": 5, "epoch": "e1" }
+        ],
+        "expectedRows": [
+            { "_id": "m1", "text": "hi" },
+            { "_id": "m2", "text": "yo" }
+        ]
+    }
+}

@@ -93,7 +93,10 @@ export interface FacadeWriterLike {
         args: { patch: Record<string, unknown>; where: Record<string, unknown> },
         options?: { limit?: number },
     ): Promise<{ patched: number }>;
-    query(tableName: string): { withSearchIndex(indexName: string, search: (q: unknown) => unknown): unknown };
+    query(tableName: string): {
+        withGeoIndex(indexName: string, build: (q: unknown) => unknown): unknown;
+        withSearchIndex(indexName: string, search: (q: unknown) => unknown): unknown;
+    };
     rank(tableName: string, indexName: string, options: unknown): Promise<unknown>;
     rankPage(tableName: string, indexName: string, options?: unknown): Promise<unknown>;
     replace(id: string, document: Record<string, unknown>, expectedTable?: string): Promise<void>;
@@ -149,6 +152,7 @@ export interface FacadeEntry {
     upsert: (args: UpsertArgs) => Promise<UpsertResult>;
     /** Sequential `upsert` over many rows sharing one `target`; returns one result per input row in order. */
     upsertMany: (args: UpsertManyArgs) => Promise<UpsertResult[]>;
+    withGeoIndex: (indexName: string, build: (q: unknown) => unknown) => unknown;
     withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => unknown;
 }
 
@@ -341,6 +345,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
 
             return results;
         },
+        withGeoIndex: (indexName, build) => writer.query(tableName).withGeoIndex(indexName, build),
         withSearchIndex: (indexName, search) => writer.query(tableName).withSearchIndex(indexName, search),
     };
 };

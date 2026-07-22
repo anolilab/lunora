@@ -3,6 +3,7 @@ import type { Infer, Validator } from "@lunora/values";
 import type {
     ActionCtx as ActionContext,
     ArgsValidator,
+    ExposeConfig,
     FunctionKind,
     InferArgs,
     MutationCtx as MutationContext,
@@ -51,6 +52,14 @@ export type CreateOptions = Record<never, never>;
  */
 export interface QueryBuilder<Context, Args extends ArgsValidator, Output = undefined> {
     readonly __lunoraProcedure: "query";
+
+    /**
+     * Publish this query on the opt-in public REST surface (plan 167) — the
+     * runtime mints `GET /_lunora/rest/&lt;namespace>/&lt;fn>` (and `POST`), dispatching
+     * THROUGH the procedure so `ctx.auth` / RLS / validators are enforced, and the
+     * generated OpenAPI describes it. Default-closed: omit to keep it RPC-only.
+     */
+    expose: (config: ExposeConfig) => QueryBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => QueryBuilder<Context, A & Args, Output>;
     output: <V extends Validator>(validator: V) => QueryBuilder<Context, Args, Infer<V>>;
     query: [Output] extends [undefined]
@@ -81,6 +90,14 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
 
 export interface MutationBuilder<Context, Args extends ArgsValidator, Output = undefined> {
     readonly __lunoraProcedure: "mutation";
+
+    /**
+     * Publish this mutation on the opt-in public REST surface (plan 167) — the
+     * runtime mints `POST /_lunora/rest/&lt;namespace>/&lt;fn>`, dispatching THROUGH the
+     * procedure so `ctx.auth` / RLS / validators are enforced, and the generated
+     * OpenAPI describes it. Default-closed: omit to keep it RPC-only.
+     */
+    expose: (config: ExposeConfig) => MutationBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => MutationBuilder<Context, A & Args, Output>;
     mutation: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
@@ -102,6 +119,14 @@ export interface ActionBuilder<Context, Args extends ArgsValidator, Output = und
     action: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
+
+    /**
+     * Publish this action on the opt-in public REST surface (plan 167) — the
+     * runtime mints `POST /_lunora/rest/&lt;namespace>/&lt;fn>`, dispatching THROUGH the
+     * procedure so `ctx.auth` / RLS / validators are enforced, and the generated
+     * OpenAPI describes it. Default-closed: omit to keep it RPC-only.
+     */
+    expose: (config: ExposeConfig) => ActionBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Context, A & Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;

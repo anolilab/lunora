@@ -28,7 +28,7 @@ import { migrateClientWatermark } from "./ctx-db-client-watermark";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
 import { runDrizzle } from "./do-exec";
-import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
+import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
 import { rankTableName, sortColumnName } from "./rank";
 import { ftsTableName } from "./search-text";
 
@@ -75,6 +75,32 @@ const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: Table
             sql,
             dsql`CREATE VIRTUAL TABLE IF NOT EXISTS ${dsql.identifier(ftName)} USING fts5(${dsql.identifier("__text__")}, ${dsql.identifier("__id__")} UNINDEXED)`,
         );
+    }
+};
+
+/**
+ * Create the geohash companion tables backing `.geoIndex()` declarations. One
+ * row per source row keyed by `__id__`, carrying the geohash prefix plus the raw
+ * `__lat__`/`__lng__` so `withGeoIndex(...)` can range-scan by geohash and then
+ * Haversine-refine without re-decoding the source doc. A btree on
+ * `(__geohash__, __id__)` answers the prefix range scan.
+ */
+const migrateGeoIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
+    if (!definition.geoIndexes) {
+        return;
+    }
+
+    for (const index of definition.geoIndexes) {
+        const geoTable = geoTableName(tableName, index.name);
+
+        runDrizzle(
+            sql,
+            dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(geoTable)} (${dsql.identifier("__id__")} TEXT PRIMARY KEY, ${dsql.identifier("__geohash__")} TEXT NOT NULL, ${dsql.identifier("__lat__")} REAL NOT NULL, ${dsql.identifier("__lng__")} REAL NOT NULL)`,
+        );
+
+        const btreeName = `${tableName}__geo_${index.name}__btree`;
+
+        runDrizzle(sql, createIndexSql(btreeName, geoTable, dsql`${dsql.identifier("__geohash__")} ASC, ${dsql.identifier("__id__")} ASC`, false));
     }
 };
 
@@ -180,6 +206,7 @@ export const runShardMigrations = (sql: SqlExec, schema: SchemaLike, options: { 
 
         migrateSecondaryIndexes(sql, tableName, definition);
         migrateSearchIndexes(sql, tableName, definition);
+        migrateGeoIndexes(sql, tableName, definition);
         migrateAggregateIndexes(sql, tableName, definition);
         migrateRankIndexes(sql, tableName, definition);
     }

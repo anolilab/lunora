@@ -21,8 +21,24 @@ export type {
     ListUsersOptions,
 } from "./admin";
 export { createAuthAdmin, LunoraAuthAdminError } from "./admin";
+export type {
+    AppendAuthAuditEntry,
+    AppendAuthAuditOptions,
+    AuthAuditEntry,
+    AuthAuditEvent,
+    AuthAuditOutcome,
+    AuthAuditReader,
+    ReadAuthAuditOptions,
+} from "./audit";
+export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable, readAuthAuditLog } from "./audit";
+export type { AuthAuditHookConfig } from "./audit-hooks";
+export { authAuditHook, buildAuditEntry, eventForPath, withAuthAudit } from "./audit-hooks";
 export type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 export { createAuth, resolveAuthOptions } from "./create-auth";
+export type { EmailGateHookConfig } from "./email-gate";
+export { emailGateDatabaseHooks, withEmailGate } from "./email-gate";
+export type { EmailClass, EmailClassification, EmailGateConfig, EmailGateMiddlewareOptions } from "./email-guard";
+export { assertEmailAllowed, classifyEmail, emailGateMiddleware, loadEmailDomainLists } from "./email-guard";
 export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "./handler";
 export type { LunoraAuthApiContext, WithAuthPluginsMiddleware, WithAuthPluginsOptions } from "./middleware";
 export { LunoraAuthHeadersError, withAuthPlugins } from "./middleware";

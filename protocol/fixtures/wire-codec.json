@@ -1,0 +1,54 @@
+{
+    "$comment": "Golden fixtures for the Lunora wire value codec (shared/wire-codec.ts). Each case's `encoded` is the canonical JSON wire form. A conforming codec MUST satisfy `encode(decode(encoded)) == encoded` for every case (round-trip stability), which exercises both the decode of tagged tokens and their re-encode. Language-native construction checks (e.g. bigint 7 -> the bigint tag) live in each SDK's own test suite since native values are not uniformly JSON-representable.",
+    "tag": "$lunora.wire$",
+    "cases": [
+        { "name": "null", "encoded": null },
+        { "name": "boolean", "encoded": true },
+        { "name": "string", "encoded": "hello" },
+        { "name": "number-int", "encoded": 42 },
+        { "name": "number-float", "encoded": 3.5 },
+        { "name": "number-zero", "encoded": 0 },
+        { "name": "empty-object", "encoded": {} },
+        { "name": "empty-array", "encoded": [] },
+        { "name": "pure-json-object", "encoded": { "a": 1, "b": [true, null, "x"], "c": { "d": 2 } } },
+        { "name": "pure-json-array", "encoded": [1, "two", false, null, { "k": "v" }] },
+        { "name": "bigint", "encoded": ["$lunora.wire$", "bigint", "7"] },
+        { "name": "bigint-negative", "encoded": ["$lunora.wire$", "bigint", "-9007199254740993"] },
+        { "name": "bigint-in-object", "encoded": { "n": ["$lunora.wire$", "bigint", "123"] } },
+        { "name": "date", "encoded": ["$lunora.wire$", "date", 1700000000000] },
+        { "name": "date-invalid", "encoded": ["$lunora.wire$", "date", ["$lunora.wire$", "nan"]] },
+        { "name": "url", "encoded": ["$lunora.wire$", "url", "https://example.com/"] },
+        { "name": "nan", "encoded": ["$lunora.wire$", "nan"] },
+        { "name": "inf", "encoded": ["$lunora.wire$", "inf"] },
+        { "name": "-inf", "encoded": ["$lunora.wire$", "-inf"] },
+        { "name": "undefined-in-array", "encoded": [1, ["$lunora.wire$", "undefined"], 2] },
+        { "name": "bytes-uint8", "encoded": ["$lunora.wire$", "bytes", "AQID"] },
+        { "name": "bytes-arraybuffer", "encoded": ["$lunora.wire$", "bytes", "AQID", "ArrayBuffer"] },
+        { "name": "bytes-float32", "encoded": ["$lunora.wire$", "bytes", "AADAPw==", "Float32Array"] },
+        {
+            "name": "map",
+            "encoded": [
+                "$lunora.wire$",
+                "map",
+                [
+                    ["a", 1],
+                    ["b", ["$lunora.wire$", "bigint", "2"]]
+                ]
+            ]
+        },
+        { "name": "set", "encoded": ["$lunora.wire$", "set", [1, 2, "three"]] },
+        { "name": "error", "encoded": ["$lunora.wire$", "error", "Error", "boom", {}] },
+        { "name": "error-with-props", "encoded": ["$lunora.wire$", "error", "TypeError", "bad", { "code": "E_BAD" }] },
+        { "name": "array-sentinel-escape", "encoded": ["$lunora.wire$", "arr", ["$lunora.wire$", "x"]] },
+        {
+            "name": "nested-typed",
+            "encoded": {
+                "items": [
+                    ["$lunora.wire$", "bigint", "1"],
+                    ["$lunora.wire$", "date", 0]
+                ],
+                "flag": true
+            }
+        }
+    ]
+}

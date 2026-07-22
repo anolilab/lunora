@@ -1,0 +1,211 @@
+import type { ChatPayload, InAppPayload, NotificationMessage, PushPayload, Receipt, WebhookPayload } from "@visulima/notification";
+import type { FcmConfig } from "@visulima/notification/providers/fcm";
+import type { PushSubscriptionLike, WebPushConfig } from "@visulima/notification/providers/web-push";
+
+/**
+ * A Worker `env` projected as a plain record (vars, secrets and bindings are
+ * `unknown`-valued). `defineNotify` factories receive this so a config can read
+ * VAPID/FCM secrets and pick bindings (D1, Queues) at request/isolate time —
+ * mirroring the `config.ai?.(env)` / flags `provider(env)` thunk pattern.
+ */
+export type NotifyEnv = Record<string, unknown>;
+
+/** The delivery kind a stored device subscription targets. */
+export type SubscriptionKind = "fcm" | "web-push";
+
+/** The last-known delivery outcome recorded on a subscription. */
+export type SubscriptionStatus = "expired" | "failed" | "ok";
+
+/**
+ * A registered device/browser subscription. Web Push carries a W3C Push API
+ * `endpoint` + `keys`; FCM carries a device registration `token`. `id` is a
+ * stable, storage-safe identifier derived from the target (see `subscriptionId`).
+ */
+export interface StoredSubscription {
+    /** Unix-ms creation time. */
+    createdAt: number;
+    /** Web Push service endpoint URL (web-push only). */
+    endpoint?: string;
+    /** Stable identifier (endpoint/token derived) used as the store key. */
+    id: string;
+    /** Web Push client keys (web-push only). */
+    keys?: { auth: string; p256dh: string };
+    /** The delivery channel this subscription targets. */
+    kind: SubscriptionKind;
+    /** Last delivery error message, when `lastStatus` is `failed`/`expired`. */
+    lastError?: string;
+    /** Unix-ms time of the most recent register/send touch. */
+    lastSeenAt: number;
+    /** Last-known delivery outcome. */
+    lastStatus?: SubscriptionStatus;
+    /** Arbitrary app metadata (device name, locale, topics, …). */
+    metadata?: Record<string, unknown>;
+    /** FCM device registration token (fcm only). */
+    token?: string;
+    /** Owning user id, or `null` when anonymous. */
+    userId?: string | null;
+}
+
+/**
+ * The admin-facing projection of a {@link StoredSubscription} — a registered
+ * device as surfaced by the gated `__lunora_admin__:listPushSubscriptions` RPC
+ * (backing the Studio Notifications page). The delivery **secrets** are dropped:
+ * the Web Push `keys` (the RFC 8291 `auth`/`p256dh` encryption material) and the
+ * FCM `token` are never sent to the browser — only the endpoint / kind / owner /
+ * timestamps and the last-send status + error the page renders.
+ */
+export type PushSubscriptionDevice = Omit<StoredSubscription, "keys" | "token">;
+
+/** Payload of a `__lunora_admin__:listPushSubscriptions` call — the registered devices, secrets redacted. */
+export interface PushSubscriptionsResult {
+    /** The registered device subscriptions matching the request filter (secrets stripped). */
+    subscriptions: PushSubscriptionDevice[];
+}
+
+/** Input accepted by `ctx.push.register(...)` — a web-push subscription or an FCM token. */
+export type RegisterInput =
+    | { kind?: "web-push"; metadata?: Record<string, unknown>; subscription: PushSubscriptionLike | string; userId?: string | null }
+    | { kind: "fcm"; metadata?: Record<string, unknown>; token: string; userId?: string | null };
+
+/** Filter narrowing which stored subscriptions a `list`/`broadcast` targets. */
+export interface SubscriptionFilter {
+    /** Restrict to a delivery kind. */
+    kind?: SubscriptionKind;
+    /** Restrict to a single owning user. */
+    userId?: string | null;
+}
+
+/**
+ * Persistence for device subscriptions. Implementations back `ctx.push`'s
+ * lifecycle (register, list, prune). Ships with an in-memory store (tests/dev)
+ * and a D1-backed store (durable, edge-safe).
+ */
+export interface SubscriptionStore {
+    /** Remove a subscription by id (idempotent). */
+    delete: (id: string) => Promise<void>;
+    /** Read a subscription by id, or `undefined`. */
+    get: (id: string) => Promise<StoredSubscription | undefined>;
+    /** List subscriptions, optionally filtered. */
+    list: (filter?: SubscriptionFilter) => Promise<StoredSubscription[]>;
+    /** Record the latest delivery outcome for a subscription (best-effort). */
+    markStatus: (id: string, status: SubscriptionStatus, error?: string) => Promise<void>;
+    /** Insert or update a subscription (upsert by id). */
+    put: (subscription: StoredSubscription) => Promise<StoredSubscription>;
+}
+
+/** Per-recipient outcome from a fan-out `broadcast`. */
+export interface BroadcastOutcome {
+    /** Delivery error message when `status` is not `ok`. */
+    error?: string;
+    /** The subscription this outcome belongs to. */
+    id: string;
+    /** `expired` subscriptions were pruned from the store. */
+    status: SubscriptionStatus;
+}
+
+/** Aggregate result of a `broadcast`. */
+export interface BroadcastResult {
+    /** Number of subscriptions that failed (non-gone). */
+    failed: number;
+    /** Per-subscription outcomes. */
+    outcomes: BroadcastOutcome[];
+    /** Number of pruned (gone/expired) subscriptions. */
+    pruned: number;
+    /** Number of subscriptions delivered successfully. */
+    sent: number;
+    /** Total subscriptions attempted. */
+    total: number;
+}
+
+/**
+ * The push sub-facade — spliced onto ctx as `ctx.push` (and reachable as
+ * `ctx.notify.push`). Owns the device-subscription lifecycle plus targeted and
+ * fan-out push delivery through the edge-safe Web Push / FCM providers.
+ */
+export interface LunoraPush {
+    /**
+     * Fan-out a push to every stored subscription matching `filter` (default: all).
+     * Reuses the engine's retry/circuit-breaker middleware; prunes subscriptions
+     * the push service reports as gone (HTTP 404/410, FCM `UNREGISTERED`). The `to`
+     * target is derived from each subscription, so it is omitted from the payload.
+     */
+    broadcast: (payload: PushContent, filter?: SubscriptionFilter) => Promise<BroadcastResult>;
+    /** List stored subscriptions (optionally filtered). */
+    list: (filter?: SubscriptionFilter) => Promise<StoredSubscription[]>;
+    /** Register (upsert) a device subscription and return the stored record. */
+    register: (input: RegisterInput) => Promise<StoredSubscription>;
+    /** Send a push to a single stored subscription (by id or record); `to` is derived from it. */
+    send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;
+    /** Remove a subscription by id (idempotent). */
+    unregister: (id: string) => Promise<void>;
+}
+
+/** A push payload without its `to` target — the facade derives `to` from the stored subscription. */
+export type PushContent = Omit<PushPayload, "to">;
+
+/**
+ * The multi-channel notification facade — spliced onto ctx as `ctx.notify`.
+ * `send` delivers a fully-specified multi-channel message through the engine;
+ * `push` is the device-push sub-facade; `chat` / `inApp` / `webhook` are
+ * single-channel convenience senders for the edge-safe channels.
+ */
+export interface LunoraNotify {
+    /** Send an outbound webhook. */
+    chat: (payload: ChatPayload) => Promise<Receipt>;
+    /** Deliver an in-app inbox notification. */
+    inApp: (payload: InAppPayload) => Promise<Receipt>;
+    /** The device-push sub-facade (identical object to `ctx.push`). */
+    push: LunoraPush;
+    /** Deliver a multi-channel message (one payload per channel). */
+    send: (message: NotificationMessage) => Promise<Receipt[]>;
+    /** Post to a chat channel (Slack/Discord/Teams/Telegram). */
+    webhook: (payload: WebhookPayload) => Promise<Receipt>;
+}
+
+/**
+ * Resolves a channel provider factory from the Worker `env`. Receiving `env`
+ * (rather than a constructed provider) lets a config read VAPID/FCM secrets and
+ * bindings at request time. Return `undefined` to leave the channel unwired.
+ */
+export type WebPushConfigFactory = (env: NotifyEnv) => WebPushConfig | undefined;
+export type FcmConfigFactory = (env: NotifyEnv) => FcmConfig | undefined;
+
+/** Options accepted by `defineNotify`. */
+export interface NotifyConfig {
+    /**
+     * Optional chat provider factory (Slack/Discord/Teams/Telegram). Wire with a
+     * provider from `@visulima/notification/providers/*`. Edge-safe (fetch-based).
+     */
+    chat?: (env: NotifyEnv) => unknown;
+    /** FCM (Firebase Cloud Messaging HTTP v1) config. Edge-safe — supply an OAuth2 token. */
+    fcm?: FcmConfig | FcmConfigFactory;
+    /** Optional in-app inbox provider factory. Edge-safe. */
+    inApp?: (env: NotifyEnv) => unknown;
+
+    /**
+     * Builds the subscription store from `env` (usually a D1-backed store from a
+     * binding). Defaults to a non-durable in-memory store with a dev warning.
+     */
+    store?: (env: NotifyEnv) => SubscriptionStore;
+    /** Optional outbound-webhook provider factory. Edge-safe (fetch-based). */
+    webhook?: (env: NotifyEnv) => unknown;
+    /** Web Push (VAPID + RFC 8291) config. Fully edge-safe (Web Crypto only). */
+    webPush?: WebPushConfig | WebPushConfigFactory;
+}
+
+/**
+ * A branded {@link NotifyConfig} produced by `defineNotify`. This is the default
+ * export of `lunora/notify.ts`; codegen imports it into the generated worker and
+ * wires `ctx.notify` / `ctx.push` from it (mirroring `defineFlags` → `ctx.flags`).
+ */
+export interface NotifyDefinition extends NotifyConfig {
+    /** Runtime brand used by `isNotifyDefinition` and codegen discovery. */
+    readonly isLunoraNotify: true;
+}
+
+// Re-export the engine payload/config types an app touches when authoring
+// `defineNotify` or a send, so consumers don't need a direct dependency on
+// `@visulima/notification` just for typing.
+export type { ChatPayload, InAppPayload, NotificationMessage, PushPayload, Receipt, WebhookPayload } from "@visulima/notification";
+export type { FcmConfig } from "@visulima/notification/providers/fcm";
+export type { PushSubscriptionLike, WebPushConfig } from "@visulima/notification/providers/web-push";

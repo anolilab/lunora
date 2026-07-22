@@ -182,6 +182,65 @@ describe("discoverSchema", () => {
         expect(docs?.searchIndexes[0]?.filterFields).toBeUndefined();
     });
 
+    it("captures geoIndex name + field + precision", () => {
+        expect.assertions(3);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                places: defineTable({
+                    location: v.geoPoint(),
+                    name: v.string(),
+                })
+                    .geoIndex("by_location", { field: "location", precision: 7 }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const places = schema.tables.find((table) => table.name === "places");
+
+        expect(places?.geoIndexes).toHaveLength(1);
+        expect(places?.geoIndexes?.[0]).toEqual({ field: "location", name: "by_location", precision: 7 });
+        // The geo-point column emits a `{ lat, lng }` type in the data model.
+        expect(emitDataModel(schema)).toContain("location: { lat: number; lng: number };");
+    });
+
+    it("emits a per-table GeoIndexName union and threads it into the facade", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                places: defineTable({ location: v.geoPoint() }).geoIndex("by_location", { field: "location" }),
+                users: defineTable({ email: v.string() }),
+            });
+        `);
+
+        const dataModel = emitDataModel(discoverSchema(project, schemaPath));
+
+        expect(dataModel).toContain('places: "by_location";');
+        expect(dataModel).toContain("export type GeoIndexName<T extends keyof DataModel> = GeoIndexNamesByTable[T];");
+    });
+
+    it("captures a .ttl(field, { after }) policy", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                sessions: defineTable({ createdAt: v.timestamp(), token: v.string() }).ttl("createdAt", { after: 3600000 }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const sessions = schema.tables.find((table) => table.name === "sessions");
+
+        expect(sessions?.ttl).toStrictEqual({ after: 3_600_000, field: "createdAt" });
+    });
+
     it("tables without searchIndex calls expose an empty searchIndexes array", () => {
         expect.assertions(1);
 
@@ -335,7 +394,7 @@ describe("discoverSchema", () => {
         expect(dataModel).toContain("export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];");
         // The per-table rank-index map is threaded into the facade binding (the
         // `RANK` generic), which constrains `rank`/`rankPage` to declared names.
-        expect(dataModel).toContain("= TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T>;");
+        expect(dataModel).toContain("= TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;");
     });
 
     it("carries a rankIndex declared on an extension table onto the prefixed table", () => {

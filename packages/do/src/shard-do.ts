@@ -136,6 +136,8 @@ import { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } f
 import { resolveTraceAnchor } from "./trace-context";
 import type { TransactionSqlLike } from "./transaction";
 import { ConflictError } from "./transaction";
+import type { TtlSweepSpec } from "./ttl-sweep";
+import { selectExpiredIds } from "./ttl-sweep";
 import type {
     LifecycleDispatchInfo,
     LifecycleEvent,
@@ -576,6 +578,12 @@ const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigration
  * full preview page's worth of rows and the two can't silently drift apart.
  */
 const SHARD_BULK_DELETE_CAP = MAX_PAGE_SIZE;
+
+/** Rows swept per TTL batch, and the max batches drained per alarm tick (bounds one sweep's work so it can't stall the shard). */
+const TTL_SWEEP_BATCH = 200;
+const TTL_SWEEP_MAX_BATCHES = 20;
+/** Cadence the TTL sweep re-arms its shared-alarm tier at while any `.ttl()` table exists — a coarse, bounded expiry window. */
+const TTL_SWEEP_INTERVAL_MS = 30_000;
 
 /**
  * Validate the `__lunora_admin__:writeRow` payload. Enforces that `id` is
@@ -1708,14 +1716,21 @@ abstract class ShardDO {
      * reason; otherwise the earlier of the two candidate times (never later than
      * `nowMs`, so a source that's already due arms essentially immediately).
      */
-    private static nextPollAlarmTarget(globalShapesRemaining: number, nextSourceDueAt: number | undefined, nowMs: number): number | undefined {
+    private static nextPollAlarmTarget(
+        globalShapesRemaining: number,
+        nextSourceDueAt: number | undefined,
+        nextTtlDueAt: number | undefined,
+        nowMs: number,
+    ): number | undefined {
         const globalTarget = globalShapesRemaining > 0 ? nowMs + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS : undefined;
 
-        if (globalTarget === undefined) {
-            return nextSourceDueAt === undefined ? undefined : Math.max(nextSourceDueAt, nowMs);
-        }
+        // The earliest of the tiers that report a pending time; a tier that's
+        // already due (past timestamp) is floored to `nowMs` so it arms promptly.
+        const candidates = [globalTarget, nextSourceDueAt, nextTtlDueAt]
+            .filter((value): value is number => value !== undefined)
+            .map((value) => Math.max(value, nowMs));
 
-        return nextSourceDueAt === undefined ? globalTarget : Math.min(globalTarget, nextSourceDueAt);
+        return candidates.length > 0 ? Math.min(...candidates) : undefined;
     }
 
     protected state: ShardDOState;
@@ -2816,6 +2831,19 @@ abstract class ShardDO {
             nextSourceDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
         }
 
+        // Declarative TTL expiry (`.ttl(...)`) shares this alarm too. The base hook
+        // returns `undefined` (no TTL tables); the codegen subclass overrides
+        // `ttlSweeps()` from the schema so the sweep pages + removes expired rows and
+        // reports its next-due. A contained failure re-arms at the fixed floor.
+        let nextTtlDueAt: number | undefined;
+
+        try {
+            nextTtlDueAt = await this.pollTtlSweeps();
+        } catch (error) {
+            this.recordShapeError("ttl:sweep", error);
+            nextTtlDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
+        }
+
         // Drain the tables the ingest poll just wrote: a sourced table is local, so
         // its `defineShape` subscribers are poked through the standard
         // changed-table → `pokeShapeSubscribers` path (the same one a mutation
@@ -2824,7 +2852,7 @@ abstract class ShardDO {
         // when nothing was queued (non-sourced DOs, or a steady-state tick).
         await this.flushChangedTables();
 
-        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, Date.now());
+        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, nextTtlDueAt, Date.now());
 
         if (nextAlarmAt !== undefined) {
             await this.scheduleGlobalPoll(nextAlarmAt);
@@ -4342,6 +4370,73 @@ abstract class ShardDO {
      * no-op when the runtime exposes no `setAlarm` (unit harness).
      */
     protected scheduleSourcePoll(): Promise<void> {
+        return this.scheduleGlobalPoll();
+    }
+
+    /**
+     * The resolved TTL policies (`.ttl(field, { after })`) for this DO's schema —
+     * one {@link TtlSweepSpec} per table that declares a TTL. The base `ShardDO`
+     * has no schema, so it returns `[]` and the TTL tier stays dormant. The
+     * codegen subclass overrides it to read each table's `ttlPolicy` (+ its
+     * `.softDelete()` marker) off the imported schema.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass reads the imported schema
+    protected ttlSweeps(): ReadonlyArray<TtlSweepSpec> {
+        return [];
+    }
+
+    /**
+     * Sweep every `.ttl()` table once: page the rows past their expiry and remove
+     * each THROUGH the schema-aware writer (`deleteRowThroughWriter`) so companions
+     * / CDC / live subscriptions stay correct and a `.softDelete()` table soft-deletes
+     * instead of physically removing the row. Work is bounded per tick
+     * ({@link TTL_SWEEP_BATCH} × {@link TTL_SWEEP_MAX_BATCHES}) so a large backlog
+     * drains across several alarms without stalling the shard.
+     *
+     * Returns the next-due timestamp (a coarse {@link TTL_SWEEP_INTERVAL_MS}
+     * cadence, so freshly-written rows expire within a bounded window) while any
+     * TTL table exists, or `undefined` when there are none — so a DO with no TTL
+     * table never arms this tier.
+     */
+    protected async pollTtlSweeps(): Promise<number | undefined> {
+        const specs = this.ttlSweeps();
+
+        if (specs.length === 0) {
+            return undefined;
+        }
+
+        const sql = this.sql as SqlExec;
+        const now = Date.now();
+
+        for (const spec of specs) {
+            let batches = 0;
+            let hasMore = true;
+
+            while (hasMore && batches < TTL_SWEEP_MAX_BATCHES) {
+                const page = selectExpiredIds(sql, spec, now, TTL_SWEEP_BATCH);
+
+                for (const id of page.ids) {
+                    // Sequential: serialise writes to avoid OCC contention on this DO
+                    // (same reasoning as `runShardBulkDelete`).
+                    // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO
+                    await this.deleteRowThroughWriter(spec.table, id);
+                }
+
+                hasMore = page.hasMore;
+                batches += 1;
+            }
+        }
+
+        return now + TTL_SWEEP_INTERVAL_MS;
+    }
+
+    /**
+     * Arm the shared poll alarm for the TTL sweep. Mirrors {@link scheduleSourcePoll};
+     * the codegen subclass calls it once on construction when the schema declares a
+     * `.ttl()` table so the sweep loop starts, after which {@link ShardDO.alarm}
+     * re-arms itself. Idempotent; a no-op when the runtime exposes no `setAlarm`.
+     */
+    protected scheduleTtlSweep(): Promise<void> {
         return this.scheduleGlobalPoll();
     }
 

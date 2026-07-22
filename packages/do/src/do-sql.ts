@@ -22,6 +22,9 @@ import { runDrizzle } from "./do-exec";
 /** The stored JSON document column every DO table carries alongside `id` / `_creationTime`. */
 const DOC_COLUMN = "__doc__";
 
+/** The geohash-companion table name for `.geoIndex(name)` on `table` (mirrors `ftsTableName`'s `__fts_` convention). */
+const geoTableName = (table: string, indexName: string): string => `${table}__geo_${indexName}`;
+
 const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 const jsonPath = (field: string): string => {
@@ -186,6 +189,7 @@ export {
     aggUpsertSql,
     createIndexSql,
     DOC_COLUMN,
+    geoTableName,
     isFtsAvailable,
     jsonPath,
     jsonPathSql,

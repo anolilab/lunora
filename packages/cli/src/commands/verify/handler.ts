@@ -17,6 +17,12 @@ import { defaultSpawner } from "../../util/spawn";
 import { validateWrangler } from "../../util/wrangler-validator";
 import type { VerifyOptions } from "./index";
 
+/**
+ * Minimal fetch surface the optional health probe needs — a subset of the global
+ * `fetch`, injectable so a test can feed a canned response without a network.
+ */
+type HealthFetch = (url: string) => Promise<{ ok: boolean; status: number }>;
+
 interface VerifyCommandOptions {
     /** Override the schema-drift gate — report breaking drift as a warning instead of an error. */
     allowSchemaDrift?: boolean;
@@ -25,6 +31,14 @@ interface VerifyCommandOptions {
     cwd?: string;
     /** Output format: `pretty` (default) or `json`. */
     format?: string;
+    /** Injectable fetch for the health probe; defaults to the global `fetch`. */
+    healthFetch?: HealthFetch;
+
+    /**
+     * Deployment base URL to probe `/_lunora/health` against. When omitted the
+     * health step is skipped entirely, so `verify` stays offline-safe by default.
+     */
+    healthUrl?: string;
     logger: Logger;
     /** Injectable subprocess runner for the tsc step; defaults to the real spawner. */
     spawner?: Spawner;
@@ -55,6 +69,61 @@ const runTypecheckStep = async (cwd: string, spawner: Spawner): Promise<{ error?
     const result = await spawner({ args: exec.args, command: exec.command, cwd });
 
     return result.code === 0 ? {} : { error: `type errors: tsc --noEmit exited ${String(result.code)}` };
+};
+
+/** The aggregate health route probed by the optional `--health-url` step. */
+const HEALTH_PATH = "/_lunora/health";
+
+/** Join a base URL and the health path without doubling the slash. */
+const joinHealthUrl = (base: string): string => (base.endsWith("/") ? base.slice(0, -1) : base) + HEALTH_PATH;
+
+/**
+ * Probe a deployment's `GET /_lunora/health` when a `healthUrl` is supplied
+ * (opt-in — the step is skipped otherwise, keeping `verify` offline-safe by
+ * default). A `2xx` is green; a `503` (a critical dependency down) or any other
+ * non-`2xx`, and a transport failure, are red. Returns `{ error }` on red, an
+ * empty object on green.
+ */
+const runHealthProbeStep = async (healthUrl: string, healthFetch: HealthFetch): Promise<{ error?: string }> => {
+    const url = joinHealthUrl(healthUrl);
+
+    let response: { ok: boolean; status: number };
+
+    try {
+        response = await healthFetch(url);
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        return { error: `health probe failed: could not reach ${url} (${message})` };
+    }
+
+    if (response.ok) {
+        return {};
+    }
+
+    return { error: `health probe failed: ${url} returned HTTP ${String(response.status)}` };
+};
+
+/**
+ * Run the opt-in health probe when a `healthUrl` is supplied, logging a success
+ * line on green. Returns the probe error on red, else `undefined`. Kept separate
+ * from {@link runVerifyCommand} so its branching doesn't inflate that function's
+ * cognitive complexity; the skip (no `healthUrl`) keeps `verify` offline-safe.
+ */
+const probeHealthIfRequested = async (options: VerifyCommandOptions, logger: Logger): Promise<string | undefined> => {
+    if (options.healthUrl === undefined || options.healthUrl === "") {
+        return undefined;
+    }
+
+    const probe = await runHealthProbeStep(options.healthUrl, options.healthFetch ?? ((url) => fetch(url)));
+
+    if (probe.error === undefined) {
+        logger.success(`verify: health probe ok (${joinHealthUrl(options.healthUrl)})`);
+
+        return undefined;
+    }
+
+    return probe.error;
 };
 
 /** Log the collected errors/warnings and build the command result. */
@@ -149,6 +218,14 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
         }
     }
 
+    // Opt-in health probe: only runs when a deployment URL is given, so the
+    // default `verify` never touches the network.
+    const healthError = await probeHealthIfRequested(options, logger);
+
+    if (healthError !== undefined) {
+        errors.push(healthError);
+    }
+
     const result = reportVerifyResult(logger, errors, warnings, validation.wranglerPath);
 
     if (isJsonFormat(options.format)) {
@@ -165,6 +242,7 @@ const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(asyn
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         format: options.format,
+        healthUrl: options.healthUrl,
         logger,
         // `--no-typecheck` is declared as a `no-*` option but cerebro exposes it
         // under the negated `typecheck` key (false when passed, true when absent).
@@ -175,5 +253,5 @@ const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(asyn
 });
 
 export { execute };
-export type { VerifyCommandOptions, VerifyCommandResult };
+export type { HealthFetch, VerifyCommandOptions, VerifyCommandResult };
 export { runVerifyCommand };

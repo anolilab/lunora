@@ -194,7 +194,93 @@ export function Providers({ children }: { children: React.ReactNode }) {
 - **`dehydrate` / `HydrationBoundary`** — re-exported from
   `@tanstack/react-query` for convenience.
 
+## File uploads (`@lunora/react/upload`)
+
+End-user file uploads — live progress, pause/resume, large-file resumable and
+per-part retry — are re-exported from `@visulima/storage-client` (Lunora does not
+hand-roll the uploader). `useUpload` auto-selects TUS / chunked-REST / multipart
+by file size; the TUS path survives a pause/resume and a dropped connection.
+Point the endpoint at a route backed by
+[`@lunora/storage/upload`](/docs/packages/storage#end-user-uploads-rls-gated) —
+these uploads are gated by _your_ per-user RLS policy, **not** the studio
+`adminToken`.
+
+### TanStack Query reconciliation
+
+The **upload** hooks (`useUpload`, `useMultipartUpload`, `useTusUpload`,
+`useChunkedRestUpload`, `useFileInput`, `usePasteUpload`) hold their own state and
+need **no** `QueryClientProvider`. The `@visulima/storage-client` _data_ hooks
+(`useGetFileList` …) do use TanStack Query — and `LunoraProvider` already mounts a
+`QueryClient`, so they coexist with Lunora's own `useQuery` without extra wiring.
+
+### Drag-and-drop uploader with a progress bar
+
+```tsx
+import { useCallback, useRef, useState } from "react";
+import { useUpload } from "@lunora/react/upload";
+
+export function Uploader() {
+    const [dragging, setDragging] = useState(false);
+    const controlRef = useRef(null);
+
+    // `endpointTus` points at the RLS-gated `@lunora/storage/upload` handler.
+    // The hook auto-selects TUS for large files (resumable), a plain multipart
+    // POST for small ones.
+    const { upload, progress, isUploading, isPaused, pause, resume, abort, error, result } = useUpload({
+        endpointTus: "/upload",
+        endpointMultipart: "/upload",
+        // Send the user's session so the server's `authorize` gate can identify them.
+        headers: async () => ({ authorization: `Bearer ${await getSessionToken()}` }),
+        restrictions: { maxFileSize: 5 * 1024 * 1024 * 1024, allowedTypes: ["video/*", "image/*"] },
+        onSuccess: (file) => console.log("uploaded", file.id),
+    });
+
+    const onDrop = useCallback(
+        (event: React.DragEvent) => {
+            event.preventDefault();
+            setDragging(false);
+            const file = event.dataTransfer.files[0];
+            if (file) void upload(file);
+        },
+        [upload],
+    );
+
+    return (
+        <div
+            onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+            data-dragging={dragging}
+            className="dropzone"
+        >
+            {isUploading ? (
+                <>
+                    <progress value={progress} max={100} />
+                    <span>{progress}%</span>
+                    {isPaused ? <button onClick={() => void resume?.()}>Resume</button> : <button onClick={() => pause?.()}>Pause</button>}
+                    <button onClick={() => abort()}>Cancel</button>
+                </>
+            ) : result ? (
+                <p>Uploaded ✓</p>
+            ) : (
+                <p>{dragging ? "Drop to upload" : "Drag a file here"}</p>
+            )}
+            {error ? <p role="alert">{error.message}</p> : null}
+        </div>
+    );
+}
+```
+
+`useUpload` returns `pause` / `resume` / `isPaused` / `offset` only for the
+resumable protocols (TUS / chunked-REST). For a plain `<input type="file">`,
+`useFileInput` gives you the change-handler + selected-files plumbing; `useTusUpload`
+is the lower-level hook when you always want the resumable protocol.
+
 ## See also
 
 - [@lunora/client](/docs/packages/client)
+- [@lunora/storage — end-user uploads](/docs/packages/storage#end-user-uploads-rls-gated)
 - [Add-on: auth](/docs/packages/auth)

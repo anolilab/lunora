@@ -9,6 +9,7 @@ import type {
     AggregateOp,
     DurableObjectJurisdiction,
     ExternalSourceDefinition,
+    GeoIndexDefinition,
     GlobalBackend,
     IndexDefinition,
     OnDeleteAction,
@@ -26,6 +27,7 @@ import type {
     TriggerHandler,
     TriggerOp,
     TriggerTiming,
+    TtlDefinition,
     VectorEmbedder,
     VectorIndexDefinition,
     VectorMetric,
@@ -107,6 +109,14 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     externallyManaged: () => TableBuilder<Shape>;
 
     /**
+     * Declare a geospatial index over a `v.geoPoint()` column. The runtime keeps
+     * a geohash companion so `withGeoIndex(name, q => q.near(point, radius))` and
+     * `.within(bbox)` resolve as a geohash-prefix range scan + Haversine
+     * refine/sort. `options.precision` tunes the geohash length (default 9).
+     */
+    geoIndex: (name: string, options: { field: keyof Shape & string; precision?: number }) => TableBuilder<Shape>;
+
+    /**
      * Mark this table as global (cross-shard). Backed by **D1** by default;
      * pass `{ backend: "hyperdrive" }` to store it in a Postgres/MySQL database
      * via Cloudflare Hyperdrive (PlanetScale, Neon, …) instead. Either way the
@@ -165,8 +175,19 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * `external_source_on_global` rejects combining `.source()` with `.global()`.
      */
     source: (definition: ExternalSourceDefinition) => TableBuilder<Shape>;
+
     /** Declare named lifecycle triggers fired inline within the write path. */
     triggers: (build: (t: TriggerBuilder<Shape>) => Record<string, TriggerDefinition>) => TableBuilder<Shape>;
+
+    /**
+     * Declare a table-level TTL: a DO alarm-driven sweep auto-deletes rows whose
+     * expiry has passed (or soft-deletes them when the table also
+     * `.softDelete()`s). `field` is an epoch-millisecond column; without
+     * `options.after` its value is the absolute expiry instant, with `after` the
+     * row expires `after` ms past `field` (`field + after`). Coarse, cheap,
+     * table-level — for per-row schedules use `@lunora/scheduler`.
+     */
+    ttl: (field: keyof Shape & string, options?: { after?: number }) => TableBuilder<Shape>;
     /** Declare a vector index over a single text field on this table. */
     vectorize: (field: keyof Shape & string, options: VectorizeOptions<Shape>) => TableBuilder<Shape>;
 }
@@ -233,6 +254,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     }
 
     const aggregateIndexes: AggregateIndexDefinition[] = [];
+    const geoIndexes: GeoIndexDefinition[] = [];
     const indexes: IndexDefinition[] = [];
     const rankIndexes: RankIndexDefinition[] = [];
     const relations: Record<string, RelationDefinition> = {};
@@ -244,6 +266,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     let isExternallyManaged = false;
     let isPublic = false;
     let softDelete: { field: string } | undefined;
+    let ttl: TtlDefinition | undefined;
     let externalSource: ExternalSourceDefinition | undefined;
 
     const builder: TableBuilder<Shape> = {
@@ -278,6 +301,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
             isExternallyManaged = true;
 
             return builder;
+        },
+        geoIndex(name, options) {
+            geoIndexes.push({ field: options.field, name, precision: options.precision });
+
+            return builder;
+        },
+        get geoIndexes() {
+            return geoIndexes;
         },
         global(options?: { backend?: GlobalBackend }) {
             shardMode = { backend: options?.backend ?? "d1", kind: "global" };
@@ -404,6 +435,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
             Object.assign(triggers, build(triggerBuilder));
 
             return builder;
+        },
+        ttl(field, options) {
+            ttl = { after: options?.after, field };
+
+            return builder;
+        },
+        get ttlPolicy() {
+            return ttl;
         },
         get vectorIndexes() {
             return vectorIndexes;

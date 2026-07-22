@@ -221,6 +221,110 @@ inside a handler causes a `{ error: { code, message, ... } }` body to come
 back over RPC instead of an HTTP 500. `toErrorResponse(err)` is the same
 mapping exposed for add-ons.
 
+## Health / readiness probe
+
+`createWorker` serves two probe endpoints an uptime monitor, a load balancer,
+or a Cloudflare Health Check can hit — no configuration required:
+
+- `GET /_lunora/health` — the aggregate probe. `200` when every critical
+  dependency resolves, `503` when a critical one is down. A non-critical failure
+  reports `status: "degraded"` but keeps the `200`.
+- `GET /_lunora/health/ready` — the readiness gate (only readiness checks).
+
+The runtime auto-registers probes structurally from `env`: the shard Durable
+Object (reachability, critical), any D1 binding (`SELECT 1`, critical), and R2 /
+queue / Hyperdrive bindings (presence, non-critical). The body carries only
+per-check `up`/`down` and static `appName` / `appVersion` — **never** a secret,
+connection string, or env value. Configure via `health`:
+
+```ts
+createWorker({
+    shardDO: env.SHARD,
+    health: {
+        appName: "my-app",
+        appVersion: env.CF_VERSION_METADATA?.id,
+        auth: "public", // or "admin" — bearer-gated + per-check messages included
+        probes: [
+            // add a bespoke downstream check
+            { name: "billing-api", critical: false, check: async () => ({ healthy: await pingBilling() }) },
+        ],
+    },
+});
+```
+
+Point a Cloudflare Health Check (or any uptime monitor) at
+`https://<your-worker>/_lunora/health` and alert on a non-`200`.
+
+## Opt-in public REST surface
+
+Publish a procedure over REST by tagging it with `.expose({ rest: true })` in
+`server/`:
+
+```ts
+export const list = query
+    .input({ channelId: v.id("channels") })
+    .expose({ rest: true })
+    .query(async ({ ctx, args }) => ctx.db.query("messages")./* … */);
+```
+
+The runtime then mints `GET /_lunora/rest/messages/list` (queries; also `POST`)
+or `POST /_lunora/rest/messages/send` (mutations / actions). A REST call is
+routed **through** the procedure via the same dispatch as typed RPC, so
+`ctx.auth`, RLS, and the `v.*` validators are all enforced at the shard — REST
+is a transport adapter, never a weaker entry point. **Default-closed**: a
+procedure without the tag has no REST route (it 404s), and there is no
+table-level auto-CRUD (that would bypass RLS). Query args ride the query string
+(`?limit=10`, JSON-encoded for non-scalars); mutation/action args come from the
+JSON body. The generated OpenAPI (`_generated/openapi.json`) describes exactly
+this surface. Rate-limit it over `@lunora/ratelimit`:
+
+```ts
+import { createRestRateLimit } from "lunorash/runtime";
+import { RateLimiter } from "@lunora/ratelimit";
+
+createWorker({
+    shardDO: env.SHARD,
+    functions: LUNORA_FUNCTIONS,
+    restRateLimit: createRestRateLimit(new RateLimiter(/* … */), { name: "rest" }),
+});
+```
+
+Security guidance: keep the surface small, prefer `.output()` on exposed
+procedures so the response shape is contractual, and rely on the procedure's own
+RLS/auth for authorization — never expose an unauthenticated mutation that
+writes state you wouldn't accept from an anonymous caller.
+
+## Continuous CDC export tap
+
+Stream the shard op-log to an external warehouse/ETL sink continuously (the
+outbound counterpart to CDC-in). Wire named sinks + a durable cursor store, and
+drive one drain pass per `POST /_lunora/admin/export-tap/run` (cron or external
+scheduler):
+
+```ts
+import { createKvCursorStore, r2Sink, webhookExportSink } from "lunorash/runtime";
+
+createWorker({
+    shardDO: env.SHARD,
+    queryCoordinator,
+    exportCursorStore: createKvCursorStore(env.CDC_CURSORS),
+    exportSinks: {
+        warehouse: webhookExportSink({ name: "warehouse", url: env.WAREHOUSE_URL }),
+        archive: r2Sink({ name: "archive", bucket: env.CDC_BUCKET, prefix: "cdc" }),
+    },
+});
+```
+
+Delivery is **at-least-once**, **ordered per shard**, and **resumable**: a
+shard's cursor advances only after the sink acknowledges its batch, so a crash
+replays rather than drops. A failing sink applies backpressure (the shard's
+cursor stays put and the next pass retries with exponential backoff) **without
+stalling the shard** — the tap is a reader, so writes proceed. `POST` body:
+`{ "sink": "warehouse", "limit"?: number }`; the response reports `delivered`,
+`cursors`, `failures`, and `hasMore` (poll again while `true`). Managed
+Snowflake / BigQuery / Airbyte / Fivetran connectors are a Lunora Cloud concern
+— the framework ships the tap.
+
 ## See also
 
 - [@lunora/do](/docs/packages/do)

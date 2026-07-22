@@ -11,6 +11,8 @@ import { resolveTraceSampling } from "../../../shared/sampling";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
+import type { AuthAuditReader } from "./auth-audit-rpc";
+import { buildGetAuthAuditLog, GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
 import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
@@ -18,6 +20,9 @@ import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
 import type { ExportRow } from "./export-stream";
 import { collectKnownTables, streamExportRows } from "./export-stream";
+import type { ExportCursorStore, ExportSink } from "./export-tap";
+import type { HealthProbe } from "./health-routes";
+import { buildHealthRoutes, d1Probe, durableObjectProbe, presenceProbe } from "./health-routes";
 import type { IdentityContractLike, ResolvedIdentity } from "./identity-resolvers";
 import { wrapResolverWithContract } from "./identity-resolvers";
 import { streamingImport } from "./import-stream";
@@ -32,6 +37,8 @@ import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";
+import type { RestInvoke, RestRateLimit } from "./rest-routes";
+import { buildRestRoutes } from "./rest-routes";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
@@ -181,6 +188,16 @@ interface FunctionDescriptor {
 interface FunctionRegistryEntry {
     /** The function's `v.*` args validator map; read structurally for the signature view. */
     args?: unknown;
+
+    /**
+     * Opt-in public-surface tag set by the `.expose({ rest: true })` builder
+     * modifier (plan 167). Present only on procedures deliberately published over
+     * REST; the runtime builds a `/_lunora/rest/&lt;namespace>/&lt;fn>` route for each,
+     * routing THROUGH the procedure so auth/RLS/validators are enforced. Rides
+     * along on the registered function's identity (like `fn.x402` / `fn.rls`), so
+     * reading it needs no change to the generated registry shape.
+     */
+    expose?: { readonly rest?: boolean };
 
     /**
      * The generated registry carries `"stream"` alongside query/mutation/action;
@@ -464,6 +481,82 @@ interface BackupManifest {
     tables?: string;
 }
 
+/**
+ * Health / readiness probe configuration (plan 177). Everything is optional; the
+ * runtime always registers its default binding probes, so the endpoints work
+ * with `health: {}` (or the field omitted). Nothing here is a secret — `appName`
+ * / `appVersion` are the only strings echoed in the body, and per-check messages
+ * are surfaced only under the `"admin"` posture.
+ */
+interface HealthOptions {
+    /** Application name surfaced in the health body. Defaults to `"lunora"`. */
+    appName?: string;
+    /** Application version surfaced in the health body. Defaults to `"0.0.0"`. */
+    appVersion?: string;
+
+    /**
+     * Auth posture. `"public"` (default) serves the probe unauthenticated with
+     * per-check messages redacted; `"admin"` requires a valid admin bearer and
+     * includes the (runtime-authored) messages.
+     */
+    auth?: "admin" | "public";
+    /** Cache the computed report for this many ms so a frequent poller does not re-run every probe. Defaults to `0`. */
+    cacheTtlMs?: number;
+    /** Skip the auto-registered D1 / R2 / queue / Hyperdrive binding probes (keep only the DO probe + `probes`). Defaults to `false`. */
+    disableBindingProbes?: boolean;
+    /** Extra bespoke probes appended to the auto-registered set (e.g. a downstream API reachability check). */
+    probes?: ReadonlyArray<HealthProbe>;
+}
+
+/**
+ * One registered device subscription as surfaced by the gated
+ * `__lunora_admin__:listPushSubscriptions` admin RPC (backing the Studio
+ * Notifications page). Structurally mirrors `@lunora/notify`'s
+ * `PushSubscriptionDevice` — the runtime carries NO `@lunora/notify` dependency,
+ * so the shape is declared here and matched by duck typing (the studio reuses the
+ * canonical `@lunora/notify` type). Delivery secrets (Web Push `keys`, FCM
+ * `token`) are never part of this shape.
+ */
+interface NotifySubscriptionDevice {
+    /** Unix-ms creation time. */
+    createdAt: number;
+    /** Web Push service endpoint URL (web-push only). */
+    endpoint?: string;
+    /** Stable identifier used as the store key. */
+    id: string;
+    /** The delivery channel this subscription targets (`"web-push"` / `"fcm"`). */
+    kind: string;
+    /** Last delivery error message, when `lastStatus` is `failed`/`expired`. */
+    lastError?: string;
+    /** Unix-ms time of the most recent register/send touch. */
+    lastSeenAt: number;
+    /** Last-known delivery outcome (`"ok"` / `"failed"` / `"expired"`). */
+    lastStatus?: string;
+    /** Arbitrary app metadata (device name, locale, topics, …). */
+    metadata?: Record<string, unknown>;
+    /** Owning user id, or `null`/absent when anonymous. */
+    userId?: null | string;
+}
+
+/**
+ * The minimal read surface the worker needs off an `@lunora/notify` subscription
+ * store to serve `__lunora_admin__:listPushSubscriptions`: just `list`. Codegen
+ * binds this from the app's `defineNotify({ store })` (`store(env)`), so the
+ * worker reads registered devices through the very store the handlers write to.
+ * Structural (not a `@lunora/notify` import) to keep the runtime dependency-free.
+ */
+interface NotifySubscriptionStoreLike {
+    /**
+     * List every stored subscription. Declared with NO parameter so a concrete
+     * `@lunora/notify` `SubscriptionStore` — whose `list(filter?)` narrows `kind`
+     * to the `"web-push" | "fcm"` union — assigns cleanly under
+     * `strictFunctionTypes` (an extra optional parameter on the source is fine).
+     * The RPC handler applies the `{ kind, userId }` filter in-memory, so no typed
+     * filter needs to cross this dependency-free structural boundary.
+     */
+    list: () => Promise<ReadonlyArray<NotifySubscriptionDevice & { keys?: unknown; token?: unknown }>>;
+}
+
 interface WorkerOptions {
     /**
      * An additional, async authorization gate for the `/_lunora/admin/*` plane
@@ -527,6 +620,18 @@ interface WorkerOptions {
      * every `/auth/*` endpoint responds `AUTH_NOT_CONFIGURED`.
      */
     authAdmin?: AuthAdmin;
+
+    /**
+     * The auth/security audit read plane backing the studio's "Security / audit"
+     * page (the `__lunora_admin__:getAuthAuditLog` admin RPC). The audit trail
+     * lives in the auth D1 database (via `@lunora/auth`'s `SqlExecutor`), not in a
+     * shard's DO SQLite, so — unlike the other `__lunora_admin__:*` ops — the RPC
+     * is served here at the worker, admin-gated, through this reader. Wire it with
+     * `@lunora/auth`'s `createAuthAuditReader(d1Executor(env.DB))`. Omit it and the
+     * RPC responds `AUTH_AUDIT_NOT_CONFIGURED`; a caller without a valid admin
+     * bearer always gets `ADMIN_FORBIDDEN` first (default-closed).
+     */
+    authAuditReader?: AuthAuditReader;
 
     /**
      * Base path the auth routes are mounted under (default `/api/auth`). Used
@@ -654,10 +759,28 @@ interface WorkerOptions {
     defaultShardKey?: string;
 
     /**
+     * Durable per-shard cursor store for the continuous CDC export tap (plan 170),
+     * mirroring the CDC-in `__lunora_source_cursor` watermark. Build a KV-backed
+     * one with `createKvCursorStore(env.CDC_CURSORS)`. Required (alongside
+     * {@link WorkerOptions.exportSinks}) for the `POST /_lunora/admin/export-tap/run`
+     * drain route; absent → the route reports `EXPORT_TAP_NOT_CONFIGURED`.
+     */
+    exportCursorStore?: ExportCursorStore;
+
+    /**
      * Stream `.global()` rows for the admin export endpoint. When omitted,
      * the export endpoint covers only shard-local tables.
      */
     exportGlobals?: GlobalExportFunction;
+
+    /**
+     * Named continuous-export sinks (plan 170) the CDC tap drains the op-log change
+     * feed to. Build with `webhookSink({...})`, `r2Sink({...})`, or a custom
+     * `defineExportSink({...})`. Paired with {@link WorkerOptions.exportCursorStore}
+     * to enable the `POST /_lunora/admin/export-tap/run` drain route (at-least-once,
+     * ordered per shard, resumable). Absent / empty → the route reports not-configured.
+     */
+    exportSinks?: Record<string, ExportSink>;
 
     /**
      * The generated `LUNORA_FUNCTIONS` map (from `_generated/functions.ts`). When
@@ -676,6 +799,18 @@ interface WorkerOptions {
      * respond `GLOBALS_NOT_CONFIGURED`.
      */
     globalIntrospector?: GlobalIntrospector;
+
+    /**
+     * Health / readiness probe configuration (plan 177). When present (or left as
+     * the default — probes are always registered), the worker serves
+     * `GET /_lunora/health` (aggregate; `503` when a critical dependency is down)
+     * and `GET /_lunora/health/ready` (readiness gate). The runtime auto-registers
+     * probes for the shard Durable Object (reachability, critical), any D1 binding
+     * (`SELECT 1`, critical), and R2 / queue / Hyperdrive bindings (presence,
+     * non-critical); `probes` adds bespoke checks. The body never leaks secrets —
+     * see {@link HealthOptions}.
+     */
+    health?: HealthOptions;
 
     /**
      * Router for HTTP actions (`httpRouter()` from `@lunora/server`, a hono app).
@@ -746,6 +881,18 @@ interface WorkerOptions {
      * overrides). Absent → the Archive feed reports "not configured".
      */
     logArchive?: LogArchiveConfig;
+
+    /**
+     * The `@lunora/notify` device-subscription store, bound from the request
+     * `env` by codegen from the app's `lunora/notify.ts` `defineNotify({ store })`.
+     * Backs the gated `__lunora_admin__:listPushSubscriptions` admin RPC (the
+     * Studio Notifications page): the worker reads registered devices — endpoint /
+     * kind / last-send status / delivery errors — through the SAME store the
+     * handlers register into. Delivery secrets (Web Push keys, FCM token) are
+     * stripped before the devices leave the worker. Absent (no store configured)
+     * ⇒ the RPC returns an empty device list rather than erroring.
+     */
+    notifySubscriptionStore?: NotifySubscriptionStoreLike;
 
     /**
      * Optional telemetry sink. When supplied, the worker emits one
@@ -846,6 +993,17 @@ interface WorkerOptions {
      * bucket rows; when omitted, every row routes to the default shard.
      */
     resolveTableSharding?: AdminTableResolver;
+
+    /**
+     * Optional per-request rate-limit gate for the opt-in public REST surface
+     * (plan 167). Invoked with the inbound request + the target `functionPath`
+     * BEFORE the procedure is dispatched; return a `429` `Response` to reject
+     * (returned verbatim, `Retry-After` included) or `undefined` to allow. Build it
+     * over `@lunora/ratelimit` in the worker entry — the runtime stays free of a
+     * hard `@lunora/ratelimit` dependency. Only consulted for REST calls; typed RPC
+     * is unaffected.
+     */
+    restRateLimit?: RestRateLimit;
 
     /**
      * Map of routes for custom HTTP handlers (auth callbacks etc.). Keys can
@@ -1091,6 +1249,16 @@ const DEFAULT_AUTH_BASE_PATH = "/api/auth";
  * like the other admin-op sets, to avoid importing `@lunora/do`.
  */
 const RECORD_AUTH_EVENT_OP = "__lunora_admin__:recordAuthEvent";
+
+/**
+ * Reserved admin RPC the worker (NOT the DO) serves to list the app's registered
+ * `@lunora/notify` device subscriptions for the Studio Notifications page. Unlike
+ * the DO-served admin RPCs, the subscription store is a WORKER option (built from
+ * `env` via `defineNotify({ store })`), so this op is intercepted in `handleRpc`
+ * ahead of the shard forward and gated by the worker's admin bearer. Spelled out
+ * inline, like the other admin-op constants, to avoid importing `@lunora/notify`.
+ */
+const LIST_PUSH_SUBSCRIPTIONS_OP = "__lunora_admin__:listPushSubscriptions";
 
 /**
  * Sub-paths under the auth basePath that represent a genuine auth ATTEMPT — a
@@ -1694,6 +1862,43 @@ interface LunoraWorker {
 }
 
 /**
+ * Structurally detect a health probe for one `env` binding (plan 177). Auto-detection
+ * is binding-name-agnostic and cheap: a D1 database (`.prepare`/`.batch`/`.dump`) gets
+ * an active `SELECT 1` probe (critical); R2 / queue / Hyperdrive bindings get a
+ * presence-only probe (non-critical, no billable remote op). Returns `undefined` for
+ * a value that matches no known binding shape.
+ */
+const detectBindingProbe = (key: string, value: unknown): HealthProbe | undefined => {
+    if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+        return undefined;
+    }
+
+    const shape = value as Record<string, unknown>;
+
+    // D1Database: `.prepare` + `.batch` + `.dump`. Active `SELECT 1`.
+    if (typeof shape["prepare"] === "function" && typeof shape["batch"] === "function" && typeof shape["dump"] === "function") {
+        return d1Probe(`d1:${key}`, value as { prepare: (sql: string) => { first: () => Promise<unknown> } });
+    }
+
+    // R2Bucket: `.list` + `.head` + `.createMultipartUpload`. Presence only.
+    if (typeof shape["list"] === "function" && typeof shape["head"] === "function" && typeof shape["createMultipartUpload"] === "function") {
+        return presenceProbe(`r2:${key}`, true);
+    }
+
+    // Queue: `.send` + `.sendBatch`, no `.get`. Presence only.
+    if (typeof shape["send"] === "function" && typeof shape["sendBatch"] === "function" && typeof shape["get"] !== "function") {
+        return presenceProbe(`queue:${key}`, true);
+    }
+
+    // Hyperdrive: exposes a `connectionString` string. Presence only.
+    if (typeof shape["connectionString"] === "string") {
+        return presenceProbe(`hyperdrive:${key}`, true);
+    }
+
+    return undefined;
+};
+
+/**
  * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
  * be re-exported directly as `export default createWorker(...)`.
  */
@@ -2164,22 +2369,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return response;
     };
 
-    // The data-movement admin routes (export / sync / connector-sync / apply /
-    // import) live in a sibling module; the export/import row producers are
-    // injected because they close over the worker options and are shared with
-    // the scheduled R2 backup (mirroring the other extracted clusters).
-    const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
-        applyGlobals: options.applyGlobals,
-        isAdmin: requestIsAdmin,
-        knownTables: () => collectKnownTables(options.resolveTableSharding),
-        queryCoordinator: options.queryCoordinator,
-        resolveForwardContext: resolveAdminForwardContext,
-        shardDO,
-        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow, shardDO),
-        streamingImport: (request, headers) => streamingImport(request, options, headers, shardDO),
-        syncGlobals: options.syncGlobals,
-    });
-
     /** The `&lt;CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
     interface NotConfiguredError {
         code: string;
@@ -2208,6 +2397,97 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         return value;
     };
+
+    // The `__lunora_admin__:getAuthAuditLog` handler. Unlike the shard-forwarded
+    // `__lunora_admin__:*` ops, the auth audit trail is D1-backed (via
+    // `@lunora/auth`'s `SqlExecutor`), so it is intercepted in `handleRpc` and
+    // served HERE — admin-gated (`assertAdminAuthorized`, default-closed) through
+    // the injected `authAuditReader`.
+    const getAuthAuditLog = buildGetAuthAuditLog({
+        assertAdmin: assertAdminAuthorized,
+        getReader: () => options.authAuditReader,
+    });
+
+    /**
+     * Serve the gated `__lunora_admin__:listPushSubscriptions` admin RPC — the
+     * Studio Notifications page's read of registered `@lunora/notify` devices.
+     * Default-closed (non-admin bearer → 403 FORBIDDEN); a `{ kind?, userId? }`
+     * filter narrows the read. Reads through `options.notifySubscriptionStore`
+     * (bound by codegen from `defineNotify({ store })`); when absent — no notify
+     * store configured — returns an empty device list rather than erroring. Every
+     * device is projected to strip the Web Push `keys` and FCM `token` delivery
+     * secrets so they never leave the worker.
+     */
+    const listPushSubscriptions = async (request: Request, args: Record<string, unknown> | undefined): Promise<Response> => {
+        assertAdminAuthorized(request);
+
+        const store = options.notifySubscriptionStore;
+
+        if (store === undefined) {
+            return Response.json({ subscriptions: [] }, { headers: { "content-type": "application/json" }, status: 200 });
+        }
+
+        const rawKind = args?.["kind"];
+        const rawUserId = args?.["userId"];
+        const kindFilter = typeof rawKind === "string" && rawKind !== "" ? rawKind : undefined;
+        const userIdFilter = typeof rawUserId === "string" && rawUserId !== "" ? rawUserId : undefined;
+
+        const stored = await store.list();
+
+        const subscriptions: NotifySubscriptionDevice[] = stored
+            // Apply the `{ kind, userId }` filter in-memory (the store surface is
+            // filter-free) …
+            .filter((device) => (kindFilter === undefined || device.kind === kindFilter) && (userIdFilter === undefined || device.userId === userIdFilter))
+            // … then strip delivery secrets (`keys`, `token`) — the browser only
+            // needs the endpoint / kind / owner / timestamps + last-send status.
+            .map(({ keys: _keys, token: _token, ...device }) => device);
+
+        return Response.json({ subscriptions }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    /**
+     * Handle the reserved single-shard RPCs the worker serves itself rather than
+     * forwarding to a shard: the D1-backed auth-audit read and the notify
+     * device-list read (both admin-gated, default-closed). Returns a `Response`
+     * to short-circuit `handleRpc`, or `undefined` to let normal shard dispatch
+     * proceed. A fan-out envelope is never worker-served. The fan-out-only
+     * relation-prefix guard lives in `assertDispatchableEnvelope`, which runs first.
+     */
+    const serveReservedWorkerRpc = async (request: Request, envelope: RpcEnvelope): Promise<Response | undefined> => {
+        if (envelope.fanOut) {
+            return undefined;
+        }
+
+        if (envelope.functionPath === GET_AUTH_AUDIT_LOG_OP) {
+            return getAuthAuditLog(request, envelope.args ?? {});
+        }
+
+        if (envelope.functionPath === LIST_PUSH_SUBSCRIPTIONS_OP) {
+            return listPushSubscriptions(request, envelope.args);
+        }
+
+        return undefined;
+    };
+
+    // The data-movement admin routes (export / sync / connector-sync / apply /
+    // import) live in a sibling module; the export/import row producers are
+    // injected because they close over the worker options and are shared with
+    // the scheduled R2 backup (mirroring the other extracted clusters). Threads the
+    // shared `requireAdminOption` gate helper like its siblings (every route gates
+    // behind the coordinator option, so no bare `assertAdmin` is needed).
+    const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
+        applyGlobals: options.applyGlobals,
+        exportCursorStore: options.exportCursorStore,
+        exportSinks: options.exportSinks,
+        knownTables: () => collectKnownTables(options.resolveTableSharding),
+        queryCoordinator: options.queryCoordinator,
+        requireAdminOption,
+        resolveForwardContext: resolveAdminForwardContext,
+        shardDO,
+        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow, shardDO),
+        streamingImport: (request, headers) => streamingImport(request, options, headers, shardDO),
+        syncGlobals: options.syncGlobals,
+    });
 
     /** Read a query param, collapsing missing (`null`) and empty (`""`) to `undefined`. */
     const queryParameter = (url: URL, name: string): string | undefined => {
@@ -2317,6 +2597,49 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         parsePaging,
         queryParameter,
         requireAdminOption,
+    });
+
+    // Health / readiness probes (plan 177). Probes are resolved per-request from
+    // the invocation `env` — Cloudflare bindings only exist at request time — so a
+    // fresh registry always reflects the live deployment. Auto-detection is
+    // structural (no static binding-name knowledge) and deliberately cheap: the
+    // DO probe issues one reachability request, D1 runs `SELECT 1`, and R2 / queue
+    // / Hyperdrive are presence-only (never a billable remote op).
+    const resolveHealthProbes = (env: unknown): ReadonlyArray<HealthProbe> => {
+        const probes: HealthProbe[] = [];
+
+        // Durable Object reachability — the one dependency every deployment has.
+        // Prefer the runtime's own shard namespace, falling back to `env.SHARD`.
+        const namespace = (shardDO as ShardNamespaceLike | undefined) ?? (env as { SHARD?: ShardNamespaceLike } | undefined)?.SHARD;
+
+        if (namespace !== undefined) {
+            probes.push(durableObjectProbe("durable-object", namespace, defaultShard));
+        }
+
+        if (options.health?.disableBindingProbes !== true) {
+            for (const [key, value] of Object.entries((env ?? {}) as Record<string, unknown>)) {
+                const probe = detectBindingProbe(key, value);
+
+                if (probe !== undefined) {
+                    probes.push(probe);
+                }
+            }
+        }
+
+        for (const probe of options.health?.probes ?? []) {
+            probes.push(probe);
+        }
+
+        return probes;
+    };
+
+    const healthRoutes = buildHealthRoutes({
+        appName: options.health?.appName,
+        appVersion: options.health?.appVersion,
+        auth: options.health?.auth ?? "public",
+        cacheTtlMs: options.health?.cacheTtlMs,
+        isAdmin: requestIsAdmin,
+        resolveProbes: resolveHealthProbes,
     });
 
     const buildHttpActionContext = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<HttpActionContext> => {
@@ -2785,6 +3108,35 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    /**
+     * The three pre-dispatch envelope-shape guards, hoisted out of {@link handleRpc}
+     * so the hot path stays flat: (1) `fanOut` + `shardKey` are mutually exclusive;
+     * (2) a `__lunora_relation__:*` single-shard envelope would bypass the
+     * `authorizeFanOut` gate and read raw rows, so it is refused (the literal prefix
+     * is inlined to keep the runtime free of a `@lunora/do` dependency); (3) a
+     * `fanOut` envelope is rejected BEFORE `resolveIdentity` runs when no coordinator
+     * is configured, so a request already destined for a 400 wastes no identity IO.
+     */
+    const assertDispatchableEnvelope = (envelope: RpcEnvelope): void => {
+        if (envelope.fanOut && envelope.shardKey) {
+            throw new LunoraError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        if (!envelope.fanOut && envelope.functionPath.startsWith("__lunora_relation__:")) {
+            throw new LunoraError("`__lunora_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
+                code: "FORBIDDEN",
+                status: 403,
+            });
+        }
+
+        if (envelope.fanOut && !options.queryCoordinator) {
+            throw new LunoraError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
+                code: "BAD_REQUEST",
+                status: 400,
+            });
+        }
+    };
+
     const handleRpc = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
         if (request.method !== "POST") {
             throw new LunoraError("RPC endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
@@ -2798,34 +3150,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // are visible; off by default.
         logRpcDebug(env, envelope);
 
-        if (envelope.fanOut && envelope.shardKey) {
-            throw new LunoraError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
-        }
+        // Throwing envelope guards: fan-out+shardKey, the fan-out-only relation
+        // prefix, and fan-out without a coordinator (checked BEFORE `resolveIdentity`
+        // so a doomed request never triggers the identity hook's DB/IO).
+        assertDispatchableEnvelope(envelope);
 
-        // Reserved cross-shard relation reads (reverse cross-backend relations)
-        // are fan-out-only. A single-shard envelope naming the
-        // `__lunora_relation__:` prefix would bypass the `authorizeFanOut` gate
-        // and read one shard's raw rows directly, so refuse it — the only
-        // legitimate caller is the coordinator's fan-out, which carries a
-        // `fanOut` spec and is authorized through `authorizeRpcEnvelope`. The
-        // literal prefix is inlined (not imported from `@lunora/do`) to keep the
-        // runtime free of a hard `@lunora/do` dependency.
-        if (!envelope.fanOut && envelope.functionPath.startsWith("__lunora_relation__:")) {
-            throw new LunoraError("`__lunora_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
-                code: "FORBIDDEN",
-                status: 403,
-            });
-        }
+        // Reserved single-shard RPCs served at the worker boundary instead of being
+        // forwarded to a shard: the D1-backed auth-audit read and the notify
+        // device-list read (both admin-gated). A returned Response short-circuits
+        // dispatch; `undefined` continues normal routing.
+        const reservedResponse = await serveReservedWorkerRpc(request, envelope);
 
-        // Refuse fan-out envelopes that arrive without a coordinator
-        // configured BEFORE we invoke `resolveIdentity` — otherwise the
-        // hook would be called for a request that's already destined for
-        // a 400, wasting any DB/IO it performs to look up the user.
-        if (envelope.fanOut && !options.queryCoordinator) {
-            throw new LunoraError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
-                code: "BAD_REQUEST",
-                status: 400,
-            });
+        if (reservedResponse !== undefined) {
+            return reservedResponse;
         }
 
         // Forward selected headers from the inbound request so the DO can
@@ -3499,6 +3836,40 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return authResponse;
     };
 
+    // Opt-in public REST surface (plan 167). A REST call is routed THROUGH the
+    // procedure via the exact same steps as `handleRpc` — identity resolution,
+    // the `authorizeRpcEnvelope` gate, then `dispatchSingleShard` (or the
+    // coordinator fan-out) — so auth, RLS, and the `v.*` validators are enforced at
+    // the shard identically to typed RPC. The router is built from the registry, so
+    // a non-exposed procedure has no route (default-closed).
+    const invokeExposed: RestInvoke = async ({ args, env, functionPath, request, shardKey }) => {
+        const envelope: RpcEnvelope = { args, functionPath, ...(shardKey === undefined ? {} : { shardKey }) };
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+
+        await authorizeRpcEnvelope(envelope, identity);
+
+        const resolvedShardKey = shardKey ?? defaultShard;
+        const dispatch = (): Promise<Response> => dispatchSingleShard(functionPath, args, resolvedShardKey, forwardedHeaders);
+
+        // A `.x402({ price })`-tagged procedure exposed over REST is paywalled at
+        // the origin exactly as over RPC (challenge / verify / settle around the
+        // shard dispatch); the gate's presence is re-checked for the type system.
+        const x402Tag = resolveX402Charge(envelope, options);
+
+        if (x402Tag && options.x402Charge) {
+            return options.x402Charge(request, { functionPath, price: x402Tag.price }, dispatch);
+        }
+
+        return dispatch();
+    };
+
+    const restRoutes = buildRestRoutes({
+        functions: options.functions ?? {},
+        invoke: invokeExposed,
+        readJsonBody: readJsonBodyWithLimit,
+        ...(options.restRateLimit ? { rateLimit: options.restRateLimit } : {}),
+    });
+
     // Resolved once at construction so the per-request handler can skip the custom-route
     // lookup entirely when there are none. Treat an empty object as "no routes": the
     // generated composed/app workers always pass a literal `routes: {}` (never `undefined`),
@@ -3561,6 +3932,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         ...kvAdminRoutes,
         ...logArchiveAdminRoutes,
         ...introspectionAdminRoutes,
+        // `/_lunora/health` + `/_lunora/health/ready` — public (or admin-gated)
+        // liveness/readiness probes; not under the admin prefix, so `applyAdminGate`
+        // never runs on them (the handler self-gates when `auth: "admin"`).
+        ...healthRoutes,
+        // `/_lunora/rest/<namespace>/<fn>` — the opt-in public REST surface, one
+        // route per `.expose({ rest: true })` procedure (default-closed). Routes
+        // THROUGH the procedure, so auth/RLS/validators are enforced at the shard.
+        ...restRoutes,
         // `/_lunora/admin/auth/*` — the whole user-management plane, one route per
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
         ...buildAuthAdminRoutes({
@@ -3949,6 +4328,8 @@ export type {
     AuthUserFieldSpec,
     ListAuthUsersOptions,
 } from "./auth-admin-routes";
+export type { AuthAuditEntry, AuthAuditLogResult, AuthAuditOutcome, AuthAuditReader, ReadAuthAuditQuery } from "./auth-audit-rpc";
+export { GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
 export type {
     AdminTableResolver,
     BackupManifest,
@@ -3974,6 +4355,8 @@ export type {
     HttpRouterLike,
     LunoraHandlerOptions,
     LunoraWorker,
+    NotifySubscriptionDevice,
+    NotifySubscriptionStoreLike,
     QueueConsumerHandler,
     Route,
     RpcContext,

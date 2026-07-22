@@ -63,6 +63,23 @@ export interface SearchIndexIR {
     name: string;
 }
 
+/** A `.geoIndex(name, { field, precision? })` declaration — a geohash companion over a `v.geoPoint()` column. */
+export interface GeoIndexIR {
+    /** The `v.geoPoint()` column feeding the geohash. */
+    field: string;
+    name: string;
+    /** Geohash precision (characters) maintained on the companion; omitted ⇒ the runtime default. */
+    precision?: number;
+}
+
+/** A `.ttl(field, { after? })` declaration — declarative table-level auto-expiry. */
+export interface TtlIR {
+    /** Millisecond offset added to `field` to derive the expiry (`field + after`); omitted ⇒ `field` is the absolute expiry. */
+    after?: number;
+    /** The epoch-millisecond expiry column. */
+    field: string;
+}
+
 export interface VectorIndexIR {
     dimensions?: number;
     /** Shape A: the single source column. Shape B: undefined (derived via a `select` fn). */
@@ -168,6 +185,8 @@ export interface TableIR {
      * `"hyperdrive"` (a Postgres/MySQL database via Cloudflare Hyperdrive). Only
      * meaningful when `shardMode === "global"`; absent for sharded/root tables.
      */
+    /** Geospatial indexes declared inline via `.geoIndex(name, …)`. Optional so hand-built IR may omit it (discovery always sets it). */
+    geoIndexes?: ReadonlyArray<GeoIndexIR>;
     globalBackend?: "d1" | "hyperdrive";
     indexes: ReadonlyArray<IndexIR>;
 
@@ -188,6 +207,8 @@ export interface TableIR {
     shardMode: "global" | "root" | { field: string; kind: "shardBy" };
     /** Set when the chain carried `.softDelete()` — the marker column's name (default `deletedAt`). The column is injected into `shape` so `Doc_*` carries it. */
     softDelete?: { field: string };
+    /** Set when the chain carried `.ttl(field, { after? })` — the declarative auto-expiry policy read by the DO alarm sweep. */
+    ttl?: TtlIR;
     /** Vector indexes declared inline via `.vectorize()` (DSL Shape A). */
     vectorIndexes: ReadonlyArray<VectorIndexIR>;
 }
@@ -219,6 +240,15 @@ export interface SchemaIR {
 export interface FunctionIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
+
+    /**
+     * Set by the `.expose({ rest: true })` builder modifier (plan 167). When
+     * `rest` is `true` the function is published on the public REST surface, so the
+     * OpenAPI emitter describes it as a real `/_lunora/rest/&lt;namespace>/&lt;fn>` path
+     * (the single source of truth the runtime router also derives from). Absent →
+     * RPC-only (the default; not on the REST surface).
+     */
+    expose?: { rest?: boolean };
     /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "messages". */
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
@@ -959,6 +989,8 @@ export interface ProcedureMiddlewareIR {
     unboundedAiGeneration: boolean;
     /** `true` when the chain carries `.use(verifyTurnstile(...))` or a `protectPublic({ captcha })` bundle. */
     usesCaptcha: boolean;
+    /** `true` when the chain carries `.use(emailGateMiddleware(...))` (`@lunora/auth`). Feeds the `signup_mutation_without_disposable_gating` lint. */
+    usesEmailGate: boolean;
     /** `true` when the handler calls `ctx.db.insertManyUnsafe(...)`, bypassing validators and triggers. Feeds the `insert_many_unsafe_user_data` lint. */
     usesInsertManyUnsafe: boolean;
     /** `true` when the chain carries `.use(mask(...))`. */

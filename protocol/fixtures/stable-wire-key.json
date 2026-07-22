@@ -1,0 +1,18 @@
+{
+    "$comment": "Golden fixtures for the stable subscription/dedup key (shared/wire-key.ts: stableWireKey = stableStringify(encodeWire(value))). `cases` take pure-JSON `args` and assert stable_wire_key(args) == key. `typed` cases give `wireArgs` (already wire-encoded) and assert stable_wire_key(decode(wireArgs)) == key, covering bigint/date/bytes args. Object keys are sorted at every depth (code-point order); arrays keep order; null fields are kept, undefined object fields are dropped.",
+    "cases": [
+        { "name": "empty", "args": {}, "key": "{}" },
+        { "name": "sorted-top-level", "args": { "b": 2, "a": 1 }, "key": "{\"a\":1,\"b\":2}" },
+        { "name": "sorted-nested", "args": { "a": 1, "nested": { "z": 3, "y": 2 } }, "key": "{\"a\":1,\"nested\":{\"y\":2,\"z\":3}}" },
+        { "name": "arrays-keep-order", "args": { "list": [3, 1, 2] }, "key": "{\"list\":[3,1,2]}" },
+        { "name": "null-field-kept", "args": { "a": null, "b": 1 }, "key": "{\"a\":null,\"b\":1}" },
+        { "name": "codepoint-order", "args": { "b": "x", "A": "y" }, "key": "{\"A\":\"y\",\"b\":\"x\"}" },
+        { "name": "nested-array-of-objects", "args": { "rows": [{ "b": 1, "a": 2 }] }, "key": "{\"rows\":[{\"a\":2,\"b\":1}]}" },
+        { "name": "string-with-quote", "args": { "s": "a\"b" }, "key": "{\"s\":\"a\\\"b\"}" }
+    ],
+    "typed": [
+        { "name": "bigint-arg", "wireArgs": { "n": ["$lunora.wire$", "bigint", "7"] }, "key": "{\"n\":[\"$lunora.wire$\",\"bigint\",\"7\"]}" },
+        { "name": "date-arg", "wireArgs": { "d": ["$lunora.wire$", "date", 1700000000000] }, "key": "{\"d\":[\"$lunora.wire$\",\"date\",1700000000000]}" },
+        { "name": "bytes-arg", "wireArgs": { "b": ["$lunora.wire$", "bytes", "AQID"] }, "key": "{\"b\":[\"$lunora.wire$\",\"bytes\",\"AQID\"]}" }
+    ]
+}

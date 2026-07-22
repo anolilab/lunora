@@ -82,11 +82,13 @@ const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-ad
 const AgentsPanel = lazyNamed(() => import("../features/agents/agents-panel"), "AgentsPanel");
 const AnalyticsPanel = lazyNamed(() => import("../features/analytics/analytics-panel"), "AnalyticsPanel");
 const ApiTab = lazy(() => import("../features/api/api-tab"));
+const AuthAuditPanel = lazyNamed(() => import("../features/auth/auth-audit-panel"), "AuthAuditPanel");
 const AuthConfigPanel = lazyNamed(() => import("../features/auth/auth-config-panel"), "AuthConfigPanel");
 const AuthSessionsPanel = lazyNamed(() => import("../features/auth/auth-sessions-panel"), "AuthSessionsPanel");
 const OrganizationsPanel = lazyNamed(() => import("../features/auth/organizations-panel"), "OrganizationsPanel");
 const UsersPanel = lazyNamed(() => import("../features/auth/users-panel"), "UsersPanel");
 const ContainersPanel = lazyNamed(() => import("../features/containers/containers-panel"), "ContainersPanel");
+const DeploymentHealthPanel = lazyNamed(() => import("../features/health/deployment-health-panel"), "DeploymentHealthPanel");
 const TableEditor = lazyNamed(() => import("../features/data/table-editor"), "TableEditor");
 const ExportImportPanel = lazyNamed(() => import("../features/database/export-import"), "ExportImportPanel");
 const MigrationsPanel = lazyNamed(() => import("../features/database/migrations"), "MigrationsPanel");
@@ -109,6 +111,7 @@ const MailPanel = lazyNamed(() => import("../features/logs/mail-panel"), "MailPa
 const SchedulePanel = lazyNamed(() => import("../features/logs/schedule-panel"), "SchedulePanel");
 const SubscriptionsPanel = lazy(() => import("../features/logs/subscriptions-panel"));
 const KvBrowser = lazyNamed(() => import("../features/kv/kv-browser"), "KvBrowser");
+const NotificationsPanel = lazyNamed(() => import("../features/notifications/notifications-panel"), "NotificationsPanel");
 const PaymentsPanel = lazyNamed(() => import("../features/payments/payments-panel"), "PaymentsPanel");
 const PermissionsPanel = lazyNamed(() => import("../features/permissions/permissions-panel"), "PermissionsPanel");
 const QueuesPanel = lazy(() => import("../features/queues/queues-panel"));
@@ -131,11 +134,13 @@ type StudioTab =
     | "analytics"
     | "api"
     | "audit"
+    | "authAudit"
     | "authConfig"
     | "authSessions"
     | "containers"
     | "dashboards"
     | "data"
+    | "deploymentHealth"
     | "drains"
     | "export"
     | "fanout"
@@ -151,6 +156,7 @@ type StudioTab =
     | "mail"
     | "metrics"
     | "migrations"
+    | "notifications"
     | "organizations"
     | "payments"
     | "permissions"
@@ -303,6 +309,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     analytics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     api: <path d="m9 8-4 4 4 4m6-8 4 4-4 4M13 5l-2 14" />,
     audit: <path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm6 0v5h5M9 13h6M9 16h6M9 10h2" />,
+    authAudit: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8h6m-6 3h6" />,
     authConfig: (
         <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6h-3.6l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
     ),
@@ -312,6 +319,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     authSessions: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     containers: <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Zm0 0 9 4.5m0 0 9-4.5m-9 4.5V21" />,
     dashboards: <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 14h7v5H4v-5Zm9-1h7v6h-7v-6Z" />,
+    deploymentHealth: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8 2 3 4-5" />,
     drains: <path d="M5 5h14M7 5v6a5 5 0 0 0 10 0V5M10 16h4v3h-4zM12 19v2" />,
     data: (
         <path d="M5 6c0-1.4 3.1-2.5 7-2.5s7 1.1 7 2.5-3.1 2.5-7 2.5S5 7.4 5 6Zm0 0v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
@@ -333,6 +341,9 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     payments: <path d="M3 7h18v10H3V7Zm0 3h18M7 14h4" />,
     metrics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     migrations: <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />,
+    notifications: (
+        <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 0 0-4-5.7V5a2 2 0 1 0-4 0v.3A6 6 0 0 0 6 11v3.2a2 2 0 0 1-.6 1.4L4 17h5m6 0v1a3 3 0 1 1-6 0v-1m6 0H9" />
+    ),
     organizations: <path d="M3 21V8l6-4 6 4v13M9 21v-5h2v5M15 11h6v10M18 14v.01M18 17v.01M6 9v.01M6 12v.01M6 15v.01" />,
     permissions: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8 2.2 2.2L15 9.5M8.5 16h7" />,
     pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
@@ -368,11 +379,14 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "overview", tabs: ["home", "dashboards"] },
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
     { key: "functions", tabs: ["functions", "api", "workflows", "agents", "queues"] },
-    { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
+    { key: "auth", tabs: ["users", "organizations", "authSessions", "authAudit", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
-    { key: "observability", tabs: ["issues", "logs", "traces", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health"] },
+    {
+        key: "observability",
+        tabs: ["issues", "logs", "traces", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health", "deploymentHealth"],
+    },
     { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
-    { key: "operations", tabs: ["schedule", "mail", "drains", "payments", "flags"] },
+    { key: "operations", tabs: ["schedule", "mail", "drains", "notifications", "payments", "flags"] },
     { key: "settings", tabs: ["settings"] },
 ];
 
@@ -456,6 +470,7 @@ const TABS = exhaustiveRouteTabs([
     "users",
     "organizations",
     "authSessions",
+    "authAudit",
     "authConfig",
     "files",
     "storageRules",
@@ -464,6 +479,7 @@ const TABS = exhaustiveRouteTabs([
     "metrics",
     "analytics",
     "health",
+    "deploymentHealth",
     "security",
     "rls",
     "permissions",
@@ -474,6 +490,7 @@ const TABS = exhaustiveRouteTabs([
     "realtime",
     "fanout",
     "mail",
+    "notifications",
     "payments",
     "audit",
     "schedule",
@@ -820,11 +837,13 @@ const StudioLayout = (): ReactElement => {
             analytics: t("Analytics"),
             api: t("API"),
             audit: t("Audit"),
+            authAudit: t("Auth audit"),
             authConfig: t("Configuration"),
             authSessions: t("Sessions"),
             containers: t("Containers"),
             dashboards: t("Dashboards"),
             data: t("Data"),
+            deploymentHealth: t("Deployment health"),
             drains: t("Log drains"),
             export: t("Export / Import"),
             fanout: t("Fan-out"),
@@ -839,6 +858,7 @@ const StudioLayout = (): ReactElement => {
             logs: t("Logs"),
             metrics: t("Metrics"),
             migrations: t("Migrations"),
+            notifications: t("Notifications"),
             organizations: t("Organizations"),
             pitr: t("Time Travel"),
             mail: t("Mail"),
@@ -878,11 +898,13 @@ const StudioLayout = (): ReactElement => {
         analytics: t("Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards."),
         api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),
         audit: t("A durable log of admin state-changing operations."),
+        authAudit: t("Authentication and security events — sign-ins, MFA, and session changes."),
         authConfig: t("Enabled plugins and session config (read-only)."),
         authSessions: t("Browse and revoke active sessions across all users."),
         containers: t("Live Cloudflare Containers — current lifecycle state per instance from the log stream."),
         dashboards: t("Chart widgets backed by saved read-only SQL queries."),
         data: t("Browse and edit rows across your shard and global tables."),
+        deploymentHealth: t("Live liveness, readiness, and per-binding health from the deployment's /_lunora/health endpoint."),
         drains: t("Forward logs to Logpush, Tail Workers, or a webhook collector."),
         export: t("Export a shard to NDJSON, or import rows from it."),
         fanout: t("Realtime fan-out cost and per-topic subscriber counts for this shard."),
@@ -896,6 +918,7 @@ const StudioLayout = (): ReactElement => {
         logs: t("A live stream of recent function logs."),
         metrics: t("Per-shard health and aggregate metrics."),
         migrations: t("Review migration status and run them."),
+        notifications: t("Registered push devices — endpoint, kind, last-send status, and delivery errors."),
         organizations: t("Browse and manage organizations, members, and invitations."),
         pitr: t("Restore a shard to a point in the last 30 days."),
         mail: t("Email your app sent, captured in dev."),
@@ -1092,11 +1115,13 @@ const buildRouter = ({
         analytics: <AnalyticsPanel />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
+        authAudit: <AuthAuditPanel />,
         authConfig: <AuthConfigPanel />,
         authSessions: <AuthSessionsPanel />,
         containers: <ContainersPanel />,
         dashboards: <DashboardsPanel initialShardKey={initialShardKey} />,
         data: <TableEditor editable={dataEditable} initialShardKey={initialShardKey} />,
+        deploymentHealth: <DeploymentHealthPanel />,
         drains: <LogDrainsPanel />,
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
         fanout: <FanoutPanel initialShardKey={initialShardKey} />,
@@ -1117,6 +1142,7 @@ const buildRouter = ({
         traces: <TracesPanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
+        notifications: <NotificationsPanel />,
         organizations: <OrganizationsPanel />,
         permissions: <PermissionsPanel functions={functions} runAsIdentity={runAsIdentity} schemaEditable={schemaEditable} />,
         pitr: <PitrPanel initialShardKey={initialShardKey} />,

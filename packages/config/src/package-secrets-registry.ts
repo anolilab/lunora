@@ -97,6 +97,40 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<your-resend-api-key>",
         },
     ],
+    "@lunora/notify": [
+        {
+            description:
+                "Public VAPID key (base64url) for Web Push. Generate a keypair once with: npx web-push generate-vapid-keys — the public key is also shipped to the browser to subscribe.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#web-push",
+            key: "VAPID_PUBLIC_KEY",
+            placeholderValue: "<your-vapid-public-key>",
+        },
+        {
+            description: "Private VAPID key (base64url) for Web Push — the application-server signing key. Generate with: npx web-push generate-vapid-keys",
+            docsUrl: "https://lunora.sh/docs/packages/notify#web-push",
+            key: "VAPID_PRIVATE_KEY",
+            placeholderValue: "<your-vapid-private-key>",
+        },
+        {
+            description: "VAPID `sub` contact — a mailto: or https: URL identifying the application server (e.g. mailto:you@example.com).",
+            docsUrl: "https://lunora.sh/docs/packages/notify#web-push",
+            key: "VAPID_SUBJECT",
+            placeholderValue: "mailto:you@example.com",
+        },
+        {
+            description: "Firebase project id for FCM (HTTP v1) push. Found in the Firebase console project settings.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_PROJECT_ID",
+            placeholderValue: "<your-firebase-project-id>",
+        },
+        {
+            description:
+                "OAuth2 access token for FCM (HTTP v1). Convenient for dev but expires — in production supply a getAccessToken() in defineNotify instead. Obtain via the Google Cloud SDK / a service account.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_ACCESS_TOKEN",
+            placeholderValue: "<your-fcm-access-token>",
+        },
+    ],
     "@lunora/payment": [
         {
             description: "Stripe secret key (sk_test_…). Required when using the Stripe adapter. Obtain at https://dashboard.stripe.com/apikeys",
