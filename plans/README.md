@@ -915,7 +915,7 @@ trust win — boundaries read as deliberate, not missing.
 | Plan | Title                                                                                                                                                          | Category     | Pkg          | Pri | Effort | Risk | Status |
 | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------ | --- | ------ | ---- | ------ |
 | 164  | Non-TypeScript client SDK (Swift _or_ Python) — prove the wire protocol isn't TS-bound; biggest ceiling vs Convex                                              | feat         | client (new) | P2  | L      | MED  | SHIPPED |
-| 165  | `@lunora/push` — Web Push (VAPID) → FCM/APNs; grep-confirmed zero push code today                                                                              | feat         | push (new)   | P2  | L      | MED  | PARTIAL — `@lunora/notify` + `ctx.notify`/`ctx.push` codegen wiring + docs shipped; Studio page open |
+| 165  | `@lunora/push` — Web Push (VAPID) → FCM/APNs; grep-confirmed zero push code today                                                                              | feat         | push (new)   | P2  | L      | MED  | SHIPPED |
 | 166  | Enterprise auth: SSO + SCIM — `@better-auth/sso` + `@better-auth/scim` (MIT); OIDC/SCIM-Users LOW, SAML-on-workerd is the risk                                 | feat         | auth         | P2  | M–L    | MED  | TODO   |
 | 167  | Opt-in public REST/GraphQL surface — extend the existing OpenAPI/OpenRPC spec (`cli/api-spec.ts`) for non-TS/interop, RLS-enforced                             | feat         | runtime/cli  | P3  | L      | MED  | SHIPPED (REST; GraphQL Phase 2 demand-gated) |
 | 168  | Cross-shard transaction story — **design spike first** (saga vs 2PC vs documented boundary+lint); no code until ratified                                       | architecture | do/runtime   | P2  | XL     | HIGH | TODO   |
@@ -923,22 +923,20 @@ trust win — boundaries read as deliberate, not missing.
 | 170  | Continuous CDC export tap (op-log → external sink) — the streaming counterpart to CDC-in; snapshot export/backup already exist                                 | feat         | runtime/do   | P3  | L      | MED  | SHIPPED (tap + webhook/R2 sinks; warehouse connectors = Cloud) |
 | 171  | "Design boundaries / non-goals" docs page — state the NON-GOAL bucket plainly (no arbitrary SQL, RPC-not-REST-first, cross-shard eventual); cheapest trust win | docs         | docs         | P2  | S      | LOW  | SHIPPED |
 
-### Deferred Studio / surface tails (Wave 14 — plans shipped, Phase-2 open)
+### Studio / surface tails (Wave 14 — ✅ all shipped)
 
-These plans shipped to their **exit criteria** and their plan files were removed;
-the outstanding "Surface & docs" Phase-2 work is tracked here so nothing is lost:
+The "Surface & docs" Phase-2 work that trailed the shipped plans is now complete,
+so these plans are fully done and their files removed:
 
-- **174 auth audit** — recording + `@visulima/redact` redaction + configurable
-  retention + `readAuthAuditLog` + docs shipped. Open: a Studio "Security / audit"
-  page over `readAuthAuditLog`, and exposing that read as an RLS/admin-gated RPC
-  (the admin-op log's `getAuditLog` is the precedent).
-- **177 health** — `/_lunora/health` + `/health/ready` + binding probes + docs
-  shipped. Open: a Studio "Health" indicator wired to the live endpoint, a
-  `production-checklist.mdx` entry, and a deploy `verify` step that probes it.
-- **165 push** — `@lunora/notify` + codegen-wired `ctx.notify`/`ctx.push` + docs
-  shipped (plan file **retained**, see `165-push-notifications.md`). Open: a Studio
-  notifications page (registered devices / last-send / delivery errors / inbox) and
-  an example app declaring `lunora/notify.ts`.
+- **174 auth audit** ✅ — plus the Studio "Auth audit" page and the gated
+  `__lunora_admin__:getAuthAuditLog` RPC (D1-backed, admin default-closed,
+  codegen-wired `authAuditReader`).
+- **177 health** ✅ — plus the Studio deployment-health panel (fetches
+  `/_lunora/health`), the `production-checklist.mdx` section, and the opt-in
+  `lunora verify --health-url` probe.
+- **165 push** ✅ — plus the Studio Notifications devices page, the gated
+  `__lunora_admin__:listPushSubscriptions` RPC (secrets stripped), and the
+  `examples/notify-demo/` example declaring `lunora/notify.ts`.
 
 ### Considered / newly surfaced (Fable 5 deep pass, 2026-07-21)
 
