@@ -3103,6 +3103,76 @@
         "x-lunora-function-kind": "mutation"
       }
     },
+    "/_lunora/rpc#incidents:investigate": {
+      "post": {
+        "description": "Invoke the `action` `incidents:investigate` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "incidents:investigate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "description": "Id<\"incidents\">",
+                        "type": "string",
+                        "x-lunora-table": "incidents"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "incidents:investigate",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "action: incidents:investigate",
+        "tags": [
+          "incidents"
+        ],
+        "x-lunora-function-kind": "action"
+      }
+    },
     "/_lunora/rpc#incidents:list": {
       "post": {
         "description": "Invoke the `query` `incidents:list` over the Lunora RPC envelope (POST /_lunora/rpc).",

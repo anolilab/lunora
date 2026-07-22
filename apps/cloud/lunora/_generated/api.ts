@@ -68,7 +68,8 @@ export interface ApiTypes {
         remove: FunctionReference<"mutation", { installationId: number }, void>;
     };
     incidents: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
+        investigate: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { by: "deterministic" | "llm"; confidence: "high" | "low" | "medium"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; investigatedAt?: number; investigation?: { by: "deterministic" | "llm"; confidence: "high" | "low" | "medium"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
         setStatus: FunctionReference<"mutation", { id: Id<"incidents">; organizationId: Id<"organizations">; status: unknown }, Id<"incidents">>;
         triage: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { summary: string; }>;
     };

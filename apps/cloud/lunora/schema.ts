@@ -478,6 +478,24 @@ export default defineSchema({
         hash: v.string(),
         // Container DO instance id, when known.
         instance: v.optional(v.string()),
+        // When the last investigation ran (`incidents.investigate`); absent until
+        // one has. Distinct from `status` (open/resolved) — an incident can be
+        // investigated while still open.
+        investigatedAt: v.optional(v.number()),
+        // The last structured investigation result (agentic runner output), stored
+        // so the dashboard renders it without re-spending inference. Shape mirrors
+        // `InvestigationResult` (src/telemetry/investigation.ts).
+        investigation: v.optional(
+            v.object({
+                by: v.union(v.literal("deterministic"), v.literal("llm")),
+                confidence: v.union(v.literal("high"), v.literal("medium"), v.literal("low")),
+                evidenceNote: v.string(),
+                relatedTraceIds: v.array(v.string()),
+                rootCauseHypothesis: v.string(),
+                suggestedRemediation: v.string(),
+                summary: v.string(),
+            }),
+        ),
         kind: v.union(v.literal("crash_loop"), v.literal("oom"), v.literal("error_spike")),
         lastSeen: v.number(),
         openedAt: v.number(),
