@@ -52,6 +52,14 @@
             "types": "./dist/middleware.d.ts",
             "import": "./dist/middleware.mjs"
         },
+        "./audit": {
+            "types": "./dist/audit.d.ts",
+            "import": "./dist/audit.mjs"
+        },
+        "./email-guard": {
+            "types": "./dist/email-guard.d.ts",
+            "import": "./dist/email-guard.mjs"
+        },
         "./turnstile": {
             "types": "./dist/turnstile.d.ts",
             "import": "./dist/turnstile.mjs"
@@ -100,6 +108,10 @@
         "@lunora/errors": "1.0.0-alpha.6",
         "@lunora/server": "1.0.0-alpha.29",
         "@lunora/values": "1.0.0-alpha.9",
+        "@visulima/disposable-email-domains": "catalog:email",
+        "@visulima/email-verifier": "catalog:email",
+        "@visulima/free-email-domains": "catalog:email",
+        "@visulima/redact": "catalog:redact",
         "better-auth": "catalog:auth"
     },
     "devDependencies": {

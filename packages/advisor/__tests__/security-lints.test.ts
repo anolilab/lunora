@@ -27,6 +27,7 @@ import privilegedFanoutFromPublicProcedure from "../src/lints/static/privileged-
 import publicArgumentUsesAny from "../src/lints/static/public-argument-uses-any";
 import publicMutationWithoutRatelimit from "../src/lints/static/public-mutation-without-ratelimit";
 import ratelimitDefaultMemoryStore from "../src/lints/static/ratelimit-default-memory-store";
+import signupMutationWithoutDisposableGating from "../src/lints/static/signup-mutation-without-disposable-gating";
 import sqlInjectionRisk from "../src/lints/static/sql-injection-risk";
 import unboundedStringArgument from "../src/lints/static/unbounded-string-argument";
 import userCreatingMutationWithoutCaptcha from "../src/lints/static/user-creating-mutation-without-captcha";
@@ -43,6 +44,7 @@ const procedure = (overrides: Partial<AdvisorProcedureProtection> = {}): Advisor
         kind: "mutation",
         unboundedAiGeneration: false,
         usesCaptcha: false,
+        usesEmailGate: false,
         usesInsertManyUnsafe: false,
         usesMask: false,
         usesRateLimit: false,
@@ -108,6 +110,43 @@ describe("user_creating_mutation_without_captcha", () => {
         const procedures = [procedure({ usesCaptcha: true, writesUserTable: true }), procedure({ exportName: "b" })];
 
         expect(userCreatingMutationWithoutCaptcha.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
+    });
+});
+
+describe("signup_mutation_without_disposable_gating", () => {
+    it("flags a user-table write with no email gate", () => {
+        expect.assertions(2);
+
+        const findings = signupMutationWithoutDisposableGating.run({ procedureProtections: [procedure({ writesUserTable: true })], schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ cacheKey: "signup_mutation_without_disposable_gating:signup:signUp", metadata: { writesUserTable: true } });
+    });
+
+    it("ignores a procedure that already uses the email gate", () => {
+        expect.assertions(1);
+
+        const procedures = [procedure({ usesEmailGate: true, writesUserTable: true })];
+
+        expect(signupMutationWithoutDisposableGating.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
+    });
+
+    it("ignores a procedure that writes no user table, and internal procedures", () => {
+        expect.assertions(2);
+
+        expect(signupMutationWithoutDisposableGating.run({ procedureProtections: [procedure()], schema: schema() })).toHaveLength(0);
+        expect(
+            signupMutationWithoutDisposableGating.run({
+                procedureProtections: [procedure({ visibility: "internal", writesUserTable: true })],
+                schema: schema(),
+            }),
+        ).toHaveLength(0);
+    });
+
+    it("flags nothing when the codegen feeder supplies no protection evidence", () => {
+        expect.assertions(1);
+
+        expect(signupMutationWithoutDisposableGating.run({ schema: schema() })).toHaveLength(0);
     });
 });
 

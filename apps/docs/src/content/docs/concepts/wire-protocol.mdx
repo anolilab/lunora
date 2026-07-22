@@ -1,0 +1,89 @@
+---
+title: Wire protocol & non-TS SDKs
+description: The language-independent Lunora client↔server wire protocol, its conformance fixtures, and the Python SDK built on it.
+---
+
+The Lunora client surface is TypeScript-first (`@lunora/client`, `@lunora/react`,
+…), but the **wire protocol itself is not TypeScript-bound**. It is specified as a
+language-independent contract so an SDK in any language can talk to a Lunora
+deployment — the first of which is a minimal **Python** client.
+
+## The specification
+
+The normative spec lives at [`protocol/README.md`](https://github.com/anolilab/lunora/blob/alpha/protocol/README.md)
+in the repository. It covers every layer a client needs:
+
+- **Transport map** — `POST /_lunora/rpc` for query/mutation/action, the
+  `GET /_lunora/ws` WebSocket for live subscriptions, and the SSE framing for
+  HTTP streaming routes.
+- **The wire value codec** (`encodeWire`/`decodeWire`) — how `bigint`, bytes,
+  `Date`, `Map`/`Set`, `URL`, `NaN`/`Infinity`, and array-position `undefined`
+  are tagged so they survive JSON, while pure-JSON values stay byte-identical.
+- **The stable subscription key** — the sorted, canonical encoding that
+  de-duplicates `(functionPath, args, shardKey)`.
+- **The RPC envelopes** — request body, success/`commitCursor`/`lastMutationId`,
+  and the `{ error: { code, message, data } }` failure shape.
+- **The WebSocket frames** — `connect`, `subscribe`/`unsubscribe`, the
+  `ack`/`data`/`delta`/`resume`/`settled`/`error` server frames, and the
+  `pokeStart`/`pokePart`/`pokeEnd` shape (partial-replication) protocol.
+- **Auth** — the HTTP bearer, the WS `?token=` credential, and the short-lived
+  **ephemeral WS admin token** minted at `POST /_lunora/admin/ws-token`.
+
+## Conformance fixtures
+
+The spec is backed by a set of **golden frames** under
+[`protocol/fixtures/`](https://github.com/anolilab/lunora/tree/alpha/protocol/fixtures):
+`wire-codec.json`, `stable-wire-key.json`, `rpc.json`, and `ws-frames.json`. Both
+the reference TypeScript client and every non-TS SDK are tested against these
+identical files, so a protocol drift is caught on both sides:
+
+- TS reference: `packages/client/__tests__/protocol-conformance.test.ts`
+- Python: `sdks/python/tests/test_conformance.py`
+
+An SDK is protocol-conformant when it round-trips every codec fixture
+(`encode(decode(x)) == x`), reproduces every stable key, builds/parses the RPC
+envelopes, and produces/consumes the WebSocket frames — including materialising
+the poke sequence into the expected rowset.
+
+## The Python SDK
+
+A minimal, standard-library-only client lives at
+[`sdks/python/`](https://github.com/anolilab/lunora/tree/alpha/sdks/python):
+
+```python
+import asyncio
+from lunora import LunoraClient, WireBigInt
+
+async def main():
+    client = LunoraClient(
+        url="https://my-app.example.com",
+        auth_token="…",                    # HTTP bearer (optional)
+        ws_token=lambda: mint_ephemeral(),  # str | callable | async callable
+    )
+
+    # HTTP RPC round-trips
+    messages = await client.query("messages:list", {"channel": "general"})
+    await client.mutation("messages:send", {"channel": "general", "text": "hi"})
+    await client.mutation("ledger:add", {"amount": WireBigInt(1000)})  # v.bigint()
+
+    # Live subscription over the WebSocket
+    client.subscribe("messages:list", {"channel": "general"}, print)
+    await client.connect_and_run()  # needs `pip install websockets`
+
+asyncio.run(main())
+```
+
+It implements `query`/`mutation`, live `subscribe` (data/delta frames) and
+`subscribe_shape` (poke frames), an async WS token provider mirroring
+`WsTokenProvider`, and the full value codec. Because Python lacks TypeScript's
+distinct `bigint`/`Map`/`Set`/`Date` types, those are marked with small
+wrappers (`WireBigInt`, `WireDate`, `WireMap`, `WireSet`, `WireUrl`,
+`WireBytes`); plain values map to JSON directly.
+
+See [`sdks/python/README.md`](https://github.com/anolilab/lunora/tree/alpha/sdks/python)
+and the runnable `examples/quickstart.py`.
+
+<Callout type="info">
+    The Python SDK is a v1 proof that the model ports cleanly. Optimistic updates, the offline queue, and codegen'd typed bindings are follow-ups (see the
+    plan's Phase 2) rather than part of this first release.
+</Callout>

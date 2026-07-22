@@ -237,3 +237,49 @@ describe("emitOpenApiModule", () => {
         expect(JSON.parse(inlined)).toStrictEqual(JSON.parse(emitOpenApi(input)));
     });
 });
+
+describe("emitOpenApi — opt-in public REST surface (plan 167)", () => {
+    it("describes EXACTLY the `.expose({ rest: true })` procedures as real REST paths", () => {
+        expect.assertions(5);
+
+        const document = buildOpenApiDocument({
+            functions: [
+                makeFunction({ args: { limit: { inner: { kind: "number" }, kind: "optional" } }, expose: { rest: true }, exportName: "list" }),
+                makeFunction({ args: { text: { kind: "string" } }, expose: { rest: true }, exportName: "send", kind: "mutation" }),
+                // NOT exposed → must NOT appear as a REST path (default-closed).
+                makeFunction({ exportName: "secret" }),
+            ],
+            httpRoutes: [],
+        });
+
+        const restPaths = Object.keys((document as { paths: Record<string, unknown> }).paths).filter((p) => p.startsWith("/_lunora/rest/"));
+
+        // Exactly the two exposed procedures — the non-exposed `secret` is absent.
+        expect(restPaths.toSorted((a, b) => a.localeCompare(b))).toEqual(["/_lunora/rest/messages/list", "/_lunora/rest/messages/send"]);
+
+        const { paths } = document as { paths: Record<string, Record<string, { parameters?: unknown; requestBody?: unknown }>> };
+
+        // A query is a GET with its args as query parameters.
+        expect(paths["/_lunora/rest/messages/list"]?.get).toBeDefined();
+        expect(paths["/_lunora/rest/messages/list"]?.get?.parameters).toBeDefined();
+        // A mutation is a POST with a JSON request body.
+        expect(paths["/_lunora/rest/messages/send"]?.post).toBeDefined();
+        expect(paths["/_lunora/rest/messages/send"]?.post?.requestBody).toBeDefined();
+    });
+
+    it("never exposes an internal or stream procedure over REST even if tagged", () => {
+        expect.assertions(1);
+
+        const document = buildOpenApiDocument({
+            functions: [
+                makeFunction({ expose: { rest: true }, exportName: "internalThing", visibility: "internal" }),
+                makeFunction({ expose: { rest: true }, exportName: "live", kind: "stream" }),
+            ],
+            httpRoutes: [],
+        });
+
+        const restPaths = Object.keys((document as { paths: Record<string, unknown> }).paths).filter((p) => p.startsWith("/_lunora/rest/"));
+
+        expect(restPaths).toEqual([]);
+    });
+});

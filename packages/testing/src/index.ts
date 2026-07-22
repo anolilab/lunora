@@ -1,5 +1,7 @@
 export type { AgentHarness, AgentHarnessOptions, AgentRunOverrides, HarnessDispatch, HarnessMessage, HarnessThread } from "./agent-harness";
 export { agentHarness, finalTurn, toolCallTurn } from "./agent-harness";
+export type { EvaluationAttributeValue, EvaluationSpanHandle, RecordEvaluationInput } from "./evaluation-telemetry";
+export { evaluationAttributes, recordEvaluation } from "./evaluation-telemetry";
 export type {
     FakeScheduledJob,
     FakeSchedulerControls,

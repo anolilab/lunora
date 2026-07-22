@@ -176,6 +176,60 @@ const resolveEmbeddingModel = (input: RagConfig["embeddingModel"], ai: RagContex
  * needs no `env.AI` binding (bind any context carrying just `vectors`).
  * @experimental
  */
+
+/**
+ * Structural slice of the span handle `ctx.trace` hands its body (see the server
+ * `SpanHandle`) — enough to attach an embed's post-hoc usage/cost. Declared here
+ * rather than imported so `@lunora/ai/rag` takes no dependency on `@lunora/server`
+ * or `@lunora/do`; the real handle is assignable to it.
+ */
+interface EmbedSpan {
+    setAttribute: (key: string, value: unknown) => void;
+    setAttributes: (fields: Record<string, unknown>) => void;
+}
+
+/**
+ * Structural slice of `ctx.trace` (see the server `LunoraTracer`) — enough to
+ * wrap one embed. The body receives the enclosing span's {@link EmbedSpan} as its
+ * second argument, so it can attach token usage / cost that are only known after
+ * the embed call resolves. Declared here rather than imported so `@lunora/ai/rag`
+ * takes no dependency on `@lunora/server`; the real tracer is assignable to it.
+ */
+type EmbedTracer = <T>(name: string, function_: (trace: EmbedTracer, span: EmbedSpan) => Promise<T> | T, attributes?: Record<string, unknown>) => Promise<T>;
+
+/** Read an AI SDK model's stable id for the `gen_ai.request.model` attribute, defensively. */
+const modelIdOf = (model: EmbeddingModel): string | undefined => {
+    const id = (model as { modelId?: unknown }).modelId;
+
+    return typeof id === "string" && id.length > 0 ? id : undefined;
+};
+
+/**
+ * Read an embed's dollar cost from AI SDK `providerMetadata`, defensively. AI
+ * Gateway surfaces per-request cost there (under a provider bag's `cost` field,
+ * e.g. the `cf-aig-*` / gateway metadata) once cost routing is enabled; until
+ * then it is absent and this returns `undefined`, so the `gen_ai.usage.cost`
+ * attribute is simply omitted. Probing rather than hard-depending keeps the embed
+ * span correct with or without a gateway in front.
+ */
+const embedCostOf = (providerMetadata: unknown): number | undefined => {
+    if (typeof providerMetadata !== "object" || providerMetadata === null) {
+        return undefined;
+    }
+
+    for (const bag of Object.values(providerMetadata as Record<string, unknown>)) {
+        if (typeof bag === "object" && bag !== null) {
+            const { cost } = bag as { cost?: unknown };
+
+            if (typeof cost === "number" && Number.isFinite(cost)) {
+                return cost;
+            }
+        }
+    }
+
+    return undefined;
+};
+
 const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     if (typeof config.index !== "string" || config.index.length === 0) {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `index` must be a non-empty Vectorize index name");
@@ -229,12 +283,56 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         // drift onto different models within one request.
         let model: EmbeddingModel | undefined;
 
+        // A `ctx.trace` on the bound context (present on a real ActionCtx) turns
+        // each embed into a `generation` span; absent (a test / hand-built ctx),
+        // embeds run untraced. Narrowed from `unknown` — see `RagContext.trace`.
+        const tracer = typeof context.trace === "function" ? (context.trace as EmbedTracer) : undefined;
+
         const embedText = async (text: string): Promise<ReadonlyArray<number>> => {
+            // Resolve once and bind to a local `const`, so the nested `run` closure
+            // sees a non-nullable model without a cast.
             model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
+            const resolvedModel = model;
 
-            const { embedding } = await aiEmbed({ model, value: text });
+            // `span` is present only on the traced path (post-hoc attributes). The
+            // model id is stamped at span start; token usage / cost are known only
+            // after the call resolves, so they are attached through the handle.
+            const run = async (span?: EmbedSpan): Promise<ReadonlyArray<number>> => {
+                const { embedding, providerMetadata, usage } = await aiEmbed({ model: resolvedModel, value: text });
 
-            return embedding;
+                if (span !== undefined) {
+                    // `usage.tokens` is typed non-optional by the AI SDK; the
+                    // typeof/finite guard stays defensive against a provider that
+                    // returns a non-numeric value at runtime.
+                    const inputTokens: unknown = usage.tokens;
+
+                    if (typeof inputTokens === "number" && Number.isFinite(inputTokens)) {
+                        span.setAttribute("gen_ai.usage.input_tokens", inputTokens);
+                    }
+
+                    const cost = embedCostOf(providerMetadata);
+
+                    if (cost !== undefined) {
+                        span.setAttribute("gen_ai.usage.cost", cost);
+                    }
+                }
+
+                return embedding;
+            };
+
+            if (tracer === undefined) {
+                return run();
+            }
+
+            const modelId = modelIdOf(resolvedModel);
+            const conversationId = typeof context.conversationId === "string" && context.conversationId.length > 0 ? context.conversationId : undefined;
+
+            return tracer("ai.embed", (_trace, span) => run(span), {
+                "gen_ai.operation.name": "embeddings",
+                ...(modelId === undefined ? {} : { "gen_ai.request.model": modelId }),
+                // Session/thread grouping — absent unless a conversation id was set.
+                ...(conversationId === undefined ? {} : { "gen_ai.conversation.id": conversationId }),
+            });
         };
 
         const checkNamespace = (namespace: string | undefined): void => {

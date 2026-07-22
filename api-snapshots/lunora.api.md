@@ -133,6 +133,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ExposeConfig` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ExtendableSchema` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -150,6 +154,26 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `FunctionVisibility` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoBoundingBox` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoFilterBuilder` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoIndexDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoPoint` (interface)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `GeoPointInput` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -569,6 +593,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `Storage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -710,6 +738,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `TriggerUpdateEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `TtlDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1961,6 +1993,26 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `GEO_DEFAULT_PRECISION` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `GeoBoundingBox` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `GeoFilterBuilderLike` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `GeoIndexDefinitionLike` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `GeoPoint` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `GroupByEntry` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2437,6 +2489,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `SpanHandle` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `SqlConsoleResult` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2573,6 +2629,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `TtlSweepSpec` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `ValidatorLike` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2653,6 +2713,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `boundingBoxGeohashes` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `buildFtsMatch` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2678,6 +2742,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `containsRelationPredicate` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `coveringGeohashes` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2722,6 +2790,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `encodeCursor` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `encodeGeohash` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2770,6 +2842,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `hasTrigger` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `haversineMeters` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2838,6 +2914,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `planAggregateLookup` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `pointInBoundingBox` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2958,6 +3038,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `scoreDocument` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `selectExpiredIds` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3497,11 +3581,35 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `ExportBatch` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ExportChange` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ExportCursorStore` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ExportFanOutRequest` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `ExportFanOutResult` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ExportSink` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ExportTapFailure` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ExportTapResult` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -3562,6 +3670,42 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `GlobalTablePageMeta` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `HEALTH_PATH` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `HEALTH_READY_PATH` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `HealthAuthPosture` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `HealthBody` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `HealthCheckReport` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `HealthProbe` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `HealthProbeKind` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `HealthProbeResult` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `HealthRouteDeps` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -3685,6 +3829,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `NotifySubscriptionDevice` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `NotifySubscriptionStoreLike` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ObservabilityEvent` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -3777,11 +3929,35 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `RateLimiterLike` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ResolvedSecurity` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `ResolvedShard` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `RestInvoke` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `RestRateLimit` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `RestRegistryEntry` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `RestRegistryLike` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `RestRouteDeps` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -3794,6 +3970,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `RpcEnvelope` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `RunExportTapOptions` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -3881,6 +4061,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `TraceSamplingConfig` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `VERSION` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -3913,6 +4097,18 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `argsFromQuery` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `buildHealthRoutes` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `buildRestRoutes` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `combineSinks` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -3937,7 +4133,15 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `createKvCursorStore` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `createLunoraHandler` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `createMemoryCursorStore` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -3949,6 +4153,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `createRestRateLimit` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `createStaticShardRegistry` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -3957,11 +4165,23 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `d1Probe` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `decorateResponse` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `defineExportSink` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `defineRpcEnvelope` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `durableObjectProbe` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -3993,6 +4213,22 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `presenceProbe` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `r2Sink` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `readShardKey` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `resolveLogArchiveFromEnv` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `resolveLunoraOptions` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4005,7 +4241,19 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `restSurfaceFromRegistry` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `routeIdentityResolvers` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `runExportTap` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `sanitizeChange` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4022,6 +4270,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `toFivetranResponse` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `webhookExportSink` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4159,6 +4411,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ExposeConfig` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ExtendableSchema` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -4176,6 +4432,26 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `FunctionVisibility` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoBoundingBox` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoFilterBuilder` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoIndexDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoPoint` (interface)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `GeoPointInput` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -4595,6 +4871,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `Storage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -4736,6 +5016,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `TriggerUpdateEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `TtlDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5038,6 +5322,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `DatabaseWriterFacade` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoBoundingBox` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoFilterBuilder` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoPointInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoReader` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6035,6 +6335,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ExposeConfig` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ExternalSourceCursor` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6056,6 +6360,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `FunctionVisibility` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoBoundingBox` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoFilterBuilder` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoIndexDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `GeoPointInput` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6199,6 +6519,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `Storage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6315,6 +6639,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `TtlDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `VectorEmbedder` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6410,6 +6738,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `DEFER_VALIDATION` (const)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `GeoPoint` (interface)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 

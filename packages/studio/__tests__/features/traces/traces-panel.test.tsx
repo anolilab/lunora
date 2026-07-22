@@ -1,12 +1,13 @@
 /* eslint-disable vitest/prefer-strict-boolean-matchers -- getByTestId/findByTestId return DOM elements (truthy, not === true); toBeTruthy is the correct matcher and the strict-boolean autofix must not re-convert it */
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { filterTraces, formatSpanDuration, spanBar } from "../../../src/features/traces/trace-geometry";
 import { TracesPanel } from "../../../src/features/traces/traces-panel";
 import type { TraceSpan, TraceSummary } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
+import { clearPendingTraceFilter, peekPendingTraceFilter, writePendingTraceFilter } from "../../../src/lib/trace-handoff";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -380,5 +381,41 @@ describe("formatSpanDuration", () => {
         expect.assertions(1);
 
         expect(formatSpanDuration(0.4)).toBe("0.40ms");
+    });
+});
+
+describe("exemplar hand-off", () => {
+    afterEach(() => {
+        sessionStorage.clear();
+    });
+
+    it("peeks a pending filter purely, then clears it one-shot", () => {
+        expect.assertions(3);
+
+        writePendingTraceFilter({ shardKey: "room-9", traceId: "trace-send" });
+
+        // Peek is pure — repeatable until explicitly cleared (safe in a render).
+        expect(peekPendingTraceFilter()).toStrictEqual({ shardKey: "room-9", traceId: "trace-send" });
+        expect(peekPendingTraceFilter()).toStrictEqual({ shardKey: "room-9", traceId: "trace-send" });
+
+        // Consumed on mount, so a later manual visit isn't re-filtered.
+        clearPendingTraceFilter();
+
+        expect(peekPendingTraceFilter()).toBeUndefined();
+    });
+
+    it("seeds the search AND the shard from the hand-off on mount", async () => {
+        expect.assertions(2);
+
+        // A metric exemplar recorded on a non-root shard: both the trace id and its
+        // shard must reach the panel, or Traces would search the wrong ring.
+        writePendingTraceFilter({ shardKey: "room-9", traceId: "trace-send" });
+        render(renderPanel(createClient()));
+
+        await waitFor(() => {
+            expect(screen.getByTestId<HTMLInputElement>("tr-search").value).toBe("trace-send");
+        });
+
+        expect(screen.getByTestId<HTMLInputElement>("tr-shard-input").value).toBe("room-9");
     });
 });

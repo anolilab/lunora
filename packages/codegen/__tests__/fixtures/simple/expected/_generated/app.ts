@@ -6,9 +6,10 @@ import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage
 import type { R2BucketLike, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
 import type { ExecutionContextLike, GlobalIntrospector, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
-import { createCrossShardRelationCapabilities, createWorker } from "@lunora/runtime";
+import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
 
 import schema from "../schema.js";
+import notifyConfig from "../notify.js";
 import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
 import { openApiSpec } from "./openapi.js";
@@ -280,6 +281,10 @@ class AppBuilder<Env extends Record<string, unknown>> {
         if (this.storageDeclaration) {
             Object.assign(options, this.buildStorageAdmin(env));
         }
+
+        options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env) : undefined;
+
+        options.logArchive = resolveLogArchiveFromEnv(env);
 
         for (const fn of this.extendFns) {
             Object.assign(options, fn(env, { ...options }));

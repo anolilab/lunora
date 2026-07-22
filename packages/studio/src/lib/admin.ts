@@ -16,6 +16,11 @@
 // Canonical captured-mail wire type, owned by `@lunora/mail`. Type-only: erased
 // at build time, so no mail *runtime* enters the studio's browser bundle.
 import type { CapturedMail } from "@lunora/mail";
+// Canonical registered-device wire type, owned by `@lunora/notify` (the
+// secret-stripped projection the `listPushSubscriptions` RPC returns). Type-only,
+// so no notify *runtime* enters the browser bundle — same allowed direction as
+// the `@lunora/mail` type import above.
+import type { PushSubscriptionDevice } from "@lunora/notify";
 
 export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 
@@ -39,17 +44,20 @@ export const ADMIN_FUNCTIONS = {
     facetColumn: "__lunora_admin__:facetColumn",
     getAdvisories: "__lunora_admin__:getAdvisories",
     getAuditLog: "__lunora_admin__:getAuditLog",
+    getAuthAuditLog: "__lunora_admin__:getAuthAuditLog",
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
     getCapturedMail: "__lunora_admin__:getCapturedMail",
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     getIssues: "__lunora_admin__:getIssues",
     listFlags: "__lunora_admin__:listFlags",
+    listPushSubscriptions: "__lunora_admin__:listPushSubscriptions",
     listQueues: "__lunora_admin__:listQueues",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
     listWorkflows: "__lunora_admin__:listWorkflows",
     getLogs: "__lunora_admin__:getLogs",
+    getMetricHistory: "__lunora_admin__:getMetricHistory",
     getMetricSeries: "__lunora_admin__:getMetricSeries",
     getMetrics: "__lunora_admin__:getMetrics",
     getPitrBookmark: "__lunora_admin__:getPitrBookmark",
@@ -163,6 +171,22 @@ export type { CapturedMail } from "@lunora/mail";
 /** Result of `__lunora_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
 export interface CapturedMailResult {
     entries: CapturedMail[];
+}
+
+/**
+ * One registered `@lunora/notify` device subscription, re-exported verbatim from
+ * `@lunora/notify` (its canonical owner) — the secret-stripped
+ * {@link PushSubscriptionDevice} the `__lunora_admin__:listPushSubscriptions` RPC
+ * returns (endpoint / kind / owner / timestamps + last-send status & error). The
+ * Web Push encryption `keys` and the FCM `token` are dropped server-side and are
+ * NOT part of this shape. Like `CapturedMail`, it shares the real source of truth,
+ * so a field added in `@lunora/notify` flows here automatically.
+ */
+export type { PushSubscriptionDevice } from "@lunora/notify";
+
+/** Payload of a `__lunora_admin__:listPushSubscriptions` call — the registered devices, newest register/send touch first. */
+export interface PushSubscriptionsResult {
+    subscriptions: PushSubscriptionDevice[];
 }
 
 /**
@@ -507,8 +531,11 @@ export interface StorageRulesResult {
  * Each flag is `true` when the app wires up that optional, package-backed feature
  * (discovered at codegen time from imports / `ctx.*` reads / schema signals / the
  * package being a declared dependency). The studio hides a nav page whose flag is
- * `false` — so an app with no `@lunora/payment` never renders the Payments page
- * (and never surfaces its "unknown table: subscriptions" error). A worker
+ * `false` — so an app that never wires `@lunora/payment`'s store tables never
+ * renders the Payments page (and never surfaces its "unknown table: subscriptions"
+ * error). `payments` alone gates on the `subscriptions`/`events` tables the panel
+ * reads being declared, not on a bare dependency — reusing the package's pure
+ * webhook helpers must not light up a page that would then error. A worker
  * predating this RPC returns nothing; the studio treats that as "show everything"
  * (back-compat).
  *
@@ -726,6 +753,32 @@ export interface AuditEntry {
 /** Payload of a `__lunora_admin__:getAuditLog` call: the recorded entries, newest first. */
 export interface AuditLogResult {
     entries: AuditEntry[];
+}
+
+/**
+ * One recorded auth/security event returned by `__lunora_admin__:getAuthAuditLog`,
+ * mirroring `@lunora/auth`'s `AuthAuditEntry`. Unlike the admin-op audit log
+ * (DO-backed, per shard), this trail is the authentication/security forensics
+ * surface stored in the auth D1 database: `event` is the auth event type
+ * (`sign-in`, `password-change`, `mfa-enable`, …); `outcome` whether it
+ * succeeded; `actorId`/`actorEmail` the acting user; `ip`/`userAgent` the client;
+ * `detail` carries redacted extra context; `seq` is the monotonic cursor.
+ */
+export interface AuthAuditEntry {
+    actorEmail?: string;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+    event: string;
+    ip?: string;
+    outcome: "failure" | "success";
+    seq: number;
+    ts: number;
+    userAgent?: string;
+}
+
+/** Payload of a `__lunora_admin__:getAuthAuditLog` call: the recorded auth events, newest first. */
+export interface AuthAuditLogResult {
+    entries: AuthAuditEntry[];
 }
 
 /**
@@ -1032,6 +1085,8 @@ export interface MetricSeries {
     attributes?: Record<string, unknown>;
     /** Number of measurements folded into this series. */
     count: number;
+    /** Trace id of the most recent measurement that carried one — the series' exemplar, for linking to a trace. */
+    exemplarTraceId?: string;
     /** Epoch-ms of the first measurement folded in. */
     firstTs: number;
     /** Function path that recorded the series' most recent measurement. */
@@ -1057,6 +1112,43 @@ export interface MetricSeries {
 /** Payload of a `__lunora_admin__:getMetricSeries` call: the aggregated series, most-recently-updated first. */
 export interface MetricSeriesResult {
     series: MetricSeries[];
+}
+
+/**
+ * One time-bucket sample of a series' durable history, mirroring `@lunora/do`'s
+ * `MetricHistoryPoint`: the per-minute aggregate over `[bucketMs, bucketMs + 60s)`,
+ * persisted in the shard's SQLite so it survives hibernation. `exemplarTraceId`
+ * (when present) links the point to a trace that produced a measurement in it.
+ */
+export interface MetricHistoryPoint {
+    bucketMs: number;
+    count: number;
+    exemplarTraceId?: string;
+    last: number;
+    max: number;
+    min: number;
+    sum: number;
+}
+
+/**
+ * One series' durable history returned by `__lunora_admin__:getMetricHistory`,
+ * mirroring `@lunora/do`'s `MetricHistorySeries`: the same `(name, kind,
+ * attributes)` identity as {@link MetricSeries}, with its buckets in ascending
+ * time order — ready to chart as a trend line. The durable trend complement to
+ * getMetricSeries' live snapshot.
+ */
+export interface MetricHistorySeries {
+    attributes?: Record<string, unknown>;
+    functionPath: string;
+    kind: MetricKind;
+    name: string;
+    points: MetricHistoryPoint[];
+    shardKey?: string;
+}
+
+/** Payload of a `__lunora_admin__:getMetricHistory` call: every tracked series with its time-ordered buckets. */
+export interface MetricHistoryResult {
+    series: MetricHistorySeries[];
 }
 
 /**

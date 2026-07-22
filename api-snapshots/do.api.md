@@ -32,6 +32,7 @@ const ADMIN_FUNCTIONS: {
     readonly getFanoutMetrics: "__lunora_admin__:getFanoutMetrics";
     readonly getFunctionStats: "__lunora_admin__:getFunctionStats";
     readonly getIssues: "__lunora_admin__:getIssues";
+    readonly getMetricHistory: "__lunora_admin__:getMetricHistory";
     readonly getMetricSeries: "__lunora_admin__:getMetricSeries";
     readonly listSubscriptions: "__lunora_admin__:listSubscriptions";
     readonly listTableIndexes: "__lunora_admin__:listTableIndexes";
@@ -350,7 +351,7 @@ interface ContextMetrics {
 ### `ContextTracer` (type)
 
 ```ts
-type ContextTracer = <T>(name: string, function_: (trace: ContextTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 ```
 
 ### `CountArgs` (type)
@@ -721,6 +722,61 @@ interface FunctionMetricIndexHit {
 interface FunctionStatsResult {
     functions: FunctionCallStat[];
     sinceMs: number;
+}
+```
+
+### `GEO_DEFAULT_PRECISION` (const)
+
+```ts
+const GEO_DEFAULT_PRECISION = 9;
+```
+
+### `GeoBoundingBox` (interface)
+
+```ts
+interface GeoBoundingBox {
+    ne: GeoPoint;
+    sw: GeoPoint;
+}
+```
+
+### `GeoFilterBuilderLike` (interface)
+
+```ts
+interface GeoFilterBuilderLike {
+    near: (point: {
+        lat: number;
+        lng: number;
+    }, radiusMeters: number) => GeoFilterBuilderLike;
+    within: (box: {
+        ne: {
+            lat: number;
+            lng: number;
+        };
+        sw: {
+            lat: number;
+            lng: number;
+        };
+    }) => GeoFilterBuilderLike;
+}
+```
+
+### `GeoIndexDefinitionLike` (interface)
+
+```ts
+interface GeoIndexDefinitionLike {
+    readonly field: string;
+    readonly name: string;
+    readonly precision?: number;
+}
+```
+
+### `GeoPoint` (interface)
+
+```ts
+interface GeoPoint {
+    lat: number;
+    lng: number;
 }
 ```
 
@@ -1898,6 +1954,9 @@ abstract class ShardDO {
     protected readGlobalShapeRows(_resolved: ResolvedShape, _identity?: SubscriptionIdentity): Promise<ShapeRow[]>;
     protected pollExternalSources(): Promise<number | undefined>;
     protected scheduleSourcePoll(): Promise<void>;
+    protected ttlSweeps(): ReadonlyArray<TtlSweepSpec>;
+    protected pollTtlSweeps(): Promise<number | undefined>;
+    protected scheduleTtlSweep(): Promise<void>;
     protected currentShardKey(): string;
     protected recordExternalSourceError(table: string, error: unknown): void;
     protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | {
@@ -2025,6 +2084,15 @@ interface SourceCursorLike {
 type SourceRefresh = "manual" | {
     everyMs: number;
 };
+```
+
+### `SpanHandle` (interface)
+
+```ts
+interface SpanHandle {
+    setAttribute: (key: string, value: LogFields[string]) => void;
+    setAttributes: (fields: LogFields) => void;
+}
 ```
 
 ### `SqlConsoleResult` (interface)
@@ -2212,6 +2280,7 @@ interface TableColumnsResult {
 ```ts
 interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
+    readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly isPublic?: boolean;
     readonly rankIndexes?: ReadonlyArray<RankIndexDefinitionLike>;
@@ -2226,6 +2295,10 @@ interface TableDefinitionLike {
         field: string;
     };
     readonly triggerMap?: Record<string, TriggerDefinitionLike>;
+    readonly ttlPolicy?: {
+        after?: number;
+        field: string;
+    };
 }
 ```
 
@@ -2235,7 +2308,7 @@ interface TableDefinitionLike {
 interface TableIndexInfo {
     fields: string[];
     name: string;
-    type: "index" | "rank" | "search" | "vector";
+    type: "geo" | "index" | "rank" | "search" | "vector";
     unique?: boolean;
 }
 ```
@@ -2279,6 +2352,7 @@ interface TableReaderLike {
     paginate: (options: PaginationOptions) => Promise<QueryPage>;
     take: (limit: number) => Promise<Record<string, unknown>[]>;
     unique: () => Promise<Record<string, unknown> | null>;
+    withGeoIndex: (indexName: string, build: (q: GeoFilterBuilderLike) => GeoFilterBuilderLike) => TableReaderLike;
     withIndex: (indexName: string, range?: (q: IndexRangeBuilderLike) => IndexRangeBuilderLike) => TableReaderLike;
     withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => TableReaderLike;
 }
@@ -2296,6 +2370,7 @@ interface TablesColumnsResult {
 
 ```ts
 interface TelemetrySink {
+    fuseCloudflareTraces?: boolean;
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
@@ -2317,7 +2392,9 @@ interface TraceAnchor {
 interface TracerDeps {
     anchor: TraceAnchor;
     functionPath: string;
+    fuseCloudflareSpans?: boolean;
     record: (span: SpanEvent) => void;
+    resolveCloudflareTracing?: CloudflareTracingResolver;
     shardKey: string | undefined;
     userId: () => string | undefined;
 }
@@ -2372,6 +2449,17 @@ type TriggerOpLike = "delete" | "insert" | "update";
 
 ```ts
 type TriggerTimingLike = "after" | "before";
+```
+
+### `TtlSweepSpec` (interface)
+
+```ts
+interface TtlSweepSpec {
+    after?: number;
+    field: string;
+    softDeleteField?: string;
+    table: string;
+}
 ```
 
 ### `ValidatorLike` (interface)
@@ -2525,6 +2613,12 @@ const backfillAggregateIndexes: (sql: SqlExec, schema: SchemaLike) => void;
 const backfillRankIndexes: (sql: SqlExec, schema: SchemaLike) => void;
 ```
 
+### `boundingBoxGeohashes` (const)
+
+```ts
+const boundingBoxGeohashes: (box: GeoBoundingBox) => string[];
+```
+
 ### `buildFtsMatch` (const)
 
 ```ts
@@ -2567,6 +2661,12 @@ const compileWhereSql: (where: WhereInput | undefined, strategy: WhereSqlStrateg
 
 ```ts
 const containsRelationPredicate: (where: WhereInput, schema: ResolveContext["schema"], tableName: string) => boolean;
+```
+
+### `coveringGeohashes` (const)
+
+```ts
+const coveringGeohashes: (center: GeoPoint, radiusMeters: number) => string[];
 ```
 
 ### `createDependencyTracker` (const)
@@ -2648,6 +2748,12 @@ const encodeAggregateKey: (by: ReadonlyArray<string>, source: Record<string, unk
 const encodeCursor: (record: Record<string, unknown>, keys: OrderKey[]) => string;
 ```
 
+### `encodeGeohash` (const)
+
+```ts
+const encodeGeohash: (point: GeoPoint, precision: number) => string;
+```
+
 ### `encodePartitionKey` (const)
 
 ```ts
@@ -2720,6 +2826,12 @@ const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId) =>
 const hasTrigger: (schema: {
     readonly tables: Record<string, TableDefinitionLike>;
 }, tableName: string, op: TriggerOpLike) => boolean;
+```
+
+### `haversineMeters` (const)
+
+```ts
+const haversineMeters: (a: GeoPoint, b: GeoPoint) => number;
 ```
 
 ### `importShardRows` (const)
@@ -2832,6 +2944,12 @@ const parseImportShardArgs: (args: Record<string, unknown>) => ImportShardAdminA
 
 ```ts
 const planAggregateLookup: (index: AggregateIndexDefinitionLike, requestedWhere: Record<string, unknown> | undefined) => Record<string, unknown> | undefined;
+```
+
+### `pointInBoundingBox` (const)
+
+```ts
+const pointInBoundingBox: (point: GeoPoint, box: GeoBoundingBox) => boolean;
 ```
 
 ### `pullExternalSourceIncrementalTick` (const)
@@ -3040,6 +3158,15 @@ const runTriggers: (options: RunTriggersOptions) => Promise<void>;
 
 ```ts
 const scoreDocument: (text: string, tokens: ReadonlyArray<string>) => number;
+```
+
+### `selectExpiredIds` (const)
+
+```ts
+const selectExpiredIds: (sql: SqlExec, spec: TtlSweepSpec, now: number, limit: number) => {
+    hasMore: boolean;
+    ids: string[];
+};
 ```
 
 ### `selectExportTables` (const)

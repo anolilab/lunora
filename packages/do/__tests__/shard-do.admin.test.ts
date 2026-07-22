@@ -18,6 +18,7 @@ import type {
 } from "../src/introspect";
 import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { MetricSeries } from "../src/metric-buffer";
+import type { MetricHistoryPoint, MetricHistorySeries } from "../src/metric-history";
 import type { QueueMessageRow, RecordQueueMessageInput } from "../src/queue-catcher";
 import type { RankIndexDefinitionLike, ShardRankPageResult } from "../src/rank";
 import { rankKeyFromDoc } from "../src/rank";
@@ -95,9 +96,37 @@ const TRACE_SUMMARY_KEY_GUARD: KeysMatch<keyof TraceSummary, (typeof TRACE_SUMMA
  * moving — and there if the studio copy drifts — so the Instruments table can't
  * silently fall behind the fold that feeds it. `attributes`/`shardKey` optional.
  */
-const METRIC_SERIES_KEYS = ["attributes", "count", "firstTs", "functionPath", "kind", "last", "lastTs", "max", "min", "name", "shardKey", "sum"] as const;
+const METRIC_SERIES_KEYS = [
+    "attributes",
+    "count",
+    "exemplarTraceId",
+    "firstTs",
+    "functionPath",
+    "kind",
+    "last",
+    "lastTs",
+    "max",
+    "min",
+    "name",
+    "shardKey",
+    "sum",
+] as const;
 
 const METRIC_SERIES_KEY_GUARD: KeysMatch<keyof MetricSeries, (typeof METRIC_SERIES_KEYS)[number]> = true;
+
+/**
+ * Canonical key sets of the `getMetricHistory` wire shapes — the durable rollups
+ * `@lunora/studio` hand-mirrors for the Instruments trend sparkline. `lint:types`
+ * fails here if a key moves without the tuple — and there if the studio copy
+ * drifts. `exemplarTraceId` (point), `attributes`/`shardKey` (series) optional.
+ */
+const METRIC_HISTORY_POINT_KEYS = ["bucketMs", "count", "exemplarTraceId", "last", "max", "min", "sum"] as const;
+
+const METRIC_HISTORY_POINT_KEY_GUARD: KeysMatch<keyof MetricHistoryPoint, (typeof METRIC_HISTORY_POINT_KEYS)[number]> = true;
+
+const METRIC_HISTORY_SERIES_KEYS = ["attributes", "functionPath", "kind", "name", "points", "shardKey"] as const;
+
+const METRIC_HISTORY_SERIES_KEY_GUARD: KeysMatch<keyof MetricHistorySeries, (typeof METRIC_HISTORY_SERIES_KEYS)[number]> = true;
 
 /**
  * Canonical key set of `QueueMessageRow` (the `getQueueMessages` consumed-message
@@ -646,6 +675,7 @@ describe("shardDO admin introspection", () => {
         expect([...METRIC_SERIES_KEYS]).toStrictEqual([
             "attributes",
             "count",
+            "exemplarTraceId",
             "firstTs",
             "functionPath",
             "kind",
@@ -657,6 +687,15 @@ describe("shardDO admin introspection", () => {
             "shardKey",
             "sum",
         ]);
+    });
+
+    it("keeps the getMetricHistory wire shapes in lockstep with the studio's hand-mirror", () => {
+        expect.assertions(4);
+
+        expect(METRIC_HISTORY_POINT_KEY_GUARD).toBe(true);
+        expect([...METRIC_HISTORY_POINT_KEYS]).toStrictEqual(["bucketMs", "count", "exemplarTraceId", "last", "max", "min", "sum"]);
+        expect(METRIC_HISTORY_SERIES_KEY_GUARD).toBe(true);
+        expect([...METRIC_HISTORY_SERIES_KEYS]).toStrictEqual(["attributes", "functionPath", "kind", "name", "points", "shardKey"]);
     });
 
     it("keeps QueueMessageRow's keys in lockstep with the studio's hand-mirror", () => {

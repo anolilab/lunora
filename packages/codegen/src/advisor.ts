@@ -1,4 +1,13 @@
-import type { AdvisorIndex, AdvisorSchema, AdvisorShape, Finding } from "@lunora/advisor";
+import type {
+    AdvisorExportSink,
+    AdvisorGeoIndexUsage,
+    AdvisorIndex,
+    AdvisorNotifyCall,
+    AdvisorNotifyConfig,
+    AdvisorSchema,
+    AdvisorShape,
+    Finding,
+} from "@lunora/advisor";
 import { runAdvisor } from "@lunora/advisor";
 
 import type {
@@ -76,7 +85,21 @@ const flattenIndexes = (table: TableIR): AdvisorIndex[] => [
         .map((index): AdvisorIndex => {
             return { fields: [index.field as string], kind: "vector", name: index.name };
         }),
+    ...(table.geoIndexes ?? []).map((index): AdvisorIndex => {
+        return { fields: [index.field], kind: "geo", name: index.name };
+    }),
 ];
+
+/** Effective validator kind per column (a `v.optional(...)` is unwrapped to its inner kind) for the schema-type lints. */
+const columnKindsOf = (table: TableIR): Record<string, string> => {
+    const kinds: Record<string, string> = {};
+
+    for (const [fieldName, validator] of Object.entries(table.shape)) {
+        kinds[fieldName] = validator.kind === "optional" ? (validator.inner?.kind ?? "optional") : validator.kind;
+    }
+
+    return kinds;
+};
 
 /**
  * Collapse the AST-derived {@link SchemaIR} into the advisor's feeder-agnostic
@@ -100,6 +123,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                           unanalyzable: table.externalSource.unanalyzable,
                       }
                     : undefined,
+                columnKinds: columnKindsOf(table),
                 fields: Object.keys(table.shape),
                 indexes: flattenIndexes(table),
                 isPublic: table.isPublic ?? false,
@@ -116,6 +140,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                 }),
                 shardKind: typeof table.shardMode === "string" ? table.shardMode : "shardBy",
                 softDelete: table.softDelete,
+                ttl: table.ttl,
             };
         }),
     };
@@ -171,8 +196,10 @@ export interface LintSchemaOptions {
     containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
+    exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
     flagSecurityDefaults?: ReadonlyArray<FlagSecurityDefaultIR>;
+    geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<HttpActionGuardIR>;
     httpHeaderWrites?: ReadonlyArray<HttpHeaderWriteIR>;
     identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>;
@@ -185,6 +212,8 @@ export interface LintSchemaOptions {
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
     normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>;
+    notifyCalls?: ReadonlyArray<AdvisorNotifyCall>;
+    notifyConfig?: AdvisorNotifyConfig;
     ownerFieldWrites?: ReadonlyArray<OwnerFieldWriteIR>;
     paymentWebhooks?: ReadonlyArray<PaymentWebhookIR>;
     privilegedDispatches?: ReadonlyArray<PrivilegedDispatchIR>;
@@ -224,8 +253,10 @@ export const lintSchema = (options: LintSchemaOptions): Finding[] =>
             containerKeyAccesses: options.containerKeyAccesses,
             containerOverrides: options.containerOverrides,
             containers: options.containers,
+            exportSinks: options.exportSinks,
             failOpenGuards: options.failOpenGuards,
             flagSecurityDefaults: options.flagSecurityDefaults,
+            geoIndexUsages: options.geoIndexUsages,
             httpActionGuards: options.httpActionGuards,
             httpHeaderWrites: options.httpHeaderWrites,
             identityClaimReads: options.identityClaimReads,
@@ -238,6 +269,8 @@ export const lintSchema = (options: LintSchemaOptions): Finding[] =>
             mutatorWrites: options.mutatorWrites,
             nondeterministicCalls: options.nondeterministicCalls,
             normalizeIdAuthorizations: options.normalizeIdAuthorizations,
+            notifyCalls: options.notifyCalls,
+            notifyConfig: options.notifyConfig,
             ownerFieldWrites: options.ownerFieldWrites,
             paymentWebhooks: options.paymentWebhooks,
             privilegedDispatches: options.privilegedDispatches,

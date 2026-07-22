@@ -2,9 +2,9 @@
 // Run `lunora codegen` to regenerate.
 
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createAuth, createAuthAdmin, createAuthAuditReader, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { ExecutionContextLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
-import { createWorker } from "lunorash/runtime";
+import { createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
@@ -159,6 +159,8 @@ class AppBuilder<Env extends Record<string, unknown>> {
             options.adminToken = this.adminToken(env);
         }
 
+        options.logArchive = resolveLogArchiveFromEnv(env);
+
         if (this.authDeclaration) {
             options.authHandler = (request) => {
                 const auth = getAuth();
@@ -179,6 +181,7 @@ class AppBuilder<Env extends Record<string, unknown>> {
             const authInstance = getAuth();
 
             options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
+            options.authAuditReader = createAuthAuditReader(d1Executor(this.authDeclaration.d1(env) as never));
         }
 
         for (const fn of this.extendFns) {

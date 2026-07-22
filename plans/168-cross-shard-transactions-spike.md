@@ -30,8 +30,11 @@ Produce a design doc (`plans/168-phase0-design.md`) covering:
 - [ ] Option B — **2PC/coordinator transaction** across DOs: stronger, higher
       latency + failure complexity on the DO model.
 - [ ] Option C — **documented boundary + advisor lint**: no primitive; a static
-      lint flags a mutation writing across shard boundaries, and docs state the
-      guarantee. Cheapest, most honest if demand is thin.
+      lint flags a mutation writing across shard boundaries. The guarantee is
+      already stated on the [Design boundaries](../apps/docs/src/content/docs/non-goals.mdx)
+      page (`/docs/non-goals`, "Cross-shard writes are eventual, not atomic") —
+      this option adopts that wording rather than restating it. Cheapest, most
+      honest if demand is thin.
 - [ ] Recommendation + guarantee wording, latency/complexity cost, and a STOP/GO.
 
 ## Phase 1+ — Implement the chosen option

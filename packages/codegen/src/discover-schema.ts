@@ -3,7 +3,20 @@ import type { CallExpression, Expression, Node as TsNode, ObjectLiteralExpressio
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
-import type { ExternalSourceIR, IndexIR, RankIndexIR, RankSortKeyIR, RelationIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
+import type {
+    ExternalSourceIR,
+    GeoIndexIR,
+    IndexIR,
+    RankIndexIR,
+    RankSortKeyIR,
+    RelationIR,
+    SchemaIR,
+    SearchIndexIR,
+    TableIR,
+    TtlIR,
+    ValidatorIR,
+    VectorIndexIR,
+} from "./ir";
 import { parseObjectShape } from "./parse-validator";
 import { resolvePackageExtension } from "./resolve-package-extension";
 
@@ -226,6 +239,33 @@ const parseSearchIndexCall = (args: ReadonlyArray<Node>): SearchIndexIR => {
     return { field, filterFields, name: indexNameOf(indexName) };
 };
 
+/** Parse a `.geoIndex(name, { field, precision? })` call into a {@link GeoIndexIR}. */
+const parseGeoIndexCall = (args: ReadonlyArray<Node>): GeoIndexIR => {
+    const [indexName, optionsExpression] = args;
+    let field = "_unknown_";
+    let precision: number | undefined;
+
+    if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
+        field = getStringProperty(optionsExpression, "field") ?? field;
+        precision = getNumberProperty(optionsExpression, "precision");
+    }
+
+    return { field, name: indexNameOf(indexName), precision };
+};
+
+/** Parse a `.ttl(field, { after? })` call into a {@link TtlIR}. */
+const parseTtlCall = (args: ReadonlyArray<Node>): TtlIR => {
+    const [fieldArgument, optionsExpression] = args;
+    const field = fieldArgument && Node.isStringLiteral(fieldArgument) ? fieldArgument.getLiteralText() : "_unknown_";
+    let after: number | undefined;
+
+    if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
+        after = getNumberProperty(optionsExpression, "after");
+    }
+
+    return { after, field };
+};
+
 /**
  * Parse one `{ field, direction? }` entry of a rank index's `sortBy` array into a
  * {@link RankSortKeyIR}. `direction` defaults to `"asc"`, mirroring the runtime
@@ -311,6 +351,7 @@ const parseGlobalBackend = (args: ReadonlyArray<Node>): TableIR["globalBackend"]
 interface TableBuilderAccumulator {
     externallyManaged: boolean;
     externalSource?: ExternalSourceIR;
+    geoIndexes: GeoIndexIR[];
     globalBackend?: TableIR["globalBackend"];
     indexes: IndexIR[];
     isPublic: boolean;
@@ -319,6 +360,7 @@ interface TableBuilderAccumulator {
     searchIndexes: SearchIndexIR[];
     shardMode: TableIR["shardMode"];
     softDelete?: { field: string };
+    ttl?: TtlIR;
     vectorIndexes: VectorIndexIR[];
 }
 
@@ -416,6 +458,12 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
             break;
         }
 
+        case "geoIndex": {
+            accumulator.geoIndexes.push(parseGeoIndexCall(args));
+
+            break;
+        }
+
         case "global": {
             accumulator.shardMode = "global";
             accumulator.globalBackend = parseGlobalBackend(args);
@@ -483,6 +531,12 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
             break;
         }
 
+        case "ttl": {
+            accumulator.ttl = parseTtlCall(args);
+
+            break;
+        }
+
         case "vectorize": {
             const vectorIndex = parseVectorizeCall(args, name);
 
@@ -502,6 +556,7 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
 const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     const accumulator: TableBuilderAccumulator = {
         externallyManaged: false,
+        geoIndexes: [],
         indexes: [],
         isPublic: false,
         rankIndexes: [],
@@ -546,6 +601,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     return {
         externallyManaged: accumulator.externallyManaged,
         externalSource: accumulator.externalSource,
+        geoIndexes: accumulator.geoIndexes,
         globalBackend: accumulator.shardMode === "global" ? (accumulator.globalBackend ?? "d1") : undefined,
         indexes: accumulator.indexes,
         isPublic: accumulator.isPublic,
@@ -556,6 +612,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         shape,
         shardMode: accumulator.shardMode,
         softDelete: accumulator.softDelete,
+        ttl: accumulator.ttl,
         vectorIndexes: accumulator.vectorIndexes,
     };
 };

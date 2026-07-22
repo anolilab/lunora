@@ -103,6 +103,14 @@ const jsonSchemaFromNode = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>)
             case "date": {
                 return { description: "epoch milliseconds (date)", type: "integer" };
             }
+            case "geoPoint": {
+                return {
+                    description: "geographic point (WGS84 decimal degrees)",
+                    properties: { lat: { maximum: 90, minimum: -90, type: "number" }, lng: { maximum: 180, minimum: -180, type: "number" } },
+                    required: ["lat", "lng"],
+                    type: "object",
+                };
+            }
             case "id": {
                 return { description: `Id<"${String(reader.tableName(node))}">`, type: "string", "x-lunora-table": reader.tableName(node) };
             }

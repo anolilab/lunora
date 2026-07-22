@@ -39,6 +39,8 @@ export type {
     ListAuthUsersOptions,
     LunoraHandlerOptions,
     LunoraWorker,
+    NotifySubscriptionDevice,
+    NotifySubscriptionStoreLike,
     Route,
     RpcContext,
     RpcEnvelope,
@@ -69,8 +71,12 @@ export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynami
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";
 export type { LunoraErrorBody } from "./errors";
 export { LunoraError, toErrorResponse } from "./errors";
+export type { ExportBatch, ExportChange, ExportCursorStore, ExportSink, ExportTapFailure, ExportTapResult, RunExportTapOptions } from "./export-tap";
+export { createKvCursorStore, createMemoryCursorStore, defineExportSink, r2Sink, runExportTap, sanitizeChange, webhookExportSink } from "./export-tap";
+export type { HealthAuthPosture, HealthBody, HealthCheckReport, HealthProbe, HealthProbeKind, HealthProbeResult, HealthRouteDeps } from "./health-routes";
+export { buildHealthRoutes, d1Probe, durableObjectProbe, HEALTH_PATH, HEALTH_READY_PATH, presenceProbe } from "./health-routes";
 export type { LogArchiveConfig } from "./log-archive-admin-routes";
-export { LOG_ARCHIVE_NOT_CONFIGURED, LOG_ARCHIVE_PATH } from "./log-archive-admin-routes";
+export { LOG_ARCHIVE_NOT_CONFIGURED, LOG_ARCHIVE_PATH, resolveLogArchiveFromEnv } from "./log-archive-admin-routes";
 export type {
     LogEvent,
     LogFields,
@@ -81,6 +87,7 @@ export type {
     ObservabilitySink,
     ObservabilitySinkContext,
     SpanEvent,
+    TraceSamplingConfig,
 } from "./observability";
 export { emitLogEvent, emitRpcEvent } from "./observability";
 export type {
@@ -140,6 +147,8 @@ export type {
 export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "./query-coordinator";
 export type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 export { applyJurisdiction, resolveShard } from "./resolve-shard";
+export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRouteDeps } from "./rest-routes";
+export { argsFromQuery, buildRestRoutes, createRestRateLimit, readShardKey, restSurfaceFromRegistry } from "./rest-routes";
 export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
 export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 

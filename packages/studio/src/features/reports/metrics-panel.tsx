@@ -1,4 +1,5 @@
 import { useLunora } from "@lunora/react";
+import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -15,6 +16,7 @@ import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_DURABLE_OBJECTS_URL } from "../../lib/cf-links";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatBytes } from "../../lib/internal";
 import { loadRecentShards, recordShard } from "../../lib/shard-history";
+import { writePendingTraceFilter } from "../../lib/trace-handoff";
 import { InstrumentsTable } from "./instruments-table";
 import type { ShardMetricsResult } from "./metrics-aggregate";
 import { aggregateMetrics, computeLatencyPercentiles, enrichQueryStats, shardsToAggregate } from "./metrics-aggregate";
@@ -115,6 +117,7 @@ const StatCard = ({
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
+    const navigate = useNavigate();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     /** Active panel tab: "overview" (default) or "query-insights" (shown when queryStats present). */
@@ -141,6 +144,15 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     // The shard the read targets, debounced so typing a key settles before
     // refetching (and re-subscribing) rather than firing per keystroke.
     const debouncedShard = useDebounced(shardKey.trim(), 400);
+
+    // Exemplar drill-down: stash the trace id — and the shard the series was queried
+    // on, so the Traces panel searches the right ring rather than the root — for the
+    // Traces panel to pick up and pre-filter on mount, then navigate there. A
+    // one-shot handoff keeps the two panels decoupled from the router's search schema.
+    const openTrace = (traceId: string): void => {
+        writePendingTraceFilter({ shardKey: debouncedShard, traceId });
+        fireAndForget(navigate({ to: "/traces" }));
+    };
 
     // One-shot read + always-on live subscription for the committed shard. Each
     // server push folds in like a refresh; `liveError` holds a rejection message
@@ -409,7 +421,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
              * this shard. Self-contained (its own live read), renders nothing until a
              * series exists, and sits below the shard-health cards on the overview.
              */}
-            {effectiveTab === "overview" && <InstrumentsTable shardKey={debouncedShard} />}
+            {effectiveTab === "overview" && <InstrumentsTable onOpenTrace={openTrace} shardKey={debouncedShard} />}
 
             {effectiveTab === "overview" && aggregate !== null && shardResults !== null && (
                 <div className="flex flex-col gap-4" data-testid="mt-aggregate-view">

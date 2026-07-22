@@ -67,7 +67,10 @@ const resolveAgentModel = (model: AgentModelInput, env: Record<string, unknown>)
             );
         }
 
-        return createAi({ binding: binding as AiBindingLike }).model(model);
+        // Pass `env` so an opt-in Cloudflare AI Gateway (LUNORA_AI_GATEWAY_*)
+        // routes this Workers AI model, letting the gateway compute token +
+        // dollar-cost telemetry. No gateway vars → unchanged (direct Workers AI).
+        return createAi({ binding: binding as AiBindingLike, env }).model(model);
     }
 
     return model;

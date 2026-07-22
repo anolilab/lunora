@@ -15,6 +15,8 @@
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
 import type { MetricEvent } from "../../../shared/metric-event";
+import type { TraceSamplingConfig } from "../../../shared/sampling";
+import { resolveTraceSampling, shouldExportTrace } from "../../../shared/sampling";
 import type { SpanEvent } from "../../../shared/span-event";
 
 /**
@@ -85,6 +87,29 @@ export type ObservabilitySinkContext = LogSinkContext;
  * events it cares about; the runtime no-ops the others.
  */
 export interface ObservabilitySink {
+    /**
+     * **Opt-in, EXPERIMENTAL, default `false`.** When `true`, each `ctx.trace`
+     * span the Durable Object records is ALSO emitted as a Cloudflare **custom
+     * span** (`tracing.enterSpan` from `cloudflare:workers`, GA 2026-06-16) so it
+     * nests inside CF's native binding/fetch/handler trace tree on the hosted
+     * path — a deeper waterfall in Cloudflare's own trace viewer.
+     *
+     * Capability-probed: a safe no-op off-Cloudflare, on a compat date predating
+     * custom spans, or when the trace is unsampled. This ONLY ADDS a CF-side span;
+     * it never replaces {@link ObservabilitySink.onSpan}, which stays the source
+     * of truth and drives the local studio waterfall.
+     *
+     * **Double-export caveat.** Leave this off unless you understand the trade:
+     * with it on, a deployment that also ships `onSpan` to a collector via
+     * `otlpSink` AND lets Cloudflare export its trace tree will emit the same
+     * logical span down two pipelines. Enable it only when you want the CF-native
+     * nesting and have accounted for that overlap.
+     *
+     * Pass this on the SAME sink object you give both `createWorker` and
+     * `createShardDO` — the DO reads the flag when building `ctx.trace`.
+     */
+    fuseCloudflareTraces?: boolean;
+
     /** Invoked once per `ctx.log.*` call from a function handler. */
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
 
@@ -109,9 +134,24 @@ export interface ObservabilitySink {
  * throws. Use at the dispatch boundary; the runtime should never see a
  * sink-originating throw bubble up past this point. `context.waitUntil`, when
  * supplied, lets a network sink keep its send alive past the response.
+ *
+ * `sampling` applies the trace-sampling verdict to this dispatch's SERVER span:
+ * the event is dropped unless the trace was head-sampled or (with errors
+ * force-kept) this dispatch errored — the tail bias. A dispatch with no
+ * `traceId` (a fan-out aggregation, which mints none) is always kept, and an
+ * absent `sampling` keeps everything, so both are backward-compatible.
  */
-export const emitRpcEvent = (sink: ObservabilitySink | undefined, event: ObservabilityEvent, context?: ObservabilitySinkContext): void => {
+export const emitRpcEvent = (
+    sink: ObservabilitySink | undefined,
+    event: ObservabilityEvent,
+    context?: ObservabilitySinkContext,
+    sampling?: TraceSamplingConfig,
+): void => {
     if (!sink?.onRpc) {
+        return;
+    }
+
+    if (sampling !== undefined && event.traceId !== undefined && !shouldExportTrace(resolveTraceSampling(sampling, event.traceId), !event.ok)) {
         return;
     }
 
@@ -151,4 +191,5 @@ export const emitLogEvent = (sink: ObservabilitySink | undefined, event: LogEven
 export { type LogEvent } from "../../../shared/log-event";
 export { type LogFields } from "../../../shared/log-fields";
 export { type MetricEvent, type MetricKind } from "../../../shared/metric-event";
+export { type TraceSamplingConfig } from "../../../shared/sampling";
 export { type SpanEvent } from "../../../shared/span-event";

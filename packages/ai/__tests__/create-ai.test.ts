@@ -3,7 +3,11 @@ import type { EmbeddingModel, LanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 
 import createAi from "../src/create-ai";
+import { AI_GATEWAY_ACCOUNT_ID_ENV, AI_GATEWAY_ID_ENV } from "../src/gateway";
 import type { AiBindingLike, WorkersAiProviderLike } from "../src/types";
+
+/** A configured-gateway env (account + gateway id, no auth token). */
+const gatewayEnv = (): Record<string, unknown> => ({ [AI_GATEWAY_ACCOUNT_ID_ENV]: "acct-123", [AI_GATEWAY_ID_ENV]: "my-gateway" });
 
 /**
  * A fake Workers AI provider. Calling it records the requested model id and
@@ -169,6 +173,33 @@ describe("createAi", () => {
             const ai = createAi({ provider: fakeProvider() });
 
             await expect(ai.run("@cf/meta/m2m100-1.2b", {})).rejects.toThrow(/ai\.run requires the `binding`/);
+        });
+
+        it("routes raw ai.run() through the env-resolved gateway when the caller sets none", async () => {
+            const binding = fakeBinding();
+            const ai = createAi({ binding, env: gatewayEnv() });
+
+            await ai.run("@cf/meta/m2m100-1.2b", { text: "hi" });
+
+            expect(binding.runCalls).toStrictEqual([["@cf/meta/m2m100-1.2b", { text: "hi" }, { gateway: { id: "my-gateway" } }]]);
+        });
+
+        it("preserves a caller-supplied gateway over the env-resolved one", async () => {
+            const binding = fakeBinding();
+            const ai = createAi({ binding, env: gatewayEnv() });
+
+            await ai.run("@cf/meta/m2m100-1.2b", { text: "hi" }, { gateway: { id: "explicit" } });
+
+            expect(binding.runCalls).toStrictEqual([["@cf/meta/m2m100-1.2b", { text: "hi" }, { gateway: { id: "explicit" } }]]);
+        });
+
+        it("leaves run options untouched when no gateway is configured", async () => {
+            const binding = fakeBinding();
+            const ai = createAi({ binding });
+
+            await ai.run("@cf/meta/m2m100-1.2b", { text: "hi" });
+
+            expect(binding.runCalls).toStrictEqual([["@cf/meta/m2m100-1.2b", { text: "hi" }, undefined]]);
         });
     });
 

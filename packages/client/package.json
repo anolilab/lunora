@@ -56,6 +56,10 @@
             "types": "./dist/ssr/index.d.ts",
             "import": "./dist/ssr/index.mjs"
         },
+        "./upload": {
+            "types": "./dist/upload.d.ts",
+            "import": "./dist/upload.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -77,7 +81,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.6"
+        "@lunora/errors": "1.0.0-alpha.6",
+        "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",

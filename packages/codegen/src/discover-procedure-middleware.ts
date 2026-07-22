@@ -10,8 +10,9 @@ import type { ProcedureMiddlewareIR } from "./ir";
  * access), mirroring how the RLS feeder matches `rls(...)` — by name, not import
  * origin, so degraded type info doesn't blind the lint.
  */
-const MIDDLEWARE_FLAGS: Record<string, "usesCaptcha" | "usesMask" | "usesRateLimit" | "usesRls"> = {
+const MIDDLEWARE_FLAGS: Record<string, "usesCaptcha" | "usesEmailGate" | "usesMask" | "usesRateLimit" | "usesRls"> = {
     dbRateLimit: "usesRateLimit",
+    emailGateMiddleware: "usesEmailGate",
     mask: "usesMask",
     rateLimit: "usesRateLimit",
     rls: "usesRls",
@@ -25,6 +26,7 @@ const USER_TABLE_RE = /account|credential|member|passkey|session|user/iu;
 /** The set of protections a builder chain carries. */
 interface Protections {
     usesCaptcha: boolean;
+    usesEmailGate: boolean;
     usesMask: boolean;
     usesRateLimit: boolean;
     usesRls: boolean;
@@ -94,7 +96,7 @@ const resolveUseArgumentCall = (argument: TsNode): CallExpression | undefined =>
 };
 
 /** The protections a single `.use(...)` step installs (all `false` when it matches none). */
-const NO_PROTECTIONS: Protections = { usesCaptcha: false, usesMask: false, usesRateLimit: false, usesRls: false };
+const NO_PROTECTIONS: Protections = { usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
 
 /**
  * The protections a single `.use(arg)` step installs. `arg` is resolved to its
@@ -142,6 +144,7 @@ const protectionsInChain = (receiver: TsNode): Protections => {
             const step = useStepProtections(useArgument);
 
             protections.usesCaptcha ||= step.usesCaptcha;
+            protections.usesEmailGate ||= step.usesEmailGate;
             protections.usesMask ||= step.usesMask;
             protections.usesRateLimit ||= step.usesRateLimit;
             protections.usesRls ||= step.usesRls;
@@ -322,7 +325,7 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
 
     const protections = classified.receiver
         ? protectionsInChain(classified.receiver)
-        : { usesCaptcha: false, usesMask: false, usesRateLimit: false, usesRls: false };
+        : { usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
     const { callsMail, fanOut, unboundedAiGeneration, usesInsertManyUnsafe, writesUserTable } = behaviourOf(declaration);
 
     return {
@@ -333,6 +336,7 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         kind: classified.kind,
         unboundedAiGeneration,
         usesCaptcha: protections.usesCaptcha,
+        usesEmailGate: protections.usesEmailGate,
         usesInsertManyUnsafe,
         usesMask: protections.usesMask,
         usesRateLimit: protections.usesRateLimit,

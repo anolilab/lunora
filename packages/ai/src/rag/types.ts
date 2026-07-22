@@ -112,6 +112,30 @@ export interface RagContext {
      * stays decoupled from `@lunora/server`'s identity type; `rlsFilter` narrows.
      */
     auth?: unknown;
+
+    /**
+     * Optional conversation / session id. When set (and `trace` is present), each
+     * embedding-model span additionally carries `gen_ai.conversation.id`, so a
+     * RAG embed done inside a multi-turn conversation groups with that
+     * conversation's other generation spans in the trace store. Omitted → the
+     * attribute is absent (backward-compatible).
+     */
+    conversationId?: string;
+
+    /**
+     * Optional `ctx.trace` span factory — an `ActionCtx`'s `ctx.trace` satisfies
+     * it structurally. When present, `defineRag` wraps each embedding-model
+     * call in a `generation` span carrying `gen_ai.operation.name: "embeddings"`
+     * and `gen_ai.request.model` up front, plus — attached post-hoc through the
+     * span handle the tracer hands the body — `gen_ai.usage.input_tokens` (from
+     * the embed result's token usage) and `gen_ai.usage.cost` (probed from the
+     * embed result's provider metadata, e.g. AI Gateway) when those are present.
+     * So the embed shows up on the trace waterfall with its usage like any other
+     * instrumented model call. `unknown` on purpose — the same decoupling
+     * rationale as `auth`: `defineRag` narrows it to a callable and runs embeds
+     * untraced when it is absent (a hand-built context / test).
+     */
+    trace?: unknown;
     vectors: RagVectors;
 }
 

@@ -22,11 +22,13 @@ import discoverContainerOverrides from "./discover-container-overrides";
 import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
 import { discoverEnv } from "./discover-env";
+import discoverExportSinks from "./discover-export-sinks";
 import discoverFailOpenGuards from "./discover-fail-open-guards";
 import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
 import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
 import { discoverFlagKeys } from "./discover-flags";
 import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
+import discoverGeoIndexUsages from "./discover-geo-index-usages";
 import discoverHttpActionGuards from "./discover-http-action-guards";
 import discoverHttpHeaderWrites from "./discover-http-header-writes";
 import discoverHttpRoutes from "./discover-http-routes";
@@ -42,6 +44,7 @@ import discoverMutatorWrites from "./discover-mutator-writes";
 import { discoverMutators } from "./discover-mutators";
 import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverNormalizeIdAuthorization from "./discover-normalize-id-authorization";
+import { discoverNotifyCalls, discoverNotifyConfig } from "./discover-notify";
 import discoverOwnerFieldWrites from "./discover-owner-field-writes";
 import discoverPackageDependencies from "./discover-package-dependencies";
 import discoverPaymentWebhooks from "./discover-payment-webhooks";
@@ -444,8 +447,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   containerKeyAccesses: discoverContainerKeyAccesses(project, lunoraDirectory),
                   containerOverrides: discoverContainerOverrides(project, lunoraDirectory),
                   containers,
+                  exportSinks: discoverExportSinks(project, lunoraDirectory),
                   failOpenGuards: discoverFailOpenGuards(project, lunoraDirectory),
                   flagSecurityDefaults: discoverFlagSecurityDefaults(project, lunoraDirectory),
+                  geoIndexUsages: discoverGeoIndexUsages(project, lunoraDirectory),
                   httpActionGuards: discoverHttpActionGuards(project, lunoraDirectory),
                   httpHeaderWrites: discoverHttpHeaderWrites(project, lunoraDirectory),
                   identityClaimReads: discoverIdentityClaimReads(project, lunoraDirectory),
@@ -458,6 +463,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   mutatorWrites: discoverMutatorWrites(project, lunoraDirectory),
                   nondeterministicCalls: discoverNondeterministicCalls(project, lunoraDirectory),
                   normalizeIdAuthorizations: discoverNormalizeIdAuthorization(project, lunoraDirectory),
+                  notifyCalls: discoverNotifyCalls(project, lunoraDirectory),
+                  notifyConfig: discoverNotifyConfig(project, lunoraDirectory),
                   ownerFieldWrites: discoverOwnerFieldWrites(project, lunoraDirectory),
                   paymentWebhooks: discoverPaymentWebhooks(project, lunoraDirectory),
                   privilegedDispatches: discoverPrivilegedDispatches(project, lunoraDirectory),
@@ -528,6 +535,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // ShardDO's `evaluateFlags` (studio Flags page) + the reactive read override
     // (`useFlag`) iterate these. Only meaningful when a provider is wired.
     const flagKeys = hasFlags ? discoverFlagKeys(project, lunoraDirectory) : [];
+    // `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) is gated on the
+    // project declaring a `lunora/notify.ts` (`defineNotify(...)`), mirroring
+    // `hasFlags`: the generated ShardDO imports that module's default export to
+    // build both facades via `createNotify(notifyConfig, env)`, so wiring the ctx
+    // fields without it would emit a broken import. Notify rides EVERY ctx (like
+    // `ctx.flags`); the `notify_send_outside_action` lint — not the type — keeps
+    // non-deterministic sends out of query/mutation handlers.
+    const hasNotify = existsSync(join(lunoraDirectory, "notify.ts"));
     const hasHyperdrive = featureUsage.hyperdrive;
     // Batteries-included sandbox tools (`@lunora/agent/sandbox`). `browserTool`
     // drives `ctx.browser`, so it flips `hasBrowser` (provisioning the BROWSER
@@ -554,6 +569,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         containerCount: containers.length,
         cronCount: crons.length,
         dependencies,
+        // Payments gates on the store tables the panel reads being declared, not on a
+        // bare `@lunora/payment` dependency (which may be present only to reuse the
+        // package's pure webhook helpers) — see the payment-tables signal set below.
+        hasPaymentTables: schema.tables.some((table) => table.name === "subscriptions") && schema.tables.some((table) => table.name === "events"),
         queueCount: queues.length,
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
         storageRuleCount: storageRulesMetadata.rules.length,
@@ -586,6 +605,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasHyperdrive,
         hasImages,
         hasKv,
+        hasNotify,
         hasPayments,
         hasPipelines,
         hasR2sql,
@@ -612,6 +632,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasHyperdrive,
         hasImages,
         hasKv,
+        hasNotify,
         hasPayments,
         hasPipelines,
         hasR2sql,
@@ -685,6 +706,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // `@lunora/bindings/kv` dep), so a visible KV tab always has a working
         // backend — never the reverse. The `ctx.kv` type-seam stays usage-only.
         hasKv: studioFeatures.kv,
+        hasNotify,
         hasPayments,
         hasR2sql,
         hasQueue: queues.some((queue) => queue.mode === "push"),

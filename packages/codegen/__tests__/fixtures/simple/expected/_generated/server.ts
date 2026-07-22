@@ -76,18 +76,30 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
     readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
+    /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */
+    readonly notify: import("@lunora/notify").LunoraNotify;
+    /** Device push sub-facade — the same object as ctx.notify.push (register / send / broadcast). Sends belong in action handlers. */
+    readonly push: import("@lunora/notify").LunoraPush;
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
+    /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */
+    readonly notify: import("@lunora/notify").LunoraNotify;
+    /** Device push sub-facade — the same object as ctx.notify.push (register / send / broadcast). Sends belong in action handlers. */
+    readonly push: import("@lunora/notify").LunoraPush;
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;
+    /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */
+    readonly notify: import("@lunora/notify").LunoraNotify;
+    /** Device push sub-facade — the same object as ctx.notify.push (register / send / broadcast). Sends belong in action handlers. */
+    readonly push: import("@lunora/notify").LunoraPush;
 }
 
 /**

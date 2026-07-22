@@ -117,6 +117,36 @@ export const ERROR_CATALOG = {
     AUTH_HEADERS_MISSING: { internal: true, status: 500, title: "Auth headers missing" },
 
     /**
+     * Signup rejected by `@lunora/auth`'s email-domain gate — a disposable/throwaway
+     * provider (or a caller deny-list hit). Client-safe: the message names only the
+     * offending domain class, never a secret, so it is echoed rather than redacted.
+     */
+    EMAIL_DOMAIN_BLOCKED: {
+        hint: [
+            "This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).",
+            "",
+            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` to `emailGate(...)` (`@lunora/auth/email-guard`).",
+        ],
+        status: 400,
+        title: "Email domain not allowed",
+    },
+
+    /**
+     * Opt-in MX verification (`@lunora/auth/email-guard`, `mx: true`) found no mail
+     * exchanger for the address's domain, so mail to it would never deliver.
+     * Client-safe: names only the domain, no secret.
+     */
+    EMAIL_UNDELIVERABLE: {
+        hint: [
+            "The address's domain publishes no MX (or fallback A/AAAA) records, so it can't receive mail.",
+            "",
+            "Check for a typo in the domain. MX verification is opt-in (`mx: true`) and needs DNS — leave it off on the edge path if DNS is unavailable.",
+        ],
+        status: 400,
+        title: "Email domain cannot receive mail",
+    },
+
+    /**
      * Upstream Cloudflare API failures surfaced from an action. The message
      * carries the upstream response body (Cloudflare's own error text — trusted
      * infra, not user input), so it is echoed rather than redacted. `status`

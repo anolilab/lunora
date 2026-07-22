@@ -25,17 +25,20 @@ const ADMIN_FUNCTIONS: {
     readonly facetColumn: "__lunora_admin__:facetColumn";
     readonly getAdvisories: "__lunora_admin__:getAdvisories";
     readonly getAuditLog: "__lunora_admin__:getAuditLog";
+    readonly getAuthAuditLog: "__lunora_admin__:getAuthAuditLog";
     readonly getAuthMetrics: "__lunora_admin__:getAuthMetrics";
     readonly getCapturedMail: "__lunora_admin__:getCapturedMail";
     readonly getFanoutMetrics: "__lunora_admin__:getFanoutMetrics";
     readonly getFunctionStats: "__lunora_admin__:getFunctionStats";
     readonly getIssues: "__lunora_admin__:getIssues";
     readonly listFlags: "__lunora_admin__:listFlags";
+    readonly listPushSubscriptions: "__lunora_admin__:listPushSubscriptions";
     readonly listQueues: "__lunora_admin__:listQueues";
     readonly listSubscriptions: "__lunora_admin__:listSubscriptions";
     readonly listTableIndexes: "__lunora_admin__:listTableIndexes";
     readonly listWorkflows: "__lunora_admin__:listWorkflows";
     readonly getLogs: "__lunora_admin__:getLogs";
+    readonly getMetricHistory: "__lunora_admin__:getMetricHistory";
     readonly getMetricSeries: "__lunora_admin__:getMetricSeries";
     readonly getMetrics: "__lunora_admin__:getMetrics";
     readonly getPitrBookmark: "__lunora_admin__:getPitrBookmark";
@@ -314,6 +317,26 @@ interface DeployInfo {
     versionTag?: string;
     workerUrl?: string;
 }
+```
+
+### `DeploymentHealthPanel` (const)
+
+```ts
+const DeploymentHealthPanel: ({ probe }: DeploymentHealthPanelProps) => ReactElement;
+```
+
+### `DeploymentHealthPanelProps` (interface)
+
+```ts
+interface DeploymentHealthPanelProps {
+    readonly probe?: DeploymentHealthProbe;
+}
+```
+
+### `DeploymentHealthProbe` (type)
+
+```ts
+type DeploymentHealthProbe = (kind: ProbeKind) => Promise<ProbeSnapshot>;
 ```
 
 ### `EditableFilter` (interface)
@@ -732,6 +755,12 @@ interface MigrationsPanelProps {
 }
 ```
 
+### `NotificationsPanel` (const)
+
+```ts
+const NotificationsPanel: () => ReactElement;
+```
+
 ### `OpenRpcReferencePanel` (const)
 
 ```ts
@@ -757,6 +786,17 @@ const PitrPanel: ({ initialShardKey }: PitrPanelProps) => ReactElement;
 ```ts
 interface PitrPanelProps {
     readonly initialShardKey?: string;
+}
+```
+
+### `ProbeSnapshot` (interface)
+
+```ts
+interface ProbeSnapshot {
+    body: HealthBody | null;
+    error?: string;
+    ok: boolean;
+    status: number;
 }
 ```
 
@@ -1029,7 +1069,7 @@ interface StudioProps {
 ### `StudioTab` (type)
 
 ```ts
-type StudioTab = "agents" | "analytics" | "api" | "audit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "realtime" | "rls" | "schedule" | "schema" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
+type StudioTab = "agents" | "analytics" | "api" | "audit" | "authAudit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "deploymentHealth" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "notifications" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "realtime" | "rls" | "schedule" | "schema" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
 ```
 
 ### `TFunction` (type)

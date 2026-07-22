@@ -63,7 +63,21 @@ export interface LunoraAiOptions {
      * Has no effect on bring-your-own providers.
      */
     defaultModel?: string;
-    /** Route Workers AI inference through a Cloudflare AI Gateway. */
+
+    /**
+     * The Worker `env`, read for opt-in Cloudflare AI Gateway routing (the
+     * `LUNORA_AI_GATEWAY_*` vars, via `resolveAiGateway`). When it configures a
+     * gateway and no explicit {@link LunoraAiOptions.gateway} is given, the
+     * Workers AI provider is routed through that gateway so token + dollar-cost
+     * telemetry is computed on the app's behalf. Unset, or with no gateway vars,
+     * behavior is unchanged (calls go straight to Workers AI).
+     */
+    env?: Record<string, unknown>;
+
+    /**
+     * Route Workers AI inference through a Cloudflare AI Gateway. An explicit
+     * value wins over anything derived from {@link LunoraAiOptions.env}.
+     */
     gateway?: AiGatewayOptions;
 
     /**

@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
-import type { TablePage } from "../../lib/admin";
+import type { TableInfo, TablePage } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
 
@@ -18,6 +18,12 @@ interface PaymentsPanelProps {
 }
 
 type Row = Record<string, unknown>;
+
+// The `@lunora/payment` store table this panel reads — used as the presence probe.
+const SUBSCRIPTIONS_TABLE = "subscriptions";
+
+/** Stable empty args for the no-argument `listTables` presence probe (avoids a fresh object each render). */
+const NO_ARGS: Record<string, unknown> = {};
 
 // Subscription states that count as "active" for the summary + badge tone.
 const ACTIVE_STATES = new Set(["active", "trialing"]);
@@ -74,29 +80,54 @@ const badgeVariant = (state: string): "default" | "destructive" | "outline" => {
 const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
     const t = useT();
 
+    // Presence probe: the payment store tables only exist when the app hand-declares
+    // them in its schema (codegen can't resolve `@lunora/payment`'s cross-package table
+    // spread), so a bare `readTablePage` on a missing table errors. Nav gating already
+    // hides this page for an app that never declares them, but a worker predating the
+    // `studioFeatures` RPC falls back to "show everything" — so gate the reads here too,
+    // and render a helpful empty state instead of an "unknown table" alert.
+    const { data: tables } = useAdminQuery<TableInfo[]>(ADMIN_FUNCTIONS.listTables, NO_ARGS, { live: true });
+
+    const loadedTables = tables !== undefined;
+    const hasPaymentTables = Array.isArray(tables) && tables.some((table) => table.name === SUBSCRIPTIONS_TABLE);
+
     // Payment tables are ordinary app tables, read through the generic
     // `readTablePage` RPC (no payment-specific endpoint). The structural query
     // key dedupes the inline args, so a fresh object each render is harmless.
-    const subscriptionsQuery = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, {
-        filters: [],
-        limit,
-        offset: 0,
-        orderBy: [],
-        search: "",
-        table: "subscriptions",
-    });
-    const eventsQuery = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, {
-        filters: [],
-        limit: 25,
-        offset: 0,
-        orderBy: [],
-        search: "",
-        table: "events",
-    });
+    const subscriptionsQuery = useAdminQuery<TablePage>(
+        ADMIN_FUNCTIONS.readTablePage,
+        {
+            filters: [],
+            limit,
+            offset: 0,
+            orderBy: [],
+            search: "",
+            table: "subscriptions",
+        },
+        { enabled: hasPaymentTables },
+    );
+    const eventsQuery = useAdminQuery<TablePage>(
+        ADMIN_FUNCTIONS.readTablePage,
+        {
+            filters: [],
+            limit: 25,
+            offset: 0,
+            orderBy: [],
+            search: "",
+            table: "events",
+        },
+        { enabled: hasPaymentTables },
+    );
 
     // The payment sync store has no client-observable write event to push on, so
-    // poll (skipped while the tab is hidden by `useAutoRefresh`).
+    // poll (skipped while the tab is hidden by `useAutoRefresh`). Skip the poll when
+    // the tables are absent — `refetch()` fires regardless of `enabled`, and a poll
+    // against a missing table would resurrect the "unknown table" error.
     useAutoRefresh(() => {
+        if (!hasPaymentTables) {
+            return;
+        }
+
         subscriptionsQuery.refetch();
         eventsQuery.refetch();
     }, true);
@@ -109,6 +140,22 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
     const activeCount = subscriptions.filter((row) => ACTIVE_STATES.has(text(readField(row, "state")))).length;
 
     const recentEvents = events.toSorted((a, b) => Number(readField(b, "processedAt") ?? 0) - Number(readField(a, "processedAt") ?? 0));
+
+    // The app pulls in `@lunora/payment` (or an old worker shows every page) but never
+    // declared the store tables — guide the user rather than surfacing a table error.
+    if (loadedTables && !hasPaymentTables) {
+        return (
+            <div className="flex flex-col gap-4" data-testid="payments-panel">
+                <EmptyState
+                    description={t(
+                        "No @lunora/payment tables found in this deployment. Declare the store tables (subscriptions, events, …) in lunora/schema.ts and wire `payment` on createShardDO() to sync customers and subscriptions.",
+                    )}
+                    testId="payments-unconfigured"
+                    title={t("No payments configured")}
+                />
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col gap-4" data-testid="payments-panel">

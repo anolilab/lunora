@@ -10,8 +10,10 @@ import type { AdvisorConfigCall } from "./config-calls";
 import type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 import type { AdvisorContainerOverride } from "./container-overrides";
 import type { AdvisorContainer } from "./containers";
+import type { AdvisorExportSink } from "./export-sinks";
 import type { AdvisorFailOpenGuard } from "./fail-open-guards";
 import type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
+import type { AdvisorGeoIndexUsage } from "./geo-index-usages";
 import type { AdvisorHttpActionGuard } from "./http-action-guards";
 import type { AdvisorHttpHeaderWrite } from "./http-header-writes";
 import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
@@ -26,6 +28,7 @@ import type { AdvisorMaskStrategy } from "./mask-strategies";
 import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
+import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "./notify-calls";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
@@ -234,6 +237,17 @@ export interface LintContext {
     containers?: ReadonlyArray<AdvisorContainer>;
 
     /**
+     * CDC export-sink constructions (`defineExportSink` / `webhookExportSink` /
+     * `r2Sink`) discovered in function bodies — the `export_sink_misconfigured`
+     * input. Each carries which config keys were present (and which were an empty
+     * string), so the lint can flag a sink missing a required field (a webhook
+     * with no `url`, an R2 sink with no `bucket`, a sink with no `name`/`deliver`).
+     * Supplied by the codegen feeder; absent for runtime callers, where the lint
+     * finds nothing.
+     */
+    exportSinks?: ReadonlyArray<AdvisorExportSink>;
+
+    /**
      * `rateLimit`/`dbRateLimit` (`@lunora/ratelimit`) and `verifyTurnstileMiddleware`
      * (`@lunora/auth`) middleware calls, each with whether its options literal set
      * `failOpen: true` and the rate-limit `name` — the
@@ -255,6 +269,16 @@ export interface LintContext {
      * codegen feeder; absent for runtime callers, where the lint finds nothing.
      */
     flagSecurityDefaults?: ReadonlyArray<AdvisorFlagSecurityDefault>;
+
+    /**
+     * `withGeoIndex("name", …)` reads discovered in function bodies — the use-side
+     * input the `geo_index_unused` lint cross-references against the declared geo
+     * indexes in {@link LintContext.schema}. A declared `.geoIndex(name, …)` with
+     * no matching read is dead overhead (its geohash companion is maintained on
+     * every write and read by nothing). Supplied by the codegen feeder; absent for
+     * runtime callers, where the lint finds nothing.
+     */
+    geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
 
     /**
      * `httpAction`/`httpRoute` handlers that perform a side effect
@@ -396,6 +420,23 @@ export interface LintContext {
      * for runtime callers, where the lint finds nothing.
      */
     normalizeIdAuthorizations?: ReadonlyArray<AdvisorNormalizeIdAuthorization>;
+
+    /**
+     * `ctx.notify` / `ctx.push` sends discovered lexically inside `query`/`mutation`
+     * handler bodies — the `notify_send_outside_action` input. Supplied by the
+     * codegen feeder, which omits `action` handlers (where these facades are the
+     * typed, intended surface); absent for runtime callers, where the lint finds
+     * nothing.
+     */
+    notifyCalls?: ReadonlyArray<AdvisorNotifyCall>;
+
+    /**
+     * Whether the app uses `ctx.push` and which push channels `defineNotify(...)`
+     * wires — the `notify_missing_push_config` input. Supplied by the codegen
+     * feeder from the resolved `lunora/notify.ts` definition; absent for runtime
+     * callers, where the lint finds nothing.
+     */
+    notifyConfig?: AdvisorNotifyConfig;
 
     /**
      * `ctx.db` writes (`insert` / `replace` / `patch` / `insertManyUnsafe`) that set

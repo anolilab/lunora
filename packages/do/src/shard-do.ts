@@ -10,6 +10,7 @@ import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
+import { parseTraceparent } from "../../../shared/otlp";
 import type { SpanEvent } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -19,7 +20,7 @@ import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import { buildBatchEntryRequest } from "./batch";
-import type { ContextMetrics, ContextTracer, TraceAnchor } from "./context-telemetry";
+import type { CloudflareTracingLike, ContextMetrics, ContextTracer, TraceAnchor } from "./context-telemetry";
 import { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
 import type { CdcChange, SqlExec } from "./ctx-db";
 import {
@@ -102,6 +103,7 @@ import { LogBuffer } from "./log-buffer";
 import type { RecordMailInput } from "./mail-catcher";
 import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 import { MetricBuffer } from "./metric-buffer";
+import { readMetricHistory, recordMetricHistory } from "./metric-history";
 import { armRestore, readBookmark } from "./pitr";
 import type { QueryStatEntry } from "./query-metrics";
 import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
@@ -135,6 +137,8 @@ import { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } f
 import { resolveTraceAnchor } from "./trace-context";
 import type { TransactionSqlLike } from "./transaction";
 import { ConflictError } from "./transaction";
+import type { TtlSweepSpec } from "./ttl-sweep";
+import { selectExpiredIds } from "./ttl-sweep";
 import type {
     LifecycleDispatchInfo,
     LifecycleEvent,
@@ -182,10 +186,65 @@ const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes
  * `@lunora/runtime`'s `ObservabilitySink` without taking a dependency on it.
  */
 interface TelemetrySink {
+    /**
+     * **Opt-in, EXPERIMENTAL, default off.** When `true`, each `ctx.trace` span is
+     * ALSO emitted as a Cloudflare **custom span** (`tracing.enterSpan` from
+     * `cloudflare:workers`, GA 2026-06-16) so it nests inside CF's native trace
+     * tree on the hosted path — capability-probed, and a safe no-op off-CF / on an
+     * older compat date / when unsampled. This only ADDS a CF-side span; the
+     * `onSpan` event below (our `SpanBuffer`/`otlpSink`) is unchanged and stays the
+     * source of truth. Mirror of `@lunora/runtime`'s `ObservabilitySink`
+     * `fuseCloudflareTraces`; see {@link createTracer} for the double-export caveat.
+     */
+    fuseCloudflareTraces?: boolean;
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
 }
+
+/**
+ * Memoized resolution of CF's `tracing` namespace, or `undefined` when custom
+ * spans are unavailable. Backs the opt-in `makeTracer` Cloudflare custom-spans
+ * bridge (see {@link createTracer}).
+ *
+ * Deliberately a guarded DYNAMIC import, not a top-level
+ * `import { tracing } from "cloudflare:workers"`. A static named import of
+ * `tracing` would be a module link-time dependency — on a compat date predating
+ * custom spans the binding may not exist, and `@lunora/do` is also imported in
+ * plain Node (the `@lunora/testing` harness), where `cloudflare:workers` cannot
+ * resolve at all. The dynamic import runs ONLY when the bridge is enabled
+ * (default off), and its `catch` turns any absence into a safe `undefined`.
+ * `enterSpan` is additionally feature-probed (`typeof … === "function"`) so an
+ * older runtime exposing a partial `tracing` still no-ops rather than throwing.
+ *
+ * Resolved at most once per isolate and cached (including the "unavailable"
+ * verdict), so the import cost is paid a single time.
+ */
+let cloudflareTracingResolved = false;
+
+let cloudflareTracing: CloudflareTracingLike | undefined;
+
+const resolveCloudflareTracing = async (): Promise<CloudflareTracingLike | undefined> => {
+    if (!cloudflareTracingResolved) {
+        cloudflareTracingResolved = true;
+
+        try {
+            const cloudflareModule = (await import("cloudflare:workers")) as { tracing?: unknown };
+            const candidate = cloudflareModule.tracing;
+
+            cloudflareTracing =
+                candidate !== null && typeof candidate === "object" && typeof (candidate as CloudflareTracingLike).enterSpan === "function"
+                    ? (candidate as CloudflareTracingLike)
+                    : undefined;
+        } catch {
+            // Off-Cloudflare (e.g. the Node test harness) or a runtime without the
+            // module — custom spans simply aren't available. A safe no-op.
+            cloudflareTracing = undefined;
+        }
+    }
+
+    return cloudflareTracing;
+};
 
 /**
  * Structural shape of the `ctx.log` logger the DO builds (see the server
@@ -575,6 +634,12 @@ const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigration
  * full preview page's worth of rows and the two can't silently drift apart.
  */
 const SHARD_BULK_DELETE_CAP = MAX_PAGE_SIZE;
+
+/** Rows swept per TTL batch, and the max batches drained per alarm tick (bounds one sweep's work so it can't stall the shard). */
+const TTL_SWEEP_BATCH = 200;
+const TTL_SWEEP_MAX_BATCHES = 20;
+/** Cadence the TTL sweep re-arms its shared-alarm tier at while any `.ttl()` table exists — a coarse, bounded expiry window. */
+const TTL_SWEEP_INTERVAL_MS = 30_000;
 
 /**
  * Validate the `__lunora_admin__:writeRow` payload. Enforces that `id` is
@@ -1707,14 +1772,21 @@ abstract class ShardDO {
      * reason; otherwise the earlier of the two candidate times (never later than
      * `nowMs`, so a source that's already due arms essentially immediately).
      */
-    private static nextPollAlarmTarget(globalShapesRemaining: number, nextSourceDueAt: number | undefined, nowMs: number): number | undefined {
+    private static nextPollAlarmTarget(
+        globalShapesRemaining: number,
+        nextSourceDueAt: number | undefined,
+        nextTtlDueAt: number | undefined,
+        nowMs: number,
+    ): number | undefined {
         const globalTarget = globalShapesRemaining > 0 ? nowMs + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS : undefined;
 
-        if (globalTarget === undefined) {
-            return nextSourceDueAt === undefined ? undefined : Math.max(nextSourceDueAt, nowMs);
-        }
+        // The earliest of the tiers that report a pending time; a tier that's
+        // already due (past timestamp) is floored to `nowMs` so it arms promptly.
+        const candidates = [globalTarget, nextSourceDueAt, nextTtlDueAt]
+            .filter((value): value is number => value !== undefined)
+            .map((value) => Math.max(value, nowMs));
 
-        return nextSourceDueAt === undefined ? globalTarget : Math.min(globalTarget, nextSourceDueAt);
+        return candidates.length > 0 ? Math.min(...candidates) : undefined;
     }
 
     protected state: ShardDOState;
@@ -1792,6 +1864,25 @@ abstract class ShardDO {
      * fields.
      */
     private currentRequestTrace: { rootSpanId: string; traceId: string } | undefined;
+
+    /**
+     * Per-trace head-sampling state, keyed by `traceId` so concurrent dispatches on
+     * the same DO instance can't clobber each other's decision. A DO interleaves
+     * dispatches across `await` points, and the span-recording and error-flush
+     * choke points run after a span body (or the whole dispatch) settles — by which
+     * point a flat per-instance field could have been overwritten by a sibling
+     * dispatch (the same hazard `dispatchTrace` guards against for the trace anchor).
+     * Each entry holds `sampled` (the inbound `traceparent` flag; absent means keep,
+     * so alarms, subscription re-runs and non-Lunora callers export exactly as
+     * before — when false, `ctx.trace` INTERNAL spans are held out of the live export
+     * and re-decided in the dispatch `finally` as a tail bias), `keepErrors` (the
+     * runtime's `x-lunora-sample-errors` / `alwaysSampleErrors` toggle — a sampled-out
+     * trace that errored is still exported whole unless off), and `sink` (captured
+     * when a sampled-out span is first held, so the `finally` can flush the trace's
+     * held spans). Registered at dispatch entry by the dispatch's own `traceId`, read
+     * by `span.traceId`, and deleted in the `finally`.
+     */
+    private traceSampling = new Map<string, { keepErrors: boolean; sampled: boolean; sink?: TelemetrySink }>();
 
     /**
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
@@ -2208,6 +2299,16 @@ abstract class ShardDO {
         // re-set the shared field — reading it there would file this dispatch's
         // root span under another request's trace (and leave that one rootless).
         const dispatchTrace = this.currentRequestTrace;
+        // Trace-sampling verdict propagated by the runtime: the `traceparent`
+        // sampled flag carries the head decision (absent → keep, so this path is
+        // unchanged for alarms / subscription re-runs / non-Lunora callers) and
+        // `x-lunora-sample-errors` carries the tail-bias toggle. Registered keyed by
+        // THIS dispatch's `traceId` (not a flat field) so a concurrent dispatch's
+        // `recordSpan` / `finally` reads its own verdict — see `traceSampling`.
+        this.traceSampling.set(dispatchTrace.traceId, {
+            keepErrors: request.headers.get("x-lunora-sample-errors") !== "0",
+            sampled: parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true,
+        });
         // Reset the per-request read/cache capture (filled by `runCachedQuery`
         // for cached query paths) so a previous dispatch can't leak into this
         // entry's logged read set / cache-hit flag.
@@ -2401,6 +2502,12 @@ abstract class ShardDO {
             if (this.spans.hasTrace(dispatchTrace.traceId)) {
                 this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace);
             }
+            // Export boundary for a sampled-out trace: now that the dispatch has
+            // settled we know whether it errored, so flush its held `ctx.trace`
+            // spans (tail bias) or drop them. A no-op for sampled-in traces (their
+            // spans already streamed live).
+            this.flushSampledOutTrace(dispatchTrace, dispatchError !== undefined);
+            this.traceSampling.delete(dispatchTrace.traceId);
             this.currentRequestTrace = undefined;
             this.currentRequestBookmark = undefined;
             this.currentResponseBookmark = undefined;
@@ -2774,6 +2881,19 @@ abstract class ShardDO {
             nextSourceDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
         }
 
+        // Declarative TTL expiry (`.ttl(...)`) shares this alarm too. The base hook
+        // returns `undefined` (no TTL tables); the codegen subclass overrides
+        // `ttlSweeps()` from the schema so the sweep pages + removes expired rows and
+        // reports its next-due. A contained failure re-arms at the fixed floor.
+        let nextTtlDueAt: number | undefined;
+
+        try {
+            nextTtlDueAt = await this.pollTtlSweeps();
+        } catch (error) {
+            this.recordShapeError("ttl:sweep", error);
+            nextTtlDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
+        }
+
         // Drain the tables the ingest poll just wrote: a sourced table is local, so
         // its `defineShape` subscribers are poked through the standard
         // changed-table → `pokeShapeSubscribers` path (the same one a mutation
@@ -2782,7 +2902,7 @@ abstract class ShardDO {
         // when nothing was queued (non-sourced DOs, or a steady-state tick).
         await this.flushChangedTables();
 
-        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, Date.now());
+        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, nextTtlDueAt, Date.now());
 
         if (nextAlarmAt !== undefined) {
             await this.scheduleGlobalPoll(nextAlarmAt);
@@ -4303,6 +4423,73 @@ abstract class ShardDO {
         return this.scheduleGlobalPoll();
     }
 
+    /**
+     * The resolved TTL policies (`.ttl(field, { after })`) for this DO's schema —
+     * one {@link TtlSweepSpec} per table that declares a TTL. The base `ShardDO`
+     * has no schema, so it returns `[]` and the TTL tier stays dormant. The
+     * codegen subclass overrides it to read each table's `ttlPolicy` (+ its
+     * `.softDelete()` marker) off the imported schema.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass reads the imported schema
+    protected ttlSweeps(): ReadonlyArray<TtlSweepSpec> {
+        return [];
+    }
+
+    /**
+     * Sweep every `.ttl()` table once: page the rows past their expiry and remove
+     * each THROUGH the schema-aware writer (`deleteRowThroughWriter`) so companions
+     * / CDC / live subscriptions stay correct and a `.softDelete()` table soft-deletes
+     * instead of physically removing the row. Work is bounded per tick
+     * ({@link TTL_SWEEP_BATCH} × {@link TTL_SWEEP_MAX_BATCHES}) so a large backlog
+     * drains across several alarms without stalling the shard.
+     *
+     * Returns the next-due timestamp (a coarse {@link TTL_SWEEP_INTERVAL_MS}
+     * cadence, so freshly-written rows expire within a bounded window) while any
+     * TTL table exists, or `undefined` when there are none — so a DO with no TTL
+     * table never arms this tier.
+     */
+    protected async pollTtlSweeps(): Promise<number | undefined> {
+        const specs = this.ttlSweeps();
+
+        if (specs.length === 0) {
+            return undefined;
+        }
+
+        const sql = this.sql as SqlExec;
+        const now = Date.now();
+
+        for (const spec of specs) {
+            let batches = 0;
+            let hasMore = true;
+
+            while (hasMore && batches < TTL_SWEEP_MAX_BATCHES) {
+                const page = selectExpiredIds(sql, spec, now, TTL_SWEEP_BATCH);
+
+                for (const id of page.ids) {
+                    // Sequential: serialise writes to avoid OCC contention on this DO
+                    // (same reasoning as `runShardBulkDelete`).
+                    // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO
+                    await this.deleteRowThroughWriter(spec.table, id);
+                }
+
+                hasMore = page.hasMore;
+                batches += 1;
+            }
+        }
+
+        return now + TTL_SWEEP_INTERVAL_MS;
+    }
+
+    /**
+     * Arm the shared poll alarm for the TTL sweep. Mirrors {@link scheduleSourcePoll};
+     * the codegen subclass calls it once on construction when the schema declares a
+     * `.ttl()` table so the sweep loop starts, after which {@link ShardDO.alarm}
+     * re-arms itself. Idempotent; a no-op when the runtime exposes no `setAlarm`.
+     */
+    protected scheduleTtlSweep(): Promise<void> {
+        return this.scheduleGlobalPoll();
+    }
+
     /** This DO's shard key (its DO name), or `__root__` for the single-DO default. The `tenantBy` mapper binds it into the source query. */
     protected currentShardKey(): string {
         return this.state.id?.name ?? ROOT_SHARD_NAME;
@@ -4599,14 +4786,19 @@ abstract class ShardDO {
      * `anchor` is the trace this ctx's spans belong to; omit it for a ctx with no
      * owning dispatch (an alarm, a subscription re-run) to mint a fresh anchor, so
      * `ctx.trace` still yields a coherent self-contained trace there.
+     *
+     * The Cloudflare custom-spans bridge is threaded here but stays off unless the
+     * resolved sink sets `fuseCloudflareTraces` (see {@link resolveCloudflareTracing}).
      */
     protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer {
         return createTracer({
             anchor: anchor ?? resolveTraceAnchor(undefined),
+            fuseCloudflareSpans: sink?.fuseCloudflareTraces === true,
             functionPath,
             record: (span) => {
                 this.recordSpan(span, sink);
             },
+            resolveCloudflareTracing,
             shardKey: this.state.id?.name,
             userId: () => this.getCurrentUserId(),
         });
@@ -4640,18 +4832,43 @@ abstract class ShardDO {
      * cross-instance aggregation is still the sink's job.
      */
     protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void {
-        try {
-            this.metricSeries.push(event);
-        } catch {
-            // Folding is best-effort: a malformed event must not break the handler.
-        }
+        // Stamp the exemplar: the measurement inherits the recording dispatch's
+        // trace id (when it ran inside one), so a metric point can link to a trace.
+        // Owned here, not by `createMetrics` — the shard is what knows the current
+        // request's trace context.
+        const exemplarTraceId = this.currentRequestTrace?.traceId;
+        const stamped: MetricEvent = exemplarTraceId === undefined ? event : { ...event, traceId: exemplarTraceId };
 
-        if (sink?.onMetric) {
+        // Every target is best-effort: recording a measurement must never break the
+        // handler that recorded it (a malformed event, a SQLite write failure, a
+        // buggy sink). One swallow so the policy is stated once, not per target.
+        const bestEffort = (run: () => void): void => {
             try {
-                sink.onMetric(event, { waitUntil: this.state.waitUntil?.bind(this.state) });
+                run();
             } catch {
-                // A buggy metric sink must not break the handler.
+                // Telemetry is best-effort — see above.
             }
+        };
+
+        // Live in-memory fold (the "recent on this instance" readout).
+        bestEffort(() => {
+            this.metricSeries.push(stamped);
+        });
+
+        // Durable per-minute rollups. Use the RAW storage handle, NOT `this.sql`:
+        // the getter instruments statements into the Query Insights leaderboard
+        // during a dispatch, and these housekeeping writes would be misattributed
+        // to the user function that recorded the metric (matching recordFunctionMetric
+        // et al., which all write through the raw handle for the same reason).
+        const rawSql = this.state.storage.sql as unknown as SqlExec;
+
+        bestEffort(() => {
+            recordMetricHistory(rawSql, stamped, exemplarTraceId);
+        });
+
+        // Optional export sink (the durable, cross-instance path).
+        if (sink?.onMetric) {
+            bestEffort(() => sink.onMetric?.(stamped, { waitUntil: this.state.waitUntil?.bind(this.state) }));
         }
     }
 
@@ -4689,6 +4906,15 @@ abstract class ShardDO {
      * `sink.onSpan`. Best-effort throughout, exactly like {@link recordUserLog}:
      * a span is recorded *after* its body already settled, so letting a telemetry
      * failure escape here would turn a succeeded operation into a failed request.
+     *
+     * The span is ALWAYS buffered locally (the Studio Traces panel is a full
+     * "recent traces on this instance" readout, unaffected by sampling). Only the
+     * export to the sink is sampled: when the active dispatch's trace was sampled
+     * OUT (its inbound `traceparent` flag was `00`), the span is held back rather
+     * than streamed — the dispatch `finally` re-decides once the trace's error
+     * status is known ({@link flushSampledOutTrace}), so an errored trace is still
+     * exported whole (tail bias). Spans from a sampled-in dispatch, or from another
+     * trace (a subscription re-run mints its own anchor), stream immediately.
      */
     // eslint-disable-next-line @typescript-eslint/member-ordering -- kept in the span-recording cluster (next to recordDispatchRootSpan) for cohesion rather than hoisted above every private member
     protected recordSpan(span: SpanEvent, sink?: TelemetrySink): void {
@@ -4698,14 +4924,77 @@ abstract class ShardDO {
             // Best-effort — never let span capture fail the handler.
         }
 
-        if (sink?.onSpan) {
-            try {
-                // Thread the DO's `waitUntil` so a network sink (otlpSink) can keep
-                // its export alive past the response, matching the log path.
-                sink.onSpan(span, { waitUntil: this.state.waitUntil?.bind(this.state) });
-            } catch {
-                // A buggy span sink must not break the handler.
-            }
+        if (!sink?.onSpan) {
+            return;
+        }
+
+        // Look the verdict up by the SPAN's own `traceId` (not the shared
+        // `currentRequestTrace`, which a sibling dispatch may have overwritten by now).
+        const sampling = this.traceSampling.get(span.traceId);
+
+        if (sampling && !sampling.sampled) {
+            // Sampled out: hold this span back and remember the sink so the
+            // `finally` can flush the trace's held spans if it turns out to error.
+            sampling.sink = sink;
+
+            return;
+        }
+
+        this.emitSpan(span, sink);
+    }
+
+    /**
+     * Hand one span to `sink.onSpan`, swallowing sink throws. The DO's `waitUntil`
+     * is threaded so a network sink (otlpSink) can keep its export alive past the
+     * response, matching the log path. Extracted so both the live-stream path in
+     * {@link recordSpan} and the deferred error-keep flush in
+     * {@link flushSampledOutTrace} share one guarded emit.
+     */
+    private emitSpan(span: SpanEvent, sink: TelemetrySink): void {
+        if (!sink.onSpan) {
+            return;
+        }
+
+        try {
+            sink.onSpan(span, { waitUntil: this.state.waitUntil?.bind(this.state) });
+        } catch {
+            // A buggy span sink must not break the handler.
+        }
+    }
+
+    /**
+     * Export-boundary decision for a sampled-out trace, run from the dispatch
+     * `finally` once the error status is known. A sampled-in trace already
+     * streamed live, so this returns early for it; a sampled-out trace exports its
+     * held `ctx.trace` spans only when `alwaysSampleErrors` is set AND the trace
+     * errored (the dispatch threw, or a held span settled `ok: false`) — the tail
+     * bias — and otherwise drops them. Held spans are read back from the local ring
+     * (excluding the synthetic dispatch root, which never goes to `onSpan`).
+     */
+    private flushSampledOutTrace(trace: { traceId: string }, dispatchFailed: boolean): void {
+        // Read THIS trace's own verdict + held sink (keyed by traceId), so an
+        // interleaved sibling dispatch's state can't drop this trace's error spans.
+        const sampling = this.traceSampling.get(trace.traceId);
+
+        if (!sampling || sampling.sampled || !sampling.keepErrors) {
+            return;
+        }
+
+        const { sink } = sampling;
+
+        if (!sink?.onSpan) {
+            return;
+        }
+
+        const held = this.spans.entries().filter((span) => span.traceId === trace.traceId && span.dispatch !== true);
+        const traceHasError = dispatchFailed || held.some((span) => !span.ok);
+
+        if (!traceHasError) {
+            return;
+        }
+
+        for (const span of held) {
+            this.emitSpan(span, sink);
         }
     }
 
@@ -6287,6 +6576,16 @@ abstract class ShardDO {
             // for the third signal — a "recent metrics on this instance" readout that
             // resets on hibernation; durable aggregation is the sink's job.
             return { series: this.metricSeries.entries() };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getMetricHistory) {
+            // Durable per-minute rollups of `ctx.metrics.*` from the shard's SQLite,
+            // grouped per series with buckets oldest-first — the trend counterpart to
+            // getMetricSeries' live snapshot. Survives hibernation; each bucket carries
+            // an exemplar traceId so the panel can link a point to a trace. Read whole
+            // (clamped by the module's row limit) and windowed client-side, like the
+            // getMetrics history the metrics panel already charts.
+            return readMetricHistory(this.sql as SqlExec);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getSettings) {

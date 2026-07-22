@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "messages" | "users" | "attachments";
+export type TableName = "messages" | "users" | "places" | "sessions" | "attachments";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -53,6 +53,20 @@ export interface Doc_users {
     prefs: Record<string, string>;
 }
 
+export interface Doc_places {
+    _id: Id<"places">;
+    _creationTime: number;
+    location: { lat: number; lng: number };
+    name: string;
+}
+
+export interface Doc_sessions {
+    _id: Id<"sessions">;
+    _creationTime: number;
+    expiresAt: number;
+    token: string;
+}
+
 export interface Doc_attachments {
     _id: Id<"attachments">;
     _creationTime: number;
@@ -67,6 +81,8 @@ export interface Doc_attachments {
 export interface DataModel {
     messages: Doc_messages;
     users: Doc_users;
+    places: Doc_places;
+    sessions: Doc_sessions;
     attachments: Doc_attachments;
 }
 
@@ -79,6 +95,8 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
 export interface IndexNamesByTable {
     messages: "by_channel";
     users: "by_email";
+    places: never;
+    sessions: never;
     attachments: never;
 }
 
@@ -88,6 +106,8 @@ export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
 export interface SearchIndexNamesByTable {
     messages: "by_text";
     users: never;
+    places: never;
+    sessions: never;
     attachments: never;
 }
 
@@ -97,10 +117,23 @@ export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable
 export interface RankIndexNamesByTable {
     messages: never;
     users: never;
+    places: never;
+    sessions: never;
     attachments: never;
 }
 
 export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
+
+/** Per-table geo-index name union. `never` for tables without a geoIndex. */
+export interface GeoIndexNamesByTable {
+    messages: never;
+    users: never;
+    places: "by_location";
+    sessions: never;
+    attachments: never;
+}
+
+export type GeoIndexName<T extends keyof DataModel> = GeoIndexNamesByTable[T];
 
 /** Union of declared vector index names. `never` when none are declared. */
 export type VectorIndexName = never;
@@ -121,6 +154,20 @@ export interface Insert_users {
     prefs: Record<string, string>;
 }
 
+export interface Insert_places {
+    _id?: Id<"places">;
+    _creationTime?: number;
+    location: { lat: number; lng: number };
+    name: string;
+}
+
+export interface Insert_sessions {
+    _id?: Id<"sessions">;
+    _creationTime?: number;
+    expiresAt: number;
+    token: string;
+}
+
 export interface Insert_attachments {
     _id?: Id<"attachments">;
     _creationTime?: number;
@@ -136,6 +183,8 @@ export interface Insert_attachments {
 export interface InsertModel {
     messages: Insert_messages;
     users: Insert_users;
+    places: Insert_places;
+    sessions: Insert_sessions;
     attachments: Insert_attachments;
 }
 
@@ -162,6 +211,8 @@ export interface Relations {
     users: {
         attachments: ManyRelation<"attachments">;
     };
+    places: {};
+    sessions: {};
     attachments: {
         owner: OneRelation<"users">;
     };
@@ -174,16 +225,16 @@ export type WithArg<T extends keyof DataModel> = WithArgOf<DataModel, Relations,
 export type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;
 
 /** Read-only typed table accessor exposed on `QueryCtx.db.<table>`. */
-export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T>;
+export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
 
 /** Read-write typed table accessor exposed on `MutationCtx.db.<table>` / `ActionCtx.db.<table>`. */
-export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T>;
+export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
 
 /** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
-export type DatabaseReaderFacade = DatabaseReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable>;
+export type DatabaseReaderFacade = DatabaseReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
 
 /** Per-table read-write facade — `ctx.db.<table>` on a `MutationCtx` / `ActionCtx`. */
-export type DatabaseWriterFacade = DatabaseWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable>;
+export type DatabaseWriterFacade = DatabaseWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
 
 /** Insert builder returned by `ctx.orm.insert(table)`. */
 export interface OrmInsertBuilder<T extends keyof DataModel> {

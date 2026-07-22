@@ -18,8 +18,8 @@ interface FunctionReference {
 /** Foreign-key columns per table (`v.id("target")` fields) for the data browser. */
 const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {};
 
-/** Declared indexes per table (secondary, search, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
+/** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
+const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
     "todos": [
         {
             "fields": [
@@ -65,6 +65,9 @@ const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: st
 
 /** Storage-key columns per table (`v.storage(...)` fields) for the file browser's records↔files join. */
 const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = {};
+
+/** Declarative TTL policies (`.ttl(field, { after? })`) the DO alarm sweep auto-expires rows for. */
+const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = [];
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = [
@@ -364,8 +367,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_TABLE_REFS[table];
         }
 
-        protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }> {
+        protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }> {
             return LUNORA_TABLE_INDEXES[table] ?? [];
+        }
+
+        protected override ttlSweeps(): ReadonlyArray<{ after?: number; field: string; softDeleteField?: string; table: string }> {
+            return LUNORA_TTL_SWEEPS;
         }
 
         protected override tableColumns(table: string): Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }> {

@@ -115,6 +115,10 @@ What you get beyond the manual loop:
   neighbouring chunks around each match ("embed small, retrieve big").
 - **`asTool()`** — expose retrieval as an AI SDK tool so a model can decide to
   search the index itself: `tools: { searchDocs: docs(ctx).asTool() }`.
+- **Traced** — when the bound context carries `ctx.trace`, each embedding call is a
+  [`generation` span](/docs/concepts/observability#generation-spans-ai)
+  (`gen_ai.operation.name: "embeddings"`, `gen_ai.request.model`), so RAG shows up
+  on the trace waterfall. A hand-built context without `ctx.trace` embeds untraced.
 
 Chunk text lives in vector metadata by default (`returnMetadata: "all"`, `topK`
 capped at 20 by Vectorize, ~10 KiB metadata per vector). For long documents or

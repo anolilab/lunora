@@ -786,6 +786,104 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+## `@lunora/vue/upload`
+
+### `RestrictionError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadControl` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadMethod` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadRestrictions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadResult` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseChunkedRestUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseChunkedRestUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseFileInputOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseFileInputReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseMultipartUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseMultipartUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UsePasteUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UsePasteUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseTusUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseTusUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `useChunkedRestUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `useFileInput` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `useMultipartUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `usePasteUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `useTusUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `useUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
 ## `@lunora/vue/worker`
 
 ### `ComposedWorker` (interface)

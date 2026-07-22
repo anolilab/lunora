@@ -4,7 +4,7 @@ import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import { LunoraError } from "../src/errors";
 import type { LogArchiveAdminRouteDeps } from "../src/log-archive-admin-routes";
-import { buildLogArchiveAdminRoutes, LOG_ARCHIVE_NOT_CONFIGURED, LOG_ARCHIVE_PATH } from "../src/log-archive-admin-routes";
+import { buildLogArchiveAdminRoutes, LOG_ARCHIVE_NOT_CONFIGURED, LOG_ARCHIVE_PATH, resolveLogArchiveFromEnv } from "../src/log-archive-admin-routes";
 import type { PipelineLogPage, PipelineLogQuery, PipelineLogReader, PipelineLogReaderOptions } from "../src/pipeline-log-reader";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
@@ -190,5 +190,38 @@ describe("createWorker — log-archive admin endpoint gating", () => {
         const body: { error: { code: string } } = await response.json();
 
         expect(body.error.code).toBe(LOG_ARCHIVE_NOT_CONFIGURED);
+    });
+});
+
+describe("resolveLogArchiveFromEnv", () => {
+    it("returns undefined when the table env var is unset (the archive stays not-configured)", () => {
+        expect.assertions(2);
+
+        expect(resolveLogArchiveFromEnv({})).toBeUndefined();
+        expect(resolveLogArchiveFromEnv({ LUNORA_LOG_ARCHIVE_NAMESPACE: "default" })).toBeUndefined();
+    });
+
+    it("builds the config from LUNORA_LOG_ARCHIVE_TABLE (+ optional namespace)", () => {
+        expect.assertions(2);
+
+        expect(resolveLogArchiveFromEnv({ LUNORA_LOG_ARCHIVE_TABLE: "logs" })).toEqual({ table: "logs" });
+        expect(resolveLogArchiveFromEnv({ LUNORA_LOG_ARCHIVE_NAMESPACE: "default", LUNORA_LOG_ARCHIVE_TABLE: "logs" })).toEqual({
+            namespace: "default",
+            table: "logs",
+        });
+    });
+
+    it("ignores empty / non-string values and a non-object env", () => {
+        expect.assertions(3);
+
+        expect(resolveLogArchiveFromEnv({ LUNORA_LOG_ARCHIVE_TABLE: "" })).toBeUndefined();
+        expect(resolveLogArchiveFromEnv({ LUNORA_LOG_ARCHIVE_TABLE: 42 })).toBeUndefined();
+        expect(resolveLogArchiveFromEnv(undefined)).toBeUndefined();
+    });
+
+    it('drops an empty namespace rather than emitting `namespace: ""`', () => {
+        expect.assertions(1);
+
+        expect(resolveLogArchiveFromEnv({ LUNORA_LOG_ARCHIVE_NAMESPACE: "", LUNORA_LOG_ARCHIVE_TABLE: "logs" })).toEqual({ table: "logs" });
     });
 });

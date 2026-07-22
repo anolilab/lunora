@@ -25,6 +25,7 @@ interface ActionBuilder<Context, Args extends ArgsValidator, Output = undefined>
         args: InferArgs<Args>;
         ctx: Context;
     }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
+    expose: (config: ExposeConfig) => ActionBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Context, A & Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
@@ -311,6 +312,14 @@ interface EnvKeyFailure {
 type EnvShape = Record<string, Validator>;
 ```
 
+### `ExposeConfig` (interface)
+
+```ts
+interface ExposeConfig {
+    readonly rest?: boolean;
+}
+```
+
 ### `ExtendableSchema` (type)
 
 ```ts
@@ -379,6 +388,7 @@ interface FacadeEntry {
     restore: (id: string) => Promise<void>;
     upsert: (args: UpsertArgs) => Promise<UpsertResult>;
     upsertMany: (args: UpsertManyArgs) => Promise<UpsertResult[]>;
+    withGeoIndex: (indexName: string, build: (q: unknown) => unknown) => unknown;
     withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => unknown;
 }
 ```
@@ -430,6 +440,7 @@ interface FacadeWriterLike {
         patched: number;
     }>;
     query(tableName: string): {
+        withGeoIndex(indexName: string, build: (q: unknown) => unknown): unknown;
         withSearchIndex(indexName: string, search: (q: unknown) => unknown): unknown;
     };
     rank(tableName: string, indexName: string, options: unknown): Promise<unknown>;
@@ -449,6 +460,47 @@ type FunctionKind = "action" | "mutation" | "query" | "stream";
 
 ```ts
 type FunctionVisibility = "internal" | "public";
+```
+
+### `GeoBoundingBox` (interface)
+
+```ts
+interface GeoBoundingBox {
+    ne: GeoPointInput;
+    sw: GeoPointInput;
+}
+```
+
+### `GeoFilterBuilder` (interface)
+
+```ts
+interface GeoFilterBuilder {
+    near: (point: GeoPointInput, radiusMeters: number) => GeoFilterBuilder;
+    within: (box: GeoBoundingBox) => GeoFilterBuilder;
+}
+```
+
+### `GeoIndexDefinition` (interface)
+
+```ts
+interface GeoIndexDefinition {
+    field: string;
+    name: string;
+    precision?: number;
+}
+```
+
+### `GeoPoint` (interface)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `GeoPointInput` (interface)
+
+```ts
+interface GeoPointInput {
+    lat: number;
+    lng: number;
+}
 ```
 
 ### `HttpActionCtx` (type)
@@ -836,7 +888,7 @@ type LunoraRouteHandler = (c: Context<LunoraHttpEnv>) => Promise<Response>;
 ### `LunoraTracer` (type)
 
 ```ts
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 ```
 
 ### `ManyRelation` (interface)
@@ -950,6 +1002,7 @@ Re-exported from `@lunora/scheduler` — signature tracked at its source.
 ```ts
 interface MutationBuilder<Context, Args extends ArgsValidator, Output = undefined> {
     readonly __lunoraProcedure: "mutation";
+    expose: (config: ExposeConfig) => MutationBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => MutationBuilder<Context, A & Args, Output>;
     mutation: [
         Output
@@ -1195,6 +1248,7 @@ interface ProtectPublicOptions<Context> {
 ```ts
 interface QueryBuilder<Context, Args extends ArgsValidator, Output = undefined> {
     readonly __lunoraProcedure: "query";
+    expose: (config: ExposeConfig) => QueryBuilder<Context, Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => QueryBuilder<Context, A & Args, Output>;
     output: <V extends Validator>(validator: V) => QueryBuilder<Context, Args, Infer<V>>;
     query: [
@@ -1298,6 +1352,7 @@ type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "ac
 ```ts
 interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
     readonly args: A;
+    readonly expose?: ExposeConfig;
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
@@ -1539,6 +1594,15 @@ type ShardMode = {
 };
 ```
 
+### `SpanHandle` (interface)
+
+```ts
+interface SpanHandle {
+    setAttribute: (key: string, value: LogFields[string]) => void;
+    setAttributes: (fields: LogFields) => void;
+}
+```
+
 ### `Storage` (interface)
 
 ```ts
@@ -1655,6 +1719,10 @@ type SystemTableName = "_scheduled_functions" | "_storage";
 interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
     externallyManaged: () => TableBuilder<Shape>;
+    geoIndex: (name: string, options: {
+        field: keyof Shape & string;
+        precision?: number;
+    }) => TableBuilder<Shape>;
     global: (options?: {
         backend?: GlobalBackend;
     }) => TableBuilder<Shape>;
@@ -1674,6 +1742,9 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     }) => TableBuilder<Shape>;
     source: (definition: ExternalSourceDefinition) => TableBuilder<Shape>;
     triggers: (build: (t: TriggerBuilder<Shape>) => Record<string, TriggerDefinition>) => TableBuilder<Shape>;
+    ttl: (field: keyof Shape & string, options?: {
+        after?: number;
+    }) => TableBuilder<Shape>;
     vectorize: (field: keyof Shape & string, options: VectorizeOptions<Shape>) => TableBuilder<Shape>;
 }
 ```
@@ -1684,6 +1755,7 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
 interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
     externalSource?: ExternalSourceDefinition;
+    geoIndexes: ReadonlyArray<GeoIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;
     isExternallyManaged?: boolean;
     isPublic?: boolean;
@@ -1696,6 +1768,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
         field: string;
     };
     triggerMap: Record<string, TriggerDefinition>;
+    ttlPolicy?: TtlDefinition;
     vectorIndexes: ReadonlyArray<TableVectorIndex>;
 }
 ```
@@ -1711,6 +1784,7 @@ interface TableReader<Row = Record<string, unknown>> {
     paginate: (options: PaginationOptions) => Promise<PaginationResult<Row>>;
     take: (limit: number) => Promise<Row[]>;
     unique: () => Promise<Row | null>;
+    withGeoIndex: (indexName: string, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row>;
     withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row>;
     withSearchIndex: (indexName: string, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row>;
 }
@@ -1943,6 +2017,15 @@ interface TriggerUpdateEvent<Shape extends Record<string, Validator> = Record<st
     readonly op: "update";
     readonly previous: TriggerRow<Shape>;
     readonly table: string;
+}
+```
+
+### `TtlDefinition` (interface)
+
+```ts
+interface TtlDefinition {
+    after?: number;
+    field: string;
 }
 ```
 
@@ -2484,17 +2567,55 @@ type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
 ### `DatabaseReaderFacade` (type)
 
 ```ts
-type DatabaseReaderFacade<DM, REL extends Record<keyof DM, object>, RANK extends Record<keyof DM, string>, SEARCH extends Record<keyof DM, string>> = {
-    readonly [T in keyof DM]: TableReaderFacade<DM, REL, RANK, SEARCH, T>;
+type DatabaseReaderFacade<DM, REL extends Record<keyof DM, object>, RANK extends Record<keyof DM, string>, SEARCH extends Record<keyof DM, string>, GEO extends Record<keyof DM, string> = Record<keyof DM, never>> = {
+    readonly [T in keyof DM]: TableReaderFacade<DM, REL, RANK, SEARCH, T, GEO>;
 };
 ```
 
 ### `DatabaseWriterFacade` (type)
 
 ```ts
-type DatabaseWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends Record<keyof DM, object>, RANK extends Record<keyof DM, string>, SEARCH extends Record<keyof DM, string>> = {
-    readonly [T in keyof DM]: TableWriterFacade<DM, IM, REL, RANK, SEARCH, T>;
+type DatabaseWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends Record<keyof DM, object>, RANK extends Record<keyof DM, string>, SEARCH extends Record<keyof DM, string>, GEO extends Record<keyof DM, string> = Record<keyof DM, never>> = {
+    readonly [T in keyof DM]: TableWriterFacade<DM, IM, REL, RANK, SEARCH, T, GEO>;
 };
+```
+
+### `GeoBoundingBox` (interface)
+
+```ts
+interface GeoBoundingBox {
+    ne: GeoPointInput;
+    sw: GeoPointInput;
+}
+```
+
+### `GeoFilterBuilder` (interface)
+
+```ts
+interface GeoFilterBuilder {
+    near: (point: GeoPointInput, radiusMeters: number) => GeoFilterBuilder;
+    within: (box: GeoBoundingBox) => GeoFilterBuilder;
+}
+```
+
+### `GeoPointInput` (interface)
+
+```ts
+interface GeoPointInput {
+    lat: number;
+    lng: number;
+}
+```
+
+### `GeoReader` (interface)
+
+```ts
+interface GeoReader<TDocument> {
+    collect: () => Promise<TDocument[]>;
+    first: () => Promise<TDocument | null>;
+    take: (limit: number) => Promise<TDocument[]>;
+    unique: () => Promise<TDocument | null>;
+}
 ```
 
 ### `GroupByEntry` (interface)
@@ -2700,7 +2821,7 @@ interface TableRankPageOptions<TDocument> extends RestrictableQueryOptions<TDocu
 ### `TableReaderFacade` (interface)
 
 ```ts
-interface TableReaderFacade<DM, REL extends Record<keyof DM, object>, RANK extends Record<keyof DM, string>, SEARCH extends Record<keyof DM, string>, T extends keyof DM> {
+interface TableReaderFacade<DM, REL extends Record<keyof DM, object>, RANK extends Record<keyof DM, string>, SEARCH extends Record<keyof DM, string>, T extends keyof DM, GEO extends Record<keyof DM, string> = Record<keyof DM, never>> {
     aggregate: (options: TableAggregateOptionsOf<DM, REL, T>) => Promise<null | number>;
     count: (where?: RestrictableQueryOptionsOf<DM, REL, T> | WhereOf<DM, REL, T>) => Promise<number>;
     exists: (where?: WhereOf<DM, REL, T>) => Promise<boolean>;
@@ -2720,6 +2841,7 @@ interface TableReaderFacade<DM, REL extends Record<keyof DM, object>, RANK exten
     groupBy: (options: TableGroupByOptionsOf<DM, REL, T>) => Promise<ReadonlyArray<GroupByEntry<DM[T]>>>;
     rank: (indexName: RANK[T], options: TableRankOptions<DM[T]>) => Promise<null | RankResult>;
     rankPage: (indexName: RANK[T], options?: TableRankPageOptions<DM[T]>) => Promise<RankPage<DM[T]>>;
+    withGeoIndex: (indexName: GEO[T], build: (q: GeoFilterBuilder) => GeoFilterBuilder) => GeoReader<DM[T]>;
     withSearchIndex: (indexName: SEARCH[T], search: (q: SearchFilterBuilder<DM[T]>) => SearchFilterBuilder<DM[T]>) => SearchReader<DM[T]>;
 }
 ```
@@ -2727,7 +2849,7 @@ interface TableReaderFacade<DM, REL extends Record<keyof DM, object>, RANK exten
 ### `TableWriterFacade` (interface)
 
 ```ts
-interface TableWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends Record<keyof DM, object>, RANK extends Record<keyof DM, string>, SEARCH extends Record<keyof DM, string>, T extends keyof DM> extends TableReaderFacade<DM, REL, RANK, SEARCH, T> {
+interface TableWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends Record<keyof DM, object>, RANK extends Record<keyof DM, string>, SEARCH extends Record<keyof DM, string>, T extends keyof DM, GEO extends Record<keyof DM, string> = Record<keyof DM, never>> extends TableReaderFacade<DM, REL, RANK, SEARCH, T, GEO> {
     delete: (id: Id<string & T>) => Promise<void>;
     deleteMany: {
         (ids: ReadonlyArray<Id<string & T>>, options?: {
@@ -3869,6 +3991,14 @@ interface DatabaseWriter extends DatabaseReader {
 type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
 ```
 
+### `ExposeConfig` (interface)
+
+```ts
+interface ExposeConfig {
+    readonly rest?: boolean;
+}
+```
+
 ### `ExternalSourceCursor` (interface)
 
 ```ts
@@ -3920,6 +4050,43 @@ type FunctionKind = "action" | "mutation" | "query" | "stream";
 
 ```ts
 type FunctionVisibility = "internal" | "public";
+```
+
+### `GeoBoundingBox` (interface)
+
+```ts
+interface GeoBoundingBox {
+    ne: GeoPointInput;
+    sw: GeoPointInput;
+}
+```
+
+### `GeoFilterBuilder` (interface)
+
+```ts
+interface GeoFilterBuilder {
+    near: (point: GeoPointInput, radiusMeters: number) => GeoFilterBuilder;
+    within: (box: GeoBoundingBox) => GeoFilterBuilder;
+}
+```
+
+### `GeoIndexDefinition` (interface)
+
+```ts
+interface GeoIndexDefinition {
+    field: string;
+    name: string;
+    precision?: number;
+}
+```
+
+### `GeoPointInput` (interface)
+
+```ts
+interface GeoPointInput {
+    lat: number;
+    lng: number;
+}
 ```
 
 ### `GlobalBackend` (type)
@@ -4016,7 +4183,7 @@ interface LunoraMetrics {
 ### `LunoraTracer` (type)
 
 ```ts
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 ```
 
 ### `MutationCtx` (interface)
@@ -4134,6 +4301,7 @@ type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "ac
 ```ts
 interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
     readonly args: A;
+    readonly expose?: ExposeConfig;
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
@@ -4286,6 +4454,15 @@ type ShardMode = {
 };
 ```
 
+### `SpanHandle` (interface)
+
+```ts
+interface SpanHandle {
+    setAttribute: (key: string, value: LogFields[string]) => void;
+    setAttributes: (fields: LogFields) => void;
+}
+```
+
 ### `Storage` (interface)
 
 ```ts
@@ -4356,6 +4533,7 @@ type SystemTableName = "_scheduled_functions" | "_storage";
 interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
     externalSource?: ExternalSourceDefinition;
+    geoIndexes: ReadonlyArray<GeoIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;
     isExternallyManaged?: boolean;
     isPublic?: boolean;
@@ -4368,6 +4546,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
         field: string;
     };
     triggerMap: Record<string, TriggerDefinition>;
+    ttlPolicy?: TtlDefinition;
     vectorIndexes: ReadonlyArray<TableVectorIndex>;
 }
 ```
@@ -4383,6 +4562,7 @@ interface TableReader<Row = Record<string, unknown>> {
     paginate: (options: PaginationOptions) => Promise<PaginationResult<Row>>;
     take: (limit: number) => Promise<Row[]>;
     unique: () => Promise<Row | null>;
+    withGeoIndex: (indexName: string, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row>;
     withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row>;
     withSearchIndex: (indexName: string, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row>;
 }
@@ -4609,6 +4789,15 @@ interface TriggerUpdateEvent<Shape extends Record<string, Validator> = Record<st
     readonly op: "update";
     readonly previous: TriggerRow<Shape>;
     readonly table: string;
+}
+```
+
+### `TtlDefinition` (interface)
+
+```ts
+interface TtlDefinition {
+    after?: number;
+    field: string;
 }
 ```
 

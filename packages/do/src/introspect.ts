@@ -67,6 +67,7 @@ const ADMIN_FUNCTIONS = {
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     getIssues: "__lunora_admin__:getIssues",
+    getMetricHistory: "__lunora_admin__:getMetricHistory",
     getMetricSeries: "__lunora_admin__:getMetricSeries",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
@@ -235,7 +236,7 @@ interface FunctionCallStat {
 interface TableIndexInfo {
     fields: string[];
     name: string;
-    type: "index" | "rank" | "search" | "vector";
+    type: "geo" | "index" | "rank" | "search" | "vector";
     unique?: boolean;
 }
 
@@ -429,7 +430,13 @@ interface StudioFeaturesResult {
     kv: boolean;
     /** `@lunora/mail` is imported by a `lunora/` source or a declared dependency. */
     mail: boolean;
-    /** `@lunora/payment` is used (import or `ctx.payments`) or a declared dependency. */
+
+    /**
+     * `@lunora/payment` is used (import or `ctx.payments`), or the app declares the store's
+     * `subscriptions`/`events` tables that the Payments panel reads. Unlike the other flags this
+     * has no declared-dependency arm: the panel queries those tables directly, so a bare dependency
+     * (e.g. reusing the package's pure webhook helpers) must not show a page that would then error.
+     */
     payments: boolean;
     /** `@lunora/queue` / `ctx.queues` is used, the app declares queues, or it is a declared dependency. */
     queues: boolean;

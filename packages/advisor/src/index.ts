@@ -33,11 +33,14 @@ import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-e
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
+import exportSinkMisconfigured from "./lints/static/export-sink-misconfigured";
 import externalSourceIncrementalNoDeletePath from "./lints/static/external-source-incremental-no-delete-path";
 import externalSourceOnGlobal from "./lints/static/external-source-on-global";
 import externalSourceUnscoped from "./lints/static/external-source-unscoped";
 import filterWithoutIndex from "./lints/static/filter-without-index";
 import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-security-with-unsafe-default";
+import geoIndexFieldNotGeopoint from "./lints/static/geo-index-field-not-geopoint";
+import geoIndexUnused from "./lints/static/geo-index-unused";
 import hardcodedSecret from "./lints/static/hardcoded-secret";
 import httpActionMissingAuthGuard from "./lints/static/http-action-missing-auth-guard";
 import httpActionResponseHeaderInjection from "./lints/static/http-action-response-header-injection";
@@ -55,6 +58,8 @@ import maskedRelationLeakViaWith from "./lints/static/masked-relation-leak-via-w
 import mutatorFullRowReplace from "./lints/static/mutator-full-row-replace";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
 import normalizeIdUsedAsAuthorization from "./lints/static/normalize-id-used-as-authorization";
+import notifyMissingPushConfig from "./lints/static/notify-missing-push-config";
+import notifySendOutsideAction from "./lints/static/notify-send-outside-action";
 import outputProjectionMissingOnPublicRead from "./lints/static/output-projection-missing-on-public-read";
 import ownerFieldFromArgsNotAuth from "./lints/static/owner-field-from-args-not-auth";
 import paymentCreateWithoutAuthorize from "./lints/static/payment-create-without-authorize";
@@ -76,6 +81,7 @@ import relationReferencesUnknownTable from "./lints/static/relation-references-u
 import rlsUncoveredTable from "./lints/static/rls-uncovered-table";
 import shapeTargetsGlobalTable from "./lints/static/shape-targets-global-table";
 import shapeUnknownTable from "./lints/static/shape-unknown-table";
+import signupMutationWithoutDisposableGating from "./lints/static/signup-mutation-without-disposable-gating";
 import softDeleteIncludeDeletedFromArgs from "./lints/static/soft-delete-include-deleted-from-args";
 import sqlInjectionRisk from "./lints/static/sql-injection-risk";
 import storageGenerateUploadUrlNoContentTypePin from "./lints/static/storage-generate-upload-url-no-content-type-pin";
@@ -84,6 +90,7 @@ import storagePresignedUrlForPrivateContent from "./lints/static/storage-presign
 import storageUploadWithoutContentTypeAllowlist from "./lints/static/storage-upload-without-content-type-allowlist";
 import storageUploadWithoutMaxSize from "./lints/static/storage-upload-without-max-size";
 import tableWithoutInsert from "./lints/static/table-without-insert";
+import ttlFieldNotTimestamp from "./lints/static/ttl-field-not-timestamp";
 import unboundedStringArgument from "./lints/static/unbounded-string-argument";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import unindexedRelationTarget from "./lints/static/unindexed-relation-target";
@@ -109,8 +116,10 @@ export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainerOverride } from "./container-overrides";
 export type { AdvisorContainer } from "./containers";
 export { dedupeCacheKeys } from "./dedupe-cache-keys";
+export type { AdvisorExportSink } from "./export-sinks";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
 export type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
+export type { AdvisorGeoIndexUsage } from "./geo-index-usages";
 export type { AdvisorHttpActionGuard } from "./http-action-guards";
 export type { AdvisorHttpHeaderWrite } from "./http-header-writes";
 export type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
@@ -144,11 +153,14 @@ export { default as containerRuntimeEgressRelaxation } from "./lints/static/cont
 export { default as containerStartEnableInternetOverride } from "./lints/static/container-start-enable-internet-override";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
+export { default as exportSinkMisconfigured } from "./lints/static/export-sink-misconfigured";
 export { default as externalSourceIncrementalNoDeletePath } from "./lints/static/external-source-incremental-no-delete-path";
 export { default as externalSourceOnGlobal } from "./lints/static/external-source-on-global";
 export { default as externalSourceUnscoped } from "./lints/static/external-source-unscoped";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
 export { default as flagGatesSecurityWithUnsafeDefault } from "./lints/static/flag-gates-security-with-unsafe-default";
+export { default as geoIndexFieldNotGeopoint } from "./lints/static/geo-index-field-not-geopoint";
+export { default as geoIndexUnused } from "./lints/static/geo-index-unused";
 export { default as hardcodedSecret } from "./lints/static/hardcoded-secret";
 export { default as httpActionMissingAuthGuard } from "./lints/static/http-action-missing-auth-guard";
 export { default as httpActionResponseHeaderInjection } from "./lints/static/http-action-response-header-injection";
@@ -166,6 +178,8 @@ export { default as maskedRelationLeakViaWith } from "./lints/static/masked-rela
 export { default as mutatorFullRowReplace } from "./lints/static/mutator-full-row-replace";
 export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
 export { default as normalizeIdUsedAsAuthorization } from "./lints/static/normalize-id-used-as-authorization";
+export { default as notifyMissingPushConfig } from "./lints/static/notify-missing-push-config";
+export { default as notifySendOutsideAction } from "./lints/static/notify-send-outside-action";
 export { default as outputProjectionMissingOnPublicRead } from "./lints/static/output-projection-missing-on-public-read";
 export { default as ownerFieldFromArgsNotAuth } from "./lints/static/owner-field-from-args-not-auth";
 export { default as paymentCreateWithoutAuthorize } from "./lints/static/payment-create-without-authorize";
@@ -187,6 +201,7 @@ export { default as relationReferencesUnknownTable } from "./lints/static/relati
 export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table";
 export { default as shapeTargetsGlobalTable } from "./lints/static/shape-targets-global-table";
 export { default as shapeUnknownTable } from "./lints/static/shape-unknown-table";
+export { default as signupMutationWithoutDisposableGating } from "./lints/static/signup-mutation-without-disposable-gating";
 export { default as softDeleteIncludeDeletedFromArgs } from "./lints/static/soft-delete-include-deleted-from-args";
 export { default as sqlInjectionRisk } from "./lints/static/sql-injection-risk";
 export { default as storageGenerateUploadUrlNoContentTypePin } from "./lints/static/storage-generate-upload-url-no-content-type-pin";
@@ -195,6 +210,7 @@ export { default as storagePresignedUrlForPrivateContent } from "./lints/static/
 export { default as storageUploadWithoutContentTypeAllowlist } from "./lints/static/storage-upload-without-content-type-allowlist";
 export { default as storageUploadWithoutMaxSize } from "./lints/static/storage-upload-without-max-size";
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
+export { default as ttlFieldNotTimestamp } from "./lints/static/ttl-field-not-timestamp";
 export { default as unboundedStringArgument } from "./lints/static/unbounded-string-argument";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
 export { default as unindexedRelationTarget } from "./lints/static/unindexed-relation-target";
@@ -209,6 +225,7 @@ export type { AdvisorMaskStrategy } from "./mask-strategies";
 export type { AdvisorMutatorWrite } from "./mutator-writes";
 export type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 export type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
+export type { AdvisorNotifyCall, AdvisorNotifyConfig } from "./notify-calls";
 export type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 export type { AdvisorPaymentWebhook } from "./payment-webhooks";
 export type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
@@ -252,6 +269,10 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     externalSourceOnGlobal,
     externalSourceUnscoped,
     emptyIndex,
+    geoIndexFieldNotGeopoint,
+    geoIndexUnused,
+    exportSinkMisconfigured,
+    ttlFieldNotTimestamp,
     circularFk,
     unindexedForeignKey,
     unindexedRelationTarget,
@@ -274,6 +295,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     containerPublicInternet,
     publicMutationWithoutRatelimit,
     userCreatingMutationWithoutCaptcha,
+    signupMutationWithoutDisposableGating,
     publicArgumentUsesAny,
     unboundedStringArgument,
     hardcodedSecret,
@@ -322,6 +344,8 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     maskedRelationLeakViaWith,
     outputProjectionMissingOnPublicRead,
     normalizeIdUsedAsAuthorization,
+    notifySendOutsideAction,
+    notifyMissingPushConfig,
     plaintextSecretInWranglerVariables,
 ];
 
