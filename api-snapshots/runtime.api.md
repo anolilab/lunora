@@ -2180,6 +2180,7 @@ interface WorkerOptions {
     passThroughOnException?: boolean;
     queryCoordinator?: QueryCoordinator;
     queue?: QueueConsumerHandler;
+    queueHandler?: QueueForwardHandler;
     replicaReads?: boolean;
     requireEphemeralWsToken?: boolean;
     resolveIdentity?: (request: Request, env: unknown) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;

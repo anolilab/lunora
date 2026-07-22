@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { CreditsLedgerPort } from "../src/billing/overage";
-import { includedUsageFor, overageCreditsOwed, planOverageDebit, reconcileOverage } from "../src/billing/overage";
+import type { CreditsLedgerPort, OverageFleetPorts, OverageOrgInput } from "../src/billing/overage";
+import { includedUsageFor, overageCreditsOwed, planOverageDebit, reconcileAllOverages, reconcileOverage } from "../src/billing/overage";
 
 /** Prepaid-credits overage billing on Creem (GAPS.md C3 follow-up). */
 
@@ -92,5 +92,78 @@ describe(reconcileOverage, () => {
         };
 
         await expect(reconcileOverage({ ...input, usage: { cpuMs: 0, requests: 1 } }, ledger)).resolves.toStrictEqual({ status: "none" });
+    });
+
+    it("commits the watermark BEFORE debiting (fail-safe: under-bill, never double-charge)", async () => {
+        const order: string[] = [];
+        const ledger: CreditsLedgerPort = {
+            balance: () => Promise.resolve(500),
+            debit: () => {
+                order.push("debit");
+
+                return Promise.resolve();
+            },
+        };
+        const commitWatermark = (owed: number): Promise<void> => {
+            order.push(`watermark:${String(owed)}`);
+
+            return Promise.resolve();
+        };
+
+        await reconcileOverage(input, ledger, commitWatermark);
+
+        expect(order).toStrictEqual(["watermark:100", "debit"]);
+    });
+
+    it("does not debit when the pre-debit watermark commit fails (clean retry next run)", async () => {
+        const ledger: CreditsLedgerPort = { balance: () => Promise.resolve(500), debit: () => Promise.reject(new Error("must not be called")) };
+
+        await expect(reconcileOverage(input, ledger, () => Promise.reject(new Error("d1 down")))).rejects.toThrow("d1 down");
+    });
+});
+
+describe(reconcileAllOverages, () => {
+    const org = (id: string, requests: number, alreadyDebitedCredits = 0): OverageOrgInput => ({
+        alreadyDebitedCredits,
+        organizationId: id,
+        periodStart: 500,
+        plan: "pro",
+        usage: { cpuMs: 0, requests },
+    });
+
+    const ports = (balance: null | number, over: Partial<OverageFleetPorts> = {}): OverageFleetPorts => ({
+        advanceWatermark: () => Promise.resolve(),
+        ledger: { balance: () => Promise.resolve(balance), debit: () => Promise.resolve() },
+        onExhausted: () => Promise.resolve(),
+        onRecovered: () => Promise.resolve(),
+        ...over,
+    });
+
+    it("fires onRecovered after a successful debit (self-heal: covered org un-suspended)", async () => {
+        const onRecovered = vi.fn(() => Promise.resolve());
+        // 11M requests on pro (10M included) → 100 credits owed; balance covers it.
+        const summary = await reconcileAllOverages([org("org_a", 11_000_000)], ports(500, { onRecovered }));
+
+        expect(summary).toStrictEqual({ debitedCredits: 100, debitedOrgs: 1, exhausted: 0 });
+        expect(onRecovered).toHaveBeenCalledWith("org_a");
+    });
+
+    it("fires onRecovered when nothing is owed (org in good standing)", async () => {
+        const onRecovered = vi.fn(() => Promise.resolve());
+        const onExhausted = vi.fn(() => Promise.resolve());
+        await reconcileAllOverages([org("org_a", 1)], ports(0, { onExhausted, onRecovered }));
+
+        expect(onRecovered).toHaveBeenCalledWith("org_a");
+        expect(onExhausted).not.toHaveBeenCalled();
+    });
+
+    it("suspends (not recovers) when the balance can't cover the owed overage", async () => {
+        const onRecovered = vi.fn(() => Promise.resolve());
+        const onExhausted = vi.fn(() => Promise.resolve());
+        const summary = await reconcileAllOverages([org("org_a", 11_000_000)], ports(50, { onExhausted, onRecovered }));
+
+        expect(summary.exhausted).toBe(1);
+        expect(onExhausted).toHaveBeenCalledWith("org_a");
+        expect(onRecovered).not.toHaveBeenCalled();
     });
 });

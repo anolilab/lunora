@@ -7,6 +7,7 @@ import { TokenBucket } from "../src/deploy/token-bucket";
 import type { Provisioner, TenantDeploymentSpec } from "../src/provision";
 
 const spec: TenantDeploymentSpec = {
+    alias: "org__project",
     bindings: { d1: { binding: "DB" } },
     bundle: new ArrayBuffer(8),
     cell: "cell-1",

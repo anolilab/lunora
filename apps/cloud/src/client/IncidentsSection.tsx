@@ -5,10 +5,23 @@ import { useRef, useState } from "react";
 import { api } from "../../lunora/_generated/api.js";
 import type { Id } from "../../lunora/_generated/dataModel.js";
 import { AsyncList } from "./AsyncList";
+import { CrossTabLink } from "./CrossTabLink";
 import type { OrgId } from "./types";
 
 interface IncidentsSectionProps {
+    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
     organizationId: OrgId;
+}
+
+/** The structured investigation result the runner produces (mirrors the query view). */
+interface InvestigationView {
+    by: "deterministic" | "llm";
+    confidence: "high" | "low" | "medium";
+    evidenceNote: string;
+    relatedTraceIds: string[];
+    rootCauseHypothesis: string;
+    suggestedRemediation: string;
+    summary: string;
 }
 
 /** Human labels for the incident kinds the ingest opens. */
@@ -19,28 +32,76 @@ const KIND_LABELS: Record<"crash_loop" | "error_spike" | "oom", string> = {
 };
 
 /**
+ * The rendered investigation panel — summary, root-cause hypothesis, suggested
+ * remediation, a confidence + provenance badge, and cross-tab links to the
+ * related traces (the shared `CrossTabLink` deep-link, same as Issues/Logs).
+ */
+const InvestigationPanel = ({
+    onDismiss,
+    onOpenTab,
+    result,
+    title,
+}: {
+    onDismiss: () => void;
+    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
+    result: InvestigationView;
+    title: string;
+}): ReactElement => (
+    <div className="callout">
+        <p>
+            <strong>Investigation — {title}</strong> <span className="badge">{result.by === "llm" ? "AI" : "heuristic"}</span>{" "}
+            <span className="badge">confidence: {result.confidence}</span>
+        </p>
+        <p>{result.summary}</p>
+        <p>
+            <strong>Likely root cause:</strong> {result.rootCauseHypothesis}
+        </p>
+        <p>
+            <strong>Suggested remediation:</strong> {result.suggestedRemediation}
+        </p>
+        <p className="muted">{result.evidenceNote}</p>
+        {result.relatedTraceIds.length > 0 && onOpenTab ? (
+            <p>
+                <strong>Related traces:</strong>{" "}
+                {result.relatedTraceIds.map((traceId) => (
+                    <CrossTabLink key={traceId} onOpenTab={onOpenTab} target="traces" traceId={traceId} variant="inline">
+                        {traceId.slice(0, 8)}
+                    </CrossTabLink>
+                ))}
+            </p>
+        ) : null}
+        <button className="link" onClick={onDismiss} type="button">
+            Dismiss
+        </button>
+    </div>
+);
+
+/**
  * Cloud Observability "Incidents" — higher-level container failures (crash-loop /
  * OOM / error-spike) opened from lifecycle telemetry. Members-only, gated behind
- * the `logStreams` entitlement. Each incident can be AI-triaged on demand
- * (`incidents.triage` → Workers AI): a root-cause summary + next step.
+ * the `logStreams` entitlement. Each incident can be **investigated** on demand
+ * (`incidents.investigate` → the pluggable agentic runner): it gathers a
+ * read-only evidence bundle (related error spans + correlated logs) and returns a
+ * structured result — summary, root-cause hypothesis, suggested remediation,
+ * confidence, and related-trace links — which is also persisted on the incident.
  */
-export const IncidentsSection = ({ organizationId }: IncidentsSectionProps): ReactElement => {
+export const IncidentsSection = ({ onOpenTab, organizationId }: IncidentsSectionProps): ReactElement => {
     const client = useLunora();
     const entitlements = useQuery(api.billing.entitlements, { organizationId });
     const gated = entitlements ? !entitlements.features.includes("logStreams") : false;
     const incidents = useQuery(api.incidents.list, gated ? "skip" : { organizationId });
 
-    const [triage, setTriage] = useState<{ summary: string; title: string } | null>(null);
+    const [investigation, setInvestigation] = useState<{ result: InvestigationView; title: string } | null>(null);
     const [busyId, setBusyId] = useState<Id<"incidents"> | null>(null);
     const [error, setError] = useState<null | string>(null);
 
-    // Only the latest triage request may write state. Without this, triaging A and
+    // Only the latest request may write state. Without this, investigating A and
     // then B races: whichever resolves first clears `busyId`, re-enabling the other
     // row's button while its (billed) call is still in flight — and a slow A landing
-    // after B would overwrite B's summary with a stale one.
+    // after B would overwrite B's result with a stale one.
     const latestRequest = useRef(0);
 
-    const runTriage = (id: Id<"incidents">, title: string): void => {
+    const runInvestigation = (id: Id<"incidents">, title: string): void => {
         const request = latestRequest.current + 1;
 
         latestRequest.current = request;
@@ -53,20 +114,20 @@ export const IncidentsSection = ({ organizationId }: IncidentsSectionProps): Rea
         // silently opts the whole component out of auto-memoization.
         void (async () => {
             try {
-                const { summary } = await client.action(api.incidents.triage, { id, organizationId });
+                const result = await client.action(api.incidents.investigate, { id, organizationId });
 
                 if (latestRequest.current !== request) {
                     return;
                 }
 
-                setTriage({ summary, title });
+                setInvestigation({ result, title });
                 setBusyId(null);
             } catch (error_: unknown) {
                 if (latestRequest.current !== request) {
                     return;
                 }
 
-                setError(error_ instanceof Error ? error_.message : "triage failed");
+                setError(error_ instanceof Error ? error_.message : "investigation failed");
                 setBusyId(null);
             }
         })();
@@ -89,22 +150,15 @@ export const IncidentsSection = ({ organizationId }: IncidentsSectionProps): Rea
                     {error}
                 </p>
             ) : null}
-            {triage ? (
-                <div className="callout">
-                    <p>
-                        <strong>AI triage — {triage.title}</strong>
-                    </p>
-                    <p>{triage.summary}</p>
-                    <button
-                        className="link"
-                        onClick={() => {
-                            setTriage(null);
-                        }}
-                        type="button"
-                    >
-                        Dismiss
-                    </button>
-                </div>
+            {investigation ? (
+                <InvestigationPanel
+                    onDismiss={() => {
+                        setInvestigation(null);
+                    }}
+                    onOpenTab={onOpenTab}
+                    result={investigation.result}
+                    title={investigation.title}
+                />
             ) : null}
             <AsyncList
                 empty="No incidents — container crash-loops and OOMs will appear here."
@@ -118,7 +172,7 @@ export const IncidentsSection = ({ organizationId }: IncidentsSectionProps): Rea
                                 <th>Container</th>
                                 <th>Events</th>
                                 <th>Status</th>
-                                <th>Triage</th>
+                                <th>Investigation</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -137,12 +191,23 @@ export const IncidentsSection = ({ organizationId }: IncidentsSectionProps): Rea
                                             className="link"
                                             disabled={busyId === incident._id}
                                             onClick={() => {
-                                                runTriage(incident._id, incident.title);
+                                                runInvestigation(incident._id, incident.title);
                                             }}
                                             type="button"
                                         >
-                                            {busyId === incident._id ? "Triaging…" : "Triage"}
+                                            {busyId === incident._id ? "Investigating…" : incident.investigatedAt ? "Re-investigate" : "Investigate"}
                                         </button>
+                                        {incident.investigation ? (
+                                            <button
+                                                className="link"
+                                                onClick={() => {
+                                                    setInvestigation({ result: incident.investigation as InvestigationView, title: incident.title });
+                                                }}
+                                                type="button"
+                                            >
+                                                View
+                                            </button>
+                                        ) : null}
                                     </td>
                                 </tr>
                             ))}

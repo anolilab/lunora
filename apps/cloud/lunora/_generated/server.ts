@@ -24,6 +24,7 @@ import type {
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
 import type { LunoraAi } from "@lunora/ai";
 import type { LunoraPayment } from "@lunora/payment";
+import type * as lunoraEnvContract from "../env.js";
 
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
@@ -48,6 +49,9 @@ export interface CloudflareBindings {
 
 /** Alias for {@link CloudflareBindings} — the typed shape of `env`. */
 export type Env = CloudflareBindings;
+
+/** This app's declared env contract (`defineEnv` in `lunora/env.ts`) — the validated, coercion-aware shape of `ctx.env`. */
+export type LunoraEnv = ReturnType<typeof lunoraEnvContract.env>;
 
 /**
  * Project-typed contexts. The base contexts from `@lunora/server` are
@@ -76,24 +80,30 @@ type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) 
  */
 type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
 
-export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
+export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage" | "env"> {
     readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
+    /** Validated, typed environment declared by `defineEnv` in `lunora/env.ts` — parsed & coercion-aware config values (`ctx.env.STRIPE_KEY`); a missing or invalid value throws at read time. */
+    readonly env: LunoraEnv;
 }
 
-export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
+export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage" | "env"> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
+    /** Validated, typed environment declared by `defineEnv` in `lunora/env.ts` — parsed & coercion-aware config values (`ctx.env.STRIPE_KEY`); a missing or invalid value throws at read time. */
+    readonly env: LunoraEnv;
 }
 
-export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
+export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage" | "env"> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;
     readonly ai: LunoraAi;
     readonly payments: LunoraPayment;
+    /** Validated, typed environment declared by `defineEnv` in `lunora/env.ts` — parsed & coercion-aware config values (`ctx.env.STRIPE_KEY`); a missing or invalid value throws at read time. */
+    readonly env: LunoraEnv;
 }
 
 /**

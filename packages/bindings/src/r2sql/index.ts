@@ -19,7 +19,7 @@ export type { OrderTerm } from "./order";
 export { asc, desc, renderOrderTerm } from "./order";
 export type { Condition, Queryable, QueryExecutor } from "./query";
 export { default as SetOperation } from "./set-operation";
-export { isSql, joinSql, lit, raw, Sql, sql, toText } from "./sql";
+export { ident, isSql, joinSql, lit, raw, Sql, sql, tableRef, toText } from "./sql";
 export type { R2SqlColumn, R2SqlConfig, R2SqlExplainOptions, R2SqlResult } from "./types";
 export type { OverSpec } from "./window";
 export { fn, WindowFunction } from "./window";
