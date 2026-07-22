@@ -25,6 +25,13 @@ export interface TenantBindingSpec {
 
 /** A single managed-tier deployment to converge into a dispatch namespace. */
 export interface TenantDeploymentSpec {
+    /**
+     * The project's stable label (its public subdomain), shared by every
+     * version of the project. Per-tenant D1/R2 are named from this — NOT from
+     * the versioned {@link scriptName} — so a tenant's `.global()` data persists
+     * across deploys and a rollback sees the same database.
+     */
+    alias: string;
     /** Bindings to attach in the script-upload metadata. */
     bindings: TenantBindingSpec;
     /** Prebuilt worker bundle (output of the app's Vite pipeline — never built here). */
@@ -37,8 +44,12 @@ export interface TenantDeploymentSpec {
     scriptName: string;
     /** Per-deployment secrets, applied via the WfP script-secrets API. */
     secrets: Record<string, string>;
+    /** Service names to set as `tail_consumers` (e.g. the log-tail worker). */
+    tailConsumers?: string[];
     /** Lifecycle tags: `org:…`, `project:…`, `env:…`, `plan:…` (§2.1). */
     tags: string[];
+    /** Plain (non-secret) env vars, e.g. `LUNORA_OTLP_ENDPOINT`. */
+    vars?: Record<string, string>;
 }
 
 export interface ProvisionResult {
@@ -46,6 +57,15 @@ export interface ProvisionResult {
     scriptName: string;
     url: string;
 }
+
+/**
+ * Per-tenant resource names, derived from the (unique, versioned) script id.
+ * The provisioner creates resources under these names and teardown deletes them
+ * under the same names — the convention is the contract, so both sides call
+ * these helpers rather than inlining the suffix (no drift).
+ */
+export const tenantD1Name = (scriptName: string): string => `${scriptName}-db`;
+export const tenantR2Bucket = (scriptName: string): string => `${scriptName}-files`;
 
 export interface DestroyRef {
     dispatchNamespace: string;
@@ -84,13 +104,20 @@ export const createCloudflareProvisioner = (options: CloudflareProvisionerOption
             const bindings: ScriptBinding[] = [];
 
             if (spec.bindings.d1) {
-                const { uuid } = await api.createD1Database(`${spec.scriptName}-db`);
+                // Per-project (alias-keyed), find-or-create: a re-deploy of the
+                // same project reuses its existing database so tenant `.global()`
+                // data persists across versions.
+                const databaseName = tenantD1Name(spec.alias);
+                const existing = await api.findD1DatabaseByName(databaseName);
+                const uuid = existing?.uuid ?? (await api.createD1Database(databaseName)).uuid;
 
                 bindings.push({ id: uuid, name: spec.bindings.d1.binding, type: "d1" });
             }
 
             if (spec.bindings.r2) {
-                const bucketName = `${spec.scriptName}-files`;
+                // Per-project (alias-keyed); createR2Bucket tolerates "already
+                // exists" so a re-deploy reuses the project's bucket.
+                const bucketName = tenantR2Bucket(spec.alias);
 
                 await api.createR2Bucket(bucketName);
                 bindings.push({ bucket_name: bucketName, name: spec.bindings.r2.binding, type: "r2_bucket" });
@@ -109,7 +136,9 @@ export const createCloudflareProvisioner = (options: CloudflareProvisionerOption
                 namespace: spec.dispatchNamespace,
                 newSqliteClasses: durableObjects.map((durableObject) => durableObject.className),
                 scriptName: spec.scriptName,
+                ...(spec.tailConsumers ? { tailConsumers: spec.tailConsumers } : {}),
                 tags: spec.tags,
+                ...(spec.vars ? { vars: spec.vars } : {}),
             });
 
             for (const [name, text] of Object.entries(spec.secrets)) {

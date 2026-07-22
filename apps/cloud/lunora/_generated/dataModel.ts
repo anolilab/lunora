@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alerts" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alertRuleState" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -46,6 +46,7 @@ export interface Doc_cells {
     jurisdiction?: string;
     name: string;
     status: unknown;
+    usageReadAtMs?: number;
 }
 
 export interface Doc_organizations {
@@ -89,6 +90,8 @@ export interface Doc_deployments {
     _id: Id<"deployments">;
     _creationTime: number;
     adminToken?: string;
+    adminTokenCiphertext?: string;
+    adminTokenIv?: string;
     alias?: string;
     branch?: string;
     cronSpecs?: Array<string>;
@@ -112,12 +115,15 @@ export interface Doc_deployments {
     supersededAt?: number;
     failedAt?: number;
     destroyedAt?: number;
+    teardownAt?: number;
 }
 
 export interface Doc_deployKeys {
     _id: Id<"deployKeys">;
     _creationTime: number;
+    capability?: "deploy" | "ingest";
     createdAt: number;
+    encryptedSecret?: { ciphertext: string; iv: string };
     hashedKey: string;
     lastUsedAt?: number;
     name: string;
@@ -150,6 +156,34 @@ export interface Doc_tenantLogs {
     spanId?: string;
     traceId?: string;
     userId?: string;
+}
+
+export interface Doc_observations {
+    _id: Id<"observations">;
+    _creationTime: number;
+    attributes?: Record<string, string>;
+    completionTokens?: number;
+    createdAt: number;
+    deploymentId?: Id<"deployments">;
+    durationMs: number;
+    endedAt: number;
+    evaluations?: Array<{ label: string | undefined; name: string; score: number }>;
+    functionPath?: string;
+    input?: string;
+    kind: "container" | "generation" | "worker";
+    level: "error" | "info";
+    model?: string;
+    name: string;
+    organizationId: Id<"organizations">;
+    output?: string;
+    parentSpanId?: string;
+    promptTokens?: number;
+    serviceName?: string;
+    sessionId?: string;
+    spanId: string;
+    startedAt: number;
+    statusMessage?: string;
+    traceId: string;
 }
 
 export interface Doc_githubInstallations {
@@ -253,6 +287,7 @@ export interface Doc_issues {
     lastSeen: number;
     organizationId: Id<"organizations">;
     sampleMessage: string;
+    sampleTraceId?: string;
     status: "open" | "resolved";
     title: string;
     updatedAt: number;
@@ -268,6 +303,8 @@ export interface Doc_incidents {
     deploymentId?: Id<"deployments">;
     hash: string;
     instance?: string;
+    investigatedAt?: number;
+    investigation?: { by: "deterministic" | "llm"; confidence: "high" | "medium" | "low"; evidenceNote: string; relatedTraceIds: Array<string>; rootCauseHypothesis: string; suggestedRemediation: string; summary: string };
     kind: "crash_loop" | "oom" | "error_spike";
     lastSeen: number;
     openedAt: number;
@@ -280,14 +317,29 @@ export interface Doc_incidents {
 export interface Doc_alertRules {
     _id: Id<"alertRules">;
     _creationTime: number;
-    channel: "email" | "webhook";
+    channel: "email" | "webhook" | "slack" | "pagerduty";
+    comparator?: "gt" | "lt";
     createdAt: number;
     destination: string;
     enabled: boolean;
+    functionPath?: string;
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
     threshold: number;
+    updatedAt: number;
+    windowMinutes?: number;
+}
+
+export interface Doc_alertRuleState {
+    _id: Id<"alertRuleState">;
+    _creationTime: number;
+    createdAt: number;
+    firing: boolean;
+    lastEvaluatedAt: number;
+    lastValue: number;
+    organizationId: Id<"organizations">;
+    ruleId: Id<"alertRules">;
     updatedAt: number;
 }
 
@@ -295,7 +347,7 @@ export interface Doc_alerts {
     _id: Id<"alerts">;
     _creationTime: number;
     body: string;
-    channel: "email" | "webhook";
+    channel: "email" | "webhook" | "slack" | "pagerduty";
     createdAt: number;
     deliveredAt?: number;
     destination: string;
@@ -304,7 +356,31 @@ export interface Doc_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
+    updatedAt: number;
+}
+
+export interface Doc_uptimeChecks {
+    _id: Id<"uptimeChecks">;
+    _creationTime: number;
+    createdAt: number;
+    deploymentId: Id<"deployments">;
+    error?: string;
+    latencyMs?: number;
+    ok: boolean;
+    organizationId: Id<"organizations">;
+    statusCode?: number;
+}
+
+export interface Doc_uptimeState {
+    _id: Id<"uptimeState">;
+    _creationTime: number;
+    consecutiveFailures: number;
+    createdAt: number;
+    deploymentId: Id<"deployments">;
+    lastCheckedAt: number;
+    lastOk: boolean;
+    organizationId: Id<"organizations">;
     updatedAt: number;
 }
 
@@ -318,6 +394,16 @@ export interface Doc_secrets {
     name: string;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
+    updatedAt: number;
+}
+
+export interface Doc_dashboards {
+    _id: Id<"dashboards">;
+    _creationTime: number;
+    createdAt: number;
+    name: string;
+    organizationId: Id<"organizations">;
+    panels: Array<{ config: { filter: string | undefined; metricName: string | undefined; stat: "last" | "first" | "count" | undefined }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }>;
     updatedAt: number;
 }
 
@@ -392,6 +478,7 @@ export interface DataModel {
     deployKeys: Doc_deployKeys;
     overageDebits: Doc_overageDebits;
     tenantLogs: Doc_tenantLogs;
+    observations: Doc_observations;
     githubInstallations: Doc_githubInstallations;
     builds: Doc_builds;
     buildLogs: Doc_buildLogs;
@@ -402,8 +489,12 @@ export interface DataModel {
     issues: Doc_issues;
     incidents: Doc_incidents;
     alertRules: Doc_alertRules;
+    alertRuleState: Doc_alertRuleState;
     alerts: Doc_alerts;
+    uptimeChecks: Doc_uptimeChecks;
+    uptimeState: Doc_uptimeState;
     secrets: Doc_secrets;
+    dashboards: Doc_dashboards;
     customers: Doc_customers;
     events: Doc_events;
     paymentSessions: Doc_paymentSessions;
@@ -426,6 +517,7 @@ export interface IndexNamesByTable {
     deployKeys: "by_org" | "by_hash";
     overageDebits: "by_org_period";
     tenantLogs: "by_trace" | "by_script_time" | "by_org";
+    observations: "by_org_deployment_started" | "by_org_session" | "by_org_started" | "by_trace" | "by_org";
     githubInstallations: "by_org" | "by_installation";
     builds: "by_project_commit" | "by_project";
     buildLogs: "by_build";
@@ -436,8 +528,12 @@ export interface IndexNamesByTable {
     issues: "by_org_culprit" | "by_org_hash" | "by_org";
     incidents: "by_org_hash" | "by_org";
     alertRules: "by_org";
+    alertRuleState: "by_org" | "by_rule";
     alerts: "by_status" | "by_org";
+    uptimeChecks: "by_org_deployment" | "by_org";
+    uptimeState: "by_org" | "by_deployment";
     secrets: "by_project_env_name" | "by_project";
+    dashboards: "by_org";
     customers: "by_reference" | "by_provider_customer";
     events: "by_provider_event";
     paymentSessions: "by_reference" | "by_provider_session";
@@ -457,6 +553,7 @@ export interface SearchIndexNamesByTable {
     deployKeys: never;
     overageDebits: never;
     tenantLogs: never;
+    observations: never;
     githubInstallations: never;
     builds: never;
     buildLogs: never;
@@ -467,8 +564,12 @@ export interface SearchIndexNamesByTable {
     issues: never;
     incidents: never;
     alertRules: never;
+    alertRuleState: never;
     alerts: never;
+    uptimeChecks: never;
+    uptimeState: never;
     secrets: never;
+    dashboards: never;
     customers: never;
     events: never;
     paymentSessions: never;
@@ -488,6 +589,7 @@ export interface RankIndexNamesByTable {
     deployKeys: never;
     overageDebits: never;
     tenantLogs: never;
+    observations: never;
     githubInstallations: never;
     builds: never;
     buildLogs: never;
@@ -498,8 +600,12 @@ export interface RankIndexNamesByTable {
     issues: never;
     incidents: never;
     alertRules: never;
+    alertRuleState: never;
     alerts: never;
+    uptimeChecks: never;
+    uptimeState: never;
     secrets: never;
+    dashboards: never;
     customers: never;
     events: never;
     paymentSessions: never;
@@ -521,6 +627,7 @@ export interface Insert_cells {
     jurisdiction?: string;
     name: string;
     status: unknown;
+    usageReadAtMs?: number;
 }
 
 export interface Insert_organizations {
@@ -564,6 +671,8 @@ export interface Insert_deployments {
     _id?: Id<"deployments">;
     _creationTime?: number;
     adminToken?: string;
+    adminTokenCiphertext?: string;
+    adminTokenIv?: string;
     alias?: string;
     branch?: string;
     cronSpecs?: Array<string>;
@@ -587,12 +696,15 @@ export interface Insert_deployments {
     supersededAt?: number;
     failedAt?: number;
     destroyedAt?: number;
+    teardownAt?: number;
 }
 
 export interface Insert_deployKeys {
     _id?: Id<"deployKeys">;
     _creationTime?: number;
+    capability?: "deploy" | "ingest";
     createdAt: number;
+    encryptedSecret?: { ciphertext: string; iv: string };
     hashedKey: string;
     lastUsedAt?: number;
     name: string;
@@ -625,6 +737,34 @@ export interface Insert_tenantLogs {
     spanId?: string;
     traceId?: string;
     userId?: string;
+}
+
+export interface Insert_observations {
+    _id?: Id<"observations">;
+    _creationTime?: number;
+    attributes?: Record<string, string>;
+    completionTokens?: number;
+    createdAt: number;
+    deploymentId?: Id<"deployments">;
+    durationMs: number;
+    endedAt: number;
+    evaluations?: Array<{ label: string | undefined; name: string; score: number }>;
+    functionPath?: string;
+    input?: string;
+    kind: "container" | "generation" | "worker";
+    level: "error" | "info";
+    model?: string;
+    name: string;
+    organizationId: Id<"organizations">;
+    output?: string;
+    parentSpanId?: string;
+    promptTokens?: number;
+    serviceName?: string;
+    sessionId?: string;
+    spanId: string;
+    startedAt: number;
+    statusMessage?: string;
+    traceId: string;
 }
 
 export interface Insert_githubInstallations {
@@ -728,6 +868,7 @@ export interface Insert_issues {
     lastSeen: number;
     organizationId: Id<"organizations">;
     sampleMessage: string;
+    sampleTraceId?: string;
     status: "open" | "resolved";
     title: string;
     updatedAt: number;
@@ -743,6 +884,8 @@ export interface Insert_incidents {
     deploymentId?: Id<"deployments">;
     hash: string;
     instance?: string;
+    investigatedAt?: number;
+    investigation?: { by: "deterministic" | "llm"; confidence: "high" | "medium" | "low"; evidenceNote: string; relatedTraceIds: Array<string>; rootCauseHypothesis: string; suggestedRemediation: string; summary: string };
     kind: "crash_loop" | "oom" | "error_spike";
     lastSeen: number;
     openedAt: number;
@@ -755,14 +898,29 @@ export interface Insert_incidents {
 export interface Insert_alertRules {
     _id?: Id<"alertRules">;
     _creationTime?: number;
-    channel: "email" | "webhook";
+    channel: "email" | "webhook" | "slack" | "pagerduty";
+    comparator?: "gt" | "lt";
     createdAt: number;
     destination: string;
     enabled: boolean;
+    functionPath?: string;
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
     threshold: number;
+    updatedAt: number;
+    windowMinutes?: number;
+}
+
+export interface Insert_alertRuleState {
+    _id?: Id<"alertRuleState">;
+    _creationTime?: number;
+    createdAt: number;
+    firing: boolean;
+    lastEvaluatedAt: number;
+    lastValue: number;
+    organizationId: Id<"organizations">;
+    ruleId: Id<"alertRules">;
     updatedAt: number;
 }
 
@@ -770,7 +928,7 @@ export interface Insert_alerts {
     _id?: Id<"alerts">;
     _creationTime?: number;
     body: string;
-    channel: "email" | "webhook";
+    channel: "email" | "webhook" | "slack" | "pagerduty";
     createdAt: number;
     deliveredAt?: number;
     destination: string;
@@ -779,7 +937,31 @@ export interface Insert_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
+    updatedAt: number;
+}
+
+export interface Insert_uptimeChecks {
+    _id?: Id<"uptimeChecks">;
+    _creationTime?: number;
+    createdAt: number;
+    deploymentId: Id<"deployments">;
+    error?: string;
+    latencyMs?: number;
+    ok: boolean;
+    organizationId: Id<"organizations">;
+    statusCode?: number;
+}
+
+export interface Insert_uptimeState {
+    _id?: Id<"uptimeState">;
+    _creationTime?: number;
+    consecutiveFailures: number;
+    createdAt: number;
+    deploymentId: Id<"deployments">;
+    lastCheckedAt: number;
+    lastOk: boolean;
+    organizationId: Id<"organizations">;
     updatedAt: number;
 }
 
@@ -793,6 +975,16 @@ export interface Insert_secrets {
     name: string;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
+    updatedAt: number;
+}
+
+export interface Insert_dashboards {
+    _id?: Id<"dashboards">;
+    _creationTime?: number;
+    createdAt: number;
+    name: string;
+    organizationId: Id<"organizations">;
+    panels: Array<{ config: { filter: string | undefined; metricName: string | undefined; stat: "last" | "first" | "count" | undefined }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }>;
     updatedAt: number;
 }
 
@@ -868,6 +1060,7 @@ export interface InsertModel {
     deployKeys: Insert_deployKeys;
     overageDebits: Insert_overageDebits;
     tenantLogs: Insert_tenantLogs;
+    observations: Insert_observations;
     githubInstallations: Insert_githubInstallations;
     builds: Insert_builds;
     buildLogs: Insert_buildLogs;
@@ -878,8 +1071,12 @@ export interface InsertModel {
     issues: Insert_issues;
     incidents: Insert_incidents;
     alertRules: Insert_alertRules;
+    alertRuleState: Insert_alertRuleState;
     alerts: Insert_alerts;
+    uptimeChecks: Insert_uptimeChecks;
+    uptimeState: Insert_uptimeState;
     secrets: Insert_secrets;
+    dashboards: Insert_dashboards;
     customers: Insert_customers;
     events: Insert_events;
     paymentSessions: Insert_paymentSessions;
@@ -914,6 +1111,7 @@ export interface Relations {
     deployKeys: {};
     overageDebits: {};
     tenantLogs: {};
+    observations: {};
     githubInstallations: {};
     builds: {};
     buildLogs: {};
@@ -924,8 +1122,12 @@ export interface Relations {
     issues: {};
     incidents: {};
     alertRules: {};
+    alertRuleState: {};
     alerts: {};
+    uptimeChecks: {};
+    uptimeState: {};
     secrets: {};
+    dashboards: {};
     customers: {};
     events: {};
     paymentSessions: {};
