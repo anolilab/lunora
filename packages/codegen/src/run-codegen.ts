@@ -569,6 +569,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         containerCount: containers.length,
         cronCount: crons.length,
         dependencies,
+        // Payments gates on the store tables the panel reads being declared, not on a
+        // bare `@lunora/payment` dependency (which may be present only to reuse the
+        // package's pure webhook helpers) — see `StudioFeatureSignals.hasPaymentTables`.
+        hasPaymentTables: schema.tables.some((table) => table.name === "subscriptions") && schema.tables.some((table) => table.name === "events"),
         queueCount: queues.length,
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
         storageRuleCount: storageRulesMetadata.rules.length,
