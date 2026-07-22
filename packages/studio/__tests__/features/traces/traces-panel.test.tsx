@@ -7,7 +7,7 @@ import { filterTraces, formatSpanDuration, spanBar } from "../../../src/features
 import { TracesPanel } from "../../../src/features/traces/traces-panel";
 import type { TraceSpan, TraceSummary } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
-import { readPendingTraceFilter, writePendingTraceFilter } from "../../../src/lib/trace-handoff";
+import { clearPendingTraceFilter, peekPendingTraceFilter, writePendingTraceFilter } from "../../../src/lib/trace-handoff";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -389,14 +389,19 @@ describe("exemplar hand-off", () => {
         sessionStorage.clear();
     });
 
-    it("round-trips a pending filter and clears it on read (one-shot)", () => {
-        expect.assertions(2);
+    it("peeks a pending filter purely, then clears it one-shot", () => {
+        expect.assertions(3);
 
         writePendingTraceFilter({ shardKey: "room-9", traceId: "trace-send" });
 
-        expect(readPendingTraceFilter()).toStrictEqual({ shardKey: "room-9", traceId: "trace-send" });
-        // Cleared after the first read, so a later manual visit isn't re-filtered.
-        expect(readPendingTraceFilter()).toBeUndefined();
+        // Peek is pure — repeatable until explicitly cleared (safe in a render).
+        expect(peekPendingTraceFilter()).toStrictEqual({ shardKey: "room-9", traceId: "trace-send" });
+        expect(peekPendingTraceFilter()).toStrictEqual({ shardKey: "room-9", traceId: "trace-send" });
+
+        // Consumed on mount, so a later manual visit isn't re-filtered.
+        clearPendingTraceFilter();
+
+        expect(peekPendingTraceFilter()).toBeUndefined();
     });
 
     it("seeds the search AND the shard from the hand-off on mount", async () => {

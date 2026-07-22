@@ -18,7 +18,7 @@ import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import type { PendingTraceFilter } from "../../lib/trace-handoff";
-import { readPendingTraceFilter } from "../../lib/trace-handoff";
+import { clearPendingTraceFilter, peekPendingTraceFilter } from "../../lib/trace-handoff";
 import { cn } from "../../lib/utils";
 import { filterTraces, formatSpanDuration, spanBar } from "./trace-geometry";
 
@@ -209,14 +209,23 @@ export const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement
 
     // Apply a one-shot exemplar hand-off (a metric's Trace link): seed the search
     // with the trace id AND switch to the shard it was recorded on, so an exemplar
-    // opened from a non-root shard searches the right ring. Read once, in a lazy
-    // state initializer rather than an effect — the studio is a client-rendered SPA
-    // and the read is SSR-guarded, so this avoids a synchronous setState-in-effect.
-    const [pending] = useState<PendingTraceFilter | undefined>(readPendingTraceFilter);
+    // opened from a non-root shard searches the right ring. The read is a PURE peek
+    // (no store mutation), so it is safe in a lazy initializer — a render stays pure,
+    // and a double-invoked initializer under StrictMode is harmless. The one-shot
+    // clear lives in the mount effect below, not here.
+    const [pending] = useState<PendingTraceFilter | undefined>(peekPendingTraceFilter);
 
     const [shardKey, setShardKey] = useState<string>(pending?.shardKey !== undefined && pending.shardKey !== "" ? pending.shardKey : (initialShardKey ?? ""));
     const [search, setSearch] = useState<string>(pending?.traceId ?? "");
     const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+
+    // Consume the hand-off on mount (a committed boundary): clear the store so a
+    // later manual visit isn't re-filtered. Clearing needs no setState, so this
+    // doesn't trip the set-state-in-effect rule, and keeping it out of render is
+    // what lets the peek above stay pure.
+    useEffect(() => {
+        clearPendingTraceFilter();
+    }, []);
 
     // Debounced so typing a key settles before refetching (and re-subscribing)
     // rather than firing per keystroke — mirrors the Logs and Issues panels.
