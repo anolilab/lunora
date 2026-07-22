@@ -299,6 +299,8 @@ export interface Doc_incidents {
     deploymentId?: Id<"deployments">;
     hash: string;
     instance?: string;
+    investigatedAt?: number;
+    investigation?: { by: "deterministic" | "llm"; confidence: "high" | "medium" | "low"; evidenceNote: string; relatedTraceIds: Array<string>; rootCauseHypothesis: string; suggestedRemediation: string; summary: string };
     kind: "crash_loop" | "oom" | "error_spike";
     lastSeen: number;
     openedAt: number;
@@ -841,6 +843,8 @@ export interface Insert_incidents {
     deploymentId?: Id<"deployments">;
     hash: string;
     instance?: string;
+    investigatedAt?: number;
+    investigation?: { by: "deterministic" | "llm"; confidence: "high" | "medium" | "low"; evidenceNote: string; relatedTraceIds: Array<string>; rootCauseHypothesis: string; suggestedRemediation: string; summary: string };
     kind: "crash_loop" | "oom" | "error_spike";
     lastSeen: number;
     openedAt: number;

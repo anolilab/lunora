@@ -105,6 +105,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "github_installations:list": lunora_github_installations_9.list as unknown as RegisteredLunoraFunction,
     "github_installations:record": lunora_github_installations_9.record as unknown as RegisteredLunoraFunction,
     "github_installations:remove": lunora_github_installations_9.remove as unknown as RegisteredLunoraFunction,
+    "incidents:investigate": lunora_incidents_10.investigate as unknown as RegisteredLunoraFunction,
     "incidents:list": lunora_incidents_10.list as unknown as RegisteredLunoraFunction,
     "incidents:setStatus": lunora_incidents_10.setStatus as unknown as RegisteredLunoraFunction,
     "incidents:triage": lunora_incidents_10.triage as unknown as RegisteredLunoraFunction,
@@ -474,6 +475,12 @@ installCompiledValidatorMap(lunora_github_installations_9.remove.args, (source) 
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
 return { "installationId": source["installationId"] };
+});
+installCompiledValidatorMap(lunora_incidents_10.investigate.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_incidents_10.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -887,7 +894,8 @@ export interface Caller {
         remove: (args: { installationId: number }) => Promise<void>;
     };
     incidents: {
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
+        investigate: (args: { id: Id<"incidents">; organizationId: Id<"organizations"> }) => Promise<{ by: "deterministic" | "llm"; confidence: "high" | "low" | "medium"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; investigatedAt?: number; investigation?: { by: "deterministic" | "llm"; confidence: "high" | "low" | "medium"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
         setStatus: (args: { id: Id<"incidents">; organizationId: Id<"organizations">; status: unknown }) => Promise<Id<"incidents">>;
         triage: (args: { id: Id<"incidents">; organizationId: Id<"organizations"> }) => Promise<{ summary: string; }>;
     };
@@ -1050,6 +1058,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         remove: (args) => callRegistered(context, "github_installations:remove", args),
     },
     incidents: {
+        investigate: (args) => callRegistered(context, "incidents:investigate", args),
         list: (args) => callRegistered(context, "incidents:list", args),
         setStatus: (args) => callRegistered(context, "incidents:setStatus", args),
         triage: (args) => callRegistered(context, "incidents:triage", args),
