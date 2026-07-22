@@ -186,7 +186,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(hasAuth
             ? [
                   `import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";`,
-                  `import { createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
+                  `import { createAuth, createAuthAdmin, createAuthAuditReader, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
               ]
             : []),
         ...buildAccessImports(hasAccess, hasAuth),
@@ -579,6 +579,7 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
             const authInstance = getAuth();
 
             options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
+            options.authAuditReader = createAuthAuditReader(d1Executor(this.authDeclaration.d1(env) as never));
         }`,
           ]
         : []),
