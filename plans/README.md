@@ -923,6 +923,23 @@ trust win — boundaries read as deliberate, not missing.
 | 170  | Continuous CDC export tap (op-log → external sink) — the streaming counterpart to CDC-in; snapshot export/backup already exist                                 | feat         | runtime/do   | P3  | L      | MED  | SHIPPED (tap + webhook/R2 sinks; warehouse connectors = Cloud) |
 | 171  | "Design boundaries / non-goals" docs page — state the NON-GOAL bucket plainly (no arbitrary SQL, RPC-not-REST-first, cross-shard eventual); cheapest trust win | docs         | docs         | P2  | S      | LOW  | SHIPPED |
 
+### Deferred Studio / surface tails (Wave 14 — plans shipped, Phase-2 open)
+
+These plans shipped to their **exit criteria** and their plan files were removed;
+the outstanding "Surface & docs" Phase-2 work is tracked here so nothing is lost:
+
+- **174 auth audit** — recording + `@visulima/redact` redaction + configurable
+  retention + `readAuthAuditLog` + docs shipped. Open: a Studio "Security / audit"
+  page over `readAuthAuditLog`, and exposing that read as an RLS/admin-gated RPC
+  (the admin-op log's `getAuditLog` is the precedent).
+- **177 health** — `/_lunora/health` + `/health/ready` + binding probes + docs
+  shipped. Open: a Studio "Health" indicator wired to the live endpoint, a
+  `production-checklist.mdx` entry, and a deploy `verify` step that probes it.
+- **165 push** — `@lunora/notify` + codegen-wired `ctx.notify`/`ctx.push` + docs
+  shipped (plan file **retained**, see `165-push-notifications.md`). Open: a Studio
+  notifications page (registered devices / last-send / delivery errors / inbox) and
+  an example app declaring `lunora/notify.ts`.
+
 ### Considered / newly surfaced (Fable 5 deep pass, 2026-07-21)
 
 **The three follow-up gaps — verified:**
@@ -954,7 +971,7 @@ scheduler}` (`server/src/schema.ts`, `types.ts:1104`) — stronger than Convex's
 | ------------------------------------ | -------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | -------- | --------------------------- |
 | 172 ✅ SHIPPED                        | **Geospatial indexing / queries** (`near`, within-radius)      | Convex (geo component), Supabase (PostGIS), Firebase (geohash)   | none — zero geo code in `packages/server/src`                                              | **HIGH** | FRAMEWORK                   |
 | 173 ✅ SHIPPED                        | **Client-side upload SDK** (progress, pause/resume, resumable) | Firebase, Supabase (TUS), Convex                                 | server R2 multipart + presigned exist; only admin-gated client upload, no `useUpload`      | MED      | FRAMEWORK                   |
-| [174](174-auth-audit-trail.md)       | **Auth/security audit trail**                                  | Supabase (`auth.audit_log_entries`), Firebase, Convex (paid)     | admin-state audit log exists (`do/audit-log.ts`) but no auth-event recording               | MED      | FRAMEWORK                   |
+| 174 ✅ SHIPPED                        | **Auth/security audit trail**                                  | Supabase (`auth.audit_log_entries`), Firebase, Convex (paid)     | admin-state audit log exists (`do/audit-log.ts`) but no auth-event recording               | MED      | FRAMEWORK                   |
 | 175 ✅ SHIPPED                        | **Schema-level TTL / auto-expiry**                             | Firebase (Firestore TTL), Supabase (pg_cron) — Convex also lacks | no `.ttl()`; only presence-heartbeat TTL. DO alarm infra (`do/triggers.ts`) already exists | LOW–MED  | FRAMEWORK                   |
 | —                                    | **Client integrity / attestation** (App Check)                 | Firebase only                                                    | none; Turnstile/WAF already front every Worker                                             | LOW      | CLOUD / NON-GOAL → plan 171 |
 
@@ -997,7 +1014,7 @@ New opportunities the catalog surfaces (not previously listed):
   → `@lunora/auth`: block throwaway signups / validate email (domain lists are
   pure-data / edge-safe; MX verify needs DNS). → **plan 176 ✅ SHIPPED**.
 - **`@visulima/health-check`** → production-readiness health/metrics endpoint
-  (feeds the production-checklist). → **[plan 177](177-health-check-endpoint.md)**.
+  (feeds the production-checklist). → **plan 177 ✅ SHIPPED**.
 - **`@visulima/content-safety`** → optional moderation for user-generated content
   (multi-language filtering) — a `ctx` helper or small package. _(not yet a plan)_
 - **`@visulima/bytes`** → `encodeWire` Uint8Array handling (plan 164 SDK / storage).
