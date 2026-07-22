@@ -15,8 +15,10 @@ import { InvitationsSection } from "./InvitationsSection";
 import { IssuesSection } from "./IssuesSection";
 import { LogsSection } from "./LogsSection";
 import { MembersSection } from "./MembersSection";
+import { MetricsSection } from "./MetricsSection";
 import { ProjectsSection } from "./ProjectsSection";
 import { SecretsSection } from "./SecretsSection";
+import { TimeRangeProvider } from "./TimeRangeProvider";
 import { TracesSection } from "./TracesSection";
 import type { OrgId } from "./types";
 import { UptimeSection } from "./UptimeSection";
@@ -41,6 +43,7 @@ type Tab =
     | "keys"
     | "logs"
     | "members"
+    | "metrics"
     | "projects"
     | "secrets"
     | "traces"
@@ -67,6 +70,7 @@ const TABS: { id: Tab; label: string }[] = [
     { id: "builds", label: "Builds" },
     { id: "logs", label: "Logs" },
     { id: "traces", label: "Traces" },
+    { id: "metrics", label: "Metrics" },
     { id: "issues", label: "Issues" },
     { id: "incidents", label: "Incidents" },
     { id: "uptime", label: "Uptime" },
@@ -90,6 +94,7 @@ const SECTIONS: Record<Tab, (props: SectionProps) => ReactElement> = {
     keys: DeployKeysSection,
     logs: LogsSection,
     members: MembersSection,
+    metrics: MetricsSection,
     projects: ProjectsSection,
     secrets: SecretsSection,
     traces: TracesSection,
@@ -194,12 +199,14 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
                 ))}
             </nav>
 
-            <ActiveSection
-                focusTraceId={tab === "logs" || tab === "traces" ? focus.traceId : undefined}
-                key={`${tab}:${String(focus.seq)}`}
-                onOpenTab={onOpenTab}
-                organizationId={organizationId}
-            />
+            <TimeRangeProvider>
+                <ActiveSection
+                    focusTraceId={tab === "logs" || tab === "traces" ? focus.traceId : undefined}
+                    key={`${tab}:${String(focus.seq)}`}
+                    onOpenTab={onOpenTab}
+                    organizationId={organizationId}
+                />
+            </TimeRangeProvider>
         </div>
     );
 };
