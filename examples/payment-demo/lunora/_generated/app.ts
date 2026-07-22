@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { ExecutionContextLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
-import { createWorker } from "lunorash/runtime";
+import { createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
@@ -140,6 +140,8 @@ class AppBuilder<Env extends Record<string, unknown>> {
         if (this.adminToken) {
             options.adminToken = this.adminToken(env);
         }
+
+        options.logArchive = resolveLogArchiveFromEnv(env);
 
         for (const fn of this.extendFns) {
             Object.assign(options, fn(env, { ...options }));
