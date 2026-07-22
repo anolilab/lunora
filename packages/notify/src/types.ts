@@ -46,6 +46,22 @@ export interface StoredSubscription {
     userId?: string | null;
 }
 
+/**
+ * The admin-facing projection of a {@link StoredSubscription} — a registered
+ * device as surfaced by the gated `__lunora_admin__:listPushSubscriptions` RPC
+ * (backing the Studio Notifications page). The delivery **secrets** are dropped:
+ * the Web Push `keys` (the RFC 8291 `auth`/`p256dh` encryption material) and the
+ * FCM `token` are never sent to the browser — only the endpoint / kind / owner /
+ * timestamps and the last-send status + error the page renders.
+ */
+export type PushSubscriptionDevice = Omit<StoredSubscription, "keys" | "token">;
+
+/** Payload of a `__lunora_admin__:listPushSubscriptions` call — the registered devices, secrets redacted. */
+export interface PushSubscriptionsResult {
+    /** The registered device subscriptions matching the request filter (secrets stripped). */
+    subscriptions: PushSubscriptionDevice[];
+}
+
 /** Input accepted by `ctx.push.register(...)` — a web-push subscription or an FCM token. */
 export type RegisterInput =
     | { kind?: "web-push"; metadata?: Record<string, unknown>; subscription: PushSubscriptionLike | string; userId?: string | null }
