@@ -67,7 +67,9 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     // `binding` is present when `provider` is absent (guarded above). An explicit
     // `gateway` wins; else an env-configured AI Gateway routes Workers AI through
     // it (opt-in), so token + dollar-cost telemetry is computed by the gateway.
-    const workersai: WorkersAiProviderLike = provider ?? buildProvider(binding as AiBindingLike, resolveGatewayOption(gateway, env));
+    // Resolved once so the raw `ai.run()` path below routes through the same gateway.
+    const resolvedGateway = resolveGatewayOption(gateway, env);
+    const workersai: WorkersAiProviderLike = provider ?? buildProvider(binding as AiBindingLike, resolvedGateway);
 
     const model = (input?: ModelInput): LanguageModel => {
         if (input === undefined) {
@@ -128,7 +130,12 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
             );
         }
 
-        return binding.run(modelId, inputs, runOptions);
+        // Route raw `ai.run()` binding calls through the same resolved AI Gateway
+        // (for token + dollar-cost telemetry) unless the caller set `gateway` — so
+        // gateway routing isn't limited to the AI-SDK model path.
+        const mergedOptions = resolvedGateway !== undefined && runOptions?.gateway === undefined ? { ...runOptions, gateway: resolvedGateway } : runOptions;
+
+        return binding.run(modelId, inputs, mergedOptions);
     };
 
     return { embeddingModel, model, run, workersai };
