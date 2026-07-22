@@ -1,10 +1,11 @@
-import { useQuery } from "@lunora/react";
+import { useLunora, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { buildTraceTree } from "../telemetry/trace-tree";
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
+import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import type { DeploymentId, OrgId, ProjectId } from "./types";
 
 interface TracesSectionProps {
@@ -29,6 +30,8 @@ const formatMs = (ms: number): string => (ms < 1000 ? `${String(Math.round(ms))}
  * log-gap timeline. Both queries are live.
  */
 export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: TracesSectionProps): ReactElement => {
+    const client = useLunora();
+    const { from, to } = useTimeRange();
     const projects = useQuery(api.projects.listByOrg, { organizationId });
     const [projectId, setProjectId] = useState<ProjectId | "">("");
     const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId } : "skip");
@@ -41,13 +44,56 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
     const [traceId, setTraceId] = useState(focusTraceId ?? "");
     const [errorOnly, setErrorOnly] = useState(false);
     const [selectedSpanId, setSelectedSpanId] = useState("");
+    // Archive fallback: the spans `traces.getArchived` returned for a trace D1 no
+    // longer has (aged past the hot window). Keyed to the trace it was fetched for.
+    const [archived, setArchived] = useState<typeof spans>(undefined);
 
-    const traces = useQuery(api.traces.list, deploymentId ? { deploymentId, errorOnly, organizationId } : "skip");
+    const traces = useQuery(api.traces.list, deploymentId ? { deploymentId, errorOnly, from, organizationId, to } : "skip");
     const spans = useQuery(api.traces.get, traceId ? { organizationId, traceId } : "skip");
 
+    // Reset the archive fallback whenever the open trace changes (the live D1
+    // query re-runs; we only reach for the archive once it comes back empty).
+    useEffect(() => {
+        setArchived(undefined);
+    }, [traceId]);
+
+    // D1 has no spans for this trace (loaded, empty) → try the columnar archive
+    // (an action — the R2-SQL read is a `fetch`). Fails open to `[]`, so the
+    // waterfall just stays empty when the archive isn't configured.
+    const d1Empty = traceId !== "" && spans !== undefined && spans.length === 0;
+
+    useEffect(() => {
+        if (!d1Empty) {
+            return;
+        }
+
+        let cancelled = false;
+
+        client
+            .action(api.traces.getArchived, { organizationId, traceId })
+            .then((result) => {
+                if (!cancelled) {
+                    setArchived(result);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setArchived([]);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [client, d1Empty, organizationId, traceId]);
+
+    // Prefer the live D1 spans; fall back to the archived spans when D1 is empty.
+    const displaySpans = spans && spans.length > 0 ? spans : (archived ?? spans);
+    const fromArchive = spans?.length === 0 && (archived?.length ?? 0) > 0;
+
     const selected = (traces ?? []).find((trace) => trace.traceId === traceId);
-    const waterfall = buildTraceTree(spans ?? []);
-    const selectedSpan = (spans ?? []).find((span) => span.spanId === selectedSpanId);
+    const waterfall = buildTraceTree(displaySpans ?? []);
+    const selectedSpan = (displaySpans ?? []).find((span) => span.spanId === selectedSpanId);
 
     // The longest trace on screen, so each list row's latency bar reads relative to it.
     const maxDuration = Math.max(1, ...(traces ?? []).map((trace) => trace.durationMs));
@@ -55,7 +101,10 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
     return (
         <div className="stack">
             <section className="card">
-                <h3>Traces</h3>
+                <div className="metrics-head">
+                    <h3>Traces</h3>
+                    <TimeRangePicker />
+                </div>
                 <label htmlFor="traces-project">
                     Project
                     <select
@@ -165,6 +214,7 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
                     <header className="trace-detail-head">
                         <div>
                             <span className="trace-detail-id">{traceId.slice(0, 16)}</span>
+                            {fromArchive ? <span className="log-badge trace-archive-badge">from archive</span> : null}
                             {selected ? (
                                 <span className="trace-detail-meta">
                                     {selected.spanCount} spans · {formatMs(selected.durationMs)}
@@ -184,8 +234,10 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
                         </div>
                     </header>
 
-                    {spans === undefined ? <p className="muted">Loading…</p> : null}
-                    {spans?.length === 0 ? <p className="muted">No spans for this trace in the retention window.</p> : null}
+                    {spans === undefined || (d1Empty && archived === undefined) ? <p className="muted">Loading…</p> : null}
+                    {spans !== undefined && !(d1Empty && archived === undefined) && (displaySpans?.length ?? 0) === 0 ? (
+                        <p className="muted">No spans for this trace in the retention window or the archive.</p>
+                    ) : null}
 
                     <div className="trace-waterfall">
                         {waterfall.map((row) => (
