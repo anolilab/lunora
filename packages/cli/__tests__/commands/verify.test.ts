@@ -244,6 +244,91 @@ describe("lunora verify", () => {
             expect(calls).toHaveLength(0);
         });
 
+        describe("--health-url probe", () => {
+            it("is skipped by default (no healthUrl) so verify stays offline-safe", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                const { logger } = recordingLogger();
+                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
+                    return { ok: true, status: 200 };
+                });
+
+                const result = await runVerifyCommand({ cwd: workdir, healthFetch, logger, typecheck: false });
+
+                expect(result.code).toBe(0);
+                // No healthUrl → the probe never fires.
+                expect(healthFetch).not.toHaveBeenCalled();
+                expect(result.errors).toEqual([]);
+            });
+
+            it("passes when the deployment's /_lunora/health returns 200", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                const { logger, recorded } = recordingLogger();
+                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
+                    return { ok: true, status: 200 };
+                });
+
+                const result = await runVerifyCommand({
+                    cwd: workdir,
+                    healthFetch,
+                    healthUrl: "https://my-app.workers.dev",
+                    logger,
+                    typecheck: false,
+                });
+
+                expect(result.code).toBe(0);
+                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health");
+                expect(recorded.successes.join("\n")).toContain("health probe ok");
+            });
+
+            it("fails red when the health endpoint returns 503", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                const { logger } = recordingLogger();
+                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
+                    return { ok: false, status: 503 };
+                });
+
+                const result = await runVerifyCommand({
+                    cwd: workdir,
+                    healthFetch,
+                    healthUrl: "https://my-app.workers.dev/",
+                    logger,
+                    typecheck: false,
+                });
+
+                expect(result.code).toBe(1);
+                expect(result.errors.some((error) => error.includes("health probe failed"))).toBe(true);
+                // A trailing slash on the base URL doesn't double up in the probed URL.
+                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health");
+            });
+
+            it("fails red when the probe can't reach the deployment", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                const { logger } = recordingLogger();
+                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
+                    throw new Error("ECONNREFUSED");
+                });
+
+                const result = await runVerifyCommand({
+                    cwd: workdir,
+                    healthFetch,
+                    healthUrl: "https://my-app.workers.dev",
+                    logger,
+                    typecheck: false,
+                });
+
+                expect(result.code).toBe(1);
+                expect(result.errors.some((error) => error.includes("could not reach"))).toBe(true);
+            });
+        });
+
         describe("--format json", () => {
             it("emits a single parseable JSON document with the structured result", async () => {
                 expect.assertions(5);

@@ -292,8 +292,22 @@ catalogs:
     "@visulima/email": 2.1.1
     "@react-email/render": 2.1.0
     "postal-mime": 2.7.5
+  notify:
+    "@visulima/notification": 1.0.5
   mcp:
     "@modelcontextprotocol/sdk": ^1.29.0
+  # Client-side upload SDK (@lunora/storage /upload handler + framework upload
+  # hooks). `@visulima/storage` is the server-side resumable upload handler
+  # (TUS / chunked-REST / multipart over R2 via its aws-light provider);
+  # `@visulima/storage-client` ships the browser-safe upload hooks + framework
+  # adapters (React/Vue/Solid/Svelte) with progress, pause/resume and per-part
+  # retry. Both follow the repo's exact-pinned `@visulima/*` convention.
+  storage:
+    "@visulima/storage": 1.0.5
+    "@visulima/storage-client": 1.0.0
+    # aws4fetch is @visulima/storage's Workers-friendly S3 signer, an optional
+    # peer pulled in by the `aws-light` provider that backs `createR2UploadStorage`.
+    aws4fetch: 1.0.20
   # x402 agentic payments (@lunora/x402) — the Coinbase/x402 v2 protocol SDK
   # (Apache-2.0) plus chain signers. EXACT-pinned (saveExact); all versions are
   # >24h old so no `minimumReleaseAgeExclude` entry is needed. `@x402/core`'s
@@ -416,6 +430,10 @@ catalogs:
     hono: ^4.12.30
   redact:
     "@visulima/redact": 3.0.0
+  email:
+    "@visulima/disposable-email-domains": 1.0.1
+    "@visulima/free-email-domains": 1.0.0
+    "@visulima/email-verifier": 1.0.1
 
 preferWorkspacePackages: true
 

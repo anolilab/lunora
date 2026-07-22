@@ -135,6 +135,35 @@ interface SearchIndexDefinition {
     name: string;
 }
 
+/**
+ * A geospatial index declared via `.geoIndex(name, { field })`. The runtime
+ * maintains a geohash companion table over the `v.geoPoint()` column `field` so
+ * `withGeoIndex(name, q => q.near(point, radius) | q.within(bbox))` resolves a
+ * proximity / bounding-box read as a geohash-prefix range scan plus a Haversine
+ * refine/sort on the candidate rows.
+ *
+ * - `field` — the `v.geoPoint()` column whose lat/lng feed the geohash.
+ * - `precision` — geohash character length on the companion (default 9, ~4.8 m cells); higher precision narrows each cell.
+ */
+interface GeoIndexDefinition {
+    field: string;
+    name: string;
+    precision?: number;
+}
+
+/**
+ * Declarative table-level TTL declared via `.ttl(field, { after? })`. A DO
+ * alarm-driven sweep deletes (or, when the table also `.softDelete()`s,
+ * soft-deletes) rows whose expiry timestamp has passed.
+ *
+ * - `field` — an epoch-millisecond column. Without `after`, its value is the absolute expiry instant; with `after`, `field` is a base timestamp and the row expires `after` milliseconds later (`field + after`).
+ * - `after` — optional millisecond offset added to `field` to derive the expiry.
+ */
+interface TtlDefinition {
+    after?: number;
+    field: string;
+}
+
 /** Reducer applied by an aggregate index. */
 type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
 
@@ -259,6 +288,15 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
      */
     externalSource?: ExternalSourceDefinition;
 
+    /**
+     * Geospatial indexes declared via `.geoIndex(name, { field })`. The runtime
+     * maintains a geohash companion over the named `v.geoPoint()` column so
+     * `withGeoIndex(name, q => q.near(point, radius) | q.within(bbox))` resolves
+     * a proximity/bounding-box read as a geohash-prefix range scan plus a
+     * Haversine refine/sort. Empty unless `.geoIndex()` was called.
+     */
+    geoIndexes: ReadonlyArray<GeoIndexDefinition>;
+
     indexes: ReadonlyArray<IndexDefinition>;
 
     /**
@@ -296,6 +334,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     relationMap: Record<string, RelationDefinition>;
     searchIndexes: ReadonlyArray<SearchIndexDefinition>;
     shape: Shape;
+
     shardMode: ShardMode;
 
     /**
@@ -318,6 +357,16 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
      * field — same reasoning as {@link TableDefinition.relationMap}.
      */
     triggerMap: Record<string, TriggerDefinition>;
+
+    /**
+     * Set by `.ttl(field, { after })` — the declarative auto-expiry policy. A DO
+     * alarm-driven sweep deletes rows whose expiry timestamp has passed (or
+     * soft-deletes them when the table also `.softDelete()`s). Named `ttlPolicy`
+     * (a data field) rather than colliding with the fluent `.ttl()` builder
+     * method — same convention as `shardBy()`/`shardMode`. Absent ⇒ rows never
+     * auto-expire.
+     */
+    ttlPolicy?: TtlDefinition;
     vectorIndexes: ReadonlyArray<TableVectorIndex>;
 }
 
@@ -380,9 +429,30 @@ interface X402ProcedureConfig {
     readonly price: number | string;
 }
 
+/**
+ * Opt-in public-surface tag attached by the `.expose({ rest: true })` builder
+ * modifier (plan 167). Marks a procedure as deliberately published over the
+ * public REST surface: the runtime mints a `/_lunora/rest/&lt;namespace>/&lt;fn>` route
+ * that dispatches THROUGH the procedure (so `ctx.auth` / RLS / validators are
+ * enforced), and the generated OpenAPI describes it. Everything is default-closed
+ * — a procedure without this tag is unreachable over REST.
+ */
+interface ExposeConfig {
+    /** Publish this procedure over the public REST surface. */
+    readonly rest?: boolean;
+}
+
 interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
     readonly args: A;
+
+    /**
+     * Set by the `.expose({ rest: true })` builder modifier. Marks the procedure
+     * as published on the public REST surface (plan 167). Absent on procedures that
+     * are reachable only via typed RPC (the default).
+     */
+    readonly expose?: ExposeConfig;
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
+
     readonly kind: Kind;
 
     /**
@@ -612,6 +682,17 @@ interface TableReader<Row = Record<string, unknown>> {
      * and throws when more than one row matches. Mirrors Convex's `.unique()`.
      */
     unique: () => Promise<Row | null>;
+
+    /**
+     * Restrict the query to a declared `.geoIndex()`. The builder's
+     * `.near(point, radiusMeters)` returns rows within `radiusMeters` of `point`,
+     * ordered nearest-first; `.within(bbox)` returns rows inside the
+     * latitude/longitude bounding box. Both resolve as a geohash-prefix range
+     * scan over the index's companion followed by a Haversine refine. Pair with
+     * `.take(n)` to cap results (`.paginate()` is not supported on a geo query).
+     */
+    withGeoIndex: (indexName: string, build: (q: GeoFilterBuilder) => GeoFilterBuilder) => TableReader<Row>;
+
     withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row>;
 
     /**
@@ -638,6 +719,33 @@ interface SearchFilterBuilder {
     eq: (field: string, value: unknown) => SearchFilterBuilder;
     /** Full-text match `query` against the index's searchable `field`. Call exactly once. */
     search: (field: string, query: string) => SearchFilterBuilder;
+}
+
+/** A latitude/longitude point (WGS84 decimal degrees) accepted by geo queries. */
+interface GeoPointInput {
+    lat: number;
+    lng: number;
+}
+
+/**
+ * An axis-aligned latitude/longitude bounding box: `sw` is the south-west
+ * (min lat, min lng) corner, `ne` the north-east (max lat, max lng) corner.
+ */
+interface GeoBoundingBox {
+    ne: GeoPointInput;
+    sw: GeoPointInput;
+}
+
+/**
+ * Builder passed to {@link TableReader.withGeoIndex}. Call exactly one of
+ * `.near(...)` / `.within(...)` — the two are mutually exclusive proximity vs
+ * bounding-box modes.
+ */
+interface GeoFilterBuilder {
+    /** Rows within `radiusMeters` of `point`, resolved nearest-first. Call exactly once. */
+    near: (point: GeoPointInput, radiusMeters: number) => GeoFilterBuilder;
+    /** Rows whose point falls inside the bounding `box`. Call exactly once. */
+    within: (box: GeoBoundingBox) => GeoFilterBuilder;
 }
 
 /**
@@ -1673,12 +1781,17 @@ export type {
     DatabaseReader,
     DatabaseWriter,
     DurableObjectJurisdiction,
+    ExposeConfig,
     ExternalSourceCursor,
     ExternalSourceDefinition,
     ExternalSourceMode,
     ExternalSourceRefresh,
     FunctionKind,
     FunctionVisibility,
+    GeoBoundingBox,
+    GeoFilterBuilder,
+    GeoIndexDefinition,
+    GeoPointInput,
     GlobalBackend,
     IndexDefinition,
     IndexRangeBuilder,
@@ -1743,6 +1856,7 @@ export type {
     TriggerRow,
     TriggerTiming,
     TriggerUpdateEvent,
+    TtlDefinition,
     VectorEmbedder,
     VectorIndexDefinition,
     VectorMatch,

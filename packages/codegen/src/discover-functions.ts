@@ -79,6 +79,8 @@ const LIFECYCLE_FACTORIES: Record<string, "connect" | "disconnect"> = {
 
 interface DiscoveredFunction {
     args: Record<string, ValidatorIR>;
+    /** Set when the builder chain includes `.expose({ rest: true })` (plan 167). */
+    expose?: { rest?: boolean };
     kind: string;
     lifecycle?: "connect" | "disconnect";
     returnType: string;
@@ -201,6 +203,48 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
     }
 
     return INTERNAL_FACTORIES[rootName] ? "internal" : undefined;
+};
+
+/**
+ * Walk a builder-terminal chain (`c.input(...).expose({ rest: true }).query(...)`)
+ * leftward looking for a `.expose({ ... })` modifier, and read its `rest` flag
+ * from the object-literal argument. Returns `{ rest }` when found, else
+ * `undefined` (RPC-only — the default). Mirrors {@link resolveBuilderRootKind}'s
+ * chain descent so it works under degraded types (no `@lunora/server` install).
+ */
+const exposeFromBuilderChain = (receiver: Node): { rest?: boolean } | undefined => {
+    let current: Node = receiver;
+
+    while (Node.isCallExpression(current)) {
+        const inner = current.getExpression();
+
+        if (!Node.isPropertyAccessExpression(inner)) {
+            return undefined;
+        }
+
+        if (inner.getName() === "expose") {
+            const argument = current.getArguments()[0];
+
+            if (argument !== undefined && Node.isObjectLiteralExpression(argument)) {
+                const restProperty = argument.getProperty("rest");
+
+                if (restProperty !== undefined && Node.isPropertyAssignment(restProperty)) {
+                    const initializer = restProperty.getInitializer();
+                    const rest = initializer?.getText() === "true";
+
+                    return { rest };
+                }
+            }
+
+            // `.expose(...)` present but its arg isn't a readable `{ rest: … }`
+            // literal — treat as exposed-unknown (`rest` absent), a safe default.
+            return {};
+        }
+
+        current = inner.getExpression();
+    }
+
+    return undefined;
 };
 
 /** Inspect a `query({ args, handler })` call and pull out the args validator map. */
@@ -829,8 +873,11 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
 
     // Builder terminal: pull args/return type from the chain; bare factory: from the call.
     if (classified.receiver) {
+        const expose = exposeFromBuilderChain(classified.receiver);
+
         return {
             args: argsFromBuilderChain(classified.receiver),
+            ...(expose ? { expose } : {}),
             kind: classified.kind,
             returnType: returnTypeFromBuilderCall(call),
             visibility: classified.visibility,
@@ -980,6 +1027,7 @@ const functionIrFromCall = (call: CallExpression, exportName: string, relativePa
         kind: discovered.kind as FunctionIR["kind"],
         returnType: discovered.returnType,
         visibility: discovered.visibility,
+        ...(discovered.expose ? { expose: discovered.expose } : {}),
         ...(discovered.lifecycle ? { lifecycle: discovered.lifecycle } : {}),
     };
 };

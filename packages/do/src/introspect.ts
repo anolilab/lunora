@@ -235,7 +235,7 @@ interface FunctionCallStat {
 interface TableIndexInfo {
     fields: string[];
     name: string;
-    type: "index" | "rank" | "search" | "vector";
+    type: "geo" | "index" | "rank" | "search" | "vector";
     unique?: boolean;
 }
 

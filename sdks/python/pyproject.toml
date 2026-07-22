@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lunora"
+version = "0.1.0"
+description = "Minimal, protocol-conformant Python client for a Lunora deployment."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Lunora" }]
+keywords = ["lunora", "cloudflare", "durable-objects", "realtime"]
+dependencies = []
+
+[project.optional-dependencies]
+# Only the live WebSocket loop (client.connect_and_run) needs this; query /
+# mutation / the frame codec run on the standard library alone.
+live = ["websockets>=12"]
+dev = ["websockets>=12"]
+
+[tool.setuptools]
+packages = ["lunora"]
+
+# Tests use the standard-library `unittest` runner so they need no third-party
+# deps. Run them with either:
+#   python -m unittest discover -s tests
+#   python -m pytest            (if pytest is installed)
+[tool.pytest.ini_options]
+testpaths = ["tests"]

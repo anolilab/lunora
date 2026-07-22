@@ -50,6 +50,8 @@ export type {
     CountArgs,
     CtxDbOptions,
     DatabaseWriterLike,
+    GeoFilterBuilderLike,
+    GeoIndexDefinitionLike,
     IdGenerator,
     IndexDefinitionLike,
     IndexRangeBuilderLike,
@@ -118,6 +120,8 @@ export {
     readFunctionMetricsTotals,
     recordFunctionMetric,
 } from "./function-metrics";
+export type { GeoBoundingBox, GeoPoint } from "./geo";
+export { boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
 export type {
     AdvisoriesResult,
     AdvisoryFinding,
@@ -255,6 +259,8 @@ export type {
     TriggerTimingLike,
 } from "./triggers";
 export { hasTrigger, runTriggers } from "./triggers";
+export type { TtlSweepSpec } from "./ttl-sweep";
+export { selectExpiredIds } from "./ttl-sweep";
 export type { MutationDelta, RpcRequest, ShapeSubscriptionQuery, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
 export type { WhereSqlStrategy } from "./where-sql";
 export { compileWhereSql } from "./where-sql";

@@ -127,6 +127,8 @@ const SCALAR_TYPE_BY_KIND: Record<string, string> = {
     // not statically recoverable at codegen time — emit `unknown` so the
     // generated api types still compile without depending on the library.
     from: "unknown",
+    // A geographic point stored as a `{ lat, lng }` JSON object.
+    geoPoint: "{ lat: number; lng: number }",
     null: "null",
     number: "number",
     // The key of a stored R2 object — a string; the distinction is semantic only.
@@ -328,6 +330,16 @@ const emitDataModel = (schema: SchemaIR, useUmbrella = false): string => {
         })
         .join("\n");
 
+    const geoIndexNamesByTable = schema.tables
+        .map((table) => {
+            // Like search, geo queries route through the local DO reader; a
+            // `.global()` (D1) table has no geohash companion, so emit `never`.
+            const names = table.shardMode === "global" ? "" : (table.geoIndexes ?? []).map((index) => JSON.stringify(index.name)).join(" | ");
+
+            return `    ${table.name}: ${names || "never"};`;
+        })
+        .join("\n");
+
     const vectorIndexNames = schema.vectorIndexes.map((index) => JSON.stringify(index.name)).join(" | ") || "never";
 
     const insertInterfaces = schema.tables.map((table) => renderInsertInterface(table)).join("\n\n");
@@ -428,6 +440,13 @@ ${rankIndexNamesByTable}
 
 export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
 
+/** Per-table geo-index name union. \`never\` for tables without a geoIndex. */
+export interface GeoIndexNamesByTable {
+${geoIndexNamesByTable}
+}
+
+export type GeoIndexName<T extends keyof DataModel> = GeoIndexNamesByTable[T];
+
 /** Union of declared vector index names. \`never\` when none are declared. */
 export type VectorIndexName = ${vectorIndexNames};
 
@@ -467,16 +486,16 @@ export type WithArg<T extends keyof DataModel> = WithArgOf<DataModel, Relations,
 export type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;
 
 /** Read-only typed table accessor exposed on \`QueryCtx.db.<table>\`. */
-export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T>;
+export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
 
 /** Read-write typed table accessor exposed on \`MutationCtx.db.<table>\` / \`ActionCtx.db.<table>\`. */
-export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T>;
+export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
 
 /** Per-table read facade — \`ctx.db.<table>\` on a \`QueryCtx\`. */
-export type DatabaseReaderFacade = DatabaseReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable>;
+export type DatabaseReaderFacade = DatabaseReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
 
 /** Per-table read-write facade — \`ctx.db.<table>\` on a \`MutationCtx\` / \`ActionCtx\`. */
-export type DatabaseWriterFacade = DatabaseWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable>;
+export type DatabaseWriterFacade = DatabaseWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
 
 /** Insert builder returned by \`ctx.orm.insert(table)\`. */
 export interface OrmInsertBuilder<T extends keyof DataModel> {
@@ -1411,6 +1430,8 @@ interface EmitServerOptions {
     hasImages?: boolean;
     /** A `lunora/` source uses `@lunora/bindings/kv` / `ctx.kv` — wires `ctx.kv` onto every ctx. */
     hasKv?: boolean;
+    /** The project declares `lunora/notify.ts` — wires `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) onto every ctx. */
+    hasNotify?: boolean;
     hasPayments?: boolean;
     /** A `lunora/` source uses `@lunora/bindings/pipelines` / `ctx.pipelines` — wires `ctx.pipelines` onto ActionCtx only. */
     hasPipelines?: boolean;
@@ -1450,6 +1471,7 @@ const emitServer = ({
     hasHyperdrive = false,
     hasImages = false,
     hasKv = false,
+    hasNotify = false,
     hasPayments = false,
     hasPipelines = false,
     hasR2sql = false,
@@ -1589,6 +1611,14 @@ export type Env = CloudflareBindings;`;
     // memoized per request. Gated on the project declaring `lunora/flags.ts`.
     const flagsContextField = hasFlags
         ? `\n    /** Feature-flag evaluation (OpenFeature). Reads are memoized per request; evaluations never throw — a provider error resolves to the supplied default. */\n    readonly flags: import("${base.flags}").LunoraFlags;`
+        : "";
+    // `ctx.notify` + its `ctx.push` alias — multi-channel notifications
+    // (`@lunora/notify`). Typed on EVERY ctx (mirrors `ctx.flags`); the
+    // `notify_send_outside_action` lint — not the type — keeps non-deterministic
+    // sends out of query/mutation handlers. Gated on the project declaring
+    // `lunora/notify.ts`. `@lunora/notify` is an add-on install, never umbrella-remapped.
+    const notifyContextField = hasNotify
+        ? `\n    /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */\n    readonly notify: import("@lunora/notify").LunoraNotify;\n    /** Device push sub-facade — the same object as ctx.notify.push (register / send / broadcast). Sends belong in action handlers. */\n    readonly push: import("@lunora/notify").LunoraPush;`
         : "";
 
     // Workflows live on BOTH MutationCtx and ActionCtx (a workflow can be kicked
@@ -1774,19 +1804,19 @@ type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> |
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${envContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${authContextField}
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 /**
@@ -2121,7 +2151,7 @@ const buildStorageColumns = (schema: SchemaIR): Record<string, string[]> => {
 interface EmittedTableIndex {
     fields: string[];
     name: string;
-    type: "index" | "rank" | "search" | "vector";
+    type: "geo" | "index" | "rank" | "search" | "vector";
     unique?: boolean;
 }
 
@@ -2143,6 +2173,9 @@ const buildTableIndexes = (schema: SchemaIR): Record<string, EmittedTableIndex[]
             ...table.searchIndexes.map((index) => {
                 return { fields: [index.field, ...(index.filterFields ?? [])], name: index.name, type: "search" as const };
             }),
+            ...(table.geoIndexes ?? []).map((index) => {
+                return { fields: [index.field], name: index.name, type: "geo" as const };
+            }),
             ...table.rankIndexes.map((index) => {
                 return { fields: index.sortBy.map((key) => key.field), name: index.name, type: "rank" as const };
             }),
@@ -2157,6 +2190,39 @@ const buildTableIndexes = (schema: SchemaIR): Record<string, EmittedTableIndex[]
     }
 
     return byTable;
+};
+
+/** One resolved TTL policy the generated shard hands to the base `ttlSweeps()` alarm hook. */
+interface EmittedTtlSweep {
+    after?: number;
+    field: string;
+    softDeleteField?: string;
+    table: string;
+}
+
+/**
+ * Resolve every `.ttl(field, { after? })` table into a {@link EmittedTtlSweep} the
+ * DO's alarm sweep consumes. `.global()` tables live in D1 (no local alarm), so
+ * they're skipped. The `.softDelete()` marker (when the table declares one) rides
+ * along so the sweep excludes already-tombstoned rows.
+ */
+const buildTtlSweeps = (schema: SchemaIR): EmittedTtlSweep[] => {
+    const sweeps: EmittedTtlSweep[] = [];
+
+    for (const table of schema.tables) {
+        if (!table.ttl || table.shardMode === "global") {
+            continue;
+        }
+
+        sweeps.push({
+            ...(table.ttl.after === undefined ? {} : { after: table.ttl.after }),
+            field: table.ttl.field,
+            ...(table.softDelete ? { softDeleteField: table.softDelete.field } : {}),
+            table: table.name,
+        });
+    }
+
+    return sweeps;
 };
 
 /** One column descriptor per table, mirroring `@lunora/do`'s `ColumnMeta`. */
@@ -2386,6 +2452,34 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
         configField: `\n    flags?: (env: Record<string, unknown>) => import("${flagsSpecifier}").Provider;`,
         contextField: `\n                flags,`,
         importLines: [`import { createFlags } from "${flagsSpecifier}";`, `import flagsConfig from "../flags.js";`],
+        stub: "",
+    };
+};
+
+/**
+ * `ctx.notify` / `ctx.push` (`@lunora/notify`) fragments. Mirrors
+ * `emitFlagsFragments`: the definition comes from the project's own
+ * `lunora/notify.ts` (`defineNotify(...)`), imported as `notifyConfig`, and
+ * `createNotify(notifyConfig, env)` builds both facades from the request `env`.
+ * `ctx.push` is the very same object exposed as `ctx.notify.push`, spliced onto
+ * ctx as its own property (the `ctx.push` alias). Wired onto EVERY ctx — like
+ * `ctx.flags` — with the `notify_send_outside_action` lint (not the type) keeping
+ * non-deterministic sends out of query/mutation handlers. `@lunora/notify` is an
+ * add-on install, so — unlike `ctx.flags` — its specifier is never umbrella-
+ * remapped. `createNotify` never throws, so there is no stub fallback.
+ */
+const emitNotifyFragments = (hasNotify: boolean): HelperFragments => {
+    if (!hasNotify) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    return {
+        build: `
+            const { notify, push } = createNotify(notifyConfig, env);
+`,
+        configField: "",
+        contextField: `\n                notify,\n                push,`,
+        importLines: [`import { createNotify } from "@lunora/notify";`, `import notifyConfig from "../notify.js";`],
         stub: "",
     };
 };
@@ -3428,6 +3522,8 @@ interface EmitShardOptions {
     hasImages?: boolean;
     /** A `lunora/` source reads `ctx.kv` — wires `ctx.kv` onto every ctx. */
     hasKv?: boolean;
+    /** The project declares `lunora/notify.ts` — wires `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) onto every ctx. */
+    hasNotify?: boolean;
     hasPayments?: boolean;
     /** A `lunora/` source reads `ctx.pipelines` — wires `ctx.pipelines` onto the ActionCtx only. */
     hasPipelines?: boolean;
@@ -3466,6 +3562,7 @@ const emitShard = ({
     hasHyperdrive = false,
     hasImages = false,
     hasKv = false,
+    hasNotify = false,
     hasPayments = false,
     hasPipelines = false,
     hasR2sql = false,
@@ -3493,6 +3590,7 @@ const emitShard = ({
     const kvFragments = emitKvFragments(hasKv);
     const flagsFragments = emitFlagsFragments(hasFlags, base.flags);
     const flagsOverrides = emitFlagsOverrides(flagKeys, hasFlags, base.flags);
+    const notifyFragments = emitNotifyFragments(hasNotify);
     const envFragments = emitEnvFragments(env);
     const analyticsFragments = emitAnalyticsFragments(hasAnalytics);
     const imagesFragments = emitImagesFragments(hasImages);
@@ -3598,6 +3696,7 @@ const emitShard = ({
     const tableIndexes = buildTableIndexes(schema);
     const tableColumns = buildTableColumns(schema);
     const storageColumns = buildStorageColumns(schema);
+    const ttlSweeps = buildTtlSweeps(schema);
 
     // The facade option types (AggregateOptions/QueryArgs/RestrictableQueryOptions/
     // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
@@ -3732,6 +3831,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         ...accessFragments.importLines,
         ...kvFragments.importLines,
         ...flagsFragments.importLines,
+        ...notifyFragments.importLines,
         ...envFragments.importLines,
         ...analyticsFragments.importLines,
         ...imagesFragments.importLines,
@@ -4108,11 +4208,13 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
     // schema must not spin the alarm). The alarm re-arms itself while
     // `pollExternalSources` reports active sources. Emitted only when the schema has
     // a sourced table (else the class stays constructor-free).
-    const sourceConstructorOverride = hasSourcedTables
+    // A single constructor bootstraps every alarm tier the schema needs: the
+    // external-source ingest poll (auto-refresh sources) and the declarative TTL
+    // sweep. Emitted only when at least one tier is present, so a plain schema
+    // still gets a byte-identical `shard.ts`.
+    const hasTtlTables = ttlSweeps.length > 0;
+    const sourceBootstrap = hasSourcedTables
         ? `
-        public constructor(state: ShardDOState, env: unknown) {
-            super(state, env);
-
             const autoSourced = Object.values((schema as unknown as SchemaLike).tables).some((definition) => {
                 const source = (definition as { externalSource?: ExternalSourceLike }).externalSource;
 
@@ -4122,9 +4224,23 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
             if (autoSourced) {
                 void this.scheduleSourcePoll();
             }
-        }
 `
         : "";
+    const ttlBootstrap = hasTtlTables
+        ? `
+            if (LUNORA_TTL_SWEEPS.length > 0) {
+                void this.scheduleTtlSweep();
+            }
+`
+        : "";
+    const sourceConstructorOverride =
+        hasSourcedTables || hasTtlTables
+            ? `
+        public constructor(state: ShardDOState, env: unknown) {
+            super(state, env);
+${sourceBootstrap}${ttlBootstrap}        }
+`
+            : "";
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
@@ -4149,8 +4265,8 @@ ${schema.tables
     const secretsBuild = `
             const secrets = createSecrets(env);
 `;
-    const everyContextBuild = `${accessFragments.build}${kvFragments.build}${flagsFragments.build}${analyticsFragments.build}${envFragments.build}${secretsBuild}`;
-    const everyContextField = `${accessFragments.contextField}${kvFragments.contextField}${flagsFragments.contextField}${analyticsFragments.contextField}${envFragments.contextField}\n                secrets,`;
+    const everyContextBuild = `${accessFragments.build}${kvFragments.build}${flagsFragments.build}${notifyFragments.build}${analyticsFragments.build}${envFragments.build}${secretsBuild}`;
+    const everyContextField = `${accessFragments.contextField}${kvFragments.contextField}${flagsFragments.contextField}${notifyFragments.contextField}${analyticsFragments.contextField}${envFragments.contextField}\n                secrets,`;
 
     // `ctx.images` / `ctx.sql` (Hyperdrive) / `ctx.browser` are ActionCtx-ONLY:
     // external, non-deterministic I/O the typed `ActionCtx` exposes but
@@ -4193,14 +4309,17 @@ interface FunctionReference {
 /** Foreign-key columns per table (\`v.id("target")\` fields) for the data browser. */
 const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringify(tableReferences, undefined, 4)};
 
-/** Declared indexes per table (secondary, search, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = ${JSON.stringify(tableIndexes, undefined, 4)};
+/** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
+const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> = ${JSON.stringify(tableIndexes, undefined, 4)};
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via \`__lunora_admin__:describeTable\`. */
 const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>> = ${JSON.stringify(tableColumns, undefined, 4)};
 
 /** Storage-key columns per table (\`v.storage(...)\` fields) for the file browser's records↔files join. */
 const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = ${JSON.stringify(storageColumns, undefined, 4)};
+
+/** Declarative TTL policies (\`.ttl(field, { after? })\`) the DO alarm sweep auto-expires rows for. */
+const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = ${JSON.stringify(ttlSweeps, undefined, 4)};
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via \`__lunora_admin__:getAdvisories\`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = ${JSON.stringify(advisoryData, undefined, 4)};
@@ -4383,8 +4502,12 @@ ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${ext
             return LUNORA_TABLE_REFS[table];
         }
 
-        protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }> {
+        protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }> {
             return LUNORA_TABLE_INDEXES[table] ?? [];
+        }
+
+        protected override ttlSweeps(): ReadonlyArray<{ after?: number; field: string; softDeleteField?: string; table: string }> {
+            return LUNORA_TTL_SWEEPS;
         }
 
         protected override tableColumns(table: string): Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }> {

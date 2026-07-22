@@ -301,3 +301,75 @@ const verifySignedUrl: (input: string | URL, secret: string, options?: {
     expectedHost?: string;
 }) => Promise<VerifyResult>;
 ```
+
+## `@lunora/storage/upload`
+
+### `CreateUploadHandlerOptions` (interface)
+
+```ts
+interface CreateUploadHandlerOptions {
+    authorize?: (context: UploadAuthzContext) => boolean | Promise<boolean>;
+    maxFileSize?: number;
+    protocol?: UploadProtocol;
+    storage: UploadStorage;
+}
+```
+
+### `R2UploadStorageOptions` (interface)
+
+```ts
+interface R2UploadStorageOptions {
+    accessKeyId: string;
+    accountId: string;
+    bucket: string;
+    endpoint?: string;
+    partSize?: number | string;
+    path?: string;
+}
+```
+
+### `UploadAuthzContext` (interface)
+
+```ts
+interface UploadAuthzContext {
+    method: string;
+    protocol: UploadProtocol;
+    request: Request;
+    url: URL;
+}
+```
+
+### `UploadHandler` (interface)
+
+```ts
+interface UploadHandler {
+    fetch: (request: Request) => Promise<Response>;
+    protocol: UploadProtocol;
+}
+```
+
+### `UploadProtocol` (type)
+
+```ts
+type UploadProtocol = "chunked-rest" | "multipart" | "tus";
+```
+
+### `UploadStorage` (type)
+
+```ts
+type UploadStorage = UploadHandlerOptions["storage"];
+```
+
+### `createR2UploadStorage` (const)
+
+```ts
+const createR2UploadStorage: (options: R2UploadStorageOptions & {
+    secretAccessKey: string;
+}) => AwsLightStorage;
+```
+
+### `createUploadHandler` (const)
+
+```ts
+const createUploadHandler: (options: CreateUploadHandlerOptions) => UploadHandler;
+```

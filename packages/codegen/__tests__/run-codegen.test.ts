@@ -661,6 +661,67 @@ export default defineFlags({ provider: (env) => env.PROVIDER, identify: (auth) =
             expect(result.generated.server).not.toContain("@lunora/flags");
         });
 
+        it("does not wire @lunora/notify for a project without a lunora/notify.ts (default-closed)", () => {
+            expect.assertions(4);
+
+            // The `simple` fixture ships a `lunora/notify.ts` (golden coverage); remove
+            // it to assert the default-closed path emits neither facade.
+            rmSync(join(workdir, "lunora", "notify.ts"), { force: true });
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.generated.shard).not.toContain("@lunora/notify");
+            expect(result.generated.shard).not.toContain("createNotify");
+            expect(result.generated.server).not.toContain("@lunora/notify");
+            // Default-closed: neither the notify nor the push ctx field is emitted.
+            expect(result.generated.server).not.toContain("LunoraNotify");
+        });
+
+        it("wires ctx.notify + its ctx.push alias end-to-end (every ctx) when the project declares lunora/notify.ts", () => {
+            expect.assertions(7);
+
+            writeFileSync(
+                join(workdir, "lunora", "notify.ts"),
+                `import { defineNotify, webPushFromEnv } from "@lunora/notify";
+export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            // Runtime wiring (shard): the definition import + createNotify build + both ctx fields.
+            expect(result.generated.shard).toContain('import { createNotify } from "@lunora/notify"');
+            expect(result.generated.shard).toContain('import notifyConfig from "../notify.js"');
+            expect(result.generated.shard).toContain("const { notify, push } = createNotify(notifyConfig, env);");
+            expect(result.generated.shard).toContain("\n                notify,\n                push,");
+            // Notify rides every ctx, so it must NOT be gated behind the action-only block.
+            expect(result.generated.shard).not.toContain("ctx.notify = notify;");
+            // Type wiring (server): both facades typed via @lunora/notify (never umbrella-remapped).
+            expect(result.generated.server).toContain('readonly notify: import("@lunora/notify").LunoraNotify;');
+            expect(result.generated.server).toContain('readonly push: import("@lunora/notify").LunoraPush;');
+        });
+
+        it("wires ctx.notify (every ctx) even under the lunorash umbrella — @lunora/notify is an add-on, never remapped", () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { lunorash: "*" }, name: "umbrella-notify-app" }));
+            writeFileSync(
+                join(workdir, "lunora", "notify.ts"),
+                `import { defineNotify, webPushFromEnv } from "@lunora/notify";
+export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.generated.shard).toContain('import { createNotify } from "@lunora/notify"');
+            expect(result.generated.server).toContain('import("@lunora/notify").LunoraNotify');
+            // Never a `lunorash/notify` subpath — notify has no umbrella re-export.
+            expect(result.generated.shard).not.toContain("lunorash/notify");
+        });
+
         it("wires ctx.sql (Hyperdrive) end-to-end onto the ActionCtx ONLY (value-level) when an action reads ctx.sql", () => {
             expect.assertions(4);
 
@@ -1354,7 +1415,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
         });
 
         it("emits app.ts with the .auth() method when @lunora/auth is a declared dependency", () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             writeFileSync(
                 join(workdir, "package.json"),
@@ -1366,8 +1427,9 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             expect(result.generated.app).toContain("public auth(");
             expect(result.generated.app).toContain(
-                'import { createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
+                'import { createAuth, createAuthAdmin, createAuthAuditReader, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
             );
+            expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(this.authDeclaration.d1(env) as never));");
             expect(result.generated.app).toContain("await ensureMigrated(");
         });
 

@@ -159,6 +159,24 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Auth headers missing";
     };
+    readonly EMAIL_DOMAIN_BLOCKED: {
+        readonly hint: readonly [
+            "This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).",
+            "",
+            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` to `emailGate(...)` (`@lunora/auth/email-guard`)."
+        ];
+        readonly status: 400;
+        readonly title: "Email domain not allowed";
+    };
+    readonly EMAIL_UNDELIVERABLE: {
+        readonly hint: readonly [
+            "The address's domain publishes no MX (or fallback A/AAAA) records, so it can't receive mail.",
+            "",
+            "Check for a typo in the domain. MX verification is opt-in (`mx: true`) and needs DNS — leave it off on the edge path if DNS is unavailable."
+        ];
+        readonly status: 400;
+        readonly title: "Email domain cannot receive mail";
+    };
     readonly ANALYTICS_SQL_ERROR: {
         readonly status: 502;
         readonly title: "Analytics Engine SQL API error";

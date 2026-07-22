@@ -1857,3 +1857,143 @@ const preloadedQueryResult: <T>(preloaded: Preloaded<T>) => T;
 ```ts
 const serializePreloaded: <T>(preloaded: Preloaded<T>) => string;
 ```
+
+## `@lunora/client/upload`
+
+### `ChunkedRestAdapter` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `ChunkedRestAdapterOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreateUploadOptions` (interface)
+
+```ts
+interface CreateUploadOptions {
+    chunkSize?: number;
+    control?: UploadControl;
+    endpoint: string;
+    headers?: HeadersResolver;
+    maxRetries?: number;
+    metadata?: Record<string, string>;
+    protocol?: UploadProtocol;
+    restrictions?: UploadRestrictions;
+    retry?: boolean;
+}
+```
+
+### `FingerprintFunction` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `HeadersResolver` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `LocalStorageUrlStorage` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `MemoryUrlStorage` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `MultipartAdapter` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `MultipartAdapterOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `OnBeforeRequest` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `RequestOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `RestrictionError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `TusAdapter` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `TusAdapterOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadAdapter` (type)
+
+```ts
+type UploadAdapter = ChunkedRestAdapter | MultipartAdapter | TusAdapter;
+```
+
+### `UploadControl` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadMethod` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadProtocol` (type)
+
+```ts
+type UploadProtocol = "chunked-rest" | "multipart" | "tus";
+```
+
+### `UploadRestrictions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadResult` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `Uploader` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UrlStorage` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createChunkedRestAdapter` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createMultipartAdapter` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createTusAdapter` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createUpload` (const)
+
+```ts
+const createUpload: (options: CreateUploadOptions) => UploadAdapter;
+```
+
+### `putFile` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `validateFile` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `validateFiles` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.

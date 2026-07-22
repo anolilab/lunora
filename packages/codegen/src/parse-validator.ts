@@ -53,8 +53,12 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
     return { ...base, column };
 };
 
-/** Scalar `v.*` kinds that map to a bare `{ kind }` IR with no further parsing. */
-const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "null", "number", "string", "timestamp"]);
+/**
+ * Scalar `v.*` kinds that map to a bare `{ kind }` IR with no further parsing.
+ * `geoPoint` is arg-less like the scalars (it renders to a fixed `{ lat, lng }`
+ * object type in `emit.ts`), so it rides this fast path too.
+ */
+const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "geoPoint", "null", "number", "string", "timestamp"]);
 
 /**
  * Refinement/annotation modifiers that hang off any base `v.*` validator

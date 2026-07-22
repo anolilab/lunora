@@ -343,6 +343,7 @@ describe("discoverFunctions", () => {
 
     interface QueryBuilder<Args> {
         readonly __lunoraProcedure: "query";
+        expose: (config: { rest?: boolean }) => QueryBuilder<Args>;
         input: <X extends Record<string, unknown>>(validators: X) => QueryBuilder<Args & X>;
         use: <C>(middleware: (options: { ctx: unknown }) => C) => QueryBuilder<Args>;
         query: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "query" };
@@ -350,6 +351,7 @@ describe("discoverFunctions", () => {
 
     interface MutationBuilder<Args> {
         readonly __lunoraProcedure: "mutation";
+        expose: (config: { rest?: boolean }) => MutationBuilder<Args>;
         input: <X extends Record<string, unknown>>(validators: X) => MutationBuilder<Args & X>;
         mutation: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "mutation" };
     }
@@ -415,6 +417,38 @@ describe("discoverFunctions", () => {
             expect(result[0]?.returnType).toBe('{ hello: "world"; }');
             expect(result[0]?.args.channelId).toEqual({ kind: "id", tableName: "channels" });
             expect(result[0]?.args.limit).toEqual({ kind: "number" });
+        });
+
+        it("discovers `.expose({ rest: true })` into the FunctionIR (plan 167)", () => {
+            expect.assertions(4);
+
+            writeFunction(
+                "messages.ts",
+                `${BUILDER_PREAMBLE}
+            export const list = c.query
+                .input({ channelId: v.id("channels") })
+                .expose({ rest: true })
+                .query(() => null);
+
+            export const send = c.mutation
+                .expose({ rest: true })
+                .mutation(() => null);
+
+            export const secret = c.query
+                .query(() => null);
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const byName = new Map(discoverFunctions(project, workdir).map((f) => [f.exportName, f]));
+
+            // The exposed procedures carry `expose.rest === true`, regardless of
+            // where `.expose()` sits in the chain (before or after `.input()`).
+            expect(byName.get("list")?.expose).toEqual({ rest: true });
+            expect(byName.get("send")?.expose).toEqual({ rest: true });
+            // A procedure without `.expose()` stays RPC-only (default-closed).
+            expect(byName.get("secret")?.expose).toBeUndefined();
+            expect(byName.get("list")?.args.channelId).toEqual({ kind: "id", tableName: "channels" });
         });
 
         it("falls back to the import name when the builder brand can't resolve (uninstalled deps)", () => {

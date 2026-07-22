@@ -9,6 +9,36 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/auth`
 
+### `AUTH_AUDIT_TABLE` (const)
+
+```ts
+const AUTH_AUDIT_TABLE = "__lunora_auth_audit__";
+```
+
+### `AppendAuthAuditEntry` (interface)
+
+```ts
+interface AppendAuthAuditEntry {
+    actorEmail?: string;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+    event: string;
+    ip?: string;
+    outcome: AuthAuditOutcome;
+    ts: number;
+    userAgent?: string;
+}
+```
+
+### `AppendAuthAuditOptions` (interface)
+
+```ts
+interface AppendAuthAuditOptions {
+    redactDetail?: boolean;
+    retention?: number;
+}
+```
+
 ### `AuthAccount` (interface)
 
 ```ts
@@ -224,6 +254,51 @@ interface AuthAdminUser {
 }
 ```
 
+### `AuthAuditEntry` (interface)
+
+```ts
+interface AuthAuditEntry {
+    actorEmail?: string;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+    event: string;
+    ip?: string;
+    outcome: AuthAuditOutcome;
+    seq: number;
+    ts: number;
+    userAgent?: string;
+}
+```
+
+### `AuthAuditEvent` (type)
+
+```ts
+type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" | "mfa-disable" | "mfa-enable" | "password-change" | "password-reset" | "session-revoke" | "sign-in" | "sign-out" | "sign-up" | "token-refresh" | (string & {});
+```
+
+### `AuthAuditHookConfig` (interface)
+
+```ts
+interface AuthAuditHookConfig extends AppendAuthAuditOptions {
+    executor: SqlExecutor;
+    onRecord?: (entry: AppendAuthAuditEntry) => Promise<void> | void;
+}
+```
+
+### `AuthAuditOutcome` (type)
+
+```ts
+type AuthAuditOutcome = "failure" | "success";
+```
+
+### `AuthAuditReader` (interface)
+
+```ts
+interface AuthAuditReader {
+    read: (options: ReadAuthAuditOptions) => Promise<AuthAuditEntry[]>;
+}
+```
+
 ### `AuthCapabilities` (interface)
 
 ```ts
@@ -436,6 +511,51 @@ interface CreateAuthAdminOptions {
 const DEFAULT_AUTH_BASE_PATH: string;
 ```
 
+### `EmailClass` (type)
+
+```ts
+type EmailClass = "business" | "disposable" | "free";
+```
+
+### `EmailClassification` (interface)
+
+```ts
+interface EmailClassification {
+    domain: string | undefined;
+    emailClass: EmailClass;
+}
+```
+
+### `EmailGateConfig` (interface)
+
+```ts
+interface EmailGateConfig {
+    allowDomains?: ReadonlyArray<string>;
+    blockDisposable?: boolean;
+    denyDomains?: ReadonlyArray<string>;
+    flagFreeEmail?: boolean;
+    mx?: boolean;
+    requireValidSyntax?: boolean;
+}
+```
+
+### `EmailGateHookConfig` (interface)
+
+```ts
+interface EmailGateHookConfig extends EmailGateConfig {
+    onClassify?: (classification: EmailClassification, user: Record<string, unknown>, context: unknown) => void;
+}
+```
+
+### `EmailGateMiddlewareOptions` (interface)
+
+```ts
+interface EmailGateMiddlewareOptions<Context> extends EmailGateConfig {
+    email: (context: Context) => string | undefined;
+    onClassify?: (classification: EmailClassification, context: Context) => void;
+}
+```
+
 ### `FetchLike` (type)
 
 ```ts
@@ -508,6 +628,17 @@ class LunoraAuthHeadersError extends LunoraError {
 
 ```ts
 type LunoraAuthOptions = BetterAuthOptions;
+```
+
+### `ReadAuthAuditOptions` (interface)
+
+```ts
+interface ReadAuthAuditOptions {
+    actorId?: string;
+    event?: string;
+    limit?: number;
+    sinceSeq?: number;
+}
 ```
 
 ### `SessionPolicy` (type)
@@ -590,10 +721,40 @@ interface WithAuthPluginsOptions {
 }
 ```
 
+### `appendAuthAuditEntry` (const)
+
+```ts
+const appendAuthAuditEntry: (executor: SqlExecutor, entry: AppendAuthAuditEntry, options?: AppendAuthAuditOptions) => Promise<AppendAuthAuditEntry>;
+```
+
+### `assertEmailAllowed` (const)
+
+```ts
+const assertEmailAllowed: (email: string, config?: EmailGateConfig) => Promise<EmailClassification>;
+```
+
+### `authAuditHook` (const)
+
+```ts
+const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAuthMiddleware>;
+```
+
 ### `authTables` (const)
 
 ```ts
 const authTables: (options: LunoraAuthOptions) => Record<string, TableDefinition>;
+```
+
+### `buildAuditEntry` (const)
+
+```ts
+const buildAuditEntry: (context: AuditHookContext, now?: number) => AppendAuthAuditEntry | undefined;
+```
+
+### `classifyEmail` (const)
+
+```ts
+const classifyEmail: (email: string, config?: EmailGateConfig) => EmailClassification;
 ```
 
 ### `compileMigrationsSql` (const)
@@ -614,6 +775,12 @@ const createAuth: (options: LunoraAuthOptions) => LunoraAuth;
 const createAuthAdmin: (auth: LunoraAuth, options?: CreateAuthAdminOptions) => AuthAdmin;
 ```
 
+### `createAuthAuditReader` (const)
+
+```ts
+const createAuthAuditReader: (executor: SqlExecutor) => AuthAuditReader;
+```
+
 ### `createMemoryAuthStore` (const)
 
 ```ts
@@ -632,6 +799,24 @@ const createSqlAuthStore: (executor: SqlExecutor) => AuthStore;
 const d1Executor: (database: D1Like) => SqlExecutor;
 ```
 
+### `emailGateDatabaseHooks` (const)
+
+```ts
+const emailGateDatabaseHooks: (config?: EmailGateHookConfig) => DatabaseHooks;
+```
+
+### `emailGateMiddleware` (const)
+
+```ts
+const emailGateMiddleware: <Context>(options: EmailGateMiddlewareOptions<Context>) => Middleware<Context, Context>;
+```
+
+### `ensureAuthAuditTable` (const)
+
+```ts
+const ensureAuthAuditTable: (executor: SqlExecutor) => Promise<void>;
+```
+
 ### `ensureMigrated` (const)
 
 ```ts
@@ -640,10 +825,22 @@ const ensureMigrated: (auth: LunoraAuth | {
 }) => Promise<void>;
 ```
 
+### `eventForPath` (const)
+
+```ts
+const eventForPath: (path: string) => AuthAuditEvent | undefined;
+```
+
 ### `handleAuthRequest` (const)
 
 ```ts
 const handleAuthRequest: (auth: LunoraAuth, request: Request, basePath?: string) => Promise<Response | undefined>;
+```
+
+### `loadEmailDomainLists` (const)
+
+```ts
+const loadEmailDomainLists: () => Promise<void>;
 ```
 
 ### `lunoraAuthAdapter` (const)
@@ -662,6 +859,12 @@ const lunoraD1Adapter: (d1: Parameters<typeof d1Executor>[0]) => ReturnType<type
 
 ```ts
 const matchesWhere: (row: AuthRow, where: ReadonlyArray<AuthWhereClause>) => boolean;
+```
+
+### `readAuthAuditLog` (const)
+
+```ts
+const readAuthAuditLog: (executor: SqlExecutor, options?: ReadAuthAuditOptions) => Promise<AuthAuditEntry[]>;
 ```
 
 ### `resolveAuthOptions` (const)
@@ -694,10 +897,26 @@ const verifyTurnstile: ({ expectedAction, expectedHostname, fetch, remoteip, sec
 const verifyTurnstileMiddleware: <Context>(options: VerifyTurnstileMiddlewareOptions<Context>) => Middleware<Context, Context>;
 ```
 
+### `withAuthAudit` (const)
+
+```ts
+const withAuthAudit: <Options extends {
+    hooks?: {
+        after?: unknown;
+    };
+}>(options: Options, config: AuthAuditHookConfig) => Options;
+```
+
 ### `withAuthPlugins` (const)
 
 ```ts
 const withAuthPlugins: <Auth extends LunoraAuth>(auth: Auth, options?: WithAuthPluginsOptions) => WithAuthPluginsMiddleware<Auth>;
+```
+
+### `withEmailGate` (const)
+
+```ts
+const withEmailGate: (options: BetterAuthOptions, config?: EmailGateHookConfig) => BetterAuthOptions;
 ```
 
 ## `@lunora/auth/adapter`
@@ -712,6 +931,172 @@ const lunoraAuthAdapter: (store: AuthStore) => ReturnType<typeof createAdapterFa
 
 ```ts
 const lunoraD1Adapter: (d1: Parameters<typeof d1Executor>[0]) => ReturnType<typeof lunoraAuthAdapter>;
+```
+
+## `@lunora/auth/audit`
+
+### `AUTH_AUDIT_TABLE` (const)
+
+```ts
+const AUTH_AUDIT_TABLE = "__lunora_auth_audit__";
+```
+
+### `AppendAuthAuditEntry` (interface)
+
+```ts
+interface AppendAuthAuditEntry {
+    actorEmail?: string;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+    event: string;
+    ip?: string;
+    outcome: AuthAuditOutcome;
+    ts: number;
+    userAgent?: string;
+}
+```
+
+### `AppendAuthAuditOptions` (interface)
+
+```ts
+interface AppendAuthAuditOptions {
+    redactDetail?: boolean;
+    retention?: number;
+}
+```
+
+### `AuthAuditEntry` (interface)
+
+```ts
+interface AuthAuditEntry {
+    actorEmail?: string;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+    event: string;
+    ip?: string;
+    outcome: AuthAuditOutcome;
+    seq: number;
+    ts: number;
+    userAgent?: string;
+}
+```
+
+### `AuthAuditEvent` (type)
+
+```ts
+type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" | "mfa-disable" | "mfa-enable" | "password-change" | "password-reset" | "session-revoke" | "sign-in" | "sign-out" | "sign-up" | "token-refresh" | (string & {});
+```
+
+### `AuthAuditOutcome` (type)
+
+```ts
+type AuthAuditOutcome = "failure" | "success";
+```
+
+### `AuthAuditReader` (interface)
+
+```ts
+interface AuthAuditReader {
+    read: (options: ReadAuthAuditOptions) => Promise<AuthAuditEntry[]>;
+}
+```
+
+### `ReadAuthAuditOptions` (interface)
+
+```ts
+interface ReadAuthAuditOptions {
+    actorId?: string;
+    event?: string;
+    limit?: number;
+    sinceSeq?: number;
+}
+```
+
+### `appendAuthAuditEntry` (const)
+
+```ts
+const appendAuthAuditEntry: (executor: SqlExecutor, entry: AppendAuthAuditEntry, options?: AppendAuthAuditOptions) => Promise<AppendAuthAuditEntry>;
+```
+
+### `createAuthAuditReader` (const)
+
+```ts
+const createAuthAuditReader: (executor: SqlExecutor) => AuthAuditReader;
+```
+
+### `ensureAuthAuditTable` (const)
+
+```ts
+const ensureAuthAuditTable: (executor: SqlExecutor) => Promise<void>;
+```
+
+### `readAuthAuditLog` (const)
+
+```ts
+const readAuthAuditLog: (executor: SqlExecutor, options?: ReadAuthAuditOptions) => Promise<AuthAuditEntry[]>;
+```
+
+## `@lunora/auth/email-guard`
+
+### `EmailClass` (type)
+
+```ts
+type EmailClass = "business" | "disposable" | "free";
+```
+
+### `EmailClassification` (interface)
+
+```ts
+interface EmailClassification {
+    domain: string | undefined;
+    emailClass: EmailClass;
+}
+```
+
+### `EmailGateConfig` (interface)
+
+```ts
+interface EmailGateConfig {
+    allowDomains?: ReadonlyArray<string>;
+    blockDisposable?: boolean;
+    denyDomains?: ReadonlyArray<string>;
+    flagFreeEmail?: boolean;
+    mx?: boolean;
+    requireValidSyntax?: boolean;
+}
+```
+
+### `EmailGateMiddlewareOptions` (interface)
+
+```ts
+interface EmailGateMiddlewareOptions<Context> extends EmailGateConfig {
+    email: (context: Context) => string | undefined;
+    onClassify?: (classification: EmailClassification, context: Context) => void;
+}
+```
+
+### `assertEmailAllowed` (const)
+
+```ts
+const assertEmailAllowed: (email: string, config?: EmailGateConfig) => Promise<EmailClassification>;
+```
+
+### `classifyEmail` (const)
+
+```ts
+const classifyEmail: (email: string, config?: EmailGateConfig) => EmailClassification;
+```
+
+### `emailGateMiddleware` (const)
+
+```ts
+const emailGateMiddleware: <Context>(options: EmailGateMiddlewareOptions<Context>) => Middleware<Context, Context>;
+```
+
+### `loadEmailDomainLists` (const)
+
+```ts
+const loadEmailDomainLists: () => Promise<void>;
 ```
 
 ## `@lunora/auth/middleware`
