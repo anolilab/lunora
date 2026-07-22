@@ -82,7 +82,7 @@ export { createKvCursorStore, createMemoryCursorStore, defineExportSink, r2Sink,
 export type { HealthAuthPosture, HealthBody, HealthCheckReport, HealthProbe, HealthProbeKind, HealthProbeResult, HealthRouteDeps } from "./health-routes";
 export { buildHealthRoutes, d1Probe, durableObjectProbe, HEALTH_PATH, HEALTH_READY_PATH, presenceProbe } from "./health-routes";
 export type { LogArchiveConfig } from "./log-archive-admin-routes";
-export { LOG_ARCHIVE_NOT_CONFIGURED, LOG_ARCHIVE_PATH } from "./log-archive-admin-routes";
+export { LOG_ARCHIVE_NOT_CONFIGURED, LOG_ARCHIVE_PATH, resolveLogArchiveFromEnv } from "./log-archive-admin-routes";
 export type {
     LogEvent,
     LogFields,

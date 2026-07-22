@@ -69,6 +69,8 @@
         "non-goals",
         "limits",
         "versioning",
+        "---Lunora Cloud---",
+        "cloud/monitoring",
         "---Reference---",
         "concepts/wire-protocol",
         "packages"

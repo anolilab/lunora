@@ -120,7 +120,8 @@ the durable loop:
   `telemetry.integrations` to trace turns and tool calls.
   the [`@lunora/agent/telemetry`](#telemetry-integrations) subpath ships
   ready-made ones — `consoleTelemetry` (zero-dependency), `combineTelemetry`,
-  and the dependency-injected `sentryTelemetry` / `braintrustTelemetry` bridges
+  `otlpTelemetry` (ships `gen_ai.*` spans over OTLP to any collector), and the
+  dependency-injected `sentryTelemetry` / `braintrustTelemetry` bridges
   (privacy-safe by default — no prompt/output recorded without opt-in).
 
 ```ts
@@ -155,24 +156,34 @@ success/failure).
   tool executions into spans (`op: "gen_ai.generate"` / `"gen_ai.execute_tool"`)
   and routes errors to `Sentry.captureException`; Braintrust logs `type: "llm"` /
   `type: "tool"` `logger.traced` spans.
+- **`otlpTelemetry`** — ships a `gen_ai.*` **generation span** per model turn (and
+  a span per tool call) over OTLP-over-HTTP to any collector — the Lunora cloud, or
+  your own — so agent generations land in the same trace store as the rest of your
+  app's [telemetry](/docs/concepts/observability#generation-spans-ai). Zero SDK
+  dependency (it just `fetch`es). Pass `{ endpoint, token }` (read from the injected
+  `LUNORA_OTLP_ENDPOINT` / `LUNORA_OTLP_TOKEN` on the platform) and, optionally, a
+  `traceId` to group one run's spans into a single trace. Two deliberate
+  differences from the SDK bridges: no `onError` (a failed span already carries
+  `status.code === 2`) and flat spans (OTLP has no ambient parent to nest under).
 
 ```ts
 import { defineAgent } from "@lunora/agent";
-import { combineTelemetry, consoleTelemetry, sentryTelemetry } from "@lunora/agent/telemetry";
+import { combineTelemetry, consoleTelemetry, otlpTelemetry, sentryTelemetry } from "@lunora/agent/telemetry";
 import * as Sentry from "@sentry/cloudflare";
 
 export const support = defineAgent({
     name: "support",
     telemetry: {
         isEnabled: true,
-        integrations: [combineTelemetry(sentryTelemetry({ Sentry }), consoleTelemetry())],
+        integrations: [combineTelemetry(otlpTelemetry({ endpoint: env.LUNORA_OTLP_ENDPOINT, token: env.LUNORA_OTLP_TOKEN }), consoleTelemetry())],
     },
     // ...model, tools, loop control
 });
 ```
 
-`consoleTelemetry` and `combineTelemetry` have zero runtime dependencies; install
-`@sentry/cloudflare` / `braintrust` only if you use those bridges.
+`consoleTelemetry`, `combineTelemetry`, and `otlpTelemetry` have zero runtime
+dependencies; install `@sentry/cloudflare` / `braintrust` only if you use those
+bridges.
 
 ## Concurrency + cancellation
 
