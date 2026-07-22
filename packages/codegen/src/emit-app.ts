@@ -34,6 +34,8 @@ interface EmitAppOptions {
     hasImages: boolean;
     /** App uses `@lunora/bindings/kv` / `ctx.kv` → emit `.kv()`. */
     hasKv: boolean;
+    /** App declares `lunora/notify.ts` (`@lunora/notify`) → wire `options.notifySubscriptionStore` so the studio Notifications page can read registered devices. */
+    hasNotify: boolean;
     /** App uses `@lunora/payment` / `ctx.payments` → emit `.payment()`. */
     hasPayments: boolean;
     /** App declares push queues (`defineQueue`) → wire `LUNORA_QUEUE_REGISTRY` into the worker's `queue()` consumer entry. */
@@ -122,6 +124,9 @@ const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
 
 /** KV-browser import — the zero-config env-scanning introspector factory backing `createWorker({ kvIntrospector })`. */
 const buildKvImports = (hasKv: boolean): string[] => (hasKv ? [`import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";`] : []);
+
+/** `lunora/notify.ts` default-export import — the `defineNotify(...)` config the worker reads its subscription store off (`createWorker({ notifySubscriptionStore })`). */
+const buildNotifyImports = (hasNotify: boolean): string[] => (hasNotify ? [`import notifyConfig from "../notify.js";`] : []);
 
 /** Whether any `onEmail` agents were discovered (⇒ wire the worker `email()` handler). */
 const hasEmailAgents = (options: EmitAppOptions): boolean => (options.emailAgents?.length ?? 0) > 0;
@@ -218,6 +223,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...buildIdentityImports(options.identity),
         ...buildAgentDefinitionsImport(options),
         ...(hasGlobal || hasHyperdriveGlobal ? [`import schema from "../schema.js";`] : []),
+        ...buildNotifyImports(options.hasNotify),
         `import { LUNORA_CRONS } from "./crons.js";`,
         `import { LUNORA_FUNCTIONS } from "./functions.js";`,
         ...(hasQueue
@@ -552,6 +558,12 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
     // with no manual `createKvIntrospector` call. A deployment with no KV binding
     // yields an empty namespace list rather than crashing.
     ...(options.hasKv ? [`        options.kvIntrospector = createKvIntrospectorFromEnv(env);`] : []),
+    // The studio's Notifications page reads the app's registered `@lunora/notify`
+    // device subscriptions through the SAME store the handlers register into. The
+    // store is built from `env` via `lunora/notify.ts`'s `defineNotify({ store })`;
+    // when no `store` is configured (the in-memory default), the gated
+    // `__lunora_admin__:listPushSubscriptions` RPC returns an empty device list.
+    ...(options.hasNotify ? [`        options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env) : undefined;`] : []),
     // The studio's Logs → Archive feed is wired zero-config: when the operator sets
     // `LUNORA_LOG_ARCHIVE_TABLE` (the R2 Data Catalog table `pipelineLogSink` writes
     // to), the durable archive becomes readable; unset ⇒ `undefined` ⇒ the feed

@@ -702,6 +702,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // `@lunora/bindings/kv` dep), so a visible KV tab always has a working
         // backend — never the reverse. The `ctx.kv` type-seam stays usage-only.
         hasKv: studioFeatures.kv,
+        hasNotify,
         hasPayments,
         hasR2sql,
         hasQueue: queues.some((queue) => queue.mode === "push"),
