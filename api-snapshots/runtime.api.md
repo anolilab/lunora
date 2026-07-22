@@ -1288,6 +1288,7 @@ interface ObservabilityEvent {
 
 ```ts
 interface ObservabilitySink {
+    fuseCloudflareTraces?: boolean;
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
     onMetric?: (event: MetricEvent, context?: ObservabilitySinkContext) => void;
     onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
