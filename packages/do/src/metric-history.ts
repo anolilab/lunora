@@ -18,9 +18,9 @@
  * that produced it (OpenTelemetry's exemplar model). The reserved `__lunora`
  * prefix auto-hides the table from the data browser.
  */
-import { stableStringify } from "../../../shared/stable-key";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
+import { stableStringify } from "../../../shared/stable-key";
 import type { SqlCursor, SqlExec } from "./ctx-db";
 // Shared so the durable history and the live buffer agree byte-for-byte on what
 // "one series" is — the studio joins the two on this identity.
@@ -49,7 +49,7 @@ const METRIC_HISTORY_MAX_SERIES = 1000;
 const METRIC_HISTORY_READ_LIMIT = 5000;
 
 /** One time-bucket sample of a series: the aggregate over `[bucketMs, bucketMs + METRIC_HISTORY_BUCKET_MS)`. */
-export interface MetricHistoryPoint {
+interface MetricHistoryPoint {
     /** Epoch-ms floor of the bucket window. */
     bucketMs: number;
     /** Measurements folded into this bucket. */
@@ -67,7 +67,7 @@ export interface MetricHistoryPoint {
 }
 
 /** One series' durable history: its identity plus its time-ordered buckets, oldest first. */
-export interface MetricHistorySeries {
+interface MetricHistorySeries {
     attributes?: LogFields;
     functionPath: string;
     kind: MetricKind;
@@ -78,7 +78,7 @@ export interface MetricHistorySeries {
 }
 
 /** {@link readMetricHistory} result: every tracked series with its buckets. */
-export interface MetricHistoryResult {
+interface MetricHistoryResult {
     series: MetricHistorySeries[];
 }
 
@@ -145,7 +145,7 @@ const ensureMetricHistoryTable = (sql: SqlExec): void => {
  * the bucket so the studio can link a chart point back to a trace. Latest wins:
  * a later sample carrying a trace replaces an earlier bucket's exemplar.
  */
-export const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?: string): void => {
+const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?: string): void => {
     ensureMetricHistoryTable(sql);
 
     const key = metricSeriesKey(event);
@@ -228,7 +228,7 @@ export const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTr
 };
 
 /** Parse a stored `attrs` JSON blob back into a fields bag, tolerating a malformed value rather than throwing on a read. */
-const parseAttrs = (raw: string): LogFields | undefined => {
+const parseAttributes = (raw: string): LogFields | undefined => {
     if (raw === "" || raw === "{}") {
         return undefined;
     }
@@ -252,10 +252,11 @@ const parseAttrs = (raw: string): LogFields | undefined => {
  * alphabetically-first series its full 1440-bucket history and starving the rest
  * once the cap is hit. Each series' points are re-sorted ascending below, since a
  * trend line reads oldest→newest.
- * @param sinceMs When set, only buckets at or after this epoch-ms are returned —
+ *
+ * `options.sinceMs`, when set, returns only buckets at or after this epoch-ms —
  * the studio's time-window selector.
  */
-export const readMetricHistory = (sql: SqlExec, options: { sinceMs?: number } = {}): MetricHistoryResult => {
+const readMetricHistory = (sql: SqlExec, options: { sinceMs?: number } = {}): MetricHistoryResult => {
     ensureMetricHistoryTable(sql);
 
     const rows =
@@ -274,7 +275,7 @@ export const readMetricHistory = (sql: SqlExec, options: { sinceMs?: number } = 
         let series = bySeries.get(row.series_key);
 
         if (series === undefined) {
-            const attributes = parseAttrs(row.attrs);
+            const attributes = parseAttributes(row.attrs);
 
             series = {
                 ...(attributes === undefined ? {} : { attributes }),
@@ -305,3 +306,6 @@ export const readMetricHistory = (sql: SqlExec, options: { sinceMs?: number } = 
 
     return { series: [...bySeries.values()] };
 };
+
+export { readMetricHistory, recordMetricHistory };
+export type { MetricHistoryPoint, MetricHistoryResult, MetricHistorySeries };

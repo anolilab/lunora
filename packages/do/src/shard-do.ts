@@ -99,10 +99,10 @@ import type { IssueSeverity, IssueState, IssueStatePatch, IssueStatus } from "./
 import { ISSUE_SEVERITIES, ISSUE_STATE_TABLE, ISSUE_STATUSES, upsertIssueState } from "./issue-state";
 import type { LogEntry } from "./log-buffer";
 import { LogBuffer } from "./log-buffer";
-import { readMetricHistory, recordMetricHistory } from "./metric-history";
 import type { RecordMailInput } from "./mail-catcher";
 import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 import { MetricBuffer } from "./metric-buffer";
+import { readMetricHistory, recordMetricHistory } from "./metric-history";
 import { armRestore, readBookmark } from "./pitr";
 import type { QueryStatEntry } from "./query-metrics";
 import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
@@ -4755,7 +4755,7 @@ abstract class ShardDO {
         };
 
         // Live in-memory fold (the "recent on this instance" readout).
-        bestEffort(() => this.metricSeries.push(stamped));
+        bestEffort(() => { this.metricSeries.push(stamped); });
 
         // Durable per-minute rollups. Use the RAW storage handle, NOT `this.sql`:
         // the getter instruments statements into the Query Insights leaderboard

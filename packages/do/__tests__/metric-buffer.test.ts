@@ -20,13 +20,16 @@ describe("metricBuffer", () => {
         const buffer = new MetricBuffer();
 
         buffer.push(event({ kind: "counter", name: "orders.placed", traceId: "trace-a", value: 1 }));
+
         expect(buffer.entries()[0]?.exemplarTraceId).toBe("trace-a");
 
         buffer.push(event({ kind: "counter", name: "orders.placed", traceId: "trace-b", value: 1 }));
+
         expect(buffer.entries()[0]?.exemplarTraceId).toBe("trace-b");
 
         // A later measurement without a trace leaves the exemplar intact.
         buffer.push(event({ kind: "counter", name: "orders.placed", value: 1 }));
+
         expect(buffer.entries()[0]?.exemplarTraceId).toBe("trace-b");
     });
 

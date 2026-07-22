@@ -15,14 +15,15 @@ import createSqliteExec from "./_helpers/node-sqlite";
 const ADMIN_TOKEN = "test-admin-token-that-is-long-enough";
 
 /** A shard state backed by a real in-memory SQLite, for the durable metric-history path. */
-const sqliteStateDouble = (database: ReturnType<typeof createSqliteExec>): ShardDOState =>
-    ({
+const sqliteStateDouble = (database: ReturnType<typeof createSqliteExec>): ShardDOState => {
+    return {
         acceptWebSocket() {},
         getWebSockets() {
             return [];
         },
         storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
-    }) as unknown as ShardDOState;
+    };
+};
 
 /**
  * Drives the shard's own `makeTracer` wiring — used only by the `getTraces`

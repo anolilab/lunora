@@ -1,8 +1,6 @@
 import { LunoraProvider } from "@lunora/react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-
-import { fireEvent } from "@testing-library/react";
 
 import { formatMetricValue, metricHeadline } from "../../../src/features/reports/instrument-format";
 import { InstrumentsTable } from "../../../src/features/reports/instruments-table";
@@ -80,7 +78,7 @@ const createClient = (result: unknown = DEFAULT_RESULT, history: unknown = HISTO
                 return history;
             }
 
-            throw new Error(`unexpected ${String(reference)}`);
+            throw new Error(`unexpected ${reference}`);
         },
     });
 
@@ -178,7 +176,7 @@ describe("instrumentsTable", () => {
         render(renderTable(createClient()));
 
         // orders.placed has two history buckets; the sparkline renders for it.
-        expect(await screen.findByTestId("mt-instrument-trend-orders.placed")).toBeTruthy();
+        await expect(screen.findByTestId("mt-instrument-trend-orders.placed")).resolves.toBeDefined();
     });
 
     it("joins live series to history by canonical key, regardless of attribute order", async () => {
@@ -221,7 +219,7 @@ describe("instrumentsTable", () => {
 
         render(renderTable(createClient({ series: live }, history)));
 
-        expect(await screen.findByTestId("mt-instrument-trend-http.requests")).toBeTruthy();
+        await expect(screen.findByTestId("mt-instrument-trend-http.requests")).resolves.toBeDefined();
     });
 
     it("links a series' exemplar trace and opens it on click", async () => {
@@ -232,6 +230,7 @@ describe("instrumentsTable", () => {
         render(renderTable(createClient(), (traceId) => opened.push(traceId)));
 
         const link = await screen.findByTestId("mt-instrument-trace-orders.placed");
+
         // The short id is shown; the full id is what the drill-down opens.
         expect(link.textContent).toBe("trace-ch");
 

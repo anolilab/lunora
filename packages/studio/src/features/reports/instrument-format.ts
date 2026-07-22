@@ -1,10 +1,10 @@
 // Pure formatting helpers for the Instruments table, kept out of the component
 // file so it exports only its component (Fast Refresh preserves state), mirroring
 // how `traces-panel` keeps its geometry in `trace-geometry`.
-import type { MetricHistoryPoint, MetricKind, MetricSeries } from "../../lib/admin";
 // Bundler-inlined, zero-dep canonical JSON encoder (the same one the server's
 // series identity uses), imported by relative path per CLAUDE.md `shared/` rules.
 import { stableStringify } from "../../../../../shared/stable-key";
+import type { MetricHistoryPoint, MetricKind, MetricSeries } from "../../lib/admin";
 
 /**
  * Stable identity for a series — kind, name, and a **canonical** encoding of its
@@ -19,7 +19,7 @@ import { stableStringify } from "../../../../../shared/stable-key";
  * multi-dimension series. `stableStringify` sorts keys at every depth, so both
  * sides land on the same key regardless of authoring order.
  */
-export const seriesMatchKey = (kind: MetricKind, name: string, attributes: Record<string, unknown> | undefined): string =>
+const seriesMatchKey = (kind: MetricKind, name: string, attributes: Record<string, unknown> | undefined): string =>
     `${kind}:${name}:${stableStringify(attributes ?? {})}`;
 
 /**
@@ -42,11 +42,13 @@ const projectByKind = (kind: MetricKind, metric: { count: number; last: number; 
 };
 
 /** Project one history bucket to the value the trend line plots (its per-kind projection). */
-export const pointValue = (kind: MetricKind, point: MetricHistoryPoint): number => projectByKind(kind, point);
+const pointValue = (kind: MetricKind, point: MetricHistoryPoint): number => projectByKind(kind, point);
 
 /** The headline value the panel shows for a live series (its per-kind projection). */
-export const metricHeadline = (series: MetricSeries): number => projectByKind(series.kind, series);
+const metricHeadline = (series: MetricSeries): number => projectByKind(series.kind, series);
 
 /** Format a metric value: grouped integer, or up to 2 decimals for a fractional one. */
-export const formatMetricValue = (value: number): string =>
+const formatMetricValue = (value: number): string =>
     Number.isInteger(value) ? value.toLocaleString() : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+export { formatMetricValue, metricHeadline, pointValue, seriesMatchKey };

@@ -18,9 +18,9 @@
  * arbitrarily many measurements into O(1) state, so the readout stays faithful
  * for a hot counter while staying bounded against high-cardinality dimensions.
  */
-import { stableStringify } from "../../../shared/stable-key";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
+import { stableStringify } from "../../../shared/stable-key";
 
 /** Default number of distinct series retained; least-recently-updated evicted first. */
 const DEFAULT_CAPACITY = 256;
@@ -66,8 +66,13 @@ export interface MetricSeries {
 /**
  * Stable identity for a series: kind, name, then the code-point-sorted encoding
  * of its dimensions so `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` fold together. The
- * NUL (`\u0000`) separator can't occur in a metric name, so distinct series never
- * collide. `stableStringify` is fed already-normalized JSON-safe `LogFields`, so
+ * `U+001F` (Unit Separator) delimiter can't occur in a metric name, and JSON
+ * escapes every control char so no `stableStringify` output contains it either —
+ * distinct series never collide. It is deliberately not `U+0000` (NUL): the durable
+ * {@link file://./metric-history.ts} persists this key as a SQLite `TEXT`
+ * `series_key`, and `node:sqlite` reads `TEXT` back C-string-style, truncating at
+ * the first NUL — which collapsed every `counter`-prefixed key to `"counter"` on
+ * read and silently merged distinct series. `stableStringify` is fed already-normalized JSON-safe `LogFields`, so
  * its fail-loud path is unreachable here; the caller still records best-effort.
  *
  * Exported and shared with the durable {@link file://./metric-history.ts} rollups:
@@ -75,7 +80,7 @@ export interface MetricSeries {
  * is, or the studio's live↔history join silently mismatches. One shared function
  * makes that guarantee structural rather than a comment across two copies.
  */
-export const metricSeriesKey = (event: MetricEvent): string => `${event.kind}\u0000${event.name}\u0000${stableStringify(event.attributes ?? {})}`;
+export const metricSeriesKey = (event: MetricEvent): string => `${event.kind}\u001F${event.name}\u001F${stableStringify(event.attributes ?? {})}`;
 
 /**
  * A bounded map of running metric aggregates, keyed by series identity. Eviction
@@ -109,7 +114,9 @@ export class MetricBuffer {
      * update order (tail = newest), so one reverse yields newest-first.
      */
     public entries(): MetricSeries[] {
-        return [...this.series.values()].reverse().map((s) => ({ ...s }));
+        return [...this.series.values()].toReversed().map((s) => {
+            return { ...s };
+        });
     }
 
     /** Fold one measurement into its series, creating or updating the aggregate. */

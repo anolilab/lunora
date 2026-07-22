@@ -18,6 +18,7 @@ import type {
 } from "../src/introspect";
 import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { MetricSeries } from "../src/metric-buffer";
+import type { MetricHistoryPoint, MetricHistorySeries } from "../src/metric-history";
 import type { QueueMessageRow, RecordQueueMessageInput } from "../src/queue-catcher";
 import type { RankIndexDefinitionLike, ShardRankPageResult } from "../src/rank";
 import { rankKeyFromDoc } from "../src/rank";
@@ -32,7 +33,6 @@ import type {
     ShardDOState,
 } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { MetricHistoryPoint, MetricHistorySeries } from "../src/metric-history";
 import type { TraceSpan, TraceSummary } from "../src/span-buffer";
 import type { SocketAttachment } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";

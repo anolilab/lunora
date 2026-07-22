@@ -1,16 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { MetricEvent } from "../../../shared/metric-event";
-import { readMetricHistory, recordMetricHistory } from "../src/metric-history";
 import type { SqlExec } from "../src/ctx-db";
+import { readMetricHistory, recordMetricHistory } from "../src/metric-history";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /** Build a MetricEvent, defaulting the boilerplate so each test states only what it exercises. */
-const event = (over: Partial<MetricEvent> & Pick<MetricEvent, "kind" | "name" | "value">): MetricEvent => ({
-    functionPath: "orders:checkout",
-    ts: 1_749_300_000_000,
-    ...over,
-});
+const event = (over: Partial<MetricEvent> & Pick<MetricEvent, "kind" | "name" | "value">): MetricEvent => {
+    return {
+        functionPath: "orders:checkout",
+        ts: 1_749_300_000_000,
+        ...over,
+    };
+};
 
 const MINUTE = 60_000;
 
@@ -80,6 +82,7 @@ describe("metricHistory", () => {
         const { series } = readMetricHistory(sql);
 
         expect(series).toHaveLength(4);
+
         const eu = series.find((s) => s.attributes?.region === "eu" && s.attributes.route === "/a");
 
         expect(eu?.points[0]?.count).toBe(2);

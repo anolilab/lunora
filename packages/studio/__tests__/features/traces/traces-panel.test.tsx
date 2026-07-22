@@ -4,10 +4,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { filterTraces, formatSpanDuration, spanBar } from "../../../src/features/traces/trace-geometry";
-import { readPendingTraceFilter, writePendingTraceFilter } from "../../../src/lib/trace-handoff";
 import { TracesPanel } from "../../../src/features/traces/traces-panel";
 import type { TraceSpan, TraceSummary } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
+import { readPendingTraceFilter, writePendingTraceFilter } from "../../../src/lib/trace-handoff";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -396,7 +396,7 @@ describe("exemplar hand-off", () => {
 
         expect(readPendingTraceFilter()).toStrictEqual({ shardKey: "room-9", traceId: "trace-send" });
         // Cleared after the first read, so a later manual visit isn't re-filtered.
-        expect(readPendingTraceFilter()).toBeNull();
+        expect(readPendingTraceFilter()).toBeUndefined();
     });
 
     it("seeds the search AND the shard from the hand-off on mount", async () => {
@@ -408,9 +408,9 @@ describe("exemplar hand-off", () => {
         render(renderPanel(createClient()));
 
         await waitFor(() => {
-            expect((screen.getByTestId("tr-search") as HTMLInputElement).value).toBe("trace-send");
+            expect(screen.getByTestId<HTMLInputElement>("tr-search").value).toBe("trace-send");
         });
 
-        expect((screen.getByTestId("tr-shard-input") as HTMLInputElement).value).toBe("room-9");
+        expect(screen.getByTestId<HTMLInputElement>("tr-shard-input").value).toBe("room-9");
     });
 });

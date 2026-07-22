@@ -25,24 +25,24 @@ export const writePendingTraceFilter = (filter: PendingTraceFilter): void => {
 };
 
 /**
- * Read and clear the one-shot exemplar hand-off, or `null` when there is none.
- * Call from an effect (never render) — it touches `sessionStorage`. A malformed
- * payload (or a blocked store) is treated as absent, and each field is type-checked
- * so a tampered non-string can't reach the panel (a numeric `shardKey` would crash
- * the panel's `shardKey.trim()`).
+ * Read and clear the one-shot exemplar hand-off, or `undefined` when there is none.
+ * Safe to call from a lazy state initializer — it is SSR-guarded (a missing store
+ * yields `undefined`). A malformed payload (or a blocked store) is treated as absent,
+ * and each field is type-checked so a tampered non-string can't reach the panel (a
+ * numeric `shardKey` would crash the panel's `shardKey.trim()`).
  */
-export const readPendingTraceFilter = (): PendingTraceFilter | null => {
+export const readPendingTraceFilter = (): PendingTraceFilter | undefined => {
     const storage = storageOf("session");
 
     if (storage === undefined) {
-        return null;
+        return undefined;
     }
 
     try {
         const raw = storage.getItem(STORAGE_KEY);
 
         if (raw === null) {
-            return null;
+            return undefined;
         }
 
         // One-shot: clear before returning so a later manual visit isn't re-filtered.
@@ -51,11 +51,11 @@ export const readPendingTraceFilter = (): PendingTraceFilter | null => {
         const parsed = JSON.parse(raw) as Partial<PendingTraceFilter>;
 
         if (typeof parsed.traceId !== "string") {
-            return null;
+            return undefined;
         }
 
         return { traceId: parsed.traceId, ...(typeof parsed.shardKey === "string" ? { shardKey: parsed.shardKey } : {}) };
     } catch {
-        return null;
+        return undefined;
     }
 };

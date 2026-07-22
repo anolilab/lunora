@@ -17,8 +17,9 @@ import type { TraceSpan, TracesResult, TraceSummary } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
-import { cn } from "../../lib/utils";
+import type { PendingTraceFilter } from "../../lib/trace-handoff";
 import { readPendingTraceFilter } from "../../lib/trace-handoff";
+import { cn } from "../../lib/utils";
 import { filterTraces, formatSpanDuration, spanBar } from "./trace-geometry";
 
 /** Pixels of indent per nesting level of a span row. */
@@ -206,29 +207,16 @@ interface TracesPanelProps {
 export const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement => {
     const t = useT();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [search, setSearch] = useState<string>("");
+    // Apply a one-shot exemplar hand-off (a metric's Trace link): seed the search
+    // with the trace id AND switch to the shard it was recorded on, so an exemplar
+    // opened from a non-root shard searches the right ring. Read once, in a lazy
+    // state initializer rather than an effect — the studio is a client-rendered SPA
+    // and the read is SSR-guarded, so this avoids a synchronous setState-in-effect.
+    const [pending] = useState<PendingTraceFilter | undefined>(readPendingTraceFilter);
+
+    const [shardKey, setShardKey] = useState<string>(pending?.shardKey !== undefined && pending.shardKey !== "" ? pending.shardKey : (initialShardKey ?? ""));
+    const [search, setSearch] = useState<string>(pending?.traceId ?? "");
     const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-
-    // Apply a one-shot exemplar hand-off (a metric's Trace link) on mount: seed the
-    // search with the trace id AND switch to the shard it was recorded on, so an
-    // exemplar opened from a non-root shard searches the right ring. In an effect,
-    // not a render/initializer, because it reads the `sessionStorage` browser global
-    // (which isn't available server-side).
-    useEffect(() => {
-        const pending = readPendingTraceFilter();
-
-        if (pending === null) {
-            return;
-        }
-
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-derived-state -- a one-shot external hand-off, read once on mount; not derivable from props/state
-        setSearch(pending.traceId);
-
-        if (pending.shardKey !== undefined && pending.shardKey !== "") {
-            setShardKey(pending.shardKey);
-        }
-    }, []);
 
     // Debounced so typing a key settles before refetching (and re-subscribing)
     // rather than firing per keystroke — mirrors the Logs and Issues panels.
