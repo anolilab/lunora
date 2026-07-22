@@ -6,12 +6,27 @@ import type { QueryCoordinator } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 const noopShardDO: ShardNamespaceLike = {
-    get: () => {return { fetch: async () => new Response("ok") }},
-    idFromName: (name) => {return { __name: name }},
+    get: () => {
+        return { fetch: async () => new Response("ok") };
+    },
+    idFromName: (name) => {
+        return { __name: name };
+    },
 };
 
 /** Build a fake coordinator whose `orchestrateCdcSync` returns scripted per-shard pages, recording the cursors it was called with. */
-const fakeCoordinator = (pages: (cursors: Record<string, number>) => { failed: number; ok: number; shards: ReadonlyArray<{ changes?: ReadonlyArray<Record<string, unknown>>; cursor: number; error?: { message: string; timedOut: boolean }; shardKey: string }> }) => {
+const fakeCoordinator = (
+    pages: (cursors: Record<string, number>) => {
+        failed: number;
+        ok: number;
+        shards: ReadonlyArray<{
+            changes?: ReadonlyArray<Record<string, unknown>>;
+            cursor: number;
+            error?: { message: string; timedOut: boolean };
+            shardKey: string;
+        }>;
+    },
+) => {
     const calls: Record<string, number>[] = [];
     const coordinator = {
         orchestrateCdcSync: async (_namespace: ShardNamespaceLike, request: { cursors?: Record<string, number> }) => {
@@ -24,7 +39,9 @@ const fakeCoordinator = (pages: (cursors: Record<string, number>) => { failed: n
     return { calls, coordinator };
 };
 
-const change = (table: string, id: string, seq: number): Record<string, unknown> => {return { doc: { _id: id, v: seq }, id, op: "insert", seq, table, ts: seq }};
+const change = (table: string, id: string, seq: number): Record<string, unknown> => {
+    return { doc: { _id: id, v: seq }, id, op: "insert", seq, table, ts: seq };
+};
 
 describe("export-tap — continuous CDC drain", () => {
     it("delivers an ordered per-shard change event at-least-once and advances a resumable cursor", async () => {
@@ -39,14 +56,16 @@ describe("export-tap — continuous CDC drain", () => {
             name: "warehouse",
         });
 
-        const { calls, coordinator } = fakeCoordinator(() => {return {
-            failed: 0,
-            ok: 2,
-            shards: [
-                { changes: [change("messages", "m1", 1), change("messages", "m2", 2)], cursor: 2, shardKey: "tenant-a" },
-                { changes: [change("messages", "m3", 5)], cursor: 5, shardKey: "tenant-b" },
-            ],
-        }});
+        const { calls, coordinator } = fakeCoordinator(() => {
+            return {
+                failed: 0,
+                ok: 2,
+                shards: [
+                    { changes: [change("messages", "m1", 1), change("messages", "m2", 2)], cursor: 2, shardKey: "tenant-a" },
+                    { changes: [change("messages", "m3", 5)], cursor: 5, shardKey: "tenant-b" },
+                ],
+            };
+        });
 
         const result = await runExportTap({ coordinator, cursorStore: store, shardDO: noopShardDO, sink, tables: ["messages"] });
 
@@ -79,16 +98,27 @@ describe("export-tap — continuous CDC drain", () => {
             name: "flaky",
         });
 
-        const { coordinator } = fakeCoordinator(() => {return {
-            failed: 0,
-            ok: 2,
-            shards: [
-                { changes: [change("t", "a1", 1)], cursor: 1, shardKey: "tenant-a" },
-                { changes: [change("t", "b1", 3)], cursor: 3, shardKey: "tenant-b" },
-            ],
-        }});
+        const { coordinator } = fakeCoordinator(() => {
+            return {
+                failed: 0,
+                ok: 2,
+                shards: [
+                    { changes: [change("t", "a1", 1)], cursor: 1, shardKey: "tenant-a" },
+                    { changes: [change("t", "b1", 3)], cursor: 3, shardKey: "tenant-b" },
+                ],
+            };
+        });
 
-        const result = await runExportTap({ coordinator, cursorStore: store, initialBackoffMs: 0, maxRetries: 2, shardDO: noopShardDO, sink, sleep: async () => undefined, tables: ["t"] });
+        const result = await runExportTap({
+            coordinator,
+            cursorStore: store,
+            initialBackoffMs: 0,
+            maxRetries: 2,
+            shardDO: noopShardDO,
+            sink,
+            sleep: async () => undefined,
+            tables: ["t"],
+        });
 
         // tenant-b drained; tenant-a left for retry (backpressure), not fatal.
         expect(result.delivered).toBe(1);
@@ -114,12 +144,14 @@ describe("export-tap — continuous CDC drain", () => {
         });
         const sink = defineExportSink({ deliver, name: "retry" });
 
-        const { coordinator } = fakeCoordinator((cursors) => {return {
-            failed: 0,
-            ok: 1,
-            // Same change re-offered while the cursor has not advanced past it.
-            shards: [{ changes: cursors["s"] === undefined ? [change("t", "x1", 1)] : [], cursor: 1, shardKey: "s" }],
-        }});
+        const { coordinator } = fakeCoordinator((cursors) => {
+            return {
+                failed: 0,
+                ok: 1,
+                // Same change re-offered while the cursor has not advanced past it.
+                shards: [{ changes: cursors["s"] === undefined ? [change("t", "x1", 1)] : [], cursor: 1, shardKey: "s" }],
+            };
+        });
 
         await runExportTap({ coordinator, cursorStore: store, initialBackoffMs: 10, maxRetries: 3, shardDO: noopShardDO, sink, sleep, tables: ["t"] });
 

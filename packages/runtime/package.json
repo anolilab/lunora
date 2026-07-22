@@ -62,8 +62,7 @@
     },
     "dependencies": {
         "@lunora/bindings": "1.0.0-alpha.9",
-        "@lunora/errors": "1.0.0-alpha.6",
-        "@visulima/health-check": "catalog:prod"
+        "@lunora/errors": "1.0.0-alpha.6"
     },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",

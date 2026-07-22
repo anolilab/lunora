@@ -185,6 +185,19 @@ interface AdvisorContainerOverride {
 }
 ```
 
+### `AdvisorExportSink` (interface)
+
+```ts
+interface AdvisorExportSink {
+    analyzable: boolean;
+    emptyKeys: string[];
+    factory: "defineExportSink" | "r2Sink" | "webhookExportSink";
+    file: string;
+    line: number;
+    presentKeys: string[];
+}
+```
+
 ### `AdvisorFailOpenGuard` (interface)
 
 ```ts
@@ -206,6 +219,16 @@ interface AdvisorFlagSecurityDefault {
     exportName: string;
     file: string;
     key: string;
+    line: number;
+}
+```
+
+### `AdvisorGeoIndexUsage` (interface)
+
+```ts
+interface AdvisorGeoIndexUsage {
+    file: string;
+    indexName: string;
     line: number;
 }
 ```
@@ -275,7 +298,7 @@ interface AdvisorImageDeliveryUrlAccess {
 ```ts
 interface AdvisorIndex {
     fields: ReadonlyArray<string>;
-    kind: "index" | "rank" | "search" | "vector";
+    kind: "geo" | "index" | "rank" | "search" | "vector";
     name: string;
     unique?: boolean;
 }
@@ -391,6 +414,28 @@ interface AdvisorNormalizeIdAuthorization {
 }
 ```
 
+### `AdvisorNotifyCall` (interface)
+
+```ts
+interface AdvisorNotifyCall {
+    callee: string;
+    exportName: string;
+    file: string;
+    kind: "mutation" | "query";
+    line: number;
+}
+```
+
+### `AdvisorNotifyConfig` (interface)
+
+```ts
+interface AdvisorNotifyConfig {
+    hasFcm: boolean;
+    hasWebPush: boolean;
+    usesPush: boolean;
+}
+```
+
 ### `AdvisorOwnerFieldWrite` (interface)
 
 ```ts
@@ -439,6 +484,7 @@ interface AdvisorProcedureProtection {
     kind: "action" | "mutation" | "query";
     unboundedAiGeneration: boolean;
     usesCaptcha: boolean;
+    usesEmailGate: boolean;
     usesInsertManyUnsafe: boolean;
     usesMask: boolean;
     usesRateLimit: boolean;
@@ -651,6 +697,7 @@ interface AdvisorStorageUpload {
 
 ```ts
 interface AdvisorTable {
+    columnKinds?: Record<string, string>;
     externallyManaged?: boolean;
     externalSource?: AdvisorExternalSource;
     fields: ReadonlyArray<string>;
@@ -661,6 +708,10 @@ interface AdvisorTable {
     relations: ReadonlyArray<AdvisorRelation>;
     shardKind?: "global" | "root" | "shardBy";
     softDelete?: {
+        field: string;
+    };
+    ttl?: {
+        after?: number;
         field: string;
     };
 }
@@ -829,8 +880,10 @@ interface LintContext {
     containerKeyAccesses?: ReadonlyArray<AdvisorContainerKeyAccess>;
     containerOverrides?: ReadonlyArray<AdvisorContainerOverride>;
     containers?: ReadonlyArray<AdvisorContainer>;
+    exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
     flagSecurityDefaults?: ReadonlyArray<AdvisorFlagSecurityDefault>;
+    geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<AdvisorHttpActionGuard>;
     httpHeaderWrites?: ReadonlyArray<AdvisorHttpHeaderWrite>;
     hyperdriveCalls?: ReadonlyArray<AdvisorHyperdriveCall>;
@@ -845,6 +898,8 @@ interface LintContext {
     mutatorWrites?: ReadonlyArray<AdvisorMutatorWrite>;
     nondeterministicCalls?: ReadonlyArray<AdvisorNondeterministicCall>;
     normalizeIdAuthorizations?: ReadonlyArray<AdvisorNormalizeIdAuthorization>;
+    notifyCalls?: ReadonlyArray<AdvisorNotifyCall>;
+    notifyConfig?: AdvisorNotifyConfig;
     ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
     paymentWebhooks?: ReadonlyArray<AdvisorPaymentWebhook>;
     privilegedDispatches?: ReadonlyArray<AdvisorPrivilegedDispatch>;
@@ -1044,6 +1099,12 @@ const duplicateIndex: Lint;
 const emptyIndex: Lint;
 ```
 
+### `exportSinkMisconfigured` (const)
+
+```ts
+const exportSinkMisconfigured: Lint;
+```
+
 ### `externalSourceIncrementalNoDeletePath` (const)
 
 ```ts
@@ -1078,6 +1139,18 @@ const flagGatesSecurityWithUnsafeDefault: Lint;
 
 ```ts
 const fromServerSchema: (schema: Schema) => AdvisorSchema;
+```
+
+### `geoIndexFieldNotGeopoint` (const)
+
+```ts
+const geoIndexFieldNotGeopoint: Lint;
+```
+
+### `geoIndexUnused` (const)
+
+```ts
+const geoIndexUnused: Lint;
 ```
 
 ### `hardcodedSecret` (const)
@@ -1198,6 +1271,18 @@ const nondeterministicQueryMutation: Lint;
 
 ```ts
 const normalizeIdUsedAsAuthorization: Lint;
+```
+
+### `notifyMissingPushConfig` (const)
+
+```ts
+const notifyMissingPushConfig: Lint;
+```
+
+### `notifySendOutsideAction` (const)
+
+```ts
+const notifySendOutsideAction: Lint;
 ```
 
 ### `outputProjectionMissingOnPublicRead` (const)
@@ -1332,6 +1417,12 @@ const shapeTargetsGlobalTable: Lint;
 const shapeUnknownTable: Lint;
 ```
 
+### `signupMutationWithoutDisposableGating` (const)
+
+```ts
+const signupMutationWithoutDisposableGating: Lint;
+```
+
 ### `softDeleteIncludeDeletedFromArgs` (const)
 
 ```ts
@@ -1378,6 +1469,12 @@ const storageUploadWithoutMaxSize: Lint;
 
 ```ts
 const tableWithoutInsert: Lint;
+```
+
+### `ttlFieldNotTimestamp` (const)
+
+```ts
+const ttlFieldNotTimestamp: Lint;
 ```
 
 ### `unboundedStringArgument` (const)

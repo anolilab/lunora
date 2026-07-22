@@ -194,7 +194,6 @@ catalogs:
     "@visulima/vis": 1.0.4
     "@visulima/tabular": 4.0.0
     "@visulima/error": 6.0.0
-    "@visulima/health-check": 4.0.0
   test:
     "@codspeed/vitest-plugin": 5.7.1
     "@vitest/coverage-v8": 4.1.10

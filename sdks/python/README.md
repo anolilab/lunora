@@ -61,14 +61,14 @@ See [`examples/quickstart.py`](./examples/quickstart.py) for a runnable script.
 Python lacks TS's distinct `bigint`/`Map`/`Set`/`Date` types, so mark those
 explicitly with wrappers; plain values map to JSON directly:
 
-| Lunora / `v.*`     | Python                                             |
-| ------------------ | -------------------------------------------------- |
-| `v.string/number/boolean/object/array` | `str` / `int`\|`float` / `bool` / `dict` / `list` |
-| `v.bigint()`       | `WireBigInt(1000)`                                 |
-| `v.bytes()`        | `bytes` (or `WireBytes(data, "Float32Array")`)     |
-| `Date`             | `WireDate(epoch_ms)` / `WireDate.from_datetime(dt)` |
-| `Map` / `Set`      | `WireMap([(k, v)])` / `WireSet([...])`             |
-| `URL`              | `WireUrl("https://…")`                             |
+| Lunora / `v.*`                         | Python                                              |
+| -------------------------------------- | --------------------------------------------------- |
+| `v.string/number/boolean/object/array` | `str` / `int`\|`float` / `bool` / `dict` / `list`   |
+| `v.bigint()`                           | `WireBigInt(1000)`                                  |
+| `v.bytes()`                            | `bytes` (or `WireBytes(data, "Float32Array")`)      |
+| `Date`                                 | `WireDate(epoch_ms)` / `WireDate.from_datetime(dt)` |
+| `Map` / `Set`                          | `WireMap([(k, v)])` / `WireSet([...])`              |
+| `URL`                                  | `WireUrl("https://…")`                              |
 
 `decode_wire` returns these same wrappers so values round-trip exactly.
 

@@ -769,3 +769,101 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `serializePreloaded` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
+
+## `@lunora/solid/upload`
+
+### `CreateChunkedRestUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreateChunkedRestUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreateFileInputOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreateFileInputReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreateMultipartUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreateMultipartUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreatePasteUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreatePasteUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreateTusUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreateTusUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreateUploadOptions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `CreateUploadReturn` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `RestrictionError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadControl` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadError` (class)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadMethod` (type)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadRestrictions` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UploadResult` (interface)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createChunkedRestUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createFileInput` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createMultipartUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createPasteUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createTusUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `createUpload` (const)
+
+Re-exported from `@visulima/storage-client` — signature tracked at its source.

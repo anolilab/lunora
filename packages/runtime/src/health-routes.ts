@@ -21,8 +21,6 @@
  * `"admin"` posture the endpoint is bearer-gated AND the (still runtime-authored)
  * messages are included to aid an operator.
  */
-import { HealthCheck } from "@visulima/health-check";
-
 import { LunoraError } from "./errors";
 import { methodGuard } from "./method-guard";
 
@@ -118,9 +116,45 @@ const toCheckerType = (kind: HealthProbeKind | undefined): ("liveness" | "readin
     return ["liveness", "readiness"];
 };
 
+/** A single check's normalised result — `{ health }`, keyed by name in a {@link HealthReport}. */
+type CheckerResult = { health: { healthy: boolean; message?: string } };
+
+/** The aggregate of every run check: `healthy` is true only when all run checks are up. */
+interface HealthReport {
+    healthy: boolean;
+    report: Record<string, CheckerResult>;
+}
+
+/**
+ * Edge-safe, dependency-free health-check registry — a drop-in for the subset of
+ * `@visulima/health-check`'s `HealthCheck` this module used (register → run →
+ * aggregate). That package is NOT bundleable for workerd: its transitive
+ * `pingman` dependency imports `node:process`, which breaks the worker build.
+ * We only ever used it as a per-request container, so this ~20-line runner is a
+ * faithful substitute. Checks run concurrently; `getReport(filter)` narrows to
+ * the checkers whose `type` set includes the requested phase (readiness).
+ */
+class HealthRegistry {
+    readonly #checkers = new Map<string, { run: () => Promise<CheckerResult>; types: ReadonlyArray<"liveness" | "readiness"> }>();
+
+    addChecker(name: string, run: () => Promise<CheckerResult>, options: { type: ReadonlyArray<"liveness" | "readiness"> }): void {
+        this.#checkers.set(name, { run, types: options.type });
+    }
+
+    async getReport(filter?: "readiness"): Promise<HealthReport> {
+        const selected = [...this.#checkers].filter(([, checker]) => filter === undefined || checker.types.includes(filter));
+        const entries = await Promise.all(selected.map(async ([name, checker]): Promise<[string, CheckerResult]> => [name, await checker.run()]));
+
+        return {
+            healthy: entries.every(([, result]) => result.health.healthy),
+            report: Object.fromEntries(entries),
+        };
+    }
+}
+
 /** Build a fresh registry from the resolved probes. A new registry per request keeps the check set aligned with the live `env`. */
-const buildRegistry = (probes: ReadonlyArray<HealthProbe>, cacheTtlMs: number): { criticalNames: Set<string>; registry: HealthCheck } => {
-    const registry = new HealthCheck({ cacheTtl: cacheTtlMs });
+const buildRegistry = (probes: ReadonlyArray<HealthProbe>): { criticalNames: Set<string>; registry: HealthRegistry } => {
+    const registry = new HealthRegistry();
     const criticalNames = new Set<string>();
 
     for (const probe of probes) {
@@ -143,11 +177,9 @@ const buildRegistry = (probes: ReadonlyArray<HealthProbe>, cacheTtlMs: number): 
                 }
 
                 return {
-                    displayName: probe.name,
                     health: {
                         healthy: result.healthy,
                         ...(result.message === undefined ? {} : { message: result.message }),
-                        timestamp: new Date().toISOString(),
                     },
                 };
             },
@@ -216,7 +248,10 @@ const buildBody = (
 
 /** Build the health + readiness route map merged into the worker's internal route table. */
 const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
-    const { appName = "lunora", appVersion = "0.0.0", auth = "public", cacheTtlMs = 0, isAdmin, resolveProbes } = deps;
+    // `cacheTtlMs` is accepted for API/back-compat but is currently a no-op: a
+    // fresh registry is built per request, so there is no cross-request cache to
+    // TTL. (It never cached across requests under the old dependency either.)
+    const { appName = "lunora", appVersion = "0.0.0", auth = "public", isAdmin, resolveProbes } = deps;
 
     const gate = (request: Request): void => {
         if (auth === "admin" && !isAdmin(request)) {
@@ -233,7 +268,7 @@ const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Requ
 
         gate(request);
 
-        const { criticalNames, registry } = buildRegistry(resolveProbes(env), cacheTtlMs);
+        const { criticalNames, registry } = buildRegistry(resolveProbes(env));
         const { healthy, report } = await registry.getReport(probeKind === "readiness" ? "readiness" : undefined);
         const { anyCriticalDown, body } = buildBody(report, criticalNames, auth, appName, appVersion);
 

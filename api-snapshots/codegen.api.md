@@ -192,6 +192,7 @@ interface EmitAppOptions {
     hasHyperdriveGlobal: boolean;
     hasImages: boolean;
     hasKv: boolean;
+    hasNotify: boolean;
     hasPayments: boolean;
     hasQueue: boolean;
     hasR2sql: boolean;
@@ -247,6 +248,9 @@ interface FlagsIR {
 interface FunctionIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
+    expose?: {
+        rest?: boolean;
+    };
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
     lifecycle?: "connect" | "disconnect";
@@ -334,8 +338,10 @@ interface LintSchemaOptions {
     containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
+    exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
     flagSecurityDefaults?: ReadonlyArray<FlagSecurityDefaultIR>;
+    geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<HttpActionGuardIR>;
     httpHeaderWrites?: ReadonlyArray<HttpHeaderWriteIR>;
     identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>;
@@ -348,6 +354,8 @@ interface LintSchemaOptions {
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
     normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>;
+    notifyCalls?: ReadonlyArray<AdvisorNotifyCall>;
+    notifyConfig?: AdvisorNotifyConfig;
     ownerFieldWrites?: ReadonlyArray<OwnerFieldWriteIR>;
     paymentWebhooks?: ReadonlyArray<PaymentWebhookIR>;
     privilegedDispatches?: ReadonlyArray<PrivilegedDispatchIR>;
@@ -422,6 +430,12 @@ interface MutatorIR {
     exportName: string;
     filePath: string;
 }
+```
+
+### `NOTIFY_FILENAME` (const)
+
+```ts
+const NOTIFY_FILENAME = "notify.ts";
 ```
 
 ### `OPENRPC_VERSION` (const)
@@ -675,6 +689,7 @@ interface StorageRulesMetadataIR {
 interface TableIR {
     externallyManaged?: boolean;
     externalSource?: ExternalSourceIR;
+    geoIndexes?: ReadonlyArray<GeoIndexIR>;
     globalBackend?: "d1" | "hyperdrive";
     indexes: ReadonlyArray<IndexIR>;
     isPublic?: boolean;
@@ -690,6 +705,7 @@ interface TableIR {
     softDelete?: {
         field: string;
     };
+    ttl?: TtlIR;
     vectorIndexes: ReadonlyArray<VectorIndexIR>;
 }
 ```
@@ -880,6 +896,18 @@ const discoverMutators: (project: Project, lunoraDirectory: string) => MutatorIR
 const discoverNondeterministicCalls: (project: Project, lunoraDirectory: string) => NondeterministicCallIR[];
 ```
 
+### `discoverNotifyCalls` (const)
+
+```ts
+const discoverNotifyCalls: (project: Project, lunoraDirectory: string) => AdvisorNotifyCall[];
+```
+
+### `discoverNotifyConfig` (const)
+
+```ts
+const discoverNotifyConfig: (project: Project, lunoraDirectory: string) => AdvisorNotifyConfig | undefined;
+```
+
 ### `discoverQueries` (const)
 
 ```ts
@@ -1024,13 +1052,13 @@ const emitOpenRpcModule: (document_: Record<string, unknown>) => string;
 ### `emitServer` (const)
 
 ```ts
-const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasPayments, hasPipelines, hasR2sql, hasX402, identity, queues, schema, storageRuleBuckets, useUmbrella, workflows }?: EmitServerOptions) => string;
+const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, identity, queues, schema, storageRuleBuckets, useUmbrella, workflows }?: EmitServerOptions) => string;
 ```
 
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasPayments, hasPipelines, hasR2sql, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)

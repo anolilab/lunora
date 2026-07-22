@@ -10,9 +10,9 @@ and broadcasts to it from an action.
   D1-backed `d1SubscriptionStore(env.DB)`. Codegen discovers it and wires
   `ctx.notify` / `ctx.push` onto every handler ctx.
 - **`lunora/push.ts`** —
-  - `registerDevice` (mutation) → `ctx.push.register(...)`
-  - `announce` (mutation) → records the announcement row
-  - `broadcast` (action) → `ctx.notify.send(...)` (targeted) + `ctx.push.broadcast(...)` (fan-out)
+    - `registerDevice` (mutation) → `ctx.push.register(...)`
+    - `announce` (mutation) → records the announcement row
+    - `broadcast` (action) → `ctx.notify.send(...)` (targeted) + `ctx.push.broadcast(...)` (fan-out)
 - **Browser** — `subscribeToPush` from `@lunora/notify/web` registers `/sw.js`
   and returns a subscription the `registerDevice` mutation persists.
 - **Studio** — registered devices (endpoint / kind / last-send status / delivery

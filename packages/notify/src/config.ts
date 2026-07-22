@@ -56,7 +56,7 @@ const webPushFromEnv = (env: NotifyEnv, overrides?: Partial<WebPushConfig>): Web
  * that keeps the provider edge-safe (no Google SDK / `node:crypto` bundled).
  */
 const fcmFromEnv = (env: NotifyEnv, overrides?: Partial<FcmConfig>): FcmConfig | undefined => {
-    const projectId = readString(env, FCM_ENV_KEYS.projectId);
+    const projectId = readString(env, FCM_ENV_KEYS.projectId); // secret-scanner:allow -- `projectId` is a config field name, not a credential
 
     if (projectId === undefined) {
         return undefined;

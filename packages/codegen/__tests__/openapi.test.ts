@@ -257,7 +257,7 @@ describe("emitOpenApi — opt-in public REST surface (plan 167)", () => {
         // Exactly the two exposed procedures — the non-exposed `secret` is absent.
         expect(restPaths.toSorted((a, b) => a.localeCompare(b))).toEqual(["/_lunora/rest/messages/list", "/_lunora/rest/messages/send"]);
 
-        const {paths} = (document as { paths: Record<string, Record<string, { parameters?: unknown; requestBody?: unknown }>> });
+        const { paths } = document as { paths: Record<string, Record<string, { parameters?: unknown; requestBody?: unknown }>> };
 
         // A query is a GET with its args as query parameters.
         expect(paths["/_lunora/rest/messages/list"]?.get).toBeDefined();

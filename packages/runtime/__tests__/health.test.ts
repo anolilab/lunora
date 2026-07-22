@@ -12,37 +12,57 @@ const fakeContext: ExecutionContextLike = {
 
 /** A DO namespace whose stub answers every request (reachable). */
 const reachableNamespace: ShardNamespaceLike = {
-    get: () => {return { fetch: async () => new Response("ok", { status: 404 }) }},
-    idFromName: (name) => {return { __name: name }},
+    get: () => {
+        return { fetch: async () => new Response("ok", { status: 404 }) };
+    },
+    idFromName: (name) => {
+        return { __name: name };
+    },
 };
 
 /** A DO namespace whose stub throws on fetch (unreachable). */
 const unreachableNamespace: ShardNamespaceLike = {
-    get: () => {return {
-        fetch: async () => {
-            throw new Error("DO unreachable — connection refused to secret-host.internal");
-        },
-    }},
-    idFromName: (name) => {return { __name: name }},
+    get: () => {
+        return {
+            fetch: async () => {
+                throw new Error("DO unreachable — connection refused to secret-host.internal");
+            },
+        };
+    },
+    idFromName: (name) => {
+        return { __name: name };
+    },
 };
 
 /** A fake D1 binding whose `SELECT 1` resolves (healthy). */
-const healthyD1 = (): unknown => {return {
-    batch: async () => [],
-    dump: async () => new ArrayBuffer(0),
-    prepare: () => {return { first: async () => {return { 1: 1 }} }},
-}};
+const healthyD1 = (): unknown => {
+    return {
+        batch: async () => [],
+        dump: async () => new ArrayBuffer(0),
+        prepare: () => {
+            return {
+                first: async () => {
+                    return { 1: 1 };
+                },
+            };
+        },
+    };
+};
 
 /** A fake D1 binding whose `SELECT 1` rejects (down) — the error message embeds a "secret" to prove non-leakage. */
-const downD1 = (): unknown => {return {
-    batch: async () => [],
-    dump: async () => new ArrayBuffer(0),
-    prepare: () => {return {
-        first: async () => {
-            throw new Error("connection to postgres://user:sup3rs3cr3t@db failed");
+const downD1 = (): unknown => {
+    return {
+        batch: async () => [],
+        dump: async () => new ArrayBuffer(0),
+        prepare: () => {
+            return {
+                first: async () => {
+                    throw new Error("connection to postgres://user:sup3rs3cr3t@db failed");
+                },
+            };
         },
-    }},
-}};
+    };
+};
 
 const get = (path: string): Request => new Request(`https://app.example${path}`, { method: "GET" });
 
