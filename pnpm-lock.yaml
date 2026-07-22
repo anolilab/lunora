@@ -3634,6 +3634,9 @@ importers:
       '@lunora/notify':
         specifier: workspace:*
         version: link:../notify
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@tailwindcss/cli':
         specifier: catalog:vite
         version: 4.3.3
