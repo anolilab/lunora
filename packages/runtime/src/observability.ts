@@ -87,6 +87,29 @@ export type ObservabilitySinkContext = LogSinkContext;
  * events it cares about; the runtime no-ops the others.
  */
 export interface ObservabilitySink {
+    /**
+     * **Opt-in, EXPERIMENTAL, default `false`.** When `true`, each `ctx.trace`
+     * span the Durable Object records is ALSO emitted as a Cloudflare **custom
+     * span** (`tracing.enterSpan` from `cloudflare:workers`, GA 2026-06-16) so it
+     * nests inside CF's native binding/fetch/handler trace tree on the hosted
+     * path — a deeper waterfall in Cloudflare's own trace viewer.
+     *
+     * Capability-probed: a safe no-op off-Cloudflare, on a compat date predating
+     * custom spans, or when the trace is unsampled. This ONLY ADDS a CF-side span;
+     * it never replaces {@link ObservabilitySink.onSpan}, which stays the source
+     * of truth and drives the local studio waterfall.
+     *
+     * **Double-export caveat.** Leave this off unless you understand the trade:
+     * with it on, a deployment that also ships `onSpan` to a collector via
+     * `otlpSink` AND lets Cloudflare export its trace tree will emit the same
+     * logical span down two pipelines. Enable it only when you want the CF-native
+     * nesting and have accounted for that overlap.
+     *
+     * Pass this on the SAME sink object you give both `createWorker` and
+     * `createShardDO` — the DO reads the flag when building `ctx.trace`.
+     */
+    fuseCloudflareTraces?: boolean;
+
     /** Invoked once per `ctx.log.*` call from a function handler. */
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
 

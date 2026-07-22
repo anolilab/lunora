@@ -2370,6 +2370,7 @@ interface TablesColumnsResult {
 
 ```ts
 interface TelemetrySink {
+    fuseCloudflareTraces?: boolean;
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
@@ -2391,7 +2392,9 @@ interface TraceAnchor {
 interface TracerDeps {
     anchor: TraceAnchor;
     functionPath: string;
+    fuseCloudflareSpans?: boolean;
     record: (span: SpanEvent) => void;
+    resolveCloudflareTracing?: CloudflareTracingResolver;
     shardKey: string | undefined;
     userId: () => string | undefined;
 }

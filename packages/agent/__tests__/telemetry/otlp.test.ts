@@ -88,6 +88,24 @@ describe(otlpTelemetry, () => {
         expect(attribute(span, "gen_ai.usage.output_tokens")).toBe("3");
     });
 
+    it("tags the generation span with gen_ai.conversation.id when a conversation id is set", async () => {
+        const calls = captureFetch();
+
+        await otlpTelemetry({ conversationId: "thread-42", endpoint: "https://collector.test" }).executeLanguageModelCall?.(
+            evt({ execute: () => Promise.resolve({}), modelId: "m" }),
+        );
+
+        expect(attribute(spanOf(calls[0] as CapturedPost), "gen_ai.conversation.id")).toBe("thread-42");
+    });
+
+    it("omits gen_ai.conversation.id when no conversation id is set", async () => {
+        const calls = captureFetch();
+
+        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(evt({ execute: () => Promise.resolve({}), modelId: "m" }));
+
+        expect(attribute(spanOf(calls[0] as CapturedPost), "gen_ai.conversation.id")).toBeUndefined();
+    });
+
     it("groups every span under a shared traceId when one is given", async () => {
         const calls = captureFetch();
         const telemetry = otlpTelemetry({ endpoint: "https://collector.test", traceId: FIXED_TRACE_ID });

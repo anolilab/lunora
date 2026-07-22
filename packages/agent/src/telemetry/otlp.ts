@@ -55,6 +55,16 @@ const observeSettled = (promise: PromiseLike<unknown>, onSettle: (ok: boolean, m
  */
 export interface OtlpTelemetryOptions extends CommonOptions {
     /**
+     * Conversation / session id to tag each generation span with, emitted as the
+     * `gen_ai.conversation.id` semantic-convention attribute so a multi-turn
+     * conversation's model turns group in the trace store. On a deployed agent the
+     * platform wiring passes the run's `threadKey` here automatically (one thread =
+     * one conversation). Omitted → the attribute is absent (backward-compatible),
+     * and each turn's span is ungrouped.
+     */
+    conversationId?: string;
+
+    /**
      * The OTLP-over-HTTP collector base endpoint (e.g. the Lunora Cloud's `/v1`
      * base). Spans are POSTed to `${endpoint}/v1/traces`; a trailing slash is
      * tolerated. On the platform this is the injected `LUNORA_OTLP_ENDPOINT`.
@@ -127,7 +137,7 @@ export interface OtlpTelemetryOptions extends CommonOptions {
  * @experimental
  */
 export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
-    const { endpoint, headers, recordInputs = false, recordOutputs = false, token, traceId: fixedTraceId, waitUntil } = options;
+    const { conversationId, endpoint, headers, recordInputs = false, recordOutputs = false, token, traceId: fixedTraceId, waitUntil } = options;
     const serviceName = options.serviceName ?? "lunora";
 
     // Strip trailing slashes without a regex (ReDoS-linter-safe; runs once).
@@ -189,6 +199,9 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
                 pushAttribute(attributes, "gen_ai.operation.name", "chat");
                 pushAttribute(attributes, "gen_ai.request.model", modelId);
                 pushAttribute(attributes, "gen_ai.system", readField(options_, "provider"));
+                // Session/thread grouping — absent unless a conversation id was set,
+                // so a run with no session id emits exactly as before.
+                pushAttribute(attributes, "gen_ai.conversation.id", conversationId);
 
                 const usage = summarizeUsage(readField(result, "usage"));
 

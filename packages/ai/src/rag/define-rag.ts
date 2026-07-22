@@ -325,10 +325,13 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             }
 
             const modelId = modelIdOf(resolvedModel);
+            const conversationId = typeof context.conversationId === "string" && context.conversationId.length > 0 ? context.conversationId : undefined;
 
             return tracer("ai.embed", (_trace, span) => run(span), {
                 "gen_ai.operation.name": "embeddings",
                 ...(modelId === undefined ? {} : { "gen_ai.request.model": modelId }),
+                // Session/thread grouping — absent unless a conversation id was set.
+                ...(conversationId === undefined ? {} : { "gen_ai.conversation.id": conversationId }),
             });
         };
 
