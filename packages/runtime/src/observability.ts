@@ -99,6 +99,14 @@ export interface ObservabilitySink {
      * it never replaces {@link ObservabilitySink.onSpan}, which stays the source
      * of truth and drives the local studio waterfall.
      *
+     * **Workerd-validated (partial).** The `tracing.enterSpan` bridge is confirmed
+     * available and side-effect-free inside a real Durable Object under
+     * `@cloudflare/vitest-pool-workers` — the body runs without throwing,
+     * `span.isTraced` is a real boolean, and `onSpan`'s recorded tree is byte-for-byte
+     * identical with the flag on vs off. Still EXPERIMENTAL because the harness is
+     * unsampled (`isTraced === false`), so CF's own EXPORTED parent-linking of the
+     * custom span under the DO's ambient span is not yet observable there.
+     *
      * **Double-export caveat.** Leave this off unless you understand the trade:
      * with it on, a deployment that also ships `onSpan` to a collector via
      * `otlpSink` AND lets Cloudflare export its trace tree will emit the same
