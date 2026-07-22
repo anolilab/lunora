@@ -20,6 +20,22 @@ import type { LogFields } from "./log-fields";
  * (32-hex trace, 16-hex span), so a `SpanEvent` composes into an OTLP span with
  * no reformatting.
  */
+/**
+ * Handle the enclosing `ctx.trace` span hands its body, so the body can attach
+ * attributes only known *after* it resolves — an AI call's token usage or dollar
+ * cost, a downstream response's status, a computed row count. The start
+ * attributes passed to `ctx.trace(name, fn, attributes)` are snapshotted before
+ * the body runs (so a mid-span mutation can't rewrite them); anything set through
+ * this handle is merged over that snapshot at record time, with the post-hoc
+ * value winning on a key clash.
+ */
+export interface SpanHandle {
+    /** Set one attribute on the enclosing span (merged at record time; post-hoc wins on key clash). */
+    setAttribute: (key: string, value: LogFields[string]) => void;
+    /** Merge attributes onto the enclosing span (post-hoc wins on key clash). */
+    setAttributes: (fields: LogFields) => void;
+}
+
 export interface SpanEvent {
     /**
      * Structured attributes the caller attached, already normalized to a fresh

@@ -136,6 +136,7 @@ export type {
     SearchFilterBuilder,
     SearchIndexDefinition,
     ShardMode,
+    SpanHandle,
     Storage,
     StorageMetadata,
     SystemDatabaseReader,

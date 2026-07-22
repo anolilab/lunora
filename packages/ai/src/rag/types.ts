@@ -116,11 +116,15 @@ export interface RagContext {
     /**
      * Optional `ctx.trace` span factory — an `ActionCtx`'s `ctx.trace` satisfies
      * it structurally. When present, `defineRag` wraps each embedding-model
-     * call in a `generation` span (`gen_ai.operation.name: "embeddings"` +
-     * `gen_ai.request.model`), so the embed shows up on the trace waterfall like
-     * any other instrumented sub-operation. `unknown` on purpose — the same
-     * decoupling rationale as `auth`: `defineRag` narrows it to a callable and
-     * runs embeds untraced when it is absent (a hand-built context / test).
+     * call in a `generation` span carrying `gen_ai.operation.name: "embeddings"`
+     * and `gen_ai.request.model` up front, plus — attached post-hoc through the
+     * span handle the tracer hands the body — `gen_ai.usage.input_tokens` (from
+     * the embed result's token usage) and `gen_ai.usage.cost` (probed from the
+     * embed result's provider metadata, e.g. AI Gateway) when those are present.
+     * So the embed shows up on the trace waterfall with its usage like any other
+     * instrumented model call. `unknown` on purpose — the same decoupling
+     * rationale as `auth`: `defineRag` narrows it to a callable and runs embeds
+     * untraced when it is absent (a hand-built context / test).
      */
     trace?: unknown;
     vectors: RagVectors;

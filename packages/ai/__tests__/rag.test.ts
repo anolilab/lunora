@@ -36,7 +36,14 @@ vi.mock(import("ai"), async (importOriginal) => {
     return {
         ...actual,
         embed: vi.fn(async ({ value }: { model: unknown; value: string }) => {
-            return { embedding: bagVector(value) };
+            // `usage` + `providerMetadata` mirror the real AI SDK embed result so
+            // the post-hoc span path (token usage / gateway cost) is exercised;
+            // callers that only read `embedding` are unaffected.
+            return {
+                embedding: bagVector(value),
+                providerMetadata: { gateway: { cost: 0.0002 } },
+                usage: { tokens: value.split(/\s+/u).filter(Boolean).length },
+            };
         }) as unknown as typeof actual.embed,
     };
 });
@@ -1108,9 +1115,14 @@ describe(bm25LexicalStore, () => {
 });
 
 describe("defineRag ctx.trace instrumentation", () => {
-    /** A context whose `trace` records each span it wraps (mirrors `ctx.trace`). */
-    const tracingCtx = (vectors: RagVectors): RagContext & { spans: { attributes?: Record<string, unknown>; name: string }[] } => {
-        const spans: { attributes?: Record<string, unknown>; name: string }[] = [];
+    /**
+     * A context whose `trace` mirrors the real `ctx.trace`: it hands the body a
+     * span handle, then records the span's start attributes merged with anything
+     * the body attached post-hoc (post-hoc winning), exactly like the `@lunora/do`
+     * tracer does at record time.
+     */
+    const tracingCtx = (vectors: RagVectors): RagContext & { spans: { attributes: Record<string, unknown>; name: string }[] } => {
+        const spans: { attributes: Record<string, unknown>; name: string }[] = [];
 
         return {
             ai: {
@@ -1118,16 +1130,35 @@ describe("defineRag ctx.trace instrumentation", () => {
                 embeddingModel: (model) => ({ modelId: model ?? "default" }) as unknown as EmbeddingModel,
             },
             spans,
-            trace: async <T>(name: string, function_: () => Promise<T> | T, attributes?: Record<string, unknown>): Promise<T> => {
-                spans.push({ attributes, name });
+            trace: async <T>(
+                name: string,
+                function_: (
+                    trace: unknown,
+                    span: { setAttribute: (key: string, value: unknown) => void; setAttributes: (fields: Record<string, unknown>) => void },
+                ) => Promise<T> | T,
+                attributes?: Record<string, unknown>,
+            ): Promise<T> => {
+                const collected: Record<string, unknown> = {};
+                const span = {
+                    setAttribute: (key: string, value: unknown) => {
+                        collected[key] = value;
+                    },
+                    setAttributes: (fields: Record<string, unknown>) => {
+                        Object.assign(collected, fields);
+                    },
+                };
 
-                return function_();
+                try {
+                    return await function_(undefined, span);
+                } finally {
+                    spans.push({ attributes: { ...attributes, ...collected }, name });
+                }
             },
             vectors,
         };
     };
 
-    it("wraps each embed in a generation span carrying the model id", async () => {
+    it("wraps each embed in a generation span carrying the model id and post-hoc usage/cost", async () => {
         const { vectors } = memoryVectors();
         const ctx = tracingCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
@@ -1139,8 +1170,11 @@ describe("defineRag ctx.trace instrumentation", () => {
 
         for (const span of ctx.spans) {
             expect(span.name).toBe("ai.embed");
-            expect(span.attributes?.["gen_ai.operation.name"]).toBe("embeddings");
-            expect(span.attributes?.["gen_ai.request.model"]).toBe("@cf/baai/bge-base-en-v1.5");
+            expect(span.attributes["gen_ai.operation.name"]).toBe("embeddings");
+            expect(span.attributes["gen_ai.request.model"]).toBe("@cf/baai/bge-base-en-v1.5");
+            // Post-hoc — only knowable after the embed call resolves.
+            expect(span.attributes["gen_ai.usage.input_tokens"]).toBeGreaterThan(0);
+            expect(span.attributes["gen_ai.usage.cost"]).toBe(0.0002);
         }
     });
 

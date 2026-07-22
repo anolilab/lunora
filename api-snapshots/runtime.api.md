@@ -1192,6 +1192,7 @@ interface MetricEvent {
     kind: MetricKind;
     name: string;
     shardKey?: string;
+    traceId?: string;
     ts: number;
     value: number;
 }

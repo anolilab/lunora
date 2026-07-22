@@ -888,7 +888,7 @@ type LunoraRouteHandler = (c: Context<LunoraHttpEnv>) => Promise<Response>;
 ### `LunoraTracer` (type)
 
 ```ts
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 ```
 
 ### `ManyRelation` (interface)
@@ -1592,6 +1592,15 @@ type ShardMode = {
 } | {
     kind: "root";
 };
+```
+
+### `SpanHandle` (interface)
+
+```ts
+interface SpanHandle {
+    setAttribute: (key: string, value: LogFields[string]) => void;
+    setAttributes: (fields: LogFields) => void;
+}
 ```
 
 ### `Storage` (interface)
@@ -4174,7 +4183,7 @@ interface LunoraMetrics {
 ### `LunoraTracer` (type)
 
 ```ts
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
 ```
 
 ### `MutationCtx` (interface)
@@ -4443,6 +4452,15 @@ type ShardMode = {
 } | {
     kind: "root";
 };
+```
+
+### `SpanHandle` (interface)
+
+```ts
+interface SpanHandle {
+    setAttribute: (key: string, value: LogFields[string]) => void;
+    setAttributes: (fields: LogFields) => void;
+}
 ```
 
 ### `Storage` (interface)
