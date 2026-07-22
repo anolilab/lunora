@@ -41,11 +41,12 @@ interface StudioFeatureSignals {
     cronCount: number;
     /** The `@lunora/*` packages this app depends on (from its `package.json`). */
     dependencies: ReadonlySet<string>;
+
     /**
      * The app declares the payment store's `subscriptions` **and** `events` tables — the two the
      * Payments panel reads. Unlike every other feature, payments has no fail-open dependency arm:
      * the panel queries these tables directly, so merely depending on `@lunora/payment` (e.g. to
-     * reuse its pure `verifyStandardWebhook` / `idempotencyKey` helpers) without hand-declaring the
+     * reuse its pure webhook-verification / idempotency-key helpers) without hand-declaring the
      * store's tables would show a page that errors with `unknown table: subscriptions`. Gating on
      * the tables' presence makes the page appear exactly when it can actually render.
      */
