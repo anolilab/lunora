@@ -109,6 +109,26 @@ describe("runAddFeature (auth-ui)", () => {
         expect(readDeps(workdir)["@lunora/react"]).toBeDefined();
     });
 
+    it("`add auth-ui` detects Vue and installs the Vue payload", async () => {
+        expect.assertions(4);
+
+        seedProject(workdir, { "@lunora/vue": "1.0.0-alpha.1" });
+
+        const result = await runAddFeature({
+            cwd: workdir,
+            feature: "auth-ui",
+            from: registryRoot,
+            logger: makeLogger().logger,
+            promptText: async () => "demo-db",
+        });
+
+        expect(result.items).toStrictEqual(["auth-ui-vue"]);
+        expect(existsSync(join(workdir, "lunora", "auth-ui", "vue", "AuthUIProvider.vue"))).toBe(true);
+        // Shared, framework-agnostic core lands alongside the Vue views.
+        expect(existsSync(join(workdir, "lunora", "auth-ui", "core", "sign-in.ts"))).toBe(true);
+        expect(readDeps(workdir)["@lunora/vue"]).toBeDefined();
+    });
+
     it("`add auth-ui --yes` with no framework dependency warns and defaults to React", async () => {
         expect.assertions(2);
 
@@ -131,8 +151,7 @@ describe("runAddFeature (auth-ui)", () => {
             feature: "auth-ui",
             from: registryRoot,
             logger: makeLogger().logger,
-            // Detection returns nothing → the select prompt decides. Choose React
-            // (the only item shipped so far) so the install completes.
+            // Detection returns nothing → the select prompt decides.
             promptSelect: async () => "auth-ui-react",
             promptText: async () => "demo-db",
         });

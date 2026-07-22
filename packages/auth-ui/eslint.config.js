@@ -11,6 +11,12 @@ export default createConfig(
             "**/dist/**",
             "**/node_modules/**",
             "**/coverage/**",
+            // Non-React ports are copy-only templates in framework dialects this
+            // flat config (React/TS-tuned) can't lint; Prettier still formats them.
+            "src/vue/**",
+            "src/svelte/**",
+            "src/solid/**",
+            "src/angular/**",
             "**/*.md/**",
             "**/vitest.config.ts",
             "**/wrangler.jsonc",

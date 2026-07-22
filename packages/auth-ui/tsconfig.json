@@ -8,5 +8,11 @@
         // registry (never built/published), so `lint:types` is `tsc --noEmit` only —
         // neither is load-bearing. Mirrors packages/react/tsconfig.json.
     },
-    "include": ["src/**/*", "__tests__/**/*"]
+    "include": ["src/**/*", "__tests__/**/*"],
+    // The non-React ports are copy-only templates in framework dialects tsc can't
+    // check here (Solid's JSX runtime differs from react-jsx; Vue/Svelte SFCs and
+    // Angular decorators need their own toolchains). They're type-checked in the
+    // consumer's project after `lunora add auth-ui`. `core/` (shared) + `react/`
+    // are the type-checked reference.
+    "exclude": ["src/vue/**", "src/svelte/**", "src/solid/**", "src/angular/**"]
 }

@@ -32,9 +32,29 @@
             "title": "Auth — Email OTP"
         },
         {
+            "description": "Copy-in, user-owned Angular auth screens on top of the base `auth` item and @lunora/angular: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Framework-agnostic controllers under lunora/auth-ui/core, thin Angular views under lunora/auth-ui/angular, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
+            "name": "auth-ui-angular",
+            "title": "Auth UI — Angular"
+        },
+        {
             "description": "Copy-in, user-owned React auth screens on top of the base `auth` item and @lunora/react: sign in/up, forgot/reset password, magic link, email OTP, and two-factor. Framework-agnostic controllers under lunora/auth-ui/core, thin React views under lunora/auth-ui/react, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
             "name": "auth-ui-react",
             "title": "Auth UI — React"
+        },
+        {
+            "description": "Copy-in, user-owned Solid auth screens on top of the base `auth` item and @lunora/solid: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Framework-agnostic controllers under lunora/auth-ui/core, thin Solid views under lunora/auth-ui/solid, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
+            "name": "auth-ui-solid",
+            "title": "Auth UI — Solid"
+        },
+        {
+            "description": "Copy-in, user-owned Svelte auth screens on top of the base `auth` item and @lunora/svelte: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Framework-agnostic controllers under lunora/auth-ui/core, thin Svelte views under lunora/auth-ui/svelte, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
+            "name": "auth-ui-svelte",
+            "title": "Auth UI — Svelte"
+        },
+        {
+            "description": "Copy-in, user-owned Vue auth screens on top of the base `auth` item and @lunora/vue: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Framework-agnostic controllers under lunora/auth-ui/core, thin Vue views under lunora/auth-ui/vue, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
+            "name": "auth-ui-vue",
+            "title": "Auth UI — Vue"
         },
         {
             "description": "Managed point-in-time recovery — a cron-driven `snapshot` internalAction exports a configured set of tables to timestamped NDJSON in a dedicated R2 bucket, and a cron-driven `prune` internalAction ages snapshots out by retention window. Pairs with `lunora backup restore` (nearest snapshot + `--to` CDC replay).",

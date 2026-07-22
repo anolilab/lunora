@@ -28,9 +28,14 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "packages", "auth-ui", "src");
 const REGISTRY = join(ROOT, "registry");
 
-// Which registry item maps to which view directory under src/. Extend this as
-// the Vue / Svelte / Solid / Angular ports land (Phase 1/2).
-const FRAMEWORKS = [{ item: "auth-ui-react", view: "react" }];
+// Which registry item maps to which view directory under src/.
+const FRAMEWORKS = [
+    { item: "auth-ui-react", view: "react" },
+    { item: "auth-ui-vue", view: "vue" },
+    { item: "auth-ui-svelte", view: "svelte" },
+    { item: "auth-ui-solid", view: "solid" },
+    { item: "auth-ui-angular", view: "angular" },
+];
 
 // Item-local files that are hand-authored (not synced from src) — kept as-is and
 // still listed in files[].
