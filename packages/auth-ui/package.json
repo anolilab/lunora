@@ -1,0 +1,68 @@
+{
+    "name": "@lunora/auth-ui",
+    "version": "1.0.0-alpha.0",
+    "private": true,
+    "description": "Internal: source-of-truth for the copy-in, user-owned auth screens distributed via the `auth-ui-*` registry items. Not published — synced into registry/auth-ui-<framework>/ and copied into consumer projects.",
+    "keywords": [
+        "auth",
+        "better-auth",
+        "lunora",
+        "ui"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/auth-ui"
+    },
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
+        "lint:types": "tsc --noEmit",
+        "sync:registry": "node ../../scripts/sync-auth-ui-registry.mjs",
+        "sync:registry:check": "node ../../scripts/sync-auth-ui-registry.mjs --check",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@lunora/auth": "workspace:*",
+        "@lunora/errors": "workspace:*",
+        "@lunora/react": "workspace:*",
+        "better-auth": "catalog:auth"
+    },
+    "devDependencies": {
+        "@tanstack/react-query": "catalog:frontend",
+        "@testing-library/dom": "catalog:frontend",
+        "@testing-library/react": "catalog:frontend",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "@vitest/coverage-v8": "catalog:test",
+        "jsdom": "catalog:frontend",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "react": "^19.2.7"
+    },
+    "peerDependenciesMeta": {
+        "react": {
+            "optional": true
+        }
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

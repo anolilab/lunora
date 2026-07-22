@@ -24,6 +24,7 @@ import type { RegistryManifest } from "../registry/types";
 type StackFeature =
     | "ai"
     | "auth"
+    | "auth-ui"
     | "backup"
     | "browser"
     | "cloudflare-access"
@@ -43,6 +44,7 @@ type OfferTransformManifest = (manifest: RegistryManifest) => RegistryManifest;
 const STACK_FEATURE_OPTIONS: ReadonlyArray<{ description: string; label: string; value: StackFeature }> = [
     { description: "LLMs via Workers AI (summarize, generate, stream)", label: "AI", value: "ai" },
     { description: "Sign-up / sign-in (asks which provider)", label: "Authentication", value: "auth" },
+    { description: "Copy-in auth screens for your framework (sign in/up, reset, 2FA)", label: "Auth UI", value: "auth-ui" },
     { description: "Snapshot + restore your Durable Object data", label: "Backups", value: "backup" },
     { description: "Headless browser screenshots + PDFs", label: "Browser rendering", value: "browser" },
     { description: "Zero Trust identity via Cloudflare Access", label: "Cloudflare Access", value: "cloudflare-access" },
@@ -124,6 +126,13 @@ interface OfferDeps {
     preselected?: ReadonlyArray<StackFeature>;
     /** The new project's name — seeds smart defaults like the `project-uploads` bucket name. */
     projectName: string;
+
+    /**
+     * Resolve which per-framework auth-UI item (`auth-ui-react|vue|…`) fits the
+     * scaffolded project. Injected by the CLI (detected from the template's deps);
+     * defaults to `auth-ui-react` when absent so this module stays pure/testable.
+     */
+    resolveAuthUiItem?: () => string;
     /** Single-select among the auth providers (TTY-backed in production). */
     select: (
         message: string,
@@ -164,6 +173,19 @@ const collectEmailFeature = async (deps: OfferDeps): Promise<FeatureApply> => {
 };
 
 /**
+ * Auth UI: resolve the per-framework item (detected from the scaffolded project)
+ * and — because it `requires` the base `auth` item — prompt for the D1 database
+ * name, reusing the same transform as {@link collectAuthFeature} so Auth UI alone
+ * is enough to stand up a working auth setup.
+ */
+const collectAuthUiFeature = async (deps: OfferDeps): Promise<FeatureApply> => {
+    const item = deps.resolveAuthUiItem?.() ?? "auth-ui-react";
+    const databaseName = await promptDatabaseName(deps.text, deps.projectName);
+
+    return { label: "auth-ui", names: [item], transformManifest: (manifest) => withAuthDatabaseName(manifest, databaseName) };
+};
+
+/**
  * Storage: prompt for the R2 bucket name (default `project-uploads`, sanitized).
  * R2 names are strict and wrangler rejects an invalid one on dev/deploy, so we
  * ask up front rather than ship a placeholder the user has to chase down.
@@ -177,6 +199,7 @@ const collectStorageFeature = async (deps: OfferDeps): Promise<FeatureApply> => 
 /** Per-feature collectors that need a sub-prompt; everything else applies as its bare item name. */
 const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps) => Promise<FeatureApply>>> = {
     auth: collectAuthFeature,
+    "auth-ui": collectAuthUiFeature,
     email: collectEmailFeature,
     storage: collectStorageFeature,
 };
@@ -200,7 +223,12 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
     if (deps.preselected !== undefined && deps.preselected.length > 0) {
         await deps.applyAll(
             deps.preselected.map((feature) => {
-                return { label: feature, names: [featureItem(feature)] };
+                // `auth-ui` resolves to a per-framework item; everything else maps 1:1
+                // (with `email` → the mail item). `--add` uses shipped defaults, so no
+                // sub-prompt runs here (the base `auth` item keeps its placeholder D1 name).
+                const item = feature === "auth-ui" ? (deps.resolveAuthUiItem?.() ?? "auth-ui-react") : featureItem(feature);
+
+                return { label: feature, names: [item] };
             }),
         );
 

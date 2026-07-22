@@ -32,6 +32,11 @@
             "title": "Auth — Email OTP"
         },
         {
+            "description": "Copy-in, user-owned React auth screens on top of the base `auth` item and @lunora/react: sign in/up, forgot/reset password, magic link, email OTP, and two-factor. Framework-agnostic controllers under lunora/auth-ui/core, thin React views under lunora/auth-ui/react, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
+            "name": "auth-ui-react",
+            "title": "Auth UI — React"
+        },
+        {
             "description": "Managed point-in-time recovery — a cron-driven `snapshot` internalAction exports a configured set of tables to timestamped NDJSON in a dedicated R2 bucket, and a cron-driven `prune` internalAction ages snapshots out by retention window. Pairs with `lunora backup restore` (nearest snapshot + `--to` CDC replay).",
             "name": "backup",
             "title": "Backup"

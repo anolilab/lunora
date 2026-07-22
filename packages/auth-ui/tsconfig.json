@@ -1,0 +1,12 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "moduleResolution": "bundler",
+        "jsx": "react-jsx",
+        "types": ["node"]
+        // No `outDir`/`rootDir`: this package is a source-of-truth synced into the
+        // registry (never built/published), so `lint:types` is `tsc --noEmit` only —
+        // neither is load-bearing. Mirrors packages/react/tsconfig.json.
+    },
+    "include": ["src/**/*", "__tests__/**/*"]
+}

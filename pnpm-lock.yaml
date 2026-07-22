@@ -1967,6 +1967,58 @@ importers:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
+  packages/auth-ui:
+    dependencies:
+      '@lunora/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
+      '@lunora/react':
+        specifier: workspace:*
+        version: link:../react
+      better-auth:
+        specifier: catalog:auth
+        version: 1.6.23(cc563d2b2e753fed45a5b59bfab9f362)
+    devDependencies:
+      '@tanstack/react-query':
+        specifier: catalog:frontend
+        version: 5.101.2(react@19.2.7)
+      '@testing-library/dom':
+        specifier: catalog:frontend
+        version: 10.4.1
+      '@testing-library/react':
+        specifier: catalog:frontend
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.1
+      '@types/react':
+        specifier: catalog:frontend
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: catalog:frontend
+        version: 19.2.3(@types/react@19.2.17)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.10)
+      jsdom:
+        specifier: catalog:frontend
+        version: 29.1.1(@noble/hashes@2.2.0)
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: 19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+
   packages/bindings:
     dependencies:
       '@lunora/errors':
