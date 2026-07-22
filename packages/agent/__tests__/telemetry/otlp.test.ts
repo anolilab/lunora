@@ -49,11 +49,16 @@ const attribute = (span: ReturnType<typeof spanOf>, key: string): unknown => {
     return Object.values(found.value)[0];
 };
 
-afterEach(() => {
-    vi.unstubAllGlobals();
-});
+// A fixed 32-hex trace id used to assert span grouping. Not a credential — the
+// `no-secrets` heuristic just sees a high-entropy hex run.
+// eslint-disable-next-line no-secrets/no-secrets -- fake test trace id, not a real secret
+const FIXED_TRACE_ID = "0123456789abcdef0123456789abcdef";
 
 describe(otlpTelemetry, () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("emits a language-model span with model + token attributes and returns the result", async () => {
         const calls = captureFetch();
         const telemetry = otlpTelemetry({ endpoint: "https://collector.test/", token: "ingest-key" });
@@ -85,7 +90,7 @@ describe(otlpTelemetry, () => {
 
     it("groups every span under a shared traceId when one is given", async () => {
         const calls = captureFetch();
-        const telemetry = otlpTelemetry({ endpoint: "https://collector.test", traceId: "0123456789abcdef0123456789abcdef" });
+        const telemetry = otlpTelemetry({ endpoint: "https://collector.test", traceId: FIXED_TRACE_ID });
 
         await telemetry.executeLanguageModelCall?.(evt({ execute: () => Promise.resolve({}), modelId: "m" }));
         await telemetry.executeTool?.(evt({ execute: () => Promise.resolve("ok"), toolCall: { toolName: "lookup" }, toolCallId: "tc-1" }));
@@ -94,7 +99,7 @@ describe(otlpTelemetry, () => {
             (post) => (post.body.resourceSpans[0] as { scopeSpans: { spans: { traceId: string }[] }[] }).scopeSpans[0]?.spans[0]?.traceId,
         );
 
-        expect(traceIds).toStrictEqual(["0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"]);
+        expect(traceIds).toStrictEqual([FIXED_TRACE_ID, FIXED_TRACE_ID]);
     });
 
     it("does not record the prompt unless recordInputs is set", async () => {
