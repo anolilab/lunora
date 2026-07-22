@@ -174,6 +174,11 @@ describe("studioPlugin", () => {
     });
 
     it("serves studio assets with revalidation headers and honours a matching ETag", () => {
+        // At least one assertion always runs (the 200/501 check below), so this is
+        // safe on both the built and unbuilt-studio paths — and it satisfies
+        // `vitest/prefer-expect-assertions` (which wants it as the first expression).
+        expect.hasAssertions();
+
         const middleware = installMiddleware("localhost");
         const next = vi.fn<() => void>();
         const { response } = makeResponse();
