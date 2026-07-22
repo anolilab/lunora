@@ -1,0 +1,94 @@
+---
+title: Geospatial
+description: Store lat/lng points with v.geoPoint, index them with .geoIndex, and answer "places near me" and bounding-box reads with withGeoIndex.
+---
+
+Lunora stores geographic points as a first-class column and answers proximity
+(`near`) and bounding-box (`within`) reads over them. Declare a `v.geoPoint()`
+column, add a `.geoIndex()`, and read through it with `withGeoIndex` — the
+runtime keeps a geohash companion so the query is a geohash-prefix range scan
+refined and sorted by Haversine distance, not a full-table scan.
+
+## Declaring a point column and a geo index
+
+`v.geoPoint()` validates a `{ lat, lng }` object in WGS84 decimal degrees
+(`lat ∈ [-90, 90]`, `lng ∈ [-180, 180]`). `.geoIndex(name, { field })` names the
+`geoPoint` column it indexes; `precision` tunes the geohash length (default 9,
+~4.8 m cells).
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export default defineSchema({
+    places: defineTable({
+        name: v.string(),
+        category: v.string(),
+        location: v.geoPoint(),
+    }).geoIndex("by_location", { field: "location" }),
+});
+```
+
+## "Places near me" — `near(point, radiusMeters)`
+
+`q.withIndex()` has a geo counterpart, `q.withGeoIndex(name, q => q.near(point, radius))`.
+It scans the geohash cells covering the circle, then refines by true Haversine
+distance and orders the rows **nearest-first** (ties newest-first). Compose it
+with any terminal — here `.take(20)` returns the 20 closest places, applied
+_after_ the distance refine.
+
+```ts
+import { query, v } from "@/lunora/_generated/server";
+
+export const nearMe = query.input({ lat: v.number(), lng: v.number(), radiusMeters: v.number() }).query(async ({ ctx, args: { lat, lng, radiusMeters } }) => {
+    return ctx.db
+        .query("places")
+        .withGeoIndex("by_location", (q) => q.near({ lat, lng }, radiusMeters))
+        .take(20);
+});
+```
+
+## Bounding box — `within(box)`
+
+`within` takes a rectangle by its north-east and south-west corners and returns
+every point inside it (inclusive), in creation-time order. Use it for
+map-viewport queries — pass the visible bounds and get back the pins to draw.
+
+```ts
+import { query, v } from "@/lunora/_generated/server";
+
+const corner = v.object({ lat: v.number(), lng: v.number() });
+
+export const inViewport = query.input({ ne: corner, sw: corner }).query(async ({ ctx, args: { ne, sw } }) => {
+    return ctx.db
+        .query("places")
+        .withGeoIndex("by_location", (q) => q.within({ ne, sw }))
+        .collect();
+});
+```
+
+`.near()` and `.within()` are mutually exclusive on a single read — call one or
+the other, not both.
+
+## Single-shard scope
+
+A geo query resolves **within one shard**. On the default single-DO topology
+that is the whole table, so nothing extra is required. If you `.shardBy()` a
+table, each `withGeoIndex` read ranks points inside the resolved shard only —
+cross-shard geo ranking is a deliberate [non-goal](/docs/non-goals) in this
+release, so shard geospatial tables by a key you also query within (e.g. a city
+or region) rather than expecting a global nearest-across-all-shards result.
+
+## How the Advisors catch geo mistakes
+
+The [Advisors](/docs/concepts/advisors) lint your schema and discovered queries:
+a `.geoIndex()` that is declared but never read through, and a `near`/`within`
+read against a table with no geo index, are both surfaced in the Studio.
+
+## See also
+
+- [Indexes](/docs/concepts/indexes)
+- [Schema](/docs/concepts/schema)
+- [Sharding](/docs/concepts/sharding)
+- [Non-goals](/docs/non-goals)
+- [API: @lunora/server](/docs/packages/server)
