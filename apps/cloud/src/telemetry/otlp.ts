@@ -12,7 +12,7 @@
  * `error.type`, and container spans (scope `@lunora/container`) identify the
  * container via the `service.name` resource attribute.
  */
-import { redactRecord } from "./redact";
+import { redactRecord, redactText } from "./redact";
 
 /** OTLP `AnyValue` — only the variants Lunora emits are read. */
 interface OtlpAnyValue {
@@ -61,6 +61,8 @@ export interface TelemetryEvent {
     instance?: string;
     kind: "container" | "error";
     message: string;
+    /** The error span's trace, so the Issue can link to a sample trace. */
+    traceId?: string;
     ts: number;
 }
 
@@ -180,6 +182,8 @@ export const decodeTelemetryEvents = (payload: OtlpTracePayload): TelemetryEvent
                 const code = attributeString(span.attributes, "error.type");
                 const ts = epochMsFromNano(span.endTimeUnixNano);
 
+                const traceId = span.traceId === undefined || span.traceId === "" ? undefined : span.traceId;
+
                 if (isContainer) {
                     const container = serviceName ?? "container";
 
@@ -190,6 +194,7 @@ export const decodeTelemetryEvents = (payload: OtlpTracePayload): TelemetryEvent
                         instance: attributeString(span.attributes, "lunora.instance"),
                         kind: "container",
                         message,
+                        ...(traceId === undefined ? {} : { traceId }),
                         ts,
                     });
                 } else {
@@ -198,6 +203,7 @@ export const decodeTelemetryEvents = (payload: OtlpTracePayload): TelemetryEvent
                         functionPath: attributeString(span.attributes, "lunora.function_path") ?? span.name ?? "unknown",
                         kind: "error",
                         message,
+                        ...(traceId === undefined ? {} : { traceId }),
                         ts,
                     });
                 }
@@ -411,8 +417,8 @@ export const decodeObservations = (payload: OtlpTracePayload): SpanObservation[]
                     observation.model = model;
                     observation.promptTokens = attributeNumber(span.attributes, "gen_ai.usage.input_tokens");
                     observation.completionTokens = attributeNumber(span.attributes, "gen_ai.usage.output_tokens");
-                    observation.input = truncateText(attributeString(span.attributes, "gen_ai.prompt"));
-                    observation.output = truncateText(attributeString(span.attributes, "gen_ai.completion"));
+                    observation.input = truncateText(redactText(attributeString(span.attributes, "gen_ai.prompt")));
+                    observation.output = truncateText(redactText(attributeString(span.attributes, "gen_ai.completion")));
                 }
 
                 observations.push(observation);

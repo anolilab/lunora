@@ -6,6 +6,7 @@ import { AsyncList } from "./AsyncList";
 import type { OrgId } from "./types";
 
 interface IssuesSectionProps {
+    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
     organizationId: OrgId;
 }
 
@@ -14,7 +15,7 @@ interface IssuesSectionProps {
  * deployments (the hosted counterpart of the local Studio's Issues). Read-only
  * and members-only; gated behind the `logStreams` plan entitlement.
  */
-export const IssuesSection = ({ organizationId }: IssuesSectionProps): ReactElement => {
+export const IssuesSection = ({ onOpenTab, organizationId }: IssuesSectionProps): ReactElement => {
     const entitlements = useQuery(api.billing.entitlements, { organizationId });
     const gated = entitlements ? !entitlements.features.includes("logStreams") : false;
     const issues = useQuery(api.issues.list, gated ? "skip" : { organizationId });
@@ -42,6 +43,7 @@ export const IssuesSection = ({ organizationId }: IssuesSectionProps): ReactElem
                                 <th>Culprit</th>
                                 <th>Events</th>
                                 <th>Status</th>
+                                <th>Trace</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -54,6 +56,15 @@ export const IssuesSection = ({ organizationId }: IssuesSectionProps): ReactElem
                                         <span className="badge">{issue.count}</span>
                                     </td>
                                     <td>{issue.status}</td>
+                                    <td>
+                                        {issue.sampleTraceId && onOpenTab ? (
+                                            <button className="trace-link" onClick={() => onOpenTab("traces", { traceId: issue.sampleTraceId })} type="button">
+                                                View trace
+                                            </button>
+                                        ) : (
+                                            <span className="muted">—</span>
+                                        )}
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>

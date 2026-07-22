@@ -870,7 +870,7 @@ export interface Caller {
         revoke: (args: { id: Id<"invitations">; organizationId: Id<"organizations"> }) => Promise<void>;
     };
     issues: {
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"issues">; count: number; culprit: string; firstSeen: number; hash: string; lastSeen: number; organizationId: Id<"organizations">; sampleMessage: string; status: "open" | "resolved"; title: string }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"issues">; count: number; culprit: string; firstSeen: number; hash: string; lastSeen: number; organizationId: Id<"organizations">; sampleMessage: string; sampleTraceId?: string; status: "open" | "resolved"; title: string }[]>;
         setStatus: (args: { id: Id<"issues">; organizationId: Id<"organizations">; status: unknown }) => Promise<Id<"issues">>;
     };
     logs: {

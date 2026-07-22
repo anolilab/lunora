@@ -1,11 +1,15 @@
 import { useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { OrgId, ProjectId } from "./types";
 
 interface LogsSectionProps {
+    /** Deep-link in: prefilter the log lines to this trace (from a trace's "View logs"). */
+    focusTraceId?: string;
+    /** Deep-link out: jump to a line's trace waterfall. */
+    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
     organizationId: OrgId;
 }
 
@@ -29,13 +33,21 @@ const renderFields = (fields: Record<string, unknown>): string =>
  * both push to the server-side `logs.list`. The query is live, so the view tails
  * on its own — no polling.
  */
-export const LogsSection = ({ organizationId }: LogsSectionProps): ReactElement => {
+export const LogsSection = ({ focusTraceId, onOpenTab, organizationId }: LogsSectionProps): ReactElement => {
     const projects = useQuery(api.projects.listByOrg, { organizationId });
     const [projectId, setProjectId] = useState<ProjectId | "">("");
     const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId } : "skip");
     const [scriptName, setScriptName] = useState("");
     const [levels, setLevels] = useState<Set<LogLevel>>(new Set());
     const [search, setSearch] = useState("");
+    const [traceFilter, setTraceFilter] = useState<string | undefined>(focusTraceId);
+
+    // Deep-link in: adopt an incoming trace filter (from a trace's "View logs").
+    useEffect(() => {
+        if (focusTraceId) {
+            setTraceFilter(focusTraceId);
+        }
+    }, [focusTraceId]);
 
     const logs = useQuery(
         api.logs.list,
@@ -45,6 +57,7 @@ export const LogsSection = ({ organizationId }: LogsSectionProps): ReactElement 
                   organizationId,
                   scriptName,
                   search: search.trim() === "" ? undefined : search.trim(),
+                  traceId: traceFilter,
               }
             : "skip",
     );
@@ -109,6 +122,14 @@ export const LogsSection = ({ organizationId }: LogsSectionProps): ReactElement 
 
             {scriptName ? (
                 <section className="card">
+                    {traceFilter ? (
+                        <div className="log-trace-filter">
+                            Filtering by trace <code>{traceFilter.slice(0, 12)}</code>
+                            <button className="trace-link" onClick={() => setTraceFilter(undefined)} type="button">
+                                clear
+                            </button>
+                        </div>
+                    ) : null}
                     <div className="log-toolbar">
                         <input
                             aria-label="Search logs"
@@ -140,7 +161,15 @@ export const LogsSection = ({ organizationId }: LogsSectionProps): ReactElement 
                                 <span className={`log-badge log-badge-${entry.level}`}>{entry.level}</span>{" "}
                                 {entry.functionPath ? <span className="log-fn">{entry.functionPath}</span> : null} {entry.message}
                                 {entry.fields ? <span className="log-fields"> {renderFields(entry.fields)}</span> : null}
-                                {entry.traceId ? <span className="log-trace"> trace={entry.traceId.slice(0, 8)}</span> : null}
+                                {entry.traceId ? (
+                                    onOpenTab ? (
+                                        <button className="log-trace-link" onClick={() => onOpenTab("traces", { traceId: entry.traceId })} type="button">
+                                            trace={entry.traceId.slice(0, 8)}
+                                        </button>
+                                    ) : (
+                                        <span className="log-trace"> trace={entry.traceId.slice(0, 8)}</span>
+                                    )
+                                ) : null}
                                 {"\n"}
                             </span>
                         ))}

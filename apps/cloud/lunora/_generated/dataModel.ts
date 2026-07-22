@@ -283,6 +283,7 @@ export interface Doc_issues {
     lastSeen: number;
     organizationId: Id<"organizations">;
     sampleMessage: string;
+    sampleTraceId?: string;
     status: "open" | "resolved";
     title: string;
     updatedAt: number;
@@ -824,6 +825,7 @@ export interface Insert_issues {
     lastSeen: number;
     organizationId: Id<"organizations">;
     sampleMessage: string;
+    sampleTraceId?: string;
     status: "open" | "resolved";
     title: string;
     updatedAt: number;

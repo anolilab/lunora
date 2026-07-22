@@ -852,6 +852,42 @@ button.link.danger {
     word-break: break-word;
 }
 
+/* Cross-tab deep-link buttons (Issue → trace, trace → logs, log → trace). */
+.trace-link,
+.log-trace-link {
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--primary);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.trace-link:hover,
+.log-trace-link:hover {
+    border-color: var(--primary);
+}
+
+.log-trace-link {
+    margin-left: 6px;
+    font-family: inherit;
+}
+
+.trace-detail-actions {
+    display: inline-flex;
+    gap: 8px;
+}
+
+.log-trace-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
 /* Trace-list filter row (errors-only, …). */
 .trace-filter {
     display: inline-flex;

@@ -79,7 +79,7 @@ export interface ApiTypes {
         revoke: FunctionReference<"mutation", { id: Id<"invitations">; organizationId: Id<"organizations"> }, void>;
     };
     issues: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"issues">; count: number; culprit: string; firstSeen: number; hash: string; lastSeen: number; organizationId: Id<"organizations">; sampleMessage: string; status: "open" | "resolved"; title: string }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"issues">; count: number; culprit: string; firstSeen: number; hash: string; lastSeen: number; organizationId: Id<"organizations">; sampleMessage: string; sampleTraceId?: string; status: "open" | "resolved"; title: string }[]>;
         setStatus: FunctionReference<"mutation", { id: Id<"issues">; organizationId: Id<"organizations">; status: unknown }, Id<"issues">>;
     };
     logs: {

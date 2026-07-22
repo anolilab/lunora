@@ -47,6 +47,17 @@ type Tab =
     | "uptime"
     | "usage";
 
+/**
+ * Props every section receives. Beyond `organizationId`, sections may use
+ * `openTab` to deep-link to another tab (e.g. an Issue → its trace), and
+ * `focusTraceId` — the trace/trace-filter the target tab should open on.
+ */
+export interface SectionProps {
+    focusTraceId?: string;
+    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
+    organizationId: OrgId;
+}
+
 const TABS: { id: Tab; label: string }[] = [
     { id: "projects", label: "Projects" },
     { id: "members", label: "Members" },
@@ -67,7 +78,7 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 /** Tab → live section. Every section mounts against the same `organizationId`. */
-const SECTIONS: Record<Tab, (props: { organizationId: OrgId }) => ReactElement> = {
+const SECTIONS: Record<Tab, (props: SectionProps) => ReactElement> = {
     activity: ActivitySection,
     alerts: AlertsSection,
     billing: BillingSection,
@@ -125,6 +136,13 @@ const OrgBanners = ({ org }: { org: OrgFlags }): ReactElement | null => {
 export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDashboardProps): ReactElement => {
     const organizations = useQuery(api.organizations.list, {});
     const [tab, setTab] = useState<Tab>("projects");
+    // Cross-tab deep-link: a section calls `onOpenTab` to jump to Traces/Logs
+    // focused on a trace (an Issue → its trace, a trace → its logs).
+    const [focusTraceId, setFocusTraceId] = useState<string>();
+    const onOpenTab = (target: "logs" | "traces", context?: { traceId?: string }): void => {
+        setFocusTraceId(context?.traceId);
+        setTab(target);
+    };
     const palette = useCommandPalette();
 
     const org = organizations?.find((candidate) => candidate._id === organizationId);
@@ -175,7 +193,7 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
                 ))}
             </nav>
 
-            <ActiveSection organizationId={organizationId} />
+            <ActiveSection focusTraceId={tab === "logs" || tab === "traces" ? focusTraceId : undefined} onOpenTab={onOpenTab} organizationId={organizationId} />
         </div>
     );
 };

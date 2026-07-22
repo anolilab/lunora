@@ -28,6 +28,37 @@ const SENSITIVE_KEY =
 /** True when a field/attribute key names something secret and its value should be scrubbed. */
 export const isSensitiveKey = (key: string): boolean => SENSITIVE_KEY.test(key);
 
+// Secret-shaped SUBSTRINGS in free text (a recorded prompt/completion), where
+// there is no key to match on. Each alternative is independently bounded — no
+// nested quantifiers, so no ReDoS. Case-insensitive.
+const SECRET_IN_TEXT = new RegExp(
+    [
+        "(bearer\\s+)[A-Za-z0-9._~+/-]{8,}={0,2}", // Authorization: Bearer <token>
+        "\\bsk-[A-Za-z0-9]{16,}\\b", // OpenAI-style api keys
+        "\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{6,}", // JWTs
+        "\\bAKIA[0-9A-Z]{16}\\b", // AWS access key ids
+        "((?:password|passwd|secret|token|api[_-]?key)\\s*[=:]\\s*)\\S+", // key=value / key: value
+    ].join("|"),
+    "gi",
+);
+
+/**
+ * Scrub secret-shaped substrings from free text (a recorded generation
+ * prompt/completion), where {@link redactRecord}'s key-based match can't reach.
+ * Replaces bearer tokens, api keys, JWTs, and `secret=…` pairs with a placeholder;
+ * a `bearer `/`key=` prefix is preserved so the line still reads. `undefined`
+ * passes through.
+ */
+export const redactText = (text: string | undefined): string | undefined => {
+    if (text === undefined) {
+        return undefined;
+    }
+
+    // The regex has two prefix-capturing alternatives — `(bearer )` and
+    // `(key=)` — so use whichever one matched (the rest capture nothing).
+    return text.replace(SECRET_IN_TEXT, (_match, bearerPrefix?: string, keyPrefix?: string) => `${bearerPrefix ?? keyPrefix ?? ""}${REDACTED}`);
+};
+
 /**
  * Return a copy of `record` with every sensitive-keyed value replaced by
  * {@link REDACTED}. Returns the original reference untouched when nothing
