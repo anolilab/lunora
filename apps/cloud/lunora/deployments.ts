@@ -12,6 +12,8 @@ type DeploymentStatus = "building" | "destroyed" | "failed" | "live" | "provisio
 interface DeploymentRow {
     _id: Id<"deployments">;
     adminToken?: string;
+    adminTokenCiphertext?: string;
+    adminTokenIv?: string;
     alias?: string;
     branch?: string;
     bundleHash?: string;
@@ -48,23 +50,39 @@ const PHASE_TIMESTAMP: Record<DeploymentStatus, "destroyedAt" | "failedAt" | "li
     };
 
 /**
- * Resolve a deployment's tenant URL + admin token for the hosted-studio admin
- * proxy (§3). Asserts the caller is a member of the deployment's org. Returns
- * `null` when the deployment is missing, in another org, or not yet live.
+ * Resolve a deployment's tenant URL + *sealed* admin token for the hosted-studio
+ * admin proxy (§3). Asserts the caller is a member of the deployment's org.
+ * Returns the stored admin-token fields (ciphertext + IV, or the plaintext dev
+ * fallback) — the caller decrypts at the edge with `SECRET_ENCRYPTION_KEY`, so
+ * the plaintext bearer never crosses the RPC boundary when sealed. Returns
+ * `null` when the deployment is missing, in another org, has no admin token, or
+ * is not yet live.
  */
 export const adminTarget = query
     .input({ deploymentId: v.id("deployments"), organizationId: v.id("organizations") })
-    .query(async ({ ctx: context, args: { deploymentId, organizationId } }): Promise<null | { adminToken: string; url: string }> => {
-        await assertMember(context, organizationId);
+    .query(
+        async ({
+            ctx: context,
+            args: { deploymentId, organizationId },
+        }): Promise<null | { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string }> => {
+            await assertMember(context, organizationId);
 
-        const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
+            const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
+            const hasToken = deployment?.adminToken || (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
 
-        if (deployment?.organizationId !== organizationId || !deployment.adminToken || !deployment.url) {
-            return null;
-        }
+            if (deployment?.organizationId !== organizationId || !hasToken || !deployment.url) {
+                return null;
+            }
 
-        return { adminToken: deployment.adminToken, url: deployment.url };
-    });
+            return {
+                ...(deployment.adminToken ? { adminToken: deployment.adminToken } : {}),
+                ...(deployment.adminTokenCiphertext && deployment.adminTokenIv
+                    ? { adminTokenCiphertext: deployment.adminTokenCiphertext, adminTokenIv: deployment.adminTokenIv }
+                    : {}),
+                url: deployment.url,
+            };
+        },
+    );
 
 /**
  * Resolve a dispatch-namespace script id to its org's plan name, for the
@@ -115,7 +133,11 @@ export const listByProject = query
 export const create = mutation
     .input({
         // Tenant admin token the platform set on the worker (for the admin proxy).
+        // Sealed at the edge before it reaches here: the encrypted fields are the
+        // norm; `adminToken` (plaintext) is only the no-master-key dev fallback.
         adminToken: v.optional(v.string()),
+        adminTokenCiphertext: v.optional(v.string()),
+        adminTokenIv: v.optional(v.string()),
         branch: v.optional(v.string()),
         // The tenant's compiled cron expressions (for the WfP cron fan-out, §2.4).
         cronSpecs: v.optional(v.array(v.string())),
@@ -157,6 +179,9 @@ export const create = mutation
         const now = Date.now();
         const deploymentId = await context.db.insert("deployments", {
             ...(arguments_.adminToken ? { adminToken: arguments_.adminToken } : {}),
+            ...(arguments_.adminTokenCiphertext && arguments_.adminTokenIv
+                ? { adminTokenCiphertext: arguments_.adminTokenCiphertext, adminTokenIv: arguments_.adminTokenIv }
+                : {}),
             alias: arguments_.scriptName,
             branch: arguments_.branch,
             ...(arguments_.cronSpecs && arguments_.cronSpecs.length > 0 ? { cronSpecs: arguments_.cronSpecs } : {}),

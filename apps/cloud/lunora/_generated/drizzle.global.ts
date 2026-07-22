@@ -12,6 +12,7 @@ export const cells = sqliteTable("cells", {
     jurisdiction: text("jurisdiction"),
     name: text("name").notNull(),
     status: text("status").notNull(),
+    usageReadAtMs: real("usageReadAtMs"),
 }, (t) => ({
     by_name: uniqueIndex("by_name").on(t.name),
 }));
@@ -64,6 +65,8 @@ export const deployments = sqliteTable("deployments", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     adminToken: text("adminToken"),
+    adminTokenCiphertext: text("adminTokenCiphertext"),
+    adminTokenIv: text("adminTokenIv"),
     alias: text("alias"),
     branch: text("branch"),
     cronSpecs: text("cronSpecs", { mode: "json" }).$type<Array<string>>(),
@@ -87,6 +90,7 @@ export const deployments = sqliteTable("deployments", {
     supersededAt: real("supersededAt"),
     failedAt: real("failedAt"),
     destroyedAt: real("destroyedAt"),
+    teardownAt: real("teardownAt"),
 }, (t) => ({
     by_script: index("by_script").on(t.scriptName),
     by_project: index("by_project").on(t.projectId),
@@ -97,7 +101,9 @@ export const deployments = sqliteTable("deployments", {
 export const deployKeys = sqliteTable("deployKeys", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
+    capability: text("capability", { mode: "json" }).$type<"deploy" | "ingest">(),
     createdAt: real("createdAt").notNull(),
+    encryptedSecret: text("encryptedSecret", { mode: "json" }).$type<{ ciphertext: string; iv: string }>(),
     hashedKey: text("hashedKey").notNull(),
     lastUsedAt: real("lastUsedAt"),
     name: text("name").notNull(),
@@ -138,6 +144,40 @@ export const tenantLogs = sqliteTable("tenantLogs", {
 }, (t) => ({
     by_trace: index("by_trace").on(t.organizationId, t.traceId),
     by_script_time: index("by_script_time").on(t.scriptName, t.createdAt),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const observations = sqliteTable("observations", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    attributes: text("attributes", { mode: "json" }).$type<Record<string, string>>(),
+    completionTokens: real("completionTokens"),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId").references(() => deployments._id),
+    durationMs: real("durationMs").notNull(),
+    endedAt: real("endedAt").notNull(),
+    evaluations: text("evaluations", { mode: "json" }).$type<Array<{ label: string | undefined; name: string; score: number }>>(),
+    functionPath: text("functionPath"),
+    input: text("input"),
+    kind: text("kind", { mode: "json" }).$type<"container" | "generation" | "worker">().notNull(),
+    level: text("level", { mode: "json" }).$type<"error" | "info">().notNull(),
+    model: text("model"),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    output: text("output"),
+    parentSpanId: text("parentSpanId"),
+    promptTokens: real("promptTokens"),
+    serviceName: text("serviceName"),
+    sessionId: text("sessionId"),
+    spanId: text("spanId").notNull(),
+    startedAt: real("startedAt").notNull(),
+    statusMessage: text("statusMessage"),
+    traceId: text("traceId").notNull(),
+}, (t) => ({
+    by_org_deployment_started: index("by_org_deployment_started").on(t.organizationId, t.deploymentId, t.startedAt),
+    by_org_session: index("by_org_session").on(t.organizationId, t.sessionId),
+    by_org_started: index("by_org_started").on(t.organizationId, t.startedAt),
+    by_trace: index("by_trace").on(t.organizationId, t.traceId),
     by_org: index("by_org").on(t.organizationId),
 }));
 
@@ -260,6 +300,7 @@ export const issues = sqliteTable("issues", {
     lastSeen: real("lastSeen").notNull(),
     organizationId: text("organizationId").references(() => organizations._id).notNull(),
     sampleMessage: text("sampleMessage").notNull(),
+    sampleTraceId: text("sampleTraceId"),
     status: text("status", { mode: "json" }).$type<"open" | "resolved">().notNull(),
     title: text("title").notNull(),
     updatedAt: real("updatedAt").notNull(),
@@ -279,6 +320,8 @@ export const incidents = sqliteTable("incidents", {
     deploymentId: text("deploymentId").references(() => deployments._id),
     hash: text("hash").notNull(),
     instance: text("instance"),
+    investigatedAt: real("investigatedAt"),
+    investigation: text("investigation", { mode: "json" }).$type<{ by: "deterministic" | "llm"; confidence: "high" | "medium" | "low"; evidenceNote: string; relatedTraceIds: Array<string>; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>(),
     kind: text("kind", { mode: "json" }).$type<"crash_loop" | "oom" | "error_spike">().notNull(),
     lastSeen: real("lastSeen").notNull(),
     openedAt: real("openedAt").notNull(),
@@ -294,24 +337,42 @@ export const incidents = sqliteTable("incidents", {
 export const alertRules = sqliteTable("alertRules", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
-    channel: text("channel", { mode: "json" }).$type<"email" | "webhook">().notNull(),
+    channel: text("channel", { mode: "json" }).$type<"email" | "webhook" | "slack" | "pagerduty">().notNull(),
+    comparator: text("comparator", { mode: "json" }).$type<"gt" | "lt">(),
     createdAt: real("createdAt").notNull(),
     destination: text("destination").notNull(),
     enabled: integer("enabled", { mode: "boolean" }).notNull(),
+    functionPath: text("functionPath"),
     name: text("name").notNull(),
     organizationId: text("organizationId").references(() => organizations._id).notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost">().notNull(),
     threshold: real("threshold").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+    windowMinutes: real("windowMinutes"),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const alertRuleState = sqliteTable("alertRuleState", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    firing: integer("firing", { mode: "boolean" }).notNull(),
+    lastEvaluatedAt: real("lastEvaluatedAt").notNull(),
+    lastValue: real("lastValue").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    ruleId: text("ruleId").references(() => alertRules._id).notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_org: index("by_org").on(t.organizationId),
+    by_rule: uniqueIndex("by_rule").on(t.ruleId),
 }));
 
 export const alerts = sqliteTable("alerts", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     body: text("body").notNull(),
-    channel: text("channel", { mode: "json" }).$type<"email" | "webhook">().notNull(),
+    channel: text("channel", { mode: "json" }).$type<"email" | "webhook" | "slack" | "pagerduty">().notNull(),
     createdAt: real("createdAt").notNull(),
     deliveredAt: real("deliveredAt"),
     destination: text("destination").notNull(),
@@ -320,11 +381,41 @@ export const alerts = sqliteTable("alerts", {
     ruleId: text("ruleId").references(() => alertRules._id).notNull(),
     status: text("status", { mode: "json" }).$type<"firing" | "delivered" | "failed">().notNull(),
     subject: text("subject").notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost">().notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_status: index("by_status").on(t.status),
     by_org: index("by_org").on(t.organizationId),
+}));
+
+export const uptimeChecks = sqliteTable("uptimeChecks", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId").references(() => deployments._id).notNull(),
+    error: text("error"),
+    latencyMs: real("latencyMs"),
+    ok: integer("ok", { mode: "boolean" }).notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    statusCode: real("statusCode"),
+}, (t) => ({
+    by_org_deployment: index("by_org_deployment").on(t.organizationId, t.deploymentId),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const uptimeState = sqliteTable("uptimeState", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    consecutiveFailures: real("consecutiveFailures").notNull(),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId").references(() => deployments._id).notNull(),
+    lastCheckedAt: real("lastCheckedAt").notNull(),
+    lastOk: integer("lastOk", { mode: "boolean" }).notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+    by_deployment: index("by_deployment").on(t.deploymentId),
 }));
 
 export const secrets = sqliteTable("secrets", {
@@ -341,6 +432,18 @@ export const secrets = sqliteTable("secrets", {
 }, (t) => ({
     by_project_env_name: uniqueIndex("by_project_env_name").on(t.projectId, t.environment, t.name),
     by_project: index("by_project").on(t.projectId),
+}));
+
+export const dashboards = sqliteTable("dashboards", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    panels: text("panels", { mode: "json" }).$type<Array<{ config: { filter: string | undefined; metricName: string | undefined; stat: "last" | "first" | "count" | undefined }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }>>().notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const customers = sqliteTable("customers", {

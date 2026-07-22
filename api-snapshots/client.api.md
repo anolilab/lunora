@@ -481,6 +481,7 @@ class LunoraClient {
         text: string;
         topK?: number;
     }): Promise<VectorQueryMatch[]>;
+    queryLogArchive(query?: PipelineLogQuery): Promise<PipelineLogPage>;
     listKvNamespaces(): Promise<KvNamespaceSummary[]>;
     listKvKeys(options: {
         cursor?: string;
@@ -905,6 +906,30 @@ interface PersistenceAdapter {
     remove: (id: string) => Promise<void>;
 }
 ```
+
+### `PipelineLogColumnMap` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogCursor` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogField` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogPage` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogQuery` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogRow` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `Preloaded` (interface)
 

@@ -112,6 +112,106 @@ describe(handleDeployRequest, () => {
         expect(new TextDecoder().decode(uploaded)).toBe("export default {}");
     });
 
+    it("floors the provisioned bindings to ShardDO when the request omits a manifest", async () => {
+        let bindings: unknown;
+        const capturing: Provisioner = {
+            deploy: (spec) => {
+                bindings = spec.bindings;
+
+                return Promise.resolve({ bundleHash: "h1", scriptName: spec.scriptName, url: "https://proj.lunora.app" });
+            },
+            destroy: () => Promise.resolve(),
+        };
+
+        const response = await handleDeployRequest(request("k", { bundle: BUNDLE, projectId: "proj_1", scriptName: "s" }), deps(backendWith({}), capturing));
+
+        await response.text();
+
+        // The whole point of the fix: never an empty binding set — a Lunora
+        // worker without ShardDO + its migration tag cannot boot.
+        expect(bindings).toStrictEqual({ durableObjects: [{ binding: "SHARD", className: "ShardDO" }] });
+    });
+
+    it("passes through the declared D1/R2/extra-DO manifest and still guarantees ShardDO", async () => {
+        let bindings: { d1?: unknown; durableObjects?: { className: string }[]; r2?: unknown } | undefined;
+        const capturing: Provisioner = {
+            deploy: (spec) => {
+                bindings = spec.bindings;
+
+                return Promise.resolve({ bundleHash: "h1", scriptName: spec.scriptName, url: "https://proj.lunora.app" });
+            },
+            destroy: () => Promise.resolve(),
+        };
+
+        const response = await handleDeployRequest(
+            request("k", {
+                bindings: {
+                    d1: { binding: "DB" },
+                    durableObjects: [{ binding: "SCHEDULER", className: "SchedulerDO" }],
+                    r2: { binding: "FILES" },
+                },
+                bundle: BUNDLE,
+                projectId: "proj_1",
+                scriptName: "s",
+            }),
+            deps(backendWith({}), capturing),
+        );
+
+        await response.text();
+
+        expect(bindings?.d1).toStrictEqual({ binding: "DB" });
+        expect(bindings?.r2).toStrictEqual({ binding: "FILES" });
+        // ShardDO is prepended; the app's own SchedulerDO is preserved.
+        expect(bindings?.durableObjects?.map((durableObject) => durableObject.className)).toStrictEqual(["ShardDO", "SchedulerDO"]);
+    });
+
+    it("does not duplicate ShardDO when the caller already declares it, and drops malformed DO entries", async () => {
+        let bindings: { durableObjects?: { className: string }[] } | undefined;
+        const capturing: Provisioner = {
+            deploy: (spec) => {
+                bindings = spec.bindings;
+
+                return Promise.resolve({ bundleHash: "h1", scriptName: spec.scriptName, url: "https://proj.lunora.app" });
+            },
+            destroy: () => Promise.resolve(),
+        };
+
+        const response = await handleDeployRequest(
+            request("k", {
+                bindings: { durableObjects: [{ binding: "SHARD", className: "ShardDO" }, { binding: "BAD" }, "nope"] },
+                bundle: BUNDLE,
+                projectId: "proj_1",
+                scriptName: "s",
+            }),
+            deps(backendWith({}), capturing),
+        );
+
+        await response.text();
+
+        expect(bindings?.durableObjects).toStrictEqual([{ binding: "SHARD", className: "ShardDO" }]);
+    });
+
+    it("forwards the request's cronSpecs to createDeployment (feeds the cron fan-out)", async () => {
+        let received: string[] | undefined;
+        const backend = backendWith({
+            createDeployment: (input) => {
+                received = input.cronSpecs;
+
+                return Promise.resolve({ deploymentId: "dep_1" });
+            },
+        });
+
+        const response = await handleDeployRequest(
+            request("k", { bundle: BUNDLE, cronSpecs: ["0 */6 * * *", 3 as unknown as string], projectId: "proj_1", scriptName: "s" }),
+            deps(backend, okProvisioner),
+        );
+
+        await response.text();
+
+        // Only valid string expressions survive.
+        expect(received).toStrictEqual(["0 */6 * * *"]);
+    });
+
     it("streams accepted → queued → provisioning → live and records status transitions", async () => {
         const statuses: string[] = [];
         const backend = backendWith({
