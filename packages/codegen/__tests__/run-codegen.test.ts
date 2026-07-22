@@ -1415,7 +1415,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
         });
 
         it("emits app.ts with the .auth() method when @lunora/auth is a declared dependency", () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             writeFileSync(
                 join(workdir, "package.json"),
@@ -1427,8 +1427,9 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             expect(result.generated.app).toContain("public auth(");
             expect(result.generated.app).toContain(
-                'import { createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
+                'import { createAuth, createAuthAdmin, createAuthAuditReader, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
             );
+            expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(this.authDeclaration.d1(env) as never));");
             expect(result.generated.app).toContain("await ensureMigrated(");
         });
 

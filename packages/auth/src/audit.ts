@@ -271,5 +271,34 @@ const readAuthAuditLog = async (executor: SqlExecutor, options: ReadAuthAuditOpt
     });
 };
 
-export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, ensureAuthAuditTable, readAuthAuditLog };
-export type { AppendAuthAuditEntry, AppendAuthAuditOptions, AuthAuditEntry, AuthAuditEvent, AuthAuditOutcome, ReadAuthAuditOptions };
+/**
+ * The auth/security audit read plane the runtime's `authAuditReader` option
+ * accepts — a structurally-compatible `{ read }` object the worker calls behind
+ * its admin gate to back the studio's "Security / audit" page
+ * (`__lunora_admin__:getAuthAuditLog`).
+ */
+interface AuthAuditReader {
+    read: (options: ReadAuthAuditOptions) => Promise<AuthAuditEntry[]>;
+}
+
+/**
+ * Build the reader the runtime's `authAuditReader` option accepts, closing over
+ * the auth D1 `executor` (`d1Executor(env.DB)`) so an admin caller reads the same
+ * `__lunora_auth_audit__` table the hook writes. Filters/paging pass straight
+ * through to {@link readAuthAuditLog} (which clamps `limit`).
+ *
+ * ```ts
+ * export default createWorker({
+ *     authAuditReader: createAuthAuditReader(d1Executor(env.DB)),
+ *     // …
+ * });
+ * ```
+ */
+const createAuthAuditReader = (executor: SqlExecutor): AuthAuditReader => {
+    return {
+        read: (options) => readAuthAuditLog(executor, options),
+    };
+};
+
+export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable, readAuthAuditLog };
+export type { AppendAuthAuditEntry, AppendAuthAuditOptions, AuthAuditEntry, AuthAuditEvent, AuthAuditOutcome, AuthAuditReader, ReadAuthAuditOptions };

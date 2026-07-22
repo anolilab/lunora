@@ -21,8 +21,16 @@ export type {
     ListUsersOptions,
 } from "./admin";
 export { createAuthAdmin, LunoraAuthAdminError } from "./admin";
-export type { AppendAuthAuditEntry, AppendAuthAuditOptions, AuthAuditEntry, AuthAuditEvent, AuthAuditOutcome, ReadAuthAuditOptions } from "./audit";
-export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, ensureAuthAuditTable, readAuthAuditLog } from "./audit";
+export type {
+    AppendAuthAuditEntry,
+    AppendAuthAuditOptions,
+    AuthAuditEntry,
+    AuthAuditEvent,
+    AuthAuditOutcome,
+    AuthAuditReader,
+    ReadAuthAuditOptions,
+} from "./audit";
+export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable, readAuthAuditLog } from "./audit";
 export type { AuthAuditHookConfig } from "./audit-hooks";
 export { authAuditHook, buildAuditEntry, eventForPath, withAuthAudit } from "./audit-hooks";
 export type { LunoraAuth, LunoraAuthOptions } from "./create-auth";

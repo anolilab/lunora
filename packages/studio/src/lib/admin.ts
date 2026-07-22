@@ -39,6 +39,7 @@ export const ADMIN_FUNCTIONS = {
     facetColumn: "__lunora_admin__:facetColumn",
     getAdvisories: "__lunora_admin__:getAdvisories",
     getAuditLog: "__lunora_admin__:getAuditLog",
+    getAuthAuditLog: "__lunora_admin__:getAuthAuditLog",
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
     getCapturedMail: "__lunora_admin__:getCapturedMail",
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
@@ -726,6 +727,32 @@ export interface AuditEntry {
 /** Payload of a `__lunora_admin__:getAuditLog` call: the recorded entries, newest first. */
 export interface AuditLogResult {
     entries: AuditEntry[];
+}
+
+/**
+ * One recorded auth/security event returned by `__lunora_admin__:getAuthAuditLog`,
+ * mirroring `@lunora/auth`'s `AuthAuditEntry`. Unlike the admin-op audit log
+ * (DO-backed, per shard), this trail is the authentication/security forensics
+ * surface stored in the auth D1 database: `event` is the auth event type
+ * (`sign-in`, `password-change`, `mfa-enable`, …); `outcome` whether it
+ * succeeded; `actorId`/`actorEmail` the acting user; `ip`/`userAgent` the client;
+ * `detail` carries redacted extra context; `seq` is the monotonic cursor.
+ */
+export interface AuthAuditEntry {
+    actorEmail?: string;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+    event: string;
+    ip?: string;
+    outcome: "failure" | "success";
+    seq: number;
+    ts: number;
+    userAgent?: string;
+}
+
+/** Payload of a `__lunora_admin__:getAuthAuditLog` call: the recorded auth events, newest first. */
+export interface AuthAuditLogResult {
+    entries: AuthAuditEntry[];
 }
 
 /**

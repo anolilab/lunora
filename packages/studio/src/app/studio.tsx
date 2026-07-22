@@ -82,6 +82,7 @@ const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-ad
 const AgentsPanel = lazyNamed(() => import("../features/agents/agents-panel"), "AgentsPanel");
 const AnalyticsPanel = lazyNamed(() => import("../features/analytics/analytics-panel"), "AnalyticsPanel");
 const ApiTab = lazy(() => import("../features/api/api-tab"));
+const AuthAuditPanel = lazyNamed(() => import("../features/auth/auth-audit-panel"), "AuthAuditPanel");
 const AuthConfigPanel = lazyNamed(() => import("../features/auth/auth-config-panel"), "AuthConfigPanel");
 const AuthSessionsPanel = lazyNamed(() => import("../features/auth/auth-sessions-panel"), "AuthSessionsPanel");
 const OrganizationsPanel = lazyNamed(() => import("../features/auth/organizations-panel"), "OrganizationsPanel");
@@ -132,6 +133,7 @@ type StudioTab =
     | "analytics"
     | "api"
     | "audit"
+    | "authAudit"
     | "authConfig"
     | "authSessions"
     | "containers"
@@ -305,6 +307,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     analytics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     api: <path d="m9 8-4 4 4 4m6-8 4 4-4 4M13 5l-2 14" />,
     audit: <path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm6 0v5h5M9 13h6M9 16h6M9 10h2" />,
+    authAudit: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8h6m-6 3h6" />,
     authConfig: (
         <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6h-3.6l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
     ),
@@ -371,7 +374,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "overview", tabs: ["home", "dashboards"] },
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
     { key: "functions", tabs: ["functions", "api", "workflows", "agents", "queues"] },
-    { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
+    { key: "auth", tabs: ["users", "organizations", "authSessions", "authAudit", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
     {
         key: "observability",
@@ -462,6 +465,7 @@ const TABS = exhaustiveRouteTabs([
     "users",
     "organizations",
     "authSessions",
+    "authAudit",
     "authConfig",
     "files",
     "storageRules",
@@ -827,6 +831,7 @@ const StudioLayout = (): ReactElement => {
             analytics: t("Analytics"),
             api: t("API"),
             audit: t("Audit"),
+            authAudit: t("Auth audit"),
             authConfig: t("Configuration"),
             authSessions: t("Sessions"),
             containers: t("Containers"),
@@ -886,6 +891,7 @@ const StudioLayout = (): ReactElement => {
         analytics: t("Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards."),
         api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),
         audit: t("A durable log of admin state-changing operations."),
+        authAudit: t("Authentication and security events — sign-ins, MFA, and session changes."),
         authConfig: t("Enabled plugins and session config (read-only)."),
         authSessions: t("Browse and revoke active sessions across all users."),
         containers: t("Live Cloudflare Containers — current lifecycle state per instance from the log stream."),
@@ -1101,6 +1107,7 @@ const buildRouter = ({
         analytics: <AnalyticsPanel />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
+        authAudit: <AuthAuditPanel />,
         authConfig: <AuthConfigPanel />,
         authSessions: <AuthSessionsPanel />,
         containers: <ContainersPanel />,
