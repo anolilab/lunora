@@ -272,6 +272,10 @@ export default defineSchema({
         // `endedAt − startedAt`, denormalized so the list/waterfall need no math.
         durationMs: v.number(),
         endedAt: v.number(),
+        // Generation spans: eval scores decoded from `gen_ai.evaluation.*` (opt-in
+        // on the emitter), rendered in the span-detail pane. Absent until the
+        // framework's eval work lands.
+        evaluations: v.optional(v.array(v.object({ label: v.optional(v.string()), name: v.string(), score: v.number() }))),
         // `<file>:<function>` (or `container:<name>`), when attributed.
         functionPath: v.optional(v.string()),
         // Generation spans: the recorded prompt/input (only when the emitter opted
@@ -293,6 +297,10 @@ export default defineSchema({
         // Generation spans: prompt token count.
         promptTokens: v.optional(v.number()),
         serviceName: v.optional(v.string()),
+        // Generation spans: the conversation/thread id (`gen_ai.conversation.id`)
+        // that groups turns into a session (LLM sessions/threads view). Absent
+        // until the framework emits it — no session id → no session grouping.
+        sessionId: v.optional(v.string()),
         spanId: v.string(),
         startedAt: v.number(),
         // OTLP `status.message`, when the span errored.
@@ -305,6 +313,8 @@ export default defineSchema({
         .index("by_trace", ["organizationId", "traceId"])
         // Recent spans, org-scoped, to roll up into the trace list newest-first.
         .index("by_org_started", ["organizationId", "startedAt"])
+        // Every generation turn in one session — the sessions drill-in, org-scoped.
+        .index("by_org_session", ["organizationId", "sessionId"])
         // Recent spans for ONE deployment — so a deployment-scoped trace list scans
         // that deployment's own spans (not the global recent window, where a quiet
         // deployment's older traces would fall off the end).

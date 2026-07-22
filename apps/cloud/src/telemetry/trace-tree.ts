@@ -11,6 +11,13 @@
  *   depth under `parentSpanId` — a true span waterfall, not a log-gap timeline.
  */
 
+/** One eval score on a generation span (`gen_ai.evaluation.<name>.score`/`.label`), shown in the detail pane. */
+export interface SpanEvaluation {
+    label?: string;
+    name: string;
+    score: number;
+}
+
 /** One stored span, as both folds read it (a subset of the `observations` row). */
 export interface ObservationSpan {
     /** Selected string span attributes (shown in the detail pane). */
@@ -19,6 +26,8 @@ export interface ObservationSpan {
     completionTokens?: number;
     durationMs: number;
     endedAt: number;
+    /** Generation spans: eval scores decoded from `gen_ai.evaluation.*`. */
+    evaluations?: SpanEvaluation[];
     functionPath?: string;
     /** Generation spans: the recorded prompt (opt-in on the emitter), truncated. */
     input?: string;
@@ -33,6 +42,8 @@ export interface ObservationSpan {
     parentSpanId?: string;
     /** Generation spans: prompt token count. */
     promptTokens?: number;
+    /** Generation spans: the conversation/thread id grouping turns into a session. */
+    sessionId?: string;
     spanId: string;
     startedAt: number;
     statusMessage?: string;

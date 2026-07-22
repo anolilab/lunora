@@ -52,6 +52,7 @@ interface SpanView {
     completionTokens?: number;
     durationMs: number;
     endedAt: number;
+    evaluations?: { label?: string; name: string; score: number }[];
     functionPath?: string;
     input?: string;
     kind?: "container" | "generation" | "worker";
@@ -61,6 +62,7 @@ interface SpanView {
     output?: string;
     parentSpanId?: string;
     promptTokens?: number;
+    sessionId?: string;
     spanId: string;
     startedAt: number;
     statusMessage?: string;
@@ -127,6 +129,7 @@ const toSpanView = (span: ObservationRow | SpanObservation): SpanView => ({
     completionTokens: span.completionTokens,
     durationMs: span.durationMs,
     endedAt: span.endedAt,
+    evaluations: span.evaluations,
     functionPath: span.functionPath,
     input: span.input,
     kind: span.kind,
@@ -136,6 +139,7 @@ const toSpanView = (span: ObservationRow | SpanObservation): SpanView => ({
     output: span.output,
     parentSpanId: span.parentSpanId,
     promptTokens: span.promptTokens,
+    sessionId: span.sessionId,
     spanId: span.spanId,
     startedAt: span.startedAt,
     statusMessage: span.statusMessage,

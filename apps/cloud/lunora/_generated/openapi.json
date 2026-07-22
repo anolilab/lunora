@@ -5708,6 +5708,141 @@
         "x-lunora-function-kind": "mutation"
       }
     },
+    "/_lunora/rpc#sessions:get": {
+      "post": {
+        "description": "Invoke the `query` `sessions:get` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "sessions:get",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "organizationId",
+                      "sessionId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "sessions:get",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: sessions:get",
+        "tags": [
+          "sessions"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#sessions:list": {
+      "post": {
+        "description": "Invoke the `query` `sessions:list` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "sessions:list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "limit": {
+                        "type": "number"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "sessions:list",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: sessions:list",
+        "tags": [
+          "sessions"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
     "/_lunora/rpc#telemetry:ingest": {
       "post": {
         "description": "Invoke the `mutation` `telemetry:ingest` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -6444,6 +6579,10 @@
     {
       "description": "Operations declared in `lunora/secrets`.",
       "name": "secrets"
+    },
+    {
+      "description": "Operations declared in `lunora/sessions`.",
+      "name": "sessions"
     },
     {
       "description": "Operations declared in `lunora/telemetry`.",

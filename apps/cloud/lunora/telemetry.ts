@@ -35,6 +35,8 @@ const observationInput = v.object({
     completionTokens: v.optional(v.number()),
     durationMs: v.number(),
     endedAt: v.number(),
+    // Generation spans: eval scores from `gen_ai.evaluation.*` (defensive — absent today).
+    evaluations: v.optional(v.array(v.object({ label: v.optional(v.string()), name: v.string(), score: v.number() }))),
     functionPath: v.optional(v.string()),
     input: v.optional(v.string()),
     kind: v.union(v.literal("container"), v.literal("generation"), v.literal("worker")),
@@ -45,6 +47,8 @@ const observationInput = v.object({
     parentSpanId: v.optional(v.string()),
     promptTokens: v.optional(v.number()),
     serviceName: v.optional(v.string()),
+    // Generation spans: conversation/thread id (`gen_ai.conversation.id`) grouping turns into a session.
+    sessionId: v.optional(v.string()),
     spanId: v.string(),
     startedAt: v.number(),
     statusMessage: v.optional(v.string()),
