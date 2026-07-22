@@ -302,6 +302,28 @@ hibernation. It is a development readout, not a trace store: for retention and
 cross-instance search, point [`otlpSink`](#otlpsink) at a real collector, where
 each span is exported as an OTLP `INTERNAL` span carrying its `parentSpanId`.
 
+### Generation spans (AI)
+
+An AI model call is a span with the OpenTelemetry
+[`gen_ai.*`](https://opentelemetry.io/docs/specs/semconv/gen-ai/) attributes on
+it — the model and, once the call returns, its token usage. Two paths emit them:
+
+- **[`@lunora/ai`](/docs/packages/ai)** traces every `defineRag` embedding call
+  as a generation span (`gen_ai.operation.name: "embeddings"`,
+  `gen_ai.request.model`) whenever the bound context carries `ctx.trace`. Wrap
+  your own `generateText`/`streamText` calls in `ctx.trace("…", fn, { "gen_ai.request.model": model })`
+  for the same.
+- **[`@lunora/agent`](/docs/packages/agent)** emits a generation span per model
+  turn (and a span per tool call), with token usage, through its `otlpTelemetry`
+  integration — add it to `defineAgent({ telemetry: { integrations: [...] } })`
+  to opt in.
+
+A generation span carries `gen_ai.request.model` and, from the model result,
+`gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens`; with the agent
+integration's `recordInputs` / `recordOutputs` it also carries the prompt /
+completion (off by default). The Lunora cloud reads these to show the model,
+token counts, and cost on the Traces waterfall.
+
 ## Application metrics with `ctx.metrics`
 
 The third signal, alongside logs and traces. A trace tells you what one request
@@ -411,6 +433,17 @@ base `endpoint` (trailing slashes are tolerated):
 | Spans   | `POST {endpoint}/v1/traces`  | each RPC dispatch (`SERVER`) and each `ctx.trace` (`INTERNAL`) |
 | Logs    | `POST {endpoint}/v1/logs`    | each `ctx.log.*` call                                          |
 | Metrics | `POST {endpoint}/v1/metrics` | each `ctx.metrics.*` call                                      |
+
+:::note[The Lunora cloud ingest accepts more]
+Lunora's own sinks emit **JSON**, but the cloud ingest also accepts standard OTLP
+**protobuf** (`Content-Type: application/x-protobuf`, what most Collectors default
+to) and **gzip** (`Content-Encoding: gzip`) on all three endpoints, so any
+OpenTelemetry SDK or Collector can ship to it unchanged. A capped batch comes back
+as OTLP `partialSuccess`. Its `authorization` bearer is a **scoped ingest key** —
+telemetry-only, so a leaked token can't deploy — which the platform mints per org
+and injects into each tenant as `LUNORA_OTLP_TOKEN` at deploy time (alongside
+`LUNORA_OTLP_ENDPOINT`).
+:::
 
 **Headers.**
 

@@ -1106,3 +1106,51 @@ describe(bm25LexicalStore, () => {
         }
     });
 });
+
+describe("defineRag ctx.trace instrumentation", () => {
+    /** A context whose `trace` records each span it wraps (mirrors `ctx.trace`). */
+    const tracingCtx = (vectors: RagVectors): RagContext & { spans: { attributes?: Record<string, unknown>; name: string }[] } => {
+        const spans: { attributes?: Record<string, unknown>; name: string }[] = [];
+
+        return {
+            ai: {
+                // A model that carries a `modelId`, so the span picks it up.
+                embeddingModel: (model) => ({ modelId: model ?? "default" }) as unknown as EmbeddingModel,
+            },
+            spans,
+            trace: async <T>(name: string, function_: () => Promise<T> | T, attributes?: Record<string, unknown>): Promise<T> => {
+                spans.push({ attributes, name });
+
+                return function_();
+            },
+            vectors,
+        };
+    };
+
+    it("wraps each embed in a generation span carrying the model id", async () => {
+        const { vectors } = memoryVectors();
+        const ctx = tracingCtx(vectors);
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
+
+        await docs(ctx).index({ id: "doc-1", text: "hello world" });
+        await docs(ctx).retrieve("hello");
+
+        expect(ctx.spans.length).toBeGreaterThan(0);
+
+        for (const span of ctx.spans) {
+            expect(span.name).toBe("ai.embed");
+            expect(span.attributes?.["gen_ai.operation.name"]).toBe("embeddings");
+            expect(span.attributes?.["gen_ai.request.model"]).toBe("@cf/baai/bge-base-en-v1.5");
+        }
+    });
+
+    it("embeds untraced when the context has no `trace` (a hand-built ctx)", async () => {
+        const { store, vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
+
+        // No `trace` on the context → the embed path runs exactly as before.
+        await expect(docs(ctx).index({ id: "doc-1", text: "hello world" })).resolves.toBeDefined();
+        expect(store.size).toBeGreaterThan(0);
+    });
+});

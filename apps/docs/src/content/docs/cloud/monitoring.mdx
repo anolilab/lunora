@@ -1,0 +1,123 @@
+---
+title: Monitoring
+description: The Lunora cloud is a managed OpenTelemetry backend + control plane — deploy to it and your traces, logs, metrics, and AI generations flow in automatically, with a Traces waterfall, Issues, and Logs to read them.
+---
+
+The Lunora cloud is both a Workers-for-Platforms control plane **and** a managed
+[OpenTelemetry](/docs/concepts/observability) backend. When you deploy an app to
+it, the platform wires your telemetry end-to-end for you: no collector to run, no
+ingest endpoint to configure, no keys to copy. Your app's spans, logs, metrics,
+and AI generations land in the cloud and show up in the dashboard.
+
+If you self-host instead, everything here still works — you just point
+[`otlpSink`](/docs/concepts/observability#otlpsink) at your own collector. This
+page is about the hosted experience.
+
+## How telemetry reaches the cloud
+
+At deploy time the platform injects three things into your tenant Worker:
+
+| Injected               | As            | Purpose                                                |
+| ---------------------- | ------------- | ------------------------------------------------------ |
+| `LUNORA_OTLP_ENDPOINT` | env var       | this cell's ingest base URL                            |
+| `LUNORA_OTLP_TOKEN`    | secret        | a **scoped ingest key** (telemetry-only, can't deploy) |
+| `lunora-log-tail`      | tail consumer | streams `ctx.log` output to the Logs store             |
+
+Your app reads the first two in the usual sink wiring — no cloud-specific code:
+
+```ts
+import { analyticsEngineSink, combineSinks, otlpSink } from "@lunora/runtime";
+
+export default createWorker({
+    // …schema, functions…
+    observability: combineSinks(otlpSink({ endpoint: env.LUNORA_OTLP_ENDPOINT, token: env.LUNORA_OTLP_TOKEN })),
+});
+```
+
+Everything the framework emits — one `SERVER` span per RPC, nested
+[`ctx.trace`](/docs/concepts/observability#tracing-sub-operations-with-ctxtrace)
+spans, [`ctx.log`](/docs/concepts/observability#structured-logging-with-ctxlog)
+lines, [`ctx.metrics`](/docs/concepts/observability#application-metrics-with-ctxmetrics),
+and [AI generation spans](/docs/concepts/observability#generation-spans-ai) — flows
+over the [standard OTLP contract](/docs/concepts/observability#the-wire-contract)
+to the cloud.
+
+## Traces
+
+The **Traces** tab is a real-duration, nested trace waterfall over the span
+store. Pick a project, then a deployment; recent traces list newest-active first
+with their latency, span count, error count, and root operation.
+
+Open a trace to drill into its **waterfall** — every span placed on the trace
+timeline by its true start and duration, indented by its depth under
+`parentSpanId`, so you see which part of a request took the time (not just that it
+took 900 ms). An **errors-only** toggle narrows the list; the query also supports
+filtering by duration, function path, and time window.
+
+**Generation spans.** An AI model call shows a `gen` chip with the model and its
+token counts (`12→34 tok`). Click any span to open the **detail pane**: its id,
+duration, status, attributes, and — for a generation — the model, prompt/completion
+tokens, and (when the emitter opted in) the recorded input/output. See
+[generation spans](/docs/concepts/observability#generation-spans-ai) for how
+`@lunora/ai` and `@lunora/agent` produce them.
+
+## Issues
+
+Error spans (`status.code === 2`) are grouped into **Issues** by a deterministic
+[fingerprint](/docs/concepts/error-handling) — one row per distinct
+`(function, error, message)`, with a count, first/last-seen, and a sample message.
+Container crashes additionally open **Incidents**. Alert rules deliver a matching
+issue/incident to email or a webhook when it crosses a threshold, and an on-demand
+AI-triage action summarizes an issue for you.
+
+## Logs
+
+Every `ctx.log` line is streamed to the durable Logs store via the tail consumer,
+keeping its full shape — the seven-tier severity, the rendered message, the
+structured `fields`, the `functionPath`, and the `traceId`/`spanId`. The Logs tab
+filters by severity, function, free-text search, and trace id, so you can pull up
+exactly the lines for one dispatch and link a line back to its trace.
+
+## Metrics
+
+`ctx.metrics.*` measurements POST to `/v1/metrics` and land in an Analytics Engine
+dataset, queryable over its SQL API. Keep attributes low-cardinality — see the
+[metrics guidance](/docs/concepts/observability#application-metrics-with-ctxmetrics).
+
+## Scoped ingest keys
+
+Deploy keys have a **capability**:
+
+- **`deploy`** (the default) — the full key your CI uses to `lunora deploy`.
+- **`ingest`** — telemetry-only. It can push to the OTLP endpoints but is
+  **rejected by the deploy and admin paths**, so a leaked ingest token can't ship
+  code.
+
+The platform mints one ingest key per org and injects it as `LUNORA_OTLP_TOKEN` at
+deploy time (its plaintext is stored envelope-encrypted so it re-injects on every
+deploy without re-minting). You never handle it directly for your own apps.
+
+## Bring your own OpenTelemetry
+
+The cloud ingest is a standard OTLP endpoint, so **any** OpenTelemetry SDK or
+Collector can ship to it — not only Lunora's `otlpSink`. Issue an `ingest`-scoped
+key and point your exporter at the cell's base URL:
+
+| Endpoint      | Signal  |
+| ------------- | ------- |
+| `/v1/traces`  | spans   |
+| `/v1/logs`    | logs    |
+| `/v1/metrics` | metrics |
+
+Both **JSON** and **protobuf** (`application/x-protobuf`, what most Collectors
+default to) are accepted, with optional **gzip**; a capped batch returns OTLP
+`partialSuccess` with the rejected count. Authenticate with
+`Authorization: Bearer <ingest-key>`.
+
+## Retention & scale
+
+The hot store keeps recent traces/logs in D1 (48 h) for the dashboard; spans are
+additionally tiered to a columnar archive (Cloudflare Pipeline → R2) so history
+scales past the hot window. Metrics live in Analytics Engine. Sensitive attribute
+and log-field values (anything keyed like a credential — `authorization`, `token`,
+`api_key`, …) are redacted at ingest before storage.

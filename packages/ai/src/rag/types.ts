@@ -112,6 +112,17 @@ export interface RagContext {
      * stays decoupled from `@lunora/server`'s identity type; `rlsFilter` narrows.
      */
     auth?: unknown;
+
+    /**
+     * Optional `ctx.trace` span factory — an `ActionCtx`'s `ctx.trace` satisfies
+     * it structurally. When present, {@link defineRag} wraps each embedding-model
+     * call in a `generation` span (`gen_ai.operation.name: "embeddings"` +
+     * `gen_ai.request.model`), so the embed shows up on the trace waterfall like
+     * any other instrumented sub-operation. `unknown` on purpose — the same
+     * decoupling rationale as `auth`: `defineRag` narrows it to a callable and
+     * runs embeds untraced when it is absent (a hand-built context / test).
+     */
+    trace?: unknown;
     vectors: RagVectors;
 }
 
