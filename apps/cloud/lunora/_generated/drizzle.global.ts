@@ -335,7 +335,7 @@ export const incidents = sqliteTable("incidents", {
 export const alertRules = sqliteTable("alertRules", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
-    channel: text("channel", { mode: "json" }).$type<"email" | "webhook">().notNull(),
+    channel: text("channel", { mode: "json" }).$type<"email" | "webhook" | "slack" | "pagerduty">().notNull(),
     comparator: text("comparator", { mode: "json" }).$type<"gt" | "lt">(),
     createdAt: real("createdAt").notNull(),
     destination: text("destination").notNull(),
@@ -351,11 +351,26 @@ export const alertRules = sqliteTable("alertRules", {
     by_org: index("by_org").on(t.organizationId),
 }));
 
+export const alertRuleState = sqliteTable("alertRuleState", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    firing: integer("firing", { mode: "boolean" }).notNull(),
+    lastEvaluatedAt: real("lastEvaluatedAt").notNull(),
+    lastValue: real("lastValue").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    ruleId: text("ruleId").references(() => alertRules._id).notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+    by_rule: uniqueIndex("by_rule").on(t.ruleId),
+}));
+
 export const alerts = sqliteTable("alerts", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     body: text("body").notNull(),
-    channel: text("channel", { mode: "json" }).$type<"email" | "webhook">().notNull(),
+    channel: text("channel", { mode: "json" }).$type<"email" | "webhook" | "slack" | "pagerduty">().notNull(),
     createdAt: real("createdAt").notNull(),
     deliveredAt: real("deliveredAt"),
     destination: text("destination").notNull(),

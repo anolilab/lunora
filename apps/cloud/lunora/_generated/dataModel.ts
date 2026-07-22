@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alertRuleState" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -315,7 +315,7 @@ export interface Doc_incidents {
 export interface Doc_alertRules {
     _id: Id<"alertRules">;
     _creationTime: number;
-    channel: "email" | "webhook";
+    channel: "email" | "webhook" | "slack" | "pagerduty";
     comparator?: "gt" | "lt";
     createdAt: number;
     destination: string;
@@ -329,11 +329,23 @@ export interface Doc_alertRules {
     windowMinutes?: number;
 }
 
+export interface Doc_alertRuleState {
+    _id: Id<"alertRuleState">;
+    _creationTime: number;
+    createdAt: number;
+    firing: boolean;
+    lastEvaluatedAt: number;
+    lastValue: number;
+    organizationId: Id<"organizations">;
+    ruleId: Id<"alertRules">;
+    updatedAt: number;
+}
+
 export interface Doc_alerts {
     _id: Id<"alerts">;
     _creationTime: number;
     body: string;
-    channel: "email" | "webhook";
+    channel: "email" | "webhook" | "slack" | "pagerduty";
     createdAt: number;
     deliveredAt?: number;
     destination: string;
@@ -475,6 +487,7 @@ export interface DataModel {
     issues: Doc_issues;
     incidents: Doc_incidents;
     alertRules: Doc_alertRules;
+    alertRuleState: Doc_alertRuleState;
     alerts: Doc_alerts;
     uptimeChecks: Doc_uptimeChecks;
     uptimeState: Doc_uptimeState;
@@ -513,6 +526,7 @@ export interface IndexNamesByTable {
     issues: "by_org_culprit" | "by_org_hash" | "by_org";
     incidents: "by_org_hash" | "by_org";
     alertRules: "by_org";
+    alertRuleState: "by_org" | "by_rule";
     alerts: "by_status" | "by_org";
     uptimeChecks: "by_org_deployment" | "by_org";
     uptimeState: "by_org" | "by_deployment";
@@ -548,6 +562,7 @@ export interface SearchIndexNamesByTable {
     issues: never;
     incidents: never;
     alertRules: never;
+    alertRuleState: never;
     alerts: never;
     uptimeChecks: never;
     uptimeState: never;
@@ -583,6 +598,7 @@ export interface RankIndexNamesByTable {
     issues: never;
     incidents: never;
     alertRules: never;
+    alertRuleState: never;
     alerts: never;
     uptimeChecks: never;
     uptimeState: never;
@@ -878,7 +894,7 @@ export interface Insert_incidents {
 export interface Insert_alertRules {
     _id?: Id<"alertRules">;
     _creationTime?: number;
-    channel: "email" | "webhook";
+    channel: "email" | "webhook" | "slack" | "pagerduty";
     comparator?: "gt" | "lt";
     createdAt: number;
     destination: string;
@@ -892,11 +908,23 @@ export interface Insert_alertRules {
     windowMinutes?: number;
 }
 
+export interface Insert_alertRuleState {
+    _id?: Id<"alertRuleState">;
+    _creationTime?: number;
+    createdAt: number;
+    firing: boolean;
+    lastEvaluatedAt: number;
+    lastValue: number;
+    organizationId: Id<"organizations">;
+    ruleId: Id<"alertRules">;
+    updatedAt: number;
+}
+
 export interface Insert_alerts {
     _id?: Id<"alerts">;
     _creationTime?: number;
     body: string;
-    channel: "email" | "webhook";
+    channel: "email" | "webhook" | "slack" | "pagerduty";
     createdAt: number;
     deliveredAt?: number;
     destination: string;
@@ -1039,6 +1067,7 @@ export interface InsertModel {
     issues: Insert_issues;
     incidents: Insert_incidents;
     alertRules: Insert_alertRules;
+    alertRuleState: Insert_alertRuleState;
     alerts: Insert_alerts;
     uptimeChecks: Insert_uptimeChecks;
     uptimeState: Insert_uptimeState;
@@ -1089,6 +1118,7 @@ export interface Relations {
     issues: {};
     incidents: {};
     alertRules: {};
+    alertRuleState: {};
     alerts: {};
     uptimeChecks: {};
     uptimeState: {};

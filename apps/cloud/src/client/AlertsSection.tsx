@@ -16,6 +16,17 @@ type RuleTarget = "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cos
 /** Metric-window targets, which take a rolling window (+ comparator + optional scope). */
 const METRIC_TARGETS = new Set<RuleTarget>(["error_rate", "latency_p95", "llm_cost"]);
 
+/** Delivery channels — `email` via the mailer, the rest typed webhook POSTs. */
+type Channel = "email" | "pagerduty" | "slack" | "webhook";
+
+/** Placeholder hint for a channel's destination field. */
+const DESTINATION_HINT: Record<Channel, string> = {
+    email: "alerts@example.com",
+    pagerduty: "PagerDuty integration (routing) key",
+    slack: "https://hooks.slack.com/services/…",
+    webhook: "https://hooks.example.com/…",
+};
+
 /** Human labels for each target in the create form. */
 const TARGET_LABELS: Record<RuleTarget, string> = {
     error_rate: "Error rate (%)",
@@ -29,8 +40,9 @@ const TARGET_LABELS: Record<RuleTarget, string> = {
 /**
  * Cloud Observability "Alerts" — the watches-while-you-sleep tier. Owners/admins
  * configure rules (fire when an issue/incident's event count crosses a
- * threshold, deliver over email or webhook); the telemetry ingest evaluates them
- * and the edge delivers. This section manages rules and lists recent fired
+ * threshold, deliver over email, webhook, Slack, or PagerDuty); the telemetry
+ * ingest + periodic sweep evaluate them and the edge delivers. This section
+ * manages rules and lists recent fired
  * alerts. Gated behind the `logStreams` plan entitlement.
  */
 export const AlertsSection = ({ organizationId }: AlertsSectionProps): ReactElement => {
@@ -48,7 +60,7 @@ export const AlertsSection = ({ organizationId }: AlertsSectionProps): ReactElem
     const [comparator, setComparator] = useState<"gt" | "lt">("gt");
     const [windowMinutes, setWindowMinutes] = useState("15");
     const [functionPath, setFunctionPath] = useState("");
-    const [channel, setChannel] = useState<"email" | "webhook">("email");
+    const [channel, setChannel] = useState<Channel>("email");
     const [destination, setDestination] = useState("");
     const [error, setError] = useState<string | null>(null);
 
@@ -206,19 +218,21 @@ export const AlertsSection = ({ organizationId }: AlertsSectionProps): ReactElem
                     <select
                         aria-label="Channel"
                         onChange={(event) => {
-                            setChannel(event.target.value as "email" | "webhook");
+                            setChannel(event.target.value as Channel);
                         }}
                         value={channel}
                     >
                         <option value="email">Email</option>
                         <option value="webhook">Webhook</option>
+                        <option value="slack">Slack</option>
+                        <option value="pagerduty">PagerDuty</option>
                     </select>
                     <input
                         aria-label="Destination"
                         onChange={(event) => {
                             setDestination(event.target.value);
                         }}
-                        placeholder={channel === "email" ? "alerts@example.com" : "https://hooks.example.com/…"}
+                        placeholder={DESTINATION_HINT[channel]}
                         required
                         value={destination}
                     />

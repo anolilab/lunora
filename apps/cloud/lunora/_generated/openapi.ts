@@ -87,6 +87,14 @@ export const openApiSpec: Record<string, unknown> = {
                                                     {
                                                         "const": "webhook",
                                                         "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "slack",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "pagerduty",
+                                                        "type": "string"
                                                     }
                                                 ]
                                             },

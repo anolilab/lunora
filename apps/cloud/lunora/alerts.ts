@@ -22,7 +22,7 @@ const METRIC_TARGETS = new Set<RuleTarget>(["error_rate", "latency_p95", "llm_co
 
 interface AlertRuleRow {
     _id: Id<"alertRules">;
-    channel: "email" | "webhook";
+    channel: "email" | "pagerduty" | "slack" | "webhook";
     comparator?: "gt" | "lt";
     createdAt: number;
     destination: string;
@@ -37,7 +37,7 @@ interface AlertRuleRow {
 
 interface AlertRow {
     _id: Id<"alerts">;
-    channel: "email" | "webhook";
+    channel: "email" | "pagerduty" | "slack" | "webhook";
     createdAt: number;
     deliveredAt?: number;
     destination: string;
@@ -60,7 +60,7 @@ export const rules = query
 /** Create an alert rule (owners/admins). New rules start enabled. */
 export const createRule = mutation
     .input({
-        channel: v.union(v.literal("email"), v.literal("webhook")),
+        channel: v.union(v.literal("email"), v.literal("webhook"), v.literal("slack"), v.literal("pagerduty")),
         // Metric targets only: how the window value is compared to `threshold`. Default `gt`.
         comparator: v.optional(v.union(v.literal("gt"), v.literal("lt"))),
         destination: v.string(),
@@ -95,9 +95,16 @@ export const createRule = mutation
             throw new LunoraError("BAD_REQUEST", "windowMinutes must be at least 1 for a metric rule");
         }
 
-        // SSRF guard: the edge `fetch`es a webhook destination when the alert fires.
-        if (args.channel === "webhook" && !isSafeWebhookUrl(args.destination)) {
-            throw new LunoraError("BAD_REQUEST", "webhook destination must be an https:// URL to a public host");
+        // SSRF guard: the edge `fetch`es a `webhook`/`slack` destination when the
+        // alert fires, so both must be an https URL to a public host. `pagerduty`'s
+        // destination is an integration (routing) key posted to PagerDuty's own
+        // fixed endpoint — it just has to be non-empty.
+        if ((args.channel === "webhook" || args.channel === "slack") && !isSafeWebhookUrl(args.destination)) {
+            throw new LunoraError("BAD_REQUEST", `${args.channel} destination must be an https:// URL to a public host`);
+        }
+
+        if (args.channel === "pagerduty" && args.destination.trim() === "") {
+            throw new LunoraError("BAD_REQUEST", "pagerduty destination must be an integration (routing) key");
         }
 
         const now = Date.now();

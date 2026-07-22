@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { FiringRule, MetricObservation, MetricRule } from "../src/telemetry/alerts";
+import type { FiringRule, MetricObservation, MetricRule, MetricRulePorts } from "../src/telemetry/alerts";
 import {
     compareMetric,
     computeErrorRate,
@@ -8,11 +8,16 @@ import {
     computeLlmCost,
     computeMetric,
     deviatesByPercent,
+    evaluateMetricLevel,
     evaluateMetricRule,
     fireCrossedRules,
     fireMetricRules,
+    PAGERDUTY_EVENTS_URL,
     percentile,
     rateOfChangePercent,
+    renderPagerDutyPayload,
+    renderSlackPayload,
+    webhookRequestFor,
 } from "../src/telemetry/alerts";
 
 /** Build a metric observation with sensible defaults; override what a case needs. */
@@ -155,17 +160,59 @@ describe(evaluateMetricRule, () => {
     });
 });
 
-/** Collect the rows a firing loop inserts; return incrementing string ids. */
-const capturingInsert = (): { insert: (row: Record<string, unknown>) => Promise<string>; rows: Record<string, unknown>[] } => {
+describe(evaluateMetricLevel, () => {
+    const rule = { comparator: "gt" as const, target: "error_rate" as const, threshold: 50 };
+
+    it("fires when the window breaches and the rule was not already firing", () => {
+        expect(evaluateMetricLevel(rule, mixed(2, 2), false)).toStrictEqual({ action: "fire", currentValue: 100, firing: true });
+    });
+
+    it("does not re-fire while the window stays breached (already firing)", () => {
+        expect(evaluateMetricLevel(rule, mixed(2, 2), true)).toStrictEqual({ action: "none", currentValue: 100, firing: true });
+    });
+
+    it("clears when the window falls back under threshold and the rule was firing", () => {
+        expect(evaluateMetricLevel(rule, mixed(4, 0), true)).toStrictEqual({ action: "clear", currentValue: 0, firing: false });
+    });
+
+    it("stays quiet when under threshold and not firing", () => {
+        expect(evaluateMetricLevel(rule, mixed(4, 0), false)).toStrictEqual({ action: "none", currentValue: 0, firing: false });
+    });
+});
+
+/**
+ * A metric firing-loop store: an `alerts` sink + an in-memory `alertRuleState`
+ * latch, exposing the injected {@link MetricRulePorts} plus the captured rows and
+ * final state for assertions.
+ */
+const metricStore = (
+    initial: Record<string, boolean> = {},
+): {
+    ports: MetricRulePorts<string>;
+    rows: Record<string, unknown>[];
+    state: Map<string, boolean>;
+    writes: { firing: boolean; ruleId: string; value: number }[];
+} => {
     const rows: Record<string, unknown>[] = [];
+    const state = new Map(Object.entries(initial));
+    const writes: { firing: boolean; ruleId: string; value: number }[] = [];
 
     return {
-        insert: async (row) => {
-            rows.push(row);
+        ports: {
+            insertAlert: async (row) => {
+                rows.push(row);
 
-            return `alert_${String(rows.length)}`;
+                return `alert_${String(rows.length)}`;
+            },
+            wasFiring: (ruleId) => state.get(ruleId) ?? false,
+            writeState: async (ruleId, firing, value) => {
+                state.set(ruleId, firing);
+                writes.push({ firing, ruleId, value });
+            },
         },
         rows,
+        state,
+        writes,
     };
 };
 
@@ -182,31 +229,59 @@ describe(fireMetricRules, () => {
         windowMinutes: 5,
     };
 
-    it("fires a metric rule when the current window breaches and the prior did not", async () => {
-        // Current window (last 5 min): 2 errors of 2 = 100%. Prior window: 1 of 4 = 25%.
-        const observations: MetricObservation[] = [
-            ...mixed(2, 2, now - 60_000), // inside current window
-            ...mixed(4, 1, now - 7 * 60_000), // inside prior window
-        ];
-        const { insert, rows } = capturingInsert();
+    it("fires a metric rule when the current window breaches and the rule was not firing", async () => {
+        const observations: MetricObservation[] = mixed(2, 2, now - 60_000); // 100% in the current window
+        const store = metricStore();
 
-        const deliveries = await fireMetricRules([rule], observations, "org_1", insert, now);
+        const outcome = await fireMetricRules([rule], observations, "org_1", store.ports, now);
 
-        expect(deliveries).toHaveLength(1);
-        expect(deliveries[0]?.channel).toBe("email");
-        expect(deliveries[0]?.subject).toContain("Error rate above threshold");
-        expect(deliveries[0]?.body).toContain("100% over the last 5 min");
-        expect(rows[0]).toMatchObject({ hash: "error_rate:*", organizationId: "org_1", ruleId: "rule_1", status: "firing", target: "error_rate" });
+        expect(outcome.fired).toBe(1);
+        expect(outcome.deliveries).toHaveLength(1);
+        expect(outcome.deliveries[0]?.channel).toBe("email");
+        expect(outcome.deliveries[0]?.subject).toContain("Error rate above threshold");
+        expect(outcome.deliveries[0]?.body).toContain("100% over the last 5 min");
+        expect(store.rows[0]).toMatchObject({ hash: "error_rate:*", organizationId: "org_1", ruleId: "rule_1", status: "firing", target: "error_rate" });
+        // The latch was persisted so the next pass won't re-fire.
+        expect(store.state.get("rule_1")).toBe(true);
     });
 
-    it("does not fire when the prior window was already breaching", async () => {
+    it("fires even when the prior window was ALSO breaching — the edge-trigger miss the sweep catches", async () => {
+        // Both windows at 100%: the old window-over-window edge trigger would suppress
+        // this, but level-triggered against a not-firing latch it correctly fires.
         const observations: MetricObservation[] = [...mixed(2, 2, now - 60_000), ...mixed(2, 2, now - 7 * 60_000)];
-        const { insert, rows } = capturingInsert();
+        const store = metricStore();
 
-        const deliveries = await fireMetricRules([rule], observations, "org_1", insert, now);
+        const outcome = await fireMetricRules([rule], observations, "org_1", store.ports, now);
 
-        expect(deliveries).toHaveLength(0);
-        expect(rows).toHaveLength(0);
+        expect(outcome.fired).toBe(1);
+        expect(store.state.get("rule_1")).toBe(true);
+    });
+
+    it("does not re-fire while the rule stays firing", async () => {
+        const observations: MetricObservation[] = mixed(2, 2, now - 60_000);
+        const store = metricStore({ rule_1: true });
+
+        const outcome = await fireMetricRules([rule], observations, "org_1", store.ports, now);
+
+        expect(outcome.fired).toBe(0);
+        expect(outcome.cleared).toBe(0);
+        expect(outcome.deliveries).toHaveLength(0);
+        expect(store.rows).toHaveLength(0);
+    });
+
+    it("clears a firing rule when its window falls back under threshold — no alert, latch reset", async () => {
+        // Quiet current window (only info spans): 0% error, back under the threshold.
+        const observations: MetricObservation[] = mixed(3, 0, now - 60_000);
+        const store = metricStore({ rule_1: true });
+
+        const outcome = await fireMetricRules([rule], observations, "org_1", store.ports, now);
+
+        expect(outcome.cleared).toBe(1);
+        expect(outcome.fired).toBe(0);
+        expect(outcome.deliveries).toHaveLength(0);
+        expect(store.rows).toHaveLength(0); // clearing never writes an alert row
+        expect(store.state.get("rule_1")).toBe(false);
+        expect(store.writes).toStrictEqual([{ firing: false, ruleId: "rule_1", value: 0 }]);
     });
 
     it("honors a functionPath scope", async () => {
@@ -217,13 +292,66 @@ describe(fireMetricRules, () => {
             // The scoped path: only info spans → not breaching.
             observation({ functionPath: "messages:send", level: "info", startedAt: now - 60_000 }),
         ];
-        const { insert } = capturingInsert();
+        const store = metricStore();
 
-        const deliveries = await fireMetricRules([scoped], observations, "org_1", insert, now);
+        const outcome = await fireMetricRules([scoped], observations, "org_1", store.ports, now);
 
-        expect(deliveries).toHaveLength(0);
+        expect(outcome.deliveries).toHaveLength(0);
+        expect(outcome.fired).toBe(0);
     });
 });
+
+describe("channel payloads", () => {
+    const alert = {
+        body: "Error rate is 100% over the last 5 min.",
+        destination: "https://hooks.slack.com/services/T/B/x",
+        subject: "[Lunora] High error rate",
+    };
+
+    it("renders a Slack incoming-webhook message", () => {
+        expect(renderSlackPayload(alert)).toStrictEqual({ text: "*[Lunora] High error rate*\nError rate is 100% over the last 5 min." });
+    });
+
+    it("renders a PagerDuty Events API v2 trigger with the destination as the routing key", () => {
+        expect(renderPagerDutyPayload({ ...alert, destination: "routing-key-123" })).toStrictEqual({
+            dedup_key: "[Lunora] High error rate",
+            event_action: "trigger",
+            payload: { severity: "error", source: "lunora-cloud", summary: "[Lunora] High error rate — Error rate is 100% over the last 5 min." },
+            routing_key: "routing-key-123",
+        });
+    });
+
+    it("routes each webhook-family channel to the right URL + body", () => {
+        const slack = webhookRequestFor({ ...alert, channel: "slack" });
+
+        expect(slack.url).toBe("https://hooks.slack.com/services/T/B/x");
+        expect(JSON.parse(slack.body)).toMatchObject({ text: expect.stringContaining("High error rate") });
+
+        const pd = webhookRequestFor({ ...alert, channel: "pagerduty", destination: "routing-key-123" });
+
+        expect(pd.url).toBe(PAGERDUTY_EVENTS_URL);
+        expect(JSON.parse(pd.body)).toMatchObject({ event_action: "trigger", routing_key: "routing-key-123" });
+
+        const plain = webhookRequestFor({ ...alert, channel: "webhook", destination: "https://hooks.example.com/x" });
+
+        expect(plain.url).toBe("https://hooks.example.com/x");
+        expect(JSON.parse(plain.body)).toStrictEqual({ body: alert.body, subject: alert.subject });
+    });
+});
+
+/** Collect the rows the count-crossing firing loop inserts; return incrementing string ids. */
+const capturingInsert = (): { insert: (row: Record<string, unknown>) => Promise<string>; rows: Record<string, unknown>[] } => {
+    const rows: Record<string, unknown>[] = [];
+
+    return {
+        insert: async (row) => {
+            rows.push(row);
+
+            return `alert_${String(rows.length)}`;
+        },
+        rows,
+    };
+};
 
 describe(fireCrossedRules, () => {
     it("still fires an existing count-crossing rule exactly once on the crossing ingest", async () => {

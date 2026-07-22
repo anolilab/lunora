@@ -425,25 +425,41 @@ Shipped in this pass (own implementations):
 Backlog (ranked; all our-own-code):
 
 1. **Alerting pillar** — rules (error-rate/latency/health on deployments),
-   incidents, notification destinations (email/webhook). A whole product
-   pillar; design against the platformUsage + tenantLogs streams.
-2. **Deployment health charts on the project page** — request volume / error
-   rate per deployment (needs status-code capture in the dispatcher metering
-   first: add `outcome` blob to the AE data point).
-3. **Log viewer upgrade** — severity chips, filter bar, virtualized list,
-   log↔deployment correlation links.
-4. **Design-system pass** — dark-first token palette, severity color ramp,
-   consistent empty states with actionable copy (Maple's DESIGN.md rigor is
-   the bar, not the source).
-5. **Onboarding checklist** — first-run "create project → issue key → first
-   deploy → see it live" checklist on the dashboard, replacing bare empty
-   tabs.
-6. **Time-range picker** — shared presets (1h/24h/7d/30d) across usage/logs
-   once the data streams carry enough resolution.
-7. **Deploy-key roll UX** — one-click roll (issue+revoke atomically) in the
-   keys tab.
-8. **MCP surface** — expose the control plane to agents (list projects,
-   deployments, logs, trigger rollback) via `@lunora/mcp`; strong
-   differentiator and cheap given the framework ships an MCP package.
-9. **Integrations hub** — OAuth connect cards (GitHub App install, Creem
-   portal) instead of bare settings fields.
+   incidents, notification destinations. A whole product pillar; design against
+   the platformUsage + tenantLogs streams.
+    - _Shipped:_ count-crossing rules (issue/incident/uptime) + metric-window
+      rules (`error_rate`/`latency_p95`/`llm_cost`, edge-triggered). Metric rules
+      evaluate both inline on telemetry ingest (fast feedback) **and** on a
+      periodic every-minute sweep (`src/telemetry/sweep.ts`) over a shared
+      `alertRuleState` latch, so a window that goes quiet (error rate falling to 0
+      with no fresh spans) still fires/clears rather than latching forever.
+      Delivery channels: `email`, `webhook`, `slack` (incoming-webhook JSON), and
+      `pagerduty` (Events API v2) — the webhook-family channels reuse the
+      `isSafeWebhookUrl` SSRF guard.
+
+#### Infra-level alerts: lean on Cloudflare Notifications + Health Checks
+
+The rules above are **app-semantic** — they watch the telemetry a tenant's code
+emits (error fingerprints, span metrics, LLM spend, synthetic uptime). For
+**infra-level** signals — Worker script errors/exceptions, CPU-time limit
+overruns, sustained 5xx, origin/health-check failures — don't rebuild what the
+platform already delivers: configure **Cloudflare Notifications** (Workers alerts
+on error rate / CPU / invocation-limit, and **Health Checks** on a deployment's
+URL) with email / PagerDuty / webhook destinations at the account level. The two
+layers compose: Cloudflare Notifications + Health Checks cover the infrastructure
+floor (is the Worker up, is it erroring at the edge), while these app-semantic
+rules run on top (is _this function_ over its error/latency/cost budget). This
+also gives an independent out-of-band path — an alert about the platform doesn't
+depend on the platform's own telemetry pipeline being healthy. 2. **Deployment health charts on the project page** — request volume / error
+rate per deployment (needs status-code capture in the dispatcher metering
+first: add `outcome` blob to the AE data point). 3. **Log viewer upgrade** — severity chips, filter bar, virtualized list,
+log↔deployment correlation links. 4. **Design-system pass** — dark-first token palette, severity color ramp,
+consistent empty states with actionable copy (Maple's DESIGN.md rigor is
+the bar, not the source). 5. **Onboarding checklist** — first-run "create project → issue key → first
+deploy → see it live" checklist on the dashboard, replacing bare empty
+tabs. 6. **Time-range picker** — shared presets (1h/24h/7d/30d) across usage/logs
+once the data streams carry enough resolution. 7. **Deploy-key roll UX** — one-click roll (issue+revoke atomically) in the
+keys tab. 8. **MCP surface** — expose the control plane to agents (list projects,
+deployments, logs, trigger rollback) via `@lunora/mcp`; strong
+differentiator and cheap given the framework ships an MCP package. 9. **Integrations hub** — OAuth connect cards (GitHub App install, Creem
+portal) instead of bare settings fields.
