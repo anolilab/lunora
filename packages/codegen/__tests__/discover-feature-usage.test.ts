@@ -35,6 +35,7 @@ const NO_SIGNALS = {
     containerCount: 0,
     cronCount: 0,
     dependencies: new Set<string>(),
+    hasPaymentTables: false,
     queueCount: 0,
     storageColumnCount: 0,
     storageRuleCount: 0,
@@ -298,6 +299,7 @@ describe("discover-feature-usage", () => {
                 containerCount: 0,
                 cronCount: 1,
                 dependencies: new Set<string>(),
+                hasPaymentTables: false,
                 queueCount: 0,
                 storageColumnCount: 2,
                 storageRuleCount: 0,
@@ -317,9 +319,22 @@ describe("discover-feature-usage", () => {
 
             // This is the mail fix: mail is wired in the worker entry, not under `lunora/`,
             // so only the declared dependency keeps its page shown.
-            const result = buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/mail", "@lunora/payment"]) });
+            const result = buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/mail"]) });
 
-            expect(result).toMatchObject({ mail: true, payments: true });
+            expect(result).toMatchObject({ mail: true });
+        });
+
+        it("hides the payments page for a bare @lunora/payment dependency, showing it only once the store tables are declared", () => {
+            expect.assertions(3);
+
+            // Payments has no fail-open dependency arm: reusing the package's pure webhook
+            // helpers pulls in the dependency without declaring the store tables, so a
+            // dependency-only signal would surface a page that errors with
+            // `unknown table: subscriptions`. It gates on `hasPaymentTables` instead.
+            expect(buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/payment"]) }).payments).toBe(false);
+            expect(buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, hasPaymentTables: true }).payments).toBe(true);
+            // Actual `ctx.payments` / import usage still fires it (the worker-gating path).
+            expect(buildStudioFeatures({ ...ALL_OFF, payments: true }, NO_SIGNALS).payments).toBe(true);
         });
 
         it("shows the containers page from code usage, a declared container, or an @lunora/container dependency", () => {

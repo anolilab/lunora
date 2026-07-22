@@ -20,9 +20,21 @@ const EVENTS: Row[] = [
     { processedAt: 1_700_000_000_000, provider: "stripe", providerEventId: "evt_1", type: "payment.captured" },
 ];
 
-const createClient = (subscriptions: Row[] = SUBSCRIPTIONS, events: Row[] = EVENTS): MockClientHooks =>
+// Table names the `listTables` presence probe reports — the panel gates its reads
+// on `subscriptions` showing up here. `undefined` means "deployment declares no
+// payment tables" (the unconfigured case).
+const PAYMENT_TABLES = [
+    { name: "subscriptions", rowCount: 0 },
+    { name: "events", rowCount: 0 },
+];
+
+const createClient = (subscriptions: Row[] = SUBSCRIPTIONS, events: Row[] = EVENTS, tables: Row[] | undefined = PAYMENT_TABLES): MockClientHooks =>
     createMockClient({
         query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return tables;
+            }
+
             if (reference === ADMIN_FUNCTIONS.readTablePage) {
                 const { table } = args as { table?: string };
 
@@ -75,5 +87,18 @@ describe("paymentsPanel", () => {
         const empty = await screen.findByTestId("payments-empty");
 
         expect(empty.dataset["testid"]).toBe("payments-empty");
+    });
+
+    it("shows the unconfigured state (not a table error) when the deployment declares no payment tables", async () => {
+        expect.assertions(1);
+
+        // A worker predating the `studioFeatures` RPC shows every page; without the
+        // store tables the panel must guide the user rather than surface an
+        // "unknown table: subscriptions" error.
+        render(renderPanel(createClient([], [], [])));
+
+        const unconfigured = await screen.findByTestId("payments-unconfigured");
+
+        expect(unconfigured.dataset["testid"]).toBe("payments-unconfigured");
     });
 });
