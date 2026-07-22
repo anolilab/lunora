@@ -4755,7 +4755,9 @@ abstract class ShardDO {
         };
 
         // Live in-memory fold (the "recent on this instance" readout).
-        bestEffort(() => { this.metricSeries.push(stamped); });
+        bestEffort(() => {
+            this.metricSeries.push(stamped);
+        });
 
         // Durable per-minute rollups. Use the RAW storage handle, NOT `this.sql`:
         // the getter instruments statements into the Query Insights leaderboard
