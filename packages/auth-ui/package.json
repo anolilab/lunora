@@ -23,6 +23,12 @@
     },
     "type": "module",
     "sideEffects": false,
+    "exports": {
+        "./core": "./src/core/index.ts",
+        "./react": "./src/react/index.ts",
+        "./styles.css": "./src/styles/auth-ui.css",
+        "./package.json": "./package.json"
+    },
     "scripts": {
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",

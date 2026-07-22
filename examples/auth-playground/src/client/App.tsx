@@ -1,3 +1,4 @@
+import { AuthUIProvider, SignInCard, SignUpCard } from "@lunora/auth-ui/react";
 import type { FormEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
@@ -45,56 +46,23 @@ export const App = (): ReactElement => {
     );
 };
 
-/** Sign-up / sign-in forms — shown when there's no active session. */
-const SignedOutView = (): ReactElement => {
-    const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
-    const [name, setName] = useState("");
-    const [error, setError] = useState<null | string>(null);
+// A no-op router bridge: this single-page demo swaps views off better-auth's
+// reactive `useSession()`, so the cards don't need to navigate on success.
+const nav = { navigate: (): void => {}, replace: (): void => {} };
 
-    const onSignUp = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-        event.preventDefault();
-        setError(null);
-
-        const result = await authClient.signUp.email({ email, name, password });
-
-        if (result.error) {
-            setError(result.error.message ?? "sign-up failed");
-        }
-    };
-
-    const onSignIn = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-        event.preventDefault();
-        setError(null);
-
-        const result = await authClient.signIn.email({ email, password });
-
-        if (result.error) {
-            setError(result.error.message ?? "sign-in failed");
-        }
-    };
-
-    return (
-        <section>
-            <h2>Sign in</h2>
-            <form onSubmit={onSignIn} style={{ display: "grid", gap: 8, maxWidth: 320 }}>
-                <input onChange={(event) => setEmail(event.target.value)} placeholder="email" type="email" value={email} />
-                <input onChange={(event) => setPassword(event.target.value)} placeholder="password" type="password" value={password} />
-                <button type="submit">Sign in</button>
-            </form>
-
-            <h2 style={{ marginTop: 24 }}>Or create an account</h2>
-            <form onSubmit={onSignUp} style={{ display: "grid", gap: 8, maxWidth: 320 }}>
-                <input onChange={(event) => setName(event.target.value)} placeholder="full name" value={name} />
-                <input onChange={(event) => setEmail(event.target.value)} placeholder="email" type="email" value={email} />
-                <input onChange={(event) => setPassword(event.target.value)} placeholder="password" type="password" value={password} />
-                <button type="submit">Sign up</button>
-            </form>
-
-            {error ? <p style={{ color: "crimson", marginTop: 16 }}>{error}</p> : null}
-        </section>
-    );
-};
+/**
+ * Sign-in / sign-up — now rendered with the copy-in `@lunora/auth-ui` React
+ * screens (the same components `lunora add auth-ui` scaffolds) instead of
+ * hand-rolled forms, wrapped in `<AuthUIProvider>` with the app's authClient.
+ */
+const SignedOutView = (): ReactElement => (
+    <AuthUIProvider authClient={authClient} nav={nav}>
+        <div style={{ display: "grid", gap: 24, maxWidth: 360 }}>
+            <SignInCard />
+            <SignUpCard />
+        </div>
+    </AuthUIProvider>
+);
 
 /** Org management + admin panel — shown once a session is active. */
 const SignedInView = (): ReactElement => {

@@ -1322,6 +1322,9 @@ importers:
       '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@lunora/auth-ui':
+        specifier: workspace:*
+        version: link:../../packages/auth-ui
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
