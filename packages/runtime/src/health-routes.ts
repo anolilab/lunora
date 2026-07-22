@@ -137,11 +137,11 @@ interface HealthReport {
 class HealthRegistry {
     readonly #checkers = new Map<string, { run: () => Promise<CheckerResult>; types: ReadonlyArray<"liveness" | "readiness"> }>();
 
-    addChecker(name: string, run: () => Promise<CheckerResult>, options: { type: ReadonlyArray<"liveness" | "readiness"> }): void {
+    public addChecker(name: string, run: () => Promise<CheckerResult>, options: { type: ReadonlyArray<"liveness" | "readiness"> }): void {
         this.#checkers.set(name, { run, types: options.type });
     }
 
-    async getReport(filter?: "readiness"): Promise<HealthReport> {
+    public async getReport(filter?: "readiness"): Promise<HealthReport> {
         const selected = [...this.#checkers].filter(([, checker]) => filter === undefined || checker.types.includes(filter));
         const entries = await Promise.all(selected.map(async ([name, checker]): Promise<[string, CheckerResult]> => [name, await checker.run()]));
 
