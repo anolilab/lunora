@@ -1883,6 +1883,15 @@ interface StorageObject {
 }
 ```
 
+### `TraceSamplingConfig` (interface)
+
+```ts
+interface TraceSamplingConfig {
+    alwaysSampleErrors?: boolean;
+    headRate?: number;
+}
+```
+
 ### `VERSION` (const)
 
 ```ts
@@ -1987,6 +1996,7 @@ interface WorkerOptions {
     resolveTableSharding?: AdminTableResolver;
     restRateLimit?: RestRateLimit;
     routes?: Record<string, Route>;
+    sampling?: TraceSamplingConfig;
     schedulerDO?: ShardNamespaceLike;
     schedulerInstanceName?: string;
     security?: SecurityOptions;
@@ -2173,7 +2183,7 @@ const emitLogEvent: (sink: ObservabilitySink | undefined, event: LogEvent, conte
 ### `emitRpcEvent` (const)
 
 ```ts
-const emitRpcEvent: (sink: ObservabilitySink | undefined, event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
+const emitRpcEvent: (sink: ObservabilitySink | undefined, event: ObservabilityEvent, context?: ObservabilitySinkContext, sampling?: TraceSamplingConfig) => void;
 ```
 
 ### `enforceOrigin` (const)

@@ -15,6 +15,8 @@
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
 import type { MetricEvent } from "../../../shared/metric-event";
+import type { TraceSamplingConfig } from "../../../shared/sampling";
+import { resolveTraceSampling, shouldExportTrace } from "../../../shared/sampling";
 import type { SpanEvent } from "../../../shared/span-event";
 
 /**
@@ -109,9 +111,24 @@ export interface ObservabilitySink {
  * throws. Use at the dispatch boundary; the runtime should never see a
  * sink-originating throw bubble up past this point. `context.waitUntil`, when
  * supplied, lets a network sink keep its send alive past the response.
+ *
+ * `sampling` applies the trace-sampling verdict to this dispatch's SERVER span:
+ * the event is dropped unless the trace was head-sampled or (with errors
+ * force-kept) this dispatch errored — the tail bias. A dispatch with no
+ * `traceId` (a fan-out aggregation, which mints none) is always kept, and an
+ * absent `sampling` keeps everything, so both are backward-compatible.
  */
-export const emitRpcEvent = (sink: ObservabilitySink | undefined, event: ObservabilityEvent, context?: ObservabilitySinkContext): void => {
+export const emitRpcEvent = (
+    sink: ObservabilitySink | undefined,
+    event: ObservabilityEvent,
+    context?: ObservabilitySinkContext,
+    sampling?: TraceSamplingConfig,
+): void => {
     if (!sink?.onRpc) {
+        return;
+    }
+
+    if (sampling !== undefined && event.traceId !== undefined && !shouldExportTrace(resolveTraceSampling(sampling, event.traceId), !event.ok)) {
         return;
     }
 
@@ -151,4 +168,5 @@ export const emitLogEvent = (sink: ObservabilitySink | undefined, event: LogEven
 export { type LogEvent } from "../../../shared/log-event";
 export { type LogFields } from "../../../shared/log-fields";
 export { type MetricEvent, type MetricKind } from "../../../shared/metric-event";
+export { type TraceSamplingConfig } from "../../../shared/sampling";
 export { type SpanEvent } from "../../../shared/span-event";

@@ -531,8 +531,11 @@ export interface StorageRulesResult {
  * Each flag is `true` when the app wires up that optional, package-backed feature
  * (discovered at codegen time from imports / `ctx.*` reads / schema signals / the
  * package being a declared dependency). The studio hides a nav page whose flag is
- * `false` — so an app with no `@lunora/payment` never renders the Payments page
- * (and never surfaces its "unknown table: subscriptions" error). A worker
+ * `false` — so an app that never wires `@lunora/payment`'s store tables never
+ * renders the Payments page (and never surfaces its "unknown table: subscriptions"
+ * error). `payments` alone gates on the `subscriptions`/`events` tables the panel
+ * reads being declared, not on a bare dependency — reusing the package's pure
+ * webhook helpers must not light up a page that would then error. A worker
  * predating this RPC returns nothing; the studio treats that as "show everything"
  * (back-compat).
  *
