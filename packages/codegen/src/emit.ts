@@ -2334,7 +2334,7 @@ const emitAiFragments = (hasAi: boolean): { build: string; configField: string; 
         // a handler is never locked to Workers AI. Falls back to `aiStub`.
         build: `
             const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
-            const ai: LunoraAi = aiBinding ? createAi({ binding: aiBinding as AiBindingLike }) : aiStub;
+            const ai: LunoraAi = aiBinding ? createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown> }) : aiStub;
 `,
         // Optional override for the Workers AI binding. When omitted, ctx.ai is
         // built from `env.AI` (the conventional binding the config layer

@@ -103,7 +103,8 @@ class VoiceSessionDO {
         this.agent = agent;
         this.exportName = exportName;
         this.paths = DEFAULT_AGENT_FUNCTION_PATHS;
-        this.ai = createAi({ binding: env["AI"] as AiBindingLike });
+        // `env` also enables opt-in AI Gateway routing (LUNORA_AI_GATEWAY_*).
+        this.ai = createAi({ binding: env["AI"] as AiBindingLike, env });
         this.streamGenerate = createStreamGenerate(agent, env);
         this.sttModel = agent.voice?.stt ?? DEFAULT_STT_MODEL;
         this.ttsModel = agent.voice?.tts ?? DEFAULT_TTS_MODEL;

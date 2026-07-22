@@ -66,4 +66,31 @@ describe("provider construction from a binding", () => {
 
         expect(createWorkersAI).not.toHaveBeenCalled();
     });
+
+    it("routes Workers AI through an env-configured AI Gateway (opt-in)", () => {
+        const binding = fakeBinding();
+
+        createAi({ binding, env: { LUNORA_AI_GATEWAY_ACCOUNT_ID: "acct-123", LUNORA_AI_GATEWAY_ID: "my-gateway" } });
+
+        // The env vars derive the Workers AI `gateway` option by id so the gateway
+        // computes token + dollar-cost telemetry.
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: { id: "my-gateway" } });
+    });
+
+    it("leaves the direct-provider path unchanged when env has no gateway vars", () => {
+        const binding = fakeBinding();
+
+        createAi({ binding, env: { SOME_OTHER: "x" } });
+
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: undefined });
+    });
+
+    it("prefers an explicit gateway over the env-derived one", () => {
+        const binding = fakeBinding();
+        const gateway = { cacheTtl: 60, id: "explicit-gateway" };
+
+        createAi({ binding, env: { LUNORA_AI_GATEWAY_ACCOUNT_ID: "acct-123", LUNORA_AI_GATEWAY_ID: "env-gateway" }, gateway });
+
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway });
+    });
 });
