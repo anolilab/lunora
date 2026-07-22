@@ -8,6 +8,7 @@ import { AlertsSection } from "./AlertsSection";
 import { BillingSection } from "./BillingSection";
 import { BuildsSection } from "./BuildsSection";
 import { CommandPalette } from "./CommandPalette";
+import { DashboardsSection } from "./DashboardsSection";
 import { DeployKeysSection } from "./DeployKeysSection";
 import { DomainsSection } from "./DomainsSection";
 import { IncidentsSection } from "./IncidentsSection";
@@ -36,6 +37,7 @@ type Tab =
     | "alerts"
     | "billing"
     | "builds"
+    | "dashboards"
     | "domains"
     | "incidents"
     | "invitations"
@@ -71,6 +73,7 @@ const TABS: { id: Tab; label: string }[] = [
     { id: "logs", label: "Logs" },
     { id: "traces", label: "Traces" },
     { id: "metrics", label: "Metrics" },
+    { id: "dashboards", label: "Dashboards" },
     { id: "issues", label: "Issues" },
     { id: "incidents", label: "Incidents" },
     { id: "uptime", label: "Uptime" },
@@ -87,6 +90,7 @@ const SECTIONS: Record<Tab, (props: SectionProps) => ReactElement> = {
     alerts: AlertsSection,
     billing: BillingSection,
     builds: BuildsSection,
+    dashboards: DashboardsSection,
     domains: DomainsSection,
     incidents: IncidentsSection,
     invitations: InvitationsSection,
