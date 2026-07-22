@@ -1020,6 +1020,99 @@ button.link.danger {
     border-bottom: 1px dashed var(--border);
 }
 
+/* --- Custom dashboards ------------------------------------------------------ */
+.dash-layout {
+    display: grid;
+    grid-template-columns: minmax(160px, 220px) 1fr;
+    gap: 16px;
+    align-items: start;
+}
+
+@media (max-width: 720px) {
+    .dash-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.dash-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.dash-list-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+    text-align: left;
+    cursor: pointer;
+}
+
+.dash-list-item.active {
+    border-color: var(--primary);
+}
+
+.dash-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+}
+
+.dash-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.dash-panel-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.dash-panel-id {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.dash-panel-controls {
+    display: inline-flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.dash-metric {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.dash-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.dash-stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.dash-shortcut {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+}
+
 .trace-archive-badge {
     margin-left: 8px;
     background: var(--surface-2);

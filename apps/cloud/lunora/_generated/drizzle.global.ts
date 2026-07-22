@@ -414,6 +414,18 @@ export const secrets = sqliteTable("secrets", {
     by_project: index("by_project").on(t.projectId),
 }));
 
+export const dashboards = sqliteTable("dashboards", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    panels: text("panels", { mode: "json" }).$type<Array<{ config: { filter: string | undefined; metricName: string | undefined; stat: "last" | "first" | "count" | undefined }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }>>().notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+}));
+
 export const customers = sqliteTable("customers", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

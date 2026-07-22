@@ -35,6 +35,13 @@ export interface ApiTypes {
         list: FunctionReference<"query", {}, { _id: Id<"cells">; cloudflareAccountId: string; createdAt: number; dispatchNamespacePrefix: string; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
         register: FunctionReference<"mutation", { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }, Id<"cells">>;
     };
+    dashboards: {
+        create: FunctionReference<"mutation", { name: string; organizationId: Id<"organizations">; panels?: Array<unknown> }, Id<"dashboards">>;
+        get: FunctionReference<"query", { id: Id<"dashboards">; organizationId: Id<"organizations"> }, null | { _id: Id<"dashboards">; createdAt: number; name: string; panels: { config: { filter?: string; metricName?: string; stat?: "count" | "first" | "last"; }; id: string; kind: "logs" | "metric" | "stat" | "traces"; title: string }[]; updatedAt: number }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"dashboards">; createdAt: number; name: string; panels: { config: { filter?: string; metricName?: string; stat?: "count" | "first" | "last"; }; id: string; kind: "logs" | "metric" | "stat" | "traces"; title: string }[]; updatedAt: number }[]>;
+        remove: FunctionReference<"mutation", { id: Id<"dashboards">; organizationId: Id<"organizations"> }, Id<"dashboards">>;
+        update: FunctionReference<"mutation", { id: Id<"dashboards">; name?: string; organizationId: Id<"organizations">; panels?: Array<unknown> }, Id<"dashboards">>;
+    };
     deploy_keys: {
         ingestKeyCipher: FunctionReference<"query", { deployKey: string; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
         issue: FunctionReference<"mutation", { capability?: "deploy" | "ingest"; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }, { id: Id<"deployKeys">; key: string; }>;

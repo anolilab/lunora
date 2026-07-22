@@ -644,6 +644,36 @@ export default defineSchema({
         .index("by_project", ["projectId"])
         .index("by_project_env_name", ["projectId", "environment", "name"], { unique: true }),
 
+    // User-defined custom dashboards (Tier 2 observability). A named, per-org
+    // collection of saved panels — each panel a saved query over telemetry the
+    // console already serves (a metric trend, a single-stat number, or a saved
+    // Traces/Logs filter shortcut). Grafana-style boards composed from the
+    // existing read paths; no new telemetry backend. Panels are stored inline as
+    // a JSON array (low cardinality, always read whole with the board).
+    dashboards: defineTable({
+        createdAt: v.number(),
+        name: v.string(),
+        organizationId: v.id("organizations"),
+        // Ordered panels. `kind` selects the widget; `config` carries only the
+        // keys that kind uses (`metricName` for metric/stat, `stat` for a stat's
+        // aggregation, `filter` for a traces/logs deep-link shortcut).
+        panels: v.array(
+            v.object({
+                config: v.object({
+                    filter: v.optional(v.string()),
+                    metricName: v.optional(v.string()),
+                    stat: v.optional(v.union(v.literal("last"), v.literal("first"), v.literal("count"))),
+                }),
+                id: v.string(),
+                kind: v.union(v.literal("metric"), v.literal("stat"), v.literal("traces"), v.literal("logs")),
+                title: v.string(),
+            }),
+        ),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_org", ["organizationId"]),
+
     // ── @lunora/payment tables (§4 billing) ───────────────────────────────────
     // Declared inline (codegen parses this file's AST and can't resolve a cross-
     // package `...paymentTables` spread). `@lunora/payment`'s exported

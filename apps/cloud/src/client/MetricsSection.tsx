@@ -3,6 +3,8 @@ import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
+import { formatValue } from "./metric-format";
+import { Sparkline, TrendBadge } from "./MetricSparkline";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import type { OrgId } from "./types";
 
@@ -20,63 +22,6 @@ interface MetricSeries {
     points: { t: number; value: number }[];
     trend: number;
 }
-
-/** Compact number format for the headline last-value (`1.2k`, `3.4M`). */
-const formatValue = (value: number): string => {
-    const abs = Math.abs(value);
-
-    if (abs >= 1_000_000) {
-        return `${(value / 1_000_000).toFixed(1)}M`;
-    }
-
-    if (abs >= 1000) {
-        return `${(value / 1000).toFixed(1)}k`;
-    }
-
-    return Number.isInteger(value) ? String(value) : value.toFixed(2);
-};
-
-/**
- * A minimal inline-SVG sparkline over a metric's bucketed trend points. Points
- * are spaced evenly on x (by index) and scaled to the series' own min→max on y,
- * so a flat series still renders a centered line rather than dividing by zero.
- */
-const Sparkline = ({ points }: { points: { t: number; value: number }[] }): ReactElement => {
-    if (points.length === 0) {
-        return <div className="metric-spark metric-spark-empty" />;
-    }
-
-    const values = points.map((point) => point.value);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const span = max - min || 1;
-    const step = points.length > 1 ? 100 / (points.length - 1) : 0;
-
-    // y is inverted (SVG origin top-left): the max value sits at y=2, min at y=28.
-    const coords = points.map((point, index) => `${(index * step).toFixed(2)},${(28 - ((point.value - min) / span) * 26).toFixed(2)}`).join(" ");
-
-    return (
-        <svg className="metric-spark" preserveAspectRatio="none" role="img" viewBox="0 0 100 30">
-            {points.length === 1 ? (
-                <circle cx="50" cy="15" r="1.5" />
-            ) : (
-                <polyline fill="none" points={coords} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-            )}
-        </svg>
-    );
-};
-
-/** Direction arrow + delta for a series' net movement over the window. */
-const TrendBadge = ({ trend }: { trend: number }): ReactElement => {
-    const direction = trend > 0 ? "up" : trend < 0 ? "down" : "flat";
-    const arrow = trend > 0 ? "▲" : trend < 0 ? "▼" : "→";
-
-    return (
-        <span className={`metric-trend metric-trend-${direction}`}>
-            {arrow} {formatValue(Math.abs(trend))}
-        </span>
-    );
-};
 
 /**
  * Metrics tab (GAPS.md ring 3) — per-metric trend sparklines over the tenant

@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -381,6 +381,16 @@ export interface Doc_secrets {
     updatedAt: number;
 }
 
+export interface Doc_dashboards {
+    _id: Id<"dashboards">;
+    _creationTime: number;
+    createdAt: number;
+    name: string;
+    organizationId: Id<"organizations">;
+    panels: Array<{ config: { filter: string | undefined; metricName: string | undefined; stat: "last" | "first" | "count" | undefined }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }>;
+    updatedAt: number;
+}
+
 export interface Doc_customers {
     _id: Id<"customers">;
     _creationTime: number;
@@ -467,6 +477,7 @@ export interface DataModel {
     uptimeChecks: Doc_uptimeChecks;
     uptimeState: Doc_uptimeState;
     secrets: Doc_secrets;
+    dashboards: Doc_dashboards;
     customers: Doc_customers;
     events: Doc_events;
     paymentSessions: Doc_paymentSessions;
@@ -504,6 +515,7 @@ export interface IndexNamesByTable {
     uptimeChecks: "by_org_deployment" | "by_org";
     uptimeState: "by_org" | "by_deployment";
     secrets: "by_project_env_name" | "by_project";
+    dashboards: "by_org";
     customers: "by_reference" | "by_provider_customer";
     events: "by_provider_event";
     paymentSessions: "by_reference" | "by_provider_session";
@@ -538,6 +550,7 @@ export interface SearchIndexNamesByTable {
     uptimeChecks: never;
     uptimeState: never;
     secrets: never;
+    dashboards: never;
     customers: never;
     events: never;
     paymentSessions: never;
@@ -572,6 +585,7 @@ export interface RankIndexNamesByTable {
     uptimeChecks: never;
     uptimeState: never;
     secrets: never;
+    dashboards: never;
     customers: never;
     events: never;
     paymentSessions: never;
@@ -928,6 +942,16 @@ export interface Insert_secrets {
     updatedAt: number;
 }
 
+export interface Insert_dashboards {
+    _id?: Id<"dashboards">;
+    _creationTime?: number;
+    createdAt: number;
+    name: string;
+    organizationId: Id<"organizations">;
+    panels: Array<{ config: { filter: string | undefined; metricName: string | undefined; stat: "last" | "first" | "count" | undefined }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }>;
+    updatedAt: number;
+}
+
 export interface Insert_customers {
     _id?: Id<"customers">;
     _creationTime?: number;
@@ -1015,6 +1039,7 @@ export interface InsertModel {
     uptimeChecks: Insert_uptimeChecks;
     uptimeState: Insert_uptimeState;
     secrets: Insert_secrets;
+    dashboards: Insert_dashboards;
     customers: Insert_customers;
     events: Insert_events;
     paymentSessions: Insert_paymentSessions;
@@ -1064,6 +1089,7 @@ export interface Relations {
     uptimeChecks: {};
     uptimeState: {};
     secrets: {};
+    dashboards: {};
     customers: {};
     events: {};
     paymentSessions: {};
