@@ -914,14 +914,14 @@ trust win — boundaries read as deliberate, not missing.
 
 | Plan | Title                                                                                                                                                          | Category     | Pkg          | Pri | Effort | Risk | Status |
 | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------ | --- | ------ | ---- | ------ |
-| 164  | Non-TypeScript client SDK (Swift _or_ Python) — prove the wire protocol isn't TS-bound; biggest ceiling vs Convex                                              | feat         | client (new) | P2  | L      | MED  | TODO   |
-| 165  | `@lunora/push` — Web Push (VAPID) → FCM/APNs; grep-confirmed zero push code today                                                                              | feat         | push (new)   | P2  | L      | MED  | TODO   |
+| 164  | Non-TypeScript client SDK (Swift _or_ Python) — prove the wire protocol isn't TS-bound; biggest ceiling vs Convex                                              | feat         | client (new) | P2  | L      | MED  | SHIPPED |
+| 165  | `@lunora/push` — Web Push (VAPID) → FCM/APNs; grep-confirmed zero push code today                                                                              | feat         | push (new)   | P2  | L      | MED  | PARTIAL — `@lunora/notify` + `ctx.notify`/`ctx.push` codegen wiring + docs shipped; Studio page open |
 | 166  | Enterprise auth: SSO + SCIM — `@better-auth/sso` + `@better-auth/scim` (MIT); OIDC/SCIM-Users LOW, SAML-on-workerd is the risk                                 | feat         | auth         | P2  | M–L    | MED  | TODO   |
-| 167  | Opt-in public REST/GraphQL surface — extend the existing OpenAPI/OpenRPC spec (`cli/api-spec.ts`) for non-TS/interop, RLS-enforced                             | feat         | runtime/cli  | P3  | L      | MED  | TODO   |
+| 167  | Opt-in public REST/GraphQL surface — extend the existing OpenAPI/OpenRPC spec (`cli/api-spec.ts`) for non-TS/interop, RLS-enforced                             | feat         | runtime/cli  | P3  | L      | MED  | SHIPPED (REST; GraphQL Phase 2 demand-gated) |
 | 168  | Cross-shard transaction story — **design spike first** (saga vs 2PC vs documented boundary+lint); no code until ratified                                       | architecture | do/runtime   | P2  | XL     | HIGH | TODO   |
 | 169  | `@lunora/collab` (CRDT) — Yjs persistence + awareness over `ShardDO` + `whisper`; reuse `y-partyserver` (ISC); demand-gated                                    | feat         | collab (new) | P3  | XL     | MED  | TODO   |
-| 170  | Continuous CDC export tap (op-log → external sink) — the streaming counterpart to CDC-in; snapshot export/backup already exist                                 | feat         | runtime/do   | P3  | L      | MED  | TODO   |
-| 171  | "Design boundaries / non-goals" docs page — state the NON-GOAL bucket plainly (no arbitrary SQL, RPC-not-REST-first, cross-shard eventual); cheapest trust win | docs         | docs         | P2  | S      | LOW  | TODO   |
+| 170  | Continuous CDC export tap (op-log → external sink) — the streaming counterpart to CDC-in; snapshot export/backup already exist                                 | feat         | runtime/do   | P3  | L      | MED  | SHIPPED (tap + webhook/R2 sinks; warehouse connectors = Cloud) |
+| 171  | "Design boundaries / non-goals" docs page — state the NON-GOAL bucket plainly (no arbitrary SQL, RPC-not-REST-first, cross-shard eventual); cheapest trust win | docs         | docs         | P2  | S      | LOW  | SHIPPED |
 
 ### Considered / newly surfaced (Fable 5 deep pass, 2026-07-21)
 
@@ -952,10 +952,10 @@ scheduler}` (`server/src/schema.ts`, `types.ts:1104`) — stronger than Convex's
 
 | Plan                                 | Gap                                                            | Competitors with it                                              | Lunora today                                                                               | Sev      | Bucket                      |
 | ------------------------------------ | -------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | -------- | --------------------------- |
-| [172](172-geospatial.md)             | **Geospatial indexing / queries** (`near`, within-radius)      | Convex (geo component), Supabase (PostGIS), Firebase (geohash)   | none — zero geo code in `packages/server/src`                                              | **HIGH** | FRAMEWORK                   |
-| [173](173-client-upload-sdk.md)      | **Client-side upload SDK** (progress, pause/resume, resumable) | Firebase, Supabase (TUS), Convex                                 | server R2 multipart + presigned exist; only admin-gated client upload, no `useUpload`      | MED      | FRAMEWORK                   |
+| 172 ✅ SHIPPED                        | **Geospatial indexing / queries** (`near`, within-radius)      | Convex (geo component), Supabase (PostGIS), Firebase (geohash)   | none — zero geo code in `packages/server/src`                                              | **HIGH** | FRAMEWORK                   |
+| 173 ✅ SHIPPED                        | **Client-side upload SDK** (progress, pause/resume, resumable) | Firebase, Supabase (TUS), Convex                                 | server R2 multipart + presigned exist; only admin-gated client upload, no `useUpload`      | MED      | FRAMEWORK                   |
 | [174](174-auth-audit-trail.md)       | **Auth/security audit trail**                                  | Supabase (`auth.audit_log_entries`), Firebase, Convex (paid)     | admin-state audit log exists (`do/audit-log.ts`) but no auth-event recording               | MED      | FRAMEWORK                   |
-| [175](175-schema-ttl-auto-expiry.md) | **Schema-level TTL / auto-expiry**                             | Firebase (Firestore TTL), Supabase (pg_cron) — Convex also lacks | no `.ttl()`; only presence-heartbeat TTL. DO alarm infra (`do/triggers.ts`) already exists | LOW–MED  | FRAMEWORK                   |
+| 175 ✅ SHIPPED                        | **Schema-level TTL / auto-expiry**                             | Firebase (Firestore TTL), Supabase (pg_cron) — Convex also lacks | no `.ttl()`; only presence-heartbeat TTL. DO alarm infra (`do/triggers.ts`) already exists | LOW–MED  | FRAMEWORK                   |
 | —                                    | **Client integrity / attestation** (App Check)                 | Firebase only                                                    | none; Turnstile/WAF already front every Worker                                             | LOW      | CLOUD / NON-GOAL → plan 171 |
 
 **Verified non-gaps** confirmed by the deep pass (Lunora already ships — do not
@@ -995,7 +995,7 @@ New opportunities the catalog surfaces (not previously listed):
 
 - **`@visulima/email-verifier`** + **`disposable-email-domains`** + **`free-email-domains`**
   → `@lunora/auth`: block throwaway signups / validate email (domain lists are
-  pure-data / edge-safe; MX verify needs DNS). → **[plan 176](176-auth-email-hardening.md)**.
+  pure-data / edge-safe; MX verify needs DNS). → **plan 176 ✅ SHIPPED**.
 - **`@visulima/health-check`** → production-readiness health/metrics endpoint
   (feeds the production-checklist). → **[plan 177](177-health-check-endpoint.md)**.
 - **`@visulima/content-safety`** → optional moderation for user-generated content
