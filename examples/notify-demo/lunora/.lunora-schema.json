@@ -1,0 +1,32 @@
+{
+  "migrationIds": [],
+  "tables": {
+    "announcements": {
+      "fields": {
+        "body": {
+          "kind": "string",
+          "optional": false
+        },
+        "sentAt": {
+          "kind": "number",
+          "optional": false
+        },
+        "title": {
+          "kind": "string",
+          "optional": false
+        }
+      },
+      "indexes": {
+        "by_sent": {
+          "fields": [
+            "sentAt"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "root"
+    }
+  },
+  "version": 1
+}

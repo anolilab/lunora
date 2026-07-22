@@ -39,6 +39,8 @@ export type {
     ListAuthUsersOptions,
     LunoraHandlerOptions,
     LunoraWorker,
+    NotifySubscriptionDevice,
+    NotifySubscriptionStoreLike,
     Route,
     RpcContext,
     RpcEnvelope,

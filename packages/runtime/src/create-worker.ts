@@ -506,6 +506,55 @@ interface HealthOptions {
     probes?: ReadonlyArray<HealthProbe>;
 }
 
+/**
+ * One registered device subscription as surfaced by the gated
+ * `__lunora_admin__:listPushSubscriptions` admin RPC (backing the Studio
+ * Notifications page). Structurally mirrors `@lunora/notify`'s
+ * `PushSubscriptionDevice` — the runtime carries NO `@lunora/notify` dependency,
+ * so the shape is declared here and matched by duck typing (the studio reuses the
+ * canonical `@lunora/notify` type). Delivery secrets (Web Push `keys`, FCM
+ * `token`) are never part of this shape.
+ */
+interface NotifySubscriptionDevice {
+    /** Unix-ms creation time. */
+    createdAt: number;
+    /** Web Push service endpoint URL (web-push only). */
+    endpoint?: string;
+    /** Stable identifier used as the store key. */
+    id: string;
+    /** The delivery channel this subscription targets (`"web-push"` / `"fcm"`). */
+    kind: string;
+    /** Last delivery error message, when `lastStatus` is `failed`/`expired`. */
+    lastError?: string;
+    /** Unix-ms time of the most recent register/send touch. */
+    lastSeenAt: number;
+    /** Last-known delivery outcome (`"ok"` / `"failed"` / `"expired"`). */
+    lastStatus?: string;
+    /** Arbitrary app metadata (device name, locale, topics, …). */
+    metadata?: Record<string, unknown>;
+    /** Owning user id, or `null`/absent when anonymous. */
+    userId?: null | string;
+}
+
+/**
+ * The minimal read surface the worker needs off an `@lunora/notify` subscription
+ * store to serve `__lunora_admin__:listPushSubscriptions`: just `list`. Codegen
+ * binds this from the app's `defineNotify({ store })` (`store(env)`), so the
+ * worker reads registered devices through the very store the handlers write to.
+ * Structural (not a `@lunora/notify` import) to keep the runtime dependency-free.
+ */
+interface NotifySubscriptionStoreLike {
+    /**
+     * List every stored subscription. Declared with NO parameter so a concrete
+     * `@lunora/notify` `SubscriptionStore` — whose `list(filter?)` narrows `kind`
+     * to the `"web-push" | "fcm"` union — assigns cleanly under
+     * `strictFunctionTypes` (an extra optional parameter on the source is fine).
+     * The RPC handler applies the `{ kind, userId }` filter in-memory, so no typed
+     * filter needs to cross this dependency-free structural boundary.
+     */
+    list: () => Promise<ReadonlyArray<NotifySubscriptionDevice & { keys?: unknown; token?: unknown }>>;
+}
+
 interface WorkerOptions {
     /**
      * An additional, async authorization gate for the `/_lunora/admin/*` plane
@@ -830,6 +879,18 @@ interface WorkerOptions {
      * overrides). Absent → the Archive feed reports "not configured".
      */
     logArchive?: LogArchiveConfig;
+
+    /**
+     * The `@lunora/notify` device-subscription store, bound from the request
+     * `env` by codegen from the app's `lunora/notify.ts` `defineNotify({ store })`.
+     * Backs the gated `__lunora_admin__:listPushSubscriptions` admin RPC (the
+     * Studio Notifications page): the worker reads registered devices — endpoint /
+     * kind / last-send status / delivery errors — through the SAME store the
+     * handlers register into. Delivery secrets (Web Push keys, FCM token) are
+     * stripped before the devices leave the worker. Absent (no store configured)
+     * ⇒ the RPC returns an empty device list rather than erroring.
+     */
+    notifySubscriptionStore?: NotifySubscriptionStoreLike;
 
     /**
      * Optional telemetry sink. When supplied, the worker emits one
@@ -1166,6 +1227,16 @@ const DEFAULT_AUTH_BASE_PATH = "/api/auth";
  * like the other admin-op sets, to avoid importing `@lunora/do`.
  */
 const RECORD_AUTH_EVENT_OP = "__lunora_admin__:recordAuthEvent";
+
+/**
+ * Reserved admin RPC the worker (NOT the DO) serves to list the app's registered
+ * `@lunora/notify` device subscriptions for the Studio Notifications page. Unlike
+ * the DO-served admin RPCs, the subscription store is a WORKER option (built from
+ * `env` via `defineNotify({ store })`), so this op is intercepted in `handleRpc`
+ * ahead of the shard forward and gated by the worker's admin bearer. Spelled out
+ * inline, like the other admin-op constants, to avoid importing `@lunora/notify`.
+ */
+const LIST_PUSH_SUBSCRIPTIONS_OP = "__lunora_admin__:listPushSubscriptions";
 
 /**
  * Sub-paths under the auth basePath that represent a genuine auth ATTEMPT — a
@@ -2316,35 +2387,61 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     });
 
     /**
+     * Serve the gated `__lunora_admin__:listPushSubscriptions` admin RPC — the
+     * Studio Notifications page's read of registered `@lunora/notify` devices.
+     * Default-closed (non-admin bearer → 403 FORBIDDEN); a `{ kind?, userId? }`
+     * filter narrows the read. Reads through `options.notifySubscriptionStore`
+     * (bound by codegen from `defineNotify({ store })`); when absent — no notify
+     * store configured — returns an empty device list rather than erroring. Every
+     * device is projected to strip the Web Push `keys` and FCM `token` delivery
+     * secrets so they never leave the worker.
+     */
+    const listPushSubscriptions = async (request: Request, args: Record<string, unknown> | undefined): Promise<Response> => {
+        assertAdminAuthorized(request);
+
+        const store = options.notifySubscriptionStore;
+
+        if (store === undefined) {
+            return Response.json({ subscriptions: [] }, { headers: { "content-type": "application/json" }, status: 200 });
+        }
+
+        const rawKind = args?.["kind"];
+        const rawUserId = args?.["userId"];
+        const kindFilter = typeof rawKind === "string" && rawKind !== "" ? rawKind : undefined;
+        const userIdFilter = typeof rawUserId === "string" && rawUserId !== "" ? rawUserId : undefined;
+
+        const stored = await store.list();
+
+        const subscriptions: NotifySubscriptionDevice[] = stored
+            // Apply the `{ kind, userId }` filter in-memory (the store surface is
+            // filter-free) …
+            .filter((device) => (kindFilter === undefined || device.kind === kindFilter) && (userIdFilter === undefined || device.userId === userIdFilter))
+            // … then strip delivery secrets (`keys`, `token`) — the browser only
+            // needs the endpoint / kind / owner / timestamps + last-send status.
+            .map(({ keys: _keys, token: _token, ...device }) => device);
+
+        return Response.json({ subscriptions }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    /**
      * Handle the reserved single-shard RPCs the worker serves itself rather than
-     * forwarding to a shard. Returns a `Response` to short-circuit `handleRpc`
-     * (the D1-backed auth-audit read), throws for the fan-out-only relation
-     * prefix, or returns `undefined` to let normal shard dispatch proceed. A
-     * fan-out envelope is never worker-served — it falls through to the coordinator.
+     * forwarding to a shard: the D1-backed auth-audit read and the notify
+     * device-list read (both admin-gated, default-closed). Returns a `Response`
+     * to short-circuit `handleRpc`, or `undefined` to let normal shard dispatch
+     * proceed. A fan-out envelope is never worker-served. The fan-out-only
+     * relation-prefix guard lives in `assertDispatchableEnvelope`, which runs first.
      */
     const serveReservedWorkerRpc = async (request: Request, envelope: RpcEnvelope): Promise<Response | undefined> => {
         if (envelope.fanOut) {
             return undefined;
         }
 
-        // Reserved cross-shard relation reads are fan-out-only; a single-shard
-        // envelope naming the prefix would bypass the `authorizeFanOut` gate and
-        // read one shard's raw rows directly, so refuse it. The literal prefix is
-        // inlined (not imported from `@lunora/do`) to keep the runtime free of a
-        // hard `@lunora/do` dependency.
-        if (envelope.functionPath.startsWith("__lunora_relation__:")) {
-            throw new LunoraError("`__lunora_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
-                code: "FORBIDDEN",
-                status: 403,
-            });
-        }
-
-        // The auth/security audit trail lives in the auth D1 database (not a
-        // shard's DO SQLite), so — unlike its `__lunora_admin__:*` siblings — it is
-        // served HERE, admin-gated through the injected `authAuditReader`. A
-        // non-admin caller is rejected with `ADMIN_FORBIDDEN` (default-closed).
         if (envelope.functionPath === GET_AUTH_AUDIT_LOG_OP) {
             return getAuthAuditLog(request, envelope.args ?? {});
+        }
+
+        if (envelope.functionPath === LIST_PUSH_SUBSCRIPTIONS_OP) {
+            return listPushSubscriptions(request, envelope.args);
         }
 
         return undefined;
@@ -2972,6 +3069,35 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    /**
+     * The three pre-dispatch envelope-shape guards, hoisted out of {@link handleRpc}
+     * so the hot path stays flat: (1) `fanOut` + `shardKey` are mutually exclusive;
+     * (2) a `__lunora_relation__:*` single-shard envelope would bypass the
+     * `authorizeFanOut` gate and read raw rows, so it is refused (the literal prefix
+     * is inlined to keep the runtime free of a `@lunora/do` dependency); (3) a
+     * `fanOut` envelope is rejected BEFORE `resolveIdentity` runs when no coordinator
+     * is configured, so a request already destined for a 400 wastes no identity IO.
+     */
+    const assertDispatchableEnvelope = (envelope: RpcEnvelope): void => {
+        if (envelope.fanOut && envelope.shardKey) {
+            throw new LunoraError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        if (!envelope.fanOut && envelope.functionPath.startsWith("__lunora_relation__:")) {
+            throw new LunoraError("`__lunora_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
+                code: "FORBIDDEN",
+                status: 403,
+            });
+        }
+
+        if (envelope.fanOut && !options.queryCoordinator) {
+            throw new LunoraError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
+                code: "BAD_REQUEST",
+                status: 400,
+            });
+        }
+    };
+
     const handleRpc = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
         if (request.method !== "POST") {
             throw new LunoraError("RPC endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
@@ -2985,29 +3111,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // are visible; off by default.
         logRpcDebug(env, envelope);
 
-        if (envelope.fanOut && envelope.shardKey) {
-            throw new LunoraError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
-        }
+        // Throwing envelope guards: fan-out+shardKey, the fan-out-only relation
+        // prefix, and fan-out without a coordinator (checked BEFORE `resolveIdentity`
+        // so a doomed request never triggers the identity hook's DB/IO).
+        assertDispatchableEnvelope(envelope);
 
-        // Reserved single-shard RPCs handled at the worker boundary instead of
-        // being forwarded to a shard: the fan-out-only relation guard (throws) and
-        // the D1-backed auth-audit read (served here, admin-gated). A returned
-        // Response short-circuits dispatch; `undefined` continues normal routing.
+        // Reserved single-shard RPCs served at the worker boundary instead of being
+        // forwarded to a shard: the D1-backed auth-audit read and the notify
+        // device-list read (both admin-gated). A returned Response short-circuits
+        // dispatch; `undefined` continues normal routing.
         const reservedResponse = await serveReservedWorkerRpc(request, envelope);
 
         if (reservedResponse !== undefined) {
             return reservedResponse;
-        }
-
-        // Refuse fan-out envelopes that arrive without a coordinator
-        // configured BEFORE we invoke `resolveIdentity` — otherwise the
-        // hook would be called for a request that's already destined for
-        // a 400, wasting any DB/IO it performs to look up the user.
-        if (envelope.fanOut && !options.queryCoordinator) {
-            throw new LunoraError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
-                code: "BAD_REQUEST",
-                status: 400,
-            });
         }
 
         // Forward selected headers from the inbound request so the DO can
@@ -4200,6 +4316,8 @@ export type {
     HttpRouterLike,
     LunoraHandlerOptions,
     LunoraWorker,
+    NotifySubscriptionDevice,
+    NotifySubscriptionStoreLike,
     QueueConsumerHandler,
     Route,
     RpcContext,

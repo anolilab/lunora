@@ -16,6 +16,11 @@
 // Canonical captured-mail wire type, owned by `@lunora/mail`. Type-only: erased
 // at build time, so no mail *runtime* enters the studio's browser bundle.
 import type { CapturedMail } from "@lunora/mail";
+// Canonical registered-device wire type, owned by `@lunora/notify` (the
+// secret-stripped projection the `listPushSubscriptions` RPC returns). Type-only,
+// so no notify *runtime* enters the browser bundle — same allowed direction as
+// the `@lunora/mail` type import above.
+import type { PushSubscriptionDevice } from "@lunora/notify";
 
 export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 
@@ -46,6 +51,7 @@ export const ADMIN_FUNCTIONS = {
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     getIssues: "__lunora_admin__:getIssues",
     listFlags: "__lunora_admin__:listFlags",
+    listPushSubscriptions: "__lunora_admin__:listPushSubscriptions",
     listQueues: "__lunora_admin__:listQueues",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
@@ -164,6 +170,22 @@ export type { CapturedMail } from "@lunora/mail";
 /** Result of `__lunora_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
 export interface CapturedMailResult {
     entries: CapturedMail[];
+}
+
+/**
+ * One registered `@lunora/notify` device subscription, re-exported verbatim from
+ * `@lunora/notify` (its canonical owner) — the secret-stripped
+ * {@link PushSubscriptionDevice} the `__lunora_admin__:listPushSubscriptions` RPC
+ * returns (endpoint / kind / owner / timestamps + last-send status & error). The
+ * Web Push encryption `keys` and the FCM `token` are dropped server-side and are
+ * NOT part of this shape. Like `CapturedMail`, it shares the real source of truth,
+ * so a field added in `@lunora/notify` flows here automatically.
+ */
+export type { PushSubscriptionDevice } from "@lunora/notify";
+
+/** Payload of a `__lunora_admin__:listPushSubscriptions` call — the registered devices, newest register/send touch first. */
+export interface PushSubscriptionsResult {
+    subscriptions: PushSubscriptionDevice[];
 }
 
 /**
