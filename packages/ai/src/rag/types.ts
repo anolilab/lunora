@@ -115,7 +115,7 @@ export interface RagContext {
 
     /**
      * Optional `ctx.trace` span factory — an `ActionCtx`'s `ctx.trace` satisfies
-     * it structurally. When present, {@link defineRag} wraps each embedding-model
+     * it structurally. When present, `defineRag` wraps each embedding-model
      * call in a `generation` span (`gen_ai.operation.name: "embeddings"` +
      * `gen_ai.request.model`), so the embed shows up on the trace waterfall like
      * any other instrumented sub-operation. `unknown` on purpose — the same

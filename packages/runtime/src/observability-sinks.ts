@@ -246,7 +246,7 @@ const otlpLogBody = (event: LogEvent, serviceName: string): unknown => {
 /** Above this serialized size, an OTLP body is gzipped; tiny single-span posts skip it (the CPU isn't worth the few saved bytes). */
 const OTLP_GZIP_THRESHOLD = 1024;
 
-/** gzip a UTF-8 string to an `ArrayBuffer` (a `BodyInit`) via the platform `CompressionStream` (no dependency). */
+/** Gzip a UTF-8 string to an `ArrayBuffer` (a `BodyInit`) via the platform `CompressionStream` (no dependency). */
 const gzipEncode = async (text: string): Promise<ArrayBuffer> => {
     const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
 

@@ -30,9 +30,9 @@ const withAutoOtlpTelemetry = (agent: AgentDefinition, env: Record<string, unkno
 
     const token = typeof env.LUNORA_OTLP_TOKEN === "string" ? env.LUNORA_OTLP_TOKEN : undefined;
 
-    // `integrations` may be a single `Telemetry` or an array — normalize before appending.
-    const existing = agent.telemetry?.integrations;
-    const existingList = existing === undefined ? [] : Array.isArray(existing) ? existing : [existing];
+    // `integrations` may be a single `Telemetry`, an array, or absent — normalize
+    // to an array (`[x].flat()` keeps a single value and unwraps an array).
+    const existingList = [agent.telemetry?.integrations].flat().filter((integration) => integration !== undefined);
 
     return {
         ...agent,
@@ -73,7 +73,7 @@ const compileAgentWorkflow = (
         handler: async (context) => {
             // On the platform, auto-append OTLP generation telemetry from the
             // injected endpoint; local/self-hosted agents are unaffected.
-            const runtimeAgent = withAutoOtlpTelemetry(agent, context.env as Record<string, unknown>);
+            const runtimeAgent = withAutoOtlpTelemetry(agent, context.env);
 
             return runAgentLoop({
                 agent: runtimeAgent,
