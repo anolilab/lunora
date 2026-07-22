@@ -3,7 +3,7 @@ import type { Telemetry } from "ai";
 import type { OtlpAttribute, OtlpAttributeValue } from "../../../../shared/otlp";
 import { encodeAttribute, mergeHeaders, otlpRandomHex, otlpUnixNano, wrapResourceSpans } from "../../../../shared/otlp";
 import type { CommonOptions } from "./common";
-import { contentText, readField, summarizeUsage, toolInputOf, toolNameOf } from "./common";
+import { contentText, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf } from "./common";
 
 /** Push one attribute, skipping nullish values and JSON-stringifying non-primitives. */
 const pushAttribute = (attributes: OtlpAttribute[], key: string, value: unknown): void => {
@@ -196,6 +196,17 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
                     pushAttribute(attributes, "gen_ai.usage.input_tokens", usage.inputTokens);
                     pushAttribute(attributes, "gen_ai.usage.output_tokens", usage.outputTokens);
                     pushAttribute(attributes, "gen_ai.usage.total_tokens", usage.totalTokens);
+                }
+
+                // Cloudflare AI Gateway telemetry — additive, only present when the
+                // call was routed through a gateway (LUNORA_AI_GATEWAY_*). `pushAttribute`
+                // skips the nullish fields, so a direct-provider call emits none of these.
+                const gateway = summarizeGatewayTelemetry(result);
+
+                if (gateway) {
+                    pushAttribute(attributes, "gen_ai.usage.cost", gateway.cost);
+                    pushAttribute(attributes, "gen_ai.response.cached", gateway.cached);
+                    pushAttribute(attributes, "cf.aig.log_id", gateway.logId);
                 }
 
                 if (recordInputs) {

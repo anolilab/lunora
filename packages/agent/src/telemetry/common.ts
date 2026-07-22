@@ -58,6 +58,69 @@ export const summarizeUsage = (usage: unknown): Record<string, number> | undefin
     return Object.keys(summary).length > 0 ? summary : undefined;
 };
 
+/**
+ * Cloudflare AI Gateway telemetry, projected off a language-model call result.
+ * Every field is optional — the gateway only runs when routing is configured, so
+ * a direct-provider call yields `undefined` and no gateway attribute is emitted.
+ */
+export interface GatewayTelemetry {
+    /** Whether the gateway served this response from cache. */
+    cached?: boolean;
+    /** The gateway-computed request cost, in USD. */
+    cost?: number;
+    /** The gateway log id for this request (`cf-aig-log-id`). */
+    logId?: string;
+}
+
+/**
+ * Extract Cloudflare AI Gateway telemetry (cost, cache status, log id) from a
+ * language-model call result. Reads two additive, defensively-probed locations
+ * so it survives AI SDK shape churn: the provider-metadata `gateway` namespace
+ * (`result.providerMetadata.gateway`) and the gateway's `cf-aig-*` response
+ * headers (`result.response.headers`). Returns `undefined` when the gateway did
+ * not run (nothing to attach), keeping the span attributes purely additive.
+ */
+export const summarizeGatewayTelemetry = (result: unknown): GatewayTelemetry | undefined => {
+    const gateway = readField(readField(result, "providerMetadata"), "gateway");
+    const headers = readField(readField(result, "response"), "headers");
+
+    // Read a header by name from a `Headers` instance (case-insensitive `.get`)
+    // or a plain record (proxied response headers keyed by the lowercased name).
+    const readHeader = (name: string): string | undefined => {
+        const getter = readField(headers, "get");
+        const value = typeof getter === "function" ? (getter as (key: string) => unknown).call(headers, name) : readField(headers, name);
+
+        return typeof value === "string" && value.length > 0 ? value : undefined;
+    };
+
+    const summary: GatewayTelemetry = {};
+
+    const cost = readField(gateway, "cost");
+
+    if (typeof cost === "number" && Number.isFinite(cost)) {
+        summary.cost = cost;
+    }
+
+    const cachedField = readField(gateway, "cached");
+    const cacheStatusField = readField(gateway, "cacheStatus");
+    const cacheStatus = typeof cacheStatusField === "string" ? cacheStatusField : readHeader("cf-aig-cache-status");
+
+    if (typeof cachedField === "boolean") {
+        summary.cached = cachedField;
+    } else if (typeof cacheStatus === "string") {
+        summary.cached = cacheStatus.toUpperCase() === "HIT";
+    }
+
+    const metadataLogId = readField(gateway, "logId") ?? readField(gateway, "log_id");
+    const logId = typeof metadataLogId === "string" && metadataLogId.length > 0 ? metadataLogId : readHeader("cf-aig-log-id");
+
+    if (typeof logId === "string" && logId.length > 0) {
+        summary.logId = logId;
+    }
+
+    return Object.keys(summary).length > 0 ? summary : undefined;
+};
+
 /** The outcome of a tool execution, normalized from the end-event union. */
 export interface ToolOutcome {
     /** The error value (defined only when `success` is `false`). */

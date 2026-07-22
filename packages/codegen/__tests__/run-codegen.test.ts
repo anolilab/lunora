@@ -2054,7 +2054,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("AiBindingLike");
             expect(output).toContain("ai?: (env: Record<string, unknown>) => AiBindingLike;");
             expect(output).toContain("const aiStub: LunoraAi");
-            expect(output).toContain("createAi({ binding: aiBinding as AiBindingLike })");
+            expect(output).toContain("createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown> })");
             expect(output).toContain("ai,");
         });
 

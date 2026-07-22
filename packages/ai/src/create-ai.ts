@@ -2,7 +2,29 @@ import { LunoraError } from "@lunora/errors";
 import type { EmbeddingModel, LanguageModel } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
 
-import type { AiBindingLike, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
+import { resolveAiGateway } from "./gateway";
+import type { AiBindingLike, AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
+
+/**
+ * Resolve the effective Workers AI `gateway` option: an explicit
+ * {@link LunoraAiOptions.gateway} always wins; otherwise, when `env` configures
+ * a Cloudflare AI Gateway (`LUNORA_AI_GATEWAY_*`), route through it by its id so
+ * the gateway computes token + dollar-cost telemetry. Returns `undefined` when
+ * neither applies — the direct-to-Workers-AI path, unchanged.
+ */
+const resolveGatewayOption = (gateway: AiGatewayOptions | undefined, env: Record<string, unknown> | undefined): AiGatewayOptions | undefined => {
+    if (gateway !== undefined) {
+        return gateway;
+    }
+
+    if (env === undefined) {
+        return undefined;
+    }
+
+    const resolved = resolveAiGateway(env);
+
+    return resolved === undefined ? undefined : { id: resolved.gatewayId };
+};
 
 /**
  * Build the Workers AI provider from a binding, threading the optional AI
@@ -35,15 +57,17 @@ const buildProvider = (binding: AiBindingLike, gateway?: LunoraAiOptions["gatewa
  * @experimental
  */
 const createAi = (options: LunoraAiOptions): LunoraAi => {
-    const { binding, defaultEmbeddingModel, defaultModel, gateway, provider } = options;
+    const { binding, defaultEmbeddingModel, defaultModel, env, gateway, provider } = options;
 
     if (!provider && !binding) {
         throw new LunoraError("INTERNAL", "@lunora/ai: createAi requires a `binding` (env.AI) or a pre-built `provider`");
     }
 
     // A caller-supplied provider wins; otherwise construct one from the binding.
-    // `binding` is present when `provider` is absent (guarded above).
-    const workersai: WorkersAiProviderLike = provider ?? buildProvider(binding as AiBindingLike, gateway);
+    // `binding` is present when `provider` is absent (guarded above). An explicit
+    // `gateway` wins; else an env-configured AI Gateway routes Workers AI through
+    // it (opt-in), so token + dollar-cost telemetry is computed by the gateway.
+    const workersai: WorkersAiProviderLike = provider ?? buildProvider(binding as AiBindingLike, resolveGatewayOption(gateway, env));
 
     const model = (input?: ModelInput): LanguageModel => {
         if (input === undefined) {

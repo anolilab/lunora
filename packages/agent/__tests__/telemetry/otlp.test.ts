@@ -140,6 +140,61 @@ describe(otlpTelemetry, () => {
         expect(span.status.code).toBe(2);
     });
 
+    it("attaches AI Gateway cost/cache/log-id from providerMetadata when present", async () => {
+        const calls = captureFetch();
+
+        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
+            evt({
+                execute: () =>
+                    Promise.resolve({
+                        providerMetadata: { gateway: { cached: false, cost: 0.000_123, logId: "aig-log-42" } },
+                        usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+                    }),
+                modelId: "@cf/meta/llama",
+            }),
+        );
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        // Fractional USD cost is a double — encoded as a JSON number, not a string.
+        expect(attribute(span, "gen_ai.usage.cost")).toBe(0.000_123);
+        expect(attribute(span, "gen_ai.response.cached")).toBe(false);
+        expect(attribute(span, "cf.aig.log_id")).toBe("aig-log-42");
+    });
+
+    it("derives cached + log-id from the gateway's cf-aig-* response headers", async () => {
+        const calls = captureFetch();
+
+        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
+            evt({
+                execute: () =>
+                    Promise.resolve({
+                        response: { headers: { "cf-aig-cache-status": "HIT", "cf-aig-log-id": "aig-log-7" } },
+                    }),
+                modelId: "m",
+            }),
+        );
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        expect(attribute(span, "gen_ai.response.cached")).toBe(true);
+        expect(attribute(span, "cf.aig.log_id")).toBe("aig-log-7");
+    });
+
+    it("emits no gateway attributes when the call did not route through a gateway", async () => {
+        const calls = captureFetch();
+
+        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
+            evt({ execute: () => Promise.resolve({ usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } }), modelId: "m" }),
+        );
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        expect(attribute(span, "gen_ai.usage.cost")).toBeUndefined();
+        expect(attribute(span, "gen_ai.response.cached")).toBeUndefined();
+        expect(attribute(span, "cf.aig.log_id")).toBeUndefined();
+    });
+
     it("emits a tool-execution span named from the tool", async () => {
         const calls = captureFetch();
 
