@@ -38,6 +38,36 @@ interface AuthSession {
     userAgent?: string;
 }
 
+/** An organization the user belongs to. */
+interface AuthOrganization {
+    id?: string;
+    logo?: string;
+    name?: string;
+    slug?: string;
+}
+
+/** A member of an organization. */
+interface AuthMember {
+    id?: string;
+    role?: string;
+    user?: { email?: string; name?: string };
+    userId?: string;
+}
+
+/** A pending invitation to an organization. */
+interface AuthInvitation {
+    email?: string;
+    id?: string;
+    role?: string;
+    status?: string;
+}
+
+/** An organization with its members + pending invitations (from `getFullOrganization`). */
+interface AuthFullOrganization extends AuthOrganization {
+    invitations?: AuthInvitation[];
+    members?: AuthMember[];
+}
+
 /** A resolved session payload (loosely typed — the UI only reads a couple of fields). */
 interface SessionData {
     session?: AuthSession;
@@ -64,6 +94,17 @@ interface AuthClient {
     forgetPassword: (input: { email: string; redirectTo?: string }) => Promise<AuthResponse<{ status?: boolean }>>;
     getSession: () => Promise<AuthResponse<SessionData>>;
     listSessions: () => Promise<AuthResponse<AuthSession[]>>;
+    organization: {
+        cancelInvitation: (input: { invitationId: string }) => Promise<AuthResponse<{ status?: boolean }>>;
+        create: (input: { name: string; slug: string }) => Promise<AuthResponse<AuthOrganization>>;
+        delete: (input: { organizationId: string }) => Promise<AuthResponse<{ status?: boolean }>>;
+        getFullOrganization: (input?: { organizationId?: string }) => Promise<AuthResponse<AuthFullOrganization>>;
+        inviteMember: (input: { email: string; organizationId?: string; role: string }) => Promise<AuthResponse<AuthInvitation>>;
+        list: () => Promise<AuthResponse<AuthOrganization[]>>;
+        removeMember: (input: { memberIdOrEmail: string; organizationId?: string }) => Promise<AuthResponse<{ status?: boolean }>>;
+        setActive: (input: { organizationId: string }) => Promise<AuthResponse<AuthOrganization>>;
+        updateMemberRole: (input: { memberId: string; organizationId?: string; role: string }) => Promise<AuthResponse<AuthMember>>;
+    };
     resetPassword: (input: { newPassword: string; token?: string }) => Promise<AuthResponse<{ status?: boolean }>>;
     revokeOtherSessions: () => Promise<AuthResponse<{ status?: boolean }>>;
     revokeSession: (input: { token: string }) => Promise<AuthResponse<{ status?: boolean }>>;
@@ -131,6 +172,10 @@ type FormController<TField extends string> = Controller<FormState<TField>, FormA
 export type {
     AuthClient,
     AuthFetchError,
+    AuthFullOrganization,
+    AuthInvitation,
+    AuthMember,
+    AuthOrganization,
     AuthResponse,
     AuthSession,
     AuthUser,

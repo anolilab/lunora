@@ -25,6 +25,10 @@ export { DEFAULT_LOCALIZATION, resolveLocalization } from "./localization";
 export type { MagicLinkField } from "./magic-link";
 export { createMagicLinkController } from "./magic-link";
 export { assertOk, AuthActionError, mapAuthError } from "./map-error";
+export type { MembersActions, MembersController, MembersState } from "./members";
+export { createMembersController } from "./members";
+export type { OrganizationsActions, OrganizationsController } from "./organization-list";
+export { createOrganizationsController } from "./organization-list";
 export type { ProfileField, ProfileOptions } from "./profile";
 export { createProfileController } from "./profile";
 export type { ResetPasswordField, ResetPasswordOptions } from "./reset-password";
@@ -39,11 +43,17 @@ export { createSignUpController } from "./sign-up";
 export { signInWithSocial } from "./social";
 export type { Store } from "./store";
 export { createStore } from "./store";
+export type { TwoFactorSetupActions, TwoFactorSetupController, TwoFactorSetupState } from "./two-factor-setup";
+export { createTwoFactorSetupController } from "./two-factor-setup";
 export type { TwoFactorField, TwoFactorVerifyOptions } from "./two-factor-verify";
 export { createTwoFactorVerifyController } from "./two-factor-verify";
 export type {
     AuthClient,
     AuthFetchError,
+    AuthFullOrganization,
+    AuthInvitation,
+    AuthMember,
+    AuthOrganization,
     AuthResponse,
     AuthSession,
     AuthUser,
