@@ -1187,4 +1187,32 @@ describe("defineRag ctx.trace instrumentation", () => {
         await expect(docs(ctx).index({ id: "doc-1", text: "hello world" })).resolves.toBeDefined();
         expect(store.size).toBeGreaterThan(0);
     });
+
+    it("emits gen_ai.conversation.id on the embed span when the context carries one", async () => {
+        const { vectors } = memoryVectors();
+        const ctx = { ...tracingCtx(vectors), conversationId: "thread-42" };
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
+
+        await docs(ctx).index({ id: "doc-1", text: "hello world" });
+
+        expect(ctx.spans.length).toBeGreaterThan(0);
+
+        for (const span of ctx.spans) {
+            expect(span.attributes["gen_ai.conversation.id"]).toBe("thread-42");
+        }
+    });
+
+    it("omits gen_ai.conversation.id when no conversation id is set", async () => {
+        const { vectors } = memoryVectors();
+        const ctx = tracingCtx(vectors);
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
+
+        await docs(ctx).index({ id: "doc-1", text: "hello world" });
+
+        expect(ctx.spans.length).toBeGreaterThan(0);
+
+        for (const span of ctx.spans) {
+            expect(span.attributes).not.toHaveProperty("gen_ai.conversation.id");
+        }
+    });
 });

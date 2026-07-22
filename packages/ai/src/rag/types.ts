@@ -114,6 +114,15 @@ export interface RagContext {
     auth?: unknown;
 
     /**
+     * Optional conversation / session id. When set (and `trace` is present), each
+     * embedding-model span additionally carries `gen_ai.conversation.id`, so a
+     * RAG embed done inside a multi-turn conversation groups with that
+     * conversation's other generation spans in the trace store. Omitted → the
+     * attribute is absent (backward-compatible).
+     */
+    conversationId?: string;
+
+    /**
      * Optional `ctx.trace` span factory — an `ActionCtx`'s `ctx.trace` satisfies
      * it structurally. When present, `defineRag` wraps each embedding-model
      * call in a `generation` span carrying `gen_ai.operation.name: "embeddings"`
