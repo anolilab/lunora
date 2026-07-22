@@ -1,3 +1,4 @@
+import { filterTraces } from "../src/telemetry/trace-query";
 import type { ObservationSpan } from "../src/telemetry/trace-tree";
 import { foldObservationTraces } from "../src/telemetry/trace-tree";
 import type { Id } from "./_generated/dataModel.js";
@@ -42,12 +43,19 @@ interface TraceRollupView {
 
 /** One span in a trace — mirrors `ObservationSpan` locally so codegen inlines it. */
 interface SpanView {
+    attributes?: Record<string, string>;
+    completionTokens?: number;
     durationMs: number;
     endedAt: number;
     functionPath?: string;
+    input?: string;
+    kind?: "container" | "generation" | "worker";
     level: "error" | "info";
+    model?: string;
     name: string;
+    output?: string;
     parentSpanId?: string;
+    promptTokens?: number;
     spanId: string;
     startedAt: number;
     statusMessage?: string;
@@ -57,31 +65,55 @@ interface SpanView {
 /**
  * Recent dispatch traces, newest-active first, folded from the span store: one
  * row per `traceId` with the real trace latency, span/error counts, and root
- * operation. Optionally scoped to one deployment (filtered over the scanned
- * window). Bounded by `limit` (default {@link DEFAULT_TRACE_LIMIT}), folded over
- * the most recent {@link SCAN_LIMIT} spans. Members only.
+ * operation. Server-side filters: `deploymentId` (scans that deployment's own
+ * spans via `by_org_deployment_started`, so a quiet deployment's older traces
+ * don't fall off the global recent window), `errorOnly`, `minDurationMs`,
+ * `functionPath` (substring over the root op), and a `from`/`to` time window
+ * (`to` doubles as the "load older" cursor). Bounded by `limit`
+ * (default {@link DEFAULT_TRACE_LIMIT}), folded over the most recent
+ * {@link SCAN_LIMIT} spans. Members only.
  */
 export const list = query
     .input({
         deploymentId: v.optional(v.id("deployments")),
+        errorOnly: v.optional(v.boolean()),
+        from: v.optional(v.number()),
+        functionPath: v.optional(v.string()),
         limit: v.optional(v.number()),
+        minDurationMs: v.optional(v.number()),
         organizationId: v.id("organizations"),
+        to: v.optional(v.number()),
     })
     .query(async ({ ctx: context, args }): Promise<TraceRollupView[]> => {
         await assertMember(context, args.organizationId);
 
         const limit = Math.min(Math.max(Math.trunc(args.limit ?? DEFAULT_TRACE_LIMIT), 1), MAX_TRACE_LIMIT);
 
+        // Push `deploymentId` into the query (its own index) so the scanned window
+        // is that deployment's spans, not the global recent window.
         const { page } = await context.db.observations.findMany({
             limit: SCAN_LIMIT,
             orderBy: [{ startedAt: "desc" }],
-            where: { organizationId: args.organizationId },
+            where:
+                args.deploymentId === undefined
+                    ? { organizationId: args.organizationId }
+                    : { deploymentId: args.deploymentId, organizationId: args.organizationId },
         });
 
         const spans = page as unknown as ObservationRow[];
-        const scoped = args.deploymentId === undefined ? spans : spans.filter((span) => span.deploymentId === args.deploymentId);
 
-        return foldObservationTraces(scoped, limit);
+        // Fold every scanned span, then apply the trace-level filters, then cap —
+        // filtering after the cap would return fewer than `limit` matching traces.
+        const folded = foldObservationTraces(spans, SCAN_LIMIT);
+        const filtered = filterTraces(folded, {
+            errorOnly: args.errorOnly,
+            from: args.from,
+            functionPath: args.functionPath,
+            minDurationMs: args.minDurationMs,
+            to: args.to,
+        });
+
+        return filtered.slice(0, limit);
     });
 
 /**
@@ -102,12 +134,19 @@ export const get = query
         });
 
         return (page as unknown as ObservationRow[]).map((span) => ({
+            attributes: span.attributes,
+            completionTokens: span.completionTokens,
             durationMs: span.durationMs,
             endedAt: span.endedAt,
             functionPath: span.functionPath,
+            input: span.input,
+            kind: span.kind,
             level: span.level,
+            model: span.model,
             name: span.name,
+            output: span.output,
             parentSpanId: span.parentSpanId,
+            promptTokens: span.promptTokens,
             spanId: span.spanId,
             startedAt: span.startedAt,
             statusMessage: span.statusMessage,

@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/server";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { assertMember, authorizeDeployKey } from "./authz";
+import { assertMember, authorizeTelemetryKey } from "./authz";
 
 /**
  * Tenant runtime logs (GAPS.md B2) — full log management. The dispatch-namespace
@@ -170,7 +170,7 @@ export const ingest = mutation
         scriptName: v.string(),
     })
     .mutation(async ({ ctx: context, args: { deployKey, lines, organizationId, scriptName } }): Promise<{ ingested: number }> => {
-        await authorizeDeployKey(context, organizationId, deployKey);
+        await authorizeTelemetryKey(context, organizationId, deployKey);
 
         if (lines.length > MAX_BATCH) {
             throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_BATCH)} lines)`);

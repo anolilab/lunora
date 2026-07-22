@@ -12,6 +12,7 @@
  * `error.type`, and container spans (scope `@lunora/container`) identify the
  * container via the `service.name` resource attribute.
  */
+import { redactRecord } from "./redact";
 
 /** OTLP `AnyValue` — only the variants Lunora emits are read. */
 interface OtlpAnyValue {
@@ -69,27 +70,37 @@ export interface TelemetryEvent {
  * {@link TelemetryEvent}, this keeps EVERY span (not just errors) with its full
  * timing (`startedAt`/`endedAt` → `durationMs`) and identity
  * (`traceId`/`spanId`/`parentSpanId`), so the Traces waterfall can render real
- * durations and whatever nesting the emitter provides. (Today the runtime emits
- * one flat span per RPC — no `parentSpanId` — so trees are one level deep until
- * the framework ships `ctx.trace` child spans over OTLP.)
+ * durations and whatever nesting the emitter provides. The framework emits
+ * nested `ctx.trace` child spans with a real `parentSpanId` (deep trees), plus
+ * AI **generation** spans (`gen_ai.*`) from `@lunora/ai`/`@lunora/agent`.
  */
 export interface SpanObservation {
     /** Selected string span attributes (`lunora.shard_key`, `lunora.user_id`, …). */
     attributes?: Record<string, string>;
+    /** Generation spans: completion token count (`gen_ai.usage.output_tokens`). */
+    completionTokens?: number;
     /** `endedAt − startedAt`, in ms (≥ 0). */
     durationMs: number;
     /** Epoch-ms the span ended. */
     endedAt: number;
     /** The `&lt;file>:&lt;function>` (or `container:&lt;name>`) the span ran, when attributed. */
     functionPath?: string;
-    /** Which instrumentation emitted it — the worker runtime or a container. */
-    kind: "container" | "worker";
+    /** Generation spans: the recorded prompt (opt-in on the emitter), truncated. */
+    input?: string;
+    /** Which instrumentation emitted it — the worker runtime, a container, or an AI model call. */
+    kind: "container" | "generation" | "worker";
     /** `error` when the span's OTLP status is `STATUS_CODE_ERROR`, else `info`. */
     level: "error" | "info";
+    /** Generation spans: the model id (`gen_ai.request.model`). */
+    model?: string;
     /** Span display name (the RPC path, or the traced operation). */
     name: string;
+    /** Generation spans: the recorded completion (opt-in on the emitter), truncated. */
+    output?: string;
     /** Parent span id, when the span nests under another; absent for a root span. */
     parentSpanId?: string;
+    /** Generation spans: prompt token count (`gen_ai.usage.input_tokens`). */
+    promptTokens?: number;
     /** The `service.name` resource attribute, when set. */
     serviceName?: string;
     /** Hex span id. */
@@ -108,6 +119,34 @@ const STATUS_ERROR = 2;
 /** Read a string-valued attribute from an OTLP `KeyValue[]`. */
 const attributeString = (attributes: OtlpKeyValue[] | undefined, key: string): string | undefined =>
     attributes?.find((attribute) => attribute.key === key)?.value?.stringValue;
+
+/**
+ * Read a numeric attribute from an OTLP `KeyValue[]`. OTLP encodes int64 as a
+ * decimal string (`intValue`), floats as `doubleValue` — accept either. A
+ * non-finite parse is dropped.
+ */
+const attributeNumber = (attributes: OtlpKeyValue[] | undefined, key: string): number | undefined => {
+    const value = attributes?.find((attribute) => attribute.key === key)?.value;
+
+    if (value === undefined) {
+        return undefined;
+    }
+
+    if (value.intValue !== undefined) {
+        const parsed = Number(value.intValue);
+
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    return typeof value.doubleValue === "number" && Number.isFinite(value.doubleValue) ? value.doubleValue : undefined;
+};
+
+/** Max stored length of a recorded generation input/output before truncation. */
+const MAX_GENERATION_TEXT = 4096;
+
+/** Truncate a recorded generation payload so a large prompt/completion can't bloat a row. */
+const truncateText = (text: string | undefined): string | undefined =>
+    text === undefined ? undefined : text.length > MAX_GENERATION_TEXT ? `${text.slice(0, MAX_GENERATION_TEXT)}…` : text;
 
 /**
  * OTLP `timeUnixNano` (decimal nanoseconds as a string) → epoch ms. Slicing the
@@ -284,7 +323,7 @@ export const decodeLogRecords = (payload: OtlpLogsPayload): OtlpLogEntry[] => {
 
                 entries.push({
                     createdAt: epochMsFromNano(record.timeUnixNano ?? record.observedTimeUnixNano),
-                    fields: logFields(record.attributes),
+                    fields: redactRecord(logFields(record.attributes)),
                     functionPath: attributeString(record.attributes, "lunora.function_path") ?? attributeString(record.attributes, "code.function"),
                     level: severityToLevel(record.severityNumber, record.severityText),
                     message: typeof body === "string" ? body : body === undefined ? "" : JSON.stringify(body),
@@ -342,12 +381,19 @@ export const decodeObservations = (payload: OtlpTracePayload): SpanObservation[]
                 const errored = span.status?.code === STATUS_ERROR;
                 const workerPath = attributeString(span.attributes, "lunora.function_path") ?? span.name;
 
-                observations.push({
-                    attributes: lunoraAttributes(span.attributes),
+                // A model call carries `gen_ai.request.model` — promote it to a
+                // `generation` observation with the model + token usage broken out
+                // (container spans stay container even if they somehow carry the
+                // attribute). Input/output only arrive when the emitter opted in.
+                const model = attributeString(span.attributes, "gen_ai.request.model");
+                const isGeneration = kind !== "container" && model !== undefined;
+
+                const observation: SpanObservation = {
+                    attributes: redactRecord(lunoraAttributes(span.attributes)),
                     durationMs: Math.max(endedAt - startedAt, 0),
                     endedAt,
                     functionPath: kind === "container" ? `container:${serviceName ?? "container"}` : workerPath,
-                    kind,
+                    kind: isGeneration ? "generation" : kind,
                     level: errored ? "error" : "info",
                     name: span.name ?? workerPath ?? "span",
                     parentSpanId: span.parentSpanId === "" ? undefined : span.parentSpanId,
@@ -356,10 +402,149 @@ export const decodeObservations = (payload: OtlpTracePayload): SpanObservation[]
                     startedAt,
                     statusMessage: errored ? span.status?.message : undefined,
                     traceId: span.traceId,
-                });
+                };
+
+                // One decision, all its consequences in one place — the gen_ai.*
+                // extraction, kept off the base object so a worker/container span
+                // carries none of these fields.
+                if (isGeneration) {
+                    observation.model = model;
+                    observation.promptTokens = attributeNumber(span.attributes, "gen_ai.usage.input_tokens");
+                    observation.completionTokens = attributeNumber(span.attributes, "gen_ai.usage.output_tokens");
+                    observation.input = truncateText(attributeString(span.attributes, "gen_ai.prompt"));
+                    observation.output = truncateText(attributeString(span.attributes, "gen_ai.completion"));
+                }
+
+                observations.push(observation);
             }
         }
     }
 
     return observations;
+};
+
+// ── OTLP metrics ────────────────────────────────────────────────────────────
+// The tenant `otlpSink` POSTs `ctx.metrics.*` measurements as an OTLP
+// `ExportMetricsServiceRequest` to `/v1/metrics`. We flatten each data point to
+// a `MetricPoint` the store writes to Analytics Engine (queryable via AE SQL) —
+// so a measurement lands somewhere rather than 404-ing.
+
+/** One OTLP numeric data point (gauge/sum) — the variants Lunora emits. */
+interface OtlpNumberDataPoint {
+    asDouble?: number;
+    asInt?: string;
+    attributes?: OtlpKeyValue[];
+    timeUnixNano?: string;
+}
+
+/** One OTLP histogram data point — only its `sum` is read. */
+interface OtlpHistogramDataPoint {
+    attributes?: OtlpKeyValue[];
+    sum?: number;
+    timeUnixNano?: string;
+}
+
+interface OtlpMetric {
+    gauge?: { dataPoints?: OtlpNumberDataPoint[] };
+    histogram?: { dataPoints?: OtlpHistogramDataPoint[] };
+    name?: string;
+    sum?: { dataPoints?: OtlpNumberDataPoint[] };
+}
+
+interface OtlpScopeMetrics {
+    metrics?: OtlpMetric[];
+    scope?: { name?: string };
+}
+
+interface OtlpResourceMetrics {
+    resource?: { attributes?: OtlpKeyValue[] };
+    scopeMetrics?: OtlpScopeMetrics[];
+}
+
+/** The subset of an OTLP `ExportMetricsServiceRequest` the ingest reads. */
+export interface OtlpMetricsPayload {
+    resourceMetrics?: OtlpResourceMetrics[];
+}
+
+/** One flattened metric measurement, as the store writes it. */
+export interface MetricPoint {
+    /** Selected `lunora.*` string attributes on the data point. */
+    attributes?: Record<string, string>;
+    /** The `lunora.function_path` attribute, when the measurement was attributed. */
+    functionPath?: string;
+    /** The instrument kind. */
+    kind: "gauge" | "histogram" | "sum";
+    /** The metric name (e.g. `queue.depth`). */
+    name: string;
+    /** The `service.name` resource attribute, when set. */
+    serviceName?: string;
+    /** The measured value (double, int→number, or a histogram's sum). */
+    value: number;
+}
+
+/** Read a numeric data point's value (`asDouble`, then `asInt`, then a histogram `sum`). */
+const dataPointValue = (dataPoint: OtlpHistogramDataPoint & OtlpNumberDataPoint): number | undefined => {
+    if (typeof dataPoint.asDouble === "number" && Number.isFinite(dataPoint.asDouble)) {
+        return dataPoint.asDouble;
+    }
+
+    if (dataPoint.asInt !== undefined) {
+        const parsed = Number(dataPoint.asInt);
+
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    return typeof dataPoint.sum === "number" && Number.isFinite(dataPoint.sum) ? dataPoint.sum : undefined;
+};
+
+/** Flatten every data point of an OTLP metrics payload into {@link MetricPoint}s. Tolerant — a valueless point is skipped. */
+export const decodeMetricPoints = (payload: OtlpMetricsPayload): MetricPoint[] => {
+    const points: MetricPoint[] = [];
+
+    for (const resourceMetrics of payload.resourceMetrics ?? []) {
+        const serviceName = attributeString(resourceMetrics.resource?.attributes, "service.name");
+
+        for (const scopeMetrics of resourceMetrics.scopeMetrics ?? []) {
+            for (const metric of scopeMetrics.metrics ?? []) {
+                const name = metric.name;
+
+                if (name === undefined || name === "") {
+                    continue;
+                }
+
+                const emit = (kind: MetricPoint["kind"], dataPoints: (OtlpHistogramDataPoint & OtlpNumberDataPoint)[] | undefined): void => {
+                    for (const dataPoint of dataPoints ?? []) {
+                        const value = dataPointValue(dataPoint);
+
+                        if (value === undefined) {
+                            continue;
+                        }
+
+                        points.push({
+                            attributes: lunoraAttributes(dataPoint.attributes),
+                            functionPath: attributeString(dataPoint.attributes, "lunora.function_path"),
+                            kind,
+                            name,
+                            serviceName,
+                            value,
+                        });
+                    }
+                };
+
+                if (metric.gauge) {
+                    emit("gauge", metric.gauge.dataPoints);
+                }
+
+                if (metric.sum) {
+                    emit("sum", metric.sum.dataPoints);
+                }
+
+                if (metric.histogram) {
+                    emit("histogram", metric.histogram.dataPoints);
+                }
+            }
+        }
+    }
+
+    return points;
 };

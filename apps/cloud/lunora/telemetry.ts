@@ -6,7 +6,7 @@ import { fireCrossedRules } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server.js";
-import { authorizeDeployKey, resolveDeployKeyOrg } from "./authz";
+import { authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
 
 /**
  * Telemetry ingest for the Cloud Observability pipeline (superlog model). The
@@ -32,13 +32,18 @@ const MAX_OBSERVATIONS = 1000;
 /** One decoded span (all spans, not just errors), stored as an observation for Traces — the router's `SpanObservation`. */
 const observationInput = v.object({
     attributes: v.optional(v.record(v.string(), v.string())),
+    completionTokens: v.optional(v.number()),
     durationMs: v.number(),
     endedAt: v.number(),
     functionPath: v.optional(v.string()),
-    kind: v.union(v.literal("container"), v.literal("worker")),
+    input: v.optional(v.string()),
+    kind: v.union(v.literal("container"), v.literal("generation"), v.literal("worker")),
     level: v.union(v.literal("error"), v.literal("info")),
+    model: v.optional(v.string()),
     name: v.string(),
+    output: v.optional(v.string()),
     parentSpanId: v.optional(v.string()),
+    promptTokens: v.optional(v.number()),
     serviceName: v.optional(v.string()),
     spanId: v.string(),
     startedAt: v.number(),
@@ -238,7 +243,7 @@ export const ingest = mutation
             incidents: number;
             issues: number;
         }> => {
-            await authorizeDeployKey(context, args.organizationId, args.deployKey);
+            await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
 
             if (args.events.length > MAX_EVENTS) {
                 throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_EVENTS)} events)`);

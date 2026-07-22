@@ -77,8 +77,10 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "builds:recordPush": lunora_builds_3.recordPush as unknown as RegisteredLunoraFunction,
     "cells:list": lunora_cells_4.list as unknown as RegisteredLunoraFunction,
     "cells:register": lunora_cells_4.register as unknown as RegisteredLunoraFunction,
+    "deploy_keys:ingestKeyCipher": lunora_deploy_keys_5.ingestKeyCipher as unknown as RegisteredLunoraFunction,
     "deploy_keys:issue": lunora_deploy_keys_5.issue as unknown as RegisteredLunoraFunction,
     "deploy_keys:list": lunora_deploy_keys_5.list as unknown as RegisteredLunoraFunction,
+    "deploy_keys:recordIngestKey": lunora_deploy_keys_5.recordIngestKey as unknown as RegisteredLunoraFunction,
     "deploy_keys:revoke": lunora_deploy_keys_5.revoke as unknown as RegisteredLunoraFunction,
     "deploy_keys:verify": lunora_deploy_keys_5.verify as unknown as RegisteredLunoraFunction,
     "deployments:activate": lunora_deployments_6.activate as unknown as RegisteredLunoraFunction,
@@ -310,10 +312,27 @@ __has1 = true;
 if (typeof source["name"] !== "string") return DEFER;
 return { "cloudflareAccountId": source["cloudflareAccountId"], "dispatchNamespacePrefix": source["dispatchNamespacePrefix"], ...(__has1 ? { "jurisdiction": __val1 } : {}), "name": source["name"] };
 });
+installCompiledValidatorMap(lunora_deploy_keys_5.ingestKeyCipher.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["deployKey"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "deployKey": source["deployKey"], "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_deploy_keys_5.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_deploy_keys_5.recordIngestKey.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["deployKey"] !== "string") return DEFER;
+if (typeof source["encryptedSecret"] !== "object" || source["encryptedSecret"] === null || Array.isArray(source["encryptedSecret"])) return DEFER;
+if (typeof source["encryptedSecret"]["ciphertext"] !== "string") return DEFER;
+if (typeof source["encryptedSecret"]["iv"] !== "string") return DEFER;
+const __obj1 = { "ciphertext": source["encryptedSecret"]["ciphertext"], "iv": source["encryptedSecret"]["iv"] };
+if (typeof source["hashedKey"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "deployKey": source["deployKey"], "encryptedSecret": __obj1, "hashedKey": source["hashedKey"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_deploy_keys_5.revoke.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -612,13 +631,48 @@ __has1 = true;
 }
 let __has2 = false;
 let __val2;
-if (source["limit"] !== undefined) {
-if (typeof source["limit"] !== "number" || !Number.isFinite(source["limit"])) return DEFER;
-__val2 = source["limit"];
+if (source["errorOnly"] !== undefined) {
+if (typeof source["errorOnly"] !== "boolean") return DEFER;
+__val2 = source["errorOnly"];
 __has2 = true;
 }
+let __has3 = false;
+let __val3;
+if (source["from"] !== undefined) {
+if (typeof source["from"] !== "number" || !Number.isFinite(source["from"])) return DEFER;
+__val3 = source["from"];
+__has3 = true;
+}
+let __has4 = false;
+let __val4;
+if (source["functionPath"] !== undefined) {
+if (typeof source["functionPath"] !== "string") return DEFER;
+__val4 = source["functionPath"];
+__has4 = true;
+}
+let __has5 = false;
+let __val5;
+if (source["limit"] !== undefined) {
+if (typeof source["limit"] !== "number" || !Number.isFinite(source["limit"])) return DEFER;
+__val5 = source["limit"];
+__has5 = true;
+}
+let __has6 = false;
+let __val6;
+if (source["minDurationMs"] !== undefined) {
+if (typeof source["minDurationMs"] !== "number" || !Number.isFinite(source["minDurationMs"])) return DEFER;
+__val6 = source["minDurationMs"];
+__has6 = true;
+}
 if (typeof source["organizationId"] !== "string") return DEFER;
-return { ...(__has1 ? { "deploymentId": __val1 } : {}), ...(__has2 ? { "limit": __val2 } : {}), "organizationId": source["organizationId"] };
+let __has7 = false;
+let __val7;
+if (source["to"] !== undefined) {
+if (typeof source["to"] !== "number" || !Number.isFinite(source["to"])) return DEFER;
+__val7 = source["to"];
+__has7 = true;
+}
+return { ...(__has1 ? { "deploymentId": __val1 } : {}), ...(__has2 ? { "errorOnly": __val2 } : {}), ...(__has3 ? { "from": __val3 } : {}), ...(__has4 ? { "functionPath": __val4 } : {}), ...(__has5 ? { "limit": __val5 } : {}), ...(__has6 ? { "minDurationMs": __val6 } : {}), "organizationId": source["organizationId"], ...(__has7 ? { "to": __val7 } : {}) };
 });
 installCompiledValidatorMap(lunora_uptime_20.recent.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -768,8 +822,10 @@ export interface Caller {
         register: (args: { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }) => Promise<Id<"cells">>;
     };
     deploy_keys: {
-        issue: (args: { name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }) => Promise<{ id: Id<"deployKeys">; key: string; }>;
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"deployKeys">; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
+        ingestKeyCipher: (args: { deployKey: string; organizationId: Id<"organizations"> }) => Promise<null | { ciphertext: string; iv: string }>;
+        issue: (args: { capability?: "deploy" | "ingest"; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }) => Promise<{ id: Id<"deployKeys">; key: string; }>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"deployKeys">; capability?: "deploy" | "ingest"; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
+        recordIngestKey: (args: { deployKey: string; encryptedSecret: { ciphertext: string; iv: string }; hashedKey: string; organizationId: Id<"organizations"> }) => Promise<{ ciphertext: string; iv: string }>;
         revoke: (args: { id: Id<"deployKeys">; organizationId: Id<"organizations"> }) => Promise<void>;
         verify: (args: { key: string }) => Promise<{ deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
     };
@@ -858,8 +914,8 @@ export interface Caller {
         pruneObservations: (args?: {}) => Promise<{ pruned: number; }>;
     };
     traces: {
-        get: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ durationMs: number; endedAt: number; functionPath?: string; level: "info" | "error"; name: string; parentSpanId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
-        list: (args: { deploymentId?: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
+        get: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
+        list: (args: { deploymentId?: Id<"deployments">; errorOnly?: boolean; from?: number; functionPath?: string; limit?: number; minDurationMs?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
     };
     uptime: {
         prune: (args?: {}) => Promise<{ pruned: number; }>;
@@ -925,8 +981,10 @@ export const createCaller = (context: CallerCtx): Caller => ({
         register: (args) => callRegistered(context, "cells:register", args),
     },
     deploy_keys: {
+        ingestKeyCipher: (args) => callRegistered(context, "deploy_keys:ingestKeyCipher", args),
         issue: (args) => callRegistered(context, "deploy_keys:issue", args),
         list: (args) => callRegistered(context, "deploy_keys:list", args),
+        recordIngestKey: (args) => callRegistered(context, "deploy_keys:recordIngestKey", args),
         revoke: (args) => callRegistered(context, "deploy_keys:revoke", args),
         verify: (args) => callRegistered(context, "deploy_keys:verify", args),
     },

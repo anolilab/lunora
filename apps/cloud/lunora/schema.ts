@@ -178,7 +178,17 @@ export default defineSchema({
         .index("by_script", ["scriptName"]),
 
     deployKeys: defineTable({
+        // What the key is allowed to do. Absent = `deploy` (a full deploy key, the
+        // historical default). An `ingest` key can ONLY push telemetry to the OTLP
+        // endpoints — it is rejected by the deploy/admin paths — so the token the
+        // platform injects into a tenant's `otlpSink` can't be used to deploy.
+        capability: v.optional(v.union(v.literal("deploy"), v.literal("ingest"))),
         createdAt: v.number(),
+        // Envelope-encrypted plaintext (AES-256-GCM). ONLY set for platform-managed
+        // `ingest` keys, so the deploy path can re-inject the token into a tenant's
+        // `otlpSink` on every deploy without re-minting. User deploy keys never
+        // store this — their plaintext is shown once and is unrecoverable.
+        encryptedSecret: v.optional(v.object({ ciphertext: v.string(), iv: v.string() })),
         // Only the hash is stored; the plaintext key is shown once at creation.
         hashedKey: v.string(),
         lastUsedAt: v.optional(v.number()),
@@ -254,6 +264,8 @@ export default defineSchema({
     observations: defineTable({
         // Selected `lunora.*` string span attributes (shard key, user id, …).
         attributes: v.optional(v.record(v.string(), v.string())),
+        // Generation spans (`kind: "generation"`): completion token count.
+        completionTokens: v.optional(v.number()),
         createdAt: v.number(),
         // The deployment the span ran under, when the sink forwarded it.
         deploymentId: v.optional(v.id("deployments")),
@@ -262,14 +274,24 @@ export default defineSchema({
         endedAt: v.number(),
         // `<file>:<function>` (or `container:<name>`), when attributed.
         functionPath: v.optional(v.string()),
-        // Which instrumentation emitted the span.
-        kind: v.union(v.literal("container"), v.literal("worker")),
+        // Generation spans: the recorded prompt/input (only when the emitter opted
+        // into input recording — off by default), truncated.
+        input: v.optional(v.string()),
+        // Which instrumentation emitted the span. `generation` = an AI model call
+        // (carries `gen_ai.*`), from `@lunora/ai`/`@lunora/agent`.
+        kind: v.union(v.literal("container"), v.literal("generation"), v.literal("worker")),
         // `error` when the span's OTLP status was `STATUS_CODE_ERROR`, else `info`.
         level: v.union(v.literal("error"), v.literal("info")),
+        // Generation spans: the model id (`gen_ai.request.model`).
+        model: v.optional(v.string()),
         name: v.string(),
         organizationId: v.id("organizations"),
+        // Generation spans: the recorded completion/output (opt-in only), truncated.
+        output: v.optional(v.string()),
         // Parent span, when the span nests; absent for a root span.
         parentSpanId: v.optional(v.string()),
+        // Generation spans: prompt token count.
+        promptTokens: v.optional(v.number()),
         serviceName: v.optional(v.string()),
         spanId: v.string(),
         startedAt: v.number(),
@@ -282,7 +304,11 @@ export default defineSchema({
         // The drill-in: every span in one trace (the waterfall / tree), org-scoped.
         .index("by_trace", ["organizationId", "traceId"])
         // Recent spans, org-scoped, to roll up into the trace list newest-first.
-        .index("by_org_started", ["organizationId", "startedAt"]),
+        .index("by_org_started", ["organizationId", "startedAt"])
+        // Recent spans for ONE deployment — so a deployment-scoped trace list scans
+        // that deployment's own spans (not the global recent window, where a quiet
+        // deployment's older traces would fall off the end).
+        .index("by_org_deployment_started", ["organizationId", "deploymentId", "startedAt"]),
 
     // GitHub App installations (GAPS.md A4). Two-phase: the webhook *stages* an
     // installation (no org linkage — a spoofed call is harmless), then an org

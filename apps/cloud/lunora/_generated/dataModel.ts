@@ -119,7 +119,9 @@ export interface Doc_deployments {
 export interface Doc_deployKeys {
     _id: Id<"deployKeys">;
     _creationTime: number;
+    capability?: "deploy" | "ingest";
     createdAt: number;
+    encryptedSecret?: { ciphertext: string; iv: string };
     hashedKey: string;
     lastUsedAt?: number;
     name: string;
@@ -158,16 +160,21 @@ export interface Doc_observations {
     _id: Id<"observations">;
     _creationTime: number;
     attributes?: Record<string, string>;
+    completionTokens?: number;
     createdAt: number;
     deploymentId?: Id<"deployments">;
     durationMs: number;
     endedAt: number;
     functionPath?: string;
-    kind: "container" | "worker";
+    input?: string;
+    kind: "container" | "generation" | "worker";
     level: "error" | "info";
+    model?: string;
     name: string;
     organizationId: Id<"organizations">;
+    output?: string;
     parentSpanId?: string;
+    promptTokens?: number;
     serviceName?: string;
     spanId: string;
     startedAt: number;
@@ -476,7 +483,7 @@ export interface IndexNamesByTable {
     deployKeys: "by_org" | "by_hash";
     overageDebits: "by_org_period";
     tenantLogs: "by_trace" | "by_script_time" | "by_org";
-    observations: "by_org_started" | "by_trace" | "by_org";
+    observations: "by_org_deployment_started" | "by_org_started" | "by_trace" | "by_org";
     githubInstallations: "by_org" | "by_installation";
     builds: "by_project_commit" | "by_project";
     buildLogs: "by_build";
@@ -653,7 +660,9 @@ export interface Insert_deployments {
 export interface Insert_deployKeys {
     _id?: Id<"deployKeys">;
     _creationTime?: number;
+    capability?: "deploy" | "ingest";
     createdAt: number;
+    encryptedSecret?: { ciphertext: string; iv: string };
     hashedKey: string;
     lastUsedAt?: number;
     name: string;
@@ -692,16 +701,21 @@ export interface Insert_observations {
     _id?: Id<"observations">;
     _creationTime?: number;
     attributes?: Record<string, string>;
+    completionTokens?: number;
     createdAt: number;
     deploymentId?: Id<"deployments">;
     durationMs: number;
     endedAt: number;
     functionPath?: string;
-    kind: "container" | "worker";
+    input?: string;
+    kind: "container" | "generation" | "worker";
     level: "error" | "info";
+    model?: string;
     name: string;
     organizationId: Id<"organizations">;
+    output?: string;
     parentSpanId?: string;
+    promptTokens?: number;
     serviceName?: string;
     spanId: string;
     startedAt: number;

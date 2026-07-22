@@ -94,7 +94,6 @@ columns for free.
 > only burn builds. Everything around execution (queue, lease, dedup, log
 > streaming, dispatcher) is code-complete; the container build itself is the 🌐.
 
-
 **Today:** builds happen on the developer's machine; the platform never builds.
 GitHub webhook only parses PR events into preview _intents_.
 
@@ -200,13 +199,36 @@ waterfall** — `buildTraceTree` (`src/telemetry/trace-tree.ts`, pure +
 unit-tested) lays each span out by its true start/duration and indents it by its
 depth under `parentSpanId`. The log-derived view (`logs.listTraces`) was removed.
 
-**Also shipped — standard OTLP ingest API** (`/v1/traces`, `/v1/logs`,
-bearer-authed, gzip; mirrors Maple / Langfuse's OTLP endpoints, the open spec):
-any OpenTelemetry SDK/Collector can now ship to the cloud, not only Lunora's
-sink. Follow-ons: OTLP protobuf + gRPC transports, `/v1/metrics` (no metrics
-store yet), and — for *deep* trees — the framework emitting `ctx.trace` child
-spans over OTLP (today the runtime emits one flat span per RPC, so trees are
-shallow until then).
+**Full OpenTelemetry integration — shipped (branch `feat/cloud-otlp-full`,
+2026-07-21).** The standard OTLP ingest is now complete and hardened, and the
+framework emits deep + AI telemetry the cloud captures end-to-end:
+
+- **Deep waterfalls (framework, already on alpha).** `ctx.trace` emits nested
+  child spans with a real `parentSpanId` + timestamps, `ctx.metrics` → `/v1/metrics`
+  — so the earlier "one flat span per RPC" note is obsolete; trees are deep.
+- **AI generations (framework PR #160 → alpha).** `@lunora/ai` traces RAG embeds
+  as `generation` spans; `@lunora/agent` gains an `otlpTelemetry` integration
+  shipping `gen_ai.*` model/tool spans. The cloud store gained a `generation`
+  observation kind (model, prompt/completion tokens, opt-in input/output); the
+  Traces waterfall shows a `gen` chip + a **span-detail pane** (model/tokens/io/attrs).
+- **Full OTLP transports.** `/v1/traces|logs|metrics` accept **protobuf** (a
+  Worker-safe hand-rolled decoder — protobufjs needs eval, blocked in Workers)
+  _and_ JSON (+ gzip), return `partialSuccess` when a batch is capped, and write
+  metrics to Analytics Engine. gRPC stays out (Workers can't host it).
+- **Hardened ingest.** A scoped `ingest` deploy-key capability (telemetry-only,
+  can't deploy) + a per-org telemetry rate-limit tier + key-based PII redaction
+  of span attributes / log fields.
+- **Deploy-time wiring.** The provisioner injects `LUNORA_OTLP_ENDPOINT`/token +
+  `tail_consumers` into each tenant (the long-documented gap), minting a per-org
+  ingest key stored envelope-encrypted for re-injection.
+- **Scale.** Spans tier to the columnar archive (Pipeline → R2/Iceberg) via
+  `archiveSpans`, alongside D1's hot window.
+
+**Still 🌐 / follow-on:** the R2-SQL **read-back** of archived spans (an action over
+the Iceberg table, like the raw-event archive); a live end-to-end run against a
+dispatch namespace with `LUNORA_OTLP_ENDPOINT` configured; cross-tab UI links
+(trace→logs, error-span→Issue — needs dashboard tab-state + the framework carrying
+`traceId` into `getIssues`); OTLP gzip on the framework's own POST (marginal).
 
 ### B3. Debug header (✅ shipped)
 

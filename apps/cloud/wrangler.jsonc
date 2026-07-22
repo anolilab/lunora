@@ -39,6 +39,11 @@
         // Cell id + the apex the dispatcher routes tenant scripts under.
         "LUNORA_CELL": "default",
         "LUNORA_APP_DOMAIN": "lunora.app",
+        // This cell's public OTLP ingest base — injected into every tenant Worker
+        // as `LUNORA_OTLP_ENDPOINT` (+ a scoped `LUNORA_OTLP_TOKEN` secret) so its
+        // `otlpSink` ships traces/logs/metrics back here. Set to this cloud
+        // worker's own reachable URL; when unset, tenants deploy untelemetered.
+        "LUNORA_OTLP_ENDPOINT": "https://cloud.lunora.app",
     },
     "analytics_engine_datasets": [
         {

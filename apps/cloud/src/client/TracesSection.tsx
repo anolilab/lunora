@@ -29,12 +29,15 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
     const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId } : "skip");
     const [deploymentId, setDeploymentId] = useState<DeploymentId | "">("");
     const [traceId, setTraceId] = useState("");
+    const [errorOnly, setErrorOnly] = useState(false);
+    const [selectedSpanId, setSelectedSpanId] = useState("");
 
-    const traces = useQuery(api.traces.list, deploymentId ? { deploymentId, organizationId } : "skip");
+    const traces = useQuery(api.traces.list, deploymentId ? { deploymentId, errorOnly, organizationId } : "skip");
     const spans = useQuery(api.traces.get, traceId ? { organizationId, traceId } : "skip");
 
     const selected = (traces ?? []).find((trace) => trace.traceId === traceId);
     const waterfall = buildTraceTree(spans ?? []);
+    const selectedSpan = (spans ?? []).find((span) => span.spanId === selectedSpanId);
 
     // The longest trace on screen, so each list row's latency bar reads relative to it.
     const maxDuration = Math.max(1, ...(traces ?? []).map((trace) => trace.durationMs));
@@ -87,6 +90,10 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
 
             {deploymentId ? (
                 <section className="card">
+                    <label className="trace-filter">
+                        <input checked={errorOnly} onChange={(event) => setErrorOnly(event.target.checked)} type="checkbox" />
+                        Errors only
+                    </label>
                     <table className="table">
                         <thead>
                             <tr>
@@ -104,7 +111,10 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
                                     aria-selected={trace.traceId === traceId}
                                     className={`trace-clickable${trace.errorCount > 0 ? " trace-error" : ""}${trace.traceId === traceId ? " active" : ""}`}
                                     key={trace.traceId}
-                                    onClick={() => setTraceId(trace.traceId === traceId ? "" : trace.traceId)}
+                                    onClick={() => {
+                                        setSelectedSpanId("");
+                                        setTraceId(trace.traceId === traceId ? "" : trace.traceId);
+                                    }}
                                 >
                                     <td className="trace-id">{trace.traceId.slice(0, 12)}</td>
                                     <td className="log-fn">{trace.rootFunctionPath ?? trace.rootName}</td>
@@ -162,7 +172,20 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
 
                     <div className="trace-waterfall">
                         {waterfall.map((row) => (
-                            <div className={`trace-wrow${row.level === "error" ? " trace-wrow-err" : ""}`} key={row.spanId}>
+                            <div
+                                aria-selected={row.spanId === selectedSpanId}
+                                className={`trace-wrow trace-wrow-click${row.level === "error" ? " trace-wrow-err" : ""}${row.spanId === selectedSpanId ? " active" : ""}`}
+                                key={row.spanId}
+                                onClick={() => setSelectedSpanId(row.spanId === selectedSpanId ? "" : row.spanId)}
+                                onKeyDown={(event) => {
+                                    if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        setSelectedSpanId(row.spanId === selectedSpanId ? "" : row.spanId);
+                                    }
+                                }}
+                                role="button"
+                                tabIndex={0}
+                            >
                                 <span className="trace-off">+{String(row.offsetMs)}ms</span>
                                 <div className="trace-track" title={`${formatMs(row.durationMs)} at +${String(row.offsetMs)}ms`}>
                                     <div
@@ -171,13 +194,83 @@ export const TracesSection = ({ organizationId }: TracesSectionProps): ReactElem
                                     />
                                 </div>
                                 <div className="trace-wmeta" style={{ paddingLeft: `${String(row.depth * 16)}px` }}>
+                                    {row.kind === "generation" ? <span className="trace-gen-badge">gen</span> : null}
                                     {row.functionPath ? <span className="log-fn">{row.functionPath}</span> : <span className="trace-msg">{row.name}</span>}
                                     <span className="muted"> {formatMs(row.durationMs)}</span>
+                                    {row.kind === "generation" ? (
+                                        <span className="trace-gen-meta">
+                                            {row.model ?? "generation"}
+                                            {row.promptTokens !== undefined || row.completionTokens !== undefined
+                                                ? ` · ${String(row.promptTokens ?? 0)}→${String(row.completionTokens ?? 0)} tok`
+                                                : ""}
+                                        </span>
+                                    ) : null}
                                     {row.statusMessage ? <span className="log-fields"> {row.statusMessage}</span> : null}
                                 </div>
                             </div>
                         ))}
                     </div>
+
+                    {selectedSpan ? (
+                        <aside className="trace-span-detail">
+                            <header className="trace-span-detail-head">
+                                <span className="trace-span-detail-name">{selectedSpan.name}</span>
+                                <button className="trace-close" onClick={() => setSelectedSpanId("")} type="button">
+                                    Close
+                                </button>
+                            </header>
+                            <dl className="trace-span-detail-grid">
+                                <dt>Span</dt>
+                                <dd className="trace-span-id">{selectedSpan.spanId}</dd>
+                                <dt>Duration</dt>
+                                <dd>{formatMs(selectedSpan.durationMs)}</dd>
+                                <dt>Status</dt>
+                                <dd>{selectedSpan.level === "error" ? <span className="log-badge log-badge-error">error</span> : "ok"}</dd>
+                                {selectedSpan.model ? (
+                                    <>
+                                        <dt>Model</dt>
+                                        <dd>{selectedSpan.model}</dd>
+                                    </>
+                                ) : null}
+                                {selectedSpan.promptTokens !== undefined || selectedSpan.completionTokens !== undefined ? (
+                                    <>
+                                        <dt>Tokens</dt>
+                                        <dd>
+                                            {String(selectedSpan.promptTokens ?? 0)} in · {String(selectedSpan.completionTokens ?? 0)} out
+                                        </dd>
+                                    </>
+                                ) : null}
+                                {selectedSpan.statusMessage ? (
+                                    <>
+                                        <dt>Message</dt>
+                                        <dd>{selectedSpan.statusMessage}</dd>
+                                    </>
+                                ) : null}
+                            </dl>
+                            {selectedSpan.input ? (
+                                <div className="trace-span-io">
+                                    <span className="trace-span-io-label">Input</span>
+                                    <pre className="trace-span-io-body">{selectedSpan.input}</pre>
+                                </div>
+                            ) : null}
+                            {selectedSpan.output ? (
+                                <div className="trace-span-io">
+                                    <span className="trace-span-io-label">Output</span>
+                                    <pre className="trace-span-io-body">{selectedSpan.output}</pre>
+                                </div>
+                            ) : null}
+                            {selectedSpan.attributes && Object.keys(selectedSpan.attributes).length > 0 ? (
+                                <dl className="trace-span-detail-grid">
+                                    {Object.entries(selectedSpan.attributes).map(([key, value]) => (
+                                        <div className="trace-attr-row" key={key}>
+                                            <dt>{key}</dt>
+                                            <dd>{value}</dd>
+                                        </div>
+                                    ))}
+                                </dl>
+                            ) : null}
+                        </aside>
+                    ) : null}
                 </section>
             ) : null}
         </div>

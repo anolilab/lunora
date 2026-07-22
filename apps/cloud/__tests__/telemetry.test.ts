@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 
 import { crossesThreshold, isSafeWebhookUrl, renderAlert } from "../src/telemetry/alerts";
 import type { OtlpTracePayload } from "../src/telemetry/otlp";
-import { decodeLogRecords, decodeObservations, decodeTelemetryEvents } from "../src/telemetry/otlp";
-import { createCloudflareTelemetryStore } from "../src/telemetry/store";
+import { decodeLogRecords, decodeMetricPoints, decodeObservations, decodeTelemetryEvents } from "../src/telemetry/otlp";
+import { createCloudflareTelemetryStore, spanArchiveRecord } from "../src/telemetry/store";
 import { buildTriagePrompt, MAX_ISSUES } from "../src/telemetry/triage";
 
 /** Build an OTLP `KeyValue[]` from a flat string map. */
@@ -343,6 +343,46 @@ describe(decodeObservations, () => {
     it("skips a span with no trace/span id (it can't be placed in a trace)", () => {
         expect(decodeObservations(payload("@lunora/runtime", [{ name: "orphan", status: { code: 1 } }]))).toHaveLength(0);
     });
+
+    it("promotes a gen_ai model span to a generation observation with model + tokens", () => {
+        const [observation] = decodeObservations(
+            payload("@lunora/agent", [
+                {
+                    attributes: [
+                        { key: "gen_ai.request.model", value: { stringValue: "@cf/meta/llama" } },
+                        // OTLP int64 on the wire is a decimal string (`intValue`).
+                        { key: "gen_ai.usage.input_tokens", value: { intValue: "12" } },
+                        { key: "gen_ai.usage.output_tokens", value: { intValue: "34" } },
+                        { key: "gen_ai.prompt", value: { stringValue: "hello" } },
+                        { key: "gen_ai.completion", value: { stringValue: "hi there" } },
+                    ],
+                    endTimeUnixNano: "1700000000200000000",
+                    name: "chat @cf/meta/llama",
+                    spanId: "cccccccccccccccc",
+                    startTimeUnixNano: "1700000000000000000",
+                    status: { code: 1 },
+                    traceId: "dddddddddddddddddddddddddddddddd",
+                },
+            ]),
+        );
+
+        expect(observation).toMatchObject({
+            completionTokens: 34,
+            input: "hello",
+            kind: "generation",
+            model: "@cf/meta/llama",
+            output: "hi there",
+            promptTokens: 12,
+        });
+    });
+
+    it("leaves a plain worker span as kind:worker with no generation fields", () => {
+        const [observation] = decodeObservations(payload("@lunora/runtime", [span({ spanId: "w1" })]));
+
+        expect(observation?.kind).toBe("worker");
+        expect(observation?.model).toBeUndefined();
+        expect(observation?.promptTokens).toBeUndefined();
+    });
 });
 
 /** Wrap OTLP log records into an ExportLogsServiceRequest with one resource + scope. */
@@ -400,5 +440,75 @@ describe(decodeLogRecords, () => {
 
         expect(entry?.level).toBe("info");
         expect(decodeLogRecords({})).toHaveLength(0);
+    });
+});
+
+describe(decodeMetricPoints, () => {
+    it("flattens gauge / sum / histogram data points to metric points", () => {
+        const points = decodeMetricPoints({
+            resourceMetrics: [
+                {
+                    resource: { attributes: [{ key: "service.name", value: { stringValue: "orders" } }] },
+                    scopeMetrics: [
+                        {
+                            metrics: [
+                                { gauge: { dataPoints: [{ asDouble: 7 }] }, name: "queue.depth" },
+                                { name: "requests", sum: { dataPoints: [{ asInt: "12" }] } },
+                                { histogram: { dataPoints: [{ sum: 340 }] }, name: "latency" },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        });
+
+        expect(points).toEqual([
+            { attributes: undefined, functionPath: undefined, kind: "gauge", name: "queue.depth", serviceName: "orders", value: 7 },
+            { attributes: undefined, functionPath: undefined, kind: "sum", name: "requests", serviceName: "orders", value: 12 },
+            { attributes: undefined, functionPath: undefined, kind: "histogram", name: "latency", serviceName: "orders", value: 340 },
+        ]);
+    });
+
+    it("skips a data point with no numeric value", () => {
+        expect(decodeMetricPoints({ resourceMetrics: [{ scopeMetrics: [{ metrics: [{ gauge: { dataPoints: [{}] }, name: "x" }] }] }] })).toHaveLength(0);
+    });
+});
+
+describe(spanArchiveRecord, () => {
+    it("tags the record with recordType + organizationId for the shared archive table", () => {
+        expect(
+            spanArchiveRecord(
+                { durationMs: 5, endedAt: 105, kind: "worker", level: "info", name: "a:b", spanId: "s1", startedAt: 100, traceId: "t1" },
+                "org_9",
+            ),
+        ).toMatchObject({ durationMs: 5, kind: "worker", name: "a:b", organizationId: "org_9", recordType: "span", spanId: "s1", traceId: "t1" });
+    });
+});
+
+describe("TelemetryStore.archiveSpans", () => {
+    it("no-ops without a pipeline binding", async () => {
+        await expect(
+            createCloudflareTelemetryStore({}).archiveSpans(
+                [{ durationMs: 1, endedAt: 2, kind: "worker", level: "info", name: "a", spanId: "s", startedAt: 1, traceId: "t" }],
+                "org_1",
+            ),
+        ).resolves.toBeUndefined();
+    });
+
+    it("sends tagged span records through the pipeline binding", async () => {
+        const batches: Record<string, unknown>[][] = [];
+        const TELEMETRY_PIPELINE = {
+            send: async (records: Record<string, unknown>[]) => {
+                batches.push(records);
+            },
+        } as unknown as Parameters<typeof createCloudflareTelemetryStore>[0]["TELEMETRY_PIPELINE"];
+
+        await createCloudflareTelemetryStore({ TELEMETRY_PIPELINE }).archiveSpans(
+            [{ durationMs: 1, endedAt: 2, kind: "generation", level: "info", model: "m", name: "chat", spanId: "s", startedAt: 1, traceId: "t" }],
+            "org_1",
+        );
+
+        expect(batches).toHaveLength(1);
+        expect(batches[0]?.[0]).toMatchObject({ kind: "generation", model: "m", organizationId: "org_1", recordType: "span" });
     });
 });

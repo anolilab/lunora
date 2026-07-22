@@ -27,6 +27,7 @@ interface MemberRow {
 
 interface DeployKeyRow {
     _id: Id<"deployKeys">;
+    capability?: "deploy" | "ingest";
     organizationId: Id<"organizations">;
     projectId?: Id<"projects">;
     revokedAt?: number;
@@ -63,11 +64,29 @@ export const assertMember = async (
     return { role: member.role, userId };
 };
 
+/** Match a key by SHA-256 to its (non-revoked, org-matching) row, or throw `FORBIDDEN`. */
+const resolveKeyRow = async (context: QueryContext, organizationId: Id<"organizations">, key: string): Promise<DeployKeyRow> => {
+    const hashedKey = await hashDeployKey(key);
+    const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
+    const row = (page as unknown as DeployKeyRow[])[0];
+
+    if (!row || row.revokedAt !== undefined || row.organizationId !== organizationId) {
+        throw new LunoraError("FORBIDDEN", "invalid key for this organization");
+    }
+
+    return row;
+};
+
 /**
- * Authorize a deploy-key-credentialed write to an organization. Matches the key
- * by SHA-256 against the stored hash, rejecting it if missing, revoked, scoped
- * to a different org, or (for a project-scoped key) used against another
- * project. Returns the resolved deploy-key id on success.
+ * Authorize a **deploy/admin** write to an organization. Matches the key by
+ * SHA-256, rejecting it if missing, revoked, scoped to a different org, an
+ * `ingest`-capability (telemetry-only) key, or (for a project-scoped key) used
+ * against another project. Returns the resolved deploy-key id on success.
+ *
+ * NOTE: telemetry **ingest** must NOT use this — an `ingest` key's whole purpose
+ * is to write telemetry, so ingest paths use {@link authorizeTelemetryKey}, which
+ * accepts both key kinds. This function is the deploy/admin gate that keeps an
+ * ingest token from deploying (alongside `deploy_keys.verify` at the entrypoint).
  */
 export const authorizeDeployKey = async (
     context: QueryContext,
@@ -75,17 +94,29 @@ export const authorizeDeployKey = async (
     key: string,
     projectId?: Id<"projects">,
 ): Promise<Id<"deployKeys">> => {
-    const hashedKey = await hashDeployKey(key);
-    const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
-    const row = (page as unknown as DeployKeyRow[])[0];
+    const row = await resolveKeyRow(context, organizationId, key);
 
-    if (!row || row.revokedAt !== undefined || row.organizationId !== organizationId) {
-        throw new LunoraError("FORBIDDEN", "invalid deploy key for this organization");
+    // An ingest key is telemetry-only — it must never authorize a deploy/admin write.
+    if (row.capability === "ingest") {
+        throw new LunoraError("FORBIDDEN", "this is a telemetry ingest key, not a deploy key");
     }
 
     if (row.projectId !== undefined && projectId !== undefined && row.projectId !== projectId) {
         throw new LunoraError("FORBIDDEN", "deploy key is not authorized for this project");
     }
+
+    return row._id;
+};
+
+/**
+ * Authorize a **telemetry ingest** write to an organization. Accepts BOTH a
+ * scoped `ingest` key (the token the platform injects into a tenant's `otlpSink`)
+ * AND a full `deploy` key (legacy tenants sending their deploy key) — telemetry
+ * is exactly what an ingest key is for. Rejects only a missing/revoked/wrong-org
+ * key. Used by `telemetry.ingest` / `logs.ingest`.
+ */
+export const authorizeTelemetryKey = async (context: QueryContext, organizationId: Id<"organizations">, key: string): Promise<Id<"deployKeys">> => {
+    const row = await resolveKeyRow(context, organizationId, key);
 
     return row._id;
 };
