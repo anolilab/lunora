@@ -20,10 +20,29 @@ interface AuthResponse<T = unknown> {
     error: AuthFetchError | null;
 }
 
+/** The authenticated user (loosely typed — the UI reads a handful of fields). */
+interface AuthUser {
+    email?: string;
+    emailVerified?: boolean;
+    id?: string;
+    image?: string;
+    name?: string;
+}
+
+/** One active session row, as `listSessions` returns it. */
+interface AuthSession {
+    createdAt?: string;
+    id?: string;
+    ipAddress?: string;
+    token?: string;
+    userAgent?: string;
+}
+
 /** A resolved session payload (loosely typed — the UI only reads a couple of fields). */
 interface SessionData {
+    session?: AuthSession;
     token?: string;
-    user?: { email?: string; id?: string; name?: string };
+    user?: AuthUser;
 }
 
 /**
@@ -33,6 +52,9 @@ interface SessionData {
  * phases extend this with the `organization` / `apiKey` / `passkey` namespaces.
  */
 interface AuthClient {
+    changeEmail: (input: { callbackURL?: string; newEmail: string }) => Promise<AuthResponse<{ status?: boolean }>>;
+    changePassword: (input: { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean }) => Promise<AuthResponse<{ status?: boolean }>>;
+    deleteUser: (input: { callbackURL?: string; password?: string }) => Promise<AuthResponse<{ status?: boolean }>>;
     emailOtp: {
         sendVerificationOtp: (input: {
             email: string;
@@ -40,13 +62,18 @@ interface AuthClient {
         }) => Promise<AuthResponse<{ success?: boolean }>>;
     };
     forgetPassword: (input: { email: string; redirectTo?: string }) => Promise<AuthResponse<{ status?: boolean }>>;
+    getSession: () => Promise<AuthResponse<SessionData>>;
+    listSessions: () => Promise<AuthResponse<AuthSession[]>>;
     resetPassword: (input: { newPassword: string; token?: string }) => Promise<AuthResponse<{ status?: boolean }>>;
+    revokeOtherSessions: () => Promise<AuthResponse<{ status?: boolean }>>;
+    revokeSession: (input: { token: string }) => Promise<AuthResponse<{ status?: boolean }>>;
     signIn: {
         email: (input: { callbackURL?: string; email: string; password: string; rememberMe?: boolean }) => Promise<AuthResponse<SessionData>>;
         emailOtp: (input: { email: string; otp: string }) => Promise<AuthResponse<SessionData>>;
         magicLink: (input: { callbackURL?: string; email: string }) => Promise<AuthResponse<{ status?: boolean }>>;
         social: (input: { callbackURL?: string; provider: string }) => Promise<AuthResponse<{ redirect?: boolean; url?: string }>>;
     };
+    signOut: () => Promise<AuthResponse<{ success?: boolean }>>;
     signUp: {
         email: (input: { callbackURL?: string; email: string; name: string; password: string }) => Promise<AuthResponse<SessionData>>;
     };
@@ -56,6 +83,7 @@ interface AuthClient {
         verifyOtp: (input: { code: string; trustDevice?: boolean }) => Promise<AuthResponse<SessionData>>;
         verifyTotp: (input: { code: string; trustDevice?: boolean }) => Promise<AuthResponse<SessionData>>;
     };
+    updateUser: (input: { image?: string; name?: string }) => Promise<AuthResponse<{ status?: boolean }>>;
 }
 
 /** The lifecycle status of a flow. */
@@ -100,4 +128,17 @@ interface Controller<TState, TActions> {
 
 type FormController<TField extends string> = Controller<FormState<TField>, FormActions<TField>>;
 
-export type { AuthClient, AuthFetchError, AuthResponse, Controller, FieldState, FlowStatus, FormActions, FormController, FormState, SessionData };
+export type {
+    AuthClient,
+    AuthFetchError,
+    AuthResponse,
+    AuthSession,
+    AuthUser,
+    Controller,
+    FieldState,
+    FlowStatus,
+    FormActions,
+    FormController,
+    FormState,
+    SessionData,
+};

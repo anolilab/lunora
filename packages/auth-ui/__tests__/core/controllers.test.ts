@@ -35,7 +35,7 @@ const stubClient = (overrides: Partial<Record<string, unknown>> = {}): AuthClien
         },
     };
 
-    return { ...base, ...overrides };
+    return { ...base, ...overrides } as unknown as AuthClient;
 };
 
 const makeContext = (

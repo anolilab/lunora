@@ -21,4 +21,6 @@ export type { AuthCardProps, FieldProps } from "./primitives";
 export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton } from "./primitives";
 export type { AuthUIProviderProps } from "./provider";
 export { AuthUIProvider, useAuthUI, useAuthUILink } from "./provider";
+export type { ProfileCardProps, SignOutButtonProps } from "./settings-cards";
+export { ChangeEmailCard, ChangePasswordCard, DeleteAccountCard, ProfileCard, SessionsCard, SignOutButton } from "./settings-cards";
 export { useController } from "./use-controller";

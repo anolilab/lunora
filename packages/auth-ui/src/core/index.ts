@@ -3,11 +3,19 @@
  * Solid, Angular) imports its controllers, config, and types from here — the
  * only place flow logic lives.
  */
+export type { ChangeEmailField } from "./change-email";
+export { createChangeEmailController } from "./change-email";
+export type { ChangePasswordField } from "./change-password";
+export { createChangePasswordController } from "./change-password";
 export type { AuthUIConfig, ControllerContext, NavAdapter, PluginFlags, RedirectConfig } from "./config";
 export { DEFAULT_BASE_PATH, resolveContext } from "./config";
 export type { FieldSpec, FormControllerOptions, FormSubmitResult } from "./create-form-controller";
 export { createFormController } from "./create-form-controller";
+export type { ResourceHandle, ResourceOptions, ResourceState } from "./create-resource-controller";
+export { createResourceController } from "./create-resource-controller";
 export { defaultNav } from "./default-nav";
+export type { DeleteAccountField } from "./delete-account";
+export { createDeleteAccountController } from "./delete-account";
 export type { EmailOtpActions, EmailOtpController, EmailOtpState } from "./email-otp";
 export { createEmailOtpController } from "./email-otp";
 export type { ForgotPasswordField, ForgotPasswordOptions } from "./forgot-password";
@@ -17,8 +25,13 @@ export { DEFAULT_LOCALIZATION, resolveLocalization } from "./localization";
 export type { MagicLinkField } from "./magic-link";
 export { createMagicLinkController } from "./magic-link";
 export { assertOk, AuthActionError, mapAuthError } from "./map-error";
+export type { ProfileField, ProfileOptions } from "./profile";
+export { createProfileController } from "./profile";
 export type { ResetPasswordField, ResetPasswordOptions } from "./reset-password";
 export { createResetPasswordController } from "./reset-password";
+export { signOut } from "./session-actions";
+export type { SessionsActions, SessionsController } from "./sessions";
+export { createSessionsController } from "./sessions";
 export type { SignInField } from "./sign-in";
 export { createSignInController } from "./sign-in";
 export type { SignUpField } from "./sign-up";
@@ -32,6 +45,8 @@ export type {
     AuthClient,
     AuthFetchError,
     AuthResponse,
+    AuthSession,
+    AuthUser,
     Controller,
     FieldState,
     FlowStatus,
