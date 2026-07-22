@@ -83,11 +83,15 @@ const HEX_ONLY = /^[0-9a-f]+$/;
 
 /**
  * Build a W3C `traceparent` header from a 32-hex trace id + 16-hex span id:
- * `00-<trace-id>-<span-id>-01` (version 0, sampled). The ids are the same
- * lowercase-hex form {@link otlpRandomHex} produces, so a worker's trace/span id
- * composes into a `traceparent` with no reformatting.
+ * `00-<trace-id>-<span-id>-<flags>` (version 0). The `sampled` flag (bit 0 of the
+ * trace-flags octet) is `01` when the trace was sampled in and `00` when it was
+ * sampled out — how the runtime propagates its head-sampling decision to the
+ * shard and any container beneath it, so the whole trace is kept or dropped
+ * coherently. Defaults to sampled for callers that don't sample. The ids are the
+ * same lowercase-hex form {@link otlpRandomHex} produces, so a worker's
+ * trace/span id composes into a `traceparent` with no reformatting.
  */
-const buildTraceparent = (traceId: string, spanId: string): string => `00-${traceId}-${spanId}-01`;
+const buildTraceparent = (traceId: string, spanId: string, sampled = true): string => `00-${traceId}-${spanId}-${sampled ? "01" : "00"}`;
 
 /**
  * Parse a W3C `traceparent` into `{ traceId, parentSpanId }`, or `undefined` when
@@ -100,8 +104,12 @@ const buildTraceparent = (traceId: string, spanId: string): string => `00-${trac
  * but a future version may append fields, so a `>= 4`-field header on a higher
  * version parses off its first four and ignores the rest rather than being
  * dropped. The reserved version `ff` is rejected.
+ *
+ * `sampled` is bit 0 of the trace-flags octet — the head-sampling decision the
+ * upstream (the Lunora worker) propagated; consumers use it to keep or drop the
+ * whole trace coherently.
  */
-const parseTraceparent = (header: null | string | undefined): { parentSpanId: string; traceId: string } | undefined => {
+const parseTraceparent = (header: null | string | undefined): { parentSpanId: string; sampled: boolean; traceId: string } | undefined => {
     if (header === null || header === undefined) {
         return undefined;
     }
@@ -132,7 +140,8 @@ const parseTraceparent = (header: null | string | undefined): { parentSpanId: st
         return undefined;
     }
 
-    return { parentSpanId, traceId };
+    // Bit 0 of the trace-flags octet is the W3C `sampled` flag.
+    return { parentSpanId, sampled: (Number.parseInt(flags, 16) & 0x01) === 0x01, traceId };
 };
 
 /** Encode one attribute, choosing the OTLP value kind from the JS type. */

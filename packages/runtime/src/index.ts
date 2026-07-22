@@ -87,6 +87,7 @@ export type {
     ObservabilitySink,
     ObservabilitySinkContext,
     SpanEvent,
+    TraceSamplingConfig,
 } from "./observability";
 export { emitLogEvent, emitRpcEvent } from "./observability";
 export type {
