@@ -27,6 +27,15 @@ export type AlertTarget = CountTarget | MetricTarget;
 /** How a metric value is compared to the rule threshold. Absent on a rule ⇒ `gt`. */
 export type Comparator = "gt" | "lt";
 
+/**
+ * Where a fired alert is delivered. `email` goes through the mailer; the other
+ * three are typed webhook POSTs (see {@link webhookRequestFor}): `webhook` posts
+ * a plain `{ subject, body }`, `slack` an incoming-webhook message, `pagerduty` a
+ * PagerDuty Events API v2 event. App-semantic rules use these; infra-level alerts
+ * (Worker errors, health) are better served by Cloudflare Notifications (GAPS.md).
+ */
+export type AlertChannel = "email" | "pagerduty" | "slack" | "webhook";
+
 /** The source (issue/incident/uptime) a rule is evaluated against, for rendering. */
 export interface AlertSource {
     count: number;
@@ -73,7 +82,7 @@ export const renderAlert = (rule: { name: string; target: CountTarget }, source:
  */
 export interface AlertDelivery<TId extends string = string> {
     body: string;
-    channel: "email" | "webhook";
+    channel: AlertChannel;
     destination: string;
     id: TId;
     subject: string;
@@ -81,7 +90,7 @@ export interface AlertDelivery<TId extends string = string> {
 
 /** An enabled count-crossing rule the firing loop evaluates. `ruleId` is the alertRules row id (any string id form). */
 export interface FiringRule {
-    channel: "email" | "webhook";
+    channel: AlertChannel;
     destination: string;
     name: string;
     ruleId: string;
@@ -279,7 +288,7 @@ export const deviatesByPercent = (current: number, prior: number, thresholdPerce
 
 /** An enabled metric-window rule the metric firing loop evaluates. */
 export interface MetricRule {
-    channel: "email" | "webhook";
+    channel: AlertChannel;
     comparator: Comparator;
     destination: string;
     /** Optional scope: evaluate only observations from this function path. */
@@ -373,34 +382,101 @@ const windowsFor = (
 };
 
 /**
- * Fire every enabled metric rule whose window value edge-crosses its threshold,
- * over the org's recent `observations`. Mirrors {@link fireCrossedRules} — same
- * `alerts` row shape + injected `insertAlert` — so the metric path can't drift
- * from the count path. The alert `hash` groups a rule's alerts by target +
- * scope (mirroring the issue/incident hash), so the recent-alerts list dedupes
- * cleanly. `insertAlert` uses the same structural row the count path writes.
+ * Level-triggered transition for a metric rule, evaluated against its current
+ * window plus the rule's PERSISTED firing state (`wasFiring`) rather than only
+ * the prior window. This is what lets a periodic sweep re-fire a breach that a
+ * quiet window kept the ingest path from seeing, and clear a firing rule once its
+ * window falls back under the threshold — a true state machine, not a one-shot
+ * edge on window-over-window:
+ *  • `fire`  — the window breaches and the rule was not already firing.
+ *  • `clear` — the window no longer breaches and the rule was firing.
+ *  • `none`  — no state change (still breaching, or still clear).
+ * `firing` is the rule's state AFTER this evaluation, for the caller to persist.
+ */
+export interface MetricLevelEvaluation {
+    action: "clear" | "fire" | "none";
+    currentValue: number;
+    firing: boolean;
+}
+
+/** Decide a metric rule's level-triggered transition from its current window + prior firing state. */
+export const evaluateMetricLevel = (
+    rule: Pick<MetricRule, "comparator" | "target" | "threshold">,
+    currentWindow: readonly MetricObservation[],
+    wasFiring: boolean,
+): MetricLevelEvaluation => {
+    const currentValue = computeMetric(rule.target, currentWindow);
+    const breaching = compareMetric(currentValue, rule.comparator, rule.threshold);
+    const action = breaching && !wasFiring ? "fire" : !breaching && wasFiring ? "clear" : "none";
+
+    return { action, currentValue, firing: breaching };
+};
+
+/**
+ * Ports the metric firing loop reads + writes through, injected so the two
+ * callers can share one loop over different stores: the ingest path (typed
+ * `ctx.db`, branded `Id<"alerts">`) and the periodic sweep (structural
+ * control-plane store, string ids). `wasFiring` returns a rule's persisted
+ * firing state (false when never evaluated); `writeState` persists the new
+ * state + last value after a transition; `insertAlert` writes the `alerts` row.
+ */
+export interface MetricRulePorts<TId extends string> {
+    insertAlert: (row: Record<string, unknown>) => Promise<TId>;
+    wasFiring: (ruleId: string) => boolean;
+    writeState: (ruleId: string, firing: boolean, value: number) => Promise<void>;
+}
+
+/** The outcome of one metric-firing pass: deliveries to send + how many rules fired/cleared. */
+export interface MetricRuleOutcome<TId extends string> {
+    cleared: number;
+    deliveries: AlertDelivery<TId>[];
+    fired: number;
+}
+
+/**
+ * Evaluate every enabled metric rule over the org's recent `observations` as a
+ * level-triggered state machine (see {@link evaluateMetricLevel}), fire on a
+ * fresh breach and clear on a recovery, persisting each transition through
+ * `ports`. Shared verbatim by the ingest path (fast feedback on new spans) and
+ * the periodic sweep (re-evaluates quiet windows the ingest never sees), so the
+ * two can't drift. Mirrors {@link fireCrossedRules}'s `alerts` row shape; the
+ * alert `hash` groups a rule's alerts by target + scope (like the issue/incident
+ * hash) so the recent-alerts list dedupes cleanly.
  */
 export const fireMetricRules = async <TId extends string>(
     rules: readonly MetricRule[],
     observations: readonly MetricObservation[],
     organizationId: string,
-    insertAlert: (row: Record<string, unknown>) => Promise<TId>,
+    ports: MetricRulePorts<TId>,
     now: number,
-): Promise<AlertDelivery<TId>[]> => {
+): Promise<MetricRuleOutcome<TId>> => {
     const deliveries: AlertDelivery<TId>[] = [];
+    let fired = 0;
+    let cleared = 0;
 
     for (const rule of rules) {
         const { current, prior } = windowsFor(rule, observations, now);
-        const evaluation = evaluateMetricRule(rule, current, prior);
+        const evaluation = evaluateMetricLevel(rule, current, ports.wasFiring(rule.ruleId));
 
-        if (!evaluation.fired) {
+        if (evaluation.action === "none") {
             continue;
         }
 
-        const rendered = renderMetricAlert(rule, evaluation);
+        // eslint-disable-next-line no-await-in-loop -- one write per transitioning rule; small, serialized
+        await ports.writeState(rule.ruleId, evaluation.firing, evaluation.currentValue);
+
+        if (evaluation.action === "clear") {
+            cleared += 1;
+
+            continue;
+        }
+
+        // The prior-window value is still used for the "vs the prior window" narrative,
+        // even though the fire/clear decision is level-triggered against persisted state.
+        const rendered = renderMetricAlert(rule, { currentValue: evaluation.currentValue, priorValue: computeMetric(rule.target, prior) });
         const hash = `${rule.target}:${rule.functionPath ?? "*"}`;
         // eslint-disable-next-line no-await-in-loop -- one insert per fired rule; small, serialized
-        const id = await insertAlert({
+        const id = await ports.insertAlert({
             body: rendered.body,
             channel: rule.channel,
             createdAt: now,
@@ -415,9 +491,10 @@ export const fireMetricRules = async <TId extends string>(
         });
 
         deliveries.push({ body: rendered.body, channel: rule.channel, destination: rule.destination, id, subject: rendered.subject });
+        fired += 1;
     }
 
-    return deliveries;
+    return { cleared, deliveries, fired };
 };
 
 /** An IPv4 octet's digit shape (numeric range is checked separately). */
@@ -490,4 +567,67 @@ export const isSafeWebhookUrl = (destination: string): boolean => {
     }
 
     return !isPrivateIpv4(host);
+};
+
+// ── Delivery-channel payloads (webhook / slack / pagerduty) ──────────────────
+//
+// `email` is delivered through the mailer; the other three channels are typed
+// JSON POSTs. Each renders a channel-appropriate body from the shared
+// `{ subject, body, destination }` shape so the edge (`src/mail/notify.ts`) can
+// deliver any channel uniformly, and the shapes stay unit-testable here.
+
+/** The single, fixed PagerDuty Events API v2 ingestion endpoint — the routing key selects the service. */
+export const PAGERDUTY_EVENTS_URL = "https://events.pagerduty.com/v2/enqueue";
+
+/** The subset of a fired alert the channel renderers read. */
+export interface ChannelAlert {
+    body: string;
+    channel: AlertChannel;
+    destination: string;
+    subject: string;
+}
+
+/** Slack incoming-webhook message — subject as a bold heading, body beneath. */
+export const renderSlackPayload = (alert: Pick<ChannelAlert, "body" | "subject">): { text: string } => ({
+    text: `*${alert.subject}*\n${alert.body}`,
+});
+
+/**
+ * PagerDuty Events API v2 `trigger` event. The rule's `destination` is the
+ * integration (routing) key, posted to the fixed {@link PAGERDUTY_EVENTS_URL};
+ * `dedup_key` groups an alert's re-fires into one incident on PagerDuty's side.
+ */
+export const renderPagerDutyPayload = (
+    alert: Pick<ChannelAlert, "body" | "destination" | "subject">,
+): {
+    dedup_key: string;
+    event_action: "trigger";
+    payload: { severity: "error"; source: string; summary: string };
+    routing_key: string;
+} => ({
+    dedup_key: alert.subject,
+    event_action: "trigger",
+    payload: { severity: "error", source: "lunora-cloud", summary: `${alert.subject} — ${alert.body}` },
+    routing_key: alert.destination,
+});
+
+/**
+ * The concrete webhook request (URL + JSON body) for a webhook-family channel.
+ * `slack`/`webhook` POST to the user's `destination` (so it must clear
+ * {@link isSafeWebhookUrl} — an SSRF gate); `pagerduty` POSTs the Events v2
+ * payload to the fixed, trusted PagerDuty endpoint (which itself clears the same
+ * guard, so callers can gate every channel through one check). Not for `email`.
+ */
+export const webhookRequestFor = (alert: ChannelAlert): { body: string; url: string } => {
+    switch (alert.channel) {
+        case "pagerduty": {
+            return { body: JSON.stringify(renderPagerDutyPayload(alert)), url: PAGERDUTY_EVENTS_URL };
+        }
+        case "slack": {
+            return { body: JSON.stringify(renderSlackPayload(alert)), url: alert.destination };
+        }
+        default: {
+            return { body: JSON.stringify({ body: alert.body, subject: alert.subject }), url: alert.destination };
+        }
+    }
 };

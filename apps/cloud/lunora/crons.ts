@@ -49,7 +49,10 @@ crons.interval("purge deleted organizations", { hours: 6 }, internal.organizatio
 crons.interval("prune uptime checks", { hours: 6 }, internal.uptime.prune, {});
 
 // Every-minute heartbeat that emits the `*/1 * * * *` trigger the edge cron
-// fan-out (and the uptime sweep) ride on (§2.4) — the job itself is a no-op; see lunora/fanout.ts.
+// fan-out, the uptime sweep, AND the metric-alert sweep (src/telemetry/sweep.ts —
+// re-evaluates error_rate/latency_p95/llm_cost rules so quiet windows still
+// fire/clear) all ride on (§2.4) — the job itself is a no-op; see lunora/fanout.ts.
+// Folding these onto this one trigger keeps us within Cloudflare's 3-trigger cap.
 crons.interval("tenant cron fan-out tick", { minutes: 1 }, internal.fanout.tick, {});
 
 export default crons;

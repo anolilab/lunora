@@ -1,7 +1,7 @@
 import { fingerprintError } from "@lunora/fingerprint";
 import { LunoraError } from "@lunora/server";
 
-import type { AlertDelivery as AlertDeliveryBase, FiringRule, MetricObservation, MetricRule, MetricTarget } from "../src/telemetry/alerts";
+import type { AlertChannel, AlertDelivery as AlertDeliveryBase, FiringRule, MetricObservation, MetricRule, MetricTarget } from "../src/telemetry/alerts";
 import { fireCrossedRules, fireMetricRules } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
@@ -87,7 +87,7 @@ interface IncidentRow {
 
 interface AlertRuleRow {
     _id: Id<"alertRules">;
-    channel: "email" | "webhook";
+    channel: AlertChannel;
     comparator?: "gt" | "lt";
     destination: string;
     enabled: boolean;
@@ -96,6 +96,13 @@ interface AlertRuleRow {
     target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
     threshold: number;
     windowMinutes?: number;
+}
+
+/** A metric rule's persisted firing latch (alertRuleState), read + advanced by the ingest. */
+interface AlertRuleStateRow {
+    _id: Id<"alertRuleState">;
+    firing: boolean;
+    ruleId: Id<"alertRules">;
 }
 
 /** Count-crossing rule targets the ingest evaluates via `fireCrossedRules`. */
@@ -276,9 +283,10 @@ export const ingest = mutation
             ctx: context,
             args,
         }): Promise<{
-            // Inlined (not `AlertDelivery[]`) so codegen serializes the return type
+            // Inlined (not `AlertDelivery[]`, and the channel union spelled out not
+            // via the `AlertChannel` alias) so codegen serializes the return type
             // without an unresolved type reference — see `members.ts`.
-            alerts: { body: string; channel: "email" | "webhook"; destination: string; id: Id<"alerts">; subject: string }[];
+            alerts: { body: string; channel: "email" | "pagerduty" | "slack" | "webhook"; destination: string; id: Id<"alerts">; subject: string }[];
             incidents: number;
             issues: number;
         }> => {
@@ -390,13 +398,12 @@ export const ingest = mutation
                 });
             }
 
-            // Metric-window rules — evaluated once over the org's recent
-            // observations (this batch's spans are already persisted above), only
-            // when such a rule exists so the common no-metric-rules path pays
-            // nothing. Edge-triggered inside `fireMetricRules`, so a sustained
-            // breach alerts once, not every ingest. FOLLOW-UP: windows with no
-            // fresh ingest (e.g. error_rate falling to 0) aren't re-evaluated
-            // here — a periodic sweep (like the uptime sweep) would close that.
+            // Metric-window rules — evaluated over the org's recent observations
+            // (this batch's spans are already persisted above), only when such a
+            // rule exists so the common no-metric-rules path pays nothing. This is
+            // the fast-feedback path; the level-triggered latch in `alertRuleState`
+            // (shared with the periodic sweep in `src/telemetry/sweep.ts`) makes a
+            // sustained breach alert once and lets a quiet window still clear + re-arm.
             if (metricRules.length > 0) {
                 const { page: observationPage } = await context.db.observations.findMany({
                     limit: METRIC_SCAN_LIMIT,
@@ -404,9 +411,36 @@ export const ingest = mutation
                     where: { organizationId: args.organizationId },
                 });
                 const windowObservations = observationPage as unknown as MetricObservationRow[];
-                const metricFired = await fireMetricRules(metricRules, windowObservations, args.organizationId, insertAlert, now);
+                const { page: statePage } = await context.db.alertRuleState.findMany({ where: { organizationId: args.organizationId } });
+                const stateByRule = new Map((statePage as unknown as AlertRuleStateRow[]).map((row) => [row.ruleId as string, row]));
 
-                firedAlerts.push(...metricFired);
+                const outcome = await fireMetricRules(
+                    metricRules,
+                    windowObservations,
+                    args.organizationId,
+                    {
+                        insertAlert,
+                        wasFiring: (ruleId) => stateByRule.get(ruleId)?.firing ?? false,
+                        writeState: async (ruleId, firing, value) => {
+                            const existing = stateByRule.get(ruleId);
+
+                            await (existing
+                                ? context.db.patch(existing._id, { firing, lastEvaluatedAt: now, lastValue: value, updatedAt: now })
+                                : context.db.insert("alertRuleState", {
+                                      createdAt: now,
+                                      firing,
+                                      lastEvaluatedAt: now,
+                                      lastValue: value,
+                                      organizationId: args.organizationId,
+                                      ruleId: ruleId as Id<"alertRules">,
+                                      updatedAt: now,
+                                  }));
+                        },
+                    },
+                    now,
+                );
+
+                firedAlerts.push(...outcome.deliveries);
             }
 
             return { alerts: firedAlerts, incidents, issues };

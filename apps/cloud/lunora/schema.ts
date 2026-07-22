@@ -528,7 +528,9 @@ export default defineSchema({
     // Configured from the dashboard; evaluated (pure) inside the telemetry ingest
     // (metric rules) / uptime sweep (uptime).
     alertRules: defineTable({
-        channel: v.union(v.literal("email"), v.literal("webhook")),
+        // Delivery channel. `email` via the mailer; `webhook`/`slack`/`pagerduty`
+        // are typed JSON POSTs (Slack incoming-webhook JSON, PagerDuty Events v2).
+        channel: v.union(v.literal("email"), v.literal("webhook"), v.literal("slack"), v.literal("pagerduty")),
         // How the metric value is compared to `threshold` (metric targets only).
         // Absent ⇒ `gt`; irrelevant for count-crossing targets.
         comparator: v.optional(v.union(v.literal("gt"), v.literal("lt"))),
@@ -565,6 +567,31 @@ export default defineSchema({
         .global()
         .index("by_org", ["organizationId"]),
 
+    // Per-rule firing state for METRIC-window rules (error_rate/latency_p95/llm_cost)
+    // — the level-triggered latch behind the alert sweep (src/telemetry/sweep.ts),
+    // analogous to `uptimeState` for uptime. A metric rule's window value rises and
+    // falls, so — unlike a monotone count crossing — it needs remembered state to
+    // fire once on a breach and re-arm on recovery. Both the ingest path and the
+    // periodic sweep read/advance this latch, so a sustained breach alerts once and
+    // a window that goes quiet still clears (and can fire again later). One row per
+    // rule; count-crossing/uptime rules don't use it.
+    alertRuleState: defineTable({
+        createdAt: v.number(),
+        // `true` while the rule's window is over threshold (already alerted).
+        firing: v.boolean(),
+        // When the sweep/ingest last evaluated this rule (freshness/debugging).
+        lastEvaluatedAt: v.number(),
+        // The window metric value at the last evaluation (audit/debugging).
+        lastValue: v.number(),
+        organizationId: v.id("organizations"),
+        ruleId: v.id("alertRules"),
+        updatedAt: v.number(),
+    })
+        .global()
+        // One state row per rule; the ingest/sweep upsert through this index.
+        .index("by_rule", ["ruleId"], { unique: true })
+        .index("by_org", ["organizationId"]),
+
     // Fired alerts — the audit trail + delivery state for each rule trip. The
     // ingest inserts a `firing` row (with the notification denormalized so the
     // edge needs no re-read); the edge delivers it (email/webhook) and stamps it
@@ -572,7 +599,7 @@ export default defineSchema({
     alerts: defineTable({
         // Rendered notification content, denormalized at fire time.
         body: v.string(),
-        channel: v.union(v.literal("email"), v.literal("webhook")),
+        channel: v.union(v.literal("email"), v.literal("webhook"), v.literal("slack"), v.literal("pagerduty")),
         createdAt: v.number(),
         deliveredAt: v.optional(v.number()),
         destination: v.string(),

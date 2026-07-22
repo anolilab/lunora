@@ -84,6 +84,14 @@
                           {
                             "const": "webhook",
                             "type": "string"
+                          },
+                          {
+                            "const": "slack",
+                            "type": "string"
+                          },
+                          {
+                            "const": "pagerduty",
+                            "type": "string"
                           }
                         ]
                       },
