@@ -13,6 +13,8 @@ import type {
     KvNamespaceSummary,
     KvValueResult,
     LunoraClient,
+    PipelineLogPage,
+    PipelineLogQuery,
     ScheduleRecord,
     ShardTrafficResult,
     StorageListPage,
@@ -75,6 +77,7 @@ interface MockClientHooks {
     mutation: ReturnType<typeof vi.fn>;
     putKvValue: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
+    queryLogArchive: ReturnType<typeof vi.fn>;
     queryVectorIndex: ReturnType<typeof vi.fn>;
     readGlobalTablePage: ReturnType<typeof vi.fn>;
     removeAuthOrgMember: ReturnType<typeof vi.fn>;
@@ -139,6 +142,7 @@ interface MockClientImpls {
     listVectorIndexes?: () => VectorIndexSummary[];
     mutation?: Impl;
     query?: Impl;
+    queryLogArchive?: (query?: PipelineLogQuery) => PipelineLogPage;
     queryVectorIndex?: (options: { name: string; text: string; topK?: number }) => VectorQueryMatch[];
     readGlobalTablePage?: (options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) => GlobalTablePage;
     runCronJob?: (name: string) => { name: string; ran: boolean };
@@ -219,6 +223,9 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const listVectorIndexes = vi.fn<() => Promise<VectorIndexSummary[]>>(async () => impls.listVectorIndexes?.() ?? []);
     const queryVectorIndex = vi.fn<(options: { name: string; text: string; topK?: number }) => Promise<VectorQueryMatch[]>>(
         async (options: { name: string; text: string; topK?: number }) => impls.queryVectorIndex?.(options) ?? [],
+    );
+    const queryLogArchive = vi.fn<(logQuery?: PipelineLogQuery) => Promise<PipelineLogPage>>(
+        async (logQuery?: PipelineLogQuery) => impls.queryLogArchive?.(logQuery) ?? { rows: [] },
     );
     const readGlobalTablePage = vi.fn<
         (options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>
@@ -469,6 +476,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         mutation,
         putKvValue,
         query,
+        queryLogArchive,
         queryVectorIndex,
         readGlobalTablePage,
         runCronJob,
@@ -507,6 +515,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         mutation,
         putKvValue,
         query,
+        queryLogArchive,
         queryVectorIndex,
         readGlobalTablePage,
         runCronJob,

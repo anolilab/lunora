@@ -22,6 +22,9 @@ import { CLOUDFLARE_OBSERVABILITY_URL } from "../../lib/cf-links";
 import { recordShard } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
 import flooredRectObserver from "../../lib/virtual-rect";
+import { ArchiveFeed } from "./archive-feed";
+import type { BadgeVariant } from "./log-level-variant";
+import { LEVEL_VARIANT } from "./log-level-variant";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
 const SCROLL_HEIGHT = 400;
@@ -38,24 +41,6 @@ const ROW_BASE_STYLE: CSSProperties = {
     position: "absolute",
     top: 0,
     width: "100%",
-};
-
-type BadgeVariant = "default" | "destructive" | "outline" | "secondary";
-
-/**
- * Maps a log level to a shadcn Badge variant for Supabase-style severity chips.
- * `fatal` shares `error`'s destructive tone (it is the louder of the two, and the
- * label itself distinguishes them); `trace` reads quieter than `debug`, and the
- * default `log` tier reads like `info`.
- */
-const LEVEL_VARIANT: Record<LogLevel, BadgeVariant> = {
-    debug: "secondary",
-    error: "destructive",
-    fatal: "destructive",
-    info: "outline",
-    log: "outline",
-    trace: "outline",
-    warn: "secondary",
 };
 
 /** Tone per request outcome — an `error` reads as the most alarming. */
@@ -187,7 +172,7 @@ const entriesOf = <T,>(result: unknown): T[] => {
 };
 
 /** Which feed the panel shows: the durable per-request log, or the in-memory error buffer. */
-type LogsView = "errors" | "requests";
+type LogsView = "archive" | "errors" | "requests";
 
 /**
  * Build the server-side `getRequestLog` filter args, dropping empty fields so an
@@ -578,6 +563,11 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         setShowSummary(false);
     };
 
+    const showArchive = (): void => {
+        setView("archive");
+        setShowSummary(false);
+    };
+
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-logs">
             <div className="flex flex-wrap items-center gap-2">
@@ -602,9 +592,21 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                     >
                         {t("Errors")}
                     </button>
+                    <button
+                        aria-selected={view === "archive"}
+                        className={cn("px-3 py-1 text-sm", view === "archive" ? "bg-muted font-medium" : "text-muted-foreground")}
+                        data-testid="lg-view-archive"
+                        onClick={showArchive}
+                        role="tab"
+                        type="button"
+                    >
+                        {t("Archive")}
+                    </button>
                 </div>
                 <ShardInput onChange={setShardKey} testId="lg-shard-input" value={shardKey} />
-                <LiveError message={liveError} prefix="lg" />
+                {/* The Archive feed is HTTP-only (no WS), so it never has a live-connection
+                    status — don't leak the (disabled) Errors feed's `liveError` into it. */}
+                {view !== "archive" && <LiveError message={liveError} prefix="lg" />}
                 <a
                     className="text-sm text-primary underline-offset-4 hover:underline"
                     data-testid="lg-cf-link"
@@ -706,77 +708,86 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 </div>
             )}
 
-            {readout === "error" && <ErrorAlert error={errorSource} testId="lg-error" />}
+            {/* Archive is a wholly separate view (its own HTTP feed), mutually exclusive
+                with the readout state machine — so it's gated once, not negated on every
+                `readout` branch. */}
+            {view === "archive" ? (
+                <ArchiveFeed shardKey={debouncedShard} />
+            ) : (
+                <>
+                    {readout === "error" && <ErrorAlert error={errorSource} testId="lg-error" />}
 
-            {readout === "empty" && (
-                <EmptyState
-                    description={t("Function and request logs for this shard show up here as your app handles traffic.")}
-                    icon={
-                        <svg
-                            aria-hidden="true"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1.6}
-                            viewBox="0 0 24 24"
-                        >
-                            <path d="M4 5h16M4 12h16M4 19h10" />
-                        </svg>
-                    }
-                    testId="lg-empty"
-                    title={t("No logs.")}
-                />
-            )}
+                    {readout === "empty" && (
+                        <EmptyState
+                            description={t("Function and request logs for this shard show up here as your app handles traffic.")}
+                            icon={
+                                <svg
+                                    aria-hidden="true"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={1.6}
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path d="M4 5h16M4 12h16M4 19h10" />
+                                </svg>
+                            }
+                            testId="lg-empty"
+                            title={t("No logs.")}
+                        />
+                    )}
 
-            {readout === "summary" && (
-                <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4 shadow-xs" data-testid="logs-summary">
-                    <p className="text-xs text-muted-foreground" data-testid="logs-summary-total">
-                        {t("{count} entries", { count: summary.total })}
-                    </p>
-                    <div>
-                        <h4 className="mb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("By level")}</h4>
-                        <div className="overflow-hidden rounded-lg border border-border" data-testid="logs-summary-levels" role="grid">
-                            {summary.byLevel.map((bucket) => (
-                                <SummaryBucketRow bucket={bucket} key={bucket.key} />
-                            ))}
+                    {readout === "summary" && (
+                        <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4 shadow-xs" data-testid="logs-summary">
+                            <p className="text-xs text-muted-foreground" data-testid="logs-summary-total">
+                                {t("{count} entries", { count: summary.total })}
+                            </p>
+                            <div>
+                                <h4 className="mb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("By level")}</h4>
+                                <div className="overflow-hidden rounded-lg border border-border" data-testid="logs-summary-levels" role="grid">
+                                    {summary.byLevel.map((bucket) => (
+                                        <SummaryBucketRow bucket={bucket} key={bucket.key} />
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <h4 className="mb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("By function")}</h4>
+                                <div className="overflow-hidden rounded-lg border border-border" data-testid="logs-summary-paths" role="grid">
+                                    {summary.byPath.map((bucket) => (
+                                        <SummaryBucketRow bucket={bucket} key={bucket.key} />
+                                    ))}
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                    <div>
-                        <h4 className="mb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("By function")}</h4>
-                        <div className="overflow-hidden rounded-lg border border-border" data-testid="logs-summary-paths" role="grid">
-                            {summary.byPath.map((bucket) => (
-                                <SummaryBucketRow bucket={bucket} key={bucket.key} />
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
+                    )}
 
-            {readout === "list" && (
-                <div className="rounded-xl border border-border shadow-xs" data-testid="lg-scroll" ref={scrollRef} style={SCROLL_STYLE}>
-                    <div aria-label={t("Recent logs")} data-testid="lg-table" role="grid" style={gridStyle}>
-                        {virtualRows.map((virtualRow) =>
-                            view === "requests" ? (
-                                <RequestRow
-                                    entry={requests[virtualRow.index] as RequestLogEntry}
-                                    index={virtualRow.index}
-                                    key={virtualRow.key}
-                                    measureRef={virtualizer.measureElement}
-                                    start={virtualRow.start}
-                                />
-                            ) : (
-                                <LogRow
-                                    entry={filtered[virtualRow.index] as LogEntry}
-                                    index={virtualRow.index}
-                                    key={virtualRow.key}
-                                    measureRef={virtualizer.measureElement}
-                                    start={virtualRow.start}
-                                />
-                            ),
-                        )}
-                    </div>
-                </div>
+                    {readout === "list" && (
+                        <div className="rounded-xl border border-border shadow-xs" data-testid="lg-scroll" ref={scrollRef} style={SCROLL_STYLE}>
+                            <div aria-label={t("Recent logs")} data-testid="lg-table" role="grid" style={gridStyle}>
+                                {virtualRows.map((virtualRow) =>
+                                    view === "requests" ? (
+                                        <RequestRow
+                                            entry={requests[virtualRow.index] as RequestLogEntry}
+                                            index={virtualRow.index}
+                                            key={virtualRow.key}
+                                            measureRef={virtualizer.measureElement}
+                                            start={virtualRow.start}
+                                        />
+                                    ) : (
+                                        <LogRow
+                                            entry={filtered[virtualRow.index] as LogEntry}
+                                            index={virtualRow.index}
+                                            key={virtualRow.key}
+                                            measureRef={virtualizer.measureElement}
+                                            start={virtualRow.start}
+                                        />
+                                    ),
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </>
             )}
         </div>
     );

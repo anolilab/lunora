@@ -905,6 +905,18 @@ interface KvValueResult {
 }
 ```
 
+### `LOG_ARCHIVE_NOT_CONFIGURED` (const)
+
+```ts
+const LOG_ARCHIVE_NOT_CONFIGURED = "LOG_ARCHIVE_NOT_CONFIGURED";
+```
+
+### `LOG_ARCHIVE_PATH` (const)
+
+```ts
+const LOG_ARCHIVE_PATH = "/_lunora/admin/logs/archive";
+```
+
 ### `ListAuthUsersOptions` (interface)
 
 ```ts
@@ -917,6 +929,16 @@ interface ListAuthUsersOptions {
     searchField?: string;
     sortBy?: string;
     sortDirection?: "asc" | "desc";
+}
+```
+
+### `LogArchiveConfig` (interface)
+
+```ts
+interface LogArchiveConfig {
+    columnMap?: PipelineLogColumnMap;
+    namespace?: string;
+    table: string;
 }
 ```
 
@@ -1699,6 +1721,7 @@ interface WorkerOptions {
     importGlobals?: GlobalImportFunction;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
+    logArchive?: LogArchiveConfig;
     observability?: ObservabilitySink;
     openApiSpec?: unknown;
     openRpcSpec?: unknown;
@@ -1866,6 +1889,12 @@ const otlpSink: (options: OtlpSinkOptions) => ObservabilitySink;
 
 ```ts
 const pipelineLogSink: (options: PipelineLogSinkOptions) => ObservabilitySink;
+```
+
+### `resolveLogArchiveFromEnv` (const)
+
+```ts
+const resolveLogArchiveFromEnv: (environment: unknown) => LogArchiveConfig | undefined;
 ```
 
 ### `resolveLunoraOptions` (const)

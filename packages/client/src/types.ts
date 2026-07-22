@@ -947,6 +947,9 @@ export interface FunctionDescriptor {
 // and re-exported here for SDK consumers — a single source of truth, no hand-kept
 // copies to drift. Type-only re-export, so no worker code reaches the browser SDK.
 export type { CronJobInfo, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult, VectorIndexSummary, VectorQueryMatch } from "@lunora/runtime";
+// The durable log-archive wire types, owned by `@lunora/runtime` (the reader) and
+// re-exported here so the studio's `queryLogArchive` shares one source of truth.
+export type { PipelineLogColumnMap, PipelineLogCursor, PipelineLogField, PipelineLogPage, PipelineLogQuery, PipelineLogRow } from "@lunora/runtime";
 
 /** A `.global()` (D1-backed) table plus its row count, from `/_lunora/admin/global/tables`. */
 export interface GlobalTableInfo {
