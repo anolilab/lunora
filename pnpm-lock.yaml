@@ -3588,6 +3588,9 @@ importers:
       '@lunora/mail':
         specifier: workspace:*
         version: link:../mail
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@tailwindcss/cli':
         specifier: catalog:vite
         version: 4.3.3

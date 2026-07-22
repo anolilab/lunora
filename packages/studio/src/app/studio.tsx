@@ -87,6 +87,7 @@ const AuthSessionsPanel = lazyNamed(() => import("../features/auth/auth-sessions
 const OrganizationsPanel = lazyNamed(() => import("../features/auth/organizations-panel"), "OrganizationsPanel");
 const UsersPanel = lazyNamed(() => import("../features/auth/users-panel"), "UsersPanel");
 const ContainersPanel = lazyNamed(() => import("../features/containers/containers-panel"), "ContainersPanel");
+const DeploymentHealthPanel = lazyNamed(() => import("../features/health/deployment-health-panel"), "DeploymentHealthPanel");
 const TableEditor = lazyNamed(() => import("../features/data/table-editor"), "TableEditor");
 const ExportImportPanel = lazyNamed(() => import("../features/database/export-import"), "ExportImportPanel");
 const MigrationsPanel = lazyNamed(() => import("../features/database/migrations"), "MigrationsPanel");
@@ -136,6 +137,7 @@ type StudioTab =
     | "containers"
     | "dashboards"
     | "data"
+    | "deploymentHealth"
     | "drains"
     | "export"
     | "fanout"
@@ -312,6 +314,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     authSessions: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     containers: <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Zm0 0 9 4.5m0 0 9-4.5m-9 4.5V21" />,
     dashboards: <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 14h7v5H4v-5Zm9-1h7v6h-7v-6Z" />,
+    deploymentHealth: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8 2 3 4-5" />,
     drains: <path d="M5 5h14M7 5v6a5 5 0 0 0 10 0V5M10 16h4v3h-4zM12 19v2" />,
     data: (
         <path d="M5 6c0-1.4 3.1-2.5 7-2.5s7 1.1 7 2.5-3.1 2.5-7 2.5S5 7.4 5 6Zm0 0v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
@@ -370,7 +373,10 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "functions", tabs: ["functions", "api", "workflows", "agents", "queues"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
-    { key: "observability", tabs: ["issues", "logs", "traces", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health"] },
+    {
+        key: "observability",
+        tabs: ["issues", "logs", "traces", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health", "deploymentHealth"],
+    },
     { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
     { key: "operations", tabs: ["schedule", "mail", "drains", "payments", "flags"] },
     { key: "settings", tabs: ["settings"] },
@@ -464,6 +470,7 @@ const TABS = exhaustiveRouteTabs([
     "metrics",
     "analytics",
     "health",
+    "deploymentHealth",
     "security",
     "rls",
     "permissions",
@@ -825,6 +832,7 @@ const StudioLayout = (): ReactElement => {
             containers: t("Containers"),
             dashboards: t("Dashboards"),
             data: t("Data"),
+            deploymentHealth: t("Deployment health"),
             drains: t("Log drains"),
             export: t("Export / Import"),
             fanout: t("Fan-out"),
@@ -883,6 +891,7 @@ const StudioLayout = (): ReactElement => {
         containers: t("Live Cloudflare Containers — current lifecycle state per instance from the log stream."),
         dashboards: t("Chart widgets backed by saved read-only SQL queries."),
         data: t("Browse and edit rows across your shard and global tables."),
+        deploymentHealth: t("Live liveness, readiness, and per-binding health from the deployment's /_lunora/health endpoint."),
         drains: t("Forward logs to Logpush, Tail Workers, or a webhook collector."),
         export: t("Export a shard to NDJSON, or import rows from it."),
         fanout: t("Realtime fan-out cost and per-topic subscriber counts for this shard."),
@@ -1097,6 +1106,7 @@ const buildRouter = ({
         containers: <ContainersPanel />,
         dashboards: <DashboardsPanel initialShardKey={initialShardKey} />,
         data: <TableEditor editable={dataEditable} initialShardKey={initialShardKey} />,
+        deploymentHealth: <DeploymentHealthPanel />,
         drains: <LogDrainsPanel />,
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
         fanout: <FanoutPanel initialShardKey={initialShardKey} />,

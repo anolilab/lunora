@@ -42,6 +42,8 @@ export type { FunctionRunnerProps } from "./features/functions/function-runner";
 export { FunctionRunner } from "./features/functions/function-runner";
 export type { FunctionStatsPanelProps } from "./features/functions/function-stats";
 export { FunctionStatsPanel } from "./features/functions/function-stats";
+export type { DeploymentHealthPanelProps, DeploymentHealthProbe, ProbeSnapshot } from "./features/health/deployment-health-panel";
+export { DeploymentHealthPanel } from "./features/health/deployment-health-panel";
 export type { HomePanelProps } from "./features/home/home-panel";
 export { HomePanel } from "./features/home/home-panel";
 export type { AuditPanelProps } from "./features/logs/audit-panel";

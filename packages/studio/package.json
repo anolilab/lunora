@@ -98,6 +98,7 @@
         "@babel/core": "catalog:build",
         "@babel/preset-react": "catalog:build",
         "@lunora/mail": "1.0.0-alpha.16",
+        "@lunora/runtime": "1.0.0-alpha.33",
         "@tailwindcss/cli": "catalog:vite",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",
