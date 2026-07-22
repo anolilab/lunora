@@ -70,6 +70,20 @@ interface EvalResult {
 }
 ```
 
+### `EvaluationAttributeValue` (type)
+
+```ts
+type EvaluationAttributeValue = number | string;
+```
+
+### `EvaluationSpanHandle` (interface)
+
+```ts
+interface EvaluationSpanHandle {
+    setAttributes: (fields: Record<string, EvaluationAttributeValue>) => void;
+}
+```
+
 ### `FakeScheduledJob` (interface)
 
 ```ts
@@ -141,6 +155,17 @@ interface LunoraTestOptions {
     fetch?: typeof globalThis.fetch;
     functions?: FunctionRegistry;
     now?: number;
+}
+```
+
+### `RecordEvaluationInput` (interface)
+
+```ts
+interface RecordEvaluationInput {
+    label?: string;
+    name: string;
+    score: number;
+    span?: EvaluationSpanHandle;
 }
 ```
 
@@ -260,6 +285,12 @@ const containsScorer: (needle: string, options?: {
 const evaluate: (cases: ReadonlyArray<EvalCase>, produce: (input: string) => Promise<string> | string, scorers: ReadonlyArray<Scorer>) => Promise<EvalResult>;
 ```
 
+### `evaluationAttributes` (const)
+
+```ts
+const evaluationAttributes: (input: Pick<RecordEvaluationInput, "label" | "name" | "score">) => Record<string, EvaluationAttributeValue>;
+```
+
 ### `exactMatchScorer` (const)
 
 ```ts
@@ -300,6 +331,12 @@ const llmScorer: (options: {
 
 ```ts
 const lunoraTest: (schema: TestSchema, options?: LunoraTestOptions) => TestHarness;
+```
+
+### `recordEvaluation` (const)
+
+```ts
+const recordEvaluation: (input: RecordEvaluationInput) => Record<string, EvaluationAttributeValue>;
 ```
 
 ### `regexScorer` (const)

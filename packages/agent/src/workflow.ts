@@ -21,7 +21,7 @@ import type { AgentDefinition, AgentFunctionPaths, AgentRunInput, AgentRunResult
  * no-op when no endpoint is set (local / self-hosted) or when the app explicitly
  * set `telemetry.isEnabled: false`.
  */
-const withAutoOtlpTelemetry = (agent: AgentDefinition, env: Record<string, unknown>): AgentDefinition => {
+const withAutoOtlpTelemetry = (agent: AgentDefinition, env: Record<string, unknown>, conversationId?: string): AgentDefinition => {
     const endpoint = env.LUNORA_OTLP_ENDPOINT;
 
     if (typeof endpoint !== "string" || endpoint === "" || agent.telemetry?.isEnabled === false) {
@@ -38,7 +38,10 @@ const withAutoOtlpTelemetry = (agent: AgentDefinition, env: Record<string, unkno
         ...agent,
         telemetry: {
             ...agent.telemetry,
-            integrations: [...existingList, otlpTelemetry({ endpoint, token })],
+            // Tag every generation span with the run's thread as its conversation
+            // id (one thread = one multi-turn conversation), so the cloud groups a
+            // deployed agent's turns with no app wiring. Absent → ungrouped, as before.
+            integrations: [...existingList, otlpTelemetry({ conversationId, endpoint, token })],
             isEnabled: true,
         },
     };
@@ -72,8 +75,10 @@ const compileAgentWorkflow = (
     defineWorkflow<AgentRunInput, AgentRunResult>({
         handler: async (context) => {
             // On the platform, auto-append OTLP generation telemetry from the
-            // injected endpoint; local/self-hosted agents are unaffected.
-            const runtimeAgent = withAutoOtlpTelemetry(agent, context.env);
+            // injected endpoint; local/self-hosted agents are unaffected. The run's
+            // `threadKey` rides along as the conversation/session id so multi-turn
+            // spans group in the cloud.
+            const runtimeAgent = withAutoOtlpTelemetry(agent, context.env, context.params.threadKey);
 
             return runAgentLoop({
                 agent: runtimeAgent,
