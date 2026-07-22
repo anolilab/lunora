@@ -68,6 +68,8 @@
         "architecture",
         "limits",
         "versioning",
+        "---Lunora Cloud---",
+        "cloud/monitoring",
         "---Reference---",
         "packages"
     ]
