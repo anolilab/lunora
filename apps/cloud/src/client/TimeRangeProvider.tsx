@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import { createContext, useContext, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useState } from "react";
 
 import type { TimeRange, TimeRangePreset } from "./time-range";
 import { DEFAULT_TIME_RANGE_PRESET, rangeForPreset, TIME_RANGE_PRESETS } from "./time-range";
@@ -27,15 +27,21 @@ export const TimeRangeProvider = ({
     children: ReactNode;
     initialPreset?: TimeRangePreset;
 }): ReactElement => {
-    const [preset, setPreset] = useState<TimeRangePreset>(initialPreset);
+    // Hold the absolute window in state and snapshot it (via `Date.now()`) only
+    // where it's allowed to be impure: the lazy initializer (once, at mount) and
+    // the `setPreset` event handler. Render stays pure — no `Date.now()` in the
+    // render path — and `from`/`to` stay referentially stable between renders, so
+    // they don't re-fire the live queries.
+    const [range, setRange] = useState<{ preset: TimeRangePreset } & TimeRange>(() => ({
+        preset: initialPreset,
+        ...rangeForPreset(initialPreset, Date.now()),
+    }));
 
-    // Snapshot the absolute window on each preset change (not every render), so
-    // `from`/`to` stay referentially stable and don't re-fire the live queries.
-    const value = useMemo<TimeRangeContextValue>(() => {
-        const { from, to } = rangeForPreset(preset, Date.now());
+    const setPreset = useCallback((preset: TimeRangePreset) => {
+        setRange({ preset, ...rangeForPreset(preset, Date.now()) });
+    }, []);
 
-        return { from, preset, setPreset, to };
-    }, [preset]);
+    const value = useMemo<TimeRangeContextValue>(() => ({ from: range.from, preset: range.preset, setPreset, to: range.to }), [range, setPreset]);
 
     return <TimeRangeContext.Provider value={value}>{children}</TimeRangeContext.Provider>;
 };

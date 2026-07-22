@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { buildTraceTree } from "../telemetry/trace-tree";
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
+import { formatMs, SpanDetail, TraceWaterfall } from "./TraceDetail";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import type { DeploymentId, OrgId, ProjectId } from "./types";
 
@@ -15,9 +16,6 @@ interface TracesSectionProps {
     onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
     organizationId: OrgId;
 }
-
-/** Duration as a compact `12ms` / `1.4s`. */
-const formatMs = (ms: number): string => (ms < 1000 ? `${String(Math.round(ms))}ms` : `${(ms / 1000).toFixed(1)}s`);
 
 /**
  * Traces tab — real-duration, nested trace waterfalls over the span store
@@ -44,18 +42,14 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
     const [traceId, setTraceId] = useState(focusTraceId ?? "");
     const [errorOnly, setErrorOnly] = useState(false);
     const [selectedSpanId, setSelectedSpanId] = useState("");
-    // Archive fallback: the spans `traces.getArchived` returned for a trace D1 no
-    // longer has (aged past the hot window). Keyed to the trace it was fetched for.
-    const [archived, setArchived] = useState<typeof spans>(undefined);
+    // Archive fallback: the spans `traces.getArchived` returned, tagged with the
+    // trace they were fetched for. Keying by `traceId` means a stale fetch for a
+    // previous trace is simply ignored downstream — no reset effect (which would
+    // chain an extra render on every trace switch).
+    const [archived, setArchived] = useState<{ spans: NonNullable<typeof spans>; traceId: string } | undefined>(undefined);
 
     const traces = useQuery(api.traces.list, deploymentId ? { deploymentId, errorOnly, from, organizationId, to } : "skip");
     const spans = useQuery(api.traces.get, traceId ? { organizationId, traceId } : "skip");
-
-    // Reset the archive fallback whenever the open trace changes (the live D1
-    // query re-runs; we only reach for the archive once it comes back empty).
-    useEffect(() => {
-        setArchived(undefined);
-    }, [traceId]);
 
     // D1 has no spans for this trace (loaded, empty) → try the columnar archive
     // (an action — the R2-SQL read is a `fetch`). Fails open to `[]`, so the
@@ -73,12 +67,12 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
             .action(api.traces.getArchived, { organizationId, traceId })
             .then((result) => {
                 if (!cancelled) {
-                    setArchived(result);
+                    setArchived({ spans: result, traceId });
                 }
             })
             .catch(() => {
                 if (!cancelled) {
-                    setArchived([]);
+                    setArchived({ spans: [], traceId });
                 }
             });
 
@@ -87,13 +81,17 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
         };
     }, [client, d1Empty, organizationId, traceId]);
 
+    // Only honor the archive fetch that belongs to the trace currently open (a
+    // stale fetch for a previous trace is ignored — no reset effect needed).
+    const archivedSpans = archived?.traceId === traceId ? archived.spans : undefined;
+
     // Prefer the live D1 spans; fall back to the archived spans when D1 is empty.
-    const displaySpans = spans && spans.length > 0 ? spans : (archived ?? spans);
-    const fromArchive = spans?.length === 0 && (archived?.length ?? 0) > 0;
+    const displaySpans = spans && spans.length > 0 ? spans : (archivedSpans ?? spans);
+    const fromArchive = spans?.length === 0 && (archivedSpans?.length ?? 0) > 0;
 
     const selected = (traces ?? []).find((trace) => trace.traceId === traceId);
     const waterfall = buildTraceTree(displaySpans ?? []);
-    const selectedSpan = (displaySpans ?? []).find((span) => span.spanId === selectedSpanId);
+    const selectedSpan = waterfall.find((span) => span.spanId === selectedSpanId);
 
     // The longest trace on screen, so each list row's latency bar reads relative to it.
     const maxDuration = Math.max(1, ...(traces ?? []).map((trace) => trace.durationMs));
@@ -234,112 +232,18 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
                         </div>
                     </header>
 
-                    {spans === undefined || (d1Empty && archived === undefined) ? <p className="muted">Loading…</p> : null}
-                    {spans !== undefined && !(d1Empty && archived === undefined) && (displaySpans?.length ?? 0) === 0 ? (
+                    {spans === undefined || (d1Empty && archivedSpans === undefined) ? <p className="muted">Loading…</p> : null}
+                    {spans !== undefined && !(d1Empty && archivedSpans === undefined) && (displaySpans?.length ?? 0) === 0 ? (
                         <p className="muted">No spans for this trace in the retention window or the archive.</p>
                     ) : null}
 
-                    <div className="trace-waterfall">
-                        {waterfall.map((row) => (
-                            <div
-                                aria-selected={row.spanId === selectedSpanId}
-                                className={`trace-wrow trace-wrow-click${row.level === "error" ? " trace-wrow-err" : ""}${row.spanId === selectedSpanId ? " active" : ""}`}
-                                key={row.spanId}
-                                onClick={() => setSelectedSpanId(row.spanId === selectedSpanId ? "" : row.spanId)}
-                                onKeyDown={(event) => {
-                                    if (event.key === "Enter" || event.key === " ") {
-                                        event.preventDefault();
-                                        setSelectedSpanId(row.spanId === selectedSpanId ? "" : row.spanId);
-                                    }
-                                }}
-                                role="button"
-                                tabIndex={0}
-                            >
-                                <span className="trace-off">+{String(row.offsetMs)}ms</span>
-                                <div className="trace-track" title={`${formatMs(row.durationMs)} at +${String(row.offsetMs)}ms`}>
-                                    <div
-                                        className={`trace-bar trace-fill-${row.level}`}
-                                        style={{ left: `${String(row.startPct)}%`, width: `${String(Math.max(row.durationPct, 0.8))}%` }}
-                                    />
-                                </div>
-                                <div className="trace-wmeta" style={{ paddingLeft: `${String(row.depth * 16)}px` }}>
-                                    {row.kind === "generation" ? <span className="trace-gen-badge">gen</span> : null}
-                                    {row.functionPath ? <span className="log-fn">{row.functionPath}</span> : <span className="trace-msg">{row.name}</span>}
-                                    <span className="muted"> {formatMs(row.durationMs)}</span>
-                                    {row.kind === "generation" ? (
-                                        <span className="trace-gen-meta">
-                                            {row.model ?? "generation"}
-                                            {row.promptTokens !== undefined || row.completionTokens !== undefined
-                                                ? ` · ${String(row.promptTokens ?? 0)}→${String(row.completionTokens ?? 0)} tok`
-                                                : ""}
-                                        </span>
-                                    ) : null}
-                                    {row.statusMessage ? <span className="log-fields"> {row.statusMessage}</span> : null}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
+                    <TraceWaterfall
+                        onSelect={(spanId) => setSelectedSpanId(spanId === selectedSpanId ? "" : spanId)}
+                        rows={waterfall}
+                        selectedSpanId={selectedSpanId}
+                    />
 
-                    {selectedSpan ? (
-                        <aside className="trace-span-detail">
-                            <header className="trace-span-detail-head">
-                                <span className="trace-span-detail-name">{selectedSpan.name}</span>
-                                <button className="trace-close" onClick={() => setSelectedSpanId("")} type="button">
-                                    Close
-                                </button>
-                            </header>
-                            <dl className="trace-span-detail-grid">
-                                <dt>Span</dt>
-                                <dd className="trace-span-id">{selectedSpan.spanId}</dd>
-                                <dt>Duration</dt>
-                                <dd>{formatMs(selectedSpan.durationMs)}</dd>
-                                <dt>Status</dt>
-                                <dd>{selectedSpan.level === "error" ? <span className="log-badge log-badge-error">error</span> : "ok"}</dd>
-                                {selectedSpan.model ? (
-                                    <>
-                                        <dt>Model</dt>
-                                        <dd>{selectedSpan.model}</dd>
-                                    </>
-                                ) : null}
-                                {selectedSpan.promptTokens !== undefined || selectedSpan.completionTokens !== undefined ? (
-                                    <>
-                                        <dt>Tokens</dt>
-                                        <dd>
-                                            {String(selectedSpan.promptTokens ?? 0)} in · {String(selectedSpan.completionTokens ?? 0)} out
-                                        </dd>
-                                    </>
-                                ) : null}
-                                {selectedSpan.statusMessage ? (
-                                    <>
-                                        <dt>Message</dt>
-                                        <dd>{selectedSpan.statusMessage}</dd>
-                                    </>
-                                ) : null}
-                            </dl>
-                            {selectedSpan.input ? (
-                                <div className="trace-span-io">
-                                    <span className="trace-span-io-label">Input</span>
-                                    <pre className="trace-span-io-body">{selectedSpan.input}</pre>
-                                </div>
-                            ) : null}
-                            {selectedSpan.output ? (
-                                <div className="trace-span-io">
-                                    <span className="trace-span-io-label">Output</span>
-                                    <pre className="trace-span-io-body">{selectedSpan.output}</pre>
-                                </div>
-                            ) : null}
-                            {selectedSpan.attributes && Object.keys(selectedSpan.attributes).length > 0 ? (
-                                <dl className="trace-span-detail-grid">
-                                    {Object.entries(selectedSpan.attributes).map(([key, value]) => (
-                                        <div className="trace-attr-row" key={key}>
-                                            <dt>{key}</dt>
-                                            <dd>{value}</dd>
-                                        </div>
-                                    ))}
-                                </dl>
-                            ) : null}
-                        </aside>
-                    ) : null}
+                    {selectedSpan ? <SpanDetail onClose={() => setSelectedSpanId("")} span={selectedSpan} /> : null}
                 </section>
             ) : null}
         </div>

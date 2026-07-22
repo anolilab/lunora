@@ -101,14 +101,16 @@ export const MetricsSection = ({ organizationId }: MetricsSectionProps): ReactEl
     useEffect(() => {
         let cancelled = false;
 
-        setSeries(undefined);
-        setError(undefined);
-
+        // No synchronous reset here — state is written only in the async callbacks
+        // (the sanctioned effect pattern), so the previous window's series shows
+        // (stale-while-revalidate) until the new one resolves, and `cancelled`
+        // guards against an out-of-order write.
         client
             .action(api.metrics.list, { from, organizationId, to })
             .then((result) => {
                 if (!cancelled) {
                     setSeries(result);
+                    setError(undefined);
                 }
             })
             .catch((caught: unknown) => {
