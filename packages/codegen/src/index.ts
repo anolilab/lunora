@@ -13,6 +13,7 @@ export { default as discoverMaskProcedures } from "./discover-mask-procedures";
 export { default as discoverMigrations } from "./discover-migrations";
 export { discoverMutators, MUTATORS_FILENAME } from "./discover-mutators";
 export { default as discoverNondeterministicCalls } from "./discover-nondeterministic-calls";
+export { discoverNotifyCalls, discoverNotifyConfig, NOTIFY_FILENAME } from "./discover-notify";
 export { default as discoverQueries } from "./discover-queries";
 export { discoverQueues, QUEUES_FILENAME } from "./discover-queues";
 export { default as discoverR2sqlCalls } from "./discover-r2sql-calls";

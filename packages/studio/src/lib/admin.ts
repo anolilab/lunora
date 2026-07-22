@@ -16,6 +16,11 @@
 // Canonical captured-mail wire type, owned by `@lunora/mail`. Type-only: erased
 // at build time, so no mail *runtime* enters the studio's browser bundle.
 import type { CapturedMail } from "@lunora/mail";
+// Canonical registered-device wire type, owned by `@lunora/notify` (the
+// secret-stripped projection the `listPushSubscriptions` RPC returns). Type-only,
+// so no notify *runtime* enters the browser bundle — same allowed direction as
+// the `@lunora/mail` type import above.
+import type { PushSubscriptionDevice } from "@lunora/notify";
 
 export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 
@@ -39,12 +44,14 @@ export const ADMIN_FUNCTIONS = {
     facetColumn: "__lunora_admin__:facetColumn",
     getAdvisories: "__lunora_admin__:getAdvisories",
     getAuditLog: "__lunora_admin__:getAuditLog",
+    getAuthAuditLog: "__lunora_admin__:getAuthAuditLog",
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
     getCapturedMail: "__lunora_admin__:getCapturedMail",
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     getIssues: "__lunora_admin__:getIssues",
     listFlags: "__lunora_admin__:listFlags",
+    listPushSubscriptions: "__lunora_admin__:listPushSubscriptions",
     listQueues: "__lunora_admin__:listQueues",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
@@ -163,6 +170,22 @@ export type { CapturedMail } from "@lunora/mail";
 /** Result of `__lunora_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
 export interface CapturedMailResult {
     entries: CapturedMail[];
+}
+
+/**
+ * One registered `@lunora/notify` device subscription, re-exported verbatim from
+ * `@lunora/notify` (its canonical owner) — the secret-stripped
+ * {@link PushSubscriptionDevice} the `__lunora_admin__:listPushSubscriptions` RPC
+ * returns (endpoint / kind / owner / timestamps + last-send status & error). The
+ * Web Push encryption `keys` and the FCM `token` are dropped server-side and are
+ * NOT part of this shape. Like `CapturedMail`, it shares the real source of truth,
+ * so a field added in `@lunora/notify` flows here automatically.
+ */
+export type { PushSubscriptionDevice } from "@lunora/notify";
+
+/** Payload of a `__lunora_admin__:listPushSubscriptions` call — the registered devices, newest register/send touch first. */
+export interface PushSubscriptionsResult {
+    subscriptions: PushSubscriptionDevice[];
 }
 
 /**
@@ -726,6 +749,32 @@ export interface AuditEntry {
 /** Payload of a `__lunora_admin__:getAuditLog` call: the recorded entries, newest first. */
 export interface AuditLogResult {
     entries: AuditEntry[];
+}
+
+/**
+ * One recorded auth/security event returned by `__lunora_admin__:getAuthAuditLog`,
+ * mirroring `@lunora/auth`'s `AuthAuditEntry`. Unlike the admin-op audit log
+ * (DO-backed, per shard), this trail is the authentication/security forensics
+ * surface stored in the auth D1 database: `event` is the auth event type
+ * (`sign-in`, `password-change`, `mfa-enable`, …); `outcome` whether it
+ * succeeded; `actorId`/`actorEmail` the acting user; `ip`/`userAgent` the client;
+ * `detail` carries redacted extra context; `seq` is the monotonic cursor.
+ */
+export interface AuthAuditEntry {
+    actorEmail?: string;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+    event: string;
+    ip?: string;
+    outcome: "failure" | "success";
+    seq: number;
+    ts: number;
+    userAgent?: string;
+}
+
+/** Payload of a `__lunora_admin__:getAuthAuditLog` call: the recorded auth events, newest first. */
+export interface AuthAuditLogResult {
+    entries: AuthAuditEntry[];
 }
 
 /**

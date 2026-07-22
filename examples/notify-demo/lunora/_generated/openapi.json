@@ -1,0 +1,320 @@
+{
+  "components": {
+    "responses": {
+      "LunoraError": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "additionalProperties": false,
+              "description": "Standard Lunora error envelope.",
+              "properties": {
+                "error": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "description": "Machine-readable error code. Clients switch on this value.",
+                      "enum": [
+                        "BAD_REQUEST",
+                        "CONFLICT",
+                        "COUNT_RLS_UNSUPPORTED",
+                        "FORBIDDEN",
+                        "FUNCTION_NOT_FOUND",
+                        "INTERNAL",
+                        "INTERNAL_SERVER_ERROR",
+                        "METHOD_NOT_ALLOWED",
+                        "NOT_FOUND",
+                        "NOT_IMPLEMENTED",
+                        "PAYLOAD_TOO_LARGE",
+                        "TOO_MANY_REQUESTS",
+                        "UNAUTHORIZED",
+                        "UNPROCESSABLE",
+                        "VALIDATION_ERROR"
+                      ],
+                      "type": "string"
+                    },
+                    "message": {
+                      "description": "Human-readable error message (never echoes internal details).",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        "description": "A Lunora error response. The HTTP status reflects the error code (e.g. BAD_REQUEST→400, UNAUTHORIZED→401, FORBIDDEN→403, NOT_FOUND→404)."
+      }
+    }
+  },
+  "info": {
+    "description": "Auto-generated from @lunora/values-typed functions by @lunora/codegen. Do not edit — run `lunora codegen` to regenerate.",
+    "title": "Lunora API",
+    "version": "0.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/_lunora/rpc#push:announce": {
+      "post": {
+        "description": "Invoke the `mutation` `push:announce` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "push:announce",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "body": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "body",
+                      "title"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "push:announce",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: push:announce",
+        "tags": [
+          "push"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#push:broadcast": {
+      "post": {
+        "description": "Invoke the `action` `push:broadcast` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "push:broadcast",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "body": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "body",
+                      "title"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "push:broadcast",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "action: push:broadcast",
+        "tags": [
+          "push"
+        ],
+        "x-lunora-function-kind": "action"
+      }
+    },
+    "/_lunora/rpc#push:listAnnouncements": {
+      "post": {
+        "description": "Invoke the `query` `push:listAnnouncements` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "push:listAnnouncements",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "push:listAnnouncements",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: push:listAnnouncements",
+        "tags": [
+          "push"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#push:registerDevice": {
+      "post": {
+        "description": "Invoke the `mutation` `push:registerDevice` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "push:registerDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "subscription": {}
+                    },
+                    "required": [
+                      "subscription"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "push:registerDevice",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: push:registerDevice",
+        "tags": [
+          "push"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "Operations declared in `lunora/push`.",
+      "name": "push"
+    }
+  ]
+}

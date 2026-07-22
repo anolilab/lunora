@@ -73,6 +73,9 @@
 "package: mcp":
     - changed-files:
           - any-glob-to-any-file: "packages/mcp/**/*"
+"package: notify":
+    - changed-files:
+          - any-glob-to-any-file: "packages/notify/**/*"
 "package: nuxt":
     - changed-files:
           - any-glob-to-any-file: "packages/nuxt/**/*"

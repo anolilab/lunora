@@ -70,6 +70,15 @@ type CompiledValidatorMap = (source: any) => Record<string, unknown> | typeof DE
 const DEFER_VALIDATION: unique symbol;
 ```
 
+### `GeoPoint` (interface)
+
+```ts
+interface GeoPoint {
+    lat: number;
+    lng: number;
+}
+```
+
 ### `Id` (type)
 
 ```ts
@@ -233,7 +242,7 @@ interface Validator<T = unknown> extends StandardSchemaV1<T, T> {
 ### `ValidatorKind` (type)
 
 ```ts
-type ValidatorKind = "any" | "array" | "bigint" | "boolean" | "bytes" | "date" | "from" | "id" | "literal" | "null" | "number" | "object" | "optional" | "record" | "storage" | "string" | "timestamp" | "union";
+type ValidatorKind = "any" | "array" | "bigint" | "boolean" | "bytes" | "date" | "from" | "geoPoint" | "id" | "literal" | "null" | "number" | "object" | "optional" | "record" | "storage" | "string" | "timestamp" | "union";
 ```
 
 ### `ValidatorMap` (type)
@@ -315,6 +324,7 @@ const v: {
     bytes: typeof bytes;
     date: typeof date;
     from: typeof from;
+    geoPoint: typeof geoPoint;
     id: typeof id;
     literal: typeof literal;
     null: typeof nullValidator;

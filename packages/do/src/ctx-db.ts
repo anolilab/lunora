@@ -50,6 +50,7 @@ import {
     AGG_KEY,
     AGG_VALUE,
     DOC_COLUMN,
+    geoTableName,
     isFtsAvailable,
     jsonPathSql,
     qualifiedJsonPathSql,
@@ -58,6 +59,7 @@ import {
     serializeSqlValue,
     tableColumns,
 } from "./do-sql";
+import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import NotFoundError from "./not-found-error";
 import type { OrderKey, QueryArgs, QueryPage } from "./query-args";
 import { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
@@ -123,6 +125,14 @@ interface SchemaLike {
 
 interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
+
+    /**
+     * Mirror of `@lunora/server`'s `TableDefinition.geoIndexes` (set by
+     * `.geoIndex()`). Each declares a geohash companion over a `v.geoPoint()`
+     * column so `withGeoIndex(name, q => q.near(...) | q.within(...))` resolves
+     * proximity / bounding-box reads. Empty/absent ⇒ the table has no geo index.
+     */
+    readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
 
     /**
@@ -152,6 +162,13 @@ interface TableDefinitionLike {
      */
     readonly softDeleteMode?: { field: string };
     readonly triggerMap?: Record<string, TriggerDefinitionLike>;
+
+    /**
+     * Mirror of `@lunora/server`'s `TableDefinition.ttlPolicy` (set by `.ttl()`).
+     * Drives the DO alarm-driven expiry sweep — see `ttl-sweep.ts`. Absent ⇒ rows
+     * never auto-expire.
+     */
+    readonly ttlPolicy?: { after?: number; field: string };
 }
 
 interface IndexDefinitionLike {
@@ -164,6 +181,13 @@ interface SearchIndexDefinitionLike {
     readonly field: string;
     readonly filterFields?: ReadonlyArray<string>;
     readonly name: string;
+}
+
+/** Mirror of `@lunora/server`'s `GeoIndexDefinition` — a geohash companion over a `v.geoPoint()` column. */
+interface GeoIndexDefinitionLike {
+    readonly field: string;
+    readonly name: string;
+    readonly precision?: number;
 }
 
 /**
@@ -244,7 +268,7 @@ type ReadHook = (table: string, idOrScan?: string) => void;
  * No-op by default; called at most once per read (not per row), so it adds no
  * meaningful hot-path cost.
  */
-type IndexUseHook = (table: string, indexName: string, kind: "index" | "rank" | "search") => void;
+type IndexUseHook = (table: string, indexName: string, kind: "geo" | "index" | "rank" | "search") => void;
 
 /** Pluggable wall clock — defaults to `Date.now`. */
 type Clock = () => number;
@@ -418,6 +442,11 @@ interface SearchFilterBuilderLike {
     search: (field: string, query: string) => SearchFilterBuilderLike;
 }
 
+interface GeoFilterBuilderLike {
+    near: (point: { lat: number; lng: number }, radiusMeters: number) => GeoFilterBuilderLike;
+    within: (box: { ne: { lat: number; lng: number }; sw: { lat: number; lng: number } }) => GeoFilterBuilderLike;
+}
+
 /** Options accepted by {@link TableReaderLike.paginate} — Convex-compatible. */
 interface PaginationOptions {
     /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
@@ -459,6 +488,7 @@ interface TableReaderLike {
      * more than one matches. Mirrors Convex's `.unique()`.
      */
     unique: () => Promise<Record<string, unknown> | null>;
+    withGeoIndex: (indexName: string, build: (q: GeoFilterBuilderLike) => GeoFilterBuilderLike) => TableReaderLike;
     withIndex: (indexName: string, range?: (q: IndexRangeBuilderLike) => IndexRangeBuilderLike) => TableReaderLike;
     withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => TableReaderLike;
 }
@@ -769,7 +799,25 @@ interface SearchStage {
     query: string;
 }
 
+interface GeoNearFilter {
+    point: { lat: number; lng: number };
+    radiusMeters: number;
+}
+
+interface GeoWithinFilter {
+    ne: { lat: number; lng: number };
+    sw: { lat: number; lng: number };
+}
+
+interface GeoStage {
+    definition: GeoIndexDefinitionLike;
+    indexName: string;
+    near?: GeoNearFilter;
+    within?: GeoWithinFilter;
+}
+
 interface QueryStage {
+    geo?: GeoStage;
     indexFields: ReadonlyArray<string>;
     indexName: string | undefined;
     inMemoryFilters: ((record: Record<string, unknown>) => boolean)[];
@@ -949,6 +997,213 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
     const docs = scored.map((entry) => entry.doc);
 
     return typeof limit === "number" ? docs.slice(0, Math.max(0, Math.floor(limit))) : docs;
+};
+
+/** Builder for `withGeoIndex(name, q => q.near(...) | q.within(...))`; mutates the staged geo query in place. */
+const createGeoBuilder = (geo: GeoStage, tableName: string): GeoFilterBuilderLike => {
+    // Alias so the mutation is on a local binding, not the parameter (no-param-reassign) —
+    // same pattern as `createSearchBuilder`.
+    const staged = geo;
+    const builder: GeoFilterBuilderLike = {
+        near: (point, radiusMeters) => {
+            if (staged.within) {
+                throw new LunoraError("INTERNAL", `geo index "${staged.indexName}" on table "${tableName}": call .near() or .within(), not both`);
+            }
+
+            staged.near = { point: { lat: point.lat, lng: point.lng }, radiusMeters };
+
+            return builder;
+        },
+        within: (box) => {
+            if (staged.near) {
+                throw new LunoraError("INTERNAL", `geo index "${staged.indexName}" on table "${tableName}": call .near() or .within(), not both`);
+            }
+
+            staged.within = { ne: { lat: box.ne.lat, lng: box.ne.lng }, sw: { lat: box.sw.lat, lng: box.sw.lng } };
+
+            return builder;
+        },
+    };
+
+    return builder;
+};
+
+/** Read a `{ lat, lng }` geo point off a stored document, or `undefined` when the column is absent/malformed. */
+const readGeoPoint = (document: Record<string, unknown>, field: string): { lat: number; lng: number } | undefined => {
+    const value = document[field];
+
+    if (value === null || typeof value !== "object") {
+        return undefined;
+    }
+
+    const { lat, lng } = value as { lat?: unknown; lng?: unknown };
+
+    return typeof lat === "number" && typeof lng === "number" ? { lat, lng } : undefined;
+};
+
+/** One scored geo candidate, or `undefined` when the row has no readable point or falls outside the query. */
+const scoreGeoRow = (record: Record<string, unknown>, geo: GeoStage): { creationTime: number; distance: number } | undefined => {
+    const point = readGeoPoint(record, geo.definition.field);
+
+    if (!point) {
+        return undefined;
+    }
+
+    const creationTime = typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0;
+
+    if (geo.near) {
+        const distance = haversineMeters(geo.near.point, point);
+
+        return distance <= geo.near.radiusMeters ? { creationTime, distance } : undefined;
+    }
+
+    return pointInBoundingBox(point, geo.within as GeoWithinFilter) ? { creationTime, distance: 0 } : undefined;
+};
+
+/**
+ * Resolve a `withGeoIndex(...)` query: gather the covering geohash prefixes for
+ * the near-circle / bounding-box, range-scan the geohash companion for candidate
+ * rows, JOIN back to the document table, then refine + order exactly in JS —
+ * Haversine distance (nearest-first) for `.near()`, an inclusive box test
+ * (creation-time order) for `.within()`. `.take(n)` is applied AFTER the refine.
+ */
+const runGeoFetch = (sql: SqlExec, tableName: string, geo: GeoStage, limit: number | undefined, scopeCondition?: SQL): Record<string, unknown>[] => {
+    if (!geo.near && !geo.within) {
+        throw new LunoraError("INTERNAL", `geo index "${geo.indexName}" on table "${tableName}": call .near(point, radius) or .within(box)`);
+    }
+
+    const prefixes = geo.near ? coveringGeohashes(geo.near.point, geo.near.radiusMeters) : boundingBoxGeohashes(geo.within as GeoWithinFilter);
+    const geoTable = geoTableName(tableName, geo.indexName);
+
+    // Each geohash prefix P matches rows whose hash is in `[P, P + "{")` — "{"
+    // (0x7b) is the byte just past the base-32 alphabet's max char "z" (0x7a),
+    // so the half-open range is exactly the "starts with P" set.
+    const prefixClauses = prefixes.map(
+        (prefix) => dsql`(g.${dsql.identifier("__geohash__")} >= ${prefix} AND g.${dsql.identifier("__geohash__")} < ${`${prefix}{`})`,
+    );
+    const whereClauses: SQL[] = [dsql`(${dsql.join(prefixClauses, dsql` OR `)})`];
+
+    if (scopeCondition) {
+        whereClauses.push(scopeCondition);
+    }
+
+    const query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(geoTable)} g JOIN ${dsql.identifier(tableName)} m ON m.id = g.${dsql.identifier("__id__")} WHERE ${dsql.join(whereClauses, dsql` AND `)}`;
+    const rows = runDrizzle(sql, query).toArray();
+
+    const scored: { creationTime: number; distance: number; doc: Record<string, unknown> }[] = [];
+
+    for (const row of rows) {
+        const record = rowToDocument(row);
+        const score = record ? scoreGeoRow(record, geo) : undefined;
+
+        if (record && score) {
+            scored.push({ creationTime: score.creationTime, distance: score.distance, doc: record });
+        }
+    }
+
+    // `.near()` orders nearest-first (ties newest-first); `.within()` has no
+    // distance metric, so it orders newest-first like a default list read.
+    scored.sort((a, b) => a.distance - b.distance || b.creationTime - a.creationTime);
+
+    const docs = scored.map((entry) => entry.doc);
+
+    return typeof limit === "number" ? docs.slice(0, Math.max(0, Math.floor(limit))) : docs;
+};
+
+/**
+ * Run a staged geo query terminal: resolve the candidates via {@link runGeoFetch}
+ * (letting SQL cap the result when there are no in-memory `.filter()` predicates),
+ * then apply any predicates + the effective limit in memory. Mirrors the search
+ * terminal's split so the reader's `runFetch` stays a thin dispatcher.
+ */
+const runGeoTerminal = (
+    sql: SqlExec,
+    tableName: string,
+    stage: QueryStage,
+    scopeCondition: SQL | undefined,
+    limit: number | undefined,
+): Record<string, unknown>[] => {
+    const { geo } = stage;
+
+    if (!geo) {
+        throw new LunoraError("INTERNAL", "runGeoTerminal called without a staged geo query");
+    }
+
+    const filtered = stage.inMemoryFilters.length > 0;
+    const docs = runGeoFetch(sql, tableName, geo, filtered ? undefined : limit, scopeCondition);
+
+    if (!filtered) {
+        return docs;
+    }
+
+    const result: Record<string, unknown>[] = [];
+
+    for (const record of docs) {
+        if (stage.inMemoryFilters.every((predicate) => predicate(record))) {
+            result.push(record);
+
+            if (typeof limit === "number" && result.length >= limit) {
+                break;
+            }
+        }
+    }
+
+    return result;
+};
+
+/**
+ * Run the plain (non-search, non-geo) fetch terminal: compile the staged
+ * `sqlConditions` + soft-delete scope into a `WHERE`, order by `orderClause`,
+ * push the `LIMIT` down when there are no in-memory `.filter()` predicates, and
+ * apply any predicates + limit in memory otherwise. Extracted from `runFetch` so
+ * the reader's dispatcher stays small.
+ */
+const runPlainFetch = (
+    sql: SqlExec,
+    tableName: string,
+    stage: QueryStage,
+    scopeCondition: SQL | undefined,
+    orderClause: SQL,
+    limit: number | undefined,
+): Record<string, unknown>[] => {
+    const whereClauses: SQL[] = [];
+
+    for (const condition of stage.sqlConditions) {
+        whereClauses.push(dsql`${jsonPathSql(condition.field)} ${dsql.raw(condition.comparator)} ${serializeSqlValue(condition.value)}`);
+    }
+
+    if (scopeCondition) {
+        whereClauses.push(scopeCondition);
+    }
+
+    let query = dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`;
+
+    if (whereClauses.length > 0) {
+        query = dsql`${query} WHERE ${dsql.join(whereClauses, dsql` AND `)}`;
+    }
+
+    query = dsql`${query} ORDER BY ${orderClause}`;
+
+    if (typeof limit === "number" && stage.inMemoryFilters.length === 0) {
+        query = dsql`${query} LIMIT ${dsql.raw(String(Math.max(0, Math.floor(limit))))}`;
+    }
+
+    const rows = runDrizzle(sql, query).toArray();
+    const docs: Record<string, unknown>[] = [];
+
+    for (const row of rows) {
+        const record = rowToDocument(row);
+
+        if (record && stage.inMemoryFilters.every((predicate) => predicate(record))) {
+            docs.push(record);
+
+            if (typeof limit === "number" && docs.length >= limit) {
+                break;
+            }
+        }
+    }
+
+    return docs;
 };
 
 /** DO drizzle `where` strategy (flat): fields via `json_extract`, values via {@link serializeSqlValue}. */
@@ -1266,48 +1521,11 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
             return runSearchFetch(limit);
         }
 
-        const whereClauses: SQL[] = [];
-
-        for (const condition of stage.sqlConditions) {
-            whereClauses.push(dsql`${jsonPathSql(condition.field)} ${dsql.raw(condition.comparator)} ${serializeSqlValue(condition.value)}`);
+        if (stage.geo) {
+            return runGeoTerminal(sql, tableName, stage, scopeCondition, limit);
         }
 
-        if (scopeCondition) {
-            whereClauses.push(scopeCondition);
-        }
-
-        let query = dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`;
-
-        if (whereClauses.length > 0) {
-            query = dsql`${query} WHERE ${dsql.join(whereClauses, dsql` AND `)}`;
-        }
-
-        query = dsql`${query} ORDER BY ${buildOrderClause()}`;
-
-        if (typeof limit === "number" && stage.inMemoryFilters.length === 0) {
-            query = dsql`${query} LIMIT ${dsql.raw(String(Math.max(0, Math.floor(limit))))}`;
-        }
-
-        const rows = runDrizzle(sql, query).toArray();
-        const docs: Record<string, unknown>[] = [];
-
-        for (const row of rows) {
-            const record = rowToDocument(row);
-
-            if (!record) {
-                continue;
-            }
-
-            if (stage.inMemoryFilters.every((predicate) => predicate(record))) {
-                docs.push(record);
-
-                if (typeof limit === "number" && docs.length >= limit) {
-                    break;
-                }
-            }
-        }
-
-        return docs;
+        return runPlainFetch(sql, tableName, stage, scopeCondition, buildOrderClause(), limit);
     };
 
     const reader: TableReaderLike = {
@@ -1338,6 +1556,10 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
                 throw new LunoraError("INTERNAL", "pagination is not supported on search queries; use .take(n) or .collect()");
             }
 
+            if (stage.geo) {
+                throw new LunoraError("INTERNAL", "pagination is not supported on geo queries; use .take(n) or .collect()");
+            }
+
             return paginateStage(sql, tableName, stage, options, scopeCondition);
         },
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
@@ -1356,6 +1578,26 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
 
             // eslint-disable-next-line unicorn/no-null -- documented `unique()` result shape (Doc | null) returned to callers
             return rows[0] ?? null;
+        },
+        withGeoIndex(indexName, build) {
+            const definition = (tableDefinition.geoIndexes ?? []).find((index) => index.name === indexName);
+
+            if (!definition) {
+                throw new LunoraError("INTERNAL", `unknown geo index "${indexName}" on table "${tableName}"`);
+            }
+
+            onIndexUse(tableName, indexName, "geo");
+
+            const geoStage: GeoStage = { definition, indexName };
+
+            stage.geo = geoStage;
+            build(createGeoBuilder(geoStage, tableName));
+
+            if (!geoStage.near && !geoStage.within) {
+                throw new LunoraError("INTERNAL", `geo index "${indexName}" on table "${tableName}" requires a .near(point, radius) or .within(box) call`);
+            }
+
+            return reader;
         },
         withIndex(indexName, range) {
             const definition = tableDefinition.indexes.find((index) => index.name === indexName);
@@ -1919,6 +2161,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         ensureRankBackfilledForTable,
         syncAggregates,
         syncCompanionsForInsert,
+        syncGeo,
         syncRanks,
         syncSearch,
     } = createCompanionSync({
@@ -2307,6 +2550,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // from them (passing `undefined`/`op: "delete"`), exactly like a
                 // physical delete. `restore()` re-adds both via the patch path.
                 syncSearch(tableName, id, merged);
+                // Like rank, the geo companion has no read-time marker filter, so a
+                // soft delete removes the row from it (restore re-adds via patch).
+                syncGeo(tableName, id, undefined);
                 syncAggregates(tableName, existing, merged);
                 syncRanks(tableName, id, existing, undefined);
 
@@ -2343,6 +2589,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             );
 
             syncSearch(tableName, id, undefined);
+            syncGeo(tableName, id, undefined);
             syncAggregates(tableName, existing, undefined);
             syncRanks(tableName, id, existing, undefined);
 
@@ -3021,6 +3268,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             );
 
             syncSearch(tableName, id, merged);
+            syncGeo(tableName, id, merged);
             syncAggregates(tableName, existing, merged);
             syncRanks(tableName, id, existing, merged);
 
@@ -3422,6 +3670,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             );
 
             syncSearch(tableName, id, replaced);
+            syncGeo(tableName, id, replaced);
             syncAggregates(tableName, previous, replaced);
             syncRanks(tableName, id, previous, replaced);
 
@@ -3476,6 +3725,8 @@ export type {
     CountArgs,
     CtxDbOptions,
     DatabaseWriterLike,
+    GeoFilterBuilderLike,
+    GeoIndexDefinitionLike,
     IdGenerator,
     IndexDefinitionLike,
     IndexRangeBuilderLike,

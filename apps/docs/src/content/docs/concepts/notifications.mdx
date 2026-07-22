@@ -1,0 +1,124 @@
+---
+title: Push notifications
+description: Configure defineNotify in lunora/notify.ts for Web Push + FCM, register browser subscriptions, and send via ctx.notify / ctx.push from an action.
+---
+
+`@lunora/notify` adds multi-channel notifications, wrapping the
+[`@visulima/notification`](https://visulima.com/packages/notification) engine.
+**Web Push** and **FCM** come first — both are edge-safe under workerd
+(`fetch` + Web Crypto, no `node:*`) — alongside chat, in-app inbox, and webhook
+channels. It exposes two facades on the function context:
+
+- `ctx.notify` — the multi-channel facade (`send`, `chat`, `inApp`, `webhook`, `push`).
+- `ctx.push` — the device-push sub-facade (`register`, `send`, `broadcast`, `list`, `unregister`).
+
+<Callout type="info">
+    APNs (`node:http2`) and SMS, plus the BullMQ / pg-boss / SQS queue adapters, are Node-only and are **not** wired into the edge facade. Route heavy fan-out
+    or those channels through [`@lunora/queue`](/docs/packages/queue) instead.
+</Callout>
+
+## Configure `defineNotify`
+
+Declare the edge channels and a subscription store in `lunora/notify.ts`.
+`webPushFromEnv` / `fcmFromEnv` read config from the environment, and
+`d1SubscriptionStore` persists device subscriptions in D1 (with lazy table
+creation).
+
+```ts
+// lunora/notify.ts
+import { defineNotify, webPushFromEnv, fcmFromEnv, d1SubscriptionStore } from "@lunora/notify";
+
+export default defineNotify({
+    webPush: (env) => webPushFromEnv(env), // VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT
+    fcm: (env) => fcmFromEnv(env), // FCM_PROJECT_ID / FCM_ACCESS_TOKEN (prefer a getAccessToken in prod)
+    store: (env) => d1SubscriptionStore(env.DB),
+});
+```
+
+## VAPID / FCM config via `.dev.vars`
+
+`lunora dev` scaffolds these keys into `.dev.vars` from `@lunora/config`'s
+package-secrets registry. Generate a VAPID keypair once with
+`npx web-push generate-vapid-keys`:
+
+```
+VAPID_PUBLIC_KEY=<your-vapid-public-key>
+VAPID_PRIVATE_KEY=<your-vapid-private-key>
+VAPID_SUBJECT=mailto:you@example.com
+FCM_PROJECT_ID=<your-firebase-project-id>
+FCM_ACCESS_TOKEN=<your-fcm-access-token>
+```
+
+## Register a browser push subscription
+
+On the client, `subscribeToPush` from `@lunora/notify/web` registers a service
+worker and returns a Web Push subscription. Send it to a **mutation** (a storage
+write) and persist it with `ctx.push.register`:
+
+```ts
+// client
+import { subscribeToPush } from "@lunora/notify/web";
+
+const subscription = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey });
+await client.mutation("registerDevice", { subscription });
+```
+
+```ts
+// lunora/registerDevice.ts
+import { mutation, v } from "@/lunora/_generated/server";
+
+export const registerDevice = mutation.input({ subscription: v.any() }).mutation(async ({ ctx, args: { subscription } }) => {
+    await ctx.push.register({ subscription, userId: ctx.auth?.userId });
+});
+```
+
+## Send from an action
+
+Notification sends are external I/O, so they belong in **actions** — the
+`notify_send_outside_action` [advisor lint](/docs/concepts/advisors) enforces
+this. `ctx.push.broadcast` fans out to every stored subscription, reusing the
+engine's retry + circuit-breaker middleware and pruning subscriptions the push
+service reports as gone (HTTP 404/410, FCM `UNREGISTERED`):
+
+```ts
+// lunora/announce.ts
+import { action, v } from "@/lunora/_generated/server";
+
+export const announce = action.input({ title: v.string(), body: v.string() }).action(async ({ ctx, args: { title, body } }) => {
+    const result = await ctx.push.broadcast({ title, body });
+    // result: { total, sent, pruned, failed, outcomes }
+    return result;
+});
+```
+
+A single targeted send, and a multi-channel send through `ctx.notify`:
+
+```ts
+await ctx.push.send(subscriptionId, { title: "Hi", body: "…" });
+
+await ctx.notify.send({
+    push: { title: "New drop", body: "…", to: pushTarget },
+    chat: { text: "New drop shipped" },
+});
+```
+
+## Queue-backed fan-out
+
+Move a large broadcast off the request path with
+[`@lunora/queue`](/docs/packages/queue):
+
+```ts
+// producer (mutation/action)
+await enqueuePushBroadcast(ctx.queues.push, { payload: { title: "New drop", body: "…" } });
+
+// consumer (lunora/queues.ts)
+for (const message of batch.messages) await runPushBroadcastJob(ctx.push, message.body);
+```
+
+## See also
+
+- [Actions](/docs/concepts/actions)
+- [Scheduling](/docs/concepts/scheduling)
+- [Queues](/docs/packages/queue)
+- [Advisors](/docs/concepts/advisors)
+- [API: @lunora/notify](/docs/packages/notify)

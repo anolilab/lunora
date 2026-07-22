@@ -3246,6 +3246,16 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         // eslint-disable-next-line unicorn/no-null -- documented `unique()` result shape (Doc | null) returned to callers
                         return rows[0] ?? null;
                     },
+                    withGeoIndex() {
+                        // Geospatial (`.geoIndex()` / `.near()` / `.within()`) is a
+                        // sharded DO-SQLite feature; `.global()` tables have no
+                        // geohash companion, so codegen types this `never` and the
+                        // runtime refuses it rather than returning wrong results.
+                        throw new LunoraError(
+                            "INTERNAL",
+                            `geo indexes are not supported on \`.global()\` tables (table "${tableName}") — geospatial queries run only on sharded tables`,
+                        );
+                    },
                     withIndex() {
                         throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
                     },

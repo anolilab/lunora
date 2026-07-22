@@ -308,6 +308,40 @@ export interface SearchReader<TDocument> {
     unique: () => Promise<TDocument | null>;
 }
 
+/** A latitude/longitude point (WGS84 decimal degrees) accepted by geo queries. */
+export interface GeoPointInput {
+    lat: number;
+    lng: number;
+}
+
+/** An axis-aligned latitude/longitude bounding box (`sw`/`ne` corners). */
+export interface GeoBoundingBox {
+    ne: GeoPointInput;
+    sw: GeoPointInput;
+}
+
+/**
+ * Builder passed to `.withGeoIndex(name, q => …)`. Call exactly one of
+ * `.near(point, radiusMeters)` (proximity, nearest-first) or `.within(box)`
+ * (bounding-box).
+ */
+export interface GeoFilterBuilder {
+    near: (point: GeoPointInput, radiusMeters: number) => GeoFilterBuilder;
+    within: (box: GeoBoundingBox) => GeoFilterBuilder;
+}
+
+/**
+ * Chainable reader returned by `.withGeoIndex()`. `.near()` results come back
+ * ordered nearest-first; `.within()` results by row creation time. `.paginate()`
+ * is intentionally absent — cap the result set with `.take(n)`.
+ */
+export interface GeoReader<TDocument> {
+    collect: () => Promise<TDocument[]>;
+    first: () => Promise<TDocument | null>;
+    take: (limit: number) => Promise<TDocument[]>;
+    unique: () => Promise<TDocument | null>;
+}
+
 /** Read-only typed table accessor exposed on `QueryCtx.db.&lt;table>`. */
 export interface TableReaderFacade<
     DM,
@@ -315,6 +349,7 @@ export interface TableReaderFacade<
     RANK extends Record<keyof DM, string>,
     SEARCH extends Record<keyof DM, string>,
     T extends keyof DM,
+    GEO extends Record<keyof DM, string> = Record<keyof DM, never>,
 > {
     /**
      * Reduce rows in this table to a scalar (`avg`/`max`/`min`/`sum` — `count`
@@ -368,6 +403,14 @@ export interface TableReaderFacade<
     rankPage: (indexName: RANK[T], options?: TableRankPageOptions<DM[T]>) => Promise<RankPage<DM[T]>>;
 
     /**
+     * Restrict the query to a declared `.geoIndex()` and run a proximity /
+     * bounding-box match. `indexName` is constrained to this table's geo indexes
+     * (`never` when it declares none). Returns a distance-ordered reader —
+     * finish with `.take(n)` / `.collect()`.
+     */
+    withGeoIndex: (indexName: GEO[T], build: (q: GeoFilterBuilder) => GeoFilterBuilder) => GeoReader<DM[T]>;
+
+    /**
      * Restrict the query to a declared `.searchIndex()` and run a full-text
      * match. `indexName` is constrained to this table's search indexes
      * (`never` when it declares none). Returns a relevance-ordered reader —
@@ -384,7 +427,8 @@ export interface TableWriterFacade<
     RANK extends Record<keyof DM, string>,
     SEARCH extends Record<keyof DM, string>,
     T extends keyof DM,
-> extends TableReaderFacade<DM, REL, RANK, SEARCH, T> {
+    GEO extends Record<keyof DM, string> = Record<keyof DM, never>,
+> extends TableReaderFacade<DM, REL, RANK, SEARCH, T, GEO> {
     /**
      * Delete a row by id. On a `.softDelete()` table this flips the marker column
      * (and cascades as a soft delete) instead of removing the row; use
@@ -459,8 +503,14 @@ export interface TableWriterFacade<
 export type UpsertTargetOf<DM, T extends keyof DM> = ReadonlyArray<keyof DM[T] & string> | (keyof DM[T] & string);
 
 /** Per-table read facade — `ctx.db.&lt;table>` on a `QueryCtx`. */
-export type DatabaseReaderFacade<DM, REL extends Record<keyof DM, object>, RANK extends Record<keyof DM, string>, SEARCH extends Record<keyof DM, string>> = {
-    readonly [T in keyof DM]: TableReaderFacade<DM, REL, RANK, SEARCH, T>;
+export type DatabaseReaderFacade<
+    DM,
+    REL extends Record<keyof DM, object>,
+    RANK extends Record<keyof DM, string>,
+    SEARCH extends Record<keyof DM, string>,
+    GEO extends Record<keyof DM, string> = Record<keyof DM, never>,
+> = {
+    readonly [T in keyof DM]: TableReaderFacade<DM, REL, RANK, SEARCH, T, GEO>;
 };
 
 /** Per-table read-write facade — `ctx.db.&lt;table>` on a `MutationCtx` / `ActionCtx`. */
@@ -470,6 +520,7 @@ export type DatabaseWriterFacade<
     REL extends Record<keyof DM, object>,
     RANK extends Record<keyof DM, string>,
     SEARCH extends Record<keyof DM, string>,
+    GEO extends Record<keyof DM, string> = Record<keyof DM, never>,
 > = {
-    readonly [T in keyof DM]: TableWriterFacade<DM, IM, REL, RANK, SEARCH, T>;
+    readonly [T in keyof DM]: TableWriterFacade<DM, IM, REL, RANK, SEARCH, T, GEO>;
 };

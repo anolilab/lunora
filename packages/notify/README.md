@@ -1,0 +1,103 @@
+# @lunora/notify
+
+Multi-channel notifications for Lunora, wrapping the [`@visulima/notification`](https://visulima.com/packages/notification) engine. Web Push + FCM first (both edge-safe under workerd), plus chat, in-app inbox, and webhook channels — with device-subscription storage and queue-backed fan-out.
+
+- `ctx.notify` — the multi-channel facade (`send`, `chat`, `inApp`, `webhook`, `push`).
+- `ctx.push` — the device-push sub-facade (`register`, `send`, `broadcast`, `list`, `unregister`).
+
+## Edge safety
+
+Web Push (VAPID + RFC 8291) and FCM (HTTP v1) run on `fetch` + Web Crypto — no `node:*`. **APNs** (`node:http2`) and the **BullMQ / pg-boss / SQS** queue adapters are Node-only and are **not** wired into this facade; route heavy fan-out through `@lunora/queue`.
+
+## Configure
+
+```ts
+// lunora/notify.ts
+import { defineNotify, webPushFromEnv, fcmFromEnv, d1SubscriptionStore } from "@lunora/notify";
+
+export default defineNotify({
+    webPush: (env) => webPushFromEnv(env), // reads VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT
+    fcm: (env) => fcmFromEnv(env), // reads FCM_PROJECT_ID / FCM_ACCESS_TOKEN (prefer a getAccessToken in prod)
+    store: (env) => d1SubscriptionStore(env.DB),
+});
+```
+
+`.dev.vars` (scaffolded by `lunora dev` from `@lunora/config`'s package-secrets registry):
+
+```
+VAPID_PUBLIC_KEY=<your-vapid-public-key>
+VAPID_PRIVATE_KEY=<your-vapid-private-key>
+VAPID_SUBJECT=mailto:you@example.com
+FCM_PROJECT_ID=<your-firebase-project-id>
+FCM_ACCESS_TOKEN=<your-fcm-access-token>
+```
+
+Generate a VAPID keypair once: `npx web-push generate-vapid-keys`.
+
+## Register a device (browser)
+
+```ts
+import { subscribeToPush } from "@lunora/notify/web";
+
+const subscription = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey });
+await client.mutation("registerDevice", { subscription });
+```
+
+```ts
+// lunora/registerDevice.ts (a mutation — storage write is fine here)
+export const registerDevice = mutation({
+    args: { subscription: v.any() },
+    handler: async (ctx, { subscription }) => {
+        await ctx.push.register({ subscription, userId: ctx.auth?.userId });
+    },
+});
+```
+
+## Send (from an action)
+
+Notification sends are external I/O, so they belong in **actions** (the `notify_send_outside_action` advisor lint enforces this):
+
+```ts
+export const announce = action({
+    args: { title: v.string(), body: v.string() },
+    handler: async (ctx, { title, body }) => {
+        const result = await ctx.push.broadcast({ title, body });
+        // result: { total, sent, pruned, failed, outcomes }
+    },
+});
+```
+
+`broadcast` reuses the engine's retry + circuit-breaker middleware and prunes subscriptions the push service reports as gone (HTTP 404/410, FCM `UNREGISTERED`). A single targeted send:
+
+```ts
+await ctx.push.send(subscriptionId, { title: "Hi", body: "…" });
+```
+
+Multi-channel through `ctx.notify.send`:
+
+```ts
+await ctx.notify.send({
+    push: { title: "New drop", body: "…", to: pushTarget },
+    chat: { text: "New drop shipped" },
+});
+```
+
+## Queue-backed fan-out
+
+Move a large broadcast off the request path with `@lunora/queue`:
+
+```ts
+// producer (mutation/action)
+await enqueuePushBroadcast(ctx.queues.push, { payload: { title: "New drop", body: "…" } });
+
+// consumer (lunora/queues.ts)
+for (const message of batch.messages) await runPushBroadcastJob(ctx.push, message.body);
+```
+
+## Subscription storage
+
+`SubscriptionStore` implementations: `memorySubscriptionStore()` (non-durable default, tests/dev) and `d1SubscriptionStore(db)` (durable, edge-safe, lazy table creation). Lifecycle: register (upsert), list/filter (by kind or user), status marking, and automatic prune of gone subscriptions on send/broadcast.
+
+## Status
+
+Phases 0–2 and the Phase-3 advisor lints + queue-backed fan-out are shipped. Remaining: the codegen ctx-splice that auto-wires `ctx.notify` / `ctx.push` from `lunora/notify.ts` (mirroring `defineFlags` → `ctx.flags`; `createNotify` is the factory it calls), the codegen advisor feeder, and the Studio Notifications page. See `plans/165-push-notifications.md`.

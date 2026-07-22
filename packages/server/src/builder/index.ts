@@ -6,6 +6,7 @@ import { readRlsTag } from "../rls/policy-tag";
 import type {
     ActionCtx as ActionContext,
     ArgsValidator,
+    ExposeConfig,
     FunctionKind,
     InferArgs,
     MutationCtx as MutationContext,
@@ -30,6 +31,8 @@ import type {
 /** Accumulated builder state threaded through `.input()` / `.use()` / `.output()`. */
 interface BuilderState {
     args: ArgsValidator;
+    /** Public-surface tag set by `.expose({ rest: true })`; stamped onto the registered function as `fn.expose`. */
+    expose?: ExposeConfig;
     middlewares: ReadonlyArray<Middleware<unknown, unknown>>;
     /** Validator the handler's result is parsed through when `.output()` was called. */
     output?: Validator;
@@ -184,6 +187,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
 
             return {
                 args: state.args,
+                ...(state.expose ? { expose: state.expose } : {}),
                 handler: makeHandler(state.args, state.middlewares, userHandler, state.output),
                 kind,
                 ...(rls ? { rls } : {}),
@@ -209,6 +213,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
 
                       return {
                           args: state.args,
+                          ...(state.expose ? { expose: state.expose } : {}),
                           handler: makeStreamHandler(state.args, state.middlewares, userHandler),
                           kind: "stream" as const,
                           ...(rls ? { rls } : {}),
@@ -219,6 +224,12 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
               }
             : {}),
         use: (middleware: Middleware<unknown, unknown>) => makeBuilder(kind, { ...state, middlewares: [...state.middlewares, middleware] }, visibility),
+        // `.expose({ rest: true })` publishes a PUBLIC procedure on the REST surface
+        // (plan 167). Public-only for the same reason as `.x402`: an internal
+        // function is server-to-server and never reachable over HTTP, so there is
+        // nothing to expose. Default-closed — omitting the modifier keeps the
+        // procedure RPC-only.
+        ...(visibility ? {} : { expose: (config: ExposeConfig) => makeBuilder(kind, { ...state, expose: config }, visibility) }),
         // `.x402({ price })` marks a public procedure as paid. It's public-only:
         // internal functions are server-to-server (cron/scheduler/`ctx.run*`) and
         // never reachable via a client RPC, so there's nothing to charge. Omitting

@@ -89,6 +89,7 @@ interface TableReaderLike {
     paginate: (options: { cursor?: null | string; numItems: number }) => Promise<QueryPage>;
     take: (limit: number) => Promise<Record<string, unknown>[]>;
     unique: () => Promise<Record<string, unknown> | null>;
+    withGeoIndex: (indexName: string, build: (q: unknown) => unknown) => TableReaderLike;
     withIndex: (indexName: string, range?: (q: unknown) => unknown) => TableReaderLike;
     withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => TableReaderLike;
 }
@@ -378,6 +379,9 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
 
                 return wrapReader(reader.withSearchIndex(indexName, search), columns, tableName);
             },
+            // A geo query's builder (`.near`/`.within`) exposes no column name, so
+            // there's no masked-column value oracle to guard — just mask the output.
+            withGeoIndex: (indexName, build) => wrapReader(reader.withGeoIndex(indexName, build), columns, tableName),
         };
     };
 

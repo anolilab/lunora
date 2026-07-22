@@ -23,6 +23,15 @@ export interface AdvisorSchema {
 /** A table plus the column/index/relation metadata lints inspect. */
 export interface AdvisorTable {
     /**
+     * Effective validator kind per declared column (a `v.optional(...)` is
+     * unwrapped to its inner kind). Read by the schema-type lints
+     * (`ttl_field_not_timestamp`, `geo_index_field_not_geopoint`) to check a
+     * referenced column's type. Optional — a feeder that doesn't track column
+     * kinds omits it, and the type lints then skip the check.
+     */
+    columnKinds?: Record<string, string>;
+
+    /**
      * `true` when the table is written outside Lunora's discoverable insert path
      * — declared via `.externallyManaged()` (e.g. `@lunora/auth`'s better-auth
      * tables, `@lunora/ratelimit`'s store). Insert-path lints
@@ -45,6 +54,7 @@ export interface AdvisorTable {
      * has implicitly — lints that resolve a column treat those as always valid.
      */
     fields: ReadonlyArray<string>;
+
     /** Every declared index, across all kinds (secondary / search / rank / vector). */
     indexes: ReadonlyArray<AdvisorIndex>;
 
@@ -57,6 +67,7 @@ export interface AdvisorTable {
      * `allow_unauthenticated_shard_access_enabled`.
      */
     isPublic?: boolean;
+
     /** Table name. */
     name: string;
 
@@ -70,6 +81,7 @@ export interface AdvisorTable {
      * required (the codegen feeder never runs runtime lints anyway).
      */
     optionalFields?: ReadonlySet<string>;
+
     /** Declared relations (`.relations((r) => …)`). */
     relations: ReadonlyArray<AdvisorRelation>;
 
@@ -93,6 +105,13 @@ export interface AdvisorTable {
      * Optional — a feeder that doesn't track soft-delete omits it.
      */
     softDelete?: { field: string };
+
+    /**
+     * Set when the table declared `.ttl(field, { after? })`. Read by the
+     * `ttl_field_not_timestamp` lint to confirm the expiry column is time-typed.
+     * Optional — a feeder that doesn't track TTL omits it.
+     */
+    ttl?: { after?: number; field: string };
 }
 
 /**
@@ -106,7 +125,7 @@ export interface AdvisorTable {
  */
 export interface AdvisorIndex {
     fields: ReadonlyArray<string>;
-    kind: "index" | "rank" | "search" | "vector";
+    kind: "geo" | "index" | "rank" | "search" | "vector";
     name: string;
     unique?: boolean;
 }
@@ -169,7 +188,20 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 ...table.vectorIndexes.map((index): AdvisorIndex => {
                     return { fields: [index.field], kind: "vector", name: index.name };
                 }),
+                ...table.geoIndexes.map((index): AdvisorIndex => {
+                    return { fields: [index.field], kind: "geo", name: index.name };
+                }),
             ];
+
+            // Effective validator kind per column (a `v.optional(...)` is unwrapped to
+            // its inner kind) so the schema-type lints can check a referenced column.
+            const columnKinds: Record<string, string> = {};
+
+            for (const [fieldName, validator] of Object.entries(table.shape)) {
+                const inner = validator.kind === "optional" ? (validator as { _meta?: { inner?: { kind?: string } } })._meta?.inner : validator;
+
+                columnKinds[fieldName] = inner?.kind ?? validator.kind;
+            }
 
             // Collect optional/nullable field names so the constraint-validator
             // can skip them when checking NOT NULL. A field is optional when its
@@ -203,6 +235,7 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                           mode: table.externalSource.mode,
                       }
                     : undefined,
+                columnKinds,
                 fields: Object.keys(table.shape),
                 indexes,
                 isPublic: table.isPublic ?? false,
@@ -210,6 +243,7 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 optionalFields,
                 shardKind: table.shardMode.kind,
                 softDelete: table.softDeleteMode,
+                ttl: table.ttlPolicy,
                 relations: Object.entries(table.relationMap).map(([accessor, relation]) => {
                     return {
                         field: relation.field,

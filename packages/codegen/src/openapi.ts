@@ -1,5 +1,7 @@
 import type { JsonSchema } from "@lunora/values";
 
+import type { RestFunctionKind } from "../../../shared/rest-surface";
+import { restMethodForKind, restPathForFunction } from "../../../shared/rest-surface";
 import { GENERATED_HEADER } from "./emit";
 import type { FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
 import sanitizeNamespace from "./paths";
@@ -168,6 +170,77 @@ const rpcOperation = (definition: FunctionIR): { operation: Record<string, unkno
     return { operation, pathKey: `/_lunora/rpc#${functionPath}` };
 };
 
+/**
+ * Build the OpenAPI operation for one `.expose({ rest: true })` procedure (plan
+ * 167). Unlike the synthetic RPC operations, these are REAL REST endpoints on
+ * `/_lunora/rest/&lt;namespace>/&lt;fn>` — the exact path + method the runtime router
+ * mints (both derive from the shared `restPathForFunction` contract, so the spec
+ * cannot drift from the live surface). A `query` maps to `GET` with its args as
+ * query parameters; a `mutation`/`action` maps to `POST` with a JSON request body.
+ */
+const restOperation = (definition: FunctionIR): { method: "get" | "post"; operation: Record<string, unknown>; path: string } | undefined => {
+    const functionPath = `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`;
+    const path = restPathForFunction(functionPath);
+
+    if (path === undefined) {
+        return undefined;
+    }
+
+    const tag = sanitizeNamespace(definition.filePath);
+    // Single-source the transport method from the shared REST-surface contract (the
+    // same mapping the runtime router derives), so the spec cannot drift on method.
+    // `stream` is already filtered upstream, so the narrowing cast is safe here.
+    const method = restMethodForKind(definition.kind as RestFunctionKind);
+    const isQuery = method === "GET";
+
+    const operation: Record<string, unknown> = {
+        description: `Public REST endpoint for the \`${definition.kind}\` \`${functionPath}\` (opt-in via \`.expose({ rest: true })\`). Routed through the procedure, so auth / RLS / validators are enforced.`,
+        operationId: `rest_${sanitizeNamespace(path)}`,
+        responses: {
+            "200": {
+                content: {
+                    "application/json": {
+                        schema: { description: "Procedure result. The shape is TS-inferred from the return type; best-effort — any JSON." },
+                    },
+                },
+                description: "Successful result (TypeScript-inferred return shape, documented best-effort).",
+            },
+            default: { $ref: ERROR_COMPONENT_REF },
+        },
+        summary: `${method} ${path}`,
+        tags: [tag],
+        "x-lunora-function-kind": definition.kind,
+    };
+
+    if (isQuery) {
+        // A query's args ride the query string; each becomes an optional query parameter.
+        const parameters = Object.entries(definition.args).map(([name, validator]) => {
+            const inner = validator.kind === "optional" ? (validator.inner ?? validator) : validator;
+
+            return {
+                description: `Argument \`${name}\` (JSON-encoded for non-string values).`,
+                in: "query" as const,
+                name,
+                required: validator.kind !== "optional",
+                schema: validatorIrToJsonSchema(inner),
+            };
+        });
+
+        if (parameters.length > 0) {
+            operation.parameters = parameters;
+        }
+
+        return { method: "get", operation, path };
+    }
+
+    operation.requestBody = {
+        content: { "application/json": { schema: argsObjectSchema(definition.args) } },
+        required: Object.keys(definition.args).length > 0,
+    };
+
+    return { method: "post", operation, path };
+};
+
 /** Inputs the OpenAPI emitter needs from a codegen run. */
 interface OpenApiEmitInput {
     functions: ReadonlyArray<FunctionIR>;
@@ -221,6 +294,27 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
         const { operation, pathKey } = rpcOperation(definition);
 
         paths[pathKey] = { post: operation };
+        tagNames.add(sanitizeNamespace(definition.filePath));
+    }
+
+    // Opt-in public REST surface (plan 167): a REAL REST path per
+    // `.expose({ rest: true })` procedure, describing exactly the live surface the
+    // runtime router serves. `internal`/`stream` are already excluded above.
+    for (const definition of rpcFunctions) {
+        if (definition.expose?.rest !== true) {
+            continue;
+        }
+
+        const rest = restOperation(definition);
+
+        if (rest === undefined) {
+            continue;
+        }
+
+        const pathItem = paths[rest.path] ?? {};
+
+        pathItem[rest.method] = rest.operation;
+        paths[rest.path] = pathItem;
         tagNames.add(sanitizeNamespace(definition.filePath));
     }
 
