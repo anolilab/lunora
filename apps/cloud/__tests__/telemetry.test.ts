@@ -383,6 +383,64 @@ describe(decodeObservations, () => {
         expect(observation?.model).toBeUndefined();
         expect(observation?.promptTokens).toBeUndefined();
     });
+
+    it("extracts sessionId + evaluations from a generation span when the attributes are present", () => {
+        const [observation] = decodeObservations(
+            payload("@lunora/agent", [
+                {
+                    attributes: [
+                        { key: "gen_ai.request.model", value: { stringValue: "@cf/meta/llama" } },
+                        { key: "gen_ai.conversation.id", value: { stringValue: "thread_42" } },
+                        { key: "gen_ai.evaluation.helpfulness.score", value: { doubleValue: 0.92 } },
+                        { key: "gen_ai.evaluation.helpfulness.label", value: { stringValue: "pass" } },
+                        // A score with no label — kept, label omitted.
+                        { key: "gen_ai.evaluation.toxicity.score", value: { intValue: "0" } },
+                        // A lone label with no score — dropped (no numeric score).
+                        { key: "gen_ai.evaluation.coherence.label", value: { stringValue: "ok" } },
+                    ],
+                    endTimeUnixNano: "1700000000200000000",
+                    name: "chat @cf/meta/llama",
+                    spanId: "eeeeeeeeeeeeeeee",
+                    startTimeUnixNano: "1700000000000000000",
+                    status: { code: 1 },
+                    traceId: "ffffffffffffffffffffffffffffffff",
+                },
+            ]),
+        );
+
+        expect(observation?.sessionId).toBe("thread_42");
+        expect(observation?.evaluations).toEqual([
+            { label: "pass", name: "helpfulness", score: 0.92 },
+            { name: "toxicity", score: 0 },
+        ]);
+    });
+
+    it("omits sessionId + evaluations when the generation span carries neither", () => {
+        const [observation] = decodeObservations(
+            payload("@lunora/agent", [
+                {
+                    attributes: [{ key: "gen_ai.request.model", value: { stringValue: "@cf/meta/llama" } }],
+                    endTimeUnixNano: "1700000000200000000",
+                    name: "chat",
+                    spanId: "1111111111111111",
+                    startTimeUnixNano: "1700000000000000000",
+                    status: { code: 1 },
+                    traceId: "22222222222222222222222222222222",
+                },
+            ]),
+        );
+
+        expect(observation?.kind).toBe("generation");
+        expect(observation?.sessionId).toBeUndefined();
+        expect(observation?.evaluations).toBeUndefined();
+    });
+
+    it("never sets sessionId on a non-generation worker span even if it carries a conversation id", () => {
+        const [observation] = decodeObservations(payload("@lunora/runtime", [span({ attrs: { "gen_ai.conversation.id": "thread_stray" }, spanId: "w9" })]));
+
+        expect(observation?.kind).toBe("worker");
+        expect(observation?.sessionId).toBeUndefined();
+    });
 });
 
 /** Wrap OTLP log records into an ExportLogsServiceRequest with one resource + scope. */

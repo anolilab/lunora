@@ -102,6 +102,20 @@ export const SpanDetail = ({ onClose, span }: SpanDetailProps): ReactElement => 
                 </>
             ) : null}
         </dl>
+        {span.evaluations && span.evaluations.length > 0 ? (
+            <div className="trace-span-evals">
+                <span className="trace-span-io-label">Evaluations</span>
+                <ul className="trace-eval-list">
+                    {span.evaluations.map((evaluation) => (
+                        <li className="trace-eval-row" key={evaluation.name}>
+                            <span className="trace-eval-name">{evaluation.name}</span>
+                            <span className="trace-eval-score">{evaluation.score}</span>
+                            {evaluation.label ? <span className="trace-eval-label">{evaluation.label}</span> : null}
+                        </li>
+                    ))}
+                </ul>
+            </div>
+        ) : null}
         {span.input ? (
             <div className="trace-span-io">
                 <span className="trace-span-io-label">Input</span>

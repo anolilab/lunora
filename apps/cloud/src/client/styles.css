@@ -852,6 +852,100 @@ button.link.danger {
     word-break: break-word;
 }
 
+/* Eval scores on a generation span's detail pane. */
+.trace-span-evals {
+    margin-top: 8px;
+}
+
+.trace-eval-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.trace-eval-row {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    font-size: 12px;
+}
+
+.trace-eval-name {
+    color: var(--muted);
+}
+
+.trace-eval-score {
+    color: var(--text);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.trace-eval-label {
+    color: var(--primary);
+}
+
+/* Sessions tab — one open session's turns. */
+.session-tokens {
+    font-variant-numeric: tabular-nums;
+}
+
+.session-turns {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: none;
+}
+
+.session-turn {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.session-turn:last-child {
+    border-bottom: none;
+}
+
+.session-turn-err .session-turn-index {
+    color: var(--danger, #e5484d);
+}
+
+.session-turn-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.session-turn-index {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.session-turn-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.session-eval {
+    padding: 1px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
 /* Shared cross-tab deep-link button (Issue → trace, trace → logs, log → trace). */
 .cross-tab-link {
     padding: 2px 8px;

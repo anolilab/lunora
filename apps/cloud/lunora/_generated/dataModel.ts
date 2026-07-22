@@ -165,6 +165,7 @@ export interface Doc_observations {
     deploymentId?: Id<"deployments">;
     durationMs: number;
     endedAt: number;
+    evaluations?: Array<{ label: string | undefined; name: string; score: number }>;
     functionPath?: string;
     input?: string;
     kind: "container" | "generation" | "worker";
@@ -176,6 +177,7 @@ export interface Doc_observations {
     parentSpanId?: string;
     promptTokens?: number;
     serviceName?: string;
+    sessionId?: string;
     spanId: string;
     startedAt: number;
     statusMessage?: string;
@@ -500,7 +502,7 @@ export interface IndexNamesByTable {
     deployKeys: "by_org" | "by_hash";
     overageDebits: "by_org_period";
     tenantLogs: "by_trace" | "by_script_time" | "by_org";
-    observations: "by_org_deployment_started" | "by_org_started" | "by_trace" | "by_org";
+    observations: "by_org_deployment_started" | "by_org_session" | "by_org_started" | "by_trace" | "by_org";
     githubInstallations: "by_org" | "by_installation";
     builds: "by_project_commit" | "by_project";
     buildLogs: "by_build";
@@ -726,6 +728,7 @@ export interface Insert_observations {
     deploymentId?: Id<"deployments">;
     durationMs: number;
     endedAt: number;
+    evaluations?: Array<{ label: string | undefined; name: string; score: number }>;
     functionPath?: string;
     input?: string;
     kind: "container" | "generation" | "worker";
@@ -737,6 +740,7 @@ export interface Insert_observations {
     parentSpanId?: string;
     promptTokens?: number;
     serviceName?: string;
+    sessionId?: string;
     spanId: string;
     startedAt: number;
     statusMessage?: string;

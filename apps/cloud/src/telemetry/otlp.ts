@@ -67,6 +67,20 @@ export interface TelemetryEvent {
 }
 
 /**
+ * One eval score attached to a generation span — decoded from the
+ * `gen_ai.evaluation.<name>.score` (+ optional `.label`) attribute pair a
+ * parallel framework branch emits. A compact metadata record, never a payload.
+ */
+export interface SpanEvaluation {
+    /** Optional human label for the score (e.g. `"pass"`, `"toxic"`). */
+    label?: string;
+    /** The evaluation name (e.g. `"helpfulness"`, `"toxicity"`). */
+    name: string;
+    /** The numeric score. */
+    score: number;
+}
+
+/**
  * One decoded span, stored as an **observation** (the Traces model — a
  * Langfuse-style observation, cleanroom-shaped for our schema). Unlike
  * {@link TelemetryEvent}, this keeps EVERY span (not just errors) with its full
@@ -85,6 +99,8 @@ export interface SpanObservation {
     durationMs: number;
     /** Epoch-ms the span ended. */
     endedAt: number;
+    /** Generation spans: eval scores decoded from `gen_ai.evaluation.*` (opt-in on the emitter). */
+    evaluations?: SpanEvaluation[];
     /** The `&lt;file>:&lt;function>` (or `container:&lt;name>`) the span ran, when attributed. */
     functionPath?: string;
     /** Generation spans: the recorded prompt (opt-in on the emitter), truncated. */
@@ -105,6 +121,8 @@ export interface SpanObservation {
     promptTokens?: number;
     /** The `service.name` resource attribute, when set. */
     serviceName?: string;
+    /** Generation spans: the conversation/thread id (`gen_ai.conversation.id`) grouping turns into a session. */
+    sessionId?: string;
     /** Hex span id. */
     spanId: string;
     /** Epoch-ms the span started. */
@@ -149,6 +167,61 @@ const MAX_GENERATION_TEXT = 4096;
 /** Truncate a recorded generation payload so a large prompt/completion can't bloat a row. */
 const truncateText = (text: string | undefined): string | undefined =>
     text === undefined ? undefined : text.length > MAX_GENERATION_TEXT ? `${text.slice(0, MAX_GENERATION_TEXT)}…` : text;
+
+/** Attribute-key prefix for a per-evaluation generation-span score (`gen_ai.evaluation.<name>.score|label`). */
+const EVALUATION_PREFIX = "gen_ai.evaluation.";
+
+/**
+ * Collect `gen_ai.evaluation.<name>.score` (+ optional `.label`) attribute pairs
+ * into a compact {@link SpanEvaluation}[]. Defensive by design — the framework
+ * branch that emits these hasn't landed, so today every span returns `undefined`
+ * here (no matching attributes → no array). An eval is kept only when it carries
+ * a **finite numeric score**; a lone `.label` with no score is dropped. Names
+ * follow attribute (insertion) order, so the output is deterministic.
+ */
+const decodeEvaluations = (attributes: OtlpKeyValue[] | undefined): SpanEvaluation[] | undefined => {
+    if (attributes === undefined) {
+        return undefined;
+    }
+
+    const scores = new Map<string, number>();
+    const labels = new Map<string, string>();
+
+    for (const attribute of attributes) {
+        if (!attribute.key.startsWith(EVALUATION_PREFIX)) {
+            continue;
+        }
+
+        const rest = attribute.key.slice(EVALUATION_PREFIX.length);
+
+        if (rest.endsWith(".score")) {
+            const name = rest.slice(0, -".score".length);
+            const value = attribute.value;
+            const score = value?.doubleValue ?? (value?.intValue === undefined ? undefined : Number(value.intValue));
+
+            if (name !== "" && typeof score === "number" && Number.isFinite(score)) {
+                scores.set(name, score);
+            }
+        } else if (rest.endsWith(".label")) {
+            const name = rest.slice(0, -".label".length);
+            const label = attribute.value?.stringValue;
+
+            if (name !== "" && label !== undefined && label !== "") {
+                labels.set(name, label);
+            }
+        }
+    }
+
+    if (scores.size === 0) {
+        return undefined;
+    }
+
+    return [...scores.entries()].map(([name, score]) => {
+        const label = labels.get(name);
+
+        return label === undefined ? { name, score } : { label, name, score };
+    });
+};
 
 /**
  * OTLP `timeUnixNano` (decimal nanoseconds as a string) → epoch ms. Slicing the
@@ -419,6 +492,21 @@ export const decodeObservations = (payload: OtlpTracePayload): SpanObservation[]
                     observation.completionTokens = attributeNumber(span.attributes, "gen_ai.usage.output_tokens");
                     observation.input = truncateText(redactText(attributeString(span.attributes, "gen_ai.prompt")));
                     observation.output = truncateText(redactText(attributeString(span.attributes, "gen_ai.completion")));
+
+                    // Session/thread id + eval scores from the parallel framework
+                    // branch — decoded defensively (absent today), and only set when
+                    // present so a generation span without them carries neither field.
+                    const sessionId = attributeString(span.attributes, "gen_ai.conversation.id");
+
+                    if (sessionId !== undefined && sessionId !== "") {
+                        observation.sessionId = sessionId;
+                    }
+
+                    const evaluations = decodeEvaluations(span.attributes);
+
+                    if (evaluations !== undefined) {
+                        observation.evaluations = evaluations;
+                    }
                 }
 
                 observations.push(observation);
