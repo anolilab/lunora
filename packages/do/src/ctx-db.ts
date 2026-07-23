@@ -37,6 +37,7 @@ import {
     ConflictError,
     coveringGeohashes,
     ftsTableName,
+    guardWriter,
     haversineMeters,
     NotFoundError,
     pointInBoundingBox,
@@ -90,7 +91,6 @@ import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
 import type { RelationDefinitionLike } from "./relations";
 import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
-import { guardWriter } from "./rls-guard";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
