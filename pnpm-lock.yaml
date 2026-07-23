@@ -3487,6 +3487,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      drizzle-orm:
+        specifier: catalog:drizzle
+        version: 0.45.2(@cloudflare/workers-types@5.20260719.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.0(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1)
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test

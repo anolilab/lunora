@@ -105,6 +105,17 @@ CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 
 <!-- DEPENDENCIES -->
+
+# Licenses of bundled dependencies
+The published @lunora/shard-engine artifact additionally contains code with the following licenses:
+Apache-2.0
+
+# Bundled dependencies:
+## drizzle-orm
+License: Apache-2.0
+By: Drizzle Team
+Repository: git+https://github.com/drizzle-team/drizzle-orm.git
+
 <!-- /DEPENDENCIES -->
 
 <!-- TYPE_DEPENDENCIES -->

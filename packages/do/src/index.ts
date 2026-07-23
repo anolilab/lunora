@@ -92,8 +92,6 @@ export type {
     RunDataMigrationOptions,
 } from "./data-migration";
 export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration";
-export type { RenderedSql, SqlEngine } from "./drizzle";
-export { renderSql } from "./drizzle";
 // `external-source-cursor` is an internal ingest detail (the durable watermark
 // codec + reserved-table helpers), consumed only by `external-source-pull` and its
 // own tests — not re-exported, mirroring `external-source-diff`'s module-private
@@ -252,12 +250,14 @@ export type { TtlSweepSpec } from "./ttl-sweep";
 export { selectExpiredIds } from "./ttl-sweep";
 export type { WhereSqlStrategy } from "./where-sql";
 export { compileWhereSql } from "./where-sql";
+export type { RenderedSql, SqlEngine } from "@lunora/shard-engine";
 export type { MutationDelta, RpcRequest, ShapeSubscriptionQuery, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "@lunora/shard-engine";
 export type { GeoBoundingBox, GeoPoint } from "@lunora/shard-engine";
 export type { CacheEntry, ReactiveCacheOptions } from "@lunora/shard-engine";
 export type { FieldOperators, WhereInput } from "@lunora/shard-engine";
 export type { DependencyTracker } from "@lunora/shard-engine";
 export type { TransactionSqlLike } from "@lunora/shard-engine";
+export { renderSql } from "@lunora/shard-engine";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "@lunora/shard-engine";
 export {
     boundingBoxCenter,

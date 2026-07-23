@@ -1,8 +1,8 @@
 import type { WhereInput } from "@lunora/shard-engine";
+import { renderSql } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
-import { renderSql } from "../src/drizzle";
 import { buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys } from "../src/query-args";
 import type { WhereSqlStrategy } from "../src/where-sql";
 import { compileWhereSql } from "../src/where-sql";

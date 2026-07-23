@@ -8,6 +8,8 @@
 
 export type { DependencyTracker } from "./dependency-tracker";
 export { createDependencyTracker, depKey, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
+export type { RenderedSql, SqlEngine } from "./drizzle";
+export { param, renderSql } from "./drizzle";
 export type { GeoBoundingBox, GeoPoint } from "./geo";
 export { boundingBoxCenter, boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
 export { NotFoundError } from "./not-found-error";
