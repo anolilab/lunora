@@ -716,12 +716,15 @@ overrides:
   '@lunora/mcp': workspace:*
   '@lunora/nuxt': workspace:*
   '@lunora/payment': workspace:*
+  '@lunora/platform': workspace:*
+  '@lunora/platform-conformance': workspace:*
   '@lunora/queue': workspace:*
   '@lunora/ratelimit': workspace:*
   '@lunora/react': workspace:*
   '@lunora/react-native': workspace:*
   '@lunora/runtime': workspace:*
   '@lunora/scheduler': workspace:*
+  '@lunora/shard-engine': workspace:*
   '@lunora/seed': workspace:*
   '@lunora/server': workspace:*
   '@lunora/solid': workspace:*
@@ -2526,6 +2529,9 @@ importers:
       '@lunora/fingerprint':
         specifier: workspace:*
         version: link:../fingerprint
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@visulima/redact':
         specifier: catalog:redact
         version: 3.0.0
@@ -2995,6 +3001,64 @@ importers:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
+  packages/platform:
+    devDependencies:
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(supports-color@10.2.2)(tinybench@2.9.0)(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.10)
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.96(17d90a8c98bfcd1fb0cf40fd2f081eef)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.10)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 3.6.0
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
+
+  packages/platform-conformance:
+    dependencies:
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
+    devDependencies:
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(supports-color@10.2.2)(tinybench@2.9.0)(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.10)
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.96(17d90a8c98bfcd1fb0cf40fd2f081eef)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.10)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 3.6.0
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
+
   packages/queue:
     dependencies:
       '@lunora/errors':
@@ -3392,6 +3456,40 @@ importers:
       hono:
         specifier: catalog:http
         version: 4.12.30
+    devDependencies:
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(supports-color@10.2.2)(tinybench@2.9.0)(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.10)
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.96(17d90a8c98bfcd1fb0cf40fd2f081eef)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.10)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 3.6.0
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
+
+  packages/shard-engine:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test

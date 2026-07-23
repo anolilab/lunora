@@ -1,8 +1,8 @@
+import { ConflictError } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
-import { ConflictError } from "../src/transaction";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**

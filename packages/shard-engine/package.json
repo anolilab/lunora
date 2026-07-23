@@ -1,15 +1,14 @@
 {
-    "name": "@lunora/do",
-    "version": "1.0.0-alpha.44",
-    "description": "Lunora Durable Objects: ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO",
+    "name": "@lunora/shard-engine",
+    "version": "1.0.0-alpha.1",
+    "description": "Host-neutral reactive engine for Lunora: per-shard state, OCC, CDC, reactive subscriptions, and the poke protocol. Consumes @lunora/platform host contracts and can be mounted on any platform host.",
     "keywords": [
         "cloudflare",
         "durable-objects",
-        "hibernation",
         "lunora",
-        "shard",
-        "sqlite",
-        "websocket",
+        "platform",
+        "reactivity",
+        "shard-engine",
         "workers"
     ],
     "homepage": "https://lunora.sh",
@@ -22,13 +21,12 @@
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
-        "directory": "packages/do"
+        "directory": "packages/shard-engine"
     },
     "files": [
         "./dist",
         "README.md",
-        "LICENSE.md",
-        "__assets__"
+        "LICENSE.md"
     ],
     "type": "module",
     "sideEffects": false,
@@ -55,31 +53,23 @@
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
-        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "fallow:audit": "fallow audit",
         "fallow:dead-code": "fallow dead-code",
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.8",
-        "@lunora/fingerprint": "1.0.0-alpha.4",
-        "@lunora/shard-engine": "1.0.0-alpha.1",
-        "@visulima/redact": "catalog:redact",
-        "drizzle-orm": "catalog:drizzle"
+        "@lunora/errors": "1.0.0-alpha.7",
+        "@lunora/platform": "1.0.0-alpha.1"
     },
     "devDependencies": {
-        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
-        "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/bindings": "1.0.0-alpha.11",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test",
-        "wrangler": "catalog:cloudflare"
+        "vitest": "catalog:test"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

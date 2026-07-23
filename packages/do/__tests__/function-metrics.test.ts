@@ -1,6 +1,6 @@
+import { ConflictError,SCAN_DEP } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
-import { SCAN_DEP } from "../src/dependency-tracker";
 import {
     FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_BUCKETS_TABLE,
@@ -19,7 +19,6 @@ import {
 import type { FunctionCallStat } from "../src/introspect";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import { ConflictError } from "../src/transaction";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 const ADMIN_TOKEN = "metrics-admin";

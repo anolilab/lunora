@@ -82,6 +82,12 @@
 "package: payment":
     - changed-files:
           - any-glob-to-any-file: "packages/payment/**/*"
+"package: platform":
+    - changed-files:
+          - any-glob-to-any-file: "packages/platform/**/*"
+"package: platform-conformance":
+    - changed-files:
+          - any-glob-to-any-file: "packages/platform-conformance/**/*"
 "package: queue":
     - changed-files:
           - any-glob-to-any-file: "packages/queue/**/*"
@@ -109,6 +115,9 @@
 "package: server":
     - changed-files:
           - any-glob-to-any-file: "packages/server/**/*"
+"package: shard-engine":
+    - changed-files:
+          - any-glob-to-any-file: "packages/shard-engine/**/*"
 "package: solid":
     - changed-files:
           - any-glob-to-any-file: "packages/solid/**/*"

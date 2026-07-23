@@ -1,6 +1,6 @@
+import { createDependencyTracker } from "@lunora/shard-engine";
 import { beforeAll, bench, describe } from "vitest";
 
-import { createDependencyTracker } from "../src/dependency-tracker";
 import { ReactiveCache, reactiveCacheKey } from "../src/reactive-cache";
 
 /**

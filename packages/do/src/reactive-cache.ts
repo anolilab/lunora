@@ -46,8 +46,9 @@
  * surface (see `ctx-db.ts`).
  */
 
+import { depKey, SCAN_DEP } from "@lunora/shard-engine";
+
 import { stableWireKey } from "../../../shared/wire-key";
-import { depKey, SCAN_DEP } from "./dependency-tracker";
 
 /** A single memoized result, the deps it read, and any active subscribers. */
 interface CacheEntry {

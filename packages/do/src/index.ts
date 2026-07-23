@@ -92,8 +92,6 @@ export type {
     RunDataMigrationOptions,
 } from "./data-migration";
 export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration";
-export type { DependencyTracker } from "./dependency-tracker";
-export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker";
 export type { RenderedSql, SqlEngine } from "./drizzle";
 export { renderSql } from "./drizzle";
 // `external-source-cursor` is an internal ingest detail (the durable watermark
@@ -246,8 +244,6 @@ export type {
     SystemTableName,
 } from "./system-reader";
 export { createSystemReader } from "./system-reader";
-export type { TransactionSqlLike } from "./transaction";
-export { ConflictError } from "./transaction";
 export type {
     RunTriggersOptions,
     SchedulableWorkflowReferenceLike,
@@ -265,3 +261,7 @@ export type { MutationDelta, RpcRequest, ShapeSubscriptionQuery, SocketAttachmen
 export type { WhereSqlStrategy } from "./where-sql";
 export { compileWhereSql } from "./where-sql";
 export type { FieldOperators, WhereInput } from "./where-types";
+export type { DependencyTracker } from "@lunora/shard-engine";
+export type { TransactionSqlLike } from "@lunora/shard-engine";
+export { createDependencyTracker, depKey, SCAN_DEP } from "@lunora/shard-engine";
+export { ConflictError } from "@lunora/shard-engine";

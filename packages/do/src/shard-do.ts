@@ -1,5 +1,7 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import { LunoraError, toErrorBody } from "@lunora/errors";
+import type { DependencyTracker, TransactionSqlLike } from "@lunora/shard-engine";
+import { ConflictError,createDependencyTracker, SCAN_DEP, tableFromDepKey } from "@lunora/shard-engine";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
@@ -46,8 +48,6 @@ import {
 import type { ShapeRow } from "./ctx-db-shapes";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
-import type { DependencyTracker } from "./dependency-tracker";
-import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
 import type { FunctionMetricBucket, FunctionMetricIndexHit, IndexHit } from "./function-metrics";
 import {
     mergeScanAttribution,
@@ -135,8 +135,6 @@ import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
 import { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 import { resolveTraceAnchor } from "./trace-context";
-import type { TransactionSqlLike } from "./transaction";
-import { ConflictError } from "./transaction";
 import type { TtlSweepSpec } from "./ttl-sweep";
 import { selectExpiredIds } from "./ttl-sweep";
 import type {

@@ -1,8 +1,8 @@
+import { ConflictError } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import { ConflictError } from "../src/transaction";
 
 type ExecMock = ((query: string) => unknown) & {
     mock: { calls: unknown[][] };
