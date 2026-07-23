@@ -2334,7 +2334,16 @@ const emitAiFragments = (hasAi: boolean): { build: string; configField: string; 
         // a handler is never locked to Workers AI. Falls back to `aiStub`.
         build: `
             const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
-            const ai: LunoraAi = aiBinding ? createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown> }) : aiStub;
+            // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
+            // function path + trace id into createAi, which folds them into the
+            // gateway's native \`metadata\` only when a gateway is configured (absent
+            // otherwise). Mirror the tracer's anchor guard — a deferred subscription
+            // re-run must not borrow a concurrent dispatch's trace, so read
+            // \`getCurrentTrace()\` only on the synchronous (non-threaded-identity) path.
+            const aiTrace = options.identity ? undefined : this.getCurrentTrace();
+            const ai: LunoraAi = aiBinding
+                ? createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown>, metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId } })
+                : aiStub;
 `,
         // Optional override for the Workers AI binding. When omitted, ctx.ai is
         // built from `env.AI` (the conventional binding the config layer

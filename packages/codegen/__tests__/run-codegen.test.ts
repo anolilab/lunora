@@ -2104,7 +2104,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
 
         it("wires ctx.ai into the ShardDO when AI is used", () => {
-            expect.assertions(6);
+            expect.assertions(8);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
@@ -2116,8 +2116,14 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("AiBindingLike");
             expect(output).toContain("ai?: (env: Record<string, unknown>) => AiBindingLike;");
             expect(output).toContain("const aiStub: LunoraAi");
-            expect(output).toContain("createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown> })");
+            expect(output).toContain(
+                "createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown>, metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId } })",
+            );
             expect(output).toContain("ai,");
+            // Correlation ids are threaded into the gateway metadata, reading the
+            // dispatch trace under the same anchor guard the tracer uses.
+            expect(output).toContain("const aiTrace = options.identity ? undefined : this.getCurrentTrace();");
+            expect(output).toContain("traceId: aiTrace?.traceId");
         });
 
         it("omits @lunora/ai entirely when AI is not used", () => {
