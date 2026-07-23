@@ -100,8 +100,11 @@ export interface TracerDeps {
      * **custom span**, so it nests inside CF's native binding/fetch/handler trace
      * tree on the hosted path. This only ADDS a CF-side span — the recorded
      * {@link SpanEvent} (our `SpanBuffer`/`otlpSink`) is untouched and remains the
-     * source of truth plus the local studio waterfall. See {@link createTracer}
-     * for the double-export and Durable-Object async-context caveats.
+     * source of truth plus the local studio waterfall. The `enterSpan` call itself
+     * is now workerd-validated as available and side-effect-free inside a Durable
+     * Object; CF's exported parent-linking under sampling remains unverified. See
+     * {@link createTracer} for the double-export and Durable-Object async-context
+     * caveats.
      */
     fuseCloudflareSpans?: boolean;
 
@@ -222,12 +225,22 @@ export const applyCloudflareSpanAttributes = (
  * pipelines — an intentional, documented trade the operator opts into, not a
  * default.
  *
- * **DO async-context caveat.** `tracing.enterSpan`'s parent-linking inside Durable
- * Objects is unverified upstream, so this is capability-probed: an
- * absent/undefined `tracing`, a missing `enterSpan`, or an off-CF/unsampled run
- * all resolve to `undefined` and the bridge is a total no-op — exact prior
- * behavior. If CF's ambient-span linkage misbehaves in a DO, the worst case is a
- * mis-parented CF span; our own recorded waterfall is unaffected.
+ * **DO async-context caveat (EXPERIMENTAL, partially workerd-validated).**
+ * `tracing.enterSpan` is now confirmed to EXIST and RUN inside a real Durable
+ * Object under `@cloudflare/vitest-pool-workers` (see
+ * `__tests__/workerd/context-telemetry-cf-bridge.workerd.test.ts`): it resolves
+ * from `cloudflare:workers`, its callback executes and returns the body value
+ * without throwing, `span.isTraced` is a real boolean, and — the key additive
+ * guarantee — our recorded {@link SpanEvent} tree (parent/child via the threaded
+ * `parentSpanId`) is byte-for-byte identical with the bridge on vs off. What that
+ * harness CANNOT prove is CF's own *exported* parent-linking: with no trace head
+ * attached the run is unsampled (`isTraced === false`), so CF records nothing and
+ * its span tree is not introspectable. So `enterSpan`'s ambient-span parent-linking
+ * inside a DO stays unverified upstream, and this remains capability-probed: an
+ * absent/undefined `tracing`, a missing `enterSpan`, or an off-CF/unsampled run all
+ * resolve to `undefined`/no-op — exact prior behavior. If CF's ambient-span linkage
+ * misbehaves in a DO, the worst case is a mis-parented CF span; our own recorded
+ * waterfall is unaffected.
  */
 export const createTracer = (deps: TracerDeps): ContextTracer => {
     const { anchor, fuseCloudflareSpans, functionPath, record, resolveCloudflareTracing, shardKey, userId } = deps;
