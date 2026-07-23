@@ -74,10 +74,10 @@ export const createDependencyTracker = (): DependencyTracker => {
     const deps = new Set<string>();
 
     return {
-        collect() {
+        collect(): Set<string> {
             return deps;
         },
-        recordRead(table, idOrScan) {
+        recordRead(table: string, idOrScan: string): void {
             deps.add(depKey(table, idOrScan));
         },
     };

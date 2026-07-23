@@ -8,7 +8,7 @@ export default defineConfig({
     failOnWarn: false,
     rollup: {
         dts: {
-            oxc: true,
+            compiler: "typescript",
         },
         license: {
             path: "./LICENSE.md",

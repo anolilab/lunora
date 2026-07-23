@@ -46,9 +46,8 @@
  * surface (see `ctx-db.ts`).
  */
 
-import { depKey, SCAN_DEP } from "@lunora/shard-engine";
-
 import { stableWireKey } from "../../../shared/wire-key";
+import { depKey, SCAN_DEP } from "./dependency-tracker";
 
 /** A single memoized result, the deps it read, and any active subscribers. */
 interface CacheEntry {
@@ -113,22 +112,22 @@ const estimateBytes = (value: unknown): number => {
 
 class ReactiveCache {
     /** key -> entry. Map insertion order doubles as LRU order. */
-    private readonly entries = new Map<string, CacheEntry>();
+    private readonly entries: Map<string, CacheEntry> = new Map<string, CacheEntry>();
 
     /** `table:id` (or `table:*scan`) -> set of cache keys that depend on it. */
-    private readonly tableIndex = new Map<string, Set<string>>();
+    private readonly tableIndex: Map<string, Set<string>> = new Map<string, Set<string>>();
 
     /** Cumulative byte charge across `entries`. Tracked incrementally. */
-    private totalBytes = 0;
+    private totalBytes: number = 0;
 
     /** Lifetime cache-hit count, surfaced via `stats()`. */
-    private hits = 0;
+    private hits: number = 0;
 
     /** Lifetime cache-miss count (callback ran), surfaced via `stats()`. */
-    private misses = 0;
+    private misses: number = 0;
 
     /** Lifetime count of entries dropped by the LRU evictor. */
-    private evictions = 0;
+    private evictions: number = 0;
 
     private readonly maxEntries: number;
 
@@ -140,7 +139,7 @@ class ReactiveCache {
      * Monotonic counter — used as the default clock so `lastUsed` strictly
      * orders calls even when they land in the same wall-clock millisecond.
      */
-    private monotonic = 0;
+    private monotonic: number = 0;
 
     public constructor(options: ReactiveCacheOptions = {}) {
         this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;

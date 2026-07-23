@@ -35,5 +35,7 @@ export type {
     SubscriptionIdentity,
     SubscriptionQuery,
 } from "./types";
+export type { WhereSqlStrategy } from "./where-sql";
+export { compileWhereSql } from "./where-sql";
 export type { FieldOperators, WhereInput } from "./where-types";
 export { RELATION_EXISTS_KEY } from "./where-types";

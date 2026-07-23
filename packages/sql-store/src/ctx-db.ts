@@ -36,7 +36,6 @@ import type {
     TriggerTimingLike,
     ValidatorLike,
     WhereInput,
-    WhereSqlStrategy,
 } from "@lunora/do";
 import {
     aggregateSqlFunction,
@@ -48,7 +47,6 @@ import {
     buildFtsMatch,
     buildSeekWhere,
     coerceAggregateNumber,
-    compileWhereSql,
     ConflictError,
     CountRlsUnsupportedError,
     decodeCursor,
@@ -85,7 +83,8 @@ import {
     tokenizeSearch,
 } from "@lunora/do";
 import { LunoraError } from "@lunora/errors";
-import { NotFoundError, renderSql } from "@lunora/shard-engine";
+import type {WhereSqlStrategy} from "@lunora/shard-engine";
+import { compileWhereSql, NotFoundError, renderSql } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 

@@ -248,8 +248,7 @@ export type {
 export { hasTrigger, runTriggers } from "./triggers";
 export type { TtlSweepSpec } from "./ttl-sweep";
 export { selectExpiredIds } from "./ttl-sweep";
-export type { WhereSqlStrategy } from "./where-sql";
-export { compileWhereSql } from "./where-sql";
+export type { WhereSqlStrategy } from "@lunora/shard-engine";
 export type { RenderedSql, SqlEngine } from "@lunora/shard-engine";
 export type { MutationDelta, RpcRequest, ShapeSubscriptionQuery, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "@lunora/shard-engine";
 export type { GeoBoundingBox, GeoPoint } from "@lunora/shard-engine";
@@ -257,6 +256,7 @@ export type { CacheEntry, ReactiveCacheOptions } from "@lunora/shard-engine";
 export type { FieldOperators, WhereInput } from "@lunora/shard-engine";
 export type { DependencyTracker } from "@lunora/shard-engine";
 export type { TransactionSqlLike } from "@lunora/shard-engine";
+export { compileWhereSql } from "@lunora/shard-engine";
 export { renderSql } from "@lunora/shard-engine";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "@lunora/shard-engine";
 export {
