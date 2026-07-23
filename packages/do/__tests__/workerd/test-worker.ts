@@ -12,6 +12,7 @@
  * runtime API directly the adapter is gone and `DurableObjectState` is
  * passed straight through — structurally compatible with `ShardDOState`.
  */
+import type { MutationDelta } from "@lunora/shard-engine";
 import { DurableObject } from "cloudflare:workers";
 
 import type { DatabaseWriterLike } from "../../src/ctx-db";
@@ -19,7 +20,6 @@ import { createShardCtxDb, runShardMigrations } from "../../src/ctx-db";
 import { SessionDO } from "../../src/session-do";
 import type { ShardDOState } from "../../src/shard-do";
 import { ShardDO } from "../../src/shard-do";
-import type { MutationDelta } from "../../src/types";
 import messagesSchema from "../_helpers/messages-schema";
 
 interface Env {

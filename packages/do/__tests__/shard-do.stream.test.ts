@@ -1,10 +1,10 @@
 import { LunoraError } from "@lunora/errors";
+import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { SocketAttachment, SubscriptionEnvelope } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 interface FakeWebSocket {

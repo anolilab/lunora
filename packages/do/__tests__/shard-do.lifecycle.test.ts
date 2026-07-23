@@ -1,8 +1,8 @@
+import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { SocketAttachment, SubscriptionEnvelope } from "../src/types";
 
 /**
  * Minimal WebSocket double mirroring the `serializeAttachment` /

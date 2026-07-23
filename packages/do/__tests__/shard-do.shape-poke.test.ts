@@ -1,3 +1,4 @@
+import type { SocketAttachment } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { encodeWire } from "../../../shared/wire-codec";
@@ -5,7 +6,6 @@ import type { CdcChange, DatabaseWriterLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { SocketAttachment } from "../src/types";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
 

@@ -1,15 +1,33 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import { LunoraError, toErrorBody } from "@lunora/errors";
-import type { DependencyTracker, ReactiveCacheOptions, TransactionSqlLike } from "@lunora/shard-engine";
+import type {
+    DependencyTracker,
+    LifecycleDispatchInfo,
+    LifecycleEvent,
+    MutationDelta,
+    ReactiveCacheOptions,
+    ResolvedShape,
+    RpcRequest,
+    ShapeSubscriptionQuery,
+    SocketAttachment,
+    SubscriptionEnvelope,
+    SubscriptionIdentity,
+    SubscriptionQuery,
+    TransactionSqlLike,
+} from "@lunora/shard-engine";
 import {
+    awaitWsDrain,
     ConflictError,
     createDependencyTracker,
     ReactiveCache,
     reactiveCacheKey,
     runSocketPool,
     SCAN_DEP,
+    sendDeltaFrames,
     stableStringify,
+    subscriptionListDeltas,
     tableFromDepKey,
+    trySendFrame,
 } from "@lunora/shard-engine";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
@@ -139,22 +157,9 @@ import { buildPokeFrames, diffGlobalMembership, projectColumns } from "./shape-g
 import { foldTraces, SpanBuffer } from "./span-buffer";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
-import { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 import { resolveTraceAnchor } from "./trace-context";
 import type { TtlSweepSpec } from "./ttl-sweep";
 import { selectExpiredIds } from "./ttl-sweep";
-import type {
-    LifecycleDispatchInfo,
-    LifecycleEvent,
-    MutationDelta,
-    ResolvedShape,
-    RpcRequest,
-    ShapeSubscriptionQuery,
-    SocketAttachment,
-    SubscriptionEnvelope,
-    SubscriptionIdentity,
-    SubscriptionQuery,
-} from "./types";
 
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
@@ -8823,8 +8828,8 @@ type LogSink = TelemetrySink;
 
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
 // Re-exported so existing import sites (`./index`, tests) keep their path; the
-// canonical home is `./subscription-delivery`.
-export { subscriptionListDeltas } from "./subscription-delivery";
+// canonical home is `@lunora/shard-engine`.
+export { subscriptionListDeltas } from "@lunora/shard-engine";
 
 export type {
     HibernatableWebSocket,

@@ -1,4 +1,5 @@
 import { LunoraError } from "@lunora/errors";
+import type { SocketAttachment } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AggregateIndexDefinitionLike } from "../src/aggregates";
@@ -34,7 +35,6 @@ import type {
 } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import type { TraceSpan, TraceSummary } from "../src/span-buffer";
-import type { SocketAttachment } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**

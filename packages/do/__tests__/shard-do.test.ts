@@ -1,9 +1,9 @@
+import type { MutationDelta, SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "../src/shard-do";
-import type { MutationDelta, SocketAttachment, SubscriptionEnvelope } from "../src/types";
 
 /**
  * The Workers runtime exposes `serializeAttachment` / `deserializeAttachment`

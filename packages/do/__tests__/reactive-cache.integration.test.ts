@@ -5,6 +5,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 
+import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { ReactiveCache, reactiveCacheKey } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,7 +13,6 @@ import type { SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { ShardDOOptions, ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { SocketAttachment, SubscriptionEnvelope } from "../src/types";
 
 interface NodeStatement {
     all: (...params: unknown[]) => Record<string, unknown>[];

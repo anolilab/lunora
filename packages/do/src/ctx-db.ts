@@ -30,7 +30,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @lunora/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
 import { LunoraError } from "@lunora/errors";
-import type { ReactiveCache, WhereInput } from "@lunora/shard-engine";
+import type { MutationDelta, ReactiveCache, WhereInput } from "@lunora/shard-engine";
 import {
     boundingBoxGeohashes,
     buildFtsMatch,
@@ -95,7 +95,6 @@ import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStora
 import { createSystemReader } from "./system-reader";
 import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
 import { runTriggers } from "./triggers";
-import type { MutationDelta } from "./types";
 import type { WhereSqlStrategy } from "./where-sql";
 import { compileWhereSql } from "./where-sql";
 

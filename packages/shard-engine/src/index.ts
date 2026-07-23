@@ -15,8 +15,21 @@ export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
 export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
 export { runSocketPool } from "./socket-pool";
+export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ConflictKind } from "./transaction";
 export type { TransactionSqlLike } from "./transaction";
 export { ConflictError } from "./transaction";
+export type {
+    LifecycleDispatchInfo,
+    LifecycleEvent,
+    MutationDelta,
+    ResolvedShape,
+    RpcRequest,
+    ShapeSubscriptionQuery,
+    SocketAttachment,
+    SubscriptionEnvelope,
+    SubscriptionIdentity,
+    SubscriptionQuery,
+} from "./types";
 export type { FieldOperators, WhereInput } from "./where-types";
 export { RELATION_EXISTS_KEY } from "./where-types";

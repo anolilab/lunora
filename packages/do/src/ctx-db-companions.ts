@@ -25,6 +25,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-companions" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
+import type { MutationDelta } from "@lunora/shard-engine";
 import { encodeGeohash, ftsTableName, GEO_DEFAULT_PRECISION, stringifySearchText } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
@@ -41,7 +42,6 @@ import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, 
 import { param } from "./drizzle";
 import type { RankIndexDefinitionLike } from "./rank";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
-import type { MutationDelta } from "./types";
 
 /**
  * Whether none of the fields a rank index reads (partition / sort / static
