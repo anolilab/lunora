@@ -1,16 +1,11 @@
 import { createConfig } from "@anolilab/eslint-config";
 
-// Self-contained flat config for @lunora/mail. Each package owns its own
-// setup (no shared local preset); rules build on @anolilab/eslint-config.
+// Self-contained flat config for @lunora/shard-engine. This is production
+// runtime code (the host-neutral reactive engine), so it uses the standard
+// strict preset. Test files get the usual test relaxations.
 export default createConfig(
     {
-        // Enable type-aware linting and let @anolilab read the tsconfig. This gates
-        // correct behaviour: type-aware rules (no-unsafe-*, no-unnecessary-condition,
-        // require-await) only run with real type info, and for React packages the
-        // tsconfig's `jsx: "react-jsx"` flips the preset to the automatic runtime
-        // (react-in-jsx-scope off). Without tsconfigPath both silently misfire.
         typescript: { tsconfigPath: "tsconfig.json" },
-        // Prettier owns formatting; disable @stylistic to avoid the two-formatter ping-pong.
         stylistic: false,
         ignores: [
             "**/dist/**",
@@ -25,9 +20,6 @@ export default createConfig(
             "**/.wrangler/**",
             "**/.history/**",
             "**/CHANGELOG.md",
-            // Code fences inside markdown (e.g. DESIGN.md) are extracted as
-            // virtual .ts files that aren't in any tsconfig, so type-aware
-            // linting can't parse them — don't lint doc snippets as source.
             "**/*.md/**",
             "**/vitest.config.ts",
             "**/packem.config.ts",
@@ -40,19 +32,15 @@ export default createConfig(
             "**/eslint.config.js",
         ],
     },
-    // Scoped framework / Web-platform allowances (NOT blanket rule-off):
     {
         rules: {
-            // Web platform globals present in the workerd + browser deploy runtimes (and
-            // modern Node); eslint-plugin-n's Node-version data flags them conservatively.
+            // `node:sqlite` is stable on Node ^22.15 || >=24.10 and is the
+            // deliberate in-memory engine for the reference host only; any real
+            // host adapters must not depend on it.
             "n/no-unsupported-features/node-builtins": [
                 "error",
                 { ignores: ["crypto", "CryptoKey", "SubtleCrypto", "Storage", "sessionStorage", "localStorage"] },
             ],
-            // Leading-underscore identifiers that are framework API by design: _id /
-            // _creationTime are the public document fields; __lunora* are internal markers;
-            // _meta/__doc__ are data-model internals; __name is a bundler helper. Accidental
-            // dangles (and the trailing-underscore variety) are still flagged.
             "no-underscore-dangle": [
                 "error",
                 {
@@ -77,10 +65,6 @@ export default createConfig(
             ],
         },
     },
-    // Formatting rules that conflict with Prettier (which owns formatting). Like
-    // @stylistic (off via `stylistic: false`), satisfying these fights Prettier:
-    // no-confusing-arrow wants parens Prettier strips; consistent-chaining owns method-
-    // chain line breaks; number-literal-case wants uppercase hex digits Prettier lowercases.
     {
         rules: {
             "antfu/consistent-chaining": "off",
@@ -89,9 +73,6 @@ export default createConfig(
             "unicorn/number-literal-case": "off",
         },
     },
-    // Test files: relax rules that are noisy or inappropriate in test code (loose
-    // mocks/typing, inline regex, null fixtures, async helpers without await, toEqual,
-    // describe titles). Source files still enforce all of these.
     {
         files: ["**/__tests__/**/*.{ts,tsx}", "**/__bench__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/*.bench.{ts,tsx}"],
         rules: {
@@ -119,27 +100,12 @@ export default createConfig(
             "vitest/prefer-strict-equal": "off",
         },
     },
-    // Benchmark files declare local React components purely as render fixtures;
-    // they're never an HMR boundary, so react-refresh's "only export components"
-    // guard does not apply.
-    {
-        files: ["**/__bench__/**/*.{ts,tsx}", "**/*.bench.{ts,tsx}"],
-        rules: {
-            "react-refresh/only-export-components": "off",
-        },
-    },
-    // Markdown code blocks: don't enforce language tags.
     {
         files: ["**/*.md", "**/*.md/**"],
         rules: {
             "markdown/fenced-code-language": "off",
         },
     },
-    // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
-    // keys of JSON.stringify'd wire payloads / canonical objects, changing the bytes on
-    // the wire and breaking order-sensitive tests; prefer-expect-type-of rewrites a
-    // runtime `expect(typeof x)` into a compile-time `expectTypeOf`, silently dropping
-    // the assertion from the runtime count.
     {
         rules: {
             "perfectionist/sort-objects": "off",

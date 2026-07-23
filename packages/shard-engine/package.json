@@ -58,8 +58,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.7",
-        "@lunora/platform": "1.0.0-alpha.1"
+        "@lunora/errors": "1.0.0-alpha.7"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
