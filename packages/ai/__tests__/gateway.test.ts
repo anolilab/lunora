@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AI_GATEWAY_ACCOUNT_ID_ENV, AI_GATEWAY_ID_ENV, AI_GATEWAY_TOKEN_ENV, resolveAiGateway } from "../src/gateway";
+import { AI_GATEWAY_ACCOUNT_ID_ENV, AI_GATEWAY_ID_ENV, AI_GATEWAY_TOKEN_ENV, buildAiGatewayMetadataFields, resolveAiGateway } from "../src/gateway";
 
 /** A configured-gateway env, without any auth token. */
 const configuredEnv = (): Record<string, unknown> => {
@@ -64,5 +64,27 @@ describe(resolveAiGateway, () => {
         const resolved = resolveAiGateway(configuredEnv(), {});
 
         expect(resolved?.headers).toStrictEqual({});
+    });
+});
+
+describe(buildAiGatewayMetadataFields, () => {
+    it("returns undefined for undefined metadata", () => {
+        expect.assertions(1);
+        expect(buildAiGatewayMetadataFields(undefined)).toBeUndefined();
+    });
+
+    it("returns undefined when no field is defined", () => {
+        expect.assertions(2);
+        expect(buildAiGatewayMetadataFields({})).toBeUndefined();
+        expect(buildAiGatewayMetadataFields({ functionPath: "", traceId: undefined })).toBeUndefined();
+    });
+
+    it("projects only the defined, non-empty correlation fields", () => {
+        expect.assertions(2);
+        expect(buildAiGatewayMetadataFields({ functionPath: "messages:send", traceId: FAKE_TRACE_ID })).toStrictEqual({
+            functionPath: "messages:send",
+            traceId: FAKE_TRACE_ID,
+        });
+        expect(buildAiGatewayMetadataFields({ functionPath: "messages:send" })).toStrictEqual({ functionPath: "messages:send" });
     });
 });

@@ -2,7 +2,8 @@ import { LunoraError } from "@lunora/errors";
 import type { EmbeddingModel, LanguageModel } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
 
-import { resolveAiGateway } from "./gateway";
+import type { AiGatewayMetadata } from "./gateway";
+import { buildAiGatewayMetadataFields, resolveAiGateway } from "./gateway";
 import type { AiBindingLike, AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
 
 /**
@@ -11,19 +12,35 @@ import type { AiBindingLike, AiGatewayOptions, EmbeddingModelInput, LunoraAi, Lu
  * a Cloudflare AI Gateway (`LUNORA_AI_GATEWAY_*`), route through it by its id so
  * the gateway computes token + dollar-cost telemetry. Returns `undefined` when
  * neither applies — the direct-to-Workers-AI path, unchanged.
+ *
+ * When correlation `metadata` (`{ functionPath, traceId }`) is supplied and a
+ * gateway is active, its defined fields are folded into the gateway option's
+ * native `metadata` so the AI Gateway log ties back to the Lunora trace. It is
+ * never added to an explicit gateway that already carries its own `metadata`,
+ * and is a no-op when no gateway resolves — additive and backward-compatible.
  */
-const resolveGatewayOption = (gateway: AiGatewayOptions | undefined, env: Record<string, unknown> | undefined): AiGatewayOptions | undefined => {
+const resolveGatewayOption = (
+    gateway: AiGatewayOptions | undefined,
+    env: Record<string, unknown> | undefined,
+    metadata: AiGatewayMetadata | undefined,
+): AiGatewayOptions | undefined => {
+    const metadataFields = buildAiGatewayMetadataFields(metadata);
+
     if (gateway !== undefined) {
-        return gateway;
+        return metadataFields !== undefined && gateway.metadata === undefined ? { ...gateway, metadata: metadataFields } : gateway;
     }
 
     if (env === undefined) {
         return undefined;
     }
 
-    const resolved = resolveAiGateway(env);
+    const resolved = resolveAiGateway(env, metadata);
 
-    return resolved === undefined ? undefined : { id: resolved.gatewayId };
+    if (resolved === undefined) {
+        return undefined;
+    }
+
+    return metadataFields === undefined ? { id: resolved.gatewayId } : { id: resolved.gatewayId, metadata: metadataFields };
 };
 
 /**
@@ -57,7 +74,7 @@ const buildProvider = (binding: AiBindingLike, gateway?: LunoraAiOptions["gatewa
  * @experimental
  */
 const createAi = (options: LunoraAiOptions): LunoraAi => {
-    const { binding, defaultEmbeddingModel, defaultModel, env, gateway, provider } = options;
+    const { binding, defaultEmbeddingModel, defaultModel, env, gateway, metadata, provider } = options;
 
     if (!provider && !binding) {
         throw new LunoraError("INTERNAL", "@lunora/ai: createAi requires a `binding` (env.AI) or a pre-built `provider`");
@@ -68,7 +85,7 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     // `gateway` wins; else an env-configured AI Gateway routes Workers AI through
     // it (opt-in), so token + dollar-cost telemetry is computed by the gateway.
     // Resolved once so the raw `ai.run()` path below routes through the same gateway.
-    const resolvedGateway = resolveGatewayOption(gateway, env);
+    const resolvedGateway = resolveGatewayOption(gateway, env, metadata);
     const workersai: WorkersAiProviderLike = provider ?? buildProvider(binding as AiBindingLike, resolvedGateway);
 
     const model = (input?: ModelInput): LanguageModel => {

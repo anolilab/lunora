@@ -20,10 +20,14 @@ const readEnv = (env: Record<string, unknown>, key: string): string | undefined 
 };
 
 /**
- * Encode the `cf-aig-metadata` header value from the defined correlation fields,
- * or `undefined` when nothing is set (so the header is omitted, never sent empty).
+ * Project {@link AiGatewayMetadata} to a plain string-map of only its defined,
+ * non-empty fields, or `undefined` when nothing is set. This is the shared source
+ * of truth behind both gateway-correlation forms: the `cf-aig-metadata` HTTP
+ * header (bring-your-own providers) and the Workers AI binding's native
+ * `gateway.metadata` option — both encode the same `{ functionPath, traceId }`.
+ * @experimental
  */
-const encodeMetadata = (metadata: AiGatewayMetadata | undefined): string | undefined => {
+const buildAiGatewayMetadataFields = (metadata: AiGatewayMetadata | undefined): Record<string, string> | undefined => {
     if (metadata === undefined) {
         return undefined;
     }
@@ -38,7 +42,17 @@ const encodeMetadata = (metadata: AiGatewayMetadata | undefined): string | undef
         fields["traceId"] = metadata.traceId;
     }
 
-    return Object.keys(fields).length > 0 ? JSON.stringify(fields) : undefined;
+    return Object.keys(fields).length > 0 ? fields : undefined;
+};
+
+/**
+ * Encode the `cf-aig-metadata` header value from the defined correlation fields,
+ * or `undefined` when nothing is set (so the header is omitted, never sent empty).
+ */
+const encodeMetadata = (metadata: AiGatewayMetadata | undefined): string | undefined => {
+    const fields = buildAiGatewayMetadataFields(metadata);
+
+    return fields === undefined ? undefined : JSON.stringify(fields);
 };
 
 /**
@@ -137,3 +151,5 @@ export const resolveAiGateway = (env: Record<string, unknown>, metadata?: AiGate
         headers,
     };
 };
+
+export { buildAiGatewayMetadataFields };

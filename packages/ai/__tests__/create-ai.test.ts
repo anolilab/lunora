@@ -7,7 +7,9 @@ import { AI_GATEWAY_ACCOUNT_ID_ENV, AI_GATEWAY_ID_ENV } from "../src/gateway";
 import type { AiBindingLike, WorkersAiProviderLike } from "../src/types";
 
 /** A configured-gateway env (account + gateway id, no auth token). */
-const gatewayEnv = (): Record<string, unknown> => ({ [AI_GATEWAY_ACCOUNT_ID_ENV]: "acct-123", [AI_GATEWAY_ID_ENV]: "my-gateway" });
+const gatewayEnv = (): Record<string, unknown> => {
+    return { [AI_GATEWAY_ACCOUNT_ID_ENV]: "acct-123", [AI_GATEWAY_ID_ENV]: "my-gateway" };
+};
 
 /**
  * A fake Workers AI provider. Calling it records the requested model id and
@@ -182,6 +184,19 @@ describe("createAi", () => {
             await ai.run("@cf/meta/m2m100-1.2b", { text: "hi" });
 
             expect(binding.runCalls).toStrictEqual([["@cf/meta/m2m100-1.2b", { text: "hi" }, { gateway: { id: "my-gateway" } }]]);
+        });
+
+        it("carries the correlation metadata on the env-resolved gateway", async () => {
+            const binding = fakeBinding();
+            // eslint-disable-next-line no-secrets/no-secrets -- fake test trace id, not a real secret
+            const traceId = "0123456789abcdef0123456789abcdef";
+            const ai = createAi({ binding, env: gatewayEnv(), metadata: { functionPath: "messages:send", traceId } });
+
+            await ai.run("@cf/meta/m2m100-1.2b", { text: "hi" });
+
+            expect(binding.runCalls).toStrictEqual([
+                ["@cf/meta/m2m100-1.2b", { text: "hi" }, { gateway: { id: "my-gateway", metadata: { functionPath: "messages:send", traceId } } }],
+            ]);
         });
 
         it("preserves a caller-supplied gateway over the env-resolved one", async () => {
