@@ -36,8 +36,20 @@
  */
 
 import { serializeSqlValue } from "@lunora/shard-engine";
-
-import type { RestrictableQueryOptions } from "./aggregates";
+import type {
+    RankBeforeOptions,
+    RankBeforeResult,
+    RankDirection,
+    RankIndexDefinitionLike,
+    RankOptions,
+    RankPage,
+    RankPageOptions,
+    RankPageRow,
+    RankPageRowKey,
+    RankResult,
+    RankSortKeyLike,
+    ShardRankPageResult,
+} from "@lunora/shard-engine";
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
 const compareStrings = (a: string, b: string): number => {
@@ -72,148 +84,6 @@ const resolvePartitionValue = (value: unknown): unknown => {
 
     return value;
 };
-
-type RankDirection = "asc" | "desc";
-
-interface RankSortKeyLike {
-    readonly direction: RankDirection;
-    readonly field: string;
-}
-
-/**
- * Structural mirror of `@lunora/server`'s `RankIndexDefinition` — kept local
- * so this package doesn't take a hard dep on `@lunora/server` (same reasoning
- * as `AggregateIndexDefinitionLike` in aggregates.ts).
- */
-interface RankIndexDefinitionLike {
-    readonly name: string;
-    readonly on: string;
-    readonly partitionBy?: ReadonlyArray<string>;
-    readonly sortBy: ReadonlyArray<RankSortKeyLike>;
-    readonly where?: Record<string, unknown>;
-}
-
-/** 1-based position within a partition under the declared sort, plus the partition's row total. */
-interface RankResult {
-    position: number;
-    total: number;
-}
-
-/**
- * Args for `rank()`. `row` is either the row id (`string`) or a full row
- * doc (we read its `_id` to look up the companion entry). The restrictable
- * half (`where`/`baseWhere`/`restrictsCounts`) scopes the rank — useful
- * when an RLS policy or the caller's `where` should narrow the partition
- * (e.g. only ranking non-archived rows).
- */
-interface RankOptions extends RestrictableQueryOptions {
-    row: Record<string, unknown> | string;
-}
-
-/**
- * Args for the cross-shard `rankBefore()` primitive. Unlike `rank()`, the key
- * is supplied explicitly (built off the row doc via `rankKeyFromDocument`) so
- * a PEER shard — one that doesn't store the row being ranked — can still count
- * its local rows strictly-before that key. Scope is fixed by the explicit
- * `partitionKey`; unlike `rank()` there is no `where`/`baseWhere` (the caller
- * pins the partition up front), only the `restrictsCounts` RLS seam.
- */
-interface RankBeforeOptions {
-    /** Canonical-JSON partition tuple — `encodePartitionKey(index.partitionBy, doc)`. */
-    partitionKey: string;
-    /** Mirrors `rank()`/`count()`: a restricted ctx can't be trusted for a strict-before count. */
-    restrictsCounts?: boolean;
-    /** The `__id__` tiebreak value — `doc._id`. */
-    rowId: string;
-    /** Sort-key values in `index.sortBy` order. `rankKeyFromDocument` serializes them to the stored `__sort_k&lt;i>__` form; `rankBefore` re-applies `serializeSqlValue` idempotently, so raw values from a direct caller work too. */
-    sortValues: ReadonlyArray<unknown>;
-}
-
-/** Per-shard `rankBefore()` payload: rows strictly-before the key locally, plus the local partition total. */
-interface RankBeforeResult {
-    before: number;
-    total: number;
-}
-
-/** Args for `rankPage()` — sorted pagination over the index's companion table. */
-interface RankPageOptions extends RestrictableQueryOptions {
-    /**
-     * Cross-shard resume key from the prior page (`{ partitionKey, sortValues,
-     * rowId }`). The cross-shard coordinator forwards each shard's per-shard
-     * resume key here so the shard pages strictly-after that row under the same
-     * `(__partition__, __sort_k&lt;i>__, __id__)` order. Equivalent to `cursor` but
-     * structured (so the coordinator never re-encodes an opaque string); when
-     * both are set, `after` wins. Shard-local callers use `cursor`.
-     */
-    after?: RankPageRowKey;
-    /** Opaque cursor from the prior page's `continueCursor`; `null`/omitted starts at the first page. */
-    cursor?: null | string;
-
-    /**
-     * Pre-encoded partition tuple (`encodePartitionKey(index.partitionBy, where)`)
-     * that pins the page to one partition without re-deriving it from `where`.
-     * The cross-shard coordinator forwards this so each shard scopes its local
-     * slice to the same partition; when set it takes precedence over any
-     * partition resolved from `where`. Shard-local callers leave it unset and
-     * let the partition resolve from `where`.
-     */
-    partitionKey?: string;
-    /** Page size; defaults to 100. Capped at 1000 to keep a single fan-out manageable. */
-    take?: number;
-}
-
-/** One page returned by `rankPage()`. */
-interface RankPage {
-    continueCursor: null | string;
-    isDone: boolean;
-    page: Record<string, unknown>[];
-}
-
-/**
- * Per-row rank key emitted by the cross-shard `rankPageRows()`. Byte-identical
- * to what the rank companion's `ORDER BY __partition__, __sort_k&lt;i>__, __id__`
- * compares on, so the query coordinator's k-way merge orders rows across shards
- * the same way each shard pages them locally:
- *
- * - `partitionKey` is the companion's `__partition__` column — `encodePartitionKey(index.partitionBy, doc)`.
- * - `sortValues[i]` is the companion's `__sort_k&lt;i>__` column — `serializeSqlValue(doc[index.sortBy[i].field])` (always `null | number | string`, JSON-safe over the wire).
- * - `rowId` is the `__id__` tiebreak (`doc._id`).
- */
-interface RankPageRowKey {
-    /** Canonical-JSON partition tuple — the companion's `__partition__`. */
-    partitionKey: string;
-    /** The `__id__` tiebreak (`doc._id`). */
-    rowId: string;
-    /** Serialized sort-key values in `index.sortBy` order (`null | number | string`). */
-    sortValues: ReadonlyArray<unknown>;
-}
-
-/** One row of a shard-local `rankPageRows()` slice: the hydrated doc plus its rank key. */
-interface RankPageRow {
-    doc: Record<string, unknown>;
-    key: RankPageRowKey;
-}
-
-/**
- * A single shard's `rankPageRows()` payload — the structural contract the query
- * coordinator's `orchestrateRankPage` consumes (mirrored as `ShardRankPageResult`
- * in `@lunora/runtime`). `rows` is the shard's local ranked slice (already in
- * `(__partition__, sortcols, __id__)` order); `hasMore` says whether the shard
- * had rows beyond the slice it returned.
- */
-interface ShardRankPageResult {
-    /**
-     * Per-sort-key directions (`index.sortBy[i].direction`) the shard actually
-     * ordered its slice by — the authoritative sort order. The coordinator's
-     * k-way merge uses these (not the caller-supplied request `directions`) so
-     * the cross-shard merge order is guaranteed to match each shard's local
-     * `ORDER BY`, even if a caller passed `directions` that disagree with the
-     * named index.
-     */
-    directions: ReadonlyArray<RankDirection>;
-    hasMore: boolean;
-    rows: ReadonlyArray<RankPageRow>;
-}
 
 /**
  * Canonical-JSON encoding of the partition tuple, matching the aggregate

@@ -19,71 +19,29 @@
  * **not** transactional.
  */
 
-import type { DatabaseWriterLike, TableDefinitionLike } from "./ctx-db";
+import type {
+    SchemaLike,
+    TriggerContextLike,
+    TriggerEventLike,
+    TriggerOpLike,
+    TriggerTimingLike,
+} from "@lunora/shard-engine";
 
-/** Lifecycle phase relative to the SQL write. */
-export type TriggerTimingLike = "after" | "before";
-
-/** The CRUD operation a trigger reacts to. `patch` and `replace` both map to `update`. */
-export type TriggerOpLike = "delete" | "insert" | "update";
-
-/**
- * A schedulable durable-workflow reference — the generated `workflows.&lt;name>` /
- * `agents.&lt;name>` object (carries its `WORKFLOW_*`/`AGENT_*` binding + stable
- * name). Structural mirror so a scheduled target can be a workflow/agent, not
- * just a function path, without this package depending on `@lunora/scheduler`.
- */
-export interface SchedulableWorkflowReferenceLike {
-    readonly binding?: string;
-    readonly isLunoraWorkflow: true;
-    readonly name?: string;
-}
-
-/**
- * Structural mirror of `@lunora/server`'s `Scheduler` (kept local so this
- * package takes no runtime dependency on the server package — same reasoning
- * as `RelationDefinitionLike`). `target` is a function path (`"ns:fn"`) or a
- * generated `workflows.&lt;name>` / `agents.&lt;name>` reference (starts a fresh
- * durable instance on fire).
- */
-export interface SchedulerLike {
-    runAfter: (delayMs: number, target: SchedulableWorkflowReferenceLike | string, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: SchedulableWorkflowReferenceLike | string, args?: Record<string, unknown>) => Promise<string>;
-}
-
-/** What a trigger handler observes about the write that fired it. */
-export interface TriggerEventLike {
-    /** The new/merged row — present on `insert` and `update`, absent on `delete`. */
-    doc?: Record<string, unknown>;
-    id: string;
-    op: TriggerOpLike;
-    /** The pre-write row — present on `update` and `delete`, absent on `insert`. */
-    previous?: Record<string, unknown>;
-    table: string;
-}
-
-/** Handle injected into trigger handlers; built by the backend write layer. */
-export interface TriggerContextLike {
-    db: DatabaseWriterLike;
-    scheduler: SchedulerLike;
-}
-
-/**
- * Structural mirror of `@lunora/server`'s `TriggerDefinition` (kept local —
- * same reasoning as `RelationDefinitionLike`). Stored on the table's
- * `triggerMap` keyed by accessor name.
- */
-export interface TriggerDefinitionLike {
-    readonly handler: (context: TriggerContextLike, event: TriggerEventLike) => Promise<void> | void;
-    readonly op: TriggerOpLike;
-    readonly timing: TriggerTimingLike;
-}
+export type {
+    SchedulableWorkflowReferenceLike,
+    SchedulerLike,
+    TriggerContextLike,
+    TriggerDefinitionLike,
+    TriggerEventLike,
+    TriggerOpLike,
+    TriggerTimingLike,
+} from "@lunora/shard-engine";
 
 export interface RunTriggersOptions {
     ctx: TriggerContextLike;
     event: TriggerEventLike;
     op: TriggerOpLike;
-    schema: { readonly tables: Record<string, TableDefinitionLike> };
+    schema: SchemaLike;
     tableName: string;
     timing: TriggerTimingLike;
 }
@@ -112,7 +70,7 @@ export const runTriggers = async (options: RunTriggersOptions): Promise<void> =>
  * Whether `tableName` declares any trigger for `op`. Lets the write layer skip
  * the extra `previous` read on `replace` unless an `update` trigger needs it.
  */
-export const hasTrigger = (schema: { readonly tables: Record<string, TableDefinitionLike> }, tableName: string, op: TriggerOpLike): boolean => {
+export const hasTrigger = (schema: SchemaLike, tableName: string, op: TriggerOpLike): boolean => {
     const definitions = schema.tables[tableName]?.triggerMap;
 
     if (!definitions) {

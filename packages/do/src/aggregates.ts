@@ -30,73 +30,16 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import type { WhereInput } from "@lunora/shard-engine";
-
-/** Reducer applied by an aggregate index. */
-type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
-
-/**
- * Structural mirror of `@lunora/server`'s `AggregateIndexDefinition` — kept
- * local so this package doesn't depend on `@lunora/server` (which would create
- * a cycle).
- */
-interface AggregateIndexDefinitionLike {
-    readonly by?: ReadonlyArray<string>;
-    readonly field?: string;
-    readonly name: string;
-    readonly on: string;
-    readonly op: AggregateOp;
-    readonly where?: Record<string, unknown>;
-}
-
-/**
- * Query-options shape shared by every aggregate reader (`count` / `aggregate`
- * / `groupBy` / `rank` once it lands). Defined here so the §3.2 RLS module
- * can import this shape without taking a hard dep on the runtime layer, and
- * so the codegen facade can extend it uniformly.
- *
- * Field semantics:
- *
- * - `where` — the user's filter predicate.
- * - `baseWhere` — a predicate injected by an RLS-aware ctx, AND-merged into
- * `where` before index planning.
- * - `relationBaseWhere` — the per-child-table RLS read filter, threaded into
- * the relation pre-resolver so that a relation-crossing predicate in `where`
- * (or `baseWhere`) only counts/aggregates over child rows the caller may read
- * (fail-closed). Mirrors the `findMany` seam.
- * - `restrictsCounts` — when `true`, `count()` throws `COUNT_RLS_UNSUPPORTED`
- * instead of returning a potentially undercounted result. `aggregate` /
- * `groupBy` are unaffected because they are explicitly scoped to `where`.
- */
-interface RestrictableQueryOptions {
-    baseWhere?: WhereInput;
-    relationBaseWhere?: (table: string) => undefined | WhereInput;
-    restrictsCounts?: boolean;
-    where?: WhereInput;
-}
-
-/** Args for `DatabaseWriterLike.aggregate`. */
-interface AggregateOptions extends RestrictableQueryOptions {
-    /** The column the reducer applies to (ignored for `count`). */
-    field?: string;
-    op: AggregateOp;
-}
-
-/** Args for `DatabaseWriterLike.groupBy`. */
-interface GroupByOptions extends RestrictableQueryOptions {
-    /** Reducer applied per group; defaults to `count` to mirror SQL `GROUP BY`. */
-    agg?: { field?: string; op: AggregateOp };
-    by: ReadonlyArray<string>;
-}
-
-/** Result of `aggregate` — the scalar reduction, or `null` when no rows matched. */
-type AggregateResult = null | number;
-
-/** Result of `groupBy` — one entry per distinct group tuple. */
-interface GroupByEntry {
-    key: Record<string, unknown>;
-    value: AggregateResult;
-}
+import type {
+    AggregateIndexDefinitionLike,
+    AggregateOp,
+    AggregateOptions,
+    AggregateResult,
+    GroupByEntry,
+    GroupByOptions,
+    RestrictableQueryOptions,
+    WhereInput,
+} from "@lunora/shard-engine";
 
 /**
  * Thrown when `count` runs in an RLS-restricted ctx. A `LunoraError` subclass

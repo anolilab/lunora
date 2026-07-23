@@ -34,83 +34,21 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import type { WhereInput } from "@lunora/shard-engine";
+import type {
+    NestedWith,
+    OnDeleteActionLike,
+    RelationDefinitionLike,
+    ResolveWithOptions,
+    TableDefinitionLike,
+    WhereInput,
+    WithInput,
+} from "@lunora/shard-engine";
 
-import type { TableDefinitionLike } from "./ctx-db";
-import type { OrderByInput, QueryArgs, QueryPage } from "./query-args";
 import { applySelect } from "./query-args";
-
-/** FK behaviour when a referenced parent row is deleted (mirrors SQL `ON DELETE`). */
-type OnDeleteActionLike = "cascade" | "restrict" | "set null";
-
-/**
- * Structural mirror of `@lunora/server`'s `RelationDefinition` (kept local so
- * this package takes no runtime dependency on the server package — same
- * reasoning as {@link TableDefinitionLike}).
- */
-interface RelationDefinitionLike {
-    readonly field: string;
-    readonly kind: "many" | "one";
-    readonly onDelete?: OnDeleteActionLike;
-    readonly references: string;
-    readonly table: string;
-}
-
-/** Per-relation refinements: filter / order / cap / project / recurse into the children. */
-interface NestedWith {
-    limit?: number;
-    orderBy?: OrderByInput[];
-
-    /**
-     * Project each loaded child down to these fields (like the top-level
-     * `findMany` `select`). Applied AFTER grouping, so the join key stays
-     * available to map children to parents; `_id`/`_creationTime` and any deeper
-     * `with` relations are always retained.
-     */
-    select?: ReadonlyArray<string>;
-    where?: WhereInput;
-    with?: WithInput;
-}
 
 /** Project a loaded child (or page) per `nested.select`, keeping system + nested-`with` keys. Returns the input unchanged when no select. */
 const projectChildren = (documents: Record<string, unknown>[], nested: NestedWith): Record<string, unknown>[] =>
     nested.select ? applySelect(documents, nested.select, nested.with) : documents;
-
-/**
- * The `with` argument. Each key is a relation name resolving to either `true`
- * (load with no refinements) or a {@link NestedWith}. The reserved `_count`
- * key requests per-parent aggregate counts instead of loaded rows.
- */
-interface WithInput {
-    [relationName: string]: NestedWith | Record<string, true> | boolean | undefined;
-    _count?: Record<string, true>;
-}
-
-interface ResolveWithOptions {
-    fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
-
-    /**
-     * Grouped aggregate: for every FK value in `values`, return the count of
-     * child rows in `tableName` whose `whereField` equals that value,
-     * optionally AND-ing in `policyWhere` (the child table's RLS read filter).
-     * Returns a `Map` keyed by FK value with the per-group count — missing
-     * keys (groups with zero children) are not included; callers default to 0.
-     * A single `GROUP BY :whereField … WHERE :whereField IN (values)` query
-     * replaces the former one-query-per-distinct-value loop.
-     */
-    groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput) => Promise<Map<unknown, number>>;
-    parents: Record<string, unknown>[];
-
-    /**
-     * Per-target-table read filter (RLS) applied to each relation fetch/count and
-     * threaded into nested `with`. See `QueryArgs.relationBaseWhere`. Without
-     * it a child table's read policy is silently bypassed on the relation hop.
-     */
-    relationBaseWhere?: (table: string) => undefined | WhereInput;
-    schema: { readonly tables: Record<string, TableDefinitionLike> };
-    tableName: string;
-    with: WithInput;
-}
 
 /**
  * Cross-backend fan-out for grouped `_count` on backends whose `groupedCounter`
