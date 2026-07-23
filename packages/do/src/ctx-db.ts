@@ -30,7 +30,21 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @lunora/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
 import { LunoraError } from "@lunora/errors";
-import { ConflictError,SCAN_DEP } from "@lunora/shard-engine";
+import type { ReactiveCache, WhereInput } from "@lunora/shard-engine";
+import {
+    boundingBoxGeohashes,
+    buildFtsMatch,
+    ConflictError,
+    coveringGeohashes,
+    ftsTableName,
+    haversineMeters,
+    NotFoundError,
+    pointInBoundingBox,
+    SCAN_DEP,
+    scoreDocument,
+    stringifySearchText,
+    tokenizeSearch,
+} from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 // Aliased: this module already uses `sql` for the workerd `SqlExec` (see `runSql`), so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
@@ -59,8 +73,6 @@ import {
     serializeSqlValue,
     tableColumns,
 } from "./do-sql";
-import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
-import NotFoundError from "./not-found-error";
 import type { OrderKey, QueryArgs, QueryPage } from "./query-args";
 import { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
 import type {
@@ -74,13 +86,11 @@ import type {
     ShardRankPageResult,
 } from "./rank";
 import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
-import type { ReactiveCache } from "./reactive-cache";
 import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
 import type { RelationDefinitionLike } from "./relations";
 import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
-import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
@@ -88,7 +98,6 @@ import { runTriggers } from "./triggers";
 import type { MutationDelta } from "./types";
 import type { WhereSqlStrategy } from "./where-sql";
 import { compileWhereSql } from "./where-sql";
-import type { WhereInput } from "./where-types";
 
 /**
  * Structural projection of `state.storage.sql` (workerd's SqlStorage). We

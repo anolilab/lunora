@@ -16,9 +16,9 @@
  * (`compileWhereSql`) renders it per dialect.
  */
 import { LunoraError } from "@lunora/errors";
+import type { WhereInput } from "@lunora/shard-engine";
 
 import type { WithInput } from "./relations";
-import type { WhereInput } from "./where-types";
 
 type SortDirection = "asc" | "desc";
 

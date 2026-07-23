@@ -1,7 +1,16 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import { LunoraError, toErrorBody } from "@lunora/errors";
-import type { DependencyTracker, TransactionSqlLike } from "@lunora/shard-engine";
-import { ConflictError,createDependencyTracker, SCAN_DEP, tableFromDepKey } from "@lunora/shard-engine";
+import type { DependencyTracker, ReactiveCacheOptions, TransactionSqlLike } from "@lunora/shard-engine";
+import {
+    ConflictError,
+    createDependencyTracker,
+    ReactiveCache,
+    reactiveCacheKey,
+    runSocketPool,
+    SCAN_DEP,
+    stableStringify,
+    tableFromDepKey,
+} from "@lunora/shard-engine";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
@@ -110,8 +119,6 @@ import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { QueueMessageOutcome, RecordQueueMessageInput } from "./queue-catcher";
 import { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
 import type { ShardRankPageResult } from "./rank";
-import type { ReactiveCacheOptions } from "./reactive-cache";
-import { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
 import type { OwnerRelay, RelayHost, RelayMember } from "./relay-hub";
 import { createRelayLink, DEFAULT_MAX_RELAYS } from "./relay-hub";
 import type { AppendRequestLogEntry, ContextLogLevel, IssuesResult, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
@@ -129,7 +136,6 @@ import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
 import type { ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 import { buildPokeFrames, diffGlobalMembership, projectColumns } from "./shape-global-diff";
-import { runSocketPool } from "./socket-pool";
 import { foldTraces, SpanBuffer } from "./span-buffer";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";

@@ -8,6 +8,15 @@
 
 export type { DependencyTracker } from "./dependency-tracker";
 export { createDependencyTracker, depKey, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
+export type { GeoBoundingBox, GeoPoint } from "./geo";
+export { boundingBoxCenter, boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
+export { NotFoundError } from "./not-found-error";
+export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
+export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
+export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
+export { runSocketPool } from "./socket-pool";
 export type { ConflictKind } from "./transaction";
 export type { TransactionSqlLike } from "./transaction";
 export { ConflictError } from "./transaction";
+export type { FieldOperators, WhereInput } from "./where-types";
+export { RELATION_EXISTS_KEY } from "./where-types";

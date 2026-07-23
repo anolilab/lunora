@@ -17,11 +17,12 @@
  * next tick retries (design §3.4).
  */
 
+import { stableStringify } from "@lunora/shard-engine";
+
 import type { CdcChange, DatabaseWriterLike, SqlExec } from "./ctx-db";
 import { applyCdcChanges } from "./ctx-db-cdc";
 import { selectShapeRows } from "./ctx-db-shapes";
 import { diffExternalSource, projectExternalSourceRow } from "./external-source-diff";
-import { stableStringify } from "./reactive-cache";
 
 /** The outcome of one materialize pass: how many changes were applied, and the baseline the next tick diffs from. */
 interface MaterializeResult {

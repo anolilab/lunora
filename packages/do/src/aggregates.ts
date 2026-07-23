@@ -30,8 +30,7 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-
-import type { WhereInput } from "./where-types";
+import type { WhereInput } from "@lunora/shard-engine";
 
 /** Reducer applied by an aggregate index. */
 type AggregateOp = "avg" | "count" | "max" | "min" | "sum";

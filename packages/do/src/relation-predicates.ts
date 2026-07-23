@@ -29,13 +29,13 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+import type { WhereInput } from "@lunora/shard-engine";
+import { RELATION_EXISTS_KEY } from "@lunora/shard-engine";
 
 import type { TableDefinitionLike } from "./ctx-db";
 import type { QueryArgs, QueryPage } from "./query-args";
 import type { RelationDefinitionLike } from "./relations";
 import { distinctValues } from "./relations";
-import type { WhereInput } from "./where-types";
-import { RELATION_EXISTS_KEY } from "./where-types";
 
 /**
  * Single source of truth for the Prisma-style relation operators. Both the

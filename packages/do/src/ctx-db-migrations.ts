@@ -16,6 +16,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-migrations" mirrors its parent "ctx-db.ts" (the established public module name). */
 
+import { ftsTableName } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
@@ -30,7 +31,6 @@ import { migrateIdempotency } from "./ctx-db-idempotency";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
 import { rankTableName, sortColumnName } from "./rank";
-import { ftsTableName } from "./search-text";
 
 /** Create the secondary + `.unique()` expression indexes declared on a table. */
 const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {

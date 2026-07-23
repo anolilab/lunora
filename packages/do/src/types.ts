@@ -1,4 +1,4 @@
-import type { WhereInput } from "./where-types";
+import type { WhereInput } from "@lunora/shard-engine";
 
 export interface SubscriptionQuery {
     args?: Record<string, unknown>;

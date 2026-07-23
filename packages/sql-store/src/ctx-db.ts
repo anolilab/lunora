@@ -38,6 +38,7 @@ import type {
     WhereInput,
     WhereSqlStrategy,
 } from "@lunora/do";
+import { NotFoundError } from "@lunora/shard-engine";
 import {
     aggregateSqlFunction,
     aggregateTableName,
@@ -65,7 +66,6 @@ import {
     normalizeCountArgument,
     normalizeIdStructurally,
     normalizeOrderKeys,
-    NotFoundError,
     NotUniqueError,
     RANK_TIEBREAK,
     rankTableName,

@@ -118,8 +118,6 @@ export {
     readFunctionMetricsTotals,
     recordFunctionMetric,
 } from "./function-metrics";
-export type { GeoBoundingBox, GeoPoint } from "./geo";
-export { boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
 export type {
     AdvisoriesResult,
     AdvisoryFinding,
@@ -171,7 +169,6 @@ export type { LogEntry, LogLevel } from "./log-buffer";
 export { LogBuffer } from "./log-buffer";
 export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
 export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
-export { default as NotFoundError } from "./not-found-error";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args";
@@ -189,8 +186,6 @@ export type {
     ShardRankPageResult,
 } from "./rank";
 export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
-export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
-export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
 export { serveRelationFanout } from "./relation-fanout";
 export type { ResolveRelationPredicatesOptions } from "./relation-predicates";
 export {
@@ -205,7 +200,6 @@ export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefi
 export { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 export type { LogEventInput } from "./request-log";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
-export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
 export type { SessionRecord } from "./session-do";
@@ -260,8 +254,22 @@ export { selectExpiredIds } from "./ttl-sweep";
 export type { MutationDelta, RpcRequest, ShapeSubscriptionQuery, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
 export type { WhereSqlStrategy } from "./where-sql";
 export { compileWhereSql } from "./where-sql";
-export type { FieldOperators, WhereInput } from "./where-types";
+export type { GeoBoundingBox, GeoPoint } from "@lunora/shard-engine";
+export type { CacheEntry, ReactiveCacheOptions } from "@lunora/shard-engine";
+export type { FieldOperators, WhereInput } from "@lunora/shard-engine";
 export type { DependencyTracker } from "@lunora/shard-engine";
 export type { TransactionSqlLike } from "@lunora/shard-engine";
+export {
+    boundingBoxCenter,
+    boundingBoxGeohashes,
+    coveringGeohashes,
+    encodeGeohash,
+    GEO_DEFAULT_PRECISION,
+    haversineMeters,
+    pointInBoundingBox,
+} from "@lunora/shard-engine";
+export { NotFoundError } from "@lunora/shard-engine";
+export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "@lunora/shard-engine";
+export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "@lunora/shard-engine";
 export { createDependencyTracker, depKey, SCAN_DEP } from "@lunora/shard-engine";
 export { ConflictError } from "@lunora/shard-engine";

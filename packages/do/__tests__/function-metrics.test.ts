@@ -1,4 +1,4 @@
-import { ConflictError,SCAN_DEP } from "@lunora/shard-engine";
+import { ConflictError, SCAN_DEP } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import {

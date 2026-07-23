@@ -16,10 +16,9 @@
  */
 /* eslint-disable no-restricted-syntax -- every `sql\`…\`` here is a drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 import { LunoraError } from "@lunora/errors";
+import type { WhereInput } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
-
-import type { WhereInput } from "./where-types";
 
 /** Maps a logical field name to its dialect SQL reference (already a drizzle `SQL`). */
 type FieldRefSql = (field: string) => SQL;

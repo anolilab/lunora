@@ -34,11 +34,11 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+import type { WhereInput } from "@lunora/shard-engine";
 
 import type { TableDefinitionLike } from "./ctx-db";
 import type { OrderByInput, QueryArgs, QueryPage } from "./query-args";
 import { applySelect } from "./query-args";
-import type { WhereInput } from "./where-types";
 
 /** FK behaviour when a referenced parent row is deleted (mirrors SQL `ON DELETE`). */
 type OnDeleteActionLike = "cascade" | "restrict" | "set null";
