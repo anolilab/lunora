@@ -70,7 +70,10 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.7"
+        "@lunora/errors": "1.0.0-alpha.7",
+        "@opentelemetry/api": "catalog:otel",
+        "@opentelemetry/core": "catalog:otel",
+        "@opentelemetry/resources": "catalog:otel"
     },
     "devDependencies": {
         "@cloudflare/containers": "catalog:cloudflare",

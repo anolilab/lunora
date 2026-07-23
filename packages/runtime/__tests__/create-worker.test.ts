@@ -111,6 +111,32 @@ describe("createWorker", () => {
         expect(body).toEqual({ args: { limit: 5 }, functionPath: "messages:list" });
     });
 
+    it("propagates a W3C traceparent from the inbound request to the shard", async () => {
+        expect.hasAssertions();
+
+        const worker = createWorker({ shardDO: shard.namespace });
+        const upstreamTraceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
+        await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                headers: { traceparent: upstreamTraceparent },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const forwarded = shard.calls[0]!.request;
+        const forwardedTraceparent = forwarded.headers.get("traceparent");
+
+        expect(forwardedTraceparent).toBeDefined();
+        expect(forwardedTraceparent).not.toBe(upstreamTraceparent);
+        // The trace id is inherited from the upstream trace; the span id is a
+        // freshly-minted child span. The sampled flag is preserved (1).
+        expect(forwardedTraceparent).toMatch(/^00-0af7651916cd43dd8448eb211c80319c-[0-9a-f]{16}-01$/);
+    });
+
     it("uses the envelope shardKey when provided", async () => {
         expect.assertions(1);
 

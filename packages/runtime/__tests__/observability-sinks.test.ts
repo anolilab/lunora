@@ -1,3 +1,5 @@
+import { gunzipSync } from "node:zlib";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LogEvent, LogLevel, MetricEvent, ObservabilityEvent, SpanEvent } from "../src/observability";
@@ -62,6 +64,11 @@ interface OtlpKeyValue {
 interface ParsedSpan {
     attributes: OtlpKeyValue[];
     endTimeUnixNano: string;
+    events?: {
+        attributes: OtlpKeyValue[];
+        name: string;
+        timeUnixNano: string;
+    }[];
     kind: number;
     name: string;
     /** Absent on the RPC dispatch span; set on a `ctx.trace` span. */
@@ -86,9 +93,10 @@ interface ParsedLogRecord {
 /** Look up an attribute's value by key. */
 const attrValue = (attributes: OtlpKeyValue[], key: string): OtlpValue | undefined => attributes.find((entry) => entry.key === key)?.value;
 
-/** Decode a POSTed OTLP trace-export body down to its single span + resource attributes. */
+/** Decode a POSTed OTLP trace-export body down to its single span + resource attributes. Handles gzip bodies. */
 const spanFrom = (init: RequestInit): { resourceAttributes: OtlpKeyValue[]; scopeName: string; span: ParsedSpan } => {
-    const parsed = JSON.parse(init.body as string) as {
+    const json = typeof init.body === "string" ? init.body : gunzipSync(Buffer.from(init.body as ArrayBuffer)).toString("utf8");
+    const parsed = JSON.parse(json) as {
         resourceSpans: { resource: { attributes: OtlpKeyValue[] }; scopeSpans: { scope: { name: string }; spans: ParsedSpan[] }[] }[];
     };
     const resourceSpan = parsed.resourceSpans[0]!;
@@ -110,7 +118,8 @@ interface ParsedMetric {
 
 /** Decode a POSTed OTLP metric-export body down to its single metric. */
 const metricFrom = (init: RequestInit): ParsedMetric => {
-    const parsed = JSON.parse(init.body as string) as {
+    const json = typeof init.body === "string" ? init.body : gunzipSync(Buffer.from(init.body as ArrayBuffer)).toString("utf8");
+    const parsed = JSON.parse(json) as {
         resourceMetrics: { scopeMetrics: { metrics: ParsedMetric[] }[] }[];
     };
 
@@ -119,7 +128,8 @@ const metricFrom = (init: RequestInit): ParsedMetric => {
 
 /** Decode a POSTed OTLP log-export body down to its single log record + resource attributes. */
 const logFrom = (init: RequestInit): { record: ParsedLogRecord; resourceAttributes: OtlpKeyValue[] } => {
-    const parsed = JSON.parse(init.body as string) as {
+    const json = typeof init.body === "string" ? init.body : gunzipSync(Buffer.from(init.body as ArrayBuffer)).toString("utf8");
+    const parsed = JSON.parse(json) as {
         resourceLogs: { resource: { attributes: OtlpKeyValue[] }; scopeLogs: { logRecords: ParsedLogRecord[]; scope: { name: string } }[] }[];
     };
     const resourceLog = parsed.resourceLogs[0]!;
@@ -712,8 +722,8 @@ describe("observability-sinks", () => {
             expect(span.spanId).toBe("b7ad6b7169203331");
         });
 
-        it("encodes error status, error.type, and the status message for a failed event", () => {
-            expect.assertions(4);
+        it("encodes error status, error.type, and the status message for a failed event", async () => {
+            expect.hasAssertions();
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
@@ -721,6 +731,7 @@ describe("observability-sinks", () => {
             const sink = otlpSink({ endpoint: "https://collector.example" });
 
             sink.onRpc!(errorEvent);
+            await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(1); });
 
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
@@ -729,6 +740,17 @@ describe("observability-sinks", () => {
             expect(attrValue(span.attributes, "error.type")).toStrictEqual({ stringValue: "CONFLICT" });
             expect(attrValue(span.attributes, "lunora.error_status")).toStrictEqual({ intValue: "409" });
             expect(attrValue(span.attributes, "lunora.ok")).toStrictEqual({ boolValue: false });
+            // Exception event records the error under OTel semantics.
+            expect(span.events).toStrictEqual([
+                {
+                    attributes: [
+                        { key: "exception.type", value: { stringValue: "CONFLICT" } },
+                        { key: "exception.message", value: { stringValue: "boom: user@example.com" } },
+                    ],
+                    name: "exception",
+                    timeUnixNano: span.endTimeUnixNano,
+                },
+            ]);
         });
 
         it("derives span start and end from durationMs at nanosecond precision", () => {
@@ -890,8 +912,8 @@ describe("observability-sinks", () => {
             expect(url).toBe("https://collector.example/v1/traces");
         });
 
-        it("skips ok rpc spans when onlyErrors is set but still exports logs", () => {
-            expect.assertions(3);
+        it("skips ok rpc spans when onlyErrors is set but still exports logs", async () => {
+            expect.hasAssertions();
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
@@ -903,13 +925,11 @@ describe("observability-sinks", () => {
             expect(fetchMock).not.toHaveBeenCalled();
 
             sink.onRpc!(errorEvent);
-
-            expect(fetchMock).toHaveBeenCalledTimes(1);
+            await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(1); });
 
             // onlyErrors scopes the RPC span stream, not developer log lines.
             sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "m", ts: 1 });
-
-            expect(fetchMock).toHaveBeenCalledTimes(2);
+            await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(2); });
         });
 
         it("merges auth and correlation headers onto a default content-type", () => {
@@ -991,6 +1011,155 @@ describe("observability-sinks", () => {
 
             expect(attrValue(spanResource, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
             expect(attrValue(logResource, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
+        });
+
+        it("emits configured OTLP resource attributes on spans, logs, and metrics", () => {
+            expect.assertions(8);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({
+                deploymentEnvironment: "production",
+                endpoint: "https://collector.example",
+                resourceAttributes: { "host.name": "worker-1", "service.instance.id": "i-abc" },
+                serviceName: "checkout-api",
+                serviceNamespace: "lunora",
+                serviceVersion: "v1.2.3",
+            });
+
+            sink.onRpc!(okEvent);
+            sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "m", ts: 1 });
+            sink.onMetric!(metricEvent);
+
+            const { resourceAttributes: spanResource } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+            const { resourceAttributes: logResource } = logFrom((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1]);
+            const metric = metricFrom((fetchMock.mock.calls[2] as unknown as [string, RequestInit])[1]);
+
+            // service.name is always present; convenience fields + custom resourceAttributes are merged.
+            expect(attrValue(spanResource, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
+            expect(attrValue(spanResource, "service.version")).toStrictEqual({ stringValue: "v1.2.3" });
+            expect(attrValue(spanResource, "service.namespace")).toStrictEqual({ stringValue: "lunora" });
+            expect(attrValue(spanResource, "deployment.environment")).toStrictEqual({ stringValue: "production" });
+            expect(attrValue(spanResource, "host.name")).toStrictEqual({ stringValue: "worker-1" });
+            expect(attrValue(logResource, "service.instance.id")).toStrictEqual({ stringValue: "i-abc" });
+            expect(attrValue(metric.sum!.dataPoints[0]!.attributes, "plan")).toStrictEqual({ stringValue: "pro" });
+            expect(attrValue(spanResource, "host.name")).toStrictEqual({ stringValue: "worker-1" });
+        });
+
+        it("lets resourceAttributes override built-in resource attributes", () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example", resourceAttributes: { "service.name": "overridden" }, serviceName: "checkout-api" });
+
+            sink.onRpc!(okEvent);
+
+            const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "overridden" });
+        });
+
+        it("emits HTTP semantic-convention attributes on the RPC dispatch span", async () => {
+            expect.hasAssertions();
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onRpc!({
+                ...okEvent,
+                host: "api.example.com",
+                method: "POST",
+                path: "/_lunora/rpc",
+                port: 443,
+                scheme: "https",
+                userAgent: "test-agent/1.0",
+            });
+            await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(1); });
+
+            const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(attrValue(span.attributes, "http.request.method")).toStrictEqual({ stringValue: "POST" });
+            expect(attrValue(span.attributes, "url.path")).toStrictEqual({ stringValue: "/_lunora/rpc" });
+            expect(attrValue(span.attributes, "url.scheme")).toStrictEqual({ stringValue: "https" });
+            expect(attrValue(span.attributes, "server.address")).toStrictEqual({ stringValue: "api.example.com" });
+            expect(attrValue(span.attributes, "server.port")).toStrictEqual({ intValue: "443" });
+            expect(attrValue(span.attributes, "user_agent.original")).toStrictEqual({ stringValue: "test-agent/1.0" });
+            expect(attrValue(span.attributes, "http.route")).toStrictEqual({ stringValue: "messages:list" });
+            expect(attrValue(span.attributes, "lunora.function_path")).toStrictEqual({ stringValue: "messages:list" });
+            expect(attrValue(span.attributes, "http.response.status_code")).toStrictEqual({ intValue: "200" });
+        });
+
+        it("emits http.response.status_code on the RPC span for failed events", async () => {
+            expect.hasAssertions();
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onRpc!({ ...errorEvent, method: "POST", path: "/_lunora/rpc" });
+            await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(1); });
+
+            const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(attrValue(span.attributes, "http.response.status_code")).toStrictEqual({ intValue: "409" });
+            expect(attrValue(span.attributes, "http.request.method")).toStrictEqual({ stringValue: "POST" });
+        });
+
+        it("auto-detects Cloudflare Worker resource attributes when detectResources is true", () => {
+            expect.assertions(5);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const request = new Request("https://api.example.com/_lunora/rpc", { headers: { "user-agent": "cloudflare" } });
+            // Attach the Cloudflare `cf` object so the detector sees a Workers request.
+            Object.defineProperty(request, "cf", { value: { colo: "SFO" }, writable: false });
+
+            const sink = otlpSink({ detectResources: true, endpoint: "https://collector.example", serviceName: "checkout-api" });
+
+            sink.onRpc!(okEvent, {
+                env: { CF_ACCOUNT_ID: "abc", ENVIRONMENT: "production", SERVICE_VERSION: "v1.2.3" },
+                request,
+                waitUntil: vi.fn<(promise: Promise<unknown>) => void>(),
+            });
+
+            const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
+            expect(attrValue(resourceAttributes, "service.version")).toStrictEqual({ stringValue: "v1.2.3" });
+            expect(attrValue(resourceAttributes, "deployment.environment")).toStrictEqual({ stringValue: "production" });
+            expect(attrValue(resourceAttributes, "cloud.provider")).toStrictEqual({ stringValue: "cloudflare" });
+            expect(attrValue(resourceAttributes, "cloud.region")).toStrictEqual({ stringValue: "SFO" });
+        });
+
+        it("lets explicit resource attributes override detected ones", () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({
+                deploymentEnvironment: "staging",
+                detectResources: true,
+                endpoint: "https://collector.example",
+                resourceAttributes: { "cloud.region": "overridden-region" },
+            });
+
+            sink.onRpc!(okEvent, {
+                env: { CF_ACCOUNT_ID: "abc", CF_COLO: "SFO", ENVIRONMENT: "production" },
+                request: new Request("https://api.example.com/_lunora/rpc"),
+                waitUntil: vi.fn<(promise: Promise<unknown>) => void>(),
+            });
+
+            const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(attrValue(resourceAttributes, "cloud.region")).toStrictEqual({ stringValue: "overridden-region" });
         });
 
         it("registers the send with ctx.waitUntil when a request context is provided", () => {

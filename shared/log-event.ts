@@ -24,8 +24,16 @@ export type ContextLogLevel = "debug" | "error" | "fatal" | "info" | "log" | "tr
  * background work (a telemetry POST, a durable pipeline send) with the request's
  * `waitUntil` so it survives isolate teardown after the response returns. Absent
  * `waitUntil` (no request context) means the sink falls back to fire-and-forget.
+ *
+ * `env` and `request` are optional hooks for sinks that want to derive resource
+ * attributes or other metadata from the runtime environment. They are not
+ * required for normal operation and should be treated as read-only.
  */
 export interface LogSinkContext {
+    /** The Worker's environment bindings (env), when available. */
+    env?: Record<string, unknown>;
+    /** The inbound request, when the sink is invoked from a request path. */
+    request?: Request;
     /** Keep a background promise alive past the response (the request's `waitUntil`). */
     waitUntil?: (promise: Promise<unknown>) => void;
 }
