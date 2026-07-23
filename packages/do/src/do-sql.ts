@@ -181,7 +181,7 @@ const isFtsAvailable = (sql: SqlExec): boolean => {
     return available;
 };
 
-export { default as serializeSqlValue } from "./serialize-sql";
+export { serializeSqlValue } from "@lunora/shard-engine";
 export {
     AGG_COUNT,
     AGG_KEY,

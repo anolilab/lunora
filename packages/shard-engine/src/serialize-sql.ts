@@ -25,4 +25,5 @@ const serializeSqlValue = (value: unknown): unknown => {
     return JSON.stringify(value);
 };
 
-export default serializeSqlValue;
+// eslint-disable-next-line import/prefer-default-export -- named export keeps the re-export chain through `@lunora/do` uniform with the rest of the engine barrel.
+export { serializeSqlValue };

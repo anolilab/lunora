@@ -35,8 +35,9 @@
  * `backfillRankIndexes`.
  */
 
+import { serializeSqlValue } from "@lunora/shard-engine";
+
 import type { RestrictableQueryOptions } from "./aggregates";
-import serializeSqlValue from "./serialize-sql";
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
 const compareStrings = (a: string, b: string): number => {

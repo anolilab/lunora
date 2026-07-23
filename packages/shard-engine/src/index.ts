@@ -15,6 +15,7 @@ export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
 export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
+export { serializeSqlValue } from "./serialize-sql";
 export { runSocketPool } from "./socket-pool";
 export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ConflictKind } from "./transaction";
