@@ -68,6 +68,29 @@ describe(createDeployRouter, () => {
         expect(last.status).toBe(429);
         expect(last.headers.get("retry-after")).not.toBeNull();
     });
+
+    it("caps telemetry ingest per IP even when the bearer token is rotated every request", async () => {
+        const router = createDeployRouter();
+        // The per-token bucket alone is bypassable by rotating the bearer value —
+        // a fresh token means a fresh bucket. The per-IP backstop (12_000/min) must
+        // still throttle a single IP that churns tokens. Drain it from one IP.
+        // A margin over the 12_000 capacity absorbs the bucket's refill during the loop.
+        let last = new Response();
+
+        for (let index = 0; index < 12_300; index += 1) {
+            last = await router.fetch(
+                // eslint-disable-next-line no-await-in-loop -- sequential to drain one IP's telemetry backstop
+                new Request("https://control.lunora.app/v1/traces", {
+                    headers: { authorization: `Bearer rotated-${String(index)}`, "cf-connecting-ip": "flooder" },
+                    method: "POST",
+                }),
+                {},
+            );
+        }
+
+        expect(last.status).toBe(429);
+        expect(last.headers.get("retry-after")).not.toBeNull();
+    });
 });
 
 /** POST to the platform tail route, optionally presenting a tail secret header. */

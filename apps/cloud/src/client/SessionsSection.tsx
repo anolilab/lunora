@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
-import { formatMs } from "./TraceDetail";
+import { formatMs } from "./format";
 import type { OrgId } from "./types";
 
 interface SessionsSectionProps {
