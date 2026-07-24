@@ -375,8 +375,8 @@ proof — `cf.tlsClientAuth` is set by the Cloudflare edge and a caller cannot
 forge it, unlike a header.
 
 Error traces are unaffected either way: a trace that produced an error is kept
-whole regardless of the sampling decision, and that decision is the worker's,
-never the caller's.
+whole regardless of the [sampling](#trace-sampling) decision, and that decision
+is the worker's, never the caller's.
 :::
 
 If an inbound `traceparent` is dropped while this option is unset, Lunora logs a
@@ -416,6 +416,73 @@ A generation span carries `gen_ai.request.model` and, from the model result,
 integration's `recordInputs` / `recordOutputs` it also carries the prompt /
 completion (off by default). The Lunora cloud reads these to show the model,
 token counts, and cost on the Traces waterfall.
+
+## Trace sampling
+
+At real traffic, exporting every trace is mostly paying to store the same
+successful request a million times. `sampling` keeps a fraction of them —
+mirroring Cloudflare Workers' `head_sampling_rate`:
+
+```ts
+export default createWorker({
+    // …schema, functions…
+    sampling: {
+        headRate: 0.1, // keep ~10% of traces (default 1 — keep everything)
+        alwaysSampleErrors: true, // …but never drop a trace that errored (default)
+    },
+});
+```
+
+**It governs trace spans only** — the per-dispatch `SERVER` span and the
+`ctx.trace` spans beneath it. `ctx.log` lines and `ctx.metrics` measurements are
+never sampled: logs are the thing you go looking for when something broke, and a
+sampled metric is a wrong metric.
+
+:::tip[`sampling` vs. `onlyErrors`]
+Both reduce what you export, differently. `sampling` is deployment-wide and keeps
+a representative **fraction of whole traces**, so you retain a true picture of
+normal traffic at a lower bill. A sink's `onlyErrors` keeps **no** successful RPC
+spans at all — cheaper still, but you lose the baseline you would compare a
+regression against. Reach for `sampling` first; use `onlyErrors` on a sink whose
+only job is failures (a Sentry or alerting destination sitting alongside a
+sampled `otlpSink`).
+:::
+
+### Traces are kept or dropped whole
+
+The decision is **deterministic per trace**, derived from the trace id rather
+than a coin flip. That matters because a trace spans processes: the worker, the
+shard, and any container all reach the same verdict for the same trace, so you
+never get half a waterfall — the worker span kept and its `ctx.trace` children
+missing, or the reverse.
+
+The worker decides once and propagates it: the sampled bit rides the
+`traceparent` it forwards, so the shard drops the matching spans without
+re-deciding.
+
+### Errors are never sampled away
+
+`alwaysSampleErrors` (default `true`) is the **tail bias**: a trace that produced
+an error is exported whole even when the head decision dropped it. The shard
+holds a sampled-out trace's spans until the dispatch settles, then flushes them
+if anything failed and discards them otherwise.
+
+So `headRate: 0.01` does not mean "1% of your errors". It means 1% of your
+_successful_ traffic, plus every failure. That is usually the shape you want:
+aggressive sampling on the boring path, complete traces on the interesting one.
+
+:::note[`headRate` and the trace id]
+`headRate >= 1` keeps everything and `<= 0` drops every non-error trace; in
+between, the first 8 hex characters of the trace id are mapped onto `[0, 1)` and
+compared against the rate.
+
+Because the trace id decides, **which** id is used matters. When the inbound
+trace context is untrusted — [the default](#joining-a-trace-from-upstream) —
+Lunora keys the decision on a freshly-minted server-side id, so a caller cannot
+choose its own sampling outcome by picking a trace id. When you have opted into
+trusting the upstream, the upstream's trace id is used, which is what keeps a
+distributed trace whole across services.
+:::
 
 ## Application metrics with `ctx.metrics`
 
