@@ -6,6 +6,8 @@ Lunora is deeply engineered for the Cloudflare Workers platform. Its core value�
 
 This document assesses the most credible open-source alternatives and maps the concrete package-by-package changes that multi-platform support would require. It is intended to inform a go/no-go decision and to serve as a reference if the team chooses to pursue plan 114 (Platform Abstraction Layer) and plan 115 (AWS Deploy Target).
 
+**Status (2026-07-24):** the go decision was taken and plan 114 is under way. `@lunora/platform` (contracts), `@lunora/platform-conformance` (TCK), and `@lunora/shard-engine` (host-neutral engine) exist; `ShardDO`'s transaction and socket-accept paths run through the contracts, and the TCK passes against both the in-memory reference host and the Cloudflare adapters in real workerd. See [Next Steps](#next-steps-if-proceeding) for what is done and what is open.
+
 ---
 
 ## Candidate Alternatives: Findings
@@ -135,8 +137,10 @@ Currently in `@lunora/runtime` and `@lunora/server`:
 The DO model is abstracted behind three contracts (already defined, see `packages/platform/src/`):
 
 - **`ShardHost`** — single-writer execution per shard key: `runSerialized(fn)` (input-gate semantics), `transaction(fn)` (ACID, auto-rollback, no raw BEGIN/COMMIT), `sql: ShardSqlExec` + optional `asyncSql`, `alarms`, `waitUntil`.
-- **`SocketHost`** — hibernated WebSocket subscriptions: `accept(socket, attachment)`, `getSockets(tag?)`, attachment round-trip via `serializeAttachment`/`deserializeAttachment`.
+- **`SocketHost`** — hibernated WebSocket subscriptions: `accept(socket, attachment, tags?)`, `getSockets(tag?)`, attachment round-trip via `serializeAttachment`/`deserializeAttachment`.
 - **`ShardDirectory`** — deterministic placement + RPC dispatch: `idForName(name)`, `get(id)`, optional `getByName`, optional `jurisdiction(hint)` (fail-closed when unsupported).
+
+Socket tagging is deliberately two-tiered, because hosts disagree on when a tag can be set. **Accept-time tags are mandatory** — durable, fixed for the socket's life, and honoured exactly by `getSockets(tag)`. **Mutable tags** (`setTag`/`removeTag`) are the optional tier: a host declares them only if it can retag a live socket. Cloudflare cannot (DO tags freeze at `acceptWebSocket`), so the Cloudflare host omits both rather than shipping a no-op the engine could route on.
 
 **Interface impact:** `@lunora/do` shrinks to the Cloudflare implementation of these contracts; alternative platforms supply their own host packages. User-facing `.shardBy()` and `.global()` remain unchanged.
 
@@ -160,12 +164,18 @@ The DO model is abstracted behind three contracts (already defined, see `package
 
 **Interface impact:** Internal. Public `ctx.queues.<name>` and `defineWorkflow` APIs remain stable.
 
-### 6. Auth / secrets / config
+### 6. Durable key-value storage — **gap, blocks `SessionDO`**
+
+`ShardHost` covers local SQL, transactions, alarms, and serialization — but not the KV-style `storage.put` / `get` / `delete` / `list` surface. `SessionDO` is built entirely on that surface, so it is the one Durable Object that cannot be re-bound to the current contracts. A `ShardKvStore` contract (`get`/`put`/`delete`/`list(prefix)`) is the missing piece; every candidate platform has an obvious backing (DynamoDB, Redis, a table in the local SQL store).
+
+**Interface impact:** internal. `ctx.auth` session handling and `SessionDO`'s public RPC shape stay as they are.
+
+### 7. Auth / secrets / config
 
 - `ctx.secrets` (Cloudflare Secrets Store) needs a `SecretStore` interface.
 - `ctx.auth` is already backed by Better Auth; only the D1 adapter is Cloudflare-specific.
 
-### 7. Dev / deploy / CLI
+### 8. Dev / deploy / CLI
 
 The CLI and Vite plugin assume wrangler. A multi-platform Lunora needs:
 
@@ -210,19 +220,41 @@ The CLI and Vite plugin assume wrangler. A multi-platform Lunora needs:
 
 ## Next Steps (if proceeding)
 
-1. ~~Review and ratify plan 114 (Platform Abstraction Layer).~~ **Done** — scheme ratified 2026-07-23 (`platform` + `platform-<target>`; engine = `@lunora/shard-engine`).
-2. ~~Define the host contracts.~~ **Done** — `@lunora/platform` ships `ShardHost`, `SocketHost`, `ShardDirectory`, `SchedulerHost`, canonical binding `*Like` types, and `PlatformCapabilities` (`CLOUDFLARE_CAPABILITIES`).
-3. ~~Build `@lunora/platform-conformance` — the TCK asserting the host contract against the in-memory reference host.~~ **Done** — `defineHostContractSuite(name, factory, vitest)` ships with 12 tests covering `ShardHost` serialization/transactions/alarms, `SocketHost` accept/send/close + attachment round-trip, `ShardDirectory` deterministic placement, and `SchedulerHost` schedule/cancel. Engine-level behaviors (OCC-409 end-to-end, reactive poke ordering, RLS under live subscription) are deferred to Phase 2 when the reactive engine is extracted into `@lunora/shard-engine`.
-4. **In progress** — extract the reactive engine from `@lunora/do` into `@lunora/shard-engine`; re-bind `shard-do.ts` to `ShardHost`/`SocketHost` (move-only first; `_generated/` goldens stay byte-identical). Moved so far:
-   - Core engine: `dependency-tracker.ts`, `transaction.ts`, `geo.ts`, `not-found-error.ts`, `search-text.ts`, `where-types.ts`, `reactive-cache.ts`, `socket-pool.ts`, `types.ts` (subscription/socket types), `subscription-delivery.ts`, `rls-guard.ts`, `serialize-sql.ts`, `drizzle.ts` (render helpers), `where-sql.ts`.
-   - Query/planning: `query-args.ts`, `rank.ts`, `aggregates.ts`, `aggregate-sql.ts`, `aggregate-tally.ts`, `relations.ts`, `relation-predicates.ts`.
-   - Corresponding unit tests (and the reactive-cache bench) moved with them; DO-specific integration tests stayed in `@lunora/do` and import from `@lunora/shard-engine`. The `@lunora/do` barrel re-exports moved symbols so downstream packages keep compiling. Switched `@lunora/shard-engine`'s packem dts compiler to TypeScript (instead of oxc) to avoid isolated-declarations errors on the moved engine files.
-5. `@lunora/sql-store` now imports `NotFoundError` directly from `@lunora/shard-engine` (added dependency) to avoid a TypeScript re-export-chain issue in its large `ctx-db.ts` mirror.
-6. **Done** — extracted the shared `*Like` schema/writer types from `@lunora/do` into `@lunora/shard-engine/src/schema-types.ts` (`TableDefinitionLike`, `DatabaseWriterLike`, `SchemaLike`, `QueryArgs`, `QueryPage`, `WithInput`, `RelationDefinitionLike`, `TriggerDefinitionLike`, `TriggerEventLike`, `TriggerContextLike`, `SchedulerLike`, `SchedulableWorkflowReferenceLike`, aggregate/rank/pagination types, etc.). `@lunora/do` now imports these projections from `@lunora/shard-engine`, and `triggers.ts` re-exports the trigger-family types from the engine package. `SystemDatabaseReader` stayed Cloudflare/DO-specific and remains exported from `@lunora/do/system-reader`.
-7. **Next** — the remaining files in `@lunora/do` are Cloudflare/DO-specific and stay there for now: `ctx-db.ts`, `ctx-db-*.ts`, `relation-fanout.ts`, `introspect.ts`, `shard-do.ts`, `session-do.ts`, `shard-registry-do.ts`, and the relay tier. The next phase is to re-bind `ShardDO`/`SessionDO` to the `@lunora/platform` host contracts (`ShardHost`, `SocketHost`, `ShardDirectory`, `SchedulerHost`) so the engine can be mounted on a non-Cloudflare host.
-8. Create `@lunora/platform-cloudflare` as the default composition root; gradually fold Cloudflare-specific packages into it.
-9. Build `@lunora/platform-aws` (plan 115) as the first non-Cloudflare target.
-10. Update `lunorash` exports, Vite plugin, and CLI to support host selection (`target` field, default `cloudflare`).
-7. Create `@lunora/platform-cloudflare` as the default composition root; gradually fold Cloudflare-specific packages into it.
-8. Build `@lunora/platform-aws` (plan 115) as the first non-Cloudflare target.
-9. Update `lunorash` exports, Vite plugin, and CLI to support host selection (`target` field, default `cloudflare`).
+### Done
+
+1. ~~Review and ratify plan 114 (Platform Abstraction Layer).~~ Scheme ratified 2026-07-23 (`platform` + `platform-<target>`; engine = `@lunora/shard-engine`).
+
+2. ~~Define the host contracts.~~ `@lunora/platform` ships `ShardHost`, `SocketHost`, `ShardDirectory`, `SchedulerHost`, canonical binding `*Like` types, and `PlatformCapabilities` (`CLOUDFLARE_CAPABILITIES`).
+
+3. ~~Build `@lunora/platform-conformance` — the TCK asserting the host contract.~~ `defineHostContractSuite(name, factory, vitest)` covers `ShardHost` serialization/transactions/alarms, `SocketHost` accept/send/close + attachment round-trip + tagged fan-out, `ShardDirectory` deterministic placement, and `SchedulerHost` schedule/cancel. It runs against **both** hosts — the in-memory reference host and the Cloudflare adapters in real workerd (`packages/do/__tests__/workerd/cloudflare-host.workerd.test.ts`, 14 tests) — which closes plan 114's phase-1 gate ("TCK green on both hosts"). The suite's `it` is injectable precisely so the Cloudflare run can wrap every body in `runInDurableObject`.
+
+    Host variance is expressed as presence-based optional hooks on `ConformanceHost` rather than skipped blocks, so a gap shows up in the suite output instead of vanishing: `createSocket` (what a "socket" is differs per host), `simulateRecycle`/`restoreSocket` (only hosts whose recycle a test can drive), `awaitAlarmFired` (Cloudflare fires alarms by waking a separate `alarm()` invocation, unobservable from inside the shard callback), and an optional `scheduler` (the Cloudflare scheduler lives in `@lunora/scheduler`, not `@lunora/do`).
+
+    Engine-level behaviors (OCC-409 end-to-end, reactive poke ordering, RLS under live subscription) remain deferred until more of the engine is host-neutral.
+
+4. ~~Extract the reactive engine from `@lunora/do` into `@lunora/shard-engine`~~ (move-only; `_generated/` goldens stay byte-identical). Moved:
+    - Core engine: `dependency-tracker.ts`, `transaction.ts`, `geo.ts`, `not-found-error.ts`, `search-text.ts`, `where-types.ts`, `reactive-cache.ts`, `socket-pool.ts`, `types.ts` (subscription/socket types), `subscription-delivery.ts`, `rls-guard.ts`, `serialize-sql.ts`, `drizzle.ts` (render helpers), `where-sql.ts`.
+    - Query/planning: `query-args.ts`, `rank.ts`, `aggregates.ts`, `aggregate-sql.ts`, `aggregate-tally.ts`, `relations.ts`, `relation-predicates.ts`.
+    - Corresponding unit tests (and the reactive-cache bench) moved with them; DO-specific integration tests stayed in `@lunora/do` and import from `@lunora/shard-engine`. The `@lunora/do` barrel re-exports moved symbols so downstream packages keep compiling. Switched `@lunora/shard-engine`'s packem dts compiler to TypeScript (instead of oxc) to avoid isolated-declarations errors on the moved engine files.
+    - `@lunora/sql-store` imports `NotFoundError` directly from `@lunora/shard-engine` (added dependency) to avoid a TypeScript re-export-chain issue in its large `ctx-db.ts` mirror.
+
+5. ~~Extract the shared `*Like` schema/writer types~~ into `@lunora/shard-engine/src/schema-types.ts` (`TableDefinitionLike`, `DatabaseWriterLike`, `SchemaLike`, `QueryArgs`, `QueryPage`, `WithInput`, `RelationDefinitionLike`, `TriggerDefinitionLike`, `TriggerEventLike`, `TriggerContextLike`, `SchedulerLike`, `SchedulableWorkflowReferenceLike`, aggregate/rank/pagination types, etc.). `@lunora/do` imports these projections from `@lunora/shard-engine`, and `triggers.ts` re-exports the trigger-family types from the engine package. `SystemDatabaseReader` stayed Cloudflare/DO-specific and remains exported from `@lunora/do/system-reader`.
+
+6. ~~Re-bind `ShardDO` to the host contracts.~~ `packages/do/src/cloudflare-host.ts` implements `createShardHost` / `createSocketHost` / `createShardDirectory` over `DurableObjectState` and `DurableObjectNamespace`, and `ShardDO` now goes through them rather than `state.*`:
+    - `runInTransaction` composes `shardHost.runSerialized(...)` around `shardHost.transaction(...)` — the same `blockConcurrencyWhile` + `storage.transaction` pair as before, but expressed in contract terms. There is deliberately **no** raw `BEGIN`/`COMMIT` fallback: workerd forbids it inside a DO.
+    - The WebSocket upgrade path calls `socketHost.accept(server, attachment)`, which accepts and stamps the attachment back-to-back so no frame can reach an unstamped socket.
+    - `ShardRunner` (in `@lunora/shard-engine`) owns the `handleFetch` / `handleAlarm` seam; `ShardDO.fetch` / `.alarm` delegate through it while the Cloudflare-specific lifecycle is still injected as host handlers.
+    - `SocketHandle.id` is stable across hibernation: the adapter mints an id tag at accept and reads it back via `state.getTags(ws)`, since Cloudflare exposes no native socket identifier that survives recycling.
+    - Gate: 1139 `@lunora/do` tests (mocks + workerd projects) and the two-host TCK green; `lint:types` green across all 64 projects.
+
+### Open
+
+7. **Add a durable key-value contract (`ShardKvStore`).** This is the blocker for `SessionDO`, the one Durable Object that cannot be re-bound today: it is built entirely on `storage.put`/`get`/`delete`/`list`, which `ShardHost` does not cover. Everything else left in `@lunora/do` is genuinely Cloudflare-specific and stays for now: `ctx-db.ts`, `ctx-db-*.ts`, `relation-fanout.ts`, `introspect.ts`, `shard-do.ts`, `shard-registry-do.ts`, and the relay tier.
+
+8. **Move the request router, subscription refresh, and poke protocol into `ShardRunner`.** The seam exists and is load-bearing for transactions and socket accept, but `handleFetch`/`handleAlarm` are still injected Cloudflare handlers. Until they move, a second host can mount the _engine_ but not the _request lifecycle_.
+
+9. **Create `@lunora/platform-cloudflare`** as the default composition root: re-export the adapters from `@lunora/do`, add the `@lunora/scheduler` host, and run the full four-contract TCK from one place (today's Cloudflare run reports `SchedulerHost` as a gap because `@lunora/do` has no scheduler to offer).
+
+10. **Build `@lunora/platform-aws`** (plan 115) as the first non-Cloudflare target.
+
+11. **Update `lunorash` exports, the Vite plugin, and the CLI** to support host selection (`target` field, default `cloudflare`).
