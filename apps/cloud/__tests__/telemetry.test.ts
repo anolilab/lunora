@@ -510,9 +510,9 @@ describe(decodeMetricPoints, () => {
                     scopeMetrics: [
                         {
                             metrics: [
-                                { gauge: { dataPoints: [{ asDouble: 7 }] }, name: "queue.depth" },
-                                { name: "requests", sum: { dataPoints: [{ asInt: "12" }] } },
-                                { histogram: { dataPoints: [{ sum: 340 }] }, name: "latency" },
+                                { gauge: { dataPoints: [{ asDouble: 7, timeUnixNano: "1700000000000000000" }] }, name: "queue.depth" },
+                                { name: "requests", sum: { dataPoints: [{ asInt: "12", timeUnixNano: "1700000000000000000" }] } },
+                                { histogram: { dataPoints: [{ sum: 340, timeUnixNano: "1700000000000000000" }] }, name: "latency" },
                             ],
                         },
                     ],
@@ -521,9 +521,9 @@ describe(decodeMetricPoints, () => {
         });
 
         expect(points).toEqual([
-            { attributes: undefined, functionPath: undefined, kind: "gauge", name: "queue.depth", serviceName: "orders", value: 7 },
-            { attributes: undefined, functionPath: undefined, kind: "sum", name: "requests", serviceName: "orders", value: 12 },
-            { attributes: undefined, functionPath: undefined, kind: "histogram", name: "latency", serviceName: "orders", value: 340 },
+            { at: 1_700_000_000_000, attributes: undefined, functionPath: undefined, kind: "gauge", name: "queue.depth", serviceName: "orders", value: 7 },
+            { at: 1_700_000_000_000, attributes: undefined, functionPath: undefined, kind: "sum", name: "requests", serviceName: "orders", value: 12 },
+            { at: 1_700_000_000_000, attributes: undefined, functionPath: undefined, kind: "histogram", name: "latency", serviceName: "orders", value: 340 },
         ]);
     });
 

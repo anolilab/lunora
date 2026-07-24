@@ -131,7 +131,10 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "members:list": lunora_members_15.list as unknown as RegisteredLunoraFunction,
     "members:remove": lunora_members_15.remove as unknown as RegisteredLunoraFunction,
     "members:setRole": lunora_members_15.setRole as unknown as RegisteredLunoraFunction,
+    "metrics:ingest": lunora_metrics_16.ingest as unknown as RegisteredLunoraFunction,
     "metrics:list": lunora_metrics_16.list as unknown as RegisteredLunoraFunction,
+    "metrics:prune": lunora_metrics_16.prune as unknown as RegisteredLunoraFunction,
+    "metrics:series": lunora_metrics_16.series as unknown as RegisteredLunoraFunction,
     "organizations:cancelDeletion": lunora_organizations_17.cancelDeletion as unknown as RegisteredLunoraFunction,
     "organizations:create": lunora_organizations_17.create as unknown as RegisteredLunoraFunction,
     "organizations:getBySlug": lunora_organizations_17.getBySlug as unknown as RegisteredLunoraFunction,
@@ -588,6 +591,25 @@ __has2 = true;
 }
 return { ...(__has1 ? { "from": __val1 } : {}), "organizationId": source["organizationId"], ...(__has2 ? { "to": __val2 } : {}) };
 });
+installCompiledValidatorMap(lunora_metrics_16.series.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["from"] !== undefined) {
+if (typeof source["from"] !== "number" || !Number.isFinite(source["from"])) return DEFER;
+__val1 = source["from"];
+__has1 = true;
+}
+if (typeof source["organizationId"] !== "string") return DEFER;
+let __has2 = false;
+let __val2;
+if (source["to"] !== undefined) {
+if (typeof source["to"] !== "number" || !Number.isFinite(source["to"])) return DEFER;
+__val2 = source["to"];
+__has2 = true;
+}
+return { ...(__has1 ? { "from": __val1 } : {}), "organizationId": source["organizationId"], ...(__has2 ? { "to": __val2 } : {}) };
+});
 installCompiledValidatorMap(lunora_organizations_17.cancelDeletion.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
@@ -989,7 +1011,10 @@ export interface Caller {
         setRole: (args: { id: Id<"members">; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }) => Promise<void>;
     };
     metrics: {
+        ingest: (args: { deployKey: string; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; points: Array<unknown> }) => Promise<{ ingested: number; }>;
         list: (args: { from?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
+        prune: (args?: {}) => Promise<{ pruned: number; }>;
+        series: (args: { from?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
     };
     organizations: {
         cancelDeletion: (args: { organizationId: Id<"organizations"> }) => Promise<void>;
@@ -1165,7 +1190,10 @@ export const createCaller = (context: CallerCtx): Caller => ({
         setRole: (args) => callRegistered(context, "members:setRole", args),
     },
     metrics: {
+        ingest: (args) => callRegistered(context, "metrics:ingest", args),
         list: (args) => callRegistered(context, "metrics:list", args),
+        prune: (args) => callRegistered(context, "metrics:prune", args),
+        series: (args) => callRegistered(context, "metrics:series", args),
     },
     organizations: {
         cancelDeletion: (args) => callRegistered(context, "organizations:cancelDeletion", args),

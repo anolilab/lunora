@@ -98,7 +98,9 @@ export interface ApiTypes {
         setRole: FunctionReference<"mutation", { id: Id<"members">; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }, void>;
     };
     metrics: {
+        ingest: FunctionReference<"mutation", { deployKey: string; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; points: Array<unknown> }, { ingested: number; }>;
         list: FunctionReference<"action", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
+        series: FunctionReference<"query", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
     };
     organizations: {
         cancelDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
@@ -175,6 +177,9 @@ export interface InternalApiTypes {
     logs: {
         ingestInternal: FunctionReference<"mutation", { lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }, { ingested: number; }>;
         orgForScript: FunctionReference<"query", { scriptName: string }, { organizationId: Id<"organizations">; } | null>;
+        prune: FunctionReference<"mutation", {}, { pruned: number; }>;
+    };
+    metrics: {
         prune: FunctionReference<"mutation", {}, { pruned: number; }>;
     };
     organizations: {
