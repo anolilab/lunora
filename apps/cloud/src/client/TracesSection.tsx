@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { buildTraceTree } from "../telemetry/trace-tree";
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
-import { formatMs, SpanDetail, TraceWaterfall } from "./TraceDetail";
+import { formatMs } from "./format";
+import { SpanDetail, TraceWaterfall } from "./TraceDetail";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import type { DeploymentId, OrgId, ProjectId } from "./types";
 
