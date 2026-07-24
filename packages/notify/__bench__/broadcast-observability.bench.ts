@@ -14,10 +14,16 @@ import type { NotifyDefinition, SubscriptionStore } from "../src/types";
  * short-circuits before its argument object is even built, so the delta is
  * exactly the facade's added cost, isolated from what `ctx.metrics`/`ctx.log`
  * spend downstream (see `packages/do/__bench__/metrics-emit.bench.ts` — the
- * durable metric write is ~19µs/call, which is where the real broadcast cost
- * lives and why emitting per-recipient is the thing to reconsider).
+ * durable metric write is ~19µs/call).
  *
- * `all-fail` additionally exercises the per-failure `log.warn` path (O(failures)).
+ * A broadcast aggregates its `notify.send` counts into one emit per (kind,
+ * status) bucket, so it pays that ~19µs downstream cost ≤ kinds×3 times, not
+ * once per recipient — the metric attribute-object work measured here is the
+ * only per-recipient observability cost that remains.
+ *
+ * `all-fail` additionally exercises the per-failure `log.warn` path (still
+ * O(failures) — the failure log stays per-recipient, since it has no SQLite
+ * write and carries the ids for debugging).
  */
 const N = 200;
 

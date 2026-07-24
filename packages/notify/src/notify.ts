@@ -194,19 +194,25 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
     const { log, metrics } = options;
 
     /**
-     * Emit the observability signals for one settled send: a `notify.send` count
-     * on every channel (dimensioned by `channel` / `provider` / `status` — all
-     * low-cardinality, so the identifiers stay in the log, not the metric), plus a
-     * single `warn` line when the send FAILED. `provider` falls back to the channel
-     * name when the receipt carries none. `logFields` adds the failure-only detail
-     * (the error text, and for push the subscription/user ids).
+     * Count `count` (default 1) settled sends of one (channel, provider, status)
+     * on the `notify.send` series — dimensions are low-cardinality so identifiers
+     * stay on the log, not the metric; `provider` falls back to the channel name.
+     * A single/channel send passes the default 1; a broadcast aggregates per
+     * bucket and passes the bucket total, so the durable metric write (a SQLite
+     * upsert — see the metrics-emit bench) happens once per bucket, not per
+     * recipient.
      */
-    const observeSend = (channel: string, provider: string | undefined, status: NotifyDeliveryStatus, logFields: Record<string, unknown> = {}): void => {
-        metrics?.count("notify.send", 1, { channel, provider: provider ?? channel, status });
+    const countSend = (channel: string, provider: string | undefined, status: NotifyDeliveryStatus, count = 1): void => {
+        metrics?.count("notify.send", count, { channel, provider: provider ?? channel, status });
+    };
 
-        if (status === "failed") {
-            log?.warn(`notify ${channel} delivery failed`, { channel, provider: provider ?? channel, status, ...logFields });
-        }
+    /**
+     * Emit the per-recipient failure `warn`. Called only from a `status ===
+     * "failed"` guard, so its fields object is built only on a failure — never on
+     * the (hot, O(N)) success path of a broadcast.
+     */
+    const warnFailedSend = (channel: string, provider: string | undefined, fields: Record<string, unknown>): void => {
+        log?.warn(`notify ${channel} delivery failed`, { channel, provider: provider ?? channel, status: "failed", ...fields });
     };
 
     /** Emit a `notify.skipped` count for a send that reached no recipient (the "sent 0 because…" signal). */
@@ -228,7 +234,18 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         return found;
     };
 
-    const deliver = async (subscription: StoredSubscription, payload: PushContent): Promise<Receipt> => {
+    /**
+     * Send one push and settle its store lifecycle + observability. Returns the
+     * receipt and the derived {@link NotifyDeliveryStatus} (so a broadcast reuses
+     * it instead of re-deriving). The FAILURE LOG is per-recipient regardless of
+     * path. The metric is counted inline ONLY when `countInline` (a single
+     * `push.send`); a broadcast passes `false` and counts aggregated buckets once.
+     */
+    const deliver = async (
+        subscription: StoredSubscription,
+        payload: PushContent,
+        countInline: boolean,
+    ): Promise<{ receipt: Receipt; status: NotifyDeliveryStatus }> => {
         const receipt = await engine.sendToChannel("push", { ...payload, to: targetOf(subscription) });
         const error = receiptError(receipt);
         // The observability status vocabulary (accepted/failed/gone). The store's
@@ -243,10 +260,16 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             await subscriptionStore.markStatus(subscription.id, "failed", error);
         }
 
-        // `provider` is the push kind (web-push/fcm) — a push send's own provider.
-        observeSend("push", subscription.kind, status, { error, subscriptionId: subscription.id, userId: subscription.userId ?? null });
+        if (status === "failed") {
+            // `provider` is the push kind (web-push/fcm) — a push send's own provider.
+            warnFailedSend("push", subscription.kind, { error, subscriptionId: subscription.id, userId: subscription.userId ?? null });
+        }
 
-        return receipt;
+        if (countInline) {
+            countSend("push", subscription.kind, status);
+        }
+
+        return { receipt, status };
     };
 
     const push: LunoraPush = {
@@ -259,16 +282,41 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
                 observeSkip("push", "no-subscriptions-matched");
             }
 
-            const outcomes = await mapWithConcurrency(subscriptions, concurrency, async (subscription): Promise<BroadcastOutcome> => {
-                const receipt = await deliver(subscription, payload);
+            const rows = await mapWithConcurrency(subscriptions, concurrency, async (subscription) => {
+                const { receipt, status } = await deliver(subscription, payload, false);
 
-                if (receipt.successful) {
+                return { kind: subscription.kind, receipt, status, subscription };
+            });
+
+            // Fold the per-recipient statuses into one metric count per (kind,
+            // status) bucket — at most kinds×3 emits — instead of one durable
+            // SQLite write per recipient. (The per-recipient FAILURE LOGS already
+            // fired inside `deliver`.)
+            const buckets = new Map<string, { count: number; kind: string; status: NotifyDeliveryStatus }>();
+
+            for (const { kind, status } of rows) {
+                const key = `${kind} ${status}`;
+                const bucket = buckets.get(key);
+
+                if (bucket === undefined) {
+                    buckets.set(key, { count: 1, kind, status });
+                } else {
+                    bucket.count += 1;
+                }
+            }
+
+            for (const { count, kind, status } of buckets.values()) {
+                countSend("push", kind, status, count);
+            }
+
+            const outcomes: BroadcastOutcome[] = rows.map(({ receipt, status, subscription }) => {
+                if (status === "accepted") {
                     return { id: subscription.id, status: "ok" };
                 }
 
                 const error = receiptError(receipt);
 
-                return isGoneError(error) ? { error, id: subscription.id, status: "expired" } : { error, id: subscription.id, status: "failed" };
+                return status === "gone" ? { error, id: subscription.id, status: "expired" } : { error, id: subscription.id, status: "failed" };
             });
 
             return {
@@ -281,7 +329,11 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         },
         list: (filter?: SubscriptionFilter): Promise<StoredSubscription[]> => subscriptionStore.list(filter),
         register: (input: RegisterInput): Promise<StoredSubscription> => subscriptionStore.put(normalizeRegisterInput(input)),
-        send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => deliver(await resolveSubscription(target), payload),
+        send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => {
+            const { receipt } = await deliver(await resolveSubscription(target), payload, true);
+
+            return receipt;
+        },
         unregister: (id: string): Promise<void> => subscriptionStore.delete(id),
     };
 
@@ -293,8 +345,13 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         }
 
         const receipt = await engine.sendToChannel(channel, payload as never);
+        const status: NotifyDeliveryStatus = receipt.successful ? "accepted" : "failed";
 
-        observeSend(channel, receipt.provider, receipt.successful ? "accepted" : "failed", { error: receiptError(receipt) });
+        countSend(channel, receipt.provider, status);
+
+        if (status === "failed") {
+            warnFailedSend(channel, receipt.provider, { error: receiptError(receipt) });
+        }
 
         return receipt;
     };
@@ -310,7 +367,14 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             // the receipt (the multi-channel engine labels each), defaulting when
             // absent so an unlabeled receipt still counts.
             for (const receipt of receipts) {
-                observeSend(receipt.channel ?? "unknown", receipt.provider, receipt.successful ? "accepted" : "failed", { error: receiptError(receipt) });
+                const channel = receipt.channel ?? "unknown";
+                const status: NotifyDeliveryStatus = receipt.successful ? "accepted" : "failed";
+
+                countSend(channel, receipt.provider, status);
+
+                if (status === "failed") {
+                    warnFailedSend(channel, receipt.provider, { error: receiptError(receipt) });
+                }
             }
 
             return receipts;

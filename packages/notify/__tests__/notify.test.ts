@@ -259,6 +259,30 @@ describe("delivery observability (ctx.log + ctx.metrics)", () => {
         expect(metrics.count).not.toHaveBeenCalledWith("notify.send", 1, expect.anything());
     });
 
+    it("aggregates broadcast notify.send into one count per status bucket, not per recipient", async () => {
+        expect.hasAssertions();
+
+        const { log, metrics, push } = setupObs();
+        // 3 accepted, 2 failed, 1 gone — 6 recipients, one kind (web-push).
+        for (const suffix of ["ok-1", "ok-2", "ok-3", "fail-1", "fail-2", "gone-1"]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            await push.register({ subscription: { endpoint: `https://push.example/${suffix}`, keys: { auth: "a", p256dh: "p" } } });
+        }
+
+        await push.broadcast({ body: "drop", title: "News" });
+
+        // ≤ kinds×3 aggregated counts — here exactly 3 (accepted/failed/gone),
+        // NOT one per recipient — with the bucket total as the metric value.
+        const sendCalls = metrics.count.mock.calls.filter((call) => call[0] === "notify.send");
+
+        expect(sendCalls).toHaveLength(3);
+        expect(metrics.count).toHaveBeenCalledWith("notify.send", 3, { channel: "push", provider: "web-push", status: "accepted" });
+        expect(metrics.count).toHaveBeenCalledWith("notify.send", 2, { channel: "push", provider: "web-push", status: "failed" });
+        expect(metrics.count).toHaveBeenCalledWith("notify.send", 1, { channel: "push", provider: "web-push", status: "gone" });
+        // Failure LOGS stay per-recipient (the 2 failed; gone/accepted don't warn).
+        expect(log.warn).toHaveBeenCalledTimes(2);
+    });
+
     it("counts a configured channel send on notify.send with the receipt's provider", async () => {
         expect.hasAssertions();
 

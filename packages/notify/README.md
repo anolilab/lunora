@@ -102,10 +102,10 @@ for (const message of batch.messages) await runPushBroadcastJob(ctx.push, messag
 
 Every send is counted onto `ctx.metrics` and failures onto `ctx.log` for you — codegen threads the request's logger/metrics into `ctx.notify` (`createNotify(notifyConfig, env, { log, metrics })`), so there is nothing to wire. Two low-cardinality metric series feed the durable metric history + trend charts:
 
-- **`notify.send`** `{ channel, provider, status }` — one per attempted send. `status` is `accepted` (the provider took it), `failed`, or `gone` (endpoint unregistered — 404/410 / FCM `UNREGISTERED` — and pruned).
+- **`notify.send`** `{ channel, provider, status }` — attempted sends. `status` is `accepted` (the provider took it), `failed`, or `gone` (endpoint unregistered — 404/410 / FCM `UNREGISTERED` — and pruned). A single send counts 1; a **broadcast aggregates** into one count per `(provider, status)` bucket (value = the bucket's count), not one per recipient — each `ctx.metrics.count` is a durable write.
 - **`notify.skipped`** `{ channel, reason }` — a send that reached nobody: `no-subscriptions-matched` (empty broadcast) or `channel-not-configured`.
 
-A **failed** send also emits one `ctx.log.warn` line carrying the error and, for push, the subscription/user ids — trace-correlated to the enclosing action and durably archived. Successes and prunes stay off the log.
+A **failed** send also emits one `ctx.log.warn` line carrying the error and, for push, the subscription/user ids — trace-correlated to the enclosing action and durably archived. Successes and prunes stay off the log; failure logs stay per-recipient even in a broadcast (they have no durable write).
 
 `accepted` means the provider **accepted** the message, not that it was delivered or opened: Web Push and FCM give no delivery/open receipts, so the status stops at the send attempt. See [Observability → Delivery metrics](/docs/concepts/observability#delivery-metrics-notify).
 

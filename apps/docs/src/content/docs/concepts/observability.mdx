@@ -382,8 +382,13 @@ metrics, which are collected separately and always on.)
 
 | Metric           | Dimensions                      | Meaning                                                                                                                                             |
 | ---------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `notify.send`    | `channel`, `provider`, `status` | one per attempted send. `status` is `accepted` (the provider took it), `failed`, or `gone` (the endpoint is unregistered and was pruned).           |
+| `notify.send`    | `channel`, `provider`, `status` | attempted sends. `status` is `accepted` (the provider took it), `failed`, or `gone` (the endpoint is unregistered and was pruned).                  |
 | `notify.skipped` | `channel`, `reason`             | a send that reached nobody — `reason` is `no-subscriptions-matched` (an empty broadcast) or `channel-not-configured`. The "sent 0 because…" signal. |
+
+A single send emits one `notify.send` measurement; a **broadcast aggregates** its
+outcomes into one measurement per `(provider, status)` bucket (its value is the
+bucket's count), not one per recipient — each `ctx.metrics.count` is a durable
+write, so a large fan-out must not pay it per subscription.
 
 `accepted` means the push/chat provider **accepted** the message, not that it was
 delivered or opened — Web Push and FCM give no delivery/open receipts, so the
