@@ -103,9 +103,9 @@ import {
 } from "./do-sql";
 import { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "@lunora/shard-engine";
 import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "@lunora/shard-engine";
-import type { RelationExistsMarker } from "./relation-predicates";
-import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
-import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
+import type { RelationExistsMarker } from "@lunora/shard-engine";
+import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "@lunora/shard-engine";
+import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "@lunora/shard-engine";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import type { SchedulerLike, TriggerContextLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";

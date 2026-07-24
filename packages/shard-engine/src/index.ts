@@ -11,6 +11,7 @@ export { createDependencyTracker, depKey, SCAN_DEP, tableFromDepKey } from "./de
 export type { RenderedSql, SqlEngine } from "./drizzle";
 export { param, renderSql } from "./drizzle";
 export type { GeoBoundingBox, GeoPoint } from "./geo";
+export type { RelationExistsMarker, ResolveRelationPredicatesOptions } from "./relation-predicates";
 export { boundingBoxCenter, boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
 export { NotFoundError } from "./not-found-error";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
@@ -45,6 +46,15 @@ export {
     selectIndexForCount,
     selectIndexForGroupBy,
 } from "./aggregates";
+export {
+    assertFlatPredicate,
+    assertShapeShardable,
+    containsRelationPredicate,
+    DEFAULT_MAX_RELATION_KEYS,
+    isRelationPredicate,
+    resolveRelationPredicates,
+} from "./relation-predicates";
+export { applyOnDelete, distinctValues, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ConflictKind } from "./transaction";
 export type { TransactionSqlLike } from "./transaction";

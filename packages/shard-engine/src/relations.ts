@@ -40,11 +40,11 @@ import type {
     RelationDefinitionLike,
     ResolveWithOptions,
     TableDefinitionLike,
-    WhereInput,
     WithInput,
-} from "@lunora/shard-engine";
+} from "./schema-types";
+import type { WhereInput } from "./where-types";
 
-import { applySelect } from "@lunora/shard-engine";
+import { applySelect } from "./query-args";
 
 /** Project a loaded child (or page) per `nested.select`, keeping system + nested-`with` keys. Returns the input unchanged when no select. */
 const projectChildren = (documents: Record<string, unknown>[], nested: NestedWith): Record<string, unknown>[] =>

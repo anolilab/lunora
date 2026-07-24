@@ -29,12 +29,10 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import type { WhereInput } from "@lunora/shard-engine";
-import { RELATION_EXISTS_KEY } from "@lunora/shard-engine";
+import type { QueryArgs, QueryPage, RelationDefinitionLike, TableDefinitionLike } from "./schema-types";
+import { RELATION_EXISTS_KEY } from "./where-types";
+import type { WhereInput } from "./where-types";
 
-import type { TableDefinitionLike } from "./ctx-db";
-import type { QueryArgs, QueryPage } from "@lunora/shard-engine";
-import type { RelationDefinitionLike } from "./relations";
 import { distinctValues } from "./relations";
 
 /**

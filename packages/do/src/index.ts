@@ -185,7 +185,7 @@ export type {
 } from "@lunora/shard-engine";
 export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "@lunora/shard-engine";
 export { serveRelationFanout } from "./relation-fanout";
-export type { ResolveRelationPredicatesOptions } from "./relation-predicates";
+export type { ResolveRelationPredicatesOptions } from "@lunora/shard-engine";
 export {
     assertFlatPredicate,
     assertShapeShardable,
@@ -193,9 +193,9 @@ export {
     DEFAULT_MAX_RELATION_KEYS,
     isRelationPredicate,
     resolveRelationPredicates,
-} from "./relation-predicates";
-export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations";
-export { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
+} from "@lunora/shard-engine";
+export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "@lunora/shard-engine";
+export { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "@lunora/shard-engine";
 export type { LogEventInput } from "./request-log";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";

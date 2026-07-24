@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SchemaLike } from "../src/ctx-db";
-import { assertShapeShardable } from "../src/relation-predicates";
+import { assertShapeShardable } from "@lunora/shard-engine";
 
 /**
  * Registration-time guard for partial-replication shapes. A live shape pokes
