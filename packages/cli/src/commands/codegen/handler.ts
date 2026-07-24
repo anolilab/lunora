@@ -70,6 +70,18 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         logger.warn(`${count.toString()} schema ${count === 1 ? "advisory" : "advisories"}:\n${lines.join("\n")}`);
     }
 
+    // Platform-portability diagnostics: `ctx.*` features the deploy target does
+    // not support (omitted from the emitted surface) or an unknown target.
+    // Empty on the default Cloudflare target, so this stays silent there.
+    if (result.platformDiagnostics.length > 0) {
+        const count = result.platformDiagnostics.length;
+        const lines = result.platformDiagnostics.map(
+            (diagnostic) => `  [${diagnostic.level.toUpperCase()}] ${diagnostic.name} — ${diagnostic.message}\n      ↳ ${diagnostic.remediation}`,
+        );
+
+        logger.warn(`${count.toString()} platform ${count === 1 ? "diagnostic" : "diagnostics"}:\n${lines.join("\n")}`);
+    }
+
     // Distinct cron expressions map 1:1 to wrangler `triggers.crons`; Cloudflare
     // caps a Worker at CRON_TRIGGER_LIMIT of them. Jobs sharing an expression
     // count once, so this fires only on genuinely distinct over-scheduling.
