@@ -253,8 +253,14 @@ The CLI and Vite plugin assume wrangler. A multi-platform Lunora needs:
 
 8. **Move the request router, subscription refresh, and poke protocol into `ShardRunner`.** The seam exists and is load-bearing for transactions and socket accept, but `handleFetch`/`handleAlarm` are still injected Cloudflare handlers. Until they move, a second host can mount the _engine_ but not the _request lifecycle_.
 
-9. **Create `@lunora/platform-cloudflare`** as the default composition root: re-export the adapters from `@lunora/do`, add the `@lunora/scheduler` host, and run the full four-contract TCK from one place (today's Cloudflare run reports `SchedulerHost` as a gap because `@lunora/do` has no scheduler to offer).
+9. **Finish routing socket enumeration through `SocketHost`.** Three of eight `getWebSockets` call sites now go through the host (the two admin-introspection collectors and the whisper fan-out); five do not: `broadcastDelta`, `refreshSubscriptions`, `pokeShapeSubscribers`, `pollGlobalShapes`, and the relay-hub host adapter. Those loop bodies hand the socket to `runSocketPool` and ~20 `WebSocket`-typed private helpers, so moving them is the same retyping exercise as item 8 rather than an independent change.
 
-10. **Build `@lunora/platform-aws`** (plan 115) as the first non-Cloudflare target.
+    What unblocked the first three was giving the contract the two members the engine actually needs: `SocketHandle.bufferedAmount` (delivery back-pressure — `awaitWsDrain` polls it, and without it a second host could accept sockets but never pace them) and `SocketHost.handleFor(socket)` (enumeration yields handles while the runtime's message/close callbacks yield raw sockets; nothing could bridge the two). The engine's delivery helpers are now typed on the minimal structural surface they use — `FrameSink`, `DrainableSink` — so a runtime socket and a `SocketHandle` both satisfy them and the remaining sites can migrate one at a time instead of in one cut.
 
-11. **Update `lunorash` exports, the Vite plugin, and the CLI** to support host selection (`target` field, default `cloudflare`).
+    **Not measured:** the `__bench__` suites run under CodSpeed instrumentation, which emits no local timings, and none of them exercise `runInTransaction` — the path that gained closure hops. Plan 114's perf-regression watch is therefore still open; it needs either a bench over the transaction path or a CodSpeed CI baseline.
+
+10. **Create `@lunora/platform-cloudflare`** as the default composition root: re-export the adapters from `@lunora/do`, add the `@lunora/scheduler` host, and run the full four-contract TCK from one place (today's Cloudflare run reports `SchedulerHost` as a gap because `@lunora/do` has no scheduler to offer).
+
+11. **Build `@lunora/platform-aws`** (plan 115) as the first non-Cloudflare target.
+
+12. **Update `lunorash` exports, the Vite plugin, and the CLI** to support host selection (`target` field, default `cloudflare`).
