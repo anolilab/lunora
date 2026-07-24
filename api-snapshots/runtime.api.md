@@ -1925,13 +1925,13 @@ interface TraceSamplingConfig {
 ### `TraceTrustSignal` (type)
 
 ```ts
-type TraceTrustSignal = "cloudflare-access" | "mtls";
+type TraceTrustSignal = "mtls";
 ```
 
 ### `TrustInboundTraceContext` (type)
 
 ```ts
-type TrustInboundTraceContext = boolean | TraceTrustSignal | TraceTrustSignal[] | ((request: Request) => boolean);
+type TrustInboundTraceContext = boolean | TraceTrustSignal | ((request: Request) => boolean);
 ```
 
 ### `VERSION` (const)

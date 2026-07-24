@@ -1120,10 +1120,9 @@ interface WorkerOptions {
      * the shard. **Default: off.**
      *
      * ```ts
-     * trustInboundTraceContext: true                          // internal-only deployment
-     * trustInboundTraceContext: "mtls"                        // edge-verified client certs
-     * trustInboundTraceContext: ["mtls", "cloudflare-access"] // either one
-     * trustInboundTraceContext: (request) => …                // anything else
+     * trustInboundTraceContext: true             // nothing untrusted can reach this worker
+     * trustInboundTraceContext: "mtls"           // only edge-verified client certificates
+     * trustInboundTraceContext: (request) => …   // anything else
      * ```
      *
      * Off by default because the header is caller-supplied: on a worker an
@@ -1135,8 +1134,11 @@ interface WorkerOptions {
      * the worker's own decision, never the caller's.)
      *
      * Turn it on when something you control — a gateway, service mesh, or
-     * Cloudflare Access — sets `traceparent` itself. A proxy that merely
-     * only _forwards_ the client's header is not such a thing.
+     * Cloudflare Access — sets `traceparent` itself; a proxy that only _forwards_
+     * the client's header is not such a thing. Behind a front door like that,
+     * `true` is the answer, because every caller has already passed it. Confirm
+     * the worker really is unreachable otherwise — a `*.workers.dev` route left
+     * enabled is a second front door with no gate on it.
      *
      * Leaving this unset logs a one-time hint if an inbound trace is actually
      * dropped; setting it explicitly to `false` keeps the behaviour and silences

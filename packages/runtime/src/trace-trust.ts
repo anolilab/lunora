@@ -10,14 +10,27 @@
  * amount of request inspection can answer on its own.
  *
  * So rather than ask users to hand-roll a security predicate, this module ships
- * the handful of answers that are actually sound, named:
+ * the answers that are actually sound, named:
  *
  * ```ts
- * createWorker({ trustInboundTraceContext: "mtls" });                       // one signal
- * createWorker({ trustInboundTraceContext: ["mtls", "cloudflare-access"] }); // either
- * createWorker({ trustInboundTraceContext: true });                          // internal deployments
- * createWorker({ trustInboundTraceContext: (request) => … });                // escape hatch
+ * createWorker({ trustInboundTraceContext: true });            // nothing untrusted can reach this worker
+ * createWorker({ trustInboundTraceContext: "mtls" });          // only edge-verified client certs
+ * createWorker({ trustInboundTraceContext: (request) => … });  // anything else
  * ```
+ *
+ * **Behind a gateway, mesh, or Cloudflare Access, `true` is the answer.** If the
+ * worker is genuinely unreachable except through that front door, every caller
+ * has already passed it and there is nothing left to discriminate on. Check that
+ * it really is unreachable — a `*.workers.dev` route left enabled, or a hostname
+ * outside the Access policy, is a second front door with no gate on it.
+ *
+ * There is deliberately no `"cloudflare-access"` signal. Recognising Access by its
+ * `cf-access-jwt-assertion` header only tests that a header is present, which is
+ * redundant when the worker is properly fronted (`true` already covers it) and
+ * forgeable in one `curl` when it is not. Verifying the assertion for real means a
+ * JWKS fetch and an audience check — `@lunora/cloudflare-access` does exactly
+ * that, and it is async, so it belongs in `resolveIdentity` rather than on the
+ * dispatch path. Pass a predicate if you want to wire it in yourself.
  *
  * Everything resolves to one predicate at worker construction, so the per-request
  * cost is a single call.
@@ -30,25 +43,25 @@
  */
 
 /**
- * A named trust signal.
+ * A named trust signal — a per-request property that, on its own, establishes the
+ * caller is one whose trace context may be adopted.
  *
  * - `"mtls"` — the caller presented a client certificate that **Cloudflare
- * verified at the edge**. This is the strongest option: `cf.tlsClientAuth` is
- * set by the platform and cannot be forged by the client.
- * - `"cloudflare-access"` — the request carries a Cloudflare Access identity
- * assertion. Sound **only when the deployment actually sits behind Access**, in
- * which case nothing reaches the worker without passing it. On a worker that is
- * also reachable directly, the header proves nothing — a client can set it. Pick
- * this to say "I am behind Access"; pick `"mtls"` if you need the check itself to
- * carry the proof.
+ * verified at the edge**. `cf.tlsClientAuth` is platform-injected request
+ * metadata, not a header, so a caller cannot write it: the check carries its own
+ * proof and holds regardless of how the worker is exposed.
+ *
+ * Signals live here only when they meet that bar. A property a client can set for
+ * itself is not a signal; see the module doc on why Cloudflare Access is absent.
  */
-type TraceTrustSignal = "cloudflare-access" | "mtls";
+type TraceTrustSignal = "mtls";
 
 /**
  * How much of the inbound trace context to trust. `false` (the default) ignores
- * it entirely; `true` trusts every caller and suits an internal-only deployment.
+ * it entirely; `true` trusts every caller, which is right when nothing untrusted
+ * can reach the worker.
  */
-type TrustInboundTraceContext = boolean | TraceTrustSignal | TraceTrustSignal[] | ((request: Request) => boolean);
+type TrustInboundTraceContext = boolean | TraceTrustSignal | ((request: Request) => boolean);
 
 /** Read a nested string off the loosely-typed Cloudflare `request.cf` bag. */
 const cfString = (request: Request, ...path: string[]): string | undefined => {
@@ -67,9 +80,6 @@ const cfString = (request: Request, ...path: string[]): string | undefined => {
 
 /** Predicate for each named signal. */
 const SIGNAL_CHECKS: Record<TraceTrustSignal, (request: Request) => boolean> = {
-    // Access sets this on every request it lets through. See the caveat on the
-    // `TraceTrustSignal` docs: this is a declaration that Access fronts the worker.
-    "cloudflare-access": (request) => request.headers.get("cf-access-jwt-assertion") !== null,
     // Edge-verified client certificate — the platform sets `certVerified`, so
     // unlike a header this cannot be spoofed by the caller.
     mtls: (request) => cfString(request, "tlsClientAuth", "certVerified") === "SUCCESS",
@@ -77,8 +87,7 @@ const SIGNAL_CHECKS: Record<TraceTrustSignal, (request: Request) => boolean> = {
 
 /**
  * Collapse a {@link TrustInboundTraceContext} into a single predicate, once, at
- * worker construction. An array is an **any-of**: the trace is continued when any
- * listed signal matches.
+ * worker construction.
  */
 const resolveTraceTrust = (option: TrustInboundTraceContext | undefined): ((request: Request) => boolean) => {
     if (option === undefined || option === false) {
@@ -93,15 +102,13 @@ const resolveTraceTrust = (option: TrustInboundTraceContext | undefined): ((requ
         return option;
     }
 
-    const signals = new Set<string>(Array.isArray(option) ? option : [option]);
-    // Driven from the known table rather than from the caller's list, so a value
+    // Looked up in the known table rather than trusted from the caller, so a value
     // that is not a real signal (a typo from a JS caller, where the union is not
-    // enforced) simply matches nothing and the trace stays untrusted.
-    const checks = Object.entries(SIGNAL_CHECKS)
-        .filter(([signal]) => signals.has(signal))
-        .map(([, check]) => check);
+    // enforced) matches nothing and the trace stays untrusted rather than throwing
+    // on the dispatch path.
+    const check = Object.entries(SIGNAL_CHECKS).find(([signal]) => signal === option)?.[1];
 
-    return (request) => checks.some((check) => check(request));
+    return check ?? (() => false);
 };
 
 /**
@@ -136,7 +143,7 @@ const createDroppedTraceNotice = (option: TrustInboundTraceContext | undefined):
             "[lunora] Ignored an inbound `traceparent`, so this request starts a new trace instead of joining the caller's. " +
                 "That is the safe default: the header is caller-supplied, and trusting it lets any client choose which trace its spans and logs join. " +
                 "If this worker sits behind a gateway, service mesh, or Cloudflare Access that sets `traceparent` itself, set " +
-                '`trustInboundTraceContext` on createWorker() — `true`, or a signal like `"mtls"` / `"cloudflare-access"`. ' +
+                '`trustInboundTraceContext: true` on createWorker() (or `"mtls"` to trust only edge-verified client certificates). ' +
                 "Set it to `false` to keep this behaviour and silence this message.",
         );
     };

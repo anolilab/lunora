@@ -66,41 +66,12 @@ describe("resolveTraceTrust", () => {
         });
     });
 
-    describe("cloudflare-access", () => {
-        it("trusts a request carrying an Access assertion", () => {
-            expect.assertions(1);
+    // The union is not enforced for a JS caller, and an unrecognised value must
+    // fail closed rather than throw on the dispatch path.
+    it("distrusts an unrecognised signal rather than defaulting open", () => {
+        expect.assertions(1);
 
-            expect(resolveTraceTrust("cloudflare-access")(requestWith({ "cf-access-jwt-assertion": "ey.j.w.t" }))).toBe(true);
-        });
-
-        it("distrusts a request without one", () => {
-            expect.assertions(1);
-
-            expect(resolveTraceTrust("cloudflare-access")(requestWith())).toBe(false);
-        });
-    });
-
-    describe("a list of signals", () => {
-        it("trusts when any listed signal matches", () => {
-            expect.assertions(2);
-
-            const trusted = resolveTraceTrust(["mtls", "cloudflare-access"]);
-
-            expect(trusted(requestWith({ "cf-access-jwt-assertion": "ey.j.w.t" }))).toBe(true);
-            expect(trusted(requestWith({}, { tlsClientAuth: { certVerified: "SUCCESS" } }))).toBe(true);
-        });
-
-        it("distrusts when none match", () => {
-            expect.assertions(1);
-
-            expect(resolveTraceTrust(["mtls", "cloudflare-access"])(requestWith())).toBe(false);
-        });
-
-        it("distrusts an empty list rather than defaulting open", () => {
-            expect.assertions(1);
-
-            expect(resolveTraceTrust([])(requestWith())).toBe(false);
-        });
+        expect(resolveTraceTrust("mtsl" as "mtls")(requestWith())).toBe(false);
     });
 
     it("uses a custom predicate verbatim", () => {
