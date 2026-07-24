@@ -1,8 +1,8 @@
 import { LunoraError } from "@lunora/errors";
-import type { SocketAttachment } from "@lunora/shard-engine";
+import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike, ShardRankPageResult, SocketAttachment } from "@lunora/shard-engine";
+import { rankKeyFromDoc } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
 import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration";
@@ -21,8 +21,6 @@ import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { MetricSeries } from "../src/metric-buffer";
 import type { MetricHistoryPoint, MetricHistorySeries } from "../src/metric-history";
 import type { QueueMessageRow, RecordQueueMessageInput } from "../src/queue-catcher";
-import type { RankIndexDefinitionLike, ShardRankPageResult } from "@lunora/shard-engine";
-import { rankKeyFromDoc } from "@lunora/shard-engine";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,

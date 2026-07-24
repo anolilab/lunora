@@ -19,13 +19,7 @@
  * **not** transactional.
  */
 
-import type {
-    SchemaLike,
-    TriggerContextLike,
-    TriggerEventLike,
-    TriggerOpLike,
-    TriggerTimingLike,
-} from "@lunora/shard-engine";
+import type { SchemaLike, TriggerContextLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "@lunora/shard-engine";
 
 export type {
     SchedulableWorkflowReferenceLike,

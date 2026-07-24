@@ -1,10 +1,9 @@
-import { RELATION_EXISTS_KEY } from "@lunora/shard-engine";
+import type { QueryArgs, QueryPage } from "@lunora/shard-engine";
+import { RELATION_EXISTS_KEY, resolveRelationPredicates } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
-import type { QueryArgs, QueryPage } from "@lunora/shard-engine";
-import { resolveRelationPredicates } from "@lunora/shard-engine";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**

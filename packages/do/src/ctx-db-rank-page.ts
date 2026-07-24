@@ -21,18 +21,25 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-rank-page" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
 import { LunoraError } from "@lunora/errors";
-import { param, SCAN_DEP } from "@lunora/shard-engine";
+import type { RankDirection, RankIndexDefinitionLike, RankPageOptions, RankPageRowKey } from "@lunora/shard-engine";
+import {
+    decodeCursor,
+    encodePartitionKey,
+    mergeWhere,
+    param,
+    RANK_TIEBREAK,
+    rankTableName,
+    resolveRankPartition,
+    SCAN_DEP,
+    sortColumnName,
+} from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
-import { mergeWhere } from "@lunora/shard-engine";
 // Type-only imports for the structural surfaces the DO writer threads in — value
 // imports would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
-import { decodeCursor } from "@lunora/shard-engine";
-import type { RankDirection, RankIndexDefinitionLike, RankPageOptions, RankPageRowKey } from "@lunora/shard-engine";
-import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "@lunora/shard-engine";
 
 const DOC_COLUMN = "__doc__";
 

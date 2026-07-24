@@ -15,20 +15,25 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
 
-import { param } from "@lunora/shard-engine";
+import type { AggregateIndexDefinitionLike, AggregateTally, RankIndexDefinitionLike } from "@lunora/shard-engine";
+import {
+    aggregateTableName,
+    encodeAggregateKey,
+    encodePartitionKey,
+    foldAggregateTally,
+    matchesRankStaticWhere,
+    matchesStaticWhere,
+    param,
+    rankTableName,
+    sortColumnName,
+} from "@lunora/shard-engine";
 import { sql as dsql } from "drizzle-orm";
 
-import { matchesStaticWhere } from "@lunora/shard-engine";
-import type { AggregateTally } from "@lunora/shard-engine";
-import { aggregateTableName, encodeAggregateKey, foldAggregateTally } from "@lunora/shard-engine";
-import type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, rowToDocument, serializeSqlValue } from "./do-sql";
-import type { RankIndexDefinitionLike } from "@lunora/shard-engine";
-import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "@lunora/shard-engine";
 
 /**
  * Backfill one aggregate counter table by scanning the source rows once and

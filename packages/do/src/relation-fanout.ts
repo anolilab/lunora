@@ -1,9 +1,9 @@
 /* eslint-disable no-secrets/no-secrets -- the `__lunora_relation__:` reserved-prefix template strings are framework constants, not credentials */
 import { LunoraError } from "@lunora/errors";
+import type { QueryArgs } from "@lunora/shard-engine";
 
 import type { DatabaseWriterLike, SchemaLike } from "./ctx-db";
 import { RELATION_FUNCTION_PREFIX } from "./introspect";
-import type { QueryArgs } from "@lunora/shard-engine";
 
 /**
  * Serve a reserved `__lunora_relation__:read` / `:count` fan-out read for reverse

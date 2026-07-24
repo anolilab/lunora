@@ -32,12 +32,10 @@
 import { LunoraError } from "@lunora/errors";
 import type {
     BroadcastDelta,
-    ColumnMetaLike,
     DatabaseWriterLike,
     GeoFilterBuilderLike,
     GeoIndexDefinitionLike,
     GroupByEntry,
-    IndexDefinitionLike,
     IndexRangeBuilderLike,
     OrderKey,
     PaginationOptions,
@@ -47,6 +45,7 @@ import type {
     ReactiveCache,
     ReadHook,
     RelationDefinitionLike,
+    RelationExistsMarker,
     RestrictableQueryOptions,
     SchemaLike,
     SearchFilterBuilderLike,
@@ -54,33 +53,58 @@ import type {
     ServerDefaultContextLike,
     TableDefinitionLike,
     TableReaderLike,
-    ValidatorLike,
     WhereInput,
     WhereSqlStrategy,
 } from "@lunora/shard-engine";
 import {
+    aggregateSqlFunction,
+    aggregateTableName,
+    applyOnDelete,
+    applySelect,
+    assertFlatPredicate as assertFlatRelationPredicate,
     boundingBoxGeohashes,
     buildFtsMatch,
+    buildSeekBeforeWhere,
+    buildSeekWhere,
     compileWhereSql,
     ConflictError,
+    CountRlsUnsupportedError,
     coveringGeohashes,
+    decodeCursor,
+    encodeAggregateKey,
+    encodeCursor,
+    encodePartitionKey,
+    fanOutScalarCounts,
     ftsTableName,
     guardWriter,
     haversineMeters,
+    mergeWhere,
+    normalizeCountArgument,
+    normalizeOrderKeys,
     NotFoundError,
     pointInBoundingBox,
+    RANK_TIEBREAK,
+    rankTableName,
+    readAggregateValue,
+    resolveRankPartition,
+    resolveRelationPredicates,
+    resolveWith,
+    runRowValidators,
     SCAN_DEP,
     scoreDocument,
+    selectIndexForAggregate,
+    selectIndexForCount,
+    selectIndexForGroupBy,
+    softDeleteScope,
+    sortColumnName,
     stringifySearchText,
+    throwingScheduler,
     tokenizeSearch,
 } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 // Aliased: this module already uses `sql` for the workerd `SqlExec` (see `runSql`), so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
 
-import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from "@lunora/shard-engine";
-import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "@lunora/shard-engine";
-import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "@lunora/shard-engine";
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange } from "./ctx-db-cdc";
 import { createCompanionSync } from "./ctx-db-companions";
@@ -101,11 +125,6 @@ import {
     serializeSqlValue,
     tableColumns,
 } from "./do-sql";
-import { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "@lunora/shard-engine";
-import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "@lunora/shard-engine";
-import type { RelationExistsMarker } from "@lunora/shard-engine";
-import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "@lunora/shard-engine";
-import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "@lunora/shard-engine";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import type { SchedulerLike, TriggerContextLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
@@ -124,7 +143,6 @@ interface SqlCursor<Row> extends Iterable<Row> {
     one: () => Row;
     toArray: () => Row[];
 }
-
 
 /**
  * Telemetry hook fired when a read explicitly names a declared index
@@ -339,7 +357,6 @@ const assertBatchLimit = (count: number, limit: number | undefined, op: string):
         );
     }
 };
-
 
 interface SearchStage {
     definition: SearchIndexDefinitionLike;
@@ -3381,29 +3398,23 @@ export { runShardMigrations } from "./ctx-db-migrations";
 export type { ShapeRow } from "./ctx-db-shapes";
 export { selectShapeMemberIds, selectShapeRows } from "./ctx-db-shapes";
 export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike } from "./triggers";
-export type {
-    BroadcastDelta,
-    Clock,
-    ColumnMetaLike,
-    CountArgs,
-    CtxDbOptions,
-    DatabaseWriterLike,
-    GeoFilterBuilderLike,
-    GeoIndexDefinitionLike,
-    IdGenerator,
-    IndexDefinitionLike,
-    IndexRangeBuilderLike,
-    PaginationOptions,
-    ReadHook,
-    SchemaLike,
-    SearchFilterBuilderLike,
-    SearchIndexDefinitionLike,
-    ServerDefaultContextLike,
-    SqlCursor,
-    SqlExec,
-    TableDefinitionLike,
-    TableReaderLike,
-    ValidatorLike,
-    WriteEvent,
-    WriteHook,
-};
+export type { Clock, CountArgs, CtxDbOptions, IdGenerator, SqlCursor, SqlExec, WriteEvent, WriteHook };
+
+export {
+    type BroadcastDelta,
+    type ColumnMetaLike,
+    type DatabaseWriterLike,
+    type GeoFilterBuilderLike,
+    type GeoIndexDefinitionLike,
+    type IndexDefinitionLike,
+    type IndexRangeBuilderLike,
+    type PaginationOptions,
+    type ReadHook,
+    type SchemaLike,
+    type SearchFilterBuilderLike,
+    type SearchIndexDefinitionLike,
+    type ServerDefaultContextLike,
+    type TableDefinitionLike,
+    type TableReaderLike,
+    type ValidatorLike,
+} from "@lunora/shard-engine";

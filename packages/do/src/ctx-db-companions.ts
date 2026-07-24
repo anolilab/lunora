@@ -25,22 +25,32 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-companions" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
-import type { MutationDelta } from "@lunora/shard-engine";
-import { encodeGeohash, ftsTableName, GEO_DEFAULT_PRECISION, param, stringifySearchText } from "@lunora/shard-engine";
+import type { AggregateIndexDefinitionLike, AggregateTally, MutationDelta, RankIndexDefinitionLike } from "@lunora/shard-engine";
+import {
+    aggregateSqlFunction,
+    aggregateTableName,
+    coerceAggregateNumber,
+    encodeAggregateKey,
+    encodeGeohash,
+    encodePartitionKey,
+    foldAggregateTally,
+    ftsTableName,
+    GEO_DEFAULT_PRECISION,
+    matchesRankStaticWhere,
+    matchesStaticWhere,
+    param,
+    rankTableName,
+    sortColumnName,
+    stringifySearchText,
+} from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
-import { aggregateSqlFunction, matchesStaticWhere } from "@lunora/shard-engine";
-import type { AggregateTally } from "@lunora/shard-engine";
-import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally } from "@lunora/shard-engine";
-import type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 // Type-only imports for the structural surfaces the DO writer threads in — value
 // imports would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
-import type { RankIndexDefinitionLike } from "@lunora/shard-engine";
-import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "@lunora/shard-engine";
 
 /**
  * Whether none of the fields a rank index reads (partition / sort / static
