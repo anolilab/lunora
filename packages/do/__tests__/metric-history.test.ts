@@ -49,6 +49,27 @@ describe("metricHistory", () => {
         expect(point?.max).toBe(3);
     });
 
+    it("folds many repeats of one series correctly (the known-bucket cache path)", () => {
+        expect.assertions(3);
+
+        const sql = makeSql();
+        const base = 1_749_300_000_000;
+
+        // The first call primes the known-bucket set; every later call is a cache
+        // hit that skips the existence read and goes straight to the upsert. The
+        // fold must still be exact — the cache stores membership, never values.
+        for (let index = 0; index < 50; index += 1) {
+            recordMetricHistory(sql, event({ kind: "counter", name: "orders.placed", ts: base + index, value: 1 }));
+        }
+
+        const { series } = readMetricHistory(sql);
+        const [point] = series[0]?.points ?? [];
+
+        expect(series[0]?.points).toHaveLength(1);
+        expect(point?.count).toBe(50);
+        expect(point?.sum).toBe(50);
+    });
+
     it("splits measurements across minute boundaries into separate buckets", () => {
         expect.assertions(3);
 
