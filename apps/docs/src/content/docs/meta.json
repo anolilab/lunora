@@ -36,6 +36,7 @@
         "concepts/migrations",
         "---Auth & security---",
         "concepts/authentication",
+        "concepts/auth-ui",
         "concepts/rls",
         "concepts/masking",
         "concepts/security",

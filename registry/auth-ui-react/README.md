@@ -42,10 +42,17 @@ function AuthRoot() {
 }
 ```
 
-Cards: `SignInCard`, `SignUpCard`, `ForgotPasswordCard`, `ResetPasswordCard`,
-`MagicLinkCard`, `EmailOtpCard`, `TwoFactorCard`. Enable magic-link / email-OTP /
-2FA by adding the matching server item (`lunora add auth-magic-link`,
-`auth-otp`) and flipping the toggle in `client.ts`.
+Auth cards: `SignInCard`, `SignUpCard`, `ForgotPasswordCard`,
+`ResetPasswordCard`, `MagicLinkCard`, `EmailOtpCard`, `TwoFactorCard`.
+
+Account & security: `ProfileCard`, `ChangeEmailCard`, `ChangePasswordCard`,
+`SessionsCard`, `TwoFactorSetupCard`, `DeleteAccountCard`, `SignOutButton`.
+
+Organizations: `OrganizationsCard`, `MembersCard`.
+
+Enable magic-link / email-OTP / 2FA by adding the matching server item
+(`lunora add auth-magic-link`, `auth-otp`) and flipping the toggle in
+`client.ts`.
 
 ## Customizing
 
