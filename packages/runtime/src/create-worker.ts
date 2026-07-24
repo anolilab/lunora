@@ -6,7 +6,6 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { relayName } from "../../../shared/relay-name";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
-import { resolveTraceSampling } from "../../../shared/sampling";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
@@ -33,10 +32,12 @@ import { buildLogArchiveAdminRoutes } from "./log-archive-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 import { emitRpcEvent } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
-import { createDispatchSpanContext, extractTraceContext, injectTraceContext, SAMPLED_FLAG, UNSAMPLED_FLAG } from "./otel-trace";
+import type { DispatchTraceContext } from "./otel-trace";
+import { beginDispatchTrace, injectTraceContext } from "./otel-trace";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";
+import { createResourceAttributeResolver } from "./resource-detect";
 import type { RestInvoke, RestRateLimit } from "./rest-routes";
 import { buildRestRoutes } from "./rest-routes";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
@@ -1111,6 +1112,25 @@ interface WorkerOptions {
     syncGlobals?: GlobalCdcSyncFunction;
 
     /**
+     * Continue an inbound W3C trace: when a request arrives with a well-formed
+     * `traceparent`, adopt its trace id, parent this dispatch's span under the
+     * upstream span, and carry its `tracestate` to the shard. **Default `false`.**
+     *
+     * Off by default because on an internet-facing Worker the header is
+     * caller-supplied, and the trace id it carries is not inert: it decides which
+     * trace this request's spans and `ctx.log` lines land in, so anyone can graft
+     * entries into another tenant's waterfall in a shared collector. Head sampling
+     * is protected separately — it keys on a server-minted id whenever the inbound
+     * context is untrusted — but trace *membership* can only be protected by not
+     * trusting the header.
+     *
+     * Turn this on when the Worker sits behind a gateway/mesh you control that
+     * sets `traceparent` itself, or when the deployment is internal and the
+     * end-to-end waterfall is worth more than the isolation.
+     */
+    trustInboundTraceContext?: boolean;
+
+    /**
      * Read-only introspector for Vectorize indexes, backing the studio's vector
      * browser via `GET /_lunora/admin/vector/indexes` and
      * `POST /_lunora/admin/vector/query`. Build it from the generated
@@ -1182,6 +1202,42 @@ interface RequestTelemetryMeta {
     scheme?: string;
     userAgent?: string;
 }
+
+/**
+ * Build the per-request context handed to every observability sink.
+ *
+ * `waitUntil` is the only conditional part — it needs an `ExecutionContext`, which
+ * some entry points (an in-process `serverQuery`) may not have. Resource
+ * detection is not gated on it: `env` and `request` are available on every path,
+ * and gating them on an unrelated capability was silently blanking resource
+ * attributes on the paths that lacked one.
+ *
+ * What crosses this boundary is deliberately narrow — a `waitUntil` and a thunk
+ * that resolves a small allowlisted attribute bag. Sinks are user-extensible and
+ * this context is fanned out to all of them, so raw `env` (every secret binding)
+ * and the raw `Request` (its `Authorization`/`Cookie`) must not be reachable here.
+ */
+const buildSinkContext = (environment: unknown, request: Request, waitUntil?: (promise: Promise<unknown>) => void): ObservabilitySinkContext => {
+    return {
+        resourceAttributes: createResourceAttributeResolver(environment, request),
+        ...(waitUntil === undefined ? {} : { waitUntil }),
+    };
+};
+
+/**
+ * Project a dispatch's trace context onto the `ObservabilityEvent` fields that
+ * carry it. One helper so the success and failure emits at every dispatch site
+ * cannot drift on which of the four they set — the previous hand-copied spreads
+ * had already diverged.
+ */
+const traceEventFields = (trace: DispatchTraceContext): Pick<ObservabilityEvent, "parentSpanId" | "spanId" | "traceFlags" | "traceId"> => {
+    return {
+        spanId: trace.spanId,
+        traceFlags: trace.traceFlags,
+        traceId: trace.traceId,
+        ...(trace.parentSpanId === undefined ? {} : { parentSpanId: trace.parentSpanId }),
+    };
+};
 
 /** Extract HTTP semantic metadata from a request without throwing on bad URLs. */
 const requestTelemetryMeta = (request: Request): RequestTelemetryMeta => {
@@ -1891,8 +1947,16 @@ interface LunoraWorker {
      * @param options Call options mirroring the RPC envelope.
      * @param options.shardKey Routes to a specific shard (omitted → the worker's
      * `defaultShardKey`).
+     * @param options.waitUntil The host's `waitUntil`, so dispatch telemetry
+     * whose export is deferred (a gzipped OTLP body) survives isolate teardown.
      */
-    serverQuery: (request: Request, env: unknown, reference: unknown, args?: Record<string, unknown>, options?: { shardKey?: string }) => Promise<Response>;
+    serverQuery: (
+        request: Request,
+        env: unknown,
+        reference: unknown,
+        args?: Record<string, unknown>,
+        options?: { shardKey?: string; waitUntil?: (promise: Promise<unknown>) => void },
+    ) => Promise<Response>;
 }
 
 /**
@@ -3076,38 +3140,29 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         shardKey: string,
         forwardedHeaders: Record<string, string>,
         sinkContext?: ObservabilitySinkContext,
-        dispatchContext?: RequestTelemetryMeta,
     ): Promise<Response> => {
         const rpcStartedAt = Date.now();
         const { observability, sampling } = options;
+        const requestMeta = requestTelemetryMeta(request);
 
-        // Trace context for this dispatch. Extract a W3C `traceparent` from the
-        // inbound request so this span parents under an upstream trace; otherwise
-        // mint a fresh trace. The new span id becomes this dispatch's span, and
-        // the propagated `traceparent` carries it to the shard (and any container
-        // beneath it) for coherent W3C trace-context propagation.
-        const upstream = extractTraceContext(request);
-        const dispatchSpan = createDispatchSpanContext(upstream);
+        // Open this dispatch's trace. `beginDispatchTrace` applies the inbound-trust
+        // policy, mints the span, and settles the sampled verdict in one place, so
+        // the span's `flags`, the `traceparent` we forward, and the export gate can
+        // never disagree about whether this trace is sampled.
+        const { decision, trace } = beginDispatchTrace(request, {
+            ...(sampling === undefined ? {} : { sampling }),
+            trustInbound: options.trustInboundTraceContext === true,
+        });
 
-        // Head-sampling decision for this trace, made once here where the id is
-        // minted and propagated to the shard so it drops the matching `ctx.trace`
-        // spans coherently: the `traceparent` sampled flag carries the head
-        // verdict; `x-lunora-sample-errors` carries the tail-bias toggle so a
-        // sampled-out trace that errors is still kept whole on both sides.
-        const decision = resolveTraceSampling(sampling, dispatchSpan.traceId);
+        // `x-lunora-sample-errors` carries the tail-bias toggle alongside the
+        // `traceparent` sampled flag, so a sampled-out trace that errors is still
+        // kept whole on both the worker and the shard.
         const outgoingHeaders: Record<string, string> = {
             ...forwardedHeaders,
             "x-lunora-sample-errors": decision.keepErrors ? "1" : "0",
         };
 
-        injectTraceContext(
-            {
-                spanId: dispatchSpan.spanId,
-                traceFlags: decision.isTraced ? SAMPLED_FLAG : UNSAMPLED_FLAG,
-                traceId: dispatchSpan.traceId,
-            },
-            outgoingHeaders,
-        );
+        injectTraceContext(trace, outgoingHeaders);
 
         // Re-emit the RPC body to the shard at its `/rpc` route.
         const forwarded = new Request(`https://shard.internal/rpc`, {
@@ -3125,20 +3180,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             emitRpcEvent(
                 observability,
                 {
+                    ...requestMeta,
+                    ...traceEventFields(trace),
                     durationMs: Date.now() - rpcStartedAt,
                     functionPath,
-                    host: dispatchContext?.host,
-                    method: dispatchContext?.method,
                     ok: response.ok,
-                    parentSpanId: upstream?.spanId,
-                    path: dispatchContext?.path,
-                    port: dispatchContext?.port,
-                    scheme: dispatchContext?.scheme,
                     shardKey,
-                    spanId: dispatchSpan.spanId,
-                    traceFlags: dispatchSpan.traceFlags,
-                    traceId: dispatchSpan.traceId,
-                    userAgent: dispatchContext?.userAgent,
                     ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
                 },
                 sinkContext,
@@ -3155,17 +3202,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             emitRpcEvent(
                 observability,
                 {
+                    ...requestMeta,
+                    ...traceEventFields(trace),
                     ...buildErrorEvent(functionPath, Date.now() - rpcStartedAt, error, { shardKey }),
-                    host: dispatchContext?.host,
-                    method: dispatchContext?.method,
-                    parentSpanId: upstream?.spanId,
-                    path: dispatchContext?.path,
-                    port: dispatchContext?.port,
-                    scheme: dispatchContext?.scheme,
-                    spanId: dispatchSpan.spanId,
-                    traceFlags: dispatchSpan.traceFlags,
-                    traceId: dispatchSpan.traceId,
-                    userAgent: dispatchContext?.userAgent,
                 },
                 sinkContext,
                 sampling,
@@ -3255,18 +3294,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const requestMeta = requestTelemetryMeta(request);
 
             // Hand the request's `ctx.waitUntil` to sinks so a network sink's
-            // POST survives isolate teardown after the response returns. Also
-            // pass `env` and `request` so telemetry sinks can auto-detect OTLP
-            // resource attributes (cloud region, version, etc.).
-            const sinkContext: ObservabilitySinkContext | undefined = context
-                ? {
-                      env: env as Record<string, unknown> | undefined,
-                      request,
-                      waitUntil: (promise) => {
-                          context.waitUntil?.(promise);
-                      },
-                  }
-                : undefined;
+            // POST survives isolate teardown after the response returns.
+            const sinkContext = buildSinkContext(env, request, context && ((promise) => context.waitUntil?.(promise)));
 
             if (envelope.fanOut) {
                 // Coordinator presence was checked above; re-assert for the
@@ -3298,13 +3327,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                                 table: envelope.fanOut.table,
                             },
                             functionPath: envelope.functionPath,
-                            host: requestMeta.host,
-                            method: requestMeta.method,
+                            ...requestMeta,
                             ok: true,
-                            path: RPC_PATH,
-                            port: requestMeta.port,
-                            scheme: requestMeta.scheme,
-                            userAgent: requestMeta.userAgent,
                         },
                         sinkContext,
                     );
@@ -3318,12 +3342,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                         observability,
                         {
                             ...buildErrorEvent(envelope.functionPath, Date.now() - rpcStartedAt, error, { fanOut: { table: envelope.fanOut.table } }),
-                            host: requestMeta.host,
-                            method: requestMeta.method,
-                            path: RPC_PATH,
-                            port: requestMeta.port,
-                            scheme: requestMeta.scheme,
-                            userAgent: requestMeta.userAgent,
+                            ...requestMeta,
                         },
                         sinkContext,
                     );
@@ -3334,7 +3353,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const shardKey = envelope.shardKey ?? defaultShard;
 
             const dispatch = (): Promise<Response> =>
-                dispatchSingleShard(request, envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders, sinkContext, requestMeta);
+                dispatchSingleShard(request, envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders, sinkContext);
 
             // Paid procedure: run the injected x402 gate around the shard
             // dispatch (challenge / verify / dispatch / settle). The gate's
@@ -3422,15 +3441,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         );
 
         const { observability } = options;
-        const sinkContext: ObservabilitySinkContext | undefined = context
-            ? {
-                  env: env as Record<string, unknown> | undefined,
-                  request,
-                  waitUntil: (promise) => {
-                      context.waitUntil?.(promise);
-                  },
-              }
-            : undefined;
+        const sinkContext = buildSinkContext(env, request, context && ((promise) => context.waitUntil?.(promise)));
         const requestMeta = requestTelemetryMeta(request);
 
         const results: unknown[] = [];
@@ -3487,14 +3498,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     {
                         durationMs,
                         functionPath: entry.functionPath,
-                        host: requestMeta.host,
-                        method: requestMeta.method,
+                        ...requestMeta,
                         ok,
-                        path: RPC_BATCH_PATH,
-                        port: requestMeta.port,
-                        scheme: requestMeta.scheme,
                         shardKey,
-                        userAgent: requestMeta.userAgent,
                         ...(ok ? {} : { error: { code: "SHARD_ERROR", message: `batched call returned ${String(status)}`, status } }),
                     },
                     sinkContext,
@@ -3530,12 +3536,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     failSubBatch(entries, 502, errorBody.code, errorBody.message, (entry) => {
                         return {
                             ...buildErrorEvent(entry.functionPath, durationMs, error, { shardKey }),
-                            host: requestMeta.host,
-                            method: requestMeta.method,
-                            path: RPC_BATCH_PATH,
-                            port: requestMeta.port,
-                            scheme: requestMeta.scheme,
-                            userAgent: requestMeta.userAgent,
+                            ...requestMeta,
                         };
                     });
 
@@ -3563,14 +3564,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                             durationMs,
                             error: { code: "SHARD_ERROR", message, status: response.status },
                             functionPath: entry.functionPath,
-                            host: requestMeta.host,
-                            method: requestMeta.method,
+                            ...requestMeta,
                             ok: false,
-                            path: RPC_BATCH_PATH,
-                            port: requestMeta.port,
-                            scheme: requestMeta.scheme,
                             shardKey,
-                            userAgent: requestMeta.userAgent,
                         };
                     });
 
@@ -3647,7 +3643,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         env: unknown,
         reference: unknown,
         args: Record<string, unknown> = {},
-        callOptions: { shardKey?: string } = {},
+        callOptions: { shardKey?: string; waitUntil?: (promise: Promise<unknown>) => void } = {},
     ): Promise<Response> => {
         // Error mapping mirrors the top-level `fetch` catch (`toErrorResponse`)
         // EXACTLY: a thrown `LunoraError` (bad reference, a denied `authorizeShard`
@@ -3673,9 +3669,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             await authorizeRpcEnvelope({ args, functionPath, shardKey: callOptions.shardKey }, identity);
 
             const shardKey = callOptions.shardKey ?? defaultShard;
-            const serverSinkContext: ObservabilitySinkContext = { env: env as Record<string, unknown> | undefined, request };
+            // Pass the caller's `waitUntil` when the SSR host has one: an OTLP body
+            // past the gzip threshold is exported asynchronously, so without it an
+            // error span can be dropped when the isolate tears down.
+            const serverSinkContext = buildSinkContext(env, request, callOptions.waitUntil);
 
-            return await dispatchSingleShard(request, functionPath, args, shardKey, forwardedHeaders, serverSinkContext, requestTelemetryMeta(request));
+            return await dispatchSingleShard(request, functionPath, args, shardKey, forwardedHeaders, serverSinkContext);
         } catch (error: unknown) {
             return toErrorResponse(error);
         }
@@ -3952,16 +3951,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // coordinator fan-out) — so auth, RLS, and the `v.*` validators are enforced at
     // the shard identically to typed RPC. The router is built from the registry, so
     // a non-exposed procedure has no route (default-closed).
-    const invokeExposed: RestInvoke = async ({ args, env, functionPath, request, shardKey }) => {
+    const invokeExposed: RestInvoke = async ({ args, env, functionPath, request, shardKey, waitUntil }) => {
         const envelope: RpcEnvelope = { args, functionPath, ...(shardKey === undefined ? {} : { shardKey }) };
         const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
 
         await authorizeRpcEnvelope(envelope, identity);
 
         const resolvedShardKey = shardKey ?? defaultShard;
-        const restSinkContext: ObservabilitySinkContext = { env: env as Record<string, unknown> | undefined, request };
-        const dispatch = (): Promise<Response> =>
-            dispatchSingleShard(request, functionPath, args, resolvedShardKey, forwardedHeaders, restSinkContext, requestTelemetryMeta(request));
+        // See `serverQuery`: the public REST surface must keep its telemetry alive
+        // past the response too, or gzipped error spans are lost.
+        const restSinkContext = buildSinkContext(env, request, waitUntil);
+        const dispatch = (): Promise<Response> => dispatchSingleShard(request, functionPath, args, resolvedShardKey, forwardedHeaders, restSinkContext);
 
         // A `.x402({ price })`-tagged procedure exposed over REST is paywalled at
         // the origin exactly as over RPC (challenge / verify / settle around the

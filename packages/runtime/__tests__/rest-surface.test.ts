@@ -189,4 +189,31 @@ describe("createWorker — opt-in public REST surface", () => {
             ),
         ).toEqual(["/_lunora/rest/messages/list", "/_lunora/rest/messages/send"]);
     });
+
+    // Same gap as `serverQuery`: gzipped OTLP error spans are exported after the
+    // response, so the public REST surface has to keep them alive too.
+    it("threads the request's waitUntil into REST dispatch telemetry", async () => {
+        expect.assertions(2);
+
+        const { namespace } = echoShard();
+        const kept: Promise<unknown>[] = [];
+        const observability = {
+            onRpc: (_event: unknown, context?: { waitUntil?: (promise: Promise<unknown>) => void }) => {
+                context?.waitUntil?.(Promise.resolve("sent"));
+            },
+        };
+        const worker = createWorker({ functions, observability, shardDO: namespace });
+
+        await worker.fetch(
+            new Request("https://app.example/_lunora/rest/messages/list?limit=5"),
+            {},
+            {
+                passThroughOnException: () => undefined,
+                waitUntil: (promise: Promise<unknown>) => kept.push(promise),
+            },
+        );
+
+        expect(kept).toHaveLength(1);
+        await expect(kept[0]).resolves.toBe("sent");
+    });
 });

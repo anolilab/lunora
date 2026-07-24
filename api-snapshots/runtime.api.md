@@ -1153,6 +1153,7 @@ interface LunoraWorker {
     scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
     serverQuery: (request: Request, env: unknown, reference: unknown, args?: Record<string, unknown>, options?: {
         shardKey?: string;
+        waitUntil?: (promise: Promise<unknown>) => void;
     }) => Promise<Response>;
 }
 ```
@@ -1308,6 +1309,12 @@ interface ObservabilitySink {
 
 ```ts
 type ObservabilitySinkContext = LogSinkContext;
+```
+
+### `OtlpResourceAttributes` (type)
+
+```ts
+type OtlpResourceAttributes = Record<string, OtlpAttributeValue>;
 ```
 
 ### `OtlpSinkOptions` (interface)
@@ -1557,6 +1564,7 @@ type RestInvoke = (parameters: {
     functionPath: string;
     request: Request;
     shardKey?: string;
+    waitUntil?: (promise: Promise<unknown>) => void;
 }) => Promise<Response>;
 ```
 
@@ -2021,6 +2029,7 @@ interface WorkerOptions {
     storageSignedUrl?: StorageSignedUrlFunction;
     storageUpload?: StorageUploadFunction;
     syncGlobals?: GlobalCdcSyncFunction;
+    trustInboundTraceContext?: boolean;
     vectorIntrospector?: VectorIntrospector;
     voiceAgents?: Record<string, ShardNamespaceLike>;
     workflowsClient?: (env: unknown) => undefined | WorkflowsRestClient;
@@ -2055,7 +2064,7 @@ const buildHealthRoutes: (deps: HealthRouteDeps) => Record<string, (request: Req
 ### `buildRestRoutes` (const)
 
 ```ts
-const buildRestRoutes: (deps: RestRouteDeps) => Record<string, (request: Request, env: unknown) => Promise<Response>>;
+const buildRestRoutes: (deps: RestRouteDeps) => Record<string, RestRoute>;
 ```
 
 ### `combineSinks` (const)

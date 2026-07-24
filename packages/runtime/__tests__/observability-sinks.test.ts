@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LogEvent, LogLevel, MetricEvent, ObservabilityEvent, SpanEvent } from "../src/observability";
 import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks";
 import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, sentrySink, webhookSink } from "../src/observability-sinks";
+import { createResourceAttributeResolver } from "../src/resource-detect";
 
 const okEvent: ObservabilityEvent = { durationMs: 5, functionPath: "messages:list", ok: true, shardKey: "channel-1" };
 
@@ -90,12 +91,39 @@ interface ParsedLogRecord {
     traceId?: string;
 }
 
+/**
+ * Decode a POSTed OTLP body to JSON, transparently gunzipping the compressed
+ * form. `otlpPost` gzips past `OTLP_GZIP_THRESHOLD`, and which side of that line
+ * a body lands on shifts as attributes are added — so every decoder goes through
+ * here rather than assuming a string body.
+ */
+const bodyJson = (init: RequestInit): string =>
+    typeof init.body === "string" ? init.body : gunzipSync(Buffer.from(init.body as ArrayBuffer)).toString("utf8");
+
+/**
+ * Wait until `fetchMock` has seen `count` OTLP posts.
+ *
+ * `otlpPost` sends synchronously below `OTLP_GZIP_THRESHOLD` and asynchronously
+ * (after gzip) above it, and which side a body lands on shifts as attributes are
+ * added — so reading `mock.calls` straight after `sink.onX()` is a latent
+ * flake. Deliberately polls without `expect`, because `vi.waitFor` retries its
+ * callback and any `expect` inside would make the test's assertion count
+ * nondeterministic (which is what forced the weaker `expect.hasAssertions()`).
+ */
+const otlpCalls = async (fetchMock: { mock: { calls: unknown[] } }, count: number): Promise<void> => {
+    await vi.waitFor(() => {
+        if (fetchMock.mock.calls.length < count) {
+            throw new Error(`expected ${String(count)} OTLP post(s), saw ${String(fetchMock.mock.calls.length)}`);
+        }
+    });
+};
+
 /** Look up an attribute's value by key. */
 const attrValue = (attributes: OtlpKeyValue[], key: string): OtlpValue | undefined => attributes.find((entry) => entry.key === key)?.value;
 
 /** Decode a POSTed OTLP trace-export body down to its single span + resource attributes. Handles gzip bodies. */
 const spanFrom = (init: RequestInit): { resourceAttributes: OtlpKeyValue[]; scopeName: string; span: ParsedSpan } => {
-    const json = typeof init.body === "string" ? init.body : gunzipSync(Buffer.from(init.body as ArrayBuffer)).toString("utf8");
+    const json = bodyJson(init);
     const parsed = JSON.parse(json) as {
         resourceSpans: { resource: { attributes: OtlpKeyValue[] }; scopeSpans: { scope: { name: string }; spans: ParsedSpan[] }[] }[];
     };
@@ -116,19 +144,22 @@ interface ParsedMetric {
     sum?: { aggregationTemporality: number; dataPoints: { asDouble: number; attributes: OtlpKeyValue[] }[]; isMonotonic: boolean };
 }
 
-/** Decode a POSTed OTLP metric-export body down to its single metric. */
-const metricFrom = (init: RequestInit): ParsedMetric => {
-    const json = typeof init.body === "string" ? init.body : gunzipSync(Buffer.from(init.body as ArrayBuffer)).toString("utf8");
-    const parsed = JSON.parse(json) as {
-        resourceMetrics: { scopeMetrics: { metrics: ParsedMetric[] }[] }[];
+/** Decode a POSTed OTLP metric-export body down to its metric **and** resource attributes. */
+const metricExportFrom = (init: RequestInit): { metric: ParsedMetric; resourceAttributes: OtlpKeyValue[] } => {
+    const parsed = JSON.parse(bodyJson(init)) as {
+        resourceMetrics: { resource: { attributes: OtlpKeyValue[] }; scopeMetrics: { metrics: ParsedMetric[] }[] }[];
     };
+    const resourceMetric = parsed.resourceMetrics[0]!;
 
-    return parsed.resourceMetrics[0]!.scopeMetrics[0]!.metrics[0]!;
+    return { metric: resourceMetric.scopeMetrics[0]!.metrics[0]!, resourceAttributes: resourceMetric.resource.attributes };
 };
+
+/** Decode a POSTed OTLP metric-export body down to its single metric. */
+const metricFrom = (init: RequestInit): ParsedMetric => metricExportFrom(init).metric;
 
 /** Decode a POSTed OTLP log-export body down to its single log record + resource attributes. */
 const logFrom = (init: RequestInit): { record: ParsedLogRecord; resourceAttributes: OtlpKeyValue[] } => {
-    const json = typeof init.body === "string" ? init.body : gunzipSync(Buffer.from(init.body as ArrayBuffer)).toString("utf8");
+    const json = bodyJson(init);
     const parsed = JSON.parse(json) as {
         resourceLogs: { resource: { attributes: OtlpKeyValue[] }; scopeLogs: { logRecords: ParsedLogRecord[]; scope: { name: string } }[] }[];
     };
@@ -705,7 +736,7 @@ describe("observability-sinks", () => {
             expect(span.spanId).toMatch(SPAN_ID_HEX);
         });
 
-        it("reuses the dispatch's trace/span ids when the event carries them", () => {
+        it("reuses the dispatch's trace/span ids when the event carries them", async () => {
             expect.assertions(2);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -715,6 +746,8 @@ describe("observability-sinks", () => {
 
             sink.onRpc!({ ...okEvent, spanId: "b7ad6b7169203331", traceId: "0af7651916cd43dd8448eb211c80319c" });
 
+            await otlpCalls(fetchMock, 1);
+
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
             // The span rides the ids the runtime propagated as `traceparent`, not fresh ones.
@@ -723,7 +756,7 @@ describe("observability-sinks", () => {
         });
 
         it("encodes error status, error.type, and the status message for a failed event", async () => {
-            expect.hasAssertions();
+            expect.assertions(5);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
@@ -731,9 +764,7 @@ describe("observability-sinks", () => {
             const sink = otlpSink({ endpoint: "https://collector.example" });
 
             sink.onRpc!(errorEvent);
-            await vi.waitFor(() => {
-                expect(fetchMock).toHaveBeenCalledTimes(1);
-            });
+            await otlpCalls(fetchMock, 1);
 
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
@@ -755,7 +786,7 @@ describe("observability-sinks", () => {
             ]);
         });
 
-        it("derives span start and end from durationMs at nanosecond precision", () => {
+        it("derives span start and end from durationMs at nanosecond precision", async () => {
             expect.assertions(3);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -764,6 +795,8 @@ describe("observability-sinks", () => {
             const sink = otlpSink({ endpoint: "https://collector.example" });
 
             sink.onRpc!(okEvent);
+
+            await otlpCalls(fetchMock, 1);
 
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
@@ -774,7 +807,7 @@ describe("observability-sinks", () => {
             expect(BigInt(span.endTimeUnixNano) - BigInt(span.startTimeUnixNano)).toBe(BigInt(5 * 1_000_000));
         });
 
-        it("records fan-out cardinality and the aggregated table as attributes", () => {
+        it("records fan-out cardinality and the aggregated table as attributes", async () => {
             expect.assertions(4);
 
             const fanOutEvent: ObservabilityEvent = {
@@ -789,6 +822,8 @@ describe("observability-sinks", () => {
             const sink = otlpSink({ endpoint: "https://collector.example" });
 
             sink.onRpc!(fanOutEvent);
+
+            await otlpCalls(fetchMock, 1);
 
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
@@ -842,7 +877,7 @@ describe("observability-sinks", () => {
             expect(numbers).toStrictEqual([1, 5, 9, 9, 13, 17, 21]);
         });
 
-        it("maps structured fields onto log-record attributes and correlates the record to its trace", () => {
+        it("maps structured fields onto log-record attributes and correlates the record to its trace", async () => {
             expect.assertions(6);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -861,6 +896,8 @@ describe("observability-sinks", () => {
                 ts: 1,
             });
 
+            await otlpCalls(fetchMock, 1);
+
             const { record } = logFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
             // Primitive fields become typed attributes; a nested value is JSON-encoded.
@@ -873,7 +910,7 @@ describe("observability-sinks", () => {
             expect(record.spanId).toBe("00f067aa0ba902b7");
         });
 
-        it("emits a single attribute when a field reuses a reserved lunora.* key (field wins)", () => {
+        it("emits a single attribute when a field reuses a reserved lunora.* key (field wins)", async () => {
             expect.assertions(2);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -890,6 +927,8 @@ describe("observability-sinks", () => {
                 ts: 1,
                 userId: "real",
             });
+
+            await otlpCalls(fetchMock, 1);
 
             const { record } = logFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
             const collisions = record.attributes.filter((attribute) => attribute.key === "lunora.user_id");
@@ -915,7 +954,7 @@ describe("observability-sinks", () => {
         });
 
         it("skips ok rpc spans when onlyErrors is set but still exports logs", async () => {
-            expect.hasAssertions();
+            expect.assertions(1);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
@@ -927,15 +966,11 @@ describe("observability-sinks", () => {
             expect(fetchMock).not.toHaveBeenCalled();
 
             sink.onRpc!(errorEvent);
-            await vi.waitFor(() => {
-                expect(fetchMock).toHaveBeenCalledTimes(1);
-            });
+            await otlpCalls(fetchMock, 1);
 
             // onlyErrors scopes the RPC span stream, not developer log lines.
             sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "m", ts: 1 });
-            await vi.waitFor(() => {
-                expect(fetchMock).toHaveBeenCalledTimes(2);
-            });
+            await otlpCalls(fetchMock, 2);
         });
 
         it("merges auth and correlation headers onto a default content-type", () => {
@@ -1001,7 +1036,7 @@ describe("observability-sinks", () => {
             expect(Object.keys(sentHeaders).filter((key) => key.toLowerCase() === "content-type")).toHaveLength(1);
         });
 
-        it("sets a custom service.name resource attribute on spans and logs", () => {
+        it("sets a custom service.name resource attribute on spans and logs", async () => {
             expect.assertions(2);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1012,6 +1047,8 @@ describe("observability-sinks", () => {
             sink.onRpc!(okEvent);
             sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "m", ts: 1 });
 
+            await otlpCalls(fetchMock, 2);
+
             const { resourceAttributes: spanResource } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
             const { resourceAttributes: logResource } = logFrom((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1]);
 
@@ -1019,7 +1056,7 @@ describe("observability-sinks", () => {
             expect(attrValue(logResource, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
         });
 
-        it("emits configured OTLP resource attributes on spans, logs, and metrics", () => {
+        it("emits configured OTLP resource attributes on spans, logs, and metrics", async () => {
             expect.assertions(8);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1038,9 +1075,11 @@ describe("observability-sinks", () => {
             sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "m", ts: 1 });
             sink.onMetric!(metricEvent);
 
+            await otlpCalls(fetchMock, 3);
+
             const { resourceAttributes: spanResource } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
             const { resourceAttributes: logResource } = logFrom((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1]);
-            const metric = metricFrom((fetchMock.mock.calls[2] as unknown as [string, RequestInit])[1]);
+            const { metric, resourceAttributes: metricResource } = metricExportFrom((fetchMock.mock.calls[2] as unknown as [string, RequestInit])[1]);
 
             // service.name is always present; convenience fields + custom resourceAttributes are merged.
             expect(attrValue(spanResource, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
@@ -1049,11 +1088,33 @@ describe("observability-sinks", () => {
             expect(attrValue(spanResource, "deployment.environment")).toStrictEqual({ stringValue: "production" });
             expect(attrValue(spanResource, "host.name")).toStrictEqual({ stringValue: "worker-1" });
             expect(attrValue(logResource, "service.instance.id")).toStrictEqual({ stringValue: "i-abc" });
+            // The metric envelope carries the same resource, not just datapoint attributes.
+            expect(attrValue(metricResource, "service.version")).toStrictEqual({ stringValue: "v1.2.3" });
             expect(attrValue(metric.sum!.dataPoints[0]!.attributes, "plan")).toStrictEqual({ stringValue: "pro" });
-            expect(attrValue(spanResource, "host.name")).toStrictEqual({ stringValue: "worker-1" });
         });
 
-        it("lets resourceAttributes override built-in resource attributes", () => {
+        // `otlpMetricBody` wraps the resource at three separate return sites (gauge,
+        // histogram, sum); only the sum branch was covered, so a resource dropped
+        // from either of the others would have shipped silently.
+        it.each(["counter", "gauge", "histogram"] as const)("attaches the resource to a %s metric export", async (kind) => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example", serviceName: "checkout-api", serviceVersion: "v1.2.3" });
+
+            sink.onMetric!({ ...metricEvent, kind });
+
+            await otlpCalls(fetchMock, 1);
+
+            const { resourceAttributes } = metricExportFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
+            expect(attrValue(resourceAttributes, "service.version")).toStrictEqual({ stringValue: "v1.2.3" });
+        });
+
+        it("lets resourceAttributes override built-in resource attributes", async () => {
             expect.assertions(1);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1063,13 +1124,15 @@ describe("observability-sinks", () => {
 
             sink.onRpc!(okEvent);
 
+            await otlpCalls(fetchMock, 1);
+
             const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
             expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "overridden" });
         });
 
         it("emits HTTP semantic-convention attributes on the RPC dispatch span", async () => {
-            expect.hasAssertions();
+            expect.assertions(9);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
@@ -1085,9 +1148,7 @@ describe("observability-sinks", () => {
                 scheme: "https",
                 userAgent: "test-agent/1.0",
             });
-            await vi.waitFor(() => {
-                expect(fetchMock).toHaveBeenCalledTimes(1);
-            });
+            await otlpCalls(fetchMock, 1);
 
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
@@ -1103,7 +1164,7 @@ describe("observability-sinks", () => {
         });
 
         it("emits http.response.status_code on the RPC span for failed events", async () => {
-            expect.hasAssertions();
+            expect.assertions(2);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
@@ -1111,9 +1172,7 @@ describe("observability-sinks", () => {
             const sink = otlpSink({ endpoint: "https://collector.example" });
 
             sink.onRpc!({ ...errorEvent, method: "POST", path: "/_lunora/rpc" });
-            await vi.waitFor(() => {
-                expect(fetchMock).toHaveBeenCalledTimes(1);
-            });
+            await otlpCalls(fetchMock, 1);
 
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
@@ -1121,7 +1180,7 @@ describe("observability-sinks", () => {
             expect(attrValue(span.attributes, "http.request.method")).toStrictEqual({ stringValue: "POST" });
         });
 
-        it("auto-detects Cloudflare Worker resource attributes when detectResources is true", () => {
+        it("auto-detects Cloudflare Worker resource attributes when detectResources is true", async () => {
             expect.assertions(5);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1134,10 +1193,11 @@ describe("observability-sinks", () => {
             const sink = otlpSink({ detectResources: true, endpoint: "https://collector.example", serviceName: "checkout-api" });
 
             sink.onRpc!(okEvent, {
-                env: { CF_ACCOUNT_ID: "abc", ENVIRONMENT: "production", SERVICE_VERSION: "v1.2.3" },
-                request,
+                resourceAttributes: createResourceAttributeResolver({ CF_ACCOUNT_ID: "abc", ENVIRONMENT: "production", SERVICE_VERSION: "v1.2.3" }, request),
                 waitUntil: vi.fn<(promise: Promise<unknown>) => void>(),
             });
+
+            await otlpCalls(fetchMock, 1);
 
             const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
@@ -1148,7 +1208,7 @@ describe("observability-sinks", () => {
             expect(attrValue(resourceAttributes, "cloud.region")).toStrictEqual({ stringValue: "SFO" });
         });
 
-        it("lets explicit resource attributes override detected ones", () => {
+        it("lets explicit resource attributes override detected ones", async () => {
             expect.assertions(1);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1162,10 +1222,14 @@ describe("observability-sinks", () => {
             });
 
             sink.onRpc!(okEvent, {
-                env: { CF_ACCOUNT_ID: "abc", CF_COLO: "SFO", ENVIRONMENT: "production" },
-                request: new Request("https://api.example.com/_lunora/rpc"),
+                resourceAttributes: createResourceAttributeResolver(
+                    { CF_ACCOUNT_ID: "abc", CF_COLO: "SFO", ENVIRONMENT: "production" },
+                    new Request("https://api.example.com/_lunora/rpc"),
+                ),
                 waitUntil: vi.fn<(promise: Promise<unknown>) => void>(),
             });
+
+            await otlpCalls(fetchMock, 1);
 
             const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
@@ -1217,7 +1281,7 @@ describe("observability-sinks", () => {
             expect(BigInt(span.endTimeUnixNano) - BigInt(span.startTimeUnixNano)).toBe(25_000_000n);
         });
 
-        it("carries a ctx.trace span's attributes, letting a caller key override a reserved one", () => {
+        it("carries a ctx.trace span's attributes, letting a caller key override a reserved one", async () => {
             expect.assertions(3);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1227,6 +1291,8 @@ describe("observability-sinks", () => {
 
             sink.onSpan!({ ...spanEvent, attributes: { "lunora.shard_key": "override", orderId: "o-1" } });
 
+            await otlpCalls(fetchMock, 1);
+
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
             expect(attrValue(span.attributes, "orderId")).toStrictEqual({ stringValue: "o-1" });
@@ -1235,7 +1301,7 @@ describe("observability-sinks", () => {
             expect(span.attributes.filter((entry) => entry.key === "lunora.shard_key")).toHaveLength(1);
         });
 
-        it("encodes a failed ctx.trace span with its error type and status message", () => {
+        it("encodes a failed ctx.trace span with its error type and status message", async () => {
             expect.assertions(3);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1244,6 +1310,8 @@ describe("observability-sinks", () => {
             const sink = otlpSink({ endpoint: "https://collector.example" });
 
             sink.onSpan!({ ...spanEvent, error: { message: "card declined", type: "PAYMENT_FAILED" }, ok: false });
+
+            await otlpCalls(fetchMock, 1);
 
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
@@ -1276,7 +1344,7 @@ describe("observability-sinks", () => {
             expect(attrValue(metric.sum!.dataPoints[0]!.attributes, "plan")).toStrictEqual({ stringValue: "pro" });
         });
 
-        it("exports a gauge as a Gauge with no temporality", () => {
+        it("exports a gauge as a Gauge with no temporality", async () => {
             expect.assertions(3);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1286,6 +1354,8 @@ describe("observability-sinks", () => {
 
             sink.onMetric!({ ...metricEvent, kind: "gauge", name: "cart.items", value: 7 });
 
+            await otlpCalls(fetchMock, 1);
+
             const metric = metricFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
             expect(metric.name).toBe("cart.items");
@@ -1294,7 +1364,7 @@ describe("observability-sinks", () => {
             expect(metric.sum).toBeUndefined();
         });
 
-        it("exports a histogram sample as a single-observation delta data point", () => {
+        it("exports a histogram sample as a single-observation delta data point", async () => {
             expect.assertions(5);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1303,6 +1373,8 @@ describe("observability-sinks", () => {
             const sink = otlpSink({ endpoint: "https://collector.example" });
 
             sink.onMetric!({ ...metricEvent, kind: "histogram", name: "checkout.latency_ms", value: 128 });
+
+            await otlpCalls(fetchMock, 1);
 
             const metric = metricFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
             const point = metric.histogram?.dataPoints[0];

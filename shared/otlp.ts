@@ -51,6 +51,14 @@ interface OtlpAttribute {
 type OtlpAttributeValue = boolean | number | string;
 
 /**
+ * A `Resource.attributes` bag — the process-level identity (`service.name`,
+ * `service.version`, `cloud.region`, …) attached to every exported signal.
+ * Lives here rather than in either exporter because both packages build one and
+ * `wrapResource*` consumes it.
+ */
+type OtlpResourceAttributes = Record<string, OtlpAttributeValue>;
+
+/**
  * Encode wall-clock milliseconds as an OTLP `*UnixNano` string. proto3 JSON
  * represents uint64 as a decimal string, and ms→ns is ×10^6, so the six trailing
  * zeros are exact — no `BigInt`, no float rounding.
@@ -270,7 +278,7 @@ const wrapResourceMetrics = (metric: unknown, scopeName: string, serviceName: st
     };
 };
 
-export type { OtlpAnyValue, OtlpAttribute, OtlpAttributeValue, OtlpLevel };
+export type { OtlpAnyValue, OtlpAttribute, OtlpAttributeValue, OtlpLevel, OtlpResourceAttributes };
 export {
     buildTraceparent,
     encodeAttribute,

@@ -111,30 +111,50 @@ describe("createWorker", () => {
         expect(body).toEqual({ args: { limit: 5 }, functionPath: "messages:list" });
     });
 
-    it("propagates a W3C traceparent from the inbound request to the shard", async () => {
-        expect.hasAssertions();
+    const UPSTREAM_TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 
-        const worker = createWorker({ shardDO: shard.namespace });
-        const upstreamTraceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    /** Dispatch one RPC carrying an upstream trace context, and return what reached the shard. */
+    const forwardWithUpstreamTrace = async (workerOptions: Parameters<typeof createWorker>[0]): Promise<Headers> => {
+        const worker = createWorker(workerOptions);
 
         await worker.fetch(
             new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
-                headers: { traceparent: upstreamTraceparent },
+                headers: { traceparent: UPSTREAM_TRACEPARENT, tracestate: "congo=t61rcWkgMzE" },
                 method: "POST",
             }),
             {},
             fakeContext,
         );
 
-        const forwarded = shard.calls[0]!.request;
-        const forwardedTraceparent = forwarded.headers.get("traceparent");
+        return shard.calls[0]!.request.headers;
+    };
 
-        expect(forwardedTraceparent).toBeDefined();
-        expect(forwardedTraceparent).not.toBe(upstreamTraceparent);
-        // The trace id is inherited from the upstream trace; the span id is a
-        // freshly-minted child span. The sampled flag is preserved (1).
-        expect(forwardedTraceparent).toMatch(/^00-0af7651916cd43dd8448eb211c80319c-[0-9a-f]{16}-01$/);
+    // The inbound header is caller-controlled, and its trace id decides which
+    // trace this request's spans and logs land in — so by default we mint our own
+    // rather than let a client file entries into someone else's waterfall.
+    it("does not adopt an untrusted inbound traceparent", async () => {
+        expect.assertions(3);
+
+        const headers = await forwardWithUpstreamTrace({ shardDO: shard.namespace });
+        const forwarded = headers.get("traceparent");
+
+        expect(forwarded).toMatch(/^00-[\da-f]{32}-[\da-f]{16}-01$/);
+        expect(forwarded).not.toContain("0af7651916cd43dd8448eb211c80319c");
+        // An untrusted `tracestate` is not echoed onward either.
+        expect(headers.get("tracestate")).toBeNull();
+    });
+
+    it("continues the inbound trace when trustInboundTraceContext is set", async () => {
+        expect.assertions(3);
+
+        const headers = await forwardWithUpstreamTrace({ shardDO: shard.namespace, trustInboundTraceContext: true });
+        const forwarded = headers.get("traceparent");
+
+        expect(forwarded).not.toBe(UPSTREAM_TRACEPARENT);
+        // Trace id inherited; span id freshly minted; sampled flag preserved.
+        expect(forwarded).toMatch(/^00-0af7651916cd43dd8448eb211c80319c-[\da-f]{16}-01$/);
+        expect(headers.get("tracestate")).toBe("congo=t61rcWkgMzE");
     });
 
     it("uses the envelope shardKey when provided", async () => {

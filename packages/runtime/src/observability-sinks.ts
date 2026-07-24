@@ -1,5 +1,3 @@
-/* eslint-disable import/exports-last -- this module documents each sink with its interface immediately above the implementation; moving every export to the end would hurt readability and is not worth the refactor */
-
 /**
  * Built-in {@link ObservabilitySink} adapters.
  *
@@ -7,6 +5,11 @@
  * destinations without forcing users to write their own adapter. Every sink
  * here is workerd-compatible: they use only the global Fetch API and `console`
  * — no bundled SDKs, no Node built-ins.
+ *
+ * This module is the sink *registry*: which destinations exist and how each maps
+ * a Lunora event onto its wire format. The OTLP wire format itself — encoders and
+ * the gzip/POST transport — lives in `./otlp-export`, and OTLP resource detection
+ * in `./resource-detect`, so growing one never crowds the others.
  *
  * All sinks are defensive: a failing destination (network error, throwing
  * callback) is caught and swallowed so it can never break user-facing RPC
@@ -20,30 +23,11 @@
  * third party. Scrub or redact before enabling it against an external service
  * if that is a concern.
  */
-import type { Resource } from "@opentelemetry/resources";
-import { emptyResource, resourceFromAttributes } from "@opentelemetry/resources";
-
-import { coerceFieldValue } from "../../../shared/log-fields";
-import type { OtlpAttribute } from "../../../shared/otlp";
-import {
-    encodeAttribute,
-    mergeHeaders,
-    OTLP_SEVERITY,
-    otlpRandomHex,
-    otlpUnixNano,
-    wrapResourceLogs,
-    wrapResourceMetrics,
-    wrapResourceSpans,
-} from "../../../shared/otlp";
+import type { OtlpResourceAttributes } from "../../../shared/otlp";
+import { mergeHeaders } from "../../../shared/otlp";
+import { mergeResourceAttributes } from "../../../shared/otlp-resource";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
-
-/**
- * Resource attribute bag used by OTLP exporters. Exported because
- * {@link OtlpSinkOptions.resourceAttributes} is part of the public surface —
- * without a name for it, a caller cannot hoist a shared attribute bag into a
- * typed constant.
- */
-export type OtlpResourceAttributes = Record<string, string | boolean | number>;
+import { otlpLogBody, otlpMetricBody, otlpPost, otlpSpanBody, otlpTraceBody } from "./otlp-export";
 
 /** Shared shape for sinks that can be limited to error events only. */
 interface OnlyErrorsOption {
@@ -53,302 +37,6 @@ interface OnlyErrorsOption {
 
 /** Returns true when the event should be skipped under an `onlyErrors` filter. */
 const shouldSkip = (event: ObservabilityEvent, onlyErrors: boolean | undefined): boolean => onlyErrors === true && event.ok;
-
-/** Build the OTLP trace-export body for one RPC dispatch event. */
-const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: number, resourceAttributes?: OtlpResourceAttributes): unknown => {
-    const attributes = [encodeAttribute("lunora.function_path", event.functionPath), encodeAttribute("lunora.ok", event.ok)];
-
-    // HTTP server semantic conventions: the RPC endpoint is an HTTP handler from
-    // the collector's point of view, so expose method/route/status even though
-    // the transport path is fixed. `http.route` uses the Lunora function path
-    // because that is the logical route being invoked.
-    if (event.method !== undefined) {
-        attributes.push(encodeAttribute("http.request.method", event.method));
-    }
-
-    if (event.path !== undefined) {
-        attributes.push(encodeAttribute("url.path", event.path));
-    }
-
-    attributes.push(encodeAttribute("http.route", event.functionPath));
-
-    if (event.scheme !== undefined) {
-        attributes.push(encodeAttribute("url.scheme", event.scheme));
-    }
-
-    if (event.host !== undefined) {
-        attributes.push(encodeAttribute("server.address", event.host));
-    }
-
-    if (event.port !== undefined) {
-        attributes.push(encodeAttribute("server.port", event.port));
-    }
-
-    if (event.userAgent !== undefined) {
-        attributes.push(encodeAttribute("user_agent.original", event.userAgent));
-    }
-
-    if (event.shardKey !== undefined) {
-        attributes.push(encodeAttribute("lunora.shard_key", event.shardKey));
-    }
-
-    // HTTP response status code is present on every RPC span. Successful
-    // dispatches carry no explicit status in the event, so we default to 200;
-    // error events use the error's HTTP-ish status.
-    attributes.push(encodeAttribute("http.response.status_code", event.error?.status ?? 200));
-
-    if (event.error) {
-        // `error.type` is the OTel semantic-convention key; keep the numeric
-        // HTTP-ish status under the lunora namespace.
-        attributes.push(encodeAttribute("error.type", event.error.code), encodeAttribute("lunora.error_status", event.error.status));
-    }
-
-    if (event.fanOut) {
-        attributes.push(
-            encodeAttribute("lunora.fanout.table", event.fanOut.table),
-            encodeAttribute("lunora.fanout.shards", event.fanOut.shards),
-            encodeAttribute("lunora.fanout.failed", event.fanOut.failed),
-        );
-    }
-
-    const span: Record<string, unknown> = {
-        attributes,
-        endTimeUnixNano: otlpUnixNano(endMs),
-        // SPAN_KIND_SERVER — a dispatched RPC is server-side request handling.
-        kind: 2,
-        name: event.functionPath,
-        // Reuse the dispatch's trace context when the runtime set it (so this span
-        // shares the id it propagated as `traceparent`); else mint fresh ids.
-        spanId: event.spanId ?? otlpRandomHex(8),
-        startTimeUnixNano: otlpUnixNano(endMs - event.durationMs),
-        // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
-        status: event.ok ? { code: 1 } : { code: 2, message: event.error?.message ?? "" },
-        traceId: event.traceId ?? otlpRandomHex(16),
-    };
-
-    if (event.parentSpanId !== undefined) {
-        span.parentSpanId = event.parentSpanId;
-    }
-
-    if (event.traceFlags !== undefined) {
-        span.flags = event.traceFlags;
-    }
-
-    // On error, record an OTel exception event with the standard `exception.*`
-    // attributes. This gives collectors the canonical error representation.
-    if (event.error) {
-        span.events = [
-            {
-                attributes: [encodeAttribute("exception.type", event.error.code), encodeAttribute("exception.message", event.error.message)],
-                name: "exception",
-                timeUnixNano: otlpUnixNano(endMs),
-            },
-        ];
-    }
-
-    return wrapResourceSpans(span, "@lunora/runtime", serviceName, resourceAttributes);
-};
-
-/**
- * Build the OTLP attribute list shared by every signal: the reserved `lunora.*`
- * keys, then the caller's own attributes.
- *
- * Keyed by name so a caller key that collides with a reserved one **overrides**
- * it rather than emitting a duplicate `KeyValue` (which a collector resolves
- * ambiguously). That precedence is a wire contract, and it was previously
- * re-implemented in the span, log, and metric encoders — three copies of one
- * rule, free to drift apart. One implementation, asserted once.
- */
-const encodeSignalAttributes = (
-    reserved: { errorType?: string; functionPath: string; shardKey?: string; userId?: string },
-    caller: Record<string, unknown> | undefined,
-): OtlpAttribute[] => {
-    const byKey = new Map<string, OtlpAttribute>([["lunora.function_path", encodeAttribute("lunora.function_path", reserved.functionPath)]]);
-
-    if (reserved.shardKey !== undefined) {
-        byKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", reserved.shardKey));
-    }
-
-    if (reserved.userId !== undefined) {
-        byKey.set("lunora.user_id", encodeAttribute("lunora.user_id", reserved.userId));
-    }
-
-    if (reserved.errorType !== undefined) {
-        // `error.type` is the OTel semantic-convention key.
-        byKey.set("error.type", encodeAttribute("error.type", reserved.errorType));
-    }
-
-    // Caller values arrive pre-normalized to JSON-safe primitives;
-    // `coerceFieldValue` re-applies for a sink fed a raw event.
-    for (const [key, value] of Object.entries(caller ?? {})) {
-        byKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
-    }
-
-    return [...byKey.values()];
-};
-
-/**
- * Build the OTLP trace-export body for one user-created `ctx.trace` span.
- *
- * The counterpart to {@link otlpTraceBody}: that encodes the one SERVER span per
- * dispatch, this encodes the INTERNAL spans a handler creates beneath it. The
- * span carries a real `parentSpanId`, so a collector nests it under its parent
- * (another `ctx.trace`, or the dispatch's own RPC span) rather than showing a
- * flat list of orphans.
- *
- * Attribute precedence follows {@link encodeSignalAttributes}.
- */
-const otlpSpanBody = (event: SpanEvent, serviceName: string, resourceAttributes?: OtlpResourceAttributes): unknown => {
-    const span = {
-        attributes: encodeSignalAttributes(
-            { errorType: event.error?.type, functionPath: event.functionPath, shardKey: event.shardKey, userId: event.userId },
-            event.attributes,
-        ),
-        endTimeUnixNano: otlpUnixNano(event.startTs + event.durationMs),
-        // Always SPAN_KIND_INTERNAL: only `ctx.trace` spans reach a sink. The
-        // synthetic dispatch span is buffered for the Studio waterfall and never
-        // exported, because the runtime already emits that dispatch to `onRpc` as
-        // a SERVER span — encoding it here too would duplicate it in every trace.
-        kind: 1,
-        name: event.name,
-        parentSpanId: event.parentSpanId,
-        spanId: event.spanId,
-        startTimeUnixNano: otlpUnixNano(event.startTs),
-        // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
-        status: event.ok ? { code: 1 } : { code: 2, message: event.error?.message ?? "" },
-        traceId: event.traceId,
-    };
-
-    return wrapResourceSpans(span, "@lunora/runtime", serviceName, resourceAttributes);
-};
-
-/**
- * Build the OTLP metric-export body for one `ctx.metrics.*` measurement.
- *
- * One data point per call — the runtime does no pre-aggregation — so counters
- * and histograms are exported with **DELTA** temporality (`aggregationTemporality: 1`),
- * which tells the collector to sum successive exports rather than treat each as
- * a running total. A gauge has no temporality: it is a reading that replaces the
- * previous one.
- *
- * The histogram carries a single observation in one implicit bucket
- * (`explicitBounds: []`, `bucketCounts: ["1"]`) — a valid OTLP encoding that lets
- * the collector build the distribution from the stream of counts/sums, without
- * the runtime having to pick bucket boundaries for the user.
- */
-const otlpMetricBody = (event: MetricEvent, serviceName: string, resourceAttributes?: OtlpResourceAttributes): unknown => {
-    const timeUnixNano = otlpUnixNano(event.ts);
-    const attributes = encodeSignalAttributes({ functionPath: event.functionPath, shardKey: event.shardKey }, event.attributes);
-    // `startTimeUnixNano` is deliberately omitted (it is optional). A delta point
-    // covers `(startTimeUnixNano, timeUnixNano]`, so setting both to the same
-    // instant would declare a zero-width aggregation window — which the
-    // `deltatocumulative` processor and Prometheus remote-write paths treat as
-    // invalid and may drop. Omitting it lets the collector infer the interval
-    // from the previous export, which is what it does for a stream of deltas.
-    const dataPoint = { asDouble: event.value, attributes, timeUnixNano };
-
-    if (event.kind === "gauge") {
-        return wrapResourceMetrics({ gauge: { dataPoints: [dataPoint] }, name: event.name }, "@lunora/runtime", serviceName, resourceAttributes);
-    }
-
-    if (event.kind === "histogram") {
-        return wrapResourceMetrics(
-            {
-                histogram: {
-                    aggregationTemporality: 1,
-                    dataPoints: [
-                        {
-                            attributes,
-                            bucketCounts: ["1"],
-                            count: "1",
-                            explicitBounds: [],
-                            max: event.value,
-                            min: event.value,
-                            // `startTimeUnixNano` omitted for the same reason as
-                            // the Sum data point above — see the comment there.
-                            sum: event.value,
-                            timeUnixNano,
-                        },
-                    ],
-                },
-                name: event.name,
-            },
-            "@lunora/runtime",
-            serviceName,
-            resourceAttributes,
-        );
-    }
-
-    return wrapResourceMetrics(
-        { name: event.name, sum: { aggregationTemporality: 1, dataPoints: [dataPoint], isMonotonic: true } },
-        "@lunora/runtime",
-        serviceName,
-        resourceAttributes,
-    );
-};
-
-/** Build the OTLP log-export body for one application log line. */
-const otlpLogBody = (event: LogEvent, serviceName: string, resourceAttributes?: OtlpResourceAttributes): unknown => {
-    const logRecord: Record<string, unknown> = {
-        // Caller-supplied structured fields become log-record attributes so a
-        // pipeline can filter/index on them; precedence per `encodeSignalAttributes`.
-        attributes: encodeSignalAttributes({ functionPath: event.functionPath, shardKey: event.shardKey, userId: event.userId }, event.fields),
-        body: { stringValue: event.message },
-        severityNumber: OTLP_SEVERITY[event.level],
-        severityText: event.level.toUpperCase(),
-        timeUnixNano: otlpUnixNano(event.ts),
-    };
-
-    // Correlate the log record to its dispatch span (OTLP `LogRecord.trace_id` /
-    // `span_id`) when the runtime threaded the inbound trace context, so the
-    // Cloud/collector links the line to its trace.
-    if (event.traceId !== undefined) {
-        logRecord.traceId = event.traceId;
-    }
-
-    if (event.spanId !== undefined) {
-        logRecord.spanId = event.spanId;
-    }
-
-    return wrapResourceLogs(logRecord, "@lunora/runtime", serviceName, resourceAttributes);
-};
-
-/** Above this serialized size, an OTLP body is gzipped; tiny single-span posts skip it (the CPU isn't worth the few saved bytes). */
-const OTLP_GZIP_THRESHOLD = 1024;
-
-/** Gzip a UTF-8 string to an `ArrayBuffer` (a `BodyInit`) via the platform `CompressionStream` (no dependency). */
-const gzipEncode = async (text: string): Promise<ArrayBuffer> => {
-    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
-
-    return new Response(stream).arrayBuffer();
-};
-
-/**
- * POST an OTLP payload fire-and-forget, keeping it alive past the response when a
- * request context is present. Bodies past {@link OTLP_GZIP_THRESHOLD} are gzipped
- * (`Content-Encoding: gzip`) — standard OTLP/HTTP, which every collector (and the
- * Lunora cloud ingest) decodes.
- */
-const otlpPost = (url: string, body: unknown, headers: Record<string, string>, context?: ObservabilitySinkContext): void => {
-    try {
-        const json = JSON.stringify(body);
-        // `.catch` swallows any rejection so a failed export can never reject
-        // into the dispatch path.
-        const sent = (
-            json.length < OTLP_GZIP_THRESHOLD
-                ? fetch(url, { body: json, headers, method: "POST" })
-                : gzipEncode(json).then((gz) => fetch(url, { body: gz, headers: { ...headers, "content-encoding": "gzip" }, method: "POST" }))
-        ).catch(() => {
-            // Network error / non-OK response / gzip failure — intentionally ignored.
-        });
-
-        if (context?.waitUntil) {
-            context.waitUntil(sent);
-        }
-    } catch {
-        // `fetch` throwing synchronously (e.g. an invalid URL) must not break dispatch.
-    }
-};
 
 /**
  * A sink that logs each event via `console`.
@@ -767,82 +455,6 @@ export const pipelineLogSink = (options: PipelineLogSinkOptions): ObservabilityS
     };
 };
 
-/** Read a string env value, or `undefined` when missing / not a string. */
-const stringEnv = (env: Record<string, unknown> | undefined, key: string): string | undefined => {
-    const value = env?.[key];
-
-    return typeof value === "string" && value.length > 0 ? value : undefined;
-};
-
-/** Read a string property from an object, or `undefined` when missing / not a string. */
-const stringFrom = (object: Record<string, unknown> | undefined, key: string): string | undefined => {
-    const value = object?.[key];
-
-    return typeof value === "string" && value.length > 0 ? value : undefined;
-};
-
-/**
- * Auto-detect OTLP resource attributes from the runtime environment. This is a
- * best-effort detector that recognizes Cloudflare Workers, generic containers,
- * Kubernetes, and common CI/deployment env vars, and returns them as an OTel
- * `Resource`. Absent a value, the attribute is simply omitted rather than
- * guessed.
- */
-const detectResource = (env?: Record<string, unknown>, request?: Request): Resource => {
-    const detected: OtlpResourceAttributes = {};
-
-    // Service / deployment metadata from common env vars.
-    const serviceVersion =
-        stringEnv(env, "SERVICE_VERSION") ??
-        stringEnv(env, "CF_VERSION_METADATA") ??
-        stringEnv(env, "VERCEL_GIT_COMMIT_SHA") ??
-        stringEnv(env, "GITHUB_SHA") ??
-        stringEnv(env, "COMMIT_SHA");
-
-    if (serviceVersion !== undefined) {
-        detected["service.version"] = serviceVersion;
-    }
-
-    const deploymentEnvironment = stringEnv(env, "DEPLOYMENT_ENVIRONMENT") ?? stringEnv(env, "ENVIRONMENT") ?? stringEnv(env, "NODE_ENV");
-
-    if (deploymentEnvironment !== undefined) {
-        detected["deployment.environment"] = deploymentEnvironment;
-    }
-
-    // Cloudflare Workers: `request.cf` carries colo/region; version metadata and
-    // script name are typically injected as env vars by the platform.
-    const cf = request && "cf" in request ? request.cf : undefined;
-
-    if (cf !== undefined || stringEnv(env, "CLOUDFLARE") !== undefined || stringEnv(env, "CF_ACCOUNT_ID") !== undefined) {
-        detected["cloud.provider"] = "cloudflare";
-
-        const colo = stringFrom(cf, "colo") ?? stringEnv(env, "CF_COLO") ?? stringEnv(env, "CLOUDFLARE_COLO");
-
-        if (colo !== undefined) {
-            detected["cloud.region"] = colo;
-        }
-    }
-
-    // Container / host / process metadata.
-    const hostName = stringEnv(env, "HOSTNAME") ?? stringEnv(env, "COMPUTERNAME");
-
-    if (hostName !== undefined) {
-        detected["host.name"] = hostName;
-    }
-
-    const podName = stringEnv(env, "KUBERNETES_POD_NAME") ?? stringEnv(env, "HOSTNAME");
-
-    if (podName !== undefined && stringEnv(env, "KUBERNETES_SERVICE_HOST") !== undefined) {
-        detected["k8s.pod.name"] = podName;
-    }
-
-    if (typeof process !== "undefined" && typeof process.pid === "number") {
-        detected["process.pid"] = process.pid;
-    }
-
-    return resourceFromAttributes(detected);
-};
-
 /** Options for {@link otlpSink}. */
 export interface OtlpSinkOptions extends OnlyErrorsOption {
     /**
@@ -852,13 +464,20 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
     deploymentEnvironment?: string;
 
     /**
-     * When `true`, the sink auto-detects OTLP resource attributes from the
-     * runtime environment (`env` / `request` supplied in the sink context) and
-     * merges them under any explicit resource attributes. Detected attributes
-     * include `service.version`, `deployment.environment`, `cloud.provider`,
-     * `cloud.region` (Cloudflare colo), `host.name`, `k8s.pod.name`, and
-     * `process.pid`. Explicit options and `resourceAttributes` always win on
-     * collision.
+     * When `true`, the sink attaches the resource attributes the **host** detected
+     * for the current request, merged *under* any explicit option so those always
+     * win on collision. In a Worker that is `service.version`,
+     * `deployment.environment`, `cloud.provider`, and `cloud.region` (the colo).
+     *
+     * The sink never inspects `env` or the request itself — detection happens once
+     * per request in the runtime and arrives pre-resolved on the sink context (see
+     * `LogSinkContext.resourceAttributes`), so no sink is ever handed raw bindings.
+     *
+     * Events that originate inside a shard (`ctx.log`, `ctx.trace`, `ctx.metrics`)
+     * carry no host-detected attributes today — the shard has no `env` of its own —
+     * so they export with the explicit options only. Set the values you need
+     * explicitly if you require them to match across worker and shard spans of the
+     * same trace.
      */
     detectResources?: boolean;
 
@@ -944,24 +563,44 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
     const { deploymentEnvironment, detectResources, endpoint, headers, onlyErrors, resourceAttributes, serviceNamespace, serviceVersion, token } = options;
     const serviceName = options.serviceName ?? "lunora";
 
-    // Build the static OTel Resource once per sink. Convenience fields are
-    // merged first; `resourceAttributes` wins on collision so callers can
-    // override anything. Detected resources (from env/request) are merged at
-    // event time and fall below explicit options.
-    const staticResource: Resource = resourceFromAttributes({
+    // The explicit half of the resource, built once per sink. Convenience fields
+    // first, then `resourceAttributes`, so a caller can override anything.
+    const staticAttributes: OtlpResourceAttributes = {
         ...(serviceVersion === undefined ? {} : { "service.version": serviceVersion }),
         ...(serviceNamespace === undefined ? {} : { "service.namespace": serviceNamespace }),
         ...(deploymentEnvironment === undefined ? {} : { "deployment.environment": deploymentEnvironment }),
         ...resourceAttributes,
-    });
+    };
 
-    // Final resource attribute bag for one event: detected resources merged
-    // under static options so explicit options and `resourceAttributes` always
-    // win on collision.
+    // Per-request memo of the merged bag. Every log line, metric, and span of one
+    // request shares a sink context, and both halves of the merge are fixed for
+    // that request — so this runs at most once per request instead of once per
+    // event on the hot dispatch path.
+    const mergedByContext = new WeakMap<ObservabilitySinkContext, OtlpResourceAttributes>();
+
+    /**
+     * The resource bag for one event: host-detected attributes merged *under* the
+     * static options, so explicit configuration always wins on collision.
+     *
+     * With `detectResources` off — the default — this is the static bag by
+     * reference, so the common case allocates nothing at all.
+     */
     const resourceAttributesFor = (context?: ObservabilitySinkContext): OtlpResourceAttributes => {
-        const detected = detectResources === true ? detectResource(context?.env, context?.request) : emptyResource();
+        if (detectResources !== true || context?.resourceAttributes === undefined) {
+            return staticAttributes;
+        }
 
-        return detected.merge(staticResource).attributes as OtlpResourceAttributes;
+        const memoized = mergedByContext.get(context);
+
+        if (memoized !== undefined) {
+            return memoized;
+        }
+
+        const merged = mergeResourceAttributes(context.resourceAttributes(), staticAttributes);
+
+        mergedByContext.set(context, merged);
+
+        return merged;
     };
 
     // Strip trailing slashes without a regex — a `/\/+$/`-style pattern trips
@@ -1054,3 +693,11 @@ export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink =
         },
     };
 };
+
+/**
+ * Resource attribute bag used by OTLP exporters. Re-exported from `shared/otlp`
+ * because {@link OtlpSinkOptions.resourceAttributes} is part of the public
+ * surface — without a name for it, a caller cannot hoist a shared attribute bag
+ * into a typed constant.
+ */
+export type { OtlpResourceAttributes } from "../../../shared/otlp";

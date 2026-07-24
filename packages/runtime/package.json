@@ -62,10 +62,7 @@
     },
     "dependencies": {
         "@lunora/bindings": "1.0.0-alpha.10",
-        "@lunora/errors": "1.0.0-alpha.7",
-        "@opentelemetry/api": "catalog:otel",
-        "@opentelemetry/core": "catalog:otel",
-        "@opentelemetry/resources": "catalog:otel"
+        "@lunora/errors": "1.0.0-alpha.7"
     },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",

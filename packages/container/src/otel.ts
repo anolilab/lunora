@@ -20,9 +20,7 @@
  * The OTLP/JSON wire encoding is shared with the worker `otlpSink` via
  * `shared/otlp.ts` — one contract, bundler-inlined into both packages.
  */
-import type { Resource } from "@opentelemetry/resources";
-import { emptyResource, resourceFromAttributes } from "@opentelemetry/resources";
-
+import type { OtlpResourceAttributes } from "../../../shared/otlp";
 import {
     encodeAttribute,
     encodeAttributes,
@@ -34,6 +32,7 @@ import {
     wrapResourceLogs,
     wrapResourceSpans,
 } from "../../../shared/otlp";
+import { detectHostResource, detectServiceResource, mergeResourceAttributes } from "../../../shared/otlp-resource";
 
 /**
  * An attribute value carried on a span or log.
@@ -189,40 +188,19 @@ const readEnv = (name: string): string | undefined => {
     return process.env[name];
 };
 
-/** Auto-detect OTLP resource attributes from the container environment as an OTel Resource. */
-const detectContainerResource = (): Resource => {
-    const detected: Record<string, ContainerAttributeValue> = {};
+/**
+ * Auto-detect OTLP resource attributes from the container environment.
+ *
+ * Composes the shared detectors this host can actually satisfy: service identity
+ * (from CI/deploy env vars) and host/process identity (`HOSTNAME`,
+ * `KUBERNETES_*`, pid). The Cloudflare placement detector is deliberately absent —
+ * a container has no `request.cf`. The worker sink composes the complementary
+ * pair from the same module, so both sides share one policy.
+ */
+const detectContainerResource = (): OtlpResourceAttributes => {
+    const pid = typeof process === "undefined" || typeof process.pid !== "number" ? undefined : process.pid;
 
-    const serviceVersion =
-        readEnv("SERVICE_VERSION") ?? readEnv("CF_VERSION_METADATA") ?? readEnv("VERCEL_GIT_COMMIT_SHA") ?? readEnv("GITHUB_SHA") ?? readEnv("COMMIT_SHA");
-
-    if (serviceVersion !== undefined) {
-        detected["service.version"] = serviceVersion;
-    }
-
-    const deploymentEnvironment = readEnv("DEPLOYMENT_ENVIRONMENT") ?? readEnv("ENVIRONMENT") ?? readEnv("NODE_ENV");
-
-    if (deploymentEnvironment !== undefined) {
-        detected["deployment.environment"] = deploymentEnvironment;
-    }
-
-    const hostName = readEnv("HOSTNAME") ?? readEnv("COMPUTERNAME");
-
-    if (hostName !== undefined) {
-        detected["host.name"] = hostName;
-    }
-
-    const podName = readEnv("KUBERNETES_POD_NAME") ?? readEnv("HOSTNAME");
-
-    if (podName !== undefined && readEnv("KUBERNETES_SERVICE_HOST") !== undefined) {
-        detected["k8s.pod.name"] = podName;
-    }
-
-    if (typeof process !== "undefined" && typeof process.pid === "number") {
-        detected["process.pid"] = process.pid;
-    }
-
-    return resourceFromAttributes(detected);
+    return mergeResourceAttributes(detectServiceResource(readEnv), detectHostResource(readEnv, pid));
 };
 
 /** Resolve the `fetch` to use: the injected one, else the runtime global, else undefined. */
@@ -243,7 +221,7 @@ const traceBody = (
     span: ContainerSpanInput,
     serviceName: string,
     parent: { parentSpanId: string; traceId: string } | undefined,
-    resource?: Resource,
+    resource?: OtlpResourceAttributes,
 ): unknown => {
     const attributes = encodeAttributes(span.attributes);
 
@@ -279,11 +257,11 @@ const traceBody = (
         ];
     }
 
-    return wrapResourceSpans(otlpSpan, "@lunora/container", serviceName, resource?.attributes as Record<string, ContainerAttributeValue> | undefined);
+    return wrapResourceSpans(otlpSpan, "@lunora/container", serviceName, resource);
 };
 
 /** Build the OTLP log-export body for one container log line. */
-const logBody = (log: ContainerLogInput, serviceName: string, nowMs: number, resource?: Resource): unknown => {
+const logBody = (log: ContainerLogInput, serviceName: string, nowMs: number, resource?: OtlpResourceAttributes): unknown => {
     const level = log.level ?? "info";
 
     const record = {
@@ -294,7 +272,7 @@ const logBody = (log: ContainerLogInput, serviceName: string, nowMs: number, res
         timeUnixNano: otlpUnixNano(log.ts ?? nowMs),
     };
 
-    return wrapResourceLogs(record, "@lunora/container", serviceName, resource?.attributes as Record<string, ContainerAttributeValue> | undefined);
+    return wrapResourceLogs(record, "@lunora/container", serviceName, resource);
 };
 
 /**
@@ -326,10 +304,11 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     const fetchImpl = resolveFetch(options.fetch);
     const headers = mergeHeaders({ "content-type": "application/json" }, options.headers, token);
 
-    // Build the OTLP Resource: detected first, then explicit convenience
-    // fields, then `resourceAttributes` (highest precedence).
-    const detectedResource = options.detectResources === true ? detectContainerResource() : emptyResource();
-    const staticAttributes: Record<string, ContainerAttributeValue> = {};
+    // Build the OTLP resource bag: detected first, then explicit convenience
+    // fields, then `resourceAttributes` (highest precedence). Resolved once here
+    // — nothing it reads changes over the process lifetime.
+    const detectedAttributes = options.detectResources === true ? detectContainerResource() : undefined;
+    const staticAttributes: OtlpResourceAttributes = {};
 
     if (options.serviceVersion !== undefined) {
         staticAttributes["service.version"] = options.serviceVersion;
@@ -343,8 +322,7 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
         Object.assign(staticAttributes, options.resourceAttributes);
     }
 
-    const staticResource = resourceFromAttributes(staticAttributes);
-    const resource = detectedResource.merge(staticResource);
+    const resource = mergeResourceAttributes(detectedAttributes, staticAttributes);
 
     // Strip trailing slashes without a regex (ReDoS-linter friendly).
     let base = endpoint ?? "";
