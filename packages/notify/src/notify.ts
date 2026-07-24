@@ -243,8 +243,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             await subscriptionStore.markStatus(subscription.id, "failed", error);
         }
 
-        // `provider` is the push kind (web-push/fcm) — the receipt's own provider
-        // for a push send. Ids ride the failure log, never the metric dimensions.
+        // `provider` is the push kind (web-push/fcm) — a push send's own provider.
         observeSend("push", subscription.kind, status, { error, subscriptionId: subscription.id, userId: subscription.userId ?? null });
 
         return receipt;

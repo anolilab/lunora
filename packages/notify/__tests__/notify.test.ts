@@ -1,3 +1,4 @@
+import type { Notification, Receipt } from "@visulima/notification";
 import { describe, expect, it, vi } from "vitest";
 
 import { createNotify } from "../src/notify";
@@ -258,14 +259,42 @@ describe("delivery observability (ctx.log + ctx.metrics)", () => {
         expect(metrics.count).not.toHaveBeenCalledWith("notify.send", 1, expect.anything());
     });
 
-    it("counts a configured channel send on notify.send", async () => {
+    it("counts a configured channel send on notify.send with the receipt's provider", async () => {
         expect.hasAssertions();
 
         const { metrics, notify } = setupObs({ chat: true });
 
         await notify.chat({ text: "shipped" });
 
-        expect(metrics.count).toHaveBeenCalledWith("notify.send", 1, expect.objectContaining({ channel: "chat", status: "accepted" }));
+        // Pin the full dimension set — the channel path is where `provider` comes
+        // off the receipt (mock-chat's id), exercising observeSend's provider path.
+        expect(metrics.count).toHaveBeenCalledWith("notify.send", 1, { channel: "chat", provider: "mock-chat", status: "accepted" });
+    });
+
+    it("counts one notify.send per receipt for a multi-channel send, with the unknown fallback", async () => {
+        expect.hasAssertions();
+
+        // A fake engine returns receipts directly, including an UNLABELED failure
+        // receipt — the only way to reach the `?? "unknown"` fallback, since a real
+        // engine receipt always carries channel + provider.
+        const receipts: Receipt[] = [
+            { channel: "chat", messageId: "m1", provider: "slack", successful: true, timestamp: new Date() },
+            { errorMessages: ["boom"], successful: false },
+        ];
+        const engine = { send: async () => receipts } as unknown as Notification;
+        const log = { warn: vi.fn() };
+        const metrics = { count: vi.fn() };
+        const { notify } = createNotify(baseDefinition(memorySubscriptionStore()), {}, { engine, log, metrics, silent: true });
+
+        const returned = await notify.send({ chat: { text: "hi" } });
+
+        expect(returned).toBe(receipts);
+        expect(metrics.count).toHaveBeenCalledWith("notify.send", 1, { channel: "chat", provider: "slack", status: "accepted" });
+        expect(metrics.count).toHaveBeenCalledWith("notify.send", 1, { channel: "unknown", provider: "unknown", status: "failed" });
+        expect(log.warn).toHaveBeenCalledWith(
+            "notify unknown delivery failed",
+            expect.objectContaining({ channel: "unknown", error: "boom", status: "failed" }),
+        );
     });
 
     it("emits notify.skipped(channel-not-configured) and throws when the channel is unwired", async () => {
