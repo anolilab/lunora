@@ -31,8 +31,8 @@ import { mergeWhere } from "./aggregates";
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { decodeCursor } from "@lunora/shard-engine";
-import type { RankDirection, RankIndexDefinitionLike, RankPageOptions, RankPageRowKey } from "./rank";
-import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
+import type { RankDirection, RankIndexDefinitionLike, RankPageOptions, RankPageRowKey } from "@lunora/shard-engine";
+import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "@lunora/shard-engine";
 
 const DOC_COLUMN = "__doc__";
 

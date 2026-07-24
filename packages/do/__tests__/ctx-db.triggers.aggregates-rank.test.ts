@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AggregateIndexDefinitionLike } from "../src/aggregates";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
-import type { RankIndexDefinitionLike } from "../src/rank";
+import type { RankIndexDefinitionLike } from "@lunora/shard-engine";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**

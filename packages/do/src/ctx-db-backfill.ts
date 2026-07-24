@@ -27,8 +27,8 @@ import type { AggregateIndexDefinitionLike } from "./aggregates";
 import type { SchemaLike, SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, rowToDocument, serializeSqlValue } from "./do-sql";
-import type { RankIndexDefinitionLike } from "./rank";
-import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
+import type { RankIndexDefinitionLike } from "@lunora/shard-engine";
+import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "@lunora/shard-engine";
 
 /**
  * Backfill one aggregate counter table by scanning the source rows once and

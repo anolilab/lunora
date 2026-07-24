@@ -136,7 +136,7 @@ import type { QueryStatEntry } from "./query-metrics";
 import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { QueueMessageOutcome, RecordQueueMessageInput } from "./queue-catcher";
 import { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
-import type { ShardRankPageResult } from "./rank";
+import type { ShardRankPageResult } from "@lunora/shard-engine";
 import type { OwnerRelay, RelayHost, RelayMember } from "./relay-hub";
 import { createRelayLink, DEFAULT_MAX_RELAYS } from "./relay-hub";
 import type { AppendRequestLogEntry, ContextLogLevel, IssuesResult, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";

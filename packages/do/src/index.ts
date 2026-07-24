@@ -182,8 +182,8 @@ export type {
     RankResult,
     RankSortKeyLike,
     ShardRankPageResult,
-} from "./rank";
-export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
+} from "@lunora/shard-engine";
+export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "@lunora/shard-engine";
 export { serveRelationFanout } from "./relation-fanout";
 export type { ResolveRelationPredicatesOptions } from "./relation-predicates";
 export {

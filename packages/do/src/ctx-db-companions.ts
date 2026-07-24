@@ -39,8 +39,8 @@ import type { AggregateIndexDefinitionLike } from "./aggregates";
 import type { SchemaLike, SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
-import type { RankIndexDefinitionLike } from "./rank";
-import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
+import type { RankIndexDefinitionLike } from "@lunora/shard-engine";
+import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "@lunora/shard-engine";
 
 /**
  * Whether none of the fields a rank index reads (partition / sort / static

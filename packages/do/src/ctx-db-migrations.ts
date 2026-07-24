@@ -30,7 +30,7 @@ import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
-import { rankTableName, sortColumnName } from "./rank";
+import { rankTableName, sortColumnName } from "@lunora/shard-engine";
 
 /** Create the secondary + `.unique()` expression indexes declared on a table. */
 const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {

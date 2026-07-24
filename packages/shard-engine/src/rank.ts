@@ -35,7 +35,7 @@
  * `backfillRankIndexes`.
  */
 
-import { serializeSqlValue } from "@lunora/shard-engine";
+import { serializeSqlValue } from "./serialize-sql";
 import type {
     RankBeforeOptions,
     RankBeforeResult,
@@ -49,7 +49,7 @@ import type {
     RankResult,
     RankSortKeyLike,
     ShardRankPageResult,
-} from "@lunora/shard-engine";
+} from "./schema-types";
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
 const compareStrings = (a: string, b: string): number => {

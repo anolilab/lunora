@@ -28,6 +28,15 @@ export {
     normalizeOrderKeys,
     softDeleteScope,
 } from "./query-args";
+export {
+    encodePartitionKey,
+    matchesRankStaticWhere,
+    RANK_TIEBREAK,
+    rankKeyFromDoc,
+    rankTableName,
+    resolveRankPartition,
+    sortColumnName,
+} from "./rank";
 export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ConflictKind } from "./transaction";
 export type { TransactionSqlLike } from "./transaction";

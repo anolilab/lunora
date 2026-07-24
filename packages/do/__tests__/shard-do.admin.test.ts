@@ -21,8 +21,8 @@ import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { MetricSeries } from "../src/metric-buffer";
 import type { MetricHistoryPoint, MetricHistorySeries } from "../src/metric-history";
 import type { QueueMessageRow, RecordQueueMessageInput } from "../src/queue-catcher";
-import type { RankIndexDefinitionLike, ShardRankPageResult } from "../src/rank";
-import { rankKeyFromDoc } from "../src/rank";
+import type { RankIndexDefinitionLike, ShardRankPageResult } from "@lunora/shard-engine";
+import { rankKeyFromDoc } from "@lunora/shard-engine";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
