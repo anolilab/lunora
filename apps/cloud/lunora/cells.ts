@@ -27,6 +27,13 @@ const assertSignedIn = (userId: null | string): string => {
  * `cells` is `.global()`, so reads go through the D1-backed per-table facade.
  */
 export const list = query.query(async ({ ctx: context }): Promise<CellRow[]> => {
+    // Baseline gate: this exposes cell metadata incl. Cloudflare account ids, so it
+    // must not be unauthenticated. A dedicated platform-operator role is the proper
+    // gate (follow-up — no operator role exists yet); until then, require sign-in.
+    if (!context.auth.userId) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
+
     const { page } = await context.db.cells.findMany();
 
     return page as unknown as CellRow[];

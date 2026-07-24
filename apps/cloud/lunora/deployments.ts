@@ -170,6 +170,20 @@ export const create = mutation
             throw new LunoraError("NOT_FOUND", "project not found in this organization");
         }
 
+        // Isolation: the `alias`/`scriptName` label is the seed for this tenant's
+        // per-deployment D1/R2 resource names (`${alias}-db`/`${alias}-files`) in the
+        // provisioner, and for alias→script routing. It MUST be owned by exactly one
+        // project — otherwise a caller holding a valid key for their own project could
+        // pass a victim's alias here and bind the victim's database/bucket into their
+        // own worker (or hijack the victim's route / overwrite their script). Reject
+        // an alias already claimed by a different project (covers cross-org and the
+        // honest same-slug-across-orgs collision, since slugs are only per-org unique).
+        const { page: aliasHolders } = await context.db.deployments.findMany({ where: { alias: arguments_.scriptName } });
+
+        if ((aliasHolders as unknown as DeploymentRow[]).some((deployment) => deployment.projectId !== arguments_.projectId)) {
+            throw new LunoraError("FORBIDDEN", "deployment alias is already in use by another project");
+        }
+
         // Versioned, immutable release: `{alias}-v{n}` per (project, kind). The
         // stable alias keeps serving the previous version until `activate`
         // swaps the pointer after the health check (GAPS.md A1).

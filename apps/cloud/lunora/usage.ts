@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/server";
+
 import { evaluateSpendCap } from "../src/billing/spend";
 import { aggregateUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
@@ -51,6 +53,18 @@ export const ingest = mutation
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> => {
         await authorizeDeployKey(context, arguments_.organizationId, arguments_.deployKey);
+
+        // The deploy key is tenant-held (CI), so a tenant could otherwise POST a
+        // NEGATIVE quantity to deflate its own metered usage and defeat spend-cap
+        // suspension / prepaid-overage debits (which sum this directly). Reject
+        // negative/non-finite quantities and non-finite period timestamps.
+        if (!Number.isFinite(arguments_.quantity) || arguments_.quantity < 0) {
+            throw new LunoraError("BAD_REQUEST", "usage quantity must be a non-negative number");
+        }
+
+        if (!Number.isFinite(arguments_.periodStart) || arguments_.periodStart < 0) {
+            throw new LunoraError("BAD_REQUEST", "usage periodStart must be a valid timestamp");
+        }
 
         return context.db.insert("platformUsage", {
             createdAt: Date.now(),
