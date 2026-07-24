@@ -35,21 +35,8 @@
  * `backfillRankIndexes`.
  */
 
+import type { RankIndexDefinitionLike } from "./schema-types";
 import { serializeSqlValue } from "./serialize-sql";
-import type {
-    RankBeforeOptions,
-    RankBeforeResult,
-    RankDirection,
-    RankIndexDefinitionLike,
-    RankOptions,
-    RankPage,
-    RankPageOptions,
-    RankPageRow,
-    RankPageRowKey,
-    RankResult,
-    RankSortKeyLike,
-    ShardRankPageResult,
-} from "./schema-types";
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
 const compareStrings = (a: string, b: string): number => {
@@ -238,17 +225,18 @@ export {
     resolveRankPartition,
     sortColumnName,
 };
-export type {
-    RankBeforeOptions,
-    RankBeforeResult,
-    RankDirection,
-    RankIndexDefinitionLike,
-    RankOptions,
-    RankPage,
-    RankPageOptions,
-    RankPageRow,
-    RankPageRowKey,
-    RankResult,
-    RankSortKeyLike,
-    ShardRankPageResult,
-};
+
+export {
+    type RankBeforeOptions,
+    type RankBeforeResult,
+    type RankDirection,
+    type RankIndexDefinitionLike,
+    type RankOptions,
+    type RankPage,
+    type RankPageOptions,
+    type RankPageRow,
+    type RankPageRowKey,
+    type RankResult,
+    type RankSortKeyLike,
+    type ShardRankPageResult,
+} from "./schema-types";

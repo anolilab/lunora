@@ -16,7 +16,8 @@
  * (`compileWhereSql`) renders it per dialect.
  */
 import { LunoraError } from "@lunora/errors";
-import type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./schema-types";
+
+import type { OrderByInput, OrderKey, SortDirection } from "./schema-types";
 import type { WhereInput } from "./where-types";
 
 /** The implicit tiebreak appended to every sort so the order is total. */
@@ -236,4 +237,5 @@ const softDeleteScope = (softDeleteMode: { field: string } | undefined, includeD
     softDeleteMode && includeDeleted !== true ? { [softDeleteMode.field]: { isNull: true } } : undefined;
 
 export { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope };
-export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection };
+
+export { type OrderByInput, type OrderKey, type QueryArgs, type QueryPage, type SortDirection } from "./schema-types";

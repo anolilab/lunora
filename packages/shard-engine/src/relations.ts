@@ -34,17 +34,10 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import type {
-    NestedWith,
-    OnDeleteActionLike,
-    RelationDefinitionLike,
-    ResolveWithOptions,
-    TableDefinitionLike,
-    WithInput,
-} from "./schema-types";
-import type { WhereInput } from "./where-types";
 
 import { applySelect } from "./query-args";
+import type { NestedWith, RelationDefinitionLike, ResolveWithOptions, TableDefinitionLike } from "./schema-types";
+import type { WhereInput } from "./where-types";
 
 /** Project a loaded child (or page) per `nested.select`, keeping system + nested-`with` keys. Returns the input unchanged when no select. */
 const projectChildren = (documents: Record<string, unknown>[], nested: NestedWith): Record<string, unknown>[] =>
@@ -409,4 +402,6 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
 };
 
 export { applyOnDelete, distinctValues, fanOutScalarCounts, resolveWith, runRowValidators };
-export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput };
+export type { ApplyOnDeleteOptions };
+
+export { type NestedWith, type OnDeleteActionLike, type RelationDefinitionLike, type ResolveWithOptions, type WithInput } from "./schema-types";

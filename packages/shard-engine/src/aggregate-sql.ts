@@ -12,6 +12,7 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+
 import type { RestrictableQueryOptions, SchedulerLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
 

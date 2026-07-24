@@ -30,15 +30,8 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import type {
-    AggregateIndexDefinitionLike,
-    AggregateOp,
-    AggregateOptions,
-    AggregateResult,
-    GroupByEntry,
-    GroupByOptions,
-    RestrictableQueryOptions,
-} from "./schema-types";
+
+import type { AggregateIndexDefinitionLike, AggregateOp } from "./schema-types";
 import type { WhereInput } from "./where-types";
 
 /**
@@ -332,4 +325,13 @@ const selectIndexForGroupBy = (
 };
 
 export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy };
-export type { AggregateIndexDefinitionLike, AggregateOp, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions };
+
+export {
+    type AggregateIndexDefinitionLike,
+    type AggregateOp,
+    type AggregateOptions,
+    type AggregateResult,
+    type GroupByEntry,
+    type GroupByOptions,
+    type RestrictableQueryOptions,
+} from "./schema-types";
