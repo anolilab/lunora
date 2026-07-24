@@ -1,5 +1,6 @@
-import type { DurableObjectStorage } from "@cloudflare/workers-types";
+import type { DurableObjectState, DurableObjectStorage } from "@cloudflare/workers-types";
 import { LunoraError, toErrorBody } from "@lunora/errors";
+import type { ShardHost, SocketHost } from "@lunora/platform";
 import type {
     DependencyTracker,
     LifecycleDispatchInfo,
@@ -9,6 +10,7 @@ import type {
     ResolvedShape,
     RpcRequest,
     ShapeSubscriptionQuery,
+    ShardRankPageResult,
     SocketAttachment,
     SubscriptionEnvelope,
     SubscriptionIdentity,
@@ -24,6 +26,7 @@ import {
     runSocketPool,
     SCAN_DEP,
     sendDeltaFrames,
+    ShardRunner,
     stableStringify,
     subscriptionListDeltas,
     tableFromDepKey,
@@ -49,6 +52,7 @@ import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import { buildBatchEntryRequest } from "./batch";
+import { createShardHost, createSocketHost } from "./cloudflare-host";
 import type { CloudflareTracingLike, ContextMetrics, ContextTracer, TraceAnchor } from "./context-telemetry";
 import { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
 import type { CdcChange, SqlExec } from "./ctx-db";
@@ -136,7 +140,6 @@ import type { QueryStatEntry } from "./query-metrics";
 import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { QueueMessageOutcome, RecordQueueMessageInput } from "./queue-catcher";
 import { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
-import type { ShardRankPageResult } from "@lunora/shard-engine";
 import type { OwnerRelay, RelayHost, RelayMember } from "./relay-hub";
 import { createRelayLink, DEFAULT_MAX_RELAYS } from "./relay-hub";
 import type { AppendRequestLogEntry, ContextLogLevel, IssuesResult, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
@@ -1819,6 +1822,27 @@ abstract class ShardDO {
     protected readonly reactiveCache: ReactiveCache | undefined;
 
     /**
+     * Host-neutral shard engine runner. `ShardDO.fetch` and `ShardDO.alarm`
+     * delegate through this runner so the engine can eventually be mounted on
+     * any `@lunora/platform` host. The runner is constructed from Cloudflare
+     * host adapters in this package; future platforms will supply their own
+     * adapters and reuse the same runner.
+     */
+    private readonly runner: ShardRunner;
+
+    /**
+     * Cloudflare-specific shard host adapter, kept so internal helpers can reach
+     * the provider-neutral contract directly during the migration.
+     */
+    private readonly shardHost: ShardHost;
+
+    /**
+     * Cloudflare-specific socket host adapter. Kept for the same reason as
+     * {@link ShardDO.shardHost}.
+     */
+    private readonly socketHost: SocketHost;
+
+    /**
      * Lazily-built drizzle handle over `state.storage`. Memoised so a single
      * DO instance reuses the same dialect across handler calls. The drizzle
      * DO driver only touches `storage.sql`, so test doubles only need to
@@ -2198,6 +2222,20 @@ abstract class ShardDO {
         this.state = state;
         this.env = env;
 
+        // Build the provider-neutral Cloudflare host adapters and mount the
+        // host-neutral shard engine runner. The runner owns the platform contract
+        // seam; `fetch`/`alarm` delegate through it. First slice: the runner
+        // forwards back to the existing Cloudflare-specific implementations so
+        // tests and public API stay stable.
+        this.shardHost = createShardHost(state as unknown as DurableObjectState);
+        this.socketHost = createSocketHost(state as unknown as DurableObjectState);
+        this.runner = new ShardRunner(this.shardHost, this.socketHost, {
+            handlers: {
+                handleAlarm: () => this.handleAlarmCloudflare(),
+                handleFetch: (request) => this.handleFetchCloudflare(request),
+            },
+        });
+
         if (options.reactiveCache) {
             this.reactiveCache = new ReactiveCache(options.reactiveCache);
         }
@@ -2238,307 +2276,12 @@ abstract class ShardDO {
     /**
      * Worker-side fetch entry point. Handles WebSocket upgrades and the
      * shard-local RPC endpoint forwarded by `@lunora/runtime`.
+     *
+     * First slice: delegates to the host-neutral {@link ShardRunner}, which
+     * forwards to the Cloudflare-specific implementation for now.
      */
-    // eslint-disable-next-line sonarjs/cognitive-complexity -- the DO's central request router; #149 added the trace-anchor capture and root-span record, tipping it to 16. Splitting the request lifecycle across helpers would hurt readability more than the +1 costs.
     public async fetch(request: Request): Promise<Response> {
-        const url = new URL(request.url);
-
-        // Learn the DO namespace binding the runtime routes through, so this DO can
-        // address its siblings for the relay hub (plan 075 Phase 2). Sent on every
-        // forwarded request; kept across requests once known.
-        this.shardBinding = request.headers.get("x-lunora-shard-binding") ?? this.shardBinding;
-
-        // The non-RPC routes (WS upgrade + the internal owner↔relay control channel)
-        // are handled up front; everything past here is the shard-local RPC endpoint.
-        const early = await this.routeNonRpc(url, request);
-
-        if (early !== undefined) {
-            return early;
-        }
-
-        if (url.pathname !== "/rpc" || request.method !== "POST") {
-            return new Response("Not found", { status: 404 });
-        }
-
-        let payload: RpcRequest;
-
-        try {
-            payload = await request.json();
-        } catch {
-            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
-        }
-
-        // Reserved admin-introspection RPCs are intercepted before user
-        // dispatch — they read raw SQLite directly rather than running a
-        // registered function, and carry their own bearer-token gate.
-        if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-            return this.handleAdminRpc(request, payload.functionPath, payload.args ?? {});
-        }
-
-        // Stash the inbound D1 bookmark and identity headers for the
-        // duration of the handler call so getters return the right
-        // values. Cleared on exit so the next request starts fresh.
-        this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
-        this.currentResponseBookmark = undefined;
-        this.currentRequestUserId = request.headers.get("x-lunora-userid") ?? undefined;
-        this.currentRequestMutationId = request.headers.get("x-lunora-mutation-id") ?? undefined;
-        // Custom-mutator push identity: a stable per-device client id plus a
-        // monotonic per-client sequence. Present only on custom-mutator pushes;
-        // the watermark dispatch below classifies the sequence against the
-        // shard's `__client_watermark`. A non-numeric/absent seq disables the
-        // watermark path (the call falls back to the legacy idempotency dedup).
-        this.currentRequestClientId = request.headers.get("x-lunora-client-id") ?? undefined;
-        this.currentRequestClientSeq = parseClientSeqHeader(request.headers.get("x-lunora-client-seq"));
-        // Reset the in-transaction bookkeeping handshake: `handleRpc` sets the
-        // classification + flag for a mutation push so the writes, dedup row, and
-        // watermark advance all commit atomically (see `commitMutationBookkeeping`).
-        this.currentMutatorClass = undefined;
-        this.mutationBookkeepingCommitted = false;
-        this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
-        // The caller's IP, forwarded server-side from Cloudflare's trusted
-        // `CF-Connecting-IP` (never copied from a client header). Surfaced as
-        // `ctx.ip` so handlers/middleware can key on it (e.g. rate-limit
-        // unauthenticated traffic by IP).
-        this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
-        this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
-        this.currentRequestTraceparent = request.headers.get("traceparent") ?? undefined;
-        // Resolve the dispatch's trace anchor once, here, so `ctx.trace` spans and
-        // the synthetic root span recorded on the way out agree on the ids even
-        // when there is no inbound `traceparent` to derive them from.
-        this.currentRequestTrace = resolveTraceAnchor(this.currentRequestTraceparent);
-        // Captured into a local as well: the `finally` below runs after the
-        // handler's awaits, by which point an interleaved dispatch may have
-        // re-set the shared field — reading it there would file this dispatch's
-        // root span under another request's trace (and leave that one rootless).
-        const dispatchTrace = this.currentRequestTrace;
-        // Trace-sampling verdict propagated by the runtime: the `traceparent`
-        // sampled flag carries the head decision (absent → keep, so this path is
-        // unchanged for alarms / subscription re-runs / non-Lunora callers) and
-        // `x-lunora-sample-errors` carries the tail-bias toggle. Registered keyed by
-        // THIS dispatch's `traceId` (not a flat field) so a concurrent dispatch's
-        // `recordSpan` / `finally` reads its own verdict — see `traceSampling`.
-        this.traceSampling.set(dispatchTrace.traceId, {
-            keepErrors: request.headers.get("x-lunora-sample-errors") !== "0",
-            sampled: parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true,
-        });
-        // Reset the per-request read/cache capture (filled by `runCachedQuery`
-        // for cached query paths) so a previous dispatch can't leak into this
-        // entry's logged read set / cache-hit flag.
-        this.currentRequestReadTables = undefined;
-        this.currentRequestCacheHit = undefined;
-
-        this.metrics.requests += 1;
-        const dispatchStartedAt = Date.now();
-
-        // Collect the tables this dispatch full-scans (stamped by the
-        // ctx-db read hook) so `recordFunctionCall` can persist the causal
-        // attribution. Fresh per request; drained below.
-        this.currentScannedTables = new Set<string>();
-
-        // Collect the declared indexes this dispatch exercises (stamped by
-        // the ctx-db index-use hook) so `recordFunctionCall` can persist the
-        // per-index hit counter behind the dead-index lint. Fresh per
-        // request; drained below.
-        this.currentIndexHits = new Set<string>();
-
-        // Collect per-statement SQL samples from the instrumented `sql`
-        // getter so `flushStmtSamples` can persist them to the durable
-        // `__lunora_metrics_queries` table after the handler resolves.
-        // Allocating a fresh array here activates the instrumentation (the
-        // `sql` getter only wraps when this field is defined).
-        this.currentStmtSamples = [];
-
-        // Outcome of the dispatch, for the synthetic root span recorded in the
-        // `finally` below. A sentinel rather than a boolean so the `catch` can
-        // hand the thrown value straight through to the span's error classifier.
-        let dispatchError: { thrown: unknown } | undefined;
-
-        try {
-            // Reserved cross-shard relation read/count (reverse cross-backend
-            // relations). Served BEFORE user dispatch and returned BARE (row
-            // array / number) — never `{ result }`-wrapped — so the Query
-            // Coordinator's `concat`/`sum` merge composes the per-shard
-            // values. Runs under the forwarded identity stashed above; the
-            // worker refuses this prefix on a single-shard envelope, so it's
-            // only reachable through the authorizeFanOut-gated fan-out path.
-            if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
-                const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
-
-                return jsonResponse(value, 200, bookmarkHeaders(this.currentResponseBookmark));
-            }
-
-            // Custom-mutator ordering: a watermarked push (`clientId` +
-            // numeric `clientSeq`) on a registered mutator is classified against
-            // `__client_watermark` BEFORE the handler runs, so out-of-order and
-            // replayed pushes never reach the authoritative impl. Ordinary
-            // mutations (and pushes without the headers) get `undefined` here and
-            // ride the idempotency path below unchanged.
-            const mutatorClass = this.isCustomMutator(payload.functionPath) ? this.classifyClientMutation() : undefined;
-
-            // Stash it so the in-transaction bookkeeping (run from `handleRpc`'s
-            // mutation transaction) advances the watermark for a `"next"` push in
-            // the same commit as the writes.
-            this.currentMutatorClass = mutatorClass;
-
-            const watermarkShortCircuit = this.rejectNonNextMutation(payload.functionPath, mutatorClass, dispatchStartedAt);
-
-            if (watermarkShortCircuit !== undefined) {
-                return watermarkShortCircuit;
-            }
-
-            // Mutation-replay dedup: if this `(identity, mutationId)` already
-            // committed, return its cached result without re-running the
-            // handler (so a client that replays an unacked write — same id —
-            // sees exactly-once semantics). The id rides the
-            // `x-lunora-mutation-id` header (stashed into `currentRequestMutationId`
-            // above), the same source `persistIdempotentResult` reads when it
-            // records the row after the handler commits.
-            const cached = this.readIdempotentResult(this.currentRequestMutationId);
-
-            if (cached !== undefined) {
-                return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, cached.value);
-            }
-
-            // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity leaves)
-            // ONLY for the handler, so `validateArgs` sees real `ArrayBuffer`/`bigint`
-            // values. `payload.args` stays in wire form for the request log/metrics
-            // below (JSON-safe — a raw `bigint` there would throw `JSON.stringify`).
-            const result = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>);
-
-            this.recordPostDispatchBookkeeping(result, mutatorClass);
-
-            // Custom-mutator watermark WRITE: advance the per-client high-water
-            // mark to this sequence now that the authoritative writes committed.
-            // No-op unless this dispatch was classified `"next"` above.
-            //
-            // NOT atomic with the handler: the handler's writes auto-commit per
-            // statement, then `persistIdempotentResult` and this advance run as
-            // two further separate writes. A crash after the handler commits but
-            // before this advance leaves the watermark behind — the client's
-            // unacked replay re-classifies as `"next"` (the read side treats a
-            // missing/lower row as already-processed) and re-runs idempotently,
-            // re-advancing. So the gap self-heals; it never drops or double-applies
-            // the write. The advance helper below documents the same
-            // replay-recovery contract for a failed watermark write.
-            if (mutatorClass?.kind === "next") {
-                this.advanceClientMutationWatermark();
-            }
-
-            const durationMs = Date.now() - dispatchStartedAt;
-
-            // Record the handler's own latency (before the subscription
-            // write-flush below) against the per-function counters, along
-            // with any tables it full-scanned (causal attribution).
-            this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
-
-            // Flush per-statement SQL samples accumulated during dispatch to
-            // the durable `__lunora_metrics_queries` table. Best-effort:
-            // a flush failure (e.g. no sql handle in tests) must never fail
-            // the response.
-            this.flushStmtSamples();
-
-            // Snapshot the written-table set BEFORE `flushChangedTables`
-            // drains it — afterwards `pendingChangedTables` is `undefined`,
-            // so the request log would record an empty write set.
-            const tablesWritten = [...(this.pendingChangedTables ?? [])];
-
-            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten);
-
-            // Inspect the post-write size before responding. SQLite-in-DO
-            // exposes `databaseSize` as a real getter; reading it is a
-            // cheap stat call, not a full table scan.
-            this.maybeWarnRootSize();
-
-            // Snapshot the response before re-running subscriptions so the
-            // bookmark captured by the handler is preserved verbatim. A custom
-            // mutator echoes the applied `lastMutationId` so the client can drop
-            // the pending optimistic overlay as soon as the ack lands (the poke
-            // frame carries the same watermark for passive subscribers).
-            // Encode the result to wire form exactly here (the fresh path). The
-            // idempotency cache also stores the encoded form (see
-            // `persistIdempotentResult`), so `respondFromIdempotencyCache` /
-            // `buildDispatchResponse` never re-encode — no double-encoding.
-            const response = this.buildDispatchResponse(mutatorClass, encodeWire(result));
-
-            await this.flushChangedTables();
-
-            return response;
-        } catch (error: unknown) {
-            this.metrics.errors += 1;
-            dispatchError = { thrown: error };
-            const durationMs = Date.now() - dispatchStartedAt;
-            const message = error instanceof Error ? error.message : String(error);
-            // Count only OCC conflicts as write contention — a unique-index
-            // breach / onDelete-restrict / trigger-overflow also surfaces as a
-            // 409 ConflictError but is a constraint failure, not contention, and
-            // would mis-fire the write-contention advisor.
-            const conflicted = error instanceof ConflictError && error.kind === "occ";
-
-            // Do NOT record per-function metrics for an unregistered/`FUNCTION_NOT_FOUND`
-            // dispatch: `functionPath` is caller-controlled and the runtime forwards it
-            // without checking it against the registry, so recording here would let a
-            // flood of random paths grow both the durable `__lunora_metrics` table and the
-            // in-memory `functionStats` map without bound (the Map's "bounded by the app's
-            // finite registered-function set" assumption only holds for real functions).
-            // The request log + error buffer below still capture the failure, and both are
-            // bounded (retention / fixed buffer).
-            const code = (error as { code?: unknown } | null)?.code;
-
-            if (code !== "FUNCTION_NOT_FOUND") {
-                this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits, conflicted);
-            }
-            // Flush statement samples even on error paths — partial sampling
-            // is better than losing the timing signal entirely.
-            this.flushStmtSamples();
-            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "error", [...(this.pendingChangedTables ?? [])], message);
-            this.logs.push({
-                functionPath: payload.functionPath,
-                level: "error",
-                message,
-                timestamp: Date.now(),
-            });
-
-            // A fresh error row landed, but the failed dispatch's own writes (if
-            // any) rolled back, so nothing else drives a refresh. Mark the reqlog
-            // table changed and flush so the live `getLogs`/`getIssues`
-            // admin-wildcard subscriptions re-run and surface the throw in real
-            // time — the ok path flushes here too. Any rolled-back data tables
-            // still in the pending set re-read committed state, so no stale push.
-            this.recordChangedTable(REQUEST_LOG_TABLE);
-            await this.flushChangedTables();
-
-            return this.errorToResponse(error);
-        } finally {
-            // Guard hoisted to the call site so the common case — a handler that
-            // never called `ctx.trace` — is visibly a no-op here.
-            if (this.spans.hasTrace(dispatchTrace.traceId)) {
-                this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace);
-            }
-            // Export boundary for a sampled-out trace: now that the dispatch has
-            // settled we know whether it errored, so flush its held `ctx.trace`
-            // spans (tail bias) or drop them. A no-op for sampled-in traces (their
-            // spans already streamed live).
-            this.flushSampledOutTrace(dispatchTrace, dispatchError !== undefined);
-            this.traceSampling.delete(dispatchTrace.traceId);
-            this.currentRequestTrace = undefined;
-            this.currentRequestBookmark = undefined;
-            this.currentResponseBookmark = undefined;
-            this.currentRequestUserId = undefined;
-            this.currentRequestMutationId = undefined;
-            this.currentRequestClientId = undefined;
-            this.currentRequestClientSeq = undefined;
-            this.currentMutatorClass = undefined;
-            this.mutationBookkeepingCommitted = false;
-            this.currentRequestIdentity = undefined;
-            this.currentRequestIp = undefined;
-            this.currentRequestSystem = false;
-            this.currentRequestTraceparent = undefined;
-            this.currentScannedTables = undefined;
-            this.currentIndexHits = undefined;
-            this.currentRequestReadTables = undefined;
-            this.currentRequestCacheHit = undefined;
-            this.currentStmtSamples = undefined;
-        }
+        return this.runner.handleFetch(request);
     }
 
     /**
@@ -2851,18 +2594,333 @@ abstract class ShardDO {
 
     /**
      * Durable Object alarm handler — the heartbeat for `.global()`-table shapes
-     * AND external-source (`.source(...)`) ingest, which share one alarm. The
-     * runtime wakes this when the poll alarm armed by `scheduleGlobalPoll` fires;
-     * it refreshes every subscribed global shape (diff-poke from the global
-     * backend), materializes any due sourced tables, and re-arms at
-     * {@link ShardDO.nextPollAlarmTarget} — the fixed floor while global shapes
-     * are subscribed, or the earliest source next-due time when only ingest
-     * remains (so a 1-hour-`refresh` source sleeps ~1 hour instead of waking
-     * every 2 s). With neither tier pending, the alarm is not re-armed and the DO
-     * goes idle. A base-only / global-free / source-free DO never arms it, so
-     * this stays dormant there.
+     * AND external-source (`.source(...)`) ingest, which share one alarm.
+     *
+     * First slice: delegates to the host-neutral {@link ShardRunner}, which
+     * forwards to the Cloudflare-specific implementation for now.
      */
     public async alarm(): Promise<void> {
+        return this.runner.handleAlarm();
+    }
+
+    /**
+     * Cloudflare-specific fetch implementation — the existing request lifecycle,
+     * injected into {@link ShardRunner} as the host-specific handler while the
+     * engine is progressively extracted.
+     *
+     * `protected`, not `private`: this is the host-implementation hook a
+     * host-specific subclass overrides, the same extension point
+     * {@link ShardDO.runInTransaction} already is.
+     */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- the DO's central request router; #149 added the trace-anchor capture and root-span record, tipping it to 16. Splitting the request lifecycle across helpers would hurt readability more than the +1 costs.
+    protected async handleFetchCloudflare(request: Request): Promise<Response> {
+        const url = new URL(request.url);
+
+        // Learn the DO namespace binding the runtime routes through, so this DO can
+        // address its siblings for the relay hub (plan 075 Phase 2). Sent on every
+        // forwarded request; kept across requests once known.
+        this.shardBinding = request.headers.get("x-lunora-shard-binding") ?? this.shardBinding;
+
+        // The non-RPC routes (WS upgrade + the internal owner↔relay control channel)
+        // are handled up front; everything past here is the shard-local RPC endpoint.
+        const early = await this.routeNonRpc(url, request);
+
+        if (early !== undefined) {
+            return early;
+        }
+
+        if (url.pathname !== "/rpc" || request.method !== "POST") {
+            return new Response("Not found", { status: 404 });
+        }
+
+        let payload: RpcRequest;
+
+        try {
+            payload = await request.json();
+        } catch {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
+        }
+
+        // Reserved admin-introspection RPCs are intercepted before user
+        // dispatch — they read raw SQLite directly rather than running a
+        // registered function, and carry their own bearer-token gate.
+        if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+            return this.handleAdminRpc(request, payload.functionPath, payload.args ?? {});
+        }
+
+        // Stash the inbound D1 bookmark and identity headers for the
+        // duration of the handler call so getters return the right
+        // values. Cleared on exit so the next request starts fresh.
+        this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
+        this.currentResponseBookmark = undefined;
+        this.currentRequestUserId = request.headers.get("x-lunora-userid") ?? undefined;
+        this.currentRequestMutationId = request.headers.get("x-lunora-mutation-id") ?? undefined;
+        // Custom-mutator push identity: a stable per-device client id plus a
+        // monotonic per-client sequence. Present only on custom-mutator pushes;
+        // the watermark dispatch below classifies the sequence against the
+        // shard's `__client_watermark`. A non-numeric/absent seq disables the
+        // watermark path (the call falls back to the legacy idempotency dedup).
+        this.currentRequestClientId = request.headers.get("x-lunora-client-id") ?? undefined;
+        this.currentRequestClientSeq = parseClientSeqHeader(request.headers.get("x-lunora-client-seq"));
+        // Reset the in-transaction bookkeeping handshake: `handleRpc` sets the
+        // classification + flag for a mutation push so the writes, dedup row, and
+        // watermark advance all commit atomically (see `commitMutationBookkeeping`).
+        this.currentMutatorClass = undefined;
+        this.mutationBookkeepingCommitted = false;
+        this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
+        // The caller's IP, forwarded server-side from Cloudflare's trusted
+        // `CF-Connecting-IP` (never copied from a client header). Surfaced as
+        // `ctx.ip` so handlers/middleware can key on it (e.g. rate-limit
+        // unauthenticated traffic by IP).
+        this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
+        this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
+        this.currentRequestTraceparent = request.headers.get("traceparent") ?? undefined;
+        // Resolve the dispatch's trace anchor once, here, so `ctx.trace` spans and
+        // the synthetic root span recorded on the way out agree on the ids even
+        // when there is no inbound `traceparent` to derive them from.
+        this.currentRequestTrace = resolveTraceAnchor(this.currentRequestTraceparent);
+        // Captured into a local as well: the `finally` below runs after the
+        // handler's awaits, by which point an interleaved dispatch may have
+        // re-set the shared field — reading it there would file this dispatch's
+        // root span under another request's trace (and leave that one rootless).
+        const dispatchTrace = this.currentRequestTrace;
+        // Trace-sampling verdict propagated by the runtime: the `traceparent`
+        // sampled flag carries the head decision (absent → keep, so this path is
+        // unchanged for alarms / subscription re-runs / non-Lunora callers) and
+        // `x-lunora-sample-errors` carries the tail-bias toggle. Registered keyed by
+        // THIS dispatch's `traceId` (not a flat field) so a concurrent dispatch's
+        // `recordSpan` / `finally` reads its own verdict — see `traceSampling`.
+        this.traceSampling.set(dispatchTrace.traceId, {
+            keepErrors: request.headers.get("x-lunora-sample-errors") !== "0",
+            sampled: parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true,
+        });
+        // Reset the per-request read/cache capture (filled by `runCachedQuery`
+        // for cached query paths) so a previous dispatch can't leak into this
+        // entry's logged read set / cache-hit flag.
+        this.currentRequestReadTables = undefined;
+        this.currentRequestCacheHit = undefined;
+
+        this.metrics.requests += 1;
+        const dispatchStartedAt = Date.now();
+
+        // Collect the tables this dispatch full-scans (stamped by the
+        // ctx-db read hook) so `recordFunctionCall` can persist the causal
+        // attribution. Fresh per request; drained below.
+        this.currentScannedTables = new Set<string>();
+
+        // Collect the declared indexes this dispatch exercises (stamped by
+        // the ctx-db index-use hook) so `recordFunctionCall` can persist the
+        // per-index hit counter behind the dead-index lint. Fresh per
+        // request; drained below.
+        this.currentIndexHits = new Set<string>();
+
+        // Collect per-statement SQL samples from the instrumented `sql`
+        // getter so `flushStmtSamples` can persist them to the durable
+        // `__lunora_metrics_queries` table after the handler resolves.
+        // Allocating a fresh array here activates the instrumentation (the
+        // `sql` getter only wraps when this field is defined).
+        this.currentStmtSamples = [];
+
+        // Outcome of the dispatch, for the synthetic root span recorded in the
+        // `finally` below. A sentinel rather than a boolean so the `catch` can
+        // hand the thrown value straight through to the span's error classifier.
+        let dispatchError: { thrown: unknown } | undefined;
+
+        try {
+            // Reserved cross-shard relation read/count (reverse cross-backend
+            // relations). Served BEFORE user dispatch and returned BARE (row
+            // array / number) — never `{ result }`-wrapped — so the Query
+            // Coordinator's `concat`/`sum` merge composes the per-shard
+            // values. Runs under the forwarded identity stashed above; the
+            // worker refuses this prefix on a single-shard envelope, so it's
+            // only reachable through the authorizeFanOut-gated fan-out path.
+            if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
+                const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
+
+                return jsonResponse(value, 200, bookmarkHeaders(this.currentResponseBookmark));
+            }
+
+            // Custom-mutator ordering: a watermarked push (`clientId` +
+            // numeric `clientSeq`) on a registered mutator is classified against
+            // `__client_watermark` BEFORE the handler runs, so out-of-order and
+            // replayed pushes never reach the authoritative impl. Ordinary
+            // mutations (and pushes without the headers) get `undefined` here and
+            // ride the idempotency path below unchanged.
+            const mutatorClass = this.isCustomMutator(payload.functionPath) ? this.classifyClientMutation() : undefined;
+
+            // Stash it so the in-transaction bookkeeping (run from `handleRpc`'s
+            // mutation transaction) advances the watermark for a `"next"` push in
+            // the same commit as the writes.
+            this.currentMutatorClass = mutatorClass;
+
+            const watermarkShortCircuit = this.rejectNonNextMutation(payload.functionPath, mutatorClass, dispatchStartedAt);
+
+            if (watermarkShortCircuit !== undefined) {
+                return watermarkShortCircuit;
+            }
+
+            // Mutation-replay dedup: if this `(identity, mutationId)` already
+            // committed, return its cached result without re-running the
+            // handler (so a client that replays an unacked write — same id —
+            // sees exactly-once semantics). The id rides the
+            // `x-lunora-mutation-id` header (stashed into `currentRequestMutationId`
+            // above), the same source `persistIdempotentResult` reads when it
+            // records the row after the handler commits.
+            const cached = this.readIdempotentResult(this.currentRequestMutationId);
+
+            if (cached !== undefined) {
+                return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, cached.value);
+            }
+
+            // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity leaves)
+            // ONLY for the handler, so `validateArgs` sees real `ArrayBuffer`/`bigint`
+            // values. `payload.args` stays in wire form for the request log/metrics
+            // below (JSON-safe — a raw `bigint` there would throw `JSON.stringify`).
+            const result = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>);
+
+            this.recordPostDispatchBookkeeping(result, mutatorClass);
+
+            // Custom-mutator watermark WRITE: advance the per-client high-water
+            // mark to this sequence now that the authoritative writes committed.
+            // No-op unless this dispatch was classified `"next"` above.
+            //
+            // NOT atomic with the handler: the handler's writes auto-commit per
+            // statement, then `persistIdempotentResult` and this advance run as
+            // two further separate writes. A crash after the handler commits but
+            // before this advance leaves the watermark behind — the client's
+            // unacked replay re-classifies as `"next"` (the read side treats a
+            // missing/lower row as already-processed) and re-runs idempotently,
+            // re-advancing. So the gap self-heals; it never drops or double-applies
+            // the write. The advance helper below documents the same
+            // replay-recovery contract for a failed watermark write.
+            if (mutatorClass?.kind === "next") {
+                this.advanceClientMutationWatermark();
+            }
+
+            const durationMs = Date.now() - dispatchStartedAt;
+
+            // Record the handler's own latency (before the subscription
+            // write-flush below) against the per-function counters, along
+            // with any tables it full-scanned (causal attribution).
+            this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
+
+            // Flush per-statement SQL samples accumulated during dispatch to
+            // the durable `__lunora_metrics_queries` table. Best-effort:
+            // a flush failure (e.g. no sql handle in tests) must never fail
+            // the response.
+            this.flushStmtSamples();
+
+            // Snapshot the written-table set BEFORE `flushChangedTables`
+            // drains it — afterwards `pendingChangedTables` is `undefined`,
+            // so the request log would record an empty write set.
+            const tablesWritten = [...(this.pendingChangedTables ?? [])];
+
+            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten);
+
+            // Inspect the post-write size before responding. SQLite-in-DO
+            // exposes `databaseSize` as a real getter; reading it is a
+            // cheap stat call, not a full table scan.
+            this.maybeWarnRootSize();
+
+            // Snapshot the response before re-running subscriptions so the
+            // bookmark captured by the handler is preserved verbatim. A custom
+            // mutator echoes the applied `lastMutationId` so the client can drop
+            // the pending optimistic overlay as soon as the ack lands (the poke
+            // frame carries the same watermark for passive subscribers).
+            // Encode the result to wire form exactly here (the fresh path). The
+            // idempotency cache also stores the encoded form (see
+            // `persistIdempotentResult`), so `respondFromIdempotencyCache` /
+            // `buildDispatchResponse` never re-encode — no double-encoding.
+            const response = this.buildDispatchResponse(mutatorClass, encodeWire(result));
+
+            await this.flushChangedTables();
+
+            return response;
+        } catch (error: unknown) {
+            this.metrics.errors += 1;
+            dispatchError = { thrown: error };
+            const durationMs = Date.now() - dispatchStartedAt;
+            const message = error instanceof Error ? error.message : String(error);
+            // Count only OCC conflicts as write contention — a unique-index
+            // breach / onDelete-restrict / trigger-overflow also surfaces as a
+            // 409 ConflictError but is a constraint failure, not contention, and
+            // would mis-fire the write-contention advisor.
+            const conflicted = error instanceof ConflictError && error.kind === "occ";
+
+            // Do NOT record per-function metrics for an unregistered/`FUNCTION_NOT_FOUND`
+            // dispatch: `functionPath` is caller-controlled and the runtime forwards it
+            // without checking it against the registry, so recording here would let a
+            // flood of random paths grow both the durable `__lunora_metrics` table and the
+            // in-memory `functionStats` map without bound (the Map's "bounded by the app's
+            // finite registered-function set" assumption only holds for real functions).
+            // The request log + error buffer below still capture the failure, and both are
+            // bounded (retention / fixed buffer).
+            const code = (error as { code?: unknown } | null)?.code;
+
+            if (code !== "FUNCTION_NOT_FOUND") {
+                this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits, conflicted);
+            }
+            // Flush statement samples even on error paths — partial sampling
+            // is better than losing the timing signal entirely.
+            this.flushStmtSamples();
+            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "error", [...(this.pendingChangedTables ?? [])], message);
+            this.logs.push({
+                functionPath: payload.functionPath,
+                level: "error",
+                message,
+                timestamp: Date.now(),
+            });
+
+            // A fresh error row landed, but the failed dispatch's own writes (if
+            // any) rolled back, so nothing else drives a refresh. Mark the reqlog
+            // table changed and flush so the live `getLogs`/`getIssues`
+            // admin-wildcard subscriptions re-run and surface the throw in real
+            // time — the ok path flushes here too. Any rolled-back data tables
+            // still in the pending set re-read committed state, so no stale push.
+            this.recordChangedTable(REQUEST_LOG_TABLE);
+            await this.flushChangedTables();
+
+            return this.errorToResponse(error);
+        } finally {
+            // Guard hoisted to the call site so the common case — a handler that
+            // never called `ctx.trace` — is visibly a no-op here.
+            if (this.spans.hasTrace(dispatchTrace.traceId)) {
+                this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace);
+            }
+            // Export boundary for a sampled-out trace: now that the dispatch has
+            // settled we know whether it errored, so flush its held `ctx.trace`
+            // spans (tail bias) or drop them. A no-op for sampled-in traces (their
+            // spans already streamed live).
+            this.flushSampledOutTrace(dispatchTrace, dispatchError !== undefined);
+            this.traceSampling.delete(dispatchTrace.traceId);
+            this.currentRequestTrace = undefined;
+            this.currentRequestBookmark = undefined;
+            this.currentResponseBookmark = undefined;
+            this.currentRequestUserId = undefined;
+            this.currentRequestMutationId = undefined;
+            this.currentRequestClientId = undefined;
+            this.currentRequestClientSeq = undefined;
+            this.currentMutatorClass = undefined;
+            this.mutationBookkeepingCommitted = false;
+            this.currentRequestIdentity = undefined;
+            this.currentRequestIp = undefined;
+            this.currentRequestSystem = false;
+            this.currentRequestTraceparent = undefined;
+            this.currentScannedTables = undefined;
+            this.currentIndexHits = undefined;
+            this.currentRequestReadTables = undefined;
+            this.currentRequestCacheHit = undefined;
+            this.currentStmtSamples = undefined;
+        }
+    }
+
+    /**
+     * Cloudflare-specific alarm implementation — the existing alarm lifecycle,
+     * injected into {@link ShardRunner} as the host-specific handler while the
+     * engine is progressively extracted. `protected` for the same reason as
+     * {@link ShardDO.handleFetchCloudflare}.
+     */
+    protected async handleAlarmCloudflare(): Promise<void> {
         this.globalPollScheduled = false;
 
         let globalShapesRemaining: number;
@@ -3165,38 +3223,23 @@ abstract class ShardDO {
 
         // workerd FORBIDS raw `BEGIN`/`COMMIT`/`SAVEPOINT` SQL inside a Durable
         // Object ("please use the state.storage.transaction() ... APIs instead")
-        // — issuing them throws and fails every transactional mutation. Use the
-        // platform primitive `state.storage.transaction(closure)`: it's atomic,
-        // rolls back automatically when the closure throws, and is correctly
-        // isolated from concurrent dispatch. (`transactionSync` is sync-only and
-        // can't wrap our async handler; the async `transaction` can.) The
-        // `storage.sql` guard above still ensures the handler's SQL has a
-        // connection. Test doubles whose storage lacks `transaction` fall back to
-        // a bare call — their fakes carry no transactional semantics anyway.
-        const transactionalStorage = this.state.storage as undefined | { transaction?: <R>(closure: () => Promise<R>) => Promise<R> };
-
-        const run = async (): Promise<T> => {
+        // — issuing them throws and fails every transactional mutation. Both
+        // halves therefore go through the platform contract: `runSerialized`
+        // isolates the span from concurrent dispatch, and `transaction` is the
+        // host's atomic, auto-rolling-back boundary. The `storage.sql` guard
+        // above still ensures the handler's SQL has a connection. On Cloudflare
+        // these map to `blockConcurrencyWhile` and `storage.transaction`; on
+        // another host they map to whatever that host offers, which is the whole
+        // point of routing through the seam rather than `state.*` directly.
+        return this.shardHost.runSerialized(async () => {
             this.transactionDepth = 1;
 
             try {
-                if (typeof transactionalStorage?.transaction === "function") {
-                    return await transactionalStorage.transaction(async () => handler());
-                }
-
-                return await handler();
+                return await this.shardHost.transaction(async () => handler());
             } finally {
                 this.transactionDepth = 0;
             }
-        };
-
-        if (typeof this.state.blockConcurrencyWhile === "function") {
-            return this.state.blockConcurrencyWhile(run);
-        }
-
-        // Test doubles may not supply `blockConcurrencyWhile`; fall through to
-        // the bare path so existing unit tests keep working. Production state
-        // always carries the gate.
-        return run();
+        });
     }
 
     /**
@@ -8604,8 +8647,6 @@ abstract class ShardDO {
         const client = pair[0];
         const server = pair[1];
 
-        this.state.acceptWebSocket(server);
-
         // Capture the verified identity the runtime forwarded on the upgrade
         // (`resolveIdentity` wired into the WS upgrade) and mint a stable
         // per-socket id. Both are stashed on the attachment so they survive
@@ -8619,10 +8660,13 @@ abstract class ShardDO {
         const expiresAtRaw = Number(request.headers.get("x-lunora-identity-exp"));
         const expiresAt = Number.isFinite(expiresAtRaw) && expiresAtRaw > 0 ? expiresAtRaw : undefined;
 
-        // Stamp admin authorization onto the socket at upgrade so later
-        // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
-        // their own) can be gated without re-checking a token per message.
-        (server as HibernatableWebSocket).serializeAttachment?.({
+        // Accept + stamp in one call through the socket host: it accepts the
+        // socket and serializes the attachment back-to-back, so no frame can
+        // arrive against an unstamped socket. Admin authorization is stamped
+        // here at upgrade so later `__lunora_admin__:*` subscribe envelopes
+        // (which carry no credential of their own) can be gated without
+        // re-checking a token per message.
+        this.socketHost.accept(server, {
             admin,
             connectionId: crypto.randomUUID(),
             subs: {},

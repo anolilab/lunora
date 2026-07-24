@@ -15,7 +15,8 @@
             { "name": "SHARD", "class_name": "TestShardDO" },
             { "name": "SESSION", "class_name": "TestSessionDO" },
             { "name": "SYNC", "class_name": "TestSyncDO" },
+            { "name": "ECHO", "class_name": "TestEchoDO" },
         ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TestShardDO", "TestSessionDO", "TestSyncDO"] }],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TestShardDO", "TestSessionDO", "TestSyncDO", "TestEchoDO"] }],
 }

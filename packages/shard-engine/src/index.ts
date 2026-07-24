@@ -6,46 +6,22 @@
  * per-shard state, OCC, CDC, reactive subscriptions, and the poke protocol.
  */
 
+export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
+export type { AggregateTally } from "./aggregate-tally";
+export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally";
+export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
 export type { DependencyTracker } from "./dependency-tracker";
 export { createDependencyTracker, depKey, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
 export type { RenderedSql, SqlEngine } from "./drizzle";
 export { param, renderSql } from "./drizzle";
 export type { GeoBoundingBox, GeoPoint } from "./geo";
-export type { RelationExistsMarker, ResolveRelationPredicatesOptions } from "./relation-predicates";
 export { boundingBoxCenter, boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
 export { NotFoundError } from "./not-found-error";
+export { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
+export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankKeyFromDoc, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
-export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
-export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
-export { serializeSqlValue } from "./serialize-sql";
-export { runSocketPool } from "./socket-pool";
-export {
-    applySelect,
-    buildSeekBeforeWhere,
-    buildSeekWhere,
-    decodeCursor,
-    encodeCursor,
-    normalizeOrderKeys,
-    softDeleteScope,
-} from "./query-args";
-export {
-    encodePartitionKey,
-    matchesRankStaticWhere,
-    RANK_TIEBREAK,
-    rankKeyFromDoc,
-    rankTableName,
-    resolveRankPartition,
-    sortColumnName,
-} from "./rank";
-export {
-    CountRlsUnsupportedError,
-    mergeWhere,
-    planAggregateLookup,
-    selectIndexForAggregate,
-    selectIndexForCount,
-    selectIndexForGroupBy,
-} from "./aggregates";
+export type { RelationExistsMarker, ResolveRelationPredicatesOptions } from "./relation-predicates";
 export {
     assertFlatPredicate,
     assertShapeShardable,
@@ -55,41 +31,7 @@ export {
     resolveRelationPredicates,
 } from "./relation-predicates";
 export { applyOnDelete, distinctValues, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
-export {
-    AGGREGATE_SQL_FUNCTION,
-    aggregateSqlFunction,
-    matchesStaticWhere,
-    normalizeCountArgument,
-    throwingScheduler,
-} from "./aggregate-sql";
-export type { AggregateTally } from "./aggregate-tally";
-export {
-    aggregateTableName,
-    coerceAggregateNumber,
-    encodeAggregateKey,
-    foldAggregateTally,
-    readAggregateValue,
-} from "./aggregate-tally";
-export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
-export type { ConflictKind } from "./transaction";
-export type { TransactionSqlLike } from "./transaction";
-export { ConflictError } from "./transaction";
-export type {
-    LifecycleDispatchInfo,
-    LifecycleEvent,
-    MutationDelta,
-    ResolvedShape,
-    RpcRequest,
-    ShapeSubscriptionQuery,
-    SocketAttachment,
-    SubscriptionEnvelope,
-    SubscriptionIdentity,
-    SubscriptionQuery,
-} from "./types";
-export type { WhereSqlStrategy } from "./where-sql";
-export { compileWhereSql } from "./where-sql";
-export type { FieldOperators, WhereInput } from "./where-types";
-export { RELATION_EXISTS_KEY } from "./where-types";
+export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
 export type {
     AggregateIndexDefinitionLike,
     AggregateOp,
@@ -130,8 +72,8 @@ export type {
     ResolveWithResult,
     RestrictableQueryOptions,
     SchedulableWorkflowReferenceLike,
-    SchemaLike,
     SchedulerLike,
+    SchemaLike,
     SearchFilterBuilderLike,
     SearchIndexDefinitionLike,
     ServerDefaultContextLike,
@@ -147,3 +89,28 @@ export type {
     ValidatorLike,
     WithInput,
 } from "./schema-types";
+export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
+export { serializeSqlValue } from "./serialize-sql";
+export type { ShardRunnerOptions } from "./shard-runner";
+export { ShardRunner } from "./shard-runner";
+export { runSocketPool } from "./socket-pool";
+export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
+export type { ConflictKind } from "./transaction";
+export type { TransactionSqlLike } from "./transaction";
+export { ConflictError } from "./transaction";
+export type {
+    LifecycleDispatchInfo,
+    LifecycleEvent,
+    MutationDelta,
+    ResolvedShape,
+    RpcRequest,
+    ShapeSubscriptionQuery,
+    SocketAttachment,
+    SubscriptionEnvelope,
+    SubscriptionIdentity,
+    SubscriptionQuery,
+} from "./types";
+export type { WhereSqlStrategy } from "./where-sql";
+export { compileWhereSql } from "./where-sql";
+export type { FieldOperators, WhereInput } from "./where-types";
+export { RELATION_EXISTS_KEY } from "./where-types";

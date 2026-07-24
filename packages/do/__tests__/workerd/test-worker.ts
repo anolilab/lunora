@@ -23,6 +23,7 @@ import { ShardDO } from "../../src/shard-do";
 import messagesSchema from "../_helpers/messages-schema";
 
 interface Env {
+    ECHO: DurableObjectNamespace<TestEchoDO>;
     LUNORA_ALLOWED_ORIGINS?: string;
     SESSION: DurableObjectNamespace<TestSessionDO>;
     SHARD: DurableObjectNamespace<TestShardDO>;
@@ -73,8 +74,31 @@ class TestShardDO extends DurableObject<Env> {
         return this.shard.webSocketClose(ws, code, reason, wasClean);
     }
 
+    /**
+     * Deliver alarms to the shard. Without this override workerd has no alarm
+     * handler to wake, so any alarm the host-contract suite (or the global-poll
+     * loop) arms would surface as a runtime error instead of a dispatch.
+     */
+    public override alarm(): Promise<void> {
+        return this.shard.alarm();
+    }
+
     public broadcast(delta: MutationDelta): void {
         this.shard.broadcastDelta(delta);
+    }
+}
+
+/**
+ * A minimal Durable Object that echoes its own id.
+ *
+ * The `ShardDirectory` conformance tests need a dispatch target whose response
+ * body is a pure function of *which* object was resolved — that is what makes
+ * "the same shard key resolves to the same shard" an observable assertion
+ * rather than a coincidence of two identical 404s.
+ */
+class TestEchoDO extends DurableObject<Env> {
+    public override async fetch(request: Request): Promise<Response> {
+        return new Response(`${new URL(request.url).pathname}:${this.ctx.id.toString()}`);
     }
 }
 
@@ -217,5 +241,5 @@ const handler = {
 };
 
 export default handler;
-export { TestSessionDO, TestShardDO, TestSyncDO };
+export { TestEchoDO, TestSessionDO, TestShardDO, TestSyncDO };
 export type { Env };

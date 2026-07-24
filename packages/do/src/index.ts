@@ -16,19 +16,6 @@ export {
     selectExportTables,
     validateImportRow,
 } from "./admin-export-import";
-export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "@lunora/shard-engine";
-export type { AggregateTally } from "@lunora/shard-engine";
-export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "@lunora/shard-engine";
-export type {
-    AggregateIndexDefinitionLike,
-    AggregateOp,
-    AggregateOptions,
-    AggregateResult,
-    GroupByEntry,
-    GroupByOptions,
-    RestrictableQueryOptions,
-} from "@lunora/shard-engine";
-export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "@lunora/shard-engine";
 export type { AuditEntry } from "./audit-log";
 export type { AuthMetrics, AuthMetricsBucket, RecordAuthEventInput } from "./auth-metrics";
 export {
@@ -40,6 +27,9 @@ export {
     readAuthMetrics,
     recordAuthEvent,
 } from "./auth-metrics";
+// Cloudflare implementations of the `@lunora/platform` host contracts. These
+// are what `@lunora/platform-cloudflare` will re-export as the default host.
+export { createShardDirectory, createShardHost, createSocketHost } from "./cloudflare-host";
 export type { ContextMetrics, ContextTracer, MetricsDeps, SpanHandle, TraceAnchor, TracerDeps } from "./context-telemetry";
 export { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
 export type {
@@ -169,33 +159,7 @@ export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
 export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
-export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "@lunora/shard-engine";
-export { applySelect, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "@lunora/shard-engine";
-export type {
-    RankDirection,
-    RankIndexDefinitionLike,
-    RankOptions,
-    RankPage,
-    RankPageOptions,
-    RankPageRow,
-    RankPageRowKey,
-    RankResult,
-    RankSortKeyLike,
-    ShardRankPageResult,
-} from "@lunora/shard-engine";
-export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "@lunora/shard-engine";
 export { serveRelationFanout } from "./relation-fanout";
-export type { ResolveRelationPredicatesOptions } from "@lunora/shard-engine";
-export {
-    assertFlatPredicate,
-    assertShapeShardable,
-    containsRelationPredicate,
-    DEFAULT_MAX_RELATION_KEYS,
-    isRelationPredicate,
-    resolveRelationPredicates,
-} from "@lunora/shard-engine";
-export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "@lunora/shard-engine";
-export { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "@lunora/shard-engine";
 export type { LogEventInput } from "./request-log";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
@@ -248,6 +212,31 @@ export type {
 export { hasTrigger, runTriggers } from "./triggers";
 export type { TtlSweepSpec } from "./ttl-sweep";
 export { selectExpiredIds } from "./ttl-sweep";
+export type { AggregateTally } from "@lunora/shard-engine";
+export type {
+    AggregateIndexDefinitionLike,
+    AggregateOp,
+    AggregateOptions,
+    AggregateResult,
+    GroupByEntry,
+    GroupByOptions,
+    RestrictableQueryOptions,
+} from "@lunora/shard-engine";
+export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "@lunora/shard-engine";
+export type {
+    RankDirection,
+    RankIndexDefinitionLike,
+    RankOptions,
+    RankPage,
+    RankPageOptions,
+    RankPageRow,
+    RankPageRowKey,
+    RankResult,
+    RankSortKeyLike,
+    ShardRankPageResult,
+} from "@lunora/shard-engine";
+export type { ResolveRelationPredicatesOptions } from "@lunora/shard-engine";
+export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "@lunora/shard-engine";
 export type { WhereSqlStrategy } from "@lunora/shard-engine";
 export type { RenderedSql, SqlEngine } from "@lunora/shard-engine";
 export type { MutationDelta, RpcRequest, ShapeSubscriptionQuery, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "@lunora/shard-engine";
@@ -256,6 +245,27 @@ export type { CacheEntry, ReactiveCacheOptions } from "@lunora/shard-engine";
 export type { FieldOperators, WhereInput } from "@lunora/shard-engine";
 export type { DependencyTracker } from "@lunora/shard-engine";
 export type { TransactionSqlLike } from "@lunora/shard-engine";
+export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "@lunora/shard-engine";
+export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "@lunora/shard-engine";
+export {
+    CountRlsUnsupportedError,
+    mergeWhere,
+    planAggregateLookup,
+    selectIndexForAggregate,
+    selectIndexForCount,
+    selectIndexForGroupBy,
+} from "@lunora/shard-engine";
+export { applySelect, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "@lunora/shard-engine";
+export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "@lunora/shard-engine";
+export {
+    assertFlatPredicate,
+    assertShapeShardable,
+    containsRelationPredicate,
+    DEFAULT_MAX_RELATION_KEYS,
+    isRelationPredicate,
+    resolveRelationPredicates,
+} from "@lunora/shard-engine";
+export { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "@lunora/shard-engine";
 export { compileWhereSql } from "@lunora/shard-engine";
 export { renderSql } from "@lunora/shard-engine";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "@lunora/shard-engine";
