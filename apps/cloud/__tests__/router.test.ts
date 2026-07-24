@@ -169,3 +169,51 @@ describe("POST /v1/logs/tail", () => {
         expect(runMutation).not.toHaveBeenCalled();
     });
 });
+
+/** POST to the platform cell-register route, optionally presenting a bearer admin token. */
+const cellPost = (body: unknown, token?: string): Request =>
+    new Request("https://control.lunora.app/v1/cells", {
+        body: JSON.stringify(body),
+        headers: {
+            "cf-connecting-ip": "operator",
+            "content-type": "application/json",
+            ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+        },
+        method: "POST",
+    });
+
+describe("POST /v1/cells", () => {
+    const env = (ctx: unknown): Record<string, unknown> => ({ __lunoraCtx: ctx, LUNORA_ADMIN_TOKEN: "admin-secret" });
+    const validBody = { cloudflareAccountId: "acc_1", dispatchNamespacePrefix: "ns", name: "eu-west" };
+
+    it("401s a missing or wrong admin token (tenant can't register a cell)", async () => {
+        const router = createDeployRouter();
+
+        expect((await router.fetch(cellPost(validBody), env(makeCtx()))).status).toBe(401);
+        expect((await router.fetch(cellPost(validBody, "nope"), env(makeCtx()))).status).toBe(401);
+    });
+
+    it("401s when no platform admin token is configured", async () => {
+        const router = createDeployRouter();
+        const response = await router.fetch(cellPost(validBody, "admin-secret"), { __lunoraCtx: makeCtx() });
+
+        expect(response.status).toBe(401);
+    });
+
+    it("400s a body missing required fields", async () => {
+        const router = createDeployRouter();
+        const response = await router.fetch(cellPost({ name: "eu-west" }, "admin-secret"), env(makeCtx()));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("registers the cell via the internal mutation with a valid admin token", async () => {
+        const router = createDeployRouter();
+        const runMutation = vi.fn().mockResolvedValue("cell_1");
+        const response = await router.fetch(cellPost(validBody, "admin-secret"), env(makeCtx({ runMutation })));
+
+        expect(response.status).toBe(201);
+        await expect(response.json()).resolves.toStrictEqual({ cellId: "cell_1" });
+        expect(runMutation).toHaveBeenCalledTimes(1);
+    });
+});
