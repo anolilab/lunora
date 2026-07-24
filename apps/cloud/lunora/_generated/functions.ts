@@ -156,6 +156,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "traces:get": lunora_traces_22.get as unknown as RegisteredLunoraFunction,
     "traces:getArchived": lunora_traces_22.getArchived as unknown as RegisteredLunoraFunction,
     "traces:list": lunora_traces_22.list as unknown as RegisteredLunoraFunction,
+    "traces:listArchived": lunora_traces_22.listArchived as unknown as RegisteredLunoraFunction,
     "uptime:prune": lunora_uptime_23.prune as unknown as RegisteredLunoraFunction,
     "uptime:recent": lunora_uptime_23.recent as unknown as RegisteredLunoraFunction,
     "uptime:summary": lunora_uptime_23.summary as unknown as RegisteredLunoraFunction,
@@ -753,6 +754,20 @@ __has7 = true;
 }
 return { ...(__has1 ? { "deploymentId": __val1 } : {}), ...(__has2 ? { "errorOnly": __val2 } : {}), ...(__has3 ? { "from": __val3 } : {}), ...(__has4 ? { "functionPath": __val4 } : {}), ...(__has5 ? { "limit": __val5 } : {}), ...(__has6 ? { "minDurationMs": __val6 } : {}), "organizationId": source["organizationId"], ...(__has7 ? { "to": __val7 } : {}) };
 });
+installCompiledValidatorMap(lunora_traces_22.listArchived.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["from"] !== "number" || !Number.isFinite(source["from"])) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["limit"] !== undefined) {
+if (typeof source["limit"] !== "number" || !Number.isFinite(source["limit"])) return DEFER;
+__val1 = source["limit"];
+__has1 = true;
+}
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["to"] !== "number" || !Number.isFinite(source["to"])) return DEFER;
+return { "from": source["from"], ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"], "to": source["to"] };
+});
 installCompiledValidatorMap(lunora_uptime_23.recent.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (typeof source["deploymentId"] !== "string") return DEFER;
@@ -1011,6 +1026,7 @@ export interface Caller {
         get: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
         getArchived: (args: { organizationId: Id<"organizations">; traceId: string }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
         list: (args: { deploymentId?: Id<"deployments">; errorOnly?: boolean; from?: number; functionPath?: string; limit?: number; minDurationMs?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
+        listArchived: (args: { from: number; limit?: number; organizationId: Id<"organizations">; to: number }) => Promise<{ durationMs: number; endedAt: number; errorCount: number; rootFunctionPath?: string; rootName: string; spanCount: number; startedAt: number; traceId: string }[]>;
     };
     uptime: {
         prune: (args?: {}) => Promise<{ pruned: number; }>;
@@ -1186,6 +1202,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         get: (args) => callRegistered(context, "traces:get", args),
         getArchived: (args) => callRegistered(context, "traces:getArchived", args),
         list: (args) => callRegistered(context, "traces:list", args),
+        listArchived: (args) => callRegistered(context, "traces:listArchived", args),
     },
     uptime: {
         prune: (args) => callRegistered(context, "uptime:prune", args),
