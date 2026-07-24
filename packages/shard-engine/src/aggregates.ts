@@ -38,8 +38,8 @@ import type {
     GroupByEntry,
     GroupByOptions,
     RestrictableQueryOptions,
-    WhereInput,
-} from "@lunora/shard-engine";
+} from "./schema-types";
+import type { WhereInput } from "./where-types";
 
 /**
  * Thrown when `count` runs in an RLS-restricted ctx. A `LunoraError` subclass

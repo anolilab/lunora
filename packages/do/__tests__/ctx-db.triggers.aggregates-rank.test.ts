@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { AggregateIndexDefinitionLike } from "../src/aggregates";
+import type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { RankIndexDefinitionLike } from "@lunora/shard-engine";

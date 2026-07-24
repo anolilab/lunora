@@ -37,6 +37,14 @@ export {
     resolveRankPartition,
     sortColumnName,
 } from "./rank";
+export {
+    CountRlsUnsupportedError,
+    mergeWhere,
+    planAggregateLookup,
+    selectIndexForAggregate,
+    selectIndexForCount,
+    selectIndexForGroupBy,
+} from "./aggregates";
 export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ConflictKind } from "./transaction";
 export type { TransactionSqlLike } from "./transaction";

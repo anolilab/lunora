@@ -1,7 +1,7 @@
 import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
-import type { AggregateIndexDefinitionLike } from "../src/aggregates";
+import type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 

@@ -25,7 +25,7 @@ import { param, SCAN_DEP } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
-import { mergeWhere } from "./aggregates";
+import { mergeWhere } from "@lunora/shard-engine";
 // Type-only imports for the structural surfaces the DO writer threads in — value
 // imports would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";

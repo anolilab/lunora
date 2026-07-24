@@ -27,8 +27,8 @@ export type {
     GroupByEntry,
     GroupByOptions,
     RestrictableQueryOptions,
-} from "./aggregates";
-export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
+} from "@lunora/shard-engine";
+export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "@lunora/shard-engine";
 export type { AuditEntry } from "./audit-log";
 export type { AuthMetrics, AuthMetricsBucket, RecordAuthEventInput } from "./auth-metrics";
 export {

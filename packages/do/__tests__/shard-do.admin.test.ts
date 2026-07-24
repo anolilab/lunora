@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import type { SocketAttachment } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AggregateIndexDefinitionLike } from "../src/aggregates";
+import type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
 import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration";

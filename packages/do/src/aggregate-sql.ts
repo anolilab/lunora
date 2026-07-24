@@ -14,7 +14,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { WhereInput } from "@lunora/shard-engine";
 
-import type { RestrictableQueryOptions } from "./aggregates";
+import type { RestrictableQueryOptions } from "@lunora/shard-engine";
 import type { SchedulerLike } from "./triggers";
 
 /** Marker keys distinguishing a restrictable-query option set from a bare `WhereInput` tree. */
