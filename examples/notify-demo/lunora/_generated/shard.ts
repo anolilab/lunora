@@ -699,8 +699,6 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
 
-            const { notify, push } = createNotify(notifyConfig, env);
-
             const secrets = createSecrets(env);
 
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
@@ -741,6 +739,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // writing mutation's trace from the shared per-request field.
             const trace = this.makeTracer(logFunctionPath, observability, options.identity ? undefined : this.getCurrentTrace());
             const metrics = this.makeMetrics(logFunctionPath, observability);
+
+            const { notify, push } = createNotify(notifyConfig, env, { log, metrics });
 
             // `ctx.now`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
