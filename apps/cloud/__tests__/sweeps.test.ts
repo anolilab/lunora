@@ -6,6 +6,7 @@ import { teardownPorts, usageRollbackPorts } from "../src/deploy/sweeps";
 
 /** A fake ControlPlaneDb whose findMany answers per-table from the given pages. */
 const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => ({
+    delete: () => Promise.resolve(undefined),
     findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
     insert: () => Promise.resolve("id"),
     patch: () => Promise.resolve(undefined),
@@ -48,6 +49,25 @@ describe(teardownPorts, () => {
         await ports.markTornDown("dep_1");
 
         expect(patch).toHaveBeenCalledWith("dep_1", { teardownAt: 5000, updatedAt: 5000 }, "deployments");
+    });
+
+    it("releaseAlias deletes the ownership ledger row(s) for the alias", async () => {
+        const deleteRow = vi.fn(() => Promise.resolve(undefined));
+        const database = fakeDb({ aliasOwnership: [{ _id: "ao_1", alias: "app" }] }, { delete: deleteRow });
+        const ports = teardownPorts(database, () => Promise.resolve(), 1000);
+
+        await ports.releaseAlias("app");
+
+        expect(deleteRow).toHaveBeenCalledWith("ao_1", "aliasOwnership");
+    });
+
+    it("releaseAlias is a no-op when no ownership row exists (pre-ledger or already released)", async () => {
+        const deleteRow = vi.fn(() => Promise.resolve(undefined));
+        const ports = teardownPorts(fakeDb({ aliasOwnership: [] }, { delete: deleteRow }), () => Promise.resolve(), 1000);
+
+        await ports.releaseAlias("ghost");
+
+        expect(deleteRow).not.toHaveBeenCalled();
     });
 });
 
