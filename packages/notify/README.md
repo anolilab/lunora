@@ -98,6 +98,17 @@ for (const message of batch.messages) await runPushBroadcastJob(ctx.push, messag
 
 `SubscriptionStore` implementations: `memorySubscriptionStore()` (non-durable default, tests/dev) and `d1SubscriptionStore(db)` (durable, edge-safe, lazy table creation). Lifecycle: register (upsert), list/filter (by kind or user), status marking, and automatic prune of gone subscriptions on send/broadcast.
 
+## Delivery observability
+
+Every send is counted onto `ctx.metrics` and failures onto `ctx.log` for you — codegen threads the request's logger/metrics into `ctx.notify` (`createNotify(notifyConfig, env, { log, metrics })`), so there is nothing to wire. Two low-cardinality metric series feed the durable metric history + trend charts:
+
+- **`notify.send`** `{ channel, provider, status }` — one per attempted send. `status` is `accepted` (the provider took it), `failed`, or `gone` (endpoint unregistered — 404/410 / FCM `UNREGISTERED` — and pruned).
+- **`notify.skipped`** `{ channel, reason }` — a send that reached nobody: `no-subscriptions-matched` (empty broadcast) or `channel-not-configured`.
+
+A **failed** send also emits one `ctx.log.warn` line carrying the error and, for push, the subscription/user ids — trace-correlated to the enclosing action and durably archived. Successes and prunes stay off the log.
+
+`accepted` means the provider **accepted** the message, not that it was delivered or opened: Web Push and FCM give no delivery/open receipts, so the status stops at the send attempt. See [Observability → Delivery metrics](/docs/concepts/observability#delivery-metrics-notify).
+
 ## Status
 
 Phases 0–2 and the Phase-3 advisor lints + queue-backed fan-out are shipped. Remaining: the codegen ctx-splice that auto-wires `ctx.notify` / `ctx.push` from `lunora/notify.ts` (mirroring `defineFlags` → `ctx.flags`; `createNotify` is the factory it calls), the codegen advisor feeder, and the Studio Notifications page. See `plans/165-push-notifications.md`.
