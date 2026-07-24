@@ -6718,7 +6718,7 @@ abstract class ShardDO {
      * Read-only: it touches no SQLite and mutates no socket state.
      */
     private collectSubscriptions(): SubscriptionsResult {
-        return summarizeSubscriptions(this.state.getWebSockets().map((ws) => this.readAttachment(ws)));
+        return summarizeSubscriptions(this.socketHost.getSockets().map((socket) => this.readAttachment(socket)));
     }
 
     /**
@@ -6735,7 +6735,7 @@ abstract class ShardDO {
      * same count, never a divergent one.
      */
     private collectFanoutMetrics(): FanoutMetricsResult {
-        const summary = summarizeFanoutTopics(this.state.getWebSockets().map((ws) => this.readAttachment(ws)));
+        const summary = summarizeFanoutTopics(this.socketHost.getSockets().map((socket) => this.readAttachment(socket)));
         const relayCount = this.relay?.relayCount() ?? 0;
 
         return {
@@ -8835,15 +8835,20 @@ abstract class ShardDO {
         let scanned = 0;
         let delivered = 0;
 
-        for (const ws of this.state.getWebSockets()) {
+        // The sender arrives as a runtime socket (it came off `webSocketMessage`)
+        // while enumeration yields handles, so bridge it once up front rather
+        // than comparing across the two worlds inside the loop.
+        const excludeId = exclude === undefined ? undefined : this.socketHost.handleFor(exclude)?.id;
+
+        for (const socket of this.socketHost.getSockets()) {
             scanned += 1;
 
-            if (ws === exclude || this.readAttachment(ws).whispers?.includes(topic) !== true) {
+            if (socket.id === excludeId || this.readAttachment(socket).whispers?.includes(topic) !== true) {
                 continue;
             }
 
             // Best-effort fan-out; a closed socket is simply skipped.
-            trySendFrame(ws, frame);
+            trySendFrame(socket, frame);
             delivered += 1;
         }
 
@@ -8852,9 +8857,16 @@ abstract class ShardDO {
         return delivered;
     }
 
+    /**
+     * Read a socket's hibernation attachment.
+     *
+     * Typed on the attachment surface rather than `WebSocket` so it accepts a
+     * `SocketHandle` from `@lunora/platform` as readily as a runtime socket —
+     * the two coexist while the socket layer migrates onto the host contract.
+     */
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket
-    private readAttachment(ws: WebSocket): SocketAttachment {
-        const raw = (ws as HibernatableWebSocket).deserializeAttachment?.();
+    private readAttachment(ws: { deserializeAttachment?: () => unknown }): SocketAttachment {
+        const raw = ws.deserializeAttachment?.();
 
         if (raw && typeof raw === "object" && "subs" in raw && (raw as { subs?: unknown }).subs) {
             return raw as SocketAttachment;

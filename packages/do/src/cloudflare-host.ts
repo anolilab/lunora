@@ -170,6 +170,13 @@ class CloudflareSocketHandle implements SocketHandle {
 
     private readonly ws: WebSocket;
 
+    /** Live outbound queue depth, read through to the runtime socket. */
+    public get bufferedAmount(): number | undefined {
+        const { bufferedAmount } = this.ws as { bufferedAmount?: unknown };
+
+        return typeof bufferedAmount === "number" ? bufferedAmount : undefined;
+    }
+
     public constructor(ws: WebSocket, id: string) {
         this.ws = ws;
         this.id = id;
@@ -241,6 +248,16 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
         // contract's requirement — a superset would fan updates out across
         // subscriptions that never asked for them.
         getSockets: (tag) => state.getWebSockets(tag).map((ws) => getHandle(ws)),
+        handleFor: (socket) => {
+            const ws = socket as WebSocket;
+
+            // A socket the runtime hands to `webSocketMessage`/`webSocketClose`
+            // may predate this wake, so there may be no cached handle: rebuild
+            // it from the durable id tag. `readSocketId` only falls back to a
+            // wake-local id when the runtime has no tags at all (test doubles),
+            // and an unaccepted socket has none either way.
+            return liveHandles.get(ws) ?? (state.getWebSockets().includes(ws) ? getHandle(ws) : undefined);
+        },
     };
 };
 
