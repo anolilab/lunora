@@ -69,7 +69,11 @@ export interface ShardAlarms {
     delete: () => Promise<void> | void;
     /** Read the currently scheduled alarm timestamp, if any. */
     get: () => Promise<number | null> | number | null;
-    /** Schedule the next alarm. `null` clears any pending alarm. */
+
+    /**
+     * Schedule the next alarm. Call {@link ShardAlarms.delete} to clear a
+     * pending alarm — `set` always schedules and never clears.
+     */
     set: (timestamp: number | Date) => Promise<void> | void;
 }
 

@@ -74,8 +74,13 @@ export interface PlatformCapabilities {
 }
 
 /**
- * The Cloudflare capability matrix — the reference implementation. Every
- * feature is native on Cloudflare.
+ * The Cloudflare capability matrix — the reference implementation.
+ *
+ * `native` means the platform itself provides the feature; `emulated` means
+ * Lunora builds it on top of lower-level platform primitives (or a third-party
+ * service) rather than consuming a first-class product. Codegen and Studio read
+ * this distinction to report parity honestly, so a feature Lunora implements
+ * itself must not be reported as native even when it works flawlessly.
  */
 export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
     id: "cloudflare",
@@ -86,7 +91,7 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
         localSql: { level: "native", note: "state.storage.sql (SQLite)" },
         shardAlarms: { level: "native", note: "state.storage.setAlarm" },
-        crossShardFanout: { level: "native", note: "Query coordinator + relay tier" },
+        crossShardFanout: { level: "emulated", note: "Lunora query coordinator + relay tier over Durable Objects" },
         queues: { level: "native", note: "Cloudflare Queues" },
         workflows: { level: "native", note: "Cloudflare Workflows" },
         scheduler: { level: "native", note: "SchedulerDO + Cron Triggers" },
@@ -98,7 +103,7 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         containers: { level: "native", note: "Cloudflare Containers" },
         analytics: { level: "native", note: "Analytics Engine" },
         pipelines: { level: "native", note: "Cloudflare Pipelines" },
-        mail: { level: "native", note: "Resend via queue" },
+        mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
         hyperdrive: { level: "native", note: "Cloudflare Hyperdrive" },
     },

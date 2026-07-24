@@ -14,10 +14,14 @@ It also ships a reference in-memory host factory (`createReferenceHost`) built o
 ## Usage
 
 ```ts
-import { defineHostContractSuite, createReferenceHost } from "@lunora/platform-conformance";
+import { describe, expect, it } from "vitest";
 
-defineHostContractSuite("reference", createReferenceHost);
+import { createReferenceHost, defineHostContractSuite } from "@lunora/platform-conformance";
+
+defineHostContractSuite("reference", createReferenceHost, { describe, expect, it });
 ```
+
+The Vitest API is injected rather than imported by the suite, so a host can run the same contract under a different test runner by passing a compatible `describe`/`expect`/`it`.
 
 For a real host, implement the `@lunora/platform` contracts and pass your factory to `defineHostContractSuite`.
 

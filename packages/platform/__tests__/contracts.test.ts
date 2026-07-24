@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, SocketHost } from "../src";
-import { CLOUDFLARE_CAPABILITIES, NOOP_EXECUTION_CONTEXT } from "../src";
+import { CLOUDFLARE_CAPABILITIES, NOOP_EXECUTION_CONTEXT, resolveShard } from "../src";
 
 describe("@lunora/platform contracts", () => {
     it("exports the Cloudflare capability matrix", () => {
@@ -11,6 +11,15 @@ describe("@lunora/platform contracts", () => {
         expect(CLOUDFLARE_CAPABILITIES.name).toBe("Cloudflare");
         expect(CLOUDFLARE_CAPABILITIES.features.shardedState?.level).toBe("native");
         expect(CLOUDFLARE_CAPABILITIES.features.websocketHibernation?.level).toBe("native");
+    });
+
+    // Features Lunora builds itself must not claim platform parity: codegen and
+    // Studio read `level` to report what the target actually provides.
+    it("reports Lunora-implemented features as emulated, not native", () => {
+        expect.assertions(2);
+
+        expect(CLOUDFLARE_CAPABILITIES.features.crossShardFanout?.level).toBe("emulated");
+        expect(CLOUDFLARE_CAPABILITIES.features.mail?.level).toBe("emulated");
     });
 
     it("exports the noop execution context", () => {
@@ -56,17 +65,53 @@ describe("@lunora/platform contracts", () => {
         expect(scheduler.schedule).toBeDefined();
     });
 
-    it("structurally types a minimal shard directory", () => {
+    it("structurally types a two-step shard directory", async () => {
+        expect.assertions(1);
+
+        const directory: ShardDirectory = {
+            get: (id) => {
+                return { fetch: async () => new Response(String(id)) };
+            },
+            idForName: (name) => `shard:${name}`,
+        };
+
+        const response = await resolveShard(directory, "a").fetch(new Request("http://localhost/"));
+
+        await expect(response.text()).resolves.toBe("shard:a");
+    });
+
+    it("structurally types a name-only shard directory without id stubs", async () => {
+        expect.assertions(1);
+
+        // The whole point of the union: a registry that only understands names
+        // type-checks without stubbing out `idForName`/`get`.
+        const directory: ShardDirectory = {
+            getByName: (name) => {
+                return { fetch: async () => new Response(name) };
+            },
+        };
+
+        const response = await resolveShard(directory, "a").fetch(new Request("http://localhost/"));
+
+        await expect(response.text()).resolves.toBe("a");
+    });
+
+    it("prefers direct name lookup when a directory offers both", async () => {
         expect.assertions(1);
 
         const directory: ShardDirectory = {
             get: () => {
-                return { fetch: async () => new Response("ok") };
+                return { fetch: async () => new Response("two-step") };
+            },
+            getByName: () => {
+                return { fetch: async () => new Response("direct") };
             },
             idForName: (name) => name,
         };
 
-        expect(directory.idForName("a")).toBe("a");
+        const response = await resolveShard(directory, "a").fetch(new Request("http://localhost/"));
+
+        await expect(response.text()).resolves.toBe("direct");
     });
 
     it("structurally types a minimal socket host", () => {

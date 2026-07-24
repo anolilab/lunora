@@ -13,8 +13,9 @@
  * tag) to broadcast query invalidations and shape updates.
  *
  * A non-Cloudflare host may keep sockets in memory or in a process-local
- * registry; the contract only requires that attachments are durable and that
- * `getSockets` returns the currently-live set.
+ * registry; the contract requires that attachments are durable, that
+ * `getSockets()` returns the currently-live set, and that `getSockets(tag)`
+ * returns *only* the sockets carrying that tag.
  */
 
 /** Opaque socket handle the host returns from `accept`. */
@@ -43,10 +44,15 @@ export interface SocketHost {
     accept: (socket: unknown, attachment?: unknown) => SocketHandle;
 
     /**
-     * Enumerate currently-live sockets. When `tag` is supplied, only sockets
-     * previously tagged with that value are returned. Tags are a Cloudflare
-     * concept; hosts without native tagging may filter in userland or ignore
-     * the parameter and return all sockets.
+     * Enumerate currently-live sockets. When `tag` is supplied the result MUST
+     * contain exactly the sockets carrying that tag — never a superset.
+     *
+     * Tags are a Cloudflare concept, but a host without native tagging must
+     * still filter in userland (see {@link SocketHost.setTag}); returning every
+     * socket for a tagged call would fan a shape update out to unrelated
+     * subscriptions, which across tenants is a data leak rather than a
+     * performance wart. A host that cannot filter must omit {@link
+     * SocketHost.setTag} so the engine fails closed and never routes by tag.
      */
     getSockets: (tag?: string) => SocketHandle[];
 
@@ -57,9 +63,11 @@ export interface SocketHost {
     removeTag?: (socket: SocketHandle, tag?: string) => void;
 
     /**
-     * Tag a socket for later fan-out filtering. Optional on hosts that don't
-     * support native tags; a no-op is acceptable when the engine doesn't use
-     * tag-based routing.
+     * Tag a socket for later fan-out filtering. Presence of this method is the
+     * host's declaration that it supports tag-based routing — i.e. that
+     * {@link SocketHost.getSockets} filters exactly. Omit it (rather than
+     * supplying a no-op) on hosts that cannot filter, so callers fall back to
+     * untagged enumeration instead of silently broadcasting too widely.
      */
     setTag?: (socket: SocketHandle, tag: string) => void;
 }

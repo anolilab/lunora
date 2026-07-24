@@ -1,3 +1,5 @@
+import { resolveShard } from "@lunora/platform";
+
 import type { ConformanceHostFactory, ReferenceHost } from "./reference-host";
 
 /**
@@ -172,32 +174,49 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 host.cleanup?.();
             });
 
-            it("filters sockets by tag", async () => {
-                expect.assertions(2);
+            // A tagged `getSockets` must return *exactly* the tagged sockets.
+            // Length alone would pass a host that returns the wrong socket, and
+            // a superset would fan shape updates out to unrelated (possibly
+            // cross-tenant) subscriptions — so identity is asserted here.
+            it("returns exactly the tagged sockets for a tagged fan-out", async () => {
+                expect.assertions(5);
 
                 const host = await createHost();
+
+                // `setTag` is the host's declaration that it supports tag-based
+                // routing; a host without it must never be asked to filter.
+                expect(host.socket.setTag).toBeDefined();
+
                 const a = host.socket.accept({}, {});
                 const b = host.socket.accept({}, {});
+                const untagged = host.socket.accept({}, {});
 
                 host.socket.setTag?.(a, "room-a");
                 host.socket.setTag?.(b, "room-b");
 
-                expect(host.socket.getSockets("room-a")).toHaveLength(1);
-                expect(host.socket.getSockets("room-b")).toHaveLength(1);
+                expect(host.socket.getSockets("room-a").map((socket) => socket.id)).toStrictEqual([a.id]);
+                expect(host.socket.getSockets("room-b").map((socket) => socket.id)).toStrictEqual([b.id]);
+                // An untagged socket leaks into no tagged fan-out, and an
+                // unknown tag matches nothing.
+                expect(host.socket.getSockets("room-c").map((socket) => socket.id)).toStrictEqual([]);
+                expect(host.socket.getSockets().map((socket) => socket.id)).toContain(untagged.id);
 
                 host.cleanup?.();
             });
         });
 
         describe("ShardDirectory", () => {
+            // Asserted through `resolveShard` rather than `idForName`/`get`
+            // directly: a direct-lookup host has no observable shard id, so the
+            // stub is the only surface both directory shapes share.
             it("resolves shard keys deterministically", async () => {
                 expect.assertions(1);
 
                 const host = await createHost();
-                const first = host.directory.idForName("tenant-42");
-                const second = host.directory.idForName("tenant-42");
+                const first = await resolveShard(host.directory, "tenant-42").fetch(new Request("http://localhost/"));
+                const second = await resolveShard(host.directory, "tenant-42").fetch(new Request("http://localhost/"));
 
-                expect(first).toEqual(second);
+                await expect(first.text()).resolves.toBe(await second.text());
 
                 host.cleanup?.();
             });
@@ -206,11 +225,13 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 expect.assertions(1);
 
                 const host = await createHost();
-                const id = host.directory.idForName("tenant-42");
-                const stub = host.directory.get(id);
+                const stub = resolveShard(host.directory, "tenant-42");
                 const response = await stub.fetch(new Request("http://localhost/"));
 
-                expect(await response.text()).toBe(String(id));
+                // The body is the shard's business; the contract only promises
+                // that a resolved stub is dispatchable and answers with a
+                // Response.
+                expect(response).toBeInstanceOf(Response);
 
                 host.cleanup?.();
             });
