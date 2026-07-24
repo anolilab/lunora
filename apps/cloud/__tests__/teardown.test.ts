@@ -29,6 +29,7 @@ describe(runTeardownSweep, () => {
 
                 return Promise.resolve();
             },
+            releaseAlias: () => Promise.resolve(),
         });
 
         expect(destroyed).toStrictEqual(["a-v1", "b-v1"]);
@@ -47,6 +48,7 @@ describe(runTeardownSweep, () => {
             },
             listPending: () => Promise.resolve([target("x", "production")]),
             markTornDown: () => Promise.resolve(),
+            releaseAlias: () => Promise.resolve(),
         });
 
         expect(namespace).toBe("lunora-production");
@@ -63,6 +65,7 @@ describe(runTeardownSweep, () => {
 
                 return Promise.resolve();
             },
+            releaseAlias: () => Promise.resolve(),
         });
 
         // b failed and was never marked; a and c still torn down.
@@ -75,6 +78,7 @@ describe(runTeardownSweep, () => {
             destroy: () => Promise.resolve(),
             listPending: () => Promise.resolve([target("a")]),
             markTornDown: () => Promise.reject(new Error("d1 write failed")),
+            releaseAlias: () => Promise.resolve(),
         });
 
         // Left pending (teardownAt unset) so the next tick retries — the 404-
@@ -87,9 +91,48 @@ describe(runTeardownSweep, () => {
             destroy: () => Promise.reject(new Error("should not be called")),
             listPending: () => Promise.resolve([]),
             markTornDown: () => Promise.reject(new Error("should not be called")),
+            releaseAlias: () => Promise.reject(new Error("should not be called")),
         });
 
         expect(result).toStrictEqual({ failed: 0, tornDown: 0 });
+    });
+
+    it("releases the alias only when its last deployment is torn down (deleteResources)", async () => {
+        const released: string[] = [];
+        const lastOfAlias = (id: string): TeardownTarget => ({ ...target(id), deleteResources: true });
+
+        const result = await runTeardownSweep({
+            destroy: () => Promise.resolve(),
+            // "keep" is a routine version prune (deleteResources=false); "gone" is the last one.
+            listPending: () => Promise.resolve([target("keep"), lastOfAlias("gone")]),
+            markTornDown: () => Promise.resolve(),
+            releaseAlias: (alias) => {
+                released.push(alias);
+
+                return Promise.resolve();
+            },
+        });
+
+        expect(released).toStrictEqual(["gone"]);
+        expect(result).toStrictEqual({ failed: 0, tornDown: 2 });
+    });
+
+    it("leaves the row pending (no markTornDown) when releaseAlias fails, so it retries", async () => {
+        const marked: string[] = [];
+
+        const result = await runTeardownSweep({
+            destroy: () => Promise.resolve(),
+            listPending: () => Promise.resolve([{ ...target("gone"), deleteResources: true }]),
+            markTornDown: (id) => {
+                marked.push(id);
+
+                return Promise.resolve();
+            },
+            releaseAlias: () => Promise.reject(new Error("d1 delete failed")),
+        });
+
+        expect(marked).toStrictEqual([]);
+        expect(result).toStrictEqual({ failed: 1, tornDown: 0 });
     });
 });
 

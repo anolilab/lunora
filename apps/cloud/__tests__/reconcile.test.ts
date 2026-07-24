@@ -5,6 +5,7 @@ import type { CreditsLedgerPort } from "../src/billing/overage";
 import { buildOverageReconcileData, overageFleetPorts } from "../src/billing/reconcile";
 
 const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => ({
+    delete: () => Promise.resolve(undefined),
     findMany: (table, args) => {
         const rows = pages[table] ?? [];
         const where = args?.where;
