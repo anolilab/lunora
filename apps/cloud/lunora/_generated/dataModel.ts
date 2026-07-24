@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alertRuleState" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "aliasOwnership" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alertRuleState" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -116,6 +116,15 @@ export interface Doc_deployments {
     failedAt?: number;
     destroyedAt?: number;
     teardownAt?: number;
+}
+
+export interface Doc_aliasOwnership {
+    _id: Id<"aliasOwnership">;
+    _creationTime: number;
+    alias: string;
+    createdAt: number;
+    organizationId: Id<"organizations">;
+    projectId: Id<"projects">;
 }
 
 export interface Doc_deployKeys {
@@ -475,6 +484,7 @@ export interface DataModel {
     members: Doc_members;
     projects: Doc_projects;
     deployments: Doc_deployments;
+    aliasOwnership: Doc_aliasOwnership;
     deployKeys: Doc_deployKeys;
     overageDebits: Doc_overageDebits;
     tenantLogs: Doc_tenantLogs;
@@ -514,6 +524,7 @@ export interface IndexNamesByTable {
     members: "by_org_user";
     projects: "by_org_slug" | "by_github_repo";
     deployments: "by_script" | "by_project" | "by_kind" | "by_alias";
+    aliasOwnership: "by_project" | "by_alias";
     deployKeys: "by_org" | "by_hash";
     overageDebits: "by_org_period";
     tenantLogs: "by_trace" | "by_script_time" | "by_org";
@@ -550,6 +561,7 @@ export interface SearchIndexNamesByTable {
     members: never;
     projects: never;
     deployments: never;
+    aliasOwnership: never;
     deployKeys: never;
     overageDebits: never;
     tenantLogs: never;
@@ -586,6 +598,7 @@ export interface RankIndexNamesByTable {
     members: never;
     projects: never;
     deployments: never;
+    aliasOwnership: never;
     deployKeys: never;
     overageDebits: never;
     tenantLogs: never;
@@ -622,6 +635,7 @@ export interface GeoIndexNamesByTable {
     members: never;
     projects: never;
     deployments: never;
+    aliasOwnership: never;
     deployKeys: never;
     overageDebits: never;
     tenantLogs: never;
@@ -733,6 +747,15 @@ export interface Insert_deployments {
     failedAt?: number;
     destroyedAt?: number;
     teardownAt?: number;
+}
+
+export interface Insert_aliasOwnership {
+    _id?: Id<"aliasOwnership">;
+    _creationTime?: number;
+    alias: string;
+    createdAt: number;
+    organizationId: Id<"organizations">;
+    projectId: Id<"projects">;
 }
 
 export interface Insert_deployKeys {
@@ -1093,6 +1116,7 @@ export interface InsertModel {
     members: Insert_members;
     projects: Insert_projects;
     deployments: Insert_deployments;
+    aliasOwnership: Insert_aliasOwnership;
     deployKeys: Insert_deployKeys;
     overageDebits: Insert_overageDebits;
     tenantLogs: Insert_tenantLogs;
@@ -1144,6 +1168,7 @@ export interface Relations {
     members: {};
     projects: {};
     deployments: {};
+    aliasOwnership: {};
     deployKeys: {};
     overageDebits: {};
     tenantLogs: {};
