@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
+import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 
 /**
@@ -24,9 +24,10 @@ interface InstallationRow {
 /**
  * Stage an installation (webhook `installation created`). Upserts by
  * installation id; deliberately records no org — claiming is a separate,
- * session-authorized step.
+ * session-authorized step. `internal` — only the HMAC-verified webhook handler
+ * invokes it (`context.runMutation`), never a public RPC client.
  */
-export const record = mutation
+export const record = internalMutation
     .input({ accountLogin: v.string(), installationId: v.number() })
     .mutation(async ({ ctx: context, args: { accountLogin, installationId } }): Promise<Id<"githubInstallations">> => {
         const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
@@ -75,10 +76,11 @@ export const claim = mutation
     });
 
 /**
- * Remove an installation (webhook `installation deleted` — GitHub-driven). A
- * spoofed call can only force a re-claim, never link data across orgs.
+ * Remove an installation (webhook `installation deleted` — GitHub-driven).
+ * `internal` — only the HMAC-verified webhook handler invokes it, so a public
+ * RPC client can no longer unlink an arbitrary org's installation by id.
  */
-export const remove = mutation.input({ installationId: v.number() }).mutation(async ({ ctx: context, args: { installationId } }): Promise<void> => {
+export const remove = internalMutation.input({ installationId: v.number() }).mutation(async ({ ctx: context, args: { installationId } }): Promise<void> => {
     const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
     const existing = (page as unknown as InstallationRow[])[0];
 
