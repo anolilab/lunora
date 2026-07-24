@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
+import { internalMutation, query, v } from "./_generated/server.js";
 
 interface CellRow {
     _id: Id<"cells">;
@@ -25,14 +25,6 @@ interface CellSummary {
     name: string;
     status: "active" | "draining" | "suspended";
 }
-
-const assertSignedIn = (userId: null | string): string => {
-    if (!userId) {
-        throw new LunoraError("UNAUTHORIZED", "not signed in");
-    }
-
-    return userId;
-};
 
 /**
  * List every cell (Cloudflare account) the fleet spans (§2.5). Platform-admin
@@ -62,8 +54,14 @@ export const list = query.query(async ({ ctx: context }): Promise<CellSummary[]>
  * Register a new cell. Provisioning the underlying Cloudflare account +
  * dispatch namespaces is cell bring-up IaC (Alchemy, §2.2) and happens out of
  * band; this records the cell so orgs can be assigned to it.
+ *
+ * `internal` — registering a fleet cell is a platform-operator action, not a
+ * tenant one. It is reachable only through the `LUNORA_ADMIN_TOKEN`-gated
+ * `POST /v1/cells` route (the platform trust boundary), never public RPC, so a
+ * signed-in tenant can no longer inject cells into the fleet topology. Mutations
+ * can't read `ctx.env`, so the admin-secret check lives at the router.
  */
-export const register = mutation
+export const register = internalMutation
     .input({
         cloudflareAccountId: v.string(),
         dispatchNamespacePrefix: v.string(),
@@ -71,8 +69,6 @@ export const register = mutation
         name: v.string(),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"cells">> => {
-        assertSignedIn(context.auth.userId);
-
         return context.db.insert("cells", {
             cloudflareAccountId: arguments_.cloudflareAccountId,
             createdAt: Date.now(),

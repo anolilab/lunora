@@ -98,6 +98,18 @@ export const deployments = sqliteTable("deployments", {
     by_alias: index("by_alias").on(t.alias),
 }));
 
+export const aliasOwnership = sqliteTable("aliasOwnership", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    alias: text("alias").notNull(),
+    createdAt: real("createdAt").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    projectId: text("projectId").references(() => projects._id).notNull(),
+}, (t) => ({
+    by_project: index("by_project").on(t.projectId),
+    by_alias: uniqueIndex("by_alias").on(t.alias),
+}));
+
 export const deployKeys = sqliteTable("deployKeys", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

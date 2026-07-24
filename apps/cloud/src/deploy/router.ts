@@ -971,6 +971,54 @@ const handleTenantCustomDomainRoute = async (request: Request, environment: Rout
 };
 
 /**
+ * `POST /v1/cells` — register a fleet cell (platform-operator action, §2.5).
+ * Bearer-gated with `LUNORA_ADMIN_TOKEN` (the platform trust boundary): cell
+ * bring-up IaC holds the token. The delegated mutation is `internal`, so this
+ * route is the only path in — a tenant can't inject cells over public RPC.
+ */
+const handleCellRegisterRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const authorization = request.headers.get("authorization") ?? "";
+    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+
+    if (!environment.LUNORA_ADMIN_TOKEN || !constantTimeEqual(token, environment.LUNORA_ADMIN_TOKEN)) {
+        return jsonError(401, "unauthorized");
+    }
+
+    let body: { cloudflareAccountId?: unknown; dispatchNamespacePrefix?: unknown; jurisdiction?: unknown; name?: unknown };
+
+    try {
+        body = (await request.json()) as typeof body;
+    } catch {
+        return jsonError(400, "invalid JSON body");
+    }
+
+    const { cloudflareAccountId, dispatchNamespacePrefix, jurisdiction, name } = body;
+
+    if (typeof cloudflareAccountId !== "string" || typeof dispatchNamespacePrefix !== "string" || typeof name !== "string") {
+        return jsonError(400, "cloudflareAccountId, dispatchNamespacePrefix, and name are required");
+    }
+
+    if (jurisdiction !== undefined && typeof jurisdiction !== "string") {
+        return jsonError(400, "jurisdiction must be a string when provided");
+    }
+
+    const cellId = await context.runMutation<string>(internal.cells.register, {
+        cloudflareAccountId,
+        dispatchNamespacePrefix,
+        ...(jurisdiction === undefined ? {} : { jurisdiction }),
+        name,
+    });
+
+    return Response.json({ cellId }, { status: 201 });
+};
+
+/**
  * The control-plane HTTP API, mounted as the worker's `httpRouter` (lowest-
  * priority matcher). Routes `POST /v1/{deploy,github/webhook,admin,usage,
  * billing/webhook,invitations/send}` and 404s the rest. The worker injects the
@@ -1172,6 +1220,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleTenantPlanRoute, method: "GET", path: "/v1/tenants/plan", spec: { auth: "adminToken" } },
         { handler: handleTenantRouteRoute, method: "GET", path: "/v1/tenants/route", spec: { auth: "adminToken" } },
         { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
+        { handler: handleCellRegisterRoute, method: "POST", path: "/v1/cells", spec: { auth: "adminToken" } },
     ];
 
     // The MCP surface (GAPS.md Ring-3 #8): opted-in tool routes are exposed to
