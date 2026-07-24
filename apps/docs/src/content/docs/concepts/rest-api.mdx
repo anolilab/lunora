@@ -30,7 +30,7 @@ Both give you HTTP. They answer different questions.
   specific URL, shape, or protocol." A Stripe webhook, an OAuth callback, a file
   download, a REST shape that has to match someone else's spec.
 
-Reach for `.expose` when the endpoint exists to serve *your* procedure, and for
+Reach for `.expose` when the endpoint exists to serve _your_ procedure, and for
 `httpRoute` when the endpoint's shape is dictated by something outside your app.
 :::
 
@@ -53,11 +53,11 @@ request for one 404s like any unexposed procedure.
 The route is derived from the procedure's path — `<namespace>:<function>` becomes
 `/_lunora/rest/<namespace>/<function>`:
 
-| Procedure                    | Method            | URL                                |
-| ---------------------------- | ----------------- | ---------------------------------- |
-| `query` — `messages:list`    | `GET` (or `POST`) | `/_lunora/rest/messages/list`      |
-| `mutation` — `messages:send` | `POST`            | `/_lunora/rest/messages/send`      |
-| `action` — `billing:sync`    | `POST`            | `/_lunora/rest/billing/sync`       |
+| Procedure                    | Method            | URL                           |
+| ---------------------------- | ----------------- | ----------------------------- |
+| `query` — `messages:list`    | `GET` (or `POST`) | `/_lunora/rest/messages/list` |
+| `mutation` — `messages:send` | `POST`            | `/_lunora/rest/messages/send` |
+| `action` — `billing:sync`    | `POST`            | `/_lunora/rest/billing/sync`  |
 
 A query is a safe read, so it is a `GET`; a mutation or action changes state, so
 it is a `POST`. Queries **also** accept `POST` for the case where the arguments
@@ -79,7 +79,7 @@ curl 'https://app.example/_lunora/rest/messages/list?limit=5&tags=["a","b"]&q=he
 ```
 
 `limit=5` arrives as the number `5`, `tags=[…]` as an array, and `q=hello` stays
-a string because it isn't valid JSON. A string that *is* valid JSON is parsed —
+a string because it isn't valid JSON. A string that _is_ valid JSON is parsed —
 `?q=null` is `null`, not `"null"` — so send those in a `POST` body if you need
 them kept verbatim.
 
@@ -117,7 +117,7 @@ the procedure as `ctx.auth`, and RLS policies apply unchanged.
 
 There is no REST-specific auth path, and no way to reach a procedure over REST
 that you could not reach over RPC with the same credentials. Exposing a procedure
-publishes its *URL*, not its data.
+publishes its _URL_, not its data.
 
 ## Rate limiting
 
