@@ -897,7 +897,7 @@ export interface Caller {
         recordPush: (args: { branch: string; commitSha: string; installationId: number; repository: string }) => Promise<{ buildId: Id<"builds">; reused: boolean; } | null>;
     };
     cells: {
-        list: (args?: {}) => Promise<{ _id: Id<"cells">; cloudflareAccountId: string; createdAt: number; dispatchNamespacePrefix: string; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
+        list: (args?: {}) => Promise<{ _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
         register: (args: { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }) => Promise<Id<"cells">>;
     };
     dashboards: {
