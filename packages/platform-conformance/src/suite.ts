@@ -234,6 +234,38 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 host.cleanup?.();
             });
 
+            // Enumeration yields handles while the runtime's message/close
+            // callbacks yield raw sockets. A host that cannot bridge the two
+            // forces every caller back onto the provider socket type, which is
+            // exactly the coupling these contracts exist to remove.
+            it("resolves a raw socket back to its handle", async () => {
+                expect.assertions(2);
+
+                const host = await createHost();
+                const raw = rawSocket(host);
+                const handle = host.socket.accept(raw, {});
+
+                expect(host.socket.handleFor(raw)?.id).toBe(handle.id);
+                expect(host.socket.handleFor(rawSocket(host))).toBeUndefined();
+
+                host.cleanup?.();
+            });
+
+            // Backpressure is optional to *report* but must never be wrong when
+            // reported: a bogus queue depth either stalls delivery forever or
+            // defeats the pacing it exists to provide.
+            it("reports a plausible outbound queue depth, if any", async () => {
+                expect.assertions(1);
+
+                const host = await createHost();
+                const handle = host.socket.accept(rawSocket(host), {});
+                const { bufferedAmount } = handle;
+
+                expect(bufferedAmount === undefined || (typeof bufferedAmount === "number" && bufferedAmount >= 0)).toBe(true);
+
+                host.cleanup?.();
+            });
+
             // Mutable tagging is an optional tier: hosts whose tags freeze at
             // accept (Cloudflare) omit `setTag`, and the suite must not demand
             // it. Where it *is* declared, it has to actually work.

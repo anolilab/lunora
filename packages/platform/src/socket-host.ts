@@ -32,6 +32,15 @@
 
 /** Opaque socket handle the host returns from `accept`. */
 export interface SocketHandle {
+    /**
+     * Bytes queued for send but not yet flushed, when the transport reports it.
+     *
+     * The engine polls this to apply backpressure before pushing another batch
+     * at a slow subscriber. Optional because not every transport exposes a
+     * queue depth — absent means "assume drained", which degrades to the
+     * pre-backpressure behavior rather than stalling.
+     */
+    readonly bufferedAmount?: number;
     /** Close the socket with an optional code and reason. */
     close: (code?: number, reason?: string) => void;
     /** Read the attachment previously stored with `serializeAttachment`. */
@@ -69,6 +78,18 @@ export interface SocketHost {
      * handed at {@link SocketHost.accept}.
      */
     getSockets: (tag?: string) => SocketHandle[];
+
+    /**
+     * Resolve a raw socket the runtime handed back — to a message or close
+     * callback, which carry the transport's own object rather than a handle —
+     * to the handle the host issued for it at {@link SocketHost.accept}.
+     *
+     * Without this the two worlds never meet: enumeration yields handles while
+     * event callbacks yield raw sockets, and code that has to compare the two
+     * (excluding a sender from its own broadcast, say) is forced back onto the
+     * provider type. Returns `undefined` for a socket this host never accepted.
+     */
+    handleFor: (socket: unknown) => SocketHandle | undefined;
 
     /**
      * Remove a tag from a live socket — all of them when `tag` is omitted.

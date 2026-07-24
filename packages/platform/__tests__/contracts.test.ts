@@ -128,6 +128,11 @@ describe("@lunora/platform contracts", () => {
                 };
             },
             getSockets: () => [],
+            // Required, not optional: a host that cannot map a runtime-delivered
+            // socket back to its handle pushes every caller onto the provider
+            // socket type. `undefined` for an unknown socket is a valid answer;
+            // omitting the method is not.
+            handleFor: () => undefined,
         };
 
         expect(socketHost.accept).toBeDefined();

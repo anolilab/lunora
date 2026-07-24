@@ -77,9 +77,13 @@ type ConformanceHostFactory = () => ConformanceHost | Promise<ConformanceHost>;
 /** Internal state of a reference socket. */
 type ReferenceSocket = {
     attachment: unknown;
+    /** Bytes "queued" — the reference host flushes instantly, so always 0. */
+    bufferedAmount: number;
     closed: boolean;
     handle: SocketHandle;
     id: string;
+    /** The raw socket object handed to `accept`, for `handleFor` lookups. */
+    raw: unknown;
     received: (string | ArrayBuffer)[];
     tags: Set<string>;
 };
@@ -286,6 +290,7 @@ const createReferenceHost = (): ReferenceHost => {
 
     const createHandle = (socket: ReferenceSocket): SocketHandle => {
         const handle: SocketHandle = {
+            bufferedAmount: socket.bufferedAmount,
             close: (_code, _reason) => {
                 socket.closed = true;
             },
@@ -305,11 +310,13 @@ const createReferenceHost = (): ReferenceHost => {
     };
 
     const socket: SocketHost = {
-        accept: (_socket, attachment, tags) => {
+        accept: (rawSocket, attachment, tags) => {
             const id = nextSocketId();
             const socketState: ReferenceSocket = {
                 attachment,
+                bufferedAmount: 0,
                 closed: false,
+                raw: rawSocket,
                 handle: null as unknown as SocketHandle,
                 id,
                 received: [],
@@ -330,6 +337,7 @@ const createReferenceHost = (): ReferenceHost => {
 
             return filtered.map((s) => s.handle);
         },
+        handleFor: (socket) => [...runtimeSockets.values()].find((s) => s.raw === socket)?.handle,
         removeTag: (handle, tag) => {
             const socketState = runtimeSockets.get(handle.id);
 
@@ -445,9 +453,11 @@ const createReferenceHost = (): ReferenceHost => {
         restoreSocket: (id: string, attachment: unknown) => {
             const socketState: ReferenceSocket = {
                 attachment,
+                bufferedAmount: 0,
                 closed: false,
                 handle: null as unknown as SocketHandle,
                 id,
+                raw: undefined,
                 received: [],
                 tags: new Set(durableTags.get(id)),
             };

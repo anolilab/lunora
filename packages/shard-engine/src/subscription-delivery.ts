@@ -229,12 +229,33 @@ const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table
 };
 
 /**
- * Send one WebSocket frame, reporting whether it left the socket. A throw from
- * `ws.send` (socket closed mid-flush, outbound buffer gone) is the only
- * delivery-failure signal the runtime exposes; callers use the boolean to decide
- * whether to advance a subscription's delivered-diff baseline.
+ * The minimal outbound surface these helpers need.
+ *
+ * Deliberately structural rather than `WebSocket`: a runtime socket and a
+ * `SocketHandle` from `@lunora/platform` both satisfy it, so delivery code is
+ * shared between the Cloudflare-native call sites and the host-contract ones
+ * while the engine migrates from one to the other.
  */
-const trySendFrame = (ws: WebSocket, frame: string): boolean => {
+interface FrameSink {
+    send: (data: string) => void;
+}
+
+/**
+ * A {@link FrameSink} that may report outbound backpressure. `bufferedAmount`
+ * is optional because not every transport exposes it; absent means "assume
+ * drained" (see {@link awaitWsDrain}).
+ */
+interface DrainableSink {
+    readonly bufferedAmount?: unknown;
+}
+
+/**
+ * Send one frame, reporting whether it left the socket. A throw from `send`
+ * (socket closed mid-flush, outbound buffer gone) is the only delivery-failure
+ * signal the runtime exposes; callers use the boolean to decide whether to
+ * advance a subscription's delivered-diff baseline.
+ */
+const trySendFrame = (ws: FrameSink, frame: string): boolean => {
     try {
         ws.send(frame);
 
@@ -251,7 +272,7 @@ const trySendFrame = (ws: WebSocket, frame: string): boolean => {
  * list deltas are idempotent on replay, so re-sending an already-applied row is
  * harmless.
  */
-const sendDeltaFrames = (ws: WebSocket, subId: string, deltaFrames: ReadonlyArray<string>, cursorSuffix: string): boolean => {
+const sendDeltaFrames = (ws: FrameSink, subId: string, deltaFrames: ReadonlyArray<string>, cursorSuffix: string): boolean => {
     const idJson = JSON.stringify(subId);
     let delivered = true;
 
@@ -271,13 +292,13 @@ const sendDeltaFrames = (ws: WebSocket, subId: string, deltaFrames: ReadonlyArra
  * total) so a permanently-stuck buffer can't pin the iterator forever — past
  * that we drop through and let the next `ws.send` surface the failure.
  */
-const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
+const awaitWsDrain = async (ws: DrainableSink): Promise<void> => {
     let attempts = 0;
 
     while (attempts < 100) {
         attempts += 1;
 
-        const buffered = (ws as { bufferedAmount?: unknown }).bufferedAmount;
+        const { bufferedAmount: buffered } = ws;
 
         if (typeof buffered !== "number" || buffered < 1_048_576) {
             return;
@@ -290,4 +311,5 @@ const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
     }
 };
 
+export type { DrainableSink, FrameSink };
 export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame };
