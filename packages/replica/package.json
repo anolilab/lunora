@@ -70,9 +70,11 @@
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test:coverage": "vitest run --coverage"
     },
     "devDependencies": {
+        "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/server": "1.0.0-alpha.30",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",

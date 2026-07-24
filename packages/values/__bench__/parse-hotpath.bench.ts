@@ -8,12 +8,23 @@ import { v } from "../src/v";
  * 1. v.object hoists Object.keys(shape) + toInternal() to construction time.
  * 2. object/array/record thread a single mutable path stack (push/pop) instead
  *    of spreading `[...context.path, segment]` per child.
- * 3. v.array uses a preallocated indexed loop instead of value.entries()+push.
+ * 3. v.array builds its result with `push` onto an empty literal. It previously
+ *    preallocated with `Array.from({ length })`, which has no V8 fast path and
+ *    made this bench report the baseline as ~6x FASTER than the "optimized"
+ *    parser — the regression that reading these numbers is meant to catch.
  *
  * Each `*-baseline` bench re-implements the pre-optimization parser inline over
  * the same fixtures so the relative win is demonstrable in one run. The
  * baselines call the real per-element validators (`v.string()` etc.) so only
  * the iteration/allocation strategy differs.
+ *
+ * READ THE OBJECT NUMBERS WITH CARE. `objectBaseline` reads each field with a
+ * bare `input[key]`, while the real parser reads it through `Object.hasOwn` so a
+ * declared field colliding with an `Object.prototype` member (`toString`,
+ * `constructor`, …) reads as absent instead of inheriting the prototype's
+ * function. That guard is a correctness fix, not overhead to remove, so the
+ * object baseline is expected to stay marginally ahead — it is doing strictly
+ * less work. Only a LARGE object-side gap indicates a real regression.
  */
 
 type ParseContext = { path: (number | string)[] };
@@ -109,7 +120,7 @@ describe("v.array(v.string()) — 32 items", () => {
         arrayBaseline(sampleStringArray);
     });
 
-    bench("optimized (preallocated indexed loop + mutable path)", () => {
+    bench("optimized (push onto empty literal + mutable path)", () => {
         stringArray.parse(sampleStringArray);
     });
 });
