@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,10 +49,22 @@ const listDirectories = (parent: string): string[] =>
 /** A Lunora-owned dependency: the unscoped `lunorash` umbrella or any `@lunora/*` package. */
 const isLunoraDep = (name: string): boolean => name === "lunorash" || name.startsWith("@lunora/");
 
-/** Real Lunora package names (the `lunorash` umbrella + every `@lunora/*`) discovered from `packages/<dir>/package.json`. */
+/**
+ * Real Lunora package names (the `lunorash` umbrella + every `@lunora/*`)
+ * discovered from `packages/<dir>/package.json`.
+ *
+ * Directories without a `package.json` are skipped rather than read: `packages/`
+ * routinely holds non-package residue in a working tree — a half-scaffolded
+ * package, a stale `node_modules`-only leftover from an aborted install — and a
+ * throw there takes down the whole suite for something that is not a package at
+ * all. Skipping cannot mask a real regression either: a *renamed or deleted*
+ * package still disappears from this set and still trips assertion (2).
+ */
 const realLunoraPackages = new Set(
     listDirectories(PACKAGES_DIR)
-        .map((dir) => readJson(join(PACKAGES_DIR, dir, "package.json")).name)
+        .map((dir) => join(PACKAGES_DIR, dir, "package.json"))
+        .filter((manifest) => existsSync(manifest))
+        .map((manifest) => readJson(manifest).name)
         .filter((name): name is string => typeof name === "string" && isLunoraDep(name)),
 );
 
