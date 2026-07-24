@@ -30,7 +30,7 @@ import { mergeWhere } from "./aggregates";
 // imports would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
-import { decodeCursor } from "./query-args";
+import { decodeCursor } from "@lunora/shard-engine";
 import type { RankDirection, RankIndexDefinitionLike, RankPageOptions, RankPageRowKey } from "./rank";
 import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 

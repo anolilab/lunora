@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
-import type { SortDirection } from "./query-args";
+import type { SortDirection } from "@lunora/shard-engine";
 
 /**
  * Reserved `functionPath` prefix for admin introspection RPCs. These travel

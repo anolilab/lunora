@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/errors";
 
 import type { DatabaseWriterLike, SchemaLike } from "./ctx-db";
 import { RELATION_FUNCTION_PREFIX } from "./introspect";
-import type { QueryArgs } from "./query-args";
+import type { QueryArgs } from "@lunora/shard-engine";
 
 /**
  * Serve a reserved `__lunora_relation__:read` / `:count` fan-out read for reverse

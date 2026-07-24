@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
-import type { QueryArgs, QueryPage } from "../src/query-args";
+import type { QueryArgs, QueryPage } from "@lunora/shard-engine";
 import { resolveRelationPredicates } from "../src/relation-predicates";
 import createSqliteExec from "./_helpers/node-sqlite";
 

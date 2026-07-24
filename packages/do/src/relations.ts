@@ -44,7 +44,7 @@ import type {
     WithInput,
 } from "@lunora/shard-engine";
 
-import { applySelect } from "./query-args";
+import { applySelect } from "@lunora/shard-engine";
 
 /** Project a loaded child (or page) per `nested.select`, keeping system + nested-`with` keys. Returns the input unchanged when no select. */
 const projectChildren = (documents: Record<string, unknown>[], nested: NestedWith): Record<string, unknown>[] =>

@@ -16,7 +16,8 @@
  * (`compileWhereSql`) renders it per dialect.
  */
 import { LunoraError } from "@lunora/errors";
-import type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection, WhereInput } from "@lunora/shard-engine";
+import type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./schema-types";
+import type { WhereInput } from "./where-types";
 
 /** The implicit tiebreak appended to every sort so the order is total. */
 const TIEBREAK_FIELD = "id";

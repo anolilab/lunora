@@ -169,8 +169,8 @@ export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
 export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
-export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args";
-export { applySelect, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
+export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "@lunora/shard-engine";
+export { applySelect, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "@lunora/shard-engine";
 export type {
     RankDirection,
     RankIndexDefinitionLike,

@@ -19,6 +19,15 @@ export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
 export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
 export { serializeSqlValue } from "./serialize-sql";
 export { runSocketPool } from "./socket-pool";
+export {
+    applySelect,
+    buildSeekBeforeWhere,
+    buildSeekWhere,
+    decodeCursor,
+    encodeCursor,
+    normalizeOrderKeys,
+    softDeleteScope,
+} from "./query-args";
 export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ConflictKind } from "./transaction";
 export type { TransactionSqlLike } from "./transaction";

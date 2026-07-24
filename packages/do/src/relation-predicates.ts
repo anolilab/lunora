@@ -33,7 +33,7 @@ import type { WhereInput } from "@lunora/shard-engine";
 import { RELATION_EXISTS_KEY } from "@lunora/shard-engine";
 
 import type { TableDefinitionLike } from "./ctx-db";
-import type { QueryArgs, QueryPage } from "./query-args";
+import type { QueryArgs, QueryPage } from "@lunora/shard-engine";
 import type { RelationDefinitionLike } from "./relations";
 import { distinctValues } from "./relations";
 
