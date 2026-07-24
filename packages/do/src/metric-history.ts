@@ -271,10 +271,15 @@ const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?:
         );
     }
 
-    // The bucket now exists — remember it so the next in-minute repeat skips the
-    // existence read. Bound the set: a cleared cache only costs a re-read, never
-    // correctness.
-    if (!cache.has(cacheKey)) {
+    // Remember only a bucket that ALREADY existed before this call, so the next
+    // in-minute repeat skips the existence read. A freshly-created bucket is
+    // deliberately NOT cached: the retention trim above may have removed it (a
+    // late, out-of-window sample inserted past the retention horizon is deleted
+    // immediately), and caching it would let its next write skip both the
+    // existence check and the trim, resurrecting an expired row. Leaving it
+    // uncached means the second write re-checks and caches it only once it's
+    // confirmed durable. Bound the set: a cleared cache only costs a re-read.
+    if (bucketExists && !cache.has(cacheKey)) {
         if (cache.size >= KNOWN_BUCKETS_CAP) {
             cache.clear();
         }
