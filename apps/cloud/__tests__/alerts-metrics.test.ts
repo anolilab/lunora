@@ -7,9 +7,7 @@ import {
     computeLatencyP95,
     computeLlmCost,
     computeMetric,
-    deviatesByPercent,
     evaluateMetricLevel,
-    evaluateMetricRule,
     fireCrossedRules,
     fireMetricRules,
     PAGERDUTY_EVENTS_URL,
@@ -118,45 +116,6 @@ describe(rateOfChangePercent, () => {
         expect(rateOfChangePercent(5, 10)).toBe(-50);
         expect(rateOfChangePercent(0, 0)).toBe(0);
         expect(rateOfChangePercent(7, 0)).toBe(Number.POSITIVE_INFINITY);
-    });
-});
-
-describe(deviatesByPercent, () => {
-    it("fires when the absolute deviation meets the threshold percent", () => {
-        expect(deviatesByPercent(15, 10, 40)).toBe(true); // +50% ≥ 40
-        expect(deviatesByPercent(15, 10, 60)).toBe(false); // +50% < 60
-        expect(deviatesByPercent(5, 10, 40)).toBe(true); // -50% ≥ 40 (a drop)
-        expect(deviatesByPercent(7, 0, 40)).toBe(true); // spike from zero
-        expect(deviatesByPercent(0, 0, 40)).toBe(false); // flat
-    });
-});
-
-describe(evaluateMetricRule, () => {
-    it("edge-triggers: fires only when the current window breaches and the prior did not", () => {
-        const rule = { comparator: "gt" as const, target: "error_rate" as const, threshold: 50 };
-
-        // prior 25% (not breaching) → current 100% (breaching): fires.
-        expect(evaluateMetricRule(rule, mixed(2, 2), mixed(4, 1)).fired).toBe(true);
-        // prior already breaching → current still breaching: does NOT re-fire.
-        expect(evaluateMetricRule(rule, mixed(2, 2), mixed(2, 2)).fired).toBe(false);
-        // neither breaches: no fire.
-        expect(evaluateMetricRule(rule, mixed(4, 1), mixed(4, 1)).fired).toBe(false);
-    });
-
-    it("supports lt comparators (e.g. a latency SLO dropping below target)", () => {
-        const rule = { comparator: "lt" as const, target: "latency_p95" as const, threshold: 100 };
-        const fast = [observation({ durationMs: 20 })];
-        const slow = [observation({ durationMs: 500 })];
-
-        expect(evaluateMetricRule(rule, fast, slow).fired).toBe(true); // slow→fast crosses below
-        expect(evaluateMetricRule(rule, fast, fast).fired).toBe(false); // already below
-    });
-
-    it("reports the computed current and prior values", () => {
-        const result = evaluateMetricRule({ comparator: "gt", target: "error_rate", threshold: 10 }, mixed(4, 2), mixed(4, 1));
-
-        expect(result.currentValue).toBe(50);
-        expect(result.priorValue).toBe(25);
     });
 });
 

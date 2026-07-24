@@ -276,16 +276,6 @@ export const rateOfChangePercent = (current: number, prior: number): number => {
     return ((current - prior) / prior) * 100;
 };
 
-/**
- * Simple anomaly test: does `current` deviate (up OR down) from `prior` by at
- * least `thresholdPercent`? A rise from a zero baseline always counts. This is
- * the "rate of change" alerting primitive; a metric rule can layer it on top of
- * (or instead of) the absolute threshold to catch spikes relative to the app's
- * own recent baseline.
- */
-export const deviatesByPercent = (current: number, prior: number, thresholdPercent: number): boolean =>
-    Math.abs(rateOfChangePercent(current, prior)) >= thresholdPercent;
-
 /** An enabled metric-window rule the metric firing loop evaluates. */
 export interface MetricRule {
     channel: AlertChannel;
@@ -307,25 +297,6 @@ export interface MetricEvaluation {
     fired: boolean;
     priorValue: number;
 }
-
-/**
- * Evaluate a metric rule against the observations in its current window and the
- * equal-length window immediately before it. Fires (edge-triggered) only when
- * the current value breaches the threshold and the prior value did not, so a
- * sustained breach alerts once, not every ingest.
- */
-export const evaluateMetricRule = (
-    rule: Pick<MetricRule, "comparator" | "target" | "threshold">,
-    currentWindow: readonly MetricObservation[],
-    priorWindow: readonly MetricObservation[],
-): MetricEvaluation => {
-    const currentValue = computeMetric(rule.target, currentWindow);
-    const priorValue = computeMetric(rule.target, priorWindow);
-    const nowBreaches = compareMetric(currentValue, rule.comparator, rule.threshold);
-    const priorBreaches = compareMetric(priorValue, rule.comparator, rule.threshold);
-
-    return { currentValue, fired: nowBreaches && !priorBreaches, priorValue };
-};
 
 /** Units for a metric value in the rendered notification. */
 const METRIC_UNIT: Record<MetricTarget, string> = { error_rate: "%", latency_p95: "ms", llm_cost: "" };
