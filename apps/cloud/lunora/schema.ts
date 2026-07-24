@@ -180,6 +180,23 @@ export default defineSchema({
         // Dispatcher resolves a request's script id → org plan via this index.
         .index("by_script", ["scriptName"]),
 
+    // One-row-per-alias ownership ledger. An alias (the tenant's stable script
+    // label) seeds per-deployment D1/R2 resource names + alias→script routing, so
+    // it MUST belong to exactly one project. `deployments.alias` repeats across a
+    // project's versioned releases, so it can't carry a unique index itself; this
+    // side table does, giving the claim DB-level atomicity — two concurrent first
+    // deploys of the same alias by different projects can't both win the check
+    // (the losing insert violates `by_alias` unique), closing the create() TOCTOU.
+    aliasOwnership: defineTable({
+        alias: v.string(),
+        createdAt: v.number(),
+        organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
+    })
+        .global()
+        .index("by_alias", ["alias"], { unique: true })
+        .index("by_project", ["projectId"]),
+
     deployKeys: defineTable({
         // What the key is allowed to do. Absent = `deploy` (a full deploy key, the
         // historical default). An `ingest` key can ONLY push telemetry to the OTLP
