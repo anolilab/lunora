@@ -261,13 +261,19 @@ export const activate = mutation
 export const rollback = mutation
     .input({ deployKey: v.optional(v.string()), id: v.id("deployments"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { deployKey, id, organizationId } }): Promise<{ scriptName: string; version?: number }> => {
-        await (deployKey ? authorizeDeployKey(context, organizationId, deployKey) : assertMember(context, organizationId, ["owner", "admin"]));
-
         const target = (await context.db.get(id)) as DeploymentRow | null;
 
         if (target?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "deployment not found in this organization");
         }
+
+        // Authorize AFTER resolving the target, so a project-scoped deploy key is
+        // checked against the target deployment's OWN project — a key scoped to
+        // project A must not be able to roll back project B's deployment in the same
+        // org (every sibling — create/activate/updateStatus — passes projectId).
+        await (deployKey
+            ? authorizeDeployKey(context, organizationId, deployKey, target.projectId)
+            : assertMember(context, organizationId, ["owner", "admin"]));
 
         if (target.status !== "superseded" && target.status !== "live") {
             throw new LunoraError("CONFLICT", `cannot roll back to a ${target.status} deployment`);
