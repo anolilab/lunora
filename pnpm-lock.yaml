@@ -2347,6 +2347,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: 1.0.0-alpha.1
+        version: link:../platform
       '@lunora/queue':
         specifier: workspace:*
         version: link:../queue

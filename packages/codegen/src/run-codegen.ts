@@ -92,6 +92,8 @@ import { emitApp } from "./emit-app";
 import type { AgentIR, ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
+import type { PlatformDiagnostic } from "./platform-target";
+import { DEFAULT_TARGET, gatePlatformFeatures } from "./platform-target";
 import type { SchemaSnapshot } from "./schema-drift";
 import { buildSchemaSnapshot, serializeSchemaSnapshot } from "./schema-drift";
 
@@ -513,7 +515,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `payments` gate wiring the SDK into the generated ShardDO + the typed
     // ActionCtx — so a non-AI / non-payment project never imports those into its
     // worker; the rest additionally feed the studio nav gating below.
-    const featureUsage = discoverFeatureUsage(project, lunoraDirectory);
+    const rawFeatureUsage = discoverFeatureUsage(project, lunoraDirectory);
+    // Intersect what the app uses with what the deploy target supports. For the
+    // default Cloudflare target the matrix marks nothing unsupported, so the
+    // gate is the identity and the emitted surface (and goldens) is unchanged;
+    // a target that lacks a used feature omits its `ctx.*` surface below and
+    // reports a `platform_unsupported_feature` diagnostic.
+    const platformGate = gatePlatformFeatures(rawFeatureUsage, options.target ?? DEFAULT_TARGET);
+    const featureUsage = platformGate.usage;
     const hasAi = featureUsage.ai;
     const hasPayments = featureUsage.payments;
     // New Cloudflare-capability ctx augmentations (Plans 027/028/031/032/035/036).
@@ -859,6 +868,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             workflows: workflowsContent,
         },
         outputDirectory,
+        platformDiagnostics: platformGate.diagnostics,
         queues,
         schemaSnapshot,
         schemaSnapshotPath,
@@ -911,6 +921,18 @@ export interface CodegenOptions {
 
     /** Project root containing the `lunora/` directory. */
     projectRoot: string;
+
+    /**
+     * The deploy target codegen tailors the emitted `ctx.*` surface to.
+     * Defaults to `"cloudflare"` — whose capability matrix marks every feature
+     * native or emulated, so the default output is unchanged (byte-identical
+     * goldens). A target that marks a used feature unsupported omits its
+     * `ctx.*` surface and reports it in {@link CodegenResult.platformDiagnostics}.
+     * Only `"cloudflare"` is registered until other per-target `@lunora/platform`
+     * matrices land; an unknown target emits the full surface un-gated and a
+     * `platform_unknown_target` diagnostic.
+     */
+    target?: string;
 
     /**
      * Re-bless the committed schema-drift baseline (`lunora/.lunora-schema.json`)
@@ -1011,6 +1033,15 @@ export interface CodegenResult {
         workflows: string;
     };
     outputDirectory: string;
+
+    /**
+     * Portability diagnostics for the requested {@link CodegenOptions.target}:
+     * `ctx.*` features the app uses that the target does not support (omitted
+     * from the emitted surface), or an unknown target. Empty for a
+     * fully-supported app on the default Cloudflare target. Presentation is the
+     * caller's job, like {@link CodegenResult.advisories}.
+     */
+    platformDiagnostics: ReadonlyArray<PlatformDiagnostic>;
 
     /**
      * Queues discovered from `defineQueue` exports in `lunora/queues.ts` — the

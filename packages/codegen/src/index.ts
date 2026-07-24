@@ -77,6 +77,8 @@ export type { OpenApiEmitInput } from "./openapi";
 export { buildOpenApiDocument, emitOpenApi, emitOpenApiModule } from "./openapi";
 export type { OpenRpcEmitInput } from "./openrpc";
 export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION } from "./openrpc";
+export type { PlatformDiagnostic } from "./platform-target";
+export { DEFAULT_TARGET } from "./platform-target";
 export type { CodegenOptions, CodegenResult } from "./run-codegen";
 export { createCodegenProject, refreshCodegenProject, runCodegen, SCHEMA_SNAPSHOT_FILENAME } from "./run-codegen";
 export type {

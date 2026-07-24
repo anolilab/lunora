@@ -69,6 +69,7 @@
         "@lunora/scheduler": "1.0.0-alpha.12",
         "@lunora/values": "1.0.0-alpha.11",
         "@lunora/workflow": "1.0.0-alpha.13",
+        "@lunora/platform": "1.0.0-alpha.1",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
