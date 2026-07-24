@@ -1589,6 +1589,14 @@ interface RestRegistryEntry {
 type RestRegistryLike = Record<string, RestRegistryEntry>;
 ```
 
+### `RestRoute` (type)
+
+```ts
+type RestRoute = (request: Request, env: unknown, url?: URL, context?: {
+    waitUntil?: (promise: Promise<unknown>) => void;
+}) => Promise<Response>;
+```
+
 ### `RestRouteDeps` (interface)
 
 ```ts
@@ -1914,6 +1922,18 @@ interface TraceSamplingConfig {
 }
 ```
 
+### `TraceTrustSignal` (type)
+
+```ts
+type TraceTrustSignal = "cloudflare-access" | "mtls";
+```
+
+### `TrustInboundTraceContext` (type)
+
+```ts
+type TrustInboundTraceContext = boolean | TraceTrustSignal | TraceTrustSignal[] | ((request: Request) => boolean);
+```
+
 ### `VERSION` (const)
 
 ```ts
@@ -2029,7 +2049,7 @@ interface WorkerOptions {
     storageSignedUrl?: StorageSignedUrlFunction;
     storageUpload?: StorageUploadFunction;
     syncGlobals?: GlobalCdcSyncFunction;
-    trustInboundTraceContext?: boolean;
+    trustInboundTraceContext?: TrustInboundTraceContext;
     vectorIntrospector?: VectorIntrospector;
     voiceAgents?: Record<string, ShardNamespaceLike>;
     workflowsClient?: (env: unknown) => undefined | WorkflowsRestClient;

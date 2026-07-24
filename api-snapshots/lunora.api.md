@@ -3961,6 +3961,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `RestRoute` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `RestRouteDeps` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4066,6 +4070,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `TraceSamplingConfig` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `TraceTrustSignal` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `TrustInboundTraceContext` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

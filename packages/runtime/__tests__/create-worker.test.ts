@@ -145,6 +145,36 @@ describe("createWorker", () => {
         expect(headers.get("tracestate")).toBeNull();
     });
 
+    // The per-request form is the point of the named signals: one worker serves
+    // both a public browser request and a trusted internal caller, and only the
+    // latter should be able to choose the trace.
+    it("applies a named trust signal per request", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ shardDO: shard.namespace, trustInboundTraceContext: "mtls" });
+
+        const dispatch = async (cf?: unknown): Promise<null | string> => {
+            shard.calls.length = 0;
+
+            const request = new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                headers: { traceparent: UPSTREAM_TRACEPARENT },
+                method: "POST",
+            });
+
+            if (cf !== undefined) {
+                Object.defineProperty(request, "cf", { value: cf, writable: false });
+            }
+
+            await worker.fetch(request, {}, fakeContext);
+
+            return shard.calls[0]!.request.headers.get("traceparent");
+        };
+
+        await expect(dispatch({ tlsClientAuth: { certVerified: "SUCCESS" } })).resolves.toContain("0af7651916cd43dd8448eb211c80319c");
+        await expect(dispatch()).resolves.not.toContain("0af7651916cd43dd8448eb211c80319c");
+    });
+
     it("continues the inbound trace when trustInboundTraceContext is set", async () => {
         expect.assertions(3);
 

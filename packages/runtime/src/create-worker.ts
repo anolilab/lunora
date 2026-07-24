@@ -44,6 +44,8 @@ import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import { buildStorageAdminRoutes } from "./storage-admin-routes";
+import type { TrustInboundTraceContext } from "./trace-trust";
+import { createDroppedTraceNotice, resolveTraceTrust } from "./trace-trust";
 import { buildVectorAdminRoutes } from "./vector-admin-routes";
 import type { WorkflowsRestClient } from "./workflows-admin-routes";
 import { buildWorkflowsAdminRoutes } from "./workflows-admin-routes";
@@ -1112,23 +1114,36 @@ interface WorkerOptions {
     syncGlobals?: GlobalCdcSyncFunction;
 
     /**
-     * Continue an inbound W3C trace: when a request arrives with a well-formed
-     * `traceparent`, adopt its trace id, parent this dispatch's span under the
-     * upstream span, and carry its `tracestate` to the shard. **Default `false`.**
+     * Who may hand this worker a trace to join. Controls whether an inbound W3C
+     * `traceparent` is continued — adopting its trace id, parenting this
+     * dispatch's span under the upstream span, and carrying its `tracestate` to
+     * the shard. **Default: off.**
      *
-     * Off by default because on an internet-facing Worker the header is
-     * caller-supplied, and the trace id it carries is not inert: it decides which
-     * trace this request's spans and `ctx.log` lines land in, so anyone can graft
-     * entries into another tenant's waterfall in a shared collector. Head sampling
-     * is protected separately — it keys on a server-minted id whenever the inbound
-     * context is untrusted — but trace *membership* can only be protected by not
-     * trusting the header.
+     * ```ts
+     * trustInboundTraceContext: true                          // internal-only deployment
+     * trustInboundTraceContext: "mtls"                        // edge-verified client certs
+     * trustInboundTraceContext: ["mtls", "cloudflare-access"] // either one
+     * trustInboundTraceContext: (request) => …                // anything else
+     * ```
      *
-     * Turn this on when the Worker sits behind a gateway/mesh you control that
-     * sets `traceparent` itself, or when the deployment is internal and the
-     * end-to-end waterfall is worth more than the isolation.
+     * Off by default because the header is caller-supplied: on a worker an
+     * untrusted client can reach directly, trusting it lets anyone choose which
+     * trace their spans and `ctx.log` lines join — grafting entries into another
+     * tenant's waterfall in a shared collector — and, because the head-sampling
+     * verdict is derived from the trace id, choose their own sampling outcome.
+     * (Error traces are unaffected either way: the tail bias is evaluated from
+     * the worker's own decision, never the caller's.)
+     *
+     * Turn it on when something you control — a gateway, service mesh, or
+     * Cloudflare Access — sets `traceparent` itself. A proxy that merely
+     * only _forwards_ the client's header is not such a thing.
+     *
+     * Leaving this unset logs a one-time hint if an inbound trace is actually
+     * dropped; setting it explicitly to `false` keeps the behaviour and silences
+     * that.
+     * @see {@link TrustInboundTraceContext} for what each signal proves.
      */
-    trustInboundTraceContext?: boolean;
+    trustInboundTraceContext?: TrustInboundTraceContext;
 
     /**
      * Read-only introspector for Vectorize indexes, backing the studio's vector
@@ -2001,6 +2016,10 @@ const detectBindingProbe = (key: string, value: unknown): HealthProbe | undefine
  * be re-exported directly as `export default createWorker(...)`.
  */
 const createWorker = (options: WorkerOptions): LunoraWorker => {
+    // Resolved once here rather than per request: the trust policy is fixed for
+    // the worker's lifetime, so a dispatch pays a single predicate call.
+    const isTrustedUpstream = resolveTraceTrust(options.trustInboundTraceContext);
+    const noticeDroppedTrace = createDroppedTraceNotice(options.trustInboundTraceContext);
     const defaultShard = options.defaultShardKey ?? "__root__";
 
     // The trust-boundary identity gate: only the PUBLIC data paths (RPC /
@@ -3149,10 +3168,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // policy, mints the span, and settles the sampled verdict in one place, so
         // the span's `flags`, the `traceparent` we forward, and the export gate can
         // never disagree about whether this trace is sampled.
-        const { decision, trace } = beginDispatchTrace(request, {
+        const { decision, ignoredUpstream, trace } = beginDispatchTrace(request, {
             ...(sampling === undefined ? {} : { sampling }),
-            trustInbound: options.trustInboundTraceContext === true,
+            trustInbound: isTrustedUpstream(request),
         });
+
+        if (ignoredUpstream) {
+            noticeDroppedTrace();
+        }
 
         // `x-lunora-sample-errors` carries the tail-bias toggle alongside the
         // `traceparent` sampled flag, so a sampled-out trace that errors is still

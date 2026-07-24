@@ -144,6 +144,10 @@ const extractTraceContext = (request: Request): UpstreamTraceContext | undefined
  * policy, mint the span, and settle the sampling verdict **once** so the span's
  * `flags`, the propagated `traceparent`, and the export gate can never disagree.
  *
+ * Reports `ignoredUpstream` when a well-formed inbound trace was dropped for lack
+ * of trust, so the caller can surface that rather than leave a silently broken
+ * waterfall.
+ *
  * The head decision is keyed on the trace id only when the upstream is trusted.
  * Untrusted, it keys on the freshly-minted span id: `shared/sampling` maps an id
  * deterministically onto `[0, 1)`, so a client that could choose the id could
@@ -153,7 +157,10 @@ const extractTraceContext = (request: Request): UpstreamTraceContext | undefined
  * whole-trace invariant intact, because downstream hops read the verdict off the
  * propagated `traceparent` rather than re-deriving it.
  */
-const beginDispatchTrace = (request: Request, options: DispatchTraceOptions = {}): { decision: TraceSamplingDecision; trace: DispatchTraceContext } => {
+const beginDispatchTrace = (
+    request: Request,
+    options: DispatchTraceOptions = {},
+): { decision: TraceSamplingDecision; ignoredUpstream: boolean; trace: DispatchTraceContext } => {
     const upstream = extractTraceContext(request);
     const trusted = options.trustInbound === true ? upstream : undefined;
     const spanId = otlpRandomHex(8);
@@ -167,6 +174,8 @@ const beginDispatchTrace = (request: Request, options: DispatchTraceOptions = {}
 
     return {
         decision,
+        // A parseable upstream trace existed, and we chose not to join it.
+        ignoredUpstream: upstream !== undefined && trusted === undefined,
         trace: {
             sampled,
             spanId,
