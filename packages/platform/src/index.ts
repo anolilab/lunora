@@ -55,6 +55,9 @@ export type {
 export type { Capability, CapabilityLevel, PlatformCapabilities } from "./capabilities";
 export { CLOUDFLARE_CAPABILITIES } from "./capabilities";
 
+// Durable key-value store
+export type { ShardKvListOptions, ShardKvStore } from "./kv-store";
+
 // Scheduler host
 export type { ScheduledJob, ScheduleOptions, SchedulerHost } from "./scheduler-host";
 

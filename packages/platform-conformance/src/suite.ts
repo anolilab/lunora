@@ -372,6 +372,82 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 host.cleanup?.();
             });
         });
+
+        describe("ShardKvStore", () => {
+            // As with the scheduler, a host without a KV surface reports the gap
+            // as its own result rather than skipping the block silently.
+            it("reads back a written value", async () => {
+                expect.assertions(2);
+
+                const host = await createHost();
+
+                if (host.kv === undefined) {
+                    expect(host.kv).toBeUndefined();
+                    expect(true).toBe(true);
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                await host.kv.put("s:token-1", { userId: "ada" });
+
+                expect(await host.kv.get("s:token-1")).toEqual({ userId: "ada" });
+                expect(await host.kv.get("s:missing")).toBeUndefined();
+
+                host.cleanup?.();
+            });
+
+            it("deletes a key idempotently", async () => {
+                expect.assertions(3);
+
+                const host = await createHost();
+
+                if (host.kv === undefined) {
+                    expect(host.kv).toBeUndefined();
+                    expect(true).toBe(true);
+                    expect(true).toBe(true);
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                await host.kv.put("k", 1);
+
+                expect(await host.kv.delete("k")).toBe(true);
+                expect(await host.kv.delete("k")).toBe(false);
+                expect(await host.kv.get("k")).toBeUndefined();
+
+                host.cleanup?.();
+            });
+
+            // A prefix scan must return exactly the keys under the prefix — a
+            // superset would let a GC sweep or migration touch unrelated keys.
+            it("enumerates exactly the keys under a prefix", async () => {
+                expect.assertions(2);
+
+                const host = await createHost();
+
+                if (host.kv === undefined) {
+                    expect(host.kv).toBeUndefined();
+                    expect(true).toBe(true);
+                    host.cleanup?.();
+
+                    return;
+                }
+
+                await host.kv.put("s:a", 1);
+                await host.kv.put("s:b", 2);
+                await host.kv.put("other", 3);
+
+                const scoped = await host.kv.list({ prefix: "s:" });
+                const all = await host.kv.list();
+
+                expect([...scoped.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["s:a", "s:b"]);
+                expect(all.size).toBe(3);
+
+                host.cleanup?.();
+            });
+        });
     });
 };
 

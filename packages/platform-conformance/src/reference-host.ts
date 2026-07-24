@@ -8,6 +8,7 @@ import type {
     ShardDirectory,
     ShardHost,
     ShardJurisdiction,
+    ShardKvStore,
     ShardSqlExec,
     ShardStub,
     SocketHandle,
@@ -39,6 +40,13 @@ interface ConformanceHost {
     createSocket?: () => unknown;
     /** The shard directory under test. */
     directory: ShardDirectory;
+
+    /**
+     * The durable key-value store under test. Optional: a host that implements
+     * only the reactive-engine half (`ShardHost`) has no KV surface to offer,
+     * and the suite reports the gap rather than asserting against a stub.
+     */
+    kv?: ShardKvStore;
 
     /**
      * Re-create a runtime socket from its durable state. Optional: only hosts
@@ -337,7 +345,7 @@ const createReferenceHost = (): ReferenceHost => {
 
             return filtered.map((s) => s.handle);
         },
-        handleFor: (socket) => [...runtimeSockets.values()].find((s) => s.raw === socket)?.handle,
+        handleFor: (rawSocket) => [...runtimeSockets.values()].find((s) => s.raw === rawSocket)?.handle,
         removeTag: (handle, tag) => {
             const socketState = runtimeSockets.get(handle.id);
 
@@ -380,6 +388,30 @@ const createReferenceHost = (): ReferenceHost => {
         },
         idForName: (name) => `shard:${name}`,
         jurisdiction: (_jurisdiction: ShardJurisdiction) => directory,
+    };
+
+    // Durable key-value store, kept in a plain Map. Structured-clone the value
+    // on write so a caller mutating the object it stored cannot reach back into
+    // the "durable" copy — the same isolation a real serializing store gives.
+    const kvData = new Map<string, unknown>();
+    const kv: ShardKvStore = {
+        delete: async (key) => kvData.delete(key),
+        get: async (key) => kvData.get(key) as never,
+        list: async (options) => {
+            const prefix = options?.prefix ?? "";
+            const result = new Map<string, unknown>();
+
+            for (const [key, value] of kvData) {
+                if (key.startsWith(prefix)) {
+                    result.set(key, value);
+                }
+            }
+
+            return result as never;
+        },
+        put: async (key, value) => {
+            kvData.set(key, structuredClone(value));
+        },
     };
 
     const scheduledJobs = new Map<
@@ -450,6 +482,7 @@ const createReferenceHost = (): ReferenceHost => {
             }
         },
         directory,
+        kv,
         restoreSocket: (id: string, attachment: unknown) => {
             const socketState: ReferenceSocket = {
                 attachment,
