@@ -118,6 +118,53 @@ export interface BroadcastResult {
 }
 
 /**
+ * The compact, stable delivery-status vocabulary emitted on notify observability
+ * signals — the `status` dimension on the `notify.send` metric and the failure
+ * log line. Modeled on Novu's execution status, but honest to edge push:
+ *
+ * - `accepted` — the provider took the message (a `Receipt.successful` send).
+ * - `failed` — a provider error; the log line carries the `error` text.
+ * - `gone` — the endpoint is unregistered (404/410, FCM `UNREGISTERED`) and pruned; push-only.
+ *
+ * Web Push and FCM give no delivery/open receipts, so the vocabulary stops at the
+ * send attempt: a `delivered`/`opened` status would be a lie for these channels.
+ * The one place a later `seen`/`read` is real is the in-app inbox, where the
+ * client posts a read receipt back — out of scope here.
+ */
+export type NotifyDeliveryStatus = "accepted" | "failed" | "gone";
+
+/**
+ * Why a send fanned out to nobody — the "sent 0 because…" signal (mirrors Novu's
+ * pre-send `DetailEnum` reasons). Emitted as the `reason` dimension on a
+ * `notify.skipped` metric so a no-op is visible in the Studio metric/trend view
+ * instead of silent.
+ *
+ * - `no-subscriptions-matched` — the store held no device for the broadcast filter.
+ * - `channel-not-configured` — the target channel was never wired in `defineNotify`.
+ */
+export type NotifySkipReason = "channel-not-configured" | "no-subscriptions-matched";
+
+/**
+ * The minimal structural slice of `ctx.log` the notify facade emits through — just
+ * the `warn` severity it uses for a failed delivery. Structural (rather than a
+ * dependency on `@lunora/server`'s `LunoraLogger`) so codegen passes the real
+ * `ctx.log` and a test passes a spy — the D1-store `D1Like` pattern, applied to
+ * observability.
+ */
+export interface NotifyLogger {
+    warn: (message: string, fields?: Record<string, unknown>) => void;
+}
+
+/**
+ * The minimal structural slice of `ctx.metrics` the notify facade emits through —
+ * the `count` instrument backing the `notify.send` / `notify.skipped` series.
+ * Structural for the same reason as {@link NotifyLogger}.
+ */
+export interface NotifyMetrics {
+    count: (name: string, value?: number, attributes?: Record<string, unknown>) => void;
+}
+
+/**
  * The push sub-facade — spliced onto ctx as `ctx.push` (and reachable as
  * `ctx.notify.push`). Owns the device-subscription lifecycle plus targeted and
  * fan-out push delivery through the edge-safe Web Push / FCM providers.

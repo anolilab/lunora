@@ -111,6 +111,82 @@ describe("createWorker", () => {
         expect(body).toEqual({ args: { limit: 5 }, functionPath: "messages:list" });
     });
 
+    const UPSTREAM_TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
+    /** Dispatch one RPC carrying an upstream trace context, and return what reached the shard. */
+    const forwardWithUpstreamTrace = async (workerOptions: Parameters<typeof createWorker>[0]): Promise<Headers> => {
+        const worker = createWorker(workerOptions);
+
+        await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                headers: { traceparent: UPSTREAM_TRACEPARENT, tracestate: "congo=t61rcWkgMzE" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        return shard.calls[0]!.request.headers;
+    };
+
+    // The inbound header is caller-controlled, and its trace id decides which
+    // trace this request's spans and logs land in — so by default we mint our own
+    // rather than let a client file entries into someone else's waterfall.
+    it("does not adopt an untrusted inbound traceparent", async () => {
+        expect.assertions(3);
+
+        const headers = await forwardWithUpstreamTrace({ shardDO: shard.namespace });
+        const forwarded = headers.get("traceparent");
+
+        expect(forwarded).toMatch(/^00-[\da-f]{32}-[\da-f]{16}-01$/);
+        expect(forwarded).not.toContain("0af7651916cd43dd8448eb211c80319c");
+        // An untrusted `tracestate` is not echoed onward either.
+        expect(headers.get("tracestate")).toBeNull();
+    });
+
+    // The per-request form is the point of the named signals: one worker serves
+    // both a public browser request and a trusted internal caller, and only the
+    // latter should be able to choose the trace.
+    it("applies a named trust signal per request", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ shardDO: shard.namespace, trustInboundTraceContext: "mtls" });
+
+        const dispatch = async (cf?: unknown): Promise<null | string> => {
+            shard.calls.length = 0;
+
+            const request = new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                headers: { traceparent: UPSTREAM_TRACEPARENT },
+                method: "POST",
+            });
+
+            if (cf !== undefined) {
+                Object.defineProperty(request, "cf", { value: cf, writable: false });
+            }
+
+            await worker.fetch(request, {}, fakeContext);
+
+            return shard.calls[0]!.request.headers.get("traceparent");
+        };
+
+        await expect(dispatch({ tlsClientAuth: { certVerified: "SUCCESS" } })).resolves.toContain("0af7651916cd43dd8448eb211c80319c");
+        await expect(dispatch()).resolves.not.toContain("0af7651916cd43dd8448eb211c80319c");
+    });
+
+    it("continues the inbound trace when trustInboundTraceContext is set", async () => {
+        expect.assertions(3);
+
+        const headers = await forwardWithUpstreamTrace({ shardDO: shard.namespace, trustInboundTraceContext: true });
+        const forwarded = headers.get("traceparent");
+
+        expect(forwarded).not.toBe(UPSTREAM_TRACEPARENT);
+        // Trace id inherited; span id freshly minted; sampled flag preserved.
+        expect(forwarded).toMatch(/^00-0af7651916cd43dd8448eb211c80319c-[\da-f]{16}-01$/);
+        expect(headers.get("tracestate")).toBe("congo=t61rcWkgMzE");
+    });
+
     it("uses the envelope shardKey when provided", async () => {
         expect.assertions(1);
 

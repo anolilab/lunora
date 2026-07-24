@@ -352,6 +352,30 @@ describe(createContainerTelemetry, () => {
         expect(attrValue(logFrom(calls[1]!.body).resourceAttributes, "service.name")?.stringValue).toBe("transcoder");
     });
 
+    it("auto-detects container resource attributes when detectResources is true", async () => {
+        expect.assertions(5);
+
+        vi.stubEnv("HOSTNAME", "pod-123");
+        vi.stubEnv("SERVICE_VERSION", "v2.0.0");
+        vi.stubEnv("ENVIRONMENT", "production");
+        vi.stubEnv("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc");
+        vi.stubEnv("KUBERNETES_POD_NAME", "my-pod-abc");
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ detectResources: true, endpoint: "https://collect.example.com", fetch, serviceName: "transcoder" });
+
+        telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
+        await telemetry.flush();
+
+        const { resourceAttributes } = spanFrom(calls[0]!.body);
+
+        expect(attrValue(resourceAttributes, "service.name")?.stringValue).toBe("transcoder");
+        expect(attrValue(resourceAttributes, "service.version")?.stringValue).toBe("v2.0.0");
+        expect(attrValue(resourceAttributes, "deployment.environment")?.stringValue).toBe("production");
+        expect(attrValue(resourceAttributes, "host.name")?.stringValue).toBe("pod-123");
+        expect(attrValue(resourceAttributes, "k8s.pod.name")?.stringValue).toBe("my-pod-abc");
+    });
+
     it("times a successful trace() and returns its value", async () => {
         expect.assertions(4);
 

@@ -49,6 +49,52 @@ describe("metricHistory", () => {
         expect(point?.max).toBe(3);
     });
 
+    it("folds many repeats of one series correctly (the known-bucket cache path)", () => {
+        expect.assertions(3);
+
+        const sql = makeSql();
+        const base = 1_749_300_000_000;
+
+        // The first call primes the known-bucket set; every later call is a cache
+        // hit that skips the existence read and goes straight to the upsert. The
+        // fold must still be exact — the cache stores membership, never values.
+        for (let index = 0; index < 50; index += 1) {
+            recordMetricHistory(sql, event({ kind: "counter", name: "orders.placed", ts: base + index, value: 1 }));
+        }
+
+        const { series } = readMetricHistory(sql);
+        const [point] = series[0]?.points ?? [];
+
+        expect(series[0]?.points).toHaveLength(1);
+        expect(point?.count).toBe(50);
+        expect(point?.sum).toBe(50);
+    });
+
+    it("does not resurrect a bucket the retention trim removed (late out-of-window sample)", () => {
+        expect.assertions(2);
+
+        const sql = makeSql();
+        const base = 1_749_300_000_000;
+        // METRIC_HISTORY_BUCKET_RETENTION — buckets older than this many minutes
+        // behind the newest are trimmed.
+        const retention = 1440;
+
+        // One bucket, then a bucket far enough ahead that the first falls outside
+        // the retention window and is trimmed the moment the second arrives.
+        recordMetricHistory(sql, event({ kind: "counter", name: "m", ts: base, value: 1 }));
+        recordMetricHistory(sql, event({ kind: "counter", name: "m", ts: base + (retention + 1) * MINUTE, value: 1 }));
+
+        // Re-record the OLD (now-trimmed) bucket. The known-bucket cache must NOT
+        // have marked it as durable — this write must re-check and re-trim it,
+        // leaving only the in-window bucket rather than an expired row.
+        recordMetricHistory(sql, event({ kind: "counter", name: "m", ts: base, value: 1 }));
+
+        const points = readMetricHistory(sql).series[0]?.points ?? [];
+
+        expect(points).toHaveLength(1);
+        expect(points[0]?.bucketMs).toBe(base + (retention + 1) * MINUTE);
+    });
+
     it("splits measurements across minute boundaries into separate buckets", () => {
         expect.assertions(3);
 

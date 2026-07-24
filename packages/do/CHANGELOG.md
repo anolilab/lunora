@@ -1,3 +1,7 @@
+## @lunora/do [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/%40lunora%2Fdo%401.0.0-alpha.42...%40lunora%2Fdo%401.0.0-alpha.43) (2026-07-24)
+
+## @lunora/do [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/%40lunora%2Fdo%401.0.0-alpha.41...%40lunora%2Fdo%401.0.0-alpha.42) (2026-07-24)
+
 ## @lunora/do [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/%40lunora%2Fdo%401.0.0-alpha.40...%40lunora%2Fdo%401.0.0-alpha.41) (2026-07-22)
 
 ## @lunora/do [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/%40lunora%2Fdo%401.0.0-alpha.39...%40lunora%2Fdo%401.0.0-alpha.40) (2026-07-22)

@@ -193,7 +193,10 @@ interface TelemetrySink {
      * tree on the hosted path — capability-probed, and a safe no-op off-CF / on an
      * older compat date / when unsampled. This only ADDS a CF-side span; the
      * `onSpan` event below (our `SpanBuffer`/`otlpSink`) is unchanged and stays the
-     * source of truth. Mirror of `@lunora/runtime`'s `ObservabilitySink`
+     * source of truth. The bridge is now workerd-validated as available and
+     * side-effect-free inside a real DO (our recorded spans stay intact); CF's
+     * exported parent-linking under sampling is still unverified, so it stays
+     * EXPERIMENTAL. Mirror of `@lunora/runtime`'s `ObservabilitySink`
      * `fuseCloudflareTraces`; see {@link createTracer} for the double-export caveat.
      */
     fuseCloudflareTraces?: boolean;

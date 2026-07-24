@@ -241,4 +241,47 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
         expect(JSON.parse(await res.text())).toMatchObject({ result: { shardKey: "tenant-1" } });
         expect(shard.calls[0]!.shardKey).toBe("tenant-1");
     });
+
+    // An OTLP body past the gzip threshold is exported asynchronously, so without
+    // the caller's `waitUntil` an SSR host can tear the isolate down mid-export and
+    // silently lose exactly the error spans operators care about.
+    it("registers dispatch telemetry with the caller's waitUntil", async () => {
+        expect.assertions(2);
+
+        const kept: Promise<unknown>[] = [];
+        const observability = {
+            onRpc: (_event: unknown, context?: { waitUntil?: (promise: Promise<unknown>) => void }) => {
+                context?.waitUntil?.(Promise.resolve("sent"));
+            },
+        };
+        const worker = createWorker({ observability, shardDO: shard.namespace });
+
+        await worker.serverQuery(new Request("https://app.example/page"), {}, messagesList, {}, { waitUntil: (promise) => kept.push(promise) });
+
+        expect(kept).toHaveLength(1);
+        await expect(kept[0]).resolves.toBe("sent");
+    });
+
+    // Sinks are user-extensible and this context is fanned out to all of them, so
+    // raw `env` (every secret binding) and the raw `Request` (its Authorization /
+    // Cookie headers) must not be reachable from it.
+    it("never exposes raw env or request to a sink", async () => {
+        expect.assertions(3);
+
+        const seen: object[] = [];
+        const observability = {
+            onRpc: (_event: unknown, context?: object) => {
+                if (context) {
+                    seen.push(context);
+                }
+            },
+        };
+        const worker = createWorker({ observability, shardDO: shard.namespace });
+
+        await worker.serverQuery(new Request("https://app.example/page", { headers: { authorization: "Bearer hunter2" } }), { SECRET: "s3cret" }, messagesList);
+
+        expect(seen).toHaveLength(1);
+        expect(Object.keys(seen[0]!).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["resourceAttributes"]);
+        expect(JSON.stringify(seen[0])).not.toContain("s3cret");
+    });
 });

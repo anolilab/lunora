@@ -1,5 +1,7 @@
 import type { EmbeddingModel, LanguageModel } from "ai";
 
+import type { AiGatewayMetadata } from "./gateway";
+
 /**
  * Structural projection of the Cloudflare Workers `AI` binding (`env.AI`).
  * Declared locally so unit tests can pass a plain-object double and the real
@@ -33,6 +35,13 @@ export interface WorkersAiProviderLike {
 export interface AiGatewayOptions {
     [key: string]: unknown;
     id: string;
+
+    /**
+     * Custom correlation metadata surfaced in the AI Gateway logs (Cloudflare's
+     * native `gateway.metadata`). `@lunora/ai` folds `{ functionPath, traceId }`
+     * here from {@link LunoraAiOptions.metadata} when a gateway is configured.
+     */
+    metadata?: Record<string, string>;
 }
 
 /**
@@ -79,6 +88,16 @@ export interface LunoraAiOptions {
      * value wins over anything derived from {@link LunoraAiOptions.env}.
      */
     gateway?: AiGatewayOptions;
+
+    /**
+     * Correlation metadata folded into the active gateway call (the Workers AI
+     * binding's native `gateway.metadata`) so an AI Gateway log entry ties back
+     * to the Lunora function + trace that made it. Only applied when a gateway is
+     * actually configured (explicit or env-derived) and only its defined fields
+     * are sent — absent otherwise, so behavior is unchanged. The generated
+     * `ctx.ai` facade threads `{ functionPath, traceId }` here automatically.
+     */
+    metadata?: AiGatewayMetadata;
 
     /**
      * Pre-built Workers AI provider. When omitted, one is constructed from

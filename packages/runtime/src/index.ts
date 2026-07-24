@@ -94,6 +94,7 @@ export type {
     AnalyticsEngineDataPointLike,
     AnalyticsEngineDatasetLike,
     AnalyticsEngineSinkOptions,
+    OtlpResourceAttributes,
     OtlpSinkOptions,
     PipelineLike,
     PipelineLogSinkOptions,
@@ -147,9 +148,10 @@ export type {
 export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "./query-coordinator";
 export type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 export { applyJurisdiction, resolveShard } from "./resolve-shard";
-export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRouteDeps } from "./rest-routes";
+export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRoute, RestRouteDeps } from "./rest-routes";
 export { argsFromQuery, buildRestRoutes, createRestRateLimit, readShardKey, restSurfaceFromRegistry } from "./rest-routes";
 export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
 export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
+export type { TraceTrustSignal, TrustInboundTraceContext } from "./trace-trust";
 
 export const VERSION: string = "0.0.0";

@@ -118,6 +118,12 @@ Lunora has two migration surfaces — see [Migrations](/docs/concepts/migrations
 - [ ] You know where errors surface: the Studio groups error events into
       **Issues** — deterministic fingerprinting collapses the same error
       across live events and request-log rows into one issue.
+- [ ] If the worker sits behind a gateway or mesh that sets `traceparent`
+      itself and you want end-to-end waterfalls, `trustInboundTraceContext` is
+      set. Leave it off on anything an untrusted client can reach directly — the
+      header is caller-supplied, so honouring it lets a client pick which trace
+      its spans and logs join. See
+      [Joining a trace from upstream](/docs/concepts/observability#joining-a-trace-from-upstream).
 - [ ] Log access is sorted: `lunora logs` tails a deployed worker live;
       durable retention needs a `tail_consumers` Worker or `"logpush": true` —
       see [Deployment → Streaming logs](/docs/deployment#streaming-logs).

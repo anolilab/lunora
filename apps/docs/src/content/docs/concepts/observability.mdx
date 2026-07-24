@@ -81,6 +81,47 @@ Read `endpoint`/`token` from the environment so the platform can inject them at
 deploy time with no code change. Each event is one fire-and-forget POST; on a
 Worker it is registered with `waitUntil` so it outlives the response.
 
+#### Resource attributes
+
+A [resource](https://opentelemetry.io/docs/specs/semconv/resource/) is the
+identity of the thing _producing_ telemetry — the service, its version, where it
+runs. It rides on every span, log record, and metric, so a collector can group
+"all signals from v1.2.3 of the checkout API in Frankfurt" without you stamping
+it on each call.
+
+```ts
+otlpSink({
+    endpoint: env.LUNORA_OTLP_ENDPOINT,
+    serviceName: "checkout-api", // service.name
+    serviceVersion: env.CF_VERSION_METADATA, // service.version
+    serviceNamespace: "storefront", // service.namespace — when several services share a name
+    deploymentEnvironment: "production", // deployment.environment
+    resourceAttributes: { "service.instance.id": env.INSTANCE_ID }, // anything else
+});
+```
+
+`resourceAttributes` is a free-form bag and wins over every convenience field
+above it, so it can also override one.
+
+**Auto-detection** is opt-in with `detectResources: true`. The worker then reads
+`service.version` (from `SERVICE_VERSION` / `CF_VERSION_METADATA` /
+`VERCEL_GIT_COMMIT_SHA` / `GITHUB_SHA` / `COMMIT_SHA`), `deployment.environment`
+(`DEPLOYMENT_ENVIRONMENT` / `ENVIRONMENT` / `NODE_ENV`), and `cloud.provider` /
+`cloud.region` (the Cloudflare colo the request landed in). A value it cannot
+determine is omitted rather than guessed, and anything you set explicitly always
+wins.
+
+It is off by default because detection is a guess about your deployment: a stray
+`NODE_ENV` in a binding would otherwise silently label every span. Detection runs
+at most once per request, so turning it on costs nothing per log line or span.
+
+:::note[Shard-side signals carry the explicit attributes only]
+`ctx.log`, `ctx.trace`, and `ctx.metrics` originate inside the shard, which has
+no `env` of its own, so host-detected attributes are not attached to them. Set
+the values explicitly if you need them to match across the worker span and the
+shard spans of the same trace.
+:::
+
 ### `pipelineLogSink`
 
 Persist every `ctx.log` line durably to a Cloudflare **Pipeline → R2**, giving
@@ -290,6 +331,58 @@ Spans share the dispatch's trace id with its `ctx.log` lines and with any
 container the handler calls (the same `traceparent` is propagated), so one trace
 stitches together worker, shard, and container.
 
+### Joining a trace from upstream
+
+Everything above happens inside one Lunora deployment: the worker mints a trace
+and propagates it down. If something _in front_ of the worker already started a
+trace — an API gateway, a service mesh, another service — joining it needs one
+more decision, because the [W3C `traceparent`](https://www.w3.org/TR/trace-context/)
+header arrives from the caller.
+
+**By default Lunora ignores it** and starts its own trace. Continue an upstream
+trace with `trustInboundTraceContext`:
+
+```ts
+export default createWorker({
+    // …schema, functions…
+    trustInboundTraceContext: true, // nothing untrusted can reach this worker
+});
+```
+
+| Value               | Continues the upstream trace when…                                        |
+| ------------------- | ------------------------------------------------------------------------- |
+| `false` _(default)_ | never — every request starts a fresh trace                                |
+| `true`              | always                                                                    |
+| `"mtls"`            | the caller presented a client certificate Cloudflare verified at the edge |
+| `(request) => …`    | your predicate returns `true`                                             |
+
+When the upstream is trusted, the dispatch adopts its trace id, parents its span
+under the upstream span, and carries `tracestate` onward — so the waterfall
+stitches end to end across services.
+
+:::caution[Why this is off by default]
+`traceparent` is supplied by whoever called the worker. On a worker an untrusted
+client can reach directly, honouring it lets that client choose which trace its
+spans and `ctx.log` lines join — grafting entries into another tenant's waterfall
+in a shared collector — and, because the head-sampling decision is derived from
+the trace id, choose its own sampling outcome.
+
+`true` is the right answer when the worker is genuinely unreachable except
+through a front door you control. Check that it really is: a `*.workers.dev`
+route left enabled, or a hostname outside your Access policy, is a second front
+door with no gate on it. Use `"mtls"` when the check itself has to carry the
+proof — `cf.tlsClientAuth` is set by the Cloudflare edge and a caller cannot
+forge it, unlike a header.
+
+Error traces are unaffected either way: a trace that produced an error is kept
+whole regardless of the [sampling](#trace-sampling) decision, and that decision
+is the worker's, never the caller's.
+:::
+
+If an inbound `traceparent` is dropped while this option is unset, Lunora logs a
+one-time hint naming it — a broken waterfall shouldn't be silent. Setting the
+option to `false` keeps the behaviour and silences the hint.
+
 :::tip[Keep span names low-cardinality]
 Put the varying part in the attributes, not the name — `ctx.trace("stripe.charge", …, { orderId })`, never a name interpolated from the order id. A name
 built from an id makes every span its own group in a collector, which is exactly
@@ -323,6 +416,73 @@ A generation span carries `gen_ai.request.model` and, from the model result,
 integration's `recordInputs` / `recordOutputs` it also carries the prompt /
 completion (off by default). The Lunora cloud reads these to show the model,
 token counts, and cost on the Traces waterfall.
+
+## Trace sampling
+
+At real traffic, exporting every trace is mostly paying to store the same
+successful request a million times. `sampling` keeps a fraction of them —
+mirroring Cloudflare Workers' `head_sampling_rate`:
+
+```ts
+export default createWorker({
+    // …schema, functions…
+    sampling: {
+        headRate: 0.1, // keep ~10% of traces (default 1 — keep everything)
+        alwaysSampleErrors: true, // …but never drop a trace that errored (default)
+    },
+});
+```
+
+**It governs trace spans only** — the per-dispatch `SERVER` span and the
+`ctx.trace` spans beneath it. `ctx.log` lines and `ctx.metrics` measurements are
+never sampled: logs are the thing you go looking for when something broke, and a
+sampled metric is a wrong metric.
+
+:::tip[`sampling` vs. `onlyErrors`]
+Both reduce what you export, differently. `sampling` is deployment-wide and keeps
+a representative **fraction of whole traces**, so you retain a true picture of
+normal traffic at a lower bill. A sink's `onlyErrors` keeps **no** successful RPC
+spans at all — cheaper still, but you lose the baseline you would compare a
+regression against. Reach for `sampling` first; use `onlyErrors` on a sink whose
+only job is failures (a Sentry or alerting destination sitting alongside a
+sampled `otlpSink`).
+:::
+
+### Traces are kept or dropped whole
+
+The decision is **deterministic per trace**, derived from the trace id rather
+than a coin flip. That matters because a trace spans processes: the worker, the
+shard, and any container all reach the same verdict for the same trace, so you
+never get half a waterfall — the worker span kept and its `ctx.trace` children
+missing, or the reverse.
+
+The worker decides once and propagates it: the sampled bit rides the
+`traceparent` it forwards, so the shard drops the matching spans without
+re-deciding.
+
+### Errors are never sampled away
+
+`alwaysSampleErrors` (default `true`) is the **tail bias**: a trace that produced
+an error is exported whole even when the head decision dropped it. The shard
+holds a sampled-out trace's spans until the dispatch settles, then flushes them
+if anything failed and discards them otherwise.
+
+So `headRate: 0.01` does not mean "1% of your errors". It means 1% of your
+_successful_ traffic, plus every failure. That is usually the shape you want:
+aggressive sampling on the boring path, complete traces on the interesting one.
+
+:::note[`headRate` and the trace id]
+`headRate >= 1` keeps everything and `<= 0` drops every non-error trace; in
+between, the first 8 hex characters of the trace id are mapped onto `[0, 1)` and
+compared against the rate.
+
+Because the trace id decides, **which** id is used matters. When the inbound
+trace context is untrusted — [the default](#joining-a-trace-from-upstream) —
+Lunora keys the decision on a freshly-minted server-side id, so a caller cannot
+choose its own sampling outcome by picking a trace id. When you have opted into
+trusting the upstream, the upstream's trace id is used, which is what keeps a
+distributed trace whole across services.
+:::
 
 ## Application metrics with `ctx.metrics`
 
@@ -374,6 +534,30 @@ over time, which an in-memory ring on a hibernating instance can't represent.
 collector. (The Studio's **Metrics** page shows framework-level per-function
 metrics, which are collected separately and always on.)
 
+### Delivery metrics (notify)
+
+[`@lunora/notify`](/docs/packages/notify) counts every notification send onto
+`ctx.metrics` for you — no code, as long as the send runs on a ctx that carries
+`ctx.metrics` (every handler does). Two low-cardinality series:
+
+| Metric           | Dimensions                      | Meaning                                                                                                                                             |
+| ---------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notify.send`    | `channel`, `provider`, `status` | attempted sends. `status` is `accepted` (the provider took it), `failed`, or `gone` (the endpoint is unregistered and was pruned).                  |
+| `notify.skipped` | `channel`, `reason`             | a send that reached nobody — `reason` is `no-subscriptions-matched` (an empty broadcast) or `channel-not-configured`. The "sent 0 because…" signal. |
+
+A single send emits one `notify.send` measurement; a **broadcast aggregates** its
+outcomes into one measurement per `(provider, status)` bucket (its value is the
+bucket's count), not one per recipient — each `ctx.metrics.count` is a durable
+write, so a large fan-out must not pay it per subscription.
+
+`accepted` means the push/chat provider **accepted** the message, not that it was
+delivered or opened — Web Push and FCM give no delivery/open receipts, so the
+status stops at the send attempt. A **failed** send also emits one `ctx.log.warn`
+line (`"notify <channel> delivery failed"`) carrying the error and, for push, the
+subscription and user ids — trace-correlated to the enclosing action and durably
+archived by the log sink. Successful sends and prunes stay off the log; they live
+on the metric.
+
 ## Container telemetry
 
 Code running **inside** a [container](/docs/packages/container) can't use a worker
@@ -403,6 +587,24 @@ runs unchanged locally and in the cloud.
 Each POST is bounded by `timeoutMs` (default 10s), so a hung collector aborts
 instead of pinning a send in flight and stalling `flush()`; failures are handed to
 the optional `onError` callback and never break the container.
+
+It takes the same [resource attributes](#resource-attributes) as `otlpSink` —
+`serviceVersion`, `serviceNamespace`, `deploymentEnvironment`,
+`resourceAttributes`, and an opt-in `detectResources` — so container and worker
+telemetry can be grouped by the same service and version:
+
+```ts
+createContainerTelemetry({
+    serviceName: "transcoder",
+    detectResources: true, // service.version, deployment.environment, host.name, k8s.pod.name, process.pid
+});
+```
+
+Detection here reads the _container's_ environment, so unlike the worker it can
+also resolve `host.name`, `k8s.pod.name` (only when actually running under
+Kubernetes), and `process.pid`. As on the worker, it is opt-in and anything you
+set explicitly wins — including the `deploymentEnvironment` and `serviceVersion`
+env fallbacks, which only apply when `detectResources` is on.
 
 Thread the endpoint/token into the container the same way any other config
 reaches it — declare them on `defineContainer`:
@@ -466,8 +668,10 @@ still accepts the payload.
 - `timeUnixNano` fields are the **nanoseconds since the epoch as a decimal
   string** (Lunora works in millis, so this is the millisecond value followed by
   six zeros — exact).
-- `resource` carries a `service.name` attribute; the instrumentation `scope.name`
-  is `@lunora/runtime` (worker) or `@lunora/container` (container).
+- `resource` always carries `service.name`, plus any other
+  [resource attributes](#resource-attributes) configured or detected; the
+  instrumentation `scope.name` is `@lunora/runtime` (worker) or
+  `@lunora/container` (container).
 - Attribute values follow the OTLP `AnyValue` union — strings as `stringValue`,
   booleans as `boolValue`, integers as `intValue` (a decimal string), floats as
   `doubleValue`.
@@ -483,19 +687,42 @@ still accepts the payload.
 
 Worker spans carry these attributes:
 
-| Attribute              | When         | Value                                   |
-| ---------------------- | ------------ | --------------------------------------- |
-| `lunora.function_path` | always       | the function path, e.g. `messages:list` |
-| `lunora.ok`            | always       | boolean                                 |
-| `lunora.shard_key`     | if sharded   | the shard key                           |
-| `error.type`           | on error     | the Lunora error `code`                 |
-| `lunora.error_status`  | on error     | the HTTP/RPC status (int)               |
-| `lunora.fanout.table`  | on a fan-out | the table fanned across                 |
-| `lunora.fanout.shards` | on a fan-out | shard count (int)                       |
-| `lunora.fanout.failed` | on a fan-out | failed-shard count (int)                |
+| Attribute                   | When         | Value                                   |
+| --------------------------- | ------------ | --------------------------------------- |
+| `lunora.function_path`      | always       | the function path, e.g. `messages:list` |
+| `lunora.ok`                 | always       | boolean                                 |
+| `http.route`                | always       | the function path — the logical route   |
+| `http.response.status_code` | always       | `200`, or the error's status (int)      |
+| `http.request.method`       | if known     | the inbound HTTP method                 |
+| `url.path`                  | if known     | the inbound URL path                    |
+| `url.scheme`                | if known     | `https` / `http`                        |
+| `server.address`            | if known     | the inbound host                        |
+| `server.port`               | if known     | the inbound port (int)                  |
+| `user_agent.original`       | if known     | the inbound `User-Agent`                |
+| `lunora.shard_key`          | if sharded   | the shard key                           |
+| `error.type`                | on error     | the Lunora error `code`                 |
+| `lunora.error_status`       | on error     | the HTTP/RPC status (int)               |
+| `lunora.fanout.table`       | on a fan-out | the table fanned across                 |
+| `lunora.fanout.shards`      | on a fan-out | shard count (int)                       |
+| `lunora.fanout.failed`      | on a fan-out | failed-shard count (int)                |
+
+The `http.*` / `url.*` / `server.*` / `user_agent.*` keys are the OpenTelemetry
+[HTTP semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/),
+so a collector's built-in HTTP dashboards work against Lunora spans with no
+mapping. `http.route` deliberately carries the **function path** rather than the
+transport path (`/_lunora/rpc`), because that is the route actually being
+invoked.
+
+A span that errored also carries a standard OTel `exception` **span event** with
+`exception.type` and `exception.message` — the canonical error representation
+collectors look for, alongside the `error.type` attribute.
+
+Worker spans additionally carry `parentSpanId` when the trace was
+[joined from upstream](#joining-a-trace-from-upstream), and `flags` with the W3C
+sampled bit.
 
 Container spans carry whatever `attributes` you pass, plus `error.type` when the
-work throws.
+work throws, and the same `exception` event on failure.
 
 **Log record shape.** `body.stringValue` is the message; `severityText` is the
 upper-cased level; `severityNumber` maps as:
@@ -519,3 +746,19 @@ log-record attributes, and each record carries its dispatch's `trace_id` /
 Spans carry `error.type` and error messages, and log records carry the rendered
 message — either can include user-supplied input. Point `endpoint` only at a
 collector you trust, and use `onlyErrors` to narrow what leaves the deployment.
+
+`url.path` is the **raw** inbound path. On the RPC transport that is a constant
+(`/_lunora/rpc`), but on the opt-in public REST surface a path can carry record
+ids or user identifiers — worth knowing before pointing a sink at a third party.
+`http.route` is always the templated function path, so it is the safe one to
+group and alert on.
+
+### Writing your own sink
+
+A sink receives `(event, context)`. The `context` is deliberately narrow: a
+`waitUntil` for keeping a send alive past the response, and a
+`resourceAttributes()` thunk resolving the small allowlisted bag described
+[above](#resource-attributes). It does **not** expose the Worker `env` or the raw
+`Request`, because every registered sink — including your own — is handed the same
+context, and a single debug `console.log(context)` would otherwise print every
+secret binding and the caller's `Authorization` and `Cookie` headers.

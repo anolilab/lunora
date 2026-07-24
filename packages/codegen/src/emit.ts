@@ -2334,7 +2334,16 @@ const emitAiFragments = (hasAi: boolean): { build: string; configField: string; 
         // a handler is never locked to Workers AI. Falls back to `aiStub`.
         build: `
             const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
-            const ai: LunoraAi = aiBinding ? createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown> }) : aiStub;
+            // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
+            // function path + trace id into createAi, which folds them into the
+            // gateway's native \`metadata\` only when a gateway is configured (absent
+            // otherwise). Mirror the tracer's anchor guard — a deferred subscription
+            // re-run must not borrow a concurrent dispatch's trace, so read
+            // \`getCurrentTrace()\` only on the synchronous (non-threaded-identity) path.
+            const aiTrace = options.identity ? undefined : this.getCurrentTrace();
+            const ai: LunoraAi = aiBinding
+                ? createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown>, metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId } })
+                : aiStub;
 `,
         // Optional override for the Workers AI binding. When omitted, ctx.ai is
         // built from `env.AI` (the conventional binding the config layer
@@ -2474,8 +2483,12 @@ const emitNotifyFragments = (hasNotify: boolean): HelperFragments => {
     }
 
     return {
+        // Threads the request's `ctx.log` / `ctx.metrics` into the facade so a send
+        // emits the `notify.send` / `notify.skipped` observability signals. Because
+        // `log`/`metrics` are built LATER in the context builder, this fragment is
+        // injected after them (see `notifyBuild` below), NOT inside `everyContextBuild`.
         build: `
-            const { notify, push } = createNotify(notifyConfig, env);
+            const { notify, push } = createNotify(notifyConfig, env, { log, metrics });
 `,
         configField: "",
         contextField: `\n                notify,\n                push,`,
@@ -4265,8 +4278,14 @@ ${schema.tables
     const secretsBuild = `
             const secrets = createSecrets(env);
 `;
-    const everyContextBuild = `${accessFragments.build}${kvFragments.build}${flagsFragments.build}${notifyFragments.build}${analyticsFragments.build}${envFragments.build}${secretsBuild}`;
+    // NOTE: `notifyFragments.build` is intentionally NOT in `everyContextBuild` —
+    // the notify facade needs `log`/`metrics`, which are built later in the context
+    // builder, so its build is injected after them via `notifyBuild` below. Its
+    // `contextField` (the `notify` / `push` ctx keys) still rides `everyContextField`.
+    const everyContextBuild = `${accessFragments.build}${kvFragments.build}${flagsFragments.build}${analyticsFragments.build}${envFragments.build}${secretsBuild}`;
     const everyContextField = `${accessFragments.contextField}${kvFragments.contextField}${flagsFragments.contextField}${notifyFragments.contextField}${analyticsFragments.contextField}${envFragments.contextField}\n                secrets,`;
+    // The relocated notify build — emitted after `log`/`metrics` are in scope.
+    const notifyBuild = notifyFragments.build;
 
     // `ctx.images` / `ctx.sql` (Hyperdrive) / `ctx.browser` are ActionCtx-ONLY:
     // external, non-deterministic I/O the typed `ActionCtx` exposes but
@@ -4778,7 +4797,7 @@ ${facadeBlock}${paymentsBuild}
             // writing mutation's trace from the shared per-request field.
             const trace = this.makeTracer(logFunctionPath, observability, options.identity ? undefined : this.getCurrentTrace());
             const metrics = this.makeMetrics(logFunctionPath, observability);
-
+${notifyBuild}
             // \`ctx.now\`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
             // Query/mutation handlers must be deterministic (they may be re-run on

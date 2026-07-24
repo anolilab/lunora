@@ -51,6 +51,14 @@ interface OtlpAttribute {
 type OtlpAttributeValue = boolean | number | string;
 
 /**
+ * A `Resource.attributes` bag — the process-level identity (`service.name`,
+ * `service.version`, `cloud.region`, …) attached to every exported signal.
+ * Lives here rather than in either exporter because both packages build one and
+ * `wrapResource*` consumes it.
+ */
+type OtlpResourceAttributes = Record<string, OtlpAttributeValue>;
+
+/**
  * Encode wall-clock milliseconds as an OTLP `*UnixNano` string. proto3 JSON
  * represents uint64 as a decimal string, and ms→ns is ×10^6, so the six trailing
  * zeros are exact — no `BigInt`, no float rounding.
@@ -218,12 +226,28 @@ const mergeHeaders = (defaults: Record<string, string>, overrides: Record<string
     return merged;
 };
 
+/**
+ * Build the OTLP `Resource.attributes` list for a signal envelope. `service.name`
+ * is the default and `extra` is merged over it, so a caller-supplied
+ * `service.name` in `extra` wins. Kept as a separate helper so `wrapResource*`
+ * callers don't duplicate the merge logic.
+ */
+const buildResourceAttributes = (serviceName: string, extra?: Record<string, OtlpAttributeValue>): OtlpAttribute[] => {
+    const merged: Record<string, OtlpAttributeValue> = { "service.name": serviceName };
+
+    for (const [key, value] of Object.entries(extra ?? {})) {
+        merged[key] = value;
+    }
+
+    return Object.entries(merged).map(([key, value]) => encodeAttribute(key, value));
+};
+
 /** Wrap one encoded OTLP span in the `ExportTraceServiceRequest` envelope. */
-const wrapResourceSpans = (span: unknown, scopeName: string, serviceName: string): unknown => {
+const wrapResourceSpans = (span: unknown, scopeName: string, serviceName: string, resourceAttributes?: Record<string, OtlpAttributeValue>): unknown => {
     return {
         resourceSpans: [
             {
-                resource: { attributes: [encodeAttribute("service.name", serviceName)] },
+                resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
                 scopeSpans: [{ scope: { name: scopeName }, spans: [span] }],
             },
         ],
@@ -231,11 +255,11 @@ const wrapResourceSpans = (span: unknown, scopeName: string, serviceName: string
 };
 
 /** Wrap one encoded OTLP log record in the `ExportLogsServiceRequest` envelope. */
-const wrapResourceLogs = (logRecord: unknown, scopeName: string, serviceName: string): unknown => {
+const wrapResourceLogs = (logRecord: unknown, scopeName: string, serviceName: string, resourceAttributes?: Record<string, OtlpAttributeValue>): unknown => {
     return {
         resourceLogs: [
             {
-                resource: { attributes: [encodeAttribute("service.name", serviceName)] },
+                resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
                 scopeLogs: [{ logRecords: [logRecord], scope: { name: scopeName } }],
             },
         ],
@@ -243,18 +267,18 @@ const wrapResourceLogs = (logRecord: unknown, scopeName: string, serviceName: st
 };
 
 /** Wrap one encoded OTLP metric in the `ExportMetricsServiceRequest` envelope. */
-const wrapResourceMetrics = (metric: unknown, scopeName: string, serviceName: string): unknown => {
+const wrapResourceMetrics = (metric: unknown, scopeName: string, serviceName: string, resourceAttributes?: Record<string, OtlpAttributeValue>): unknown => {
     return {
         resourceMetrics: [
             {
-                resource: { attributes: [encodeAttribute("service.name", serviceName)] },
+                resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
                 scopeMetrics: [{ metrics: [metric], scope: { name: scopeName } }],
             },
         ],
     };
 };
 
-export type { OtlpAnyValue, OtlpAttribute, OtlpAttributeValue, OtlpLevel };
+export type { OtlpAnyValue, OtlpAttribute, OtlpAttributeValue, OtlpLevel, OtlpResourceAttributes };
 export {
     buildTraceparent,
     encodeAttribute,

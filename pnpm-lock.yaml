@@ -3723,8 +3723,8 @@ importers:
         specifier: workspace:*
         version: link:../mail
       '@lunora/notify':
-        specifier: workspace:*
-        version: link:../notify
+        specifier: 1.0.0-alpha.1
+        version: 1.0.0-alpha.1(@opentelemetry/api@1.9.1)(croner@10.0.1)(handlebars@4.7.9)(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.4)(better-sqlite3@12.11.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260719.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.0(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.23.0(@types/node@26.1.1)))(ioredis@5.11.1(supports-color@10.2.2)))
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -6803,6 +6803,10 @@ packages:
   '@lingui/message-utils@6.5.0':
     resolution: {integrity: sha512-qZZijYERMADeWVJbpQGyFxicW3F17CjtR2hnzo0VgT4cICPE27e0zBieQHxuUD/pj4dmyOOldVhWhHs5CN6ABw==}
     engines: {node: '>=22.19.0'}
+
+  '@lunora/notify@1.0.0-alpha.1':
+    resolution: {integrity: sha512-PjadgrPxG0Bn8+JZ5Fr87FjtYQ6l/43CwqDe8WeOplanv+k/WQ7dNKjs7SLQpmOE18MIdbRwpzSkk9p+kdJ8JA==}
+    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -25757,6 +25761,23 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
+
+  '@lunora/notify@1.0.0-alpha.1(@opentelemetry/api@1.9.1)(croner@10.0.1)(handlebars@4.7.9)(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.4)(better-sqlite3@12.11.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260719.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.0(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.23.0(@types/node@26.1.1)))(ioredis@5.11.1(supports-color@10.2.2)))':
+    dependencies:
+      '@lunora/errors': link:packages/errors
+      '@visulima/notification': 1.0.5(@opentelemetry/api@1.9.1)(croner@10.0.1)(handlebars@4.7.9)(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.4)(better-sqlite3@12.11.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260719.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.0(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.23.0(@types/node@26.1.1)))(ioredis@5.11.1(supports-color@10.2.2)))
+    transitivePeerDependencies:
+      - '@aws-sdk/client-sqs'
+      - '@opentelemetry/api'
+      - '@visulima/email'
+      - '@visulima/workflow'
+      - bullmq
+      - croner
+      - handlebars
+      - intl-messageformat
+      - liquidjs
+      - pg-boss
+      - unstorage
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true

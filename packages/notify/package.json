@@ -1,6 +1,6 @@
 {
     "name": "@lunora/notify",
-    "version": "1.0.0-alpha.0",
+    "version": "1.0.0-alpha.2",
     "description": "Multi-channel notifications for Lunora — ctx.notify / ctx.push over @visulima/notification: edge-safe Web Push + FCM, plus chat, in-app inbox and webhook channels, with subscription storage and queue-backed fan-out",
     "keywords": [
         "cloudflare",
@@ -57,10 +57,11 @@
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.6",
+        "@lunora/errors": "1.0.0-alpha.7",
         "@visulima/notification": "catalog:notify"
     },
     "devDependencies": {
