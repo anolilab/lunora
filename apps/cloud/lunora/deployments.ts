@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/server";
 import { highestPlan } from "../src/billing/plans";
 import { previewExpiry } from "../src/deploy/preview";
 import type { Id } from "./_generated/dataModel.js";
+import type { MutationCtx } from "./_generated/server.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
@@ -35,6 +36,58 @@ interface ProjectRow {
     activeDeploymentId?: Id<"deployments">;
     activeScriptName?: string;
 }
+
+interface AliasOwnershipRow {
+    _id: Id<"aliasOwnership">;
+    alias: string;
+    organizationId: Id<"organizations">;
+    projectId: Id<"projects">;
+}
+
+/**
+ * Claim a deployment alias for a project through the `aliasOwnership` ledger.
+ * The ledger's `by_alias` unique index makes the claim atomic, so this closes
+ * the check-then-insert TOCTOU in {@link create}: a concurrent first claim of
+ * the same new alias by a *different* project loses on the unique constraint and
+ * is rejected. Idempotent for the owning project (re-deploys reuse their alias).
+ */
+export const claimAlias = async (context: MutationCtx, alias: string, organizationId: Id<"organizations">, projectId: Id<"projects">): Promise<void> => {
+    const currentOwner = async (): Promise<AliasOwnershipRow | undefined> => {
+        const { page } = await context.db.aliasOwnership.findMany({ where: { alias } });
+
+        return (page as unknown as AliasOwnershipRow[])[0];
+    };
+
+    const existing = await currentOwner();
+
+    if (existing) {
+        if (existing.projectId !== projectId) {
+            throw new LunoraError("FORBIDDEN", "deployment alias is already in use by another project");
+        }
+
+        return;
+    }
+
+    try {
+        await context.db.insert("aliasOwnership", { alias, createdAt: Date.now(), organizationId, projectId });
+    } catch (error) {
+        // Lost a concurrent first-claim race — the `by_alias` unique index rejected
+        // the insert. Re-read the winner: if it is us, the claim stands; if it is
+        // another project, reject cleanly; otherwise the failure was not an
+        // ownership collision, so surface it.
+        const winner = await currentOwner();
+
+        if (winner?.projectId === projectId) {
+            return;
+        }
+
+        if (winner) {
+            throw new LunoraError("FORBIDDEN", "deployment alias is already in use by another project");
+        }
+
+        throw error;
+    }
+};
 
 /** The `${status}At` timestamp column stamped on each phase transition (GAPS.md A2). */
 const PHASE_TIMESTAMP: Record<DeploymentStatus, "destroyedAt" | "failedAt" | "liveAt" | "provisioningAt" | "queuedAt" | "supersededAt" | "verifyingAt" | null> =
@@ -175,14 +228,11 @@ export const create = mutation
         // provisioner, and for alias→script routing. It MUST be owned by exactly one
         // project — otherwise a caller holding a valid key for their own project could
         // pass a victim's alias here and bind the victim's database/bucket into their
-        // own worker (or hijack the victim's route / overwrite their script). Reject
-        // an alias already claimed by a different project (covers cross-org and the
-        // honest same-slug-across-orgs collision, since slugs are only per-org unique).
-        const { page: aliasHolders } = await context.db.deployments.findMany({ where: { alias: arguments_.scriptName } });
-
-        if ((aliasHolders as unknown as DeploymentRow[]).some((deployment) => deployment.projectId !== arguments_.projectId)) {
-            throw new LunoraError("FORBIDDEN", "deployment alias is already in use by another project");
-        }
+        // own worker (or hijack the victim's route / overwrite their script). Claim
+        // the alias through the `aliasOwnership` ledger, whose `by_alias` unique index
+        // makes the claim atomic (closing the check-then-insert race): a concurrent
+        // first claim by a different project loses on the unique constraint.
+        await claimAlias(context, arguments_.scriptName, arguments_.organizationId, arguments_.projectId);
 
         // Versioned, immutable release: `{alias}-v{n}` per (project, kind). The
         // stable alias keeps serving the previous version until `activate`
