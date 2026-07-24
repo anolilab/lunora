@@ -19,7 +19,11 @@ interface AuditRow {
 export const record = mutation
     .input({ action: v.string(), organizationId: v.id("organizations"), target: v.optional(v.string()) })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"auditLog">> => {
-        const { userId } = await assertMember(context, arguments_.organizationId);
+        // Restricted to owner/admin: the `action`/`target` are free-form, so a plain
+        // member (esp. a viewer) could otherwise forge security-relevant entries
+        // (e.g. "organization.suspend") into the very log used for forensics. All
+        // system-originated audit writes insert directly, not via this mutation.
+        const { userId } = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
         return context.db.insert("auditLog", {
             action: arguments_.action,

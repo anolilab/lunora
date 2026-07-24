@@ -21,11 +21,23 @@ const assertSignedIn = (userId: null | string): string => {
     return userId;
 };
 
-/** List all organizations (platform-admin surface). `.global()` → D1 facade. */
+/**
+ * The organizations the signed-in caller belongs to (the dashboard's org list).
+ * Scoped to the caller's memberships — returning every org leaked the full tenant
+ * roster (enumeration) to any caller. `.global()` → D1 facade.
+ */
 export const list = query.query(async ({ ctx: context }): Promise<OrganizationRow[]> => {
+    const { userId } = context.auth;
+
+    if (!userId) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
+
+    const { page: memberships } = await context.db.members.findMany({ where: { userId } });
+    const orgIds = new Set((memberships as unknown as { organizationId: Id<"organizations"> }[]).map((membership) => membership.organizationId));
     const { page } = await context.db.organizations.findMany();
 
-    return page as unknown as OrganizationRow[];
+    return (page as unknown as OrganizationRow[]).filter((organization) => orgIds.has(organization._id));
 });
 
 /**
