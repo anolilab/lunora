@@ -35,8 +35,11 @@
  * a concrete `DurableObject` class today; the structural state shape used by
  * the unit tests is preserved so plain-object doubles still work.
  */
+import type { ShardAlarms, ShardKvStore } from "@lunora/platform";
+
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { jsonResponse } from "../../../shared/json-response";
+import { createShardAlarms, createShardKvStore } from "./cloudflare-host";
 
 /** Default TTL for new sessions (7 days), matching `@lunora/auth`. */
 const SESSION_DO_TTL_DEFAULT: number = 7 * 24 * 60 * 60;
@@ -89,7 +92,9 @@ interface SessionDOState {
         getAlarm?: () => Promise<number | null>;
         list?: <T = unknown>(options?: { prefix?: string }) => Promise<Map<string, T>>;
         put: (key: string, value: unknown) => Promise<void>;
-        setAlarm?: (scheduledTime: number) => Promise<void>;
+        // `number | Date` to match the runtime `DurableObjectStorage.setAlarm`
+        // and the platform `ShardAlarms.set`; SessionDO only ever passes a number.
+        setAlarm?: (scheduledTime: number | Date) => Promise<void>;
     };
 }
 
@@ -182,9 +187,24 @@ class SessionDO {
 
     protected env: unknown;
 
+    /**
+     * Durable record store, bound to the `@lunora/platform` contract rather
+     * than reached through `state.storage` directly. `SessionDO` keeps plain
+     * session records — ordered key lookup and a prefix sweep — which is the KV
+     * surface, not the reactive engine's `ShardHost`. Binding it here is what
+     * lets the same session logic run on a non-Cloudflare host that supplies a
+     * `ShardKvStore`.
+     */
+    private readonly kv: ShardKvStore;
+
+    /** GC-sweep alarm, via the shared platform alarm contract. */
+    private readonly alarms: ShardAlarms;
+
     public constructor(state: SessionDOState, env: unknown) {
         this.state = state;
         this.env = env;
+        this.kv = createShardKvStore(state.storage);
+        this.alarms = createShardAlarms(state.storage);
     }
 
     public async fetch(request: Request): Promise<Response> {
@@ -218,14 +238,16 @@ class SessionDO {
      * fully idle (no billable alarm) once it's empty.
      */
     public async alarm(): Promise<void> {
-        const { storage } = this.state;
-
-        if (!storage.list) {
+        // `list` is the one KV op that may be absent on the plain-object doubles
+        // the unit tests pass (they exercise only create/get/revoke). Probe the
+        // underlying storage before routing through the contract so the sweep
+        // stays a no-op there rather than throwing.
+        if (typeof this.state.storage.list !== "function") {
             return;
         }
 
         const now = Date.now();
-        const entries = await storage.list<SessionRecord>({ prefix: "s:" });
+        const entries = await this.kv.list<SessionRecord>({ prefix: "s:" });
         const expired: string[] = [];
         let remaining = 0;
 
@@ -238,12 +260,12 @@ class SessionDO {
         }
 
         for (const key of expired) {
-            // eslint-disable-next-line no-await-in-loop -- bounded GC sweep; storage.delete takes one key in this structural surface
-            await storage.delete(key);
+            // eslint-disable-next-line no-await-in-loop -- bounded GC sweep; ShardKvStore.delete takes one key
+            await this.kv.delete(key);
         }
 
-        if (remaining > 0 && storage.setAlarm) {
-            await storage.setAlarm(now + SESSION_GC_INTERVAL_MS);
+        if (remaining > 0) {
+            await this.alarms.set(now + SESSION_GC_INTERVAL_MS);
         }
     }
 
@@ -277,7 +299,7 @@ class SessionDO {
         const now = Date.now();
         const record: SessionRecord = { createdAt: now, expiresAt: now + ttlSeconds * 1000, userId };
 
-        await this.state.storage.put(`s:${token}`, record);
+        await this.kv.put(`s:${token}`, record);
         await this.armGcAlarm();
 
         return jsonResponse({ token, ...record }, 201);
@@ -290,16 +312,13 @@ class SessionDO {
      * the alarm API.
      */
     private async armGcAlarm(): Promise<void> {
-        const { storage } = this.state;
-
-        if (!storage.getAlarm || !storage.setAlarm) {
-            return;
-        }
-
-        const existing = await storage.getAlarm();
+        // On doubles without the alarm API, `get` reads `null` and `set` is a
+        // no-op, so the whole method degrades to nothing — the same outcome as
+        // the previous explicit capability guard.
+        const existing = await this.alarms.get();
 
         if (existing === null) {
-            await storage.setAlarm(Date.now() + SESSION_GC_INTERVAL_MS);
+            await this.alarms.set(Date.now() + SESSION_GC_INTERVAL_MS);
         }
     }
 
@@ -310,7 +329,7 @@ class SessionDO {
             return jsonResponse({ error: { code: "INVALID_INPUT", message: "token required" } }, 400);
         }
 
-        const record = await this.state.storage.get<SessionRecord>(`s:${token}`);
+        const record = await this.kv.get<SessionRecord>(`s:${token}`);
 
         if (!record) {
             return jsonResponse({ error: { code: "NOT_FOUND", message: "session not found" } }, 404);
@@ -319,7 +338,7 @@ class SessionDO {
         // Expire lazily on read for correctness; the GC alarm ({@link alarm})
         // separately reclaims storage for sessions that are never read again.
         if (record.expiresAt < Date.now()) {
-            await this.state.storage.delete(`s:${token}`);
+            await this.kv.delete(`s:${token}`);
 
             return jsonResponse({ error: { code: "EXPIRED", message: "session expired" } }, 404);
         }
@@ -334,7 +353,7 @@ class SessionDO {
             return jsonResponse({ error: { code: "INVALID_INPUT", message: "token required" } }, 400);
         }
 
-        await this.state.storage.delete(`s:${token}`);
+        await this.kv.delete(`s:${token}`);
 
         return jsonResponse({ ok: true }, 200);
     }

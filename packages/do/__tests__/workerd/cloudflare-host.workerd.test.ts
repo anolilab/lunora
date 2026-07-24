@@ -33,7 +33,7 @@ import { defineHostContractSuite } from "@lunora/platform-conformance/suite";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { createShardDirectory, createShardHost, createSocketHost } from "../../src/cloudflare-host";
+import { createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "../../src/cloudflare-host";
 
 /**
  * The `DurableObjectState` of the object the current test body is running
@@ -75,6 +75,7 @@ const createCloudflareHost = (): ConformanceHost => {
             return pair[1];
         },
         directory: createShardDirectory(env.ECHO as unknown as Parameters<typeof createShardDirectory>[0]),
+        kv: createShardKvStore(state.storage),
         shard: createShardHost(state as unknown as Parameters<typeof createShardHost>[0]),
         socket: createSocketHost(state as unknown as Parameters<typeof createSocketHost>[0]),
     };

@@ -15,7 +15,17 @@
  */
 
 import type { DurableObjectNamespace, DurableObjectState, DurableObjectStub, WebSocket } from "@cloudflare/workers-types";
-import type { ShardAlarms, ShardDirectory, ShardHost, ShardJurisdiction, ShardSqlExec, ShardStub, SocketHandle, SocketHost } from "@lunora/platform";
+import type {
+    ShardAlarms,
+    ShardDirectory,
+    ShardHost,
+    ShardJurisdiction,
+    ShardKvStore,
+    ShardSqlExec,
+    ShardStub,
+    SocketHandle,
+    SocketHost,
+} from "@lunora/platform";
 
 /** Raw SQL cursor returned by Cloudflare's `SqlStorage.exec`. */
 type SqlStorageCursor = {
@@ -39,14 +49,21 @@ const execSql = (state: DurableObjectState, query: string, bindings: ReadonlyArr
     return sql.exec(query, ...bindings);
 };
 
-const createShardHost = (state: DurableObjectState): ShardHost => {
-    const { storage } = state;
+/** The alarm subset of `state.storage`, structurally (shared by shard + session hosts). */
+interface AlarmStorageLike {
+    deleteAlarm?: () => Promise<void>;
+    getAlarm?: () => Promise<number | null>;
+    setAlarm?: (scheduledTime: number | Date) => Promise<void>;
+}
 
-    const sql: ShardSqlExec = {
-        exec: (query, ...bindings) => execSql(state, query, bindings),
-    };
-
-    const alarms: ShardAlarms = {
+/**
+ * Turn a DO's `state.storage` alarm surface into {@link ShardAlarms}. Each
+ * primitive is probed at call time so a test double lacking the alarm API
+ * degrades to a no-op (and a missing alarm reads as `null`) rather than
+ * throwing — the pre-contract behavior on those doubles.
+ */
+const createShardAlarms = (storage: AlarmStorageLike): ShardAlarms => {
+    return {
         delete: () => {
             if (typeof storage.deleteAlarm === "function") {
                 return storage.deleteAlarm();
@@ -71,6 +88,16 @@ const createShardHost = (state: DurableObjectState): ShardHost => {
             return Promise.resolve();
         },
     };
+};
+
+const createShardHost = (state: DurableObjectState): ShardHost => {
+    const { storage } = state;
+
+    const sql: ShardSqlExec = {
+        exec: (query, ...bindings) => execSql(state, query, bindings),
+    };
+
+    const alarms = createShardAlarms(storage);
 
     /**
      * Single-writer gate. `blockConcurrencyWhile` delays the next dispatch
@@ -116,6 +143,41 @@ const createShardHost = (state: DurableObjectState): ShardHost => {
                       state.waitUntil(promise);
                   }
                 : undefined,
+    };
+};
+
+/**
+ * The `state.storage` key-value surface, structurally. Declared here rather
+ * than taking a full `DurableObjectState` so the adapter also accepts the
+ * plain-object doubles `SessionDO`'s unit tests pass — they carry exactly this
+ * shape and nothing else.
+ */
+interface KvStorageLike {
+    delete: (key: string) => Promise<boolean | number>;
+    get: <T = unknown>(key: string) => Promise<T | undefined>;
+    list?: <T = unknown>(options?: { prefix?: string }) => Promise<Map<string, T>>;
+    put: (key: string, value: unknown) => Promise<void>;
+}
+
+/**
+ * Turn a Durable Object's `state.storage` into the provider-neutral
+ * {@link ShardKvStore}. The DO's KV surface already matches the contract
+ * method-for-method; this adapter only normalizes the return of `delete`
+ * (workerd resolves a boolean, some doubles a number) and fails closed on a
+ * `list` the underlying storage does not provide.
+ */
+const createShardKvStore = (storage: KvStorageLike): ShardKvStore => {
+    return {
+        delete: async (key) => Boolean(await storage.delete(key)),
+        get: (key) => storage.get(key),
+        list: (options) => {
+            if (typeof storage.list !== "function") {
+                throw new TypeError("storage.list is not available on this DurableObjectStorage");
+            }
+
+            return storage.list(options);
+        },
+        put: (key, value) => storage.put(key, value),
     };
 };
 
@@ -296,5 +358,5 @@ const createShardDirectory = (namespace: DurableObjectNamespace): ShardDirectory
     return directory;
 };
 
-export { createShardDirectory, createShardHost, createSocketHost };
+export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost };
 export type { SqlStorageCursor };
