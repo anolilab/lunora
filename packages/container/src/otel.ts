@@ -20,6 +20,7 @@
  * The OTLP/JSON wire encoding is shared with the worker `otlpSink` via
  * `shared/otlp.ts` — one contract, bundler-inlined into both packages.
  */
+import type { OtlpResourceAttributes } from "../../../shared/otlp";
 import {
     encodeAttribute,
     encodeAttributes,
@@ -31,6 +32,7 @@ import {
     wrapResourceLogs,
     wrapResourceSpans,
 } from "../../../shared/otlp";
+import { detectHostResource, detectServiceResource, mergeResourceAttributes } from "../../../shared/otlp-resource";
 
 /**
  * An attribute value carried on a span or log.
@@ -88,6 +90,22 @@ interface ContainerLogInput {
  * @experimental
  */
 interface ContainerTelemetryOptions {
+    /**
+     * Value of the `deployment.environment` resource attribute. Falls back to
+     * the `DEPLOYMENT_ENVIRONMENT` / `ENVIRONMENT` / `NODE_ENV` env vars **only
+     * when {@link ContainerTelemetryOptions.detectResources} is `true`** —
+     * unlike `serviceName`, env detection here is opt-in so a stray `NODE_ENV`
+     * never silently labels a deployment.
+     */
+    deploymentEnvironment?: string;
+
+    /**
+     * When `true`, auto-detect OTLP resource attributes from the container
+     * environment (`HOSTNAME`, `KUBERNETES_*`, `SERVICE_VERSION`, etc.).
+     * Explicit options and `resourceAttributes` win on collision.
+     */
+    detectResources?: boolean;
+
     /** Base OTLP collector endpoint; defaults to the `LUNORA_OTLP_ENDPOINT` env var. */
     endpoint?: string;
     /** Injectable `fetch` (tests / non-global runtimes). Defaults to `globalThis.fetch`. */
@@ -96,8 +114,18 @@ interface ContainerTelemetryOptions {
     headers?: Record<string, string>;
     /** Called with any send failure so the caller can surface it; the export itself always swallows. */
     onError?: (error: unknown) => void;
+    /** Additional resource attributes merged onto every signal. */
+    resourceAttributes?: Record<string, ContainerAttributeValue>;
     /** `service.name` resource attribute; defaults to the `LUNORA_SERVICE_NAME` env var then `"lunora-container"`. */
     serviceName?: string;
+
+    /**
+     * `service.version` resource attribute. Falls back to `SERVICE_VERSION` /
+     * `CF_VERSION_METADATA` / `VERCEL_GIT_COMMIT_SHA` / `GITHUB_SHA` /
+     * `COMMIT_SHA` env vars **only when
+     * {@link ContainerTelemetryOptions.detectResources} is `true`**.
+     */
+    serviceVersion?: string;
     /** Per-POST timeout in ms; a collector that never responds aborts after this so a stuck send can't stall `flush()`. Defaults to {@link DEFAULT_TIMEOUT_MS} (10s). */
     timeoutMs?: number;
     /** Bearer token sent as an `Authorization: Bearer` header; defaults to the `LUNORA_OTLP_TOKEN` env var. */
@@ -160,6 +188,21 @@ const readEnv = (name: string): string | undefined => {
     return process.env[name];
 };
 
+/**
+ * Auto-detect OTLP resource attributes from the container environment.
+ *
+ * Composes the shared detectors this host can actually satisfy: service identity
+ * (from CI/deploy env vars) and host/process identity (`HOSTNAME`,
+ * `KUBERNETES_*`, pid). The Cloudflare placement detector is deliberately absent —
+ * a container has no `request.cf`. The worker sink composes the complementary
+ * pair from the same module, so both sides share one policy.
+ */
+const detectContainerResource = (): OtlpResourceAttributes => {
+    const pid = typeof process === "undefined" || typeof process.pid !== "number" ? undefined : process.pid;
+
+    return mergeResourceAttributes(detectServiceResource(readEnv), detectHostResource(readEnv, pid));
+};
+
 /** Resolve the `fetch` to use: the injected one, else the runtime global, else undefined. */
 const resolveFetch = (injected: OtelFetchLike | undefined): OtelFetchLike | undefined => {
     if (injected !== undefined) {
@@ -174,14 +217,19 @@ const resolveFetch = (injected: OtelFetchLike | undefined): OtelFetchLike | unde
 };
 
 /** Build the OTLP trace-export body for one container span. */
-const traceBody = (span: ContainerSpanInput, serviceName: string, parent: { parentSpanId: string; traceId: string } | undefined): unknown => {
+const traceBody = (
+    span: ContainerSpanInput,
+    serviceName: string,
+    parent: { parentSpanId: string; traceId: string } | undefined,
+    resource?: OtlpResourceAttributes,
+): unknown => {
     const attributes = encodeAttributes(span.attributes);
 
     if (span.error?.type !== undefined) {
         attributes.push(encodeAttribute("error.type", span.error.type));
     }
 
-    const otlpSpan = {
+    const otlpSpan: Record<string, unknown> = {
         attributes,
         endTimeUnixNano: otlpUnixNano(span.endMs),
         // SPAN_KIND_INTERNAL — the container's own work, not a server/client edge.
@@ -197,11 +245,23 @@ const traceBody = (span: ContainerSpanInput, serviceName: string, parent: { pare
         traceId: parent?.traceId ?? otlpRandomHex(16),
     };
 
-    return wrapResourceSpans(otlpSpan, "@lunora/container", serviceName);
+    // On error, record an OTel exception event with the standard `exception.*`
+    // attributes.
+    if (span.error) {
+        otlpSpan.events = [
+            {
+                attributes: [encodeAttribute("exception.type", span.error.type ?? "Error"), encodeAttribute("exception.message", span.error.message)],
+                name: "exception",
+                timeUnixNano: otlpUnixNano(span.endMs),
+            },
+        ];
+    }
+
+    return wrapResourceSpans(otlpSpan, "@lunora/container", serviceName, resource);
 };
 
 /** Build the OTLP log-export body for one container log line. */
-const logBody = (log: ContainerLogInput, serviceName: string, nowMs: number): unknown => {
+const logBody = (log: ContainerLogInput, serviceName: string, nowMs: number, resource?: OtlpResourceAttributes): unknown => {
     const level = log.level ?? "info";
 
     const record = {
@@ -212,7 +272,7 @@ const logBody = (log: ContainerLogInput, serviceName: string, nowMs: number): un
         timeUnixNano: otlpUnixNano(log.ts ?? nowMs),
     };
 
-    return wrapResourceLogs(record, "@lunora/container", serviceName);
+    return wrapResourceLogs(record, "@lunora/container", serviceName, resource);
 };
 
 /**
@@ -228,7 +288,10 @@ const logBody = (log: ContainerLogInput, serviceName: string, nowMs: number): un
  * With no endpoint resolvable the returned exporter is disabled (`enabled ===
  * false`): `emitSpan`/`emitLog` no-op and `trace` still runs its work but records
  * nothing — so the same code runs unchanged locally and in the cloud.
- * @param options Exporter options; every field falls back to a `LUNORA_*` env var.
+ * @param options Exporter options. Connection fields (`endpoint`, `token`,
+ * `serviceName`, `traceparent`) always fall back to their `LUNORA_*` env var;
+ * resource fields (`serviceVersion`, `deploymentEnvironment`) only do so under
+ * `detectResources: true`.
  * @experimental
  */
 const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): ContainerTelemetry => {
@@ -240,6 +303,26 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fetchImpl = resolveFetch(options.fetch);
     const headers = mergeHeaders({ "content-type": "application/json" }, options.headers, token);
+
+    // Build the OTLP resource bag: detected first, then explicit convenience
+    // fields, then `resourceAttributes` (highest precedence). Resolved once here
+    // — nothing it reads changes over the process lifetime.
+    const detectedAttributes = options.detectResources === true ? detectContainerResource() : undefined;
+    const staticAttributes: OtlpResourceAttributes = {};
+
+    if (options.serviceVersion !== undefined) {
+        staticAttributes["service.version"] = options.serviceVersion;
+    }
+
+    if (options.deploymentEnvironment !== undefined) {
+        staticAttributes["deployment.environment"] = options.deploymentEnvironment;
+    }
+
+    if (options.resourceAttributes !== undefined) {
+        Object.assign(staticAttributes, options.resourceAttributes);
+    }
+
+    const resource = mergeResourceAttributes(detectedAttributes, staticAttributes);
 
     // Strip trailing slashes without a regex (ReDoS-linter friendly).
     let base = endpoint ?? "";
@@ -306,7 +389,7 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
             return;
         }
 
-        send(tracesUrl, traceBody(span, serviceName, parent));
+        send(tracesUrl, traceBody(span, serviceName, parent, resource));
     };
 
     const emitLog = (log: ContainerLogInput): void => {
@@ -314,7 +397,7 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
             return;
         }
 
-        send(logsUrl, logBody(log, serviceName, Date.now()));
+        send(logsUrl, logBody(log, serviceName, Date.now(), resource));
     };
 
     const trace = async <T>(name: string, run: () => Promise<T>, attributes?: Record<string, ContainerAttributeValue>): Promise<T> => {

@@ -26,6 +26,20 @@ export type ContextLogLevel = "debug" | "error" | "fatal" | "info" | "log" | "tr
  * `waitUntil` (no request context) means the sink falls back to fire-and-forget.
  */
 export interface LogSinkContext {
+    /**
+     * Resolves this request's detected OTLP resource attributes (`service.version`,
+     * `cloud.region`, …) on demand, or absent when the host does not detect any.
+     *
+     * Deliberately a resolved, allowlisted bag behind a thunk rather than the raw
+     * `env` and `Request` the host detected them from: this context is fanned out
+     * to **every** registered sink, including user-authored ones, so anything
+     * reachable here should be assumed to end up in someone's debug log — and raw
+     * `env` is every secret binding, while a raw `Request` carries the caller's
+     * `Authorization` and `Cookie`. The thunk keeps detection lazy (a sink that
+     * does not want resource attributes pays nothing) and hosts are expected to
+     * memoize it per request.
+     */
+    resourceAttributes?: () => Record<string, boolean | number | string>;
     /** Keep a background promise alive past the response (the request's `waitUntil`). */
     waitUntil?: (promise: Promise<unknown>) => void;
 }

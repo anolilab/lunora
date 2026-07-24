@@ -1,0 +1,180 @@
+---
+title: Public REST API
+description: "Publish a query, mutation, or action as a plain REST endpoint with .expose({ rest: true }) — default-closed, routed through the procedure so auth, RLS, and validators still apply, and described by the generated OpenAPI."
+---
+
+Lunora's own clients speak typed RPC over WebSocket. When something else has to
+call your backend — a partner integration, a mobile app you don't control, a
+`curl` in a runbook — you can publish an existing procedure as a plain REST
+endpoint without rewriting it:
+
+```ts
+export const list = query
+    .args({ limit: v.optional(v.number()) })
+    .expose({ rest: true }) // ← publishes GET /_lunora/rest/messages/list
+    .handler(async (ctx, { limit }) => ctx.db.query("messages").take(limit ?? 20));
+```
+
+The call is routed **through the procedure**, so everything that guards it over
+RPC still guards it over REST: `ctx.auth`, [RLS](/docs/concepts/rls), and the
+`v.*` [validators](/docs/concepts/validation). It is the same code path, not a
+parallel one.
+
+:::note[This or `httpRoute`?]
+Both give you HTTP. They answer different questions.
+
+- **`.expose({ rest: true })`** — "this procedure I already have should also be
+  callable over HTTP." The URL, method, and OpenAPI entry are derived for you;
+  you write no routing code.
+- **[`httpRoute` / `httpAction`](/docs/concepts/http-endpoints)** — "I need a
+  specific URL, shape, or protocol." A Stripe webhook, an OAuth callback, a file
+  download, a REST shape that has to match someone else's spec.
+
+Reach for `.expose` when the endpoint exists to serve _your_ procedure, and for
+`httpRoute` when the endpoint's shape is dictated by something outside your app.
+:::
+
+## Default-closed
+
+A procedure is unreachable over REST unless it says otherwise. Without
+`.expose({ rest: true })` there is no route at all, and the URL 404s — the same
+answer an unknown path gets, so probing cannot enumerate your functions.
+
+`.expose` is only available on the **public** builders. `internalQuery`,
+`internalMutation`, and `internalAction` don't have the modifier: an internal
+function is server-to-server (crons, `ctx.runMutation`) and never client-callable,
+so there is nothing to publish.
+
+`stream` procedures are also never exposed — they are a WebSocket surface, and a
+request for one 404s like any unexposed procedure.
+
+## URLs and methods
+
+The route is derived from the procedure's path — `<namespace>:<function>` becomes
+`/_lunora/rest/<namespace>/<function>`:
+
+| Procedure                    | Method            | URL                           |
+| ---------------------------- | ----------------- | ----------------------------- |
+| `query` — `messages:list`    | `GET` (or `POST`) | `/_lunora/rest/messages/list` |
+| `mutation` — `messages:send` | `POST`            | `/_lunora/rest/messages/send` |
+| `action` — `billing:sync`    | `POST`            | `/_lunora/rest/billing/sync`  |
+
+A query is a safe read, so it is a `GET`; a mutation or action changes state, so
+it is a `POST`. Queries **also** accept `POST` for the case where the arguments
+are too large or too structured to sit comfortably in a query string.
+
+The wrong method gets a `405` with an `Allow` header listing what the endpoint
+does accept. The `/_lunora/*` prefix is reserved, so these routes can never
+collide with your own [`httpRouter`](/docs/concepts/http-endpoints) paths.
+
+## Arguments
+
+**On `GET`, arguments come from the query string.** Each value is parsed as JSON
+when it looks like JSON, and kept as a string otherwise — so a typed procedure
+receives real numbers, booleans, and arrays rather than strings of them:
+
+```bash
+curl 'https://app.example/_lunora/rest/messages/list?limit=5&tags=["a","b"]&q=hello'
+# → { limit: 5, tags: ["a", "b"], q: "hello" }
+```
+
+`limit=5` arrives as the number `5`, `tags=[…]` as an array, and `q=hello` stays
+a string because it isn't valid JSON. A string that _is_ valid JSON is parsed —
+`?q=null` is `null`, not `"null"` — so send those in a `POST` body if you need
+them kept verbatim.
+
+**On `POST`, arguments are the JSON body.** The body is optional; a no-arg
+procedure can be called with none at all:
+
+```bash
+curl -X POST https://app.example/_lunora/rest/messages/send \
+  -H 'content-type: application/json' \
+  -d '{"text":"hi"}'
+```
+
+Either way the arguments then go through the procedure's `v.*` validators, so a
+malformed call is rejected exactly as it would be over RPC.
+
+## Choosing a shard
+
+For a [sharded](/docs/concepts/sharding) app, pick the shard with `?shardKey=` or
+the `x-lunora-shard-key` header — the query parameter wins if both are present.
+Omit it and the call routes to the default shard.
+
+```bash
+curl 'https://app.example/_lunora/rest/messages/list?shardKey=tenant-42&limit=5'
+```
+
+`shardKey` is reserved for routing and is never passed to your handler as an
+argument, so a procedure may safely declare an argument of any other name.
+
+## Authentication
+
+Credentials are read from the request exactly as on the RPC path — an
+`Authorization` header or cookies — and resolved through your
+[`resolveIdentity`](/docs/concepts/authentication). The resulting identity reaches
+the procedure as `ctx.auth`, and RLS policies apply unchanged.
+
+There is no REST-specific auth path, and no way to reach a procedure over REST
+that you could not reach over RPC with the same credentials. Exposing a procedure
+publishes its _URL_, not its data.
+
+## Rate limiting
+
+The public surface is the one an anonymous internet client can reach, so it takes
+its own gate. Build one over [`@lunora/ratelimit`](/docs/packages/ratelimit) and
+pass it as `restRateLimit`:
+
+```ts
+import { createRestRateLimit } from "@lunora/runtime";
+
+export default createWorker({
+    // …schema, functions…
+    restRateLimit: createRestRateLimit(limiter, { name: "rest" }),
+});
+```
+
+It runs **before** dispatch, so a limited request costs you nothing downstream. By
+default it keys on the caller's IP (`CF-Connecting-IP`); pass `key` to key on
+something else — an API key header, or the `functionPath` to limit per endpoint:
+
+```ts
+createRestRateLimit(limiter, {
+    name: "rest",
+    key: (request, functionPath) => `${request.headers.get("x-api-key") ?? "anon"}:${functionPath}`,
+});
+```
+
+A rejected call gets a `429` with `Retry-After`. The gate applies only to REST —
+typed RPC is unaffected.
+
+## OpenAPI
+
+The exposed surface is described by the generated OpenAPI 3.1 document, so
+consumers can generate their own clients. Codegen emits it as both
+`_generated/openapi.json` and `_generated/openapi.ts` (a Worker can't read a JSON
+file at runtime, so the inlined `export const openApiSpec` is what you serve):
+
+```ts
+import { openApiSpec } from "@/lunora/_generated/openapi";
+
+export default createWorker({
+    // …schema, functions…
+    openApiSpec,
+});
+```
+
+That exposes the admin-gated `GET /_lunora/admin/openapi`.
+
+The spec and the live router derive the path/method mapping from the **same**
+helper, so "the published OpenAPI matches what is actually routable" is a
+structural property rather than something kept in sync by hand.
+
+## Observability
+
+REST calls emit the same telemetry as any dispatch — see
+[Observability](/docs/concepts/observability). One thing specific to this surface:
+span attributes include `url.path`, which is the **raw** inbound path. On the RPC
+transport that is a constant, but a REST path can carry ids, so prefer `http.route`
+(always the templated function path) when grouping or alerting, and check what
+leaves the deployment before pointing a sink at a third party.

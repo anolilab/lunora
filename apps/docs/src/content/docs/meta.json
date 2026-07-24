@@ -17,6 +17,7 @@
         "concepts/actions",
         "concepts/internal-functions",
         "concepts/http-endpoints",
+        "concepts/rest-api",
         "concepts/caching",
         "concepts/middleware",
         "concepts/scheduling",

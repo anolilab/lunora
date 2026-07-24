@@ -1153,6 +1153,7 @@ interface LunoraWorker {
     scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
     serverQuery: (request: Request, env: unknown, reference: unknown, args?: Record<string, unknown>, options?: {
         shardKey?: string;
+        waitUntil?: (promise: Promise<unknown>) => void;
     }) => Promise<Response>;
 }
 ```
@@ -1277,10 +1278,18 @@ interface ObservabilityEvent {
         table: string;
     };
     functionPath: string;
+    host?: string;
+    method?: string;
     ok: boolean;
+    parentSpanId?: string;
+    path?: string;
+    port?: number;
+    scheme?: string;
     shardKey?: string;
     spanId?: string;
+    traceFlags?: number;
     traceId?: string;
+    userAgent?: string;
 }
 ```
 
@@ -1302,13 +1311,24 @@ interface ObservabilitySink {
 type ObservabilitySinkContext = LogSinkContext;
 ```
 
+### `OtlpResourceAttributes` (type)
+
+```ts
+type OtlpResourceAttributes = Record<string, OtlpAttributeValue>;
+```
+
 ### `OtlpSinkOptions` (interface)
 
 ```ts
 interface OtlpSinkOptions extends OnlyErrorsOption {
+    deploymentEnvironment?: string;
+    detectResources?: boolean;
     endpoint: string;
     headers?: Record<string, string>;
+    resourceAttributes?: OtlpResourceAttributes;
     serviceName?: string;
+    serviceNamespace?: string;
+    serviceVersion?: string;
     token?: string;
 }
 ```
@@ -1544,6 +1564,7 @@ type RestInvoke = (parameters: {
     functionPath: string;
     request: Request;
     shardKey?: string;
+    waitUntil?: (promise: Promise<unknown>) => void;
 }) => Promise<Response>;
 ```
 
@@ -1566,6 +1587,14 @@ interface RestRegistryEntry {
 
 ```ts
 type RestRegistryLike = Record<string, RestRegistryEntry>;
+```
+
+### `RestRoute` (type)
+
+```ts
+type RestRoute = (request: Request, env: unknown, url?: URL, context?: {
+    waitUntil?: (promise: Promise<unknown>) => void;
+}) => Promise<Response>;
 ```
 
 ### `RestRouteDeps` (interface)
@@ -1893,6 +1922,18 @@ interface TraceSamplingConfig {
 }
 ```
 
+### `TraceTrustSignal` (type)
+
+```ts
+type TraceTrustSignal = "mtls";
+```
+
+### `TrustInboundTraceContext` (type)
+
+```ts
+type TrustInboundTraceContext = boolean | TraceTrustSignal | ((request: Request) => boolean);
+```
+
 ### `VERSION` (const)
 
 ```ts
@@ -2008,6 +2049,7 @@ interface WorkerOptions {
     storageSignedUrl?: StorageSignedUrlFunction;
     storageUpload?: StorageUploadFunction;
     syncGlobals?: GlobalCdcSyncFunction;
+    trustInboundTraceContext?: TrustInboundTraceContext;
     vectorIntrospector?: VectorIntrospector;
     voiceAgents?: Record<string, ShardNamespaceLike>;
     workflowsClient?: (env: unknown) => undefined | WorkflowsRestClient;
@@ -2042,7 +2084,7 @@ const buildHealthRoutes: (deps: HealthRouteDeps) => Record<string, (request: Req
 ### `buildRestRoutes` (const)
 
 ```ts
-const buildRestRoutes: (deps: RestRouteDeps) => Record<string, (request: Request, env: unknown) => Promise<Response>>;
+const buildRestRoutes: (deps: RestRouteDeps) => Record<string, RestRoute>;
 ```
 
 ### `combineSinks` (const)

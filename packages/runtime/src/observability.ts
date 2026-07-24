@@ -52,8 +52,26 @@ export interface ObservabilityEvent {
     };
     /** Function path being invoked, e.g. `"messages:list"`. */
     functionPath: string;
+    /** Host of the inbound request (e.g. `"api.example.com"`). */
+    host?: string;
+    /** HTTP method of the inbound request (e.g. `"POST"`). */
+    method?: string;
     /** True when the dispatch completed without throwing. */
     ok: boolean;
+
+    /**
+     * Span id of the upstream caller extracted from the inbound `traceparent`,
+     * when present. This becomes the OTLP `parentSpanId` for the dispatch span so
+     * collector waterfalls show the worker span nested under the upstream caller.
+     */
+    parentSpanId?: string;
+    /** URL path of the inbound request (e.g. `"/_lunora/rpc"`). */
+    path?: string;
+    /** Port of the inbound request, when available. */
+    port?: number;
+    /** URL scheme of the inbound request (e.g. `"https"`). */
+    scheme?: string;
+
     /** Shard key for single-shard calls; absent for fan-outs. */
     shardKey?: string;
 
@@ -66,7 +84,17 @@ export interface ObservabilityEvent {
      * falls back to random ids).
      */
     spanId?: string;
+
+    /**
+     * W3C trace flags for this dispatch (the sampled flag, bit 0). Carried from
+     * the upstream `traceparent` or set by the runtime's head-sampling decision.
+     */
+    traceFlags?: number;
+
     traceId?: string;
+
+    /** Inbound `User-Agent` header, when available. */
+    userAgent?: string;
 }
 
 /**

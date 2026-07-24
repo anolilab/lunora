@@ -5,8 +5,16 @@ description: Public HTTP routes with httpAction and the Hono-based httpRouter.
 
 Queries, mutations, and actions are reached through Lunora's typed client over
 the RPC/WebSocket transport. Sometimes you need a plain HTTP endpoint instead:
-an inbound webhook, an OAuth callback, a REST surface for a non-Lunora client, a
-file download. That's what `httpAction` and `httpRouter` are for.
+an inbound webhook, an OAuth callback, a file download, or a REST shape that has
+to match someone else's spec. That's what `httpAction` and `httpRouter` are for.
+
+:::tip[Just want an existing procedure callable over HTTP?]
+You don't need a route for that. `.expose({ rest: true })` publishes a query,
+mutation, or action at a derived URL, dispatching through the procedure so auth,
+RLS, and validators still apply — see [Public REST API](/docs/concepts/rest-api).
+Write an `httpRoute` when the endpoint's URL or payload shape is dictated by
+something outside your app.
+:::
 
 `httpRouter()` returns a [Hono](https://hono.dev) app, so the full Hono surface
 (middleware, path params, `.route()` composition) is available. You mount it on

@@ -30,7 +30,15 @@ interface RestRegistryEntry {
 type RestRegistryLike = Record<string, RestRegistryEntry>;
 
 /** Dispatch one exposed procedure through the shared RPC path (auth + RLS + validators enforced at the shard). Returns the shard `Response`. */
-type RestInvoke = (parameters: { args: Record<string, unknown>; env: unknown; functionPath: string; request: Request; shardKey?: string }) => Promise<Response>;
+type RestInvoke = (parameters: {
+    args: Record<string, unknown>;
+    env: unknown;
+    functionPath: string;
+    request: Request;
+    shardKey?: string;
+    /** The request's `waitUntil`, so dispatch telemetry survives isolate teardown. */
+    waitUntil?: (promise: Promise<unknown>) => void;
+}) => Promise<Response>;
 
 /**
  * Optional per-request rate-limit gate for the public surface. Returns a `429`
@@ -39,6 +47,14 @@ type RestInvoke = (parameters: { args: Record<string, unknown>; env: unknown; fu
  * `@lunora/ratelimit`.
  */
 type RestRateLimit = (request: Request, functionPath: string) => Promise<Response | undefined> | Response | undefined;
+
+/**
+ * A built REST route. Takes the same `(request, env, url, context)` shape as the
+ * runtime's internal route table so it can be spread straight into it; `url` is
+ * unused here (the route re-parses it) and `context` is read only for its
+ * `waitUntil`, which keeps dispatch telemetry alive past the response.
+ */
+type RestRoute = (request: Request, env: unknown, url?: URL, context?: { waitUntil?: (promise: Promise<unknown>) => void }) => Promise<Response>;
 
 interface RestRouteDeps {
     /** The generated function registry — the source of which procedures are exposed. */
@@ -107,15 +123,20 @@ const argsFromQuery = (url: URL): Record<string, unknown> => {
  * construction. A `query` handler accepts `GET` (args from the query string) and
  * `POST` (args from a JSON body); a `mutation` / `action` accepts `POST` only.
  */
-const buildRestRoutes = (deps: RestRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
+const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
     const { functions, invoke, rateLimit, readJsonBody } = deps;
-    const routes: Record<string, (request: Request, env: unknown) => Promise<Response>> = {};
+    const routes: Record<string, RestRoute> = {};
 
     for (const entry of restSurfaceFromRegistry(functions)) {
         // A query is reachable via GET or POST; a mutation/action via POST only.
         const allowed = entry.kind === "query" ? ["GET", "POST"] : ["POST"];
 
-        routes[entry.path] = async (request: Request, env: unknown): Promise<Response> => {
+        routes[entry.path] = async (
+            request: Request,
+            env: unknown,
+            _url?: URL,
+            context?: { waitUntil?: (promise: Promise<unknown>) => void },
+        ): Promise<Response> => {
             const wrongMethod = methodGuard(request, allowed);
 
             if (wrongMethod) {
@@ -147,7 +168,14 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, (request: Request,
 
             const shardKey = readShardKey(url, request);
 
-            return invoke({ args, env, functionPath: entry.functionPath, request, ...(shardKey === undefined ? {} : { shardKey }) });
+            return invoke({
+                args,
+                env,
+                functionPath: entry.functionPath,
+                request,
+                ...(shardKey === undefined ? {} : { shardKey }),
+                ...(context?.waitUntil === undefined ? {} : { waitUntil: (promise: Promise<unknown>) => context.waitUntil?.(promise) }),
+            });
         };
     }
 
@@ -189,5 +217,5 @@ const createRestRateLimit =
         );
     };
 
-export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRouteDeps };
+export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRoute, RestRouteDeps };
 export { argsFromQuery, buildRestRoutes, createRestRateLimit, readShardKey, restSurfaceFromRegistry };
