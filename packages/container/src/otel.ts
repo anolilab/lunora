@@ -91,7 +91,13 @@ interface ContainerLogInput {
  * @experimental
  */
 interface ContainerTelemetryOptions {
-    /** Value of the `deployment.environment` resource attribute; falls back to `DEPLOYMENT_ENVIRONMENT` / `ENVIRONMENT` / `NODE_ENV` env vars. */
+    /**
+     * Value of the `deployment.environment` resource attribute. Falls back to
+     * the `DEPLOYMENT_ENVIRONMENT` / `ENVIRONMENT` / `NODE_ENV` env vars **only
+     * when {@link ContainerTelemetryOptions.detectResources} is `true`** —
+     * unlike `serviceName`, env detection here is opt-in so a stray `NODE_ENV`
+     * never silently labels a deployment.
+     */
     deploymentEnvironment?: string;
 
     /**
@@ -113,7 +119,13 @@ interface ContainerTelemetryOptions {
     resourceAttributes?: Record<string, ContainerAttributeValue>;
     /** `service.name` resource attribute; defaults to the `LUNORA_SERVICE_NAME` env var then `"lunora-container"`. */
     serviceName?: string;
-    /** `service.version` resource attribute; falls back to `SERVICE_VERSION` / `GITHUB_SHA` / `VERCEL_GIT_COMMIT_SHA` env vars. */
+
+    /**
+     * `service.version` resource attribute. Falls back to `SERVICE_VERSION` /
+     * `CF_VERSION_METADATA` / `VERCEL_GIT_COMMIT_SHA` / `GITHUB_SHA` /
+     * `COMMIT_SHA` env vars **only when
+     * {@link ContainerTelemetryOptions.detectResources} is `true`**.
+     */
     serviceVersion?: string;
     /** Per-POST timeout in ms; a collector that never responds aborts after this so a stuck send can't stall `flush()`. Defaults to {@link DEFAULT_TIMEOUT_MS} (10s). */
     timeoutMs?: number;
@@ -260,10 +272,7 @@ const traceBody = (
     if (span.error) {
         otlpSpan.events = [
             {
-                attributes: [
-                    encodeAttribute("exception.type", span.error.type ?? "Error"),
-                    encodeAttribute("exception.message", span.error.message),
-                ],
+                attributes: [encodeAttribute("exception.type", span.error.type ?? "Error"), encodeAttribute("exception.message", span.error.message)],
                 name: "exception",
                 timeUnixNano: otlpUnixNano(span.endMs),
             },
@@ -301,7 +310,10 @@ const logBody = (log: ContainerLogInput, serviceName: string, nowMs: number, res
  * With no endpoint resolvable the returned exporter is disabled (`enabled ===
  * false`): `emitSpan`/`emitLog` no-op and `trace` still runs its work but records
  * nothing — so the same code runs unchanged locally and in the cloud.
- * @param options Exporter options; every field falls back to a `LUNORA_*` env var.
+ * @param options Exporter options. Connection fields (`endpoint`, `token`,
+ * `serviceName`, `traceparent`) always fall back to their `LUNORA_*` env var;
+ * resource fields (`serviceVersion`, `deploymentEnvironment`) only do so under
+ * `detectResources: true`.
  * @experimental
  */
 const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): ContainerTelemetry => {

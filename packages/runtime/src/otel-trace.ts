@@ -58,13 +58,21 @@ const extractTraceContext = (request: Request): SpanContext | undefined => {
  * provided, the trace id is preserved and the upstream span becomes the parent;
  * otherwise a fresh trace is minted. The returned span context is the local
  * dispatch span and should be propagated to the next hop.
+ *
+ * `traceState` is carried through from the parent: it is the W3C `tracestate`
+ * header, which holds vendor-specific correlation keys that must survive every
+ * hop of a trace. Dropping it here would silently terminate that chain at the
+ * Lunora runtime, since `injectTraceContext` only emits a `tracestate` header
+ * when the span context carries one.
  */
 const createDispatchSpanContext = (parent?: SpanContext): SpanContext => {
     const traceId = parent?.traceId ?? otlpRandomHex(16);
     const spanId = otlpRandomHex(8);
     const traceFlags = parent?.traceFlags ?? SAMPLED_FLAG;
 
-    return { spanId, traceFlags, traceId };
+    // `isRemote: false` — this is the span we are about to run locally, not the
+    // extracted upstream one.
+    return { isRemote: false, spanId, traceFlags, traceId, traceState: parent?.traceState };
 };
 
 /**

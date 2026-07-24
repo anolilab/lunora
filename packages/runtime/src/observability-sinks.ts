@@ -20,7 +20,7 @@
  * third party. Scrub or redact before enabling it against an external service
  * if that is a concern.
  */
-import type {Resource} from "@opentelemetry/resources";
+import type { Resource } from "@opentelemetry/resources";
 import { emptyResource, resourceFromAttributes } from "@opentelemetry/resources";
 
 import { coerceFieldValue } from "../../../shared/log-fields";
@@ -37,8 +37,13 @@ import {
 } from "../../../shared/otlp";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
 
-/** Resource attribute bag used by OTLP exporters. */
-type OtlpResourceAttributes = Record<string, string | boolean | number>;
+/**
+ * Resource attribute bag used by OTLP exporters. Exported because
+ * {@link OtlpSinkOptions.resourceAttributes} is part of the public surface —
+ * without a name for it, a caller cannot hoist a shared attribute bag into a
+ * typed constant.
+ */
+export type OtlpResourceAttributes = Record<string, string | boolean | number>;
 
 /** Shared shape for sinks that can be limited to error events only. */
 interface OnlyErrorsOption {
@@ -134,10 +139,7 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
     if (event.error) {
         span.events = [
             {
-                attributes: [
-                    encodeAttribute("exception.type", event.error.code),
-                    encodeAttribute("exception.message", event.error.message),
-                ],
+                attributes: [encodeAttribute("exception.type", event.error.code), encodeAttribute("exception.message", event.error.message)],
                 name: "exception",
                 timeUnixNano: otlpUnixNano(endMs),
             },

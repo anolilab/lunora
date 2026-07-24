@@ -94,6 +94,7 @@ export type {
     AnalyticsEngineDataPointLike,
     AnalyticsEngineDatasetLike,
     AnalyticsEngineSinkOptions,
+    OtlpResourceAttributes,
     OtlpSinkOptions,
     PipelineLike,
     PipelineLogSinkOptions,

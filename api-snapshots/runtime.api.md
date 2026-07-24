@@ -1277,10 +1277,18 @@ interface ObservabilityEvent {
         table: string;
     };
     functionPath: string;
+    host?: string;
+    method?: string;
     ok: boolean;
+    parentSpanId?: string;
+    path?: string;
+    port?: number;
+    scheme?: string;
     shardKey?: string;
     spanId?: string;
+    traceFlags?: number;
     traceId?: string;
+    userAgent?: string;
 }
 ```
 
@@ -1306,9 +1314,14 @@ type ObservabilitySinkContext = LogSinkContext;
 
 ```ts
 interface OtlpSinkOptions extends OnlyErrorsOption {
+    deploymentEnvironment?: string;
+    detectResources?: boolean;
     endpoint: string;
     headers?: Record<string, string>;
+    resourceAttributes?: OtlpResourceAttributes;
     serviceName?: string;
+    serviceNamespace?: string;
+    serviceVersion?: string;
     token?: string;
 }
 ```

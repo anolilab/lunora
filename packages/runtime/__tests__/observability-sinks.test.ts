@@ -731,7 +731,9 @@ describe("observability-sinks", () => {
             const sink = otlpSink({ endpoint: "https://collector.example" });
 
             sink.onRpc!(errorEvent);
-            await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(1); });
+            await vi.waitFor(() => {
+                expect(fetchMock).toHaveBeenCalledTimes(1);
+            });
 
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
@@ -925,11 +927,15 @@ describe("observability-sinks", () => {
             expect(fetchMock).not.toHaveBeenCalled();
 
             sink.onRpc!(errorEvent);
-            await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(1); });
+            await vi.waitFor(() => {
+                expect(fetchMock).toHaveBeenCalledTimes(1);
+            });
 
             // onlyErrors scopes the RPC span stream, not developer log lines.
             sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "m", ts: 1 });
-            await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(2); });
+            await vi.waitFor(() => {
+                expect(fetchMock).toHaveBeenCalledTimes(2);
+            });
         });
 
         it("merges auth and correlation headers onto a default content-type", () => {
@@ -1079,7 +1085,9 @@ describe("observability-sinks", () => {
                 scheme: "https",
                 userAgent: "test-agent/1.0",
             });
-            await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(1); });
+            await vi.waitFor(() => {
+                expect(fetchMock).toHaveBeenCalledTimes(1);
+            });
 
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
@@ -1103,7 +1111,9 @@ describe("observability-sinks", () => {
             const sink = otlpSink({ endpoint: "https://collector.example" });
 
             sink.onRpc!({ ...errorEvent, method: "POST", path: "/_lunora/rpc" });
-            await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(1); });
+            await vi.waitFor(() => {
+                expect(fetchMock).toHaveBeenCalledTimes(1);
+            });
 
             const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 

@@ -33,13 +33,7 @@ import { buildLogArchiveAdminRoutes } from "./log-archive-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 import { emitRpcEvent } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
-import {
-    createDispatchSpanContext,
-    extractTraceContext,
-    injectTraceContext,
-    SAMPLED_FLAG,
-    UNSAMPLED_FLAG,
-} from "./otel-trace";
+import { createDispatchSpanContext, extractTraceContext, injectTraceContext, SAMPLED_FLAG, UNSAMPLED_FLAG } from "./otel-trace";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";

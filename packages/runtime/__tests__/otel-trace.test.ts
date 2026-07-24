@@ -66,6 +66,27 @@ describe("otel-trace", () => {
             expect(dispatch.spanId).toHaveLength(16);
             expect(dispatch.traceFlags).toBe(SAMPLED_FLAG);
         });
+
+        it("carries the upstream tracestate through to the dispatch span", () => {
+            expect.hasAssertions();
+
+            const upstream = extractTraceContext(
+                new Request("https://app.example/_lunora/rpc", {
+                    headers: {
+                        traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+                        // eslint-disable-next-line no-secrets/no-secrets -- verbatim `tracestate` example from the W3C Trace Context spec, not a credential. Vendor keys must be lowercase or the propagator drops them, so the literal cannot be simplified into something the entropy check likes.
+                        tracestate: "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7",
+                    },
+                    method: "POST",
+                }),
+            )!;
+            const dispatch = createDispatchSpanContext(upstream);
+
+            expect(dispatch.traceState?.get("congo")).toBe("t61rcWkgMzE");
+            expect(dispatch.traceState?.get("rojo")).toBe("00f067aa0ba902b7");
+            // The local dispatch span is ours to run, not the extracted remote one.
+            expect(dispatch.isRemote).toBe(false);
+        });
     });
 
     describe("injectTraceContext", () => {
@@ -90,6 +111,28 @@ describe("otel-trace", () => {
 
             expect(headers["content-type"]).toBe("application/json");
             expect(headers.traceparent).toBeDefined();
+        });
+
+        // The end-to-end reason `createDispatchSpanContext` carries `traceState`:
+        // without it the propagator emits no `tracestate` and the vendor
+        // correlation chain dies at this hop.
+        it("propagates the upstream tracestate to the next hop", () => {
+            expect.hasAssertions();
+
+            const upstream = extractTraceContext(
+                new Request("https://app.example/_lunora/rpc", {
+                    headers: {
+                        traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+                        tracestate: "congo=t61rcWkgMzE",
+                    },
+                    method: "POST",
+                }),
+            )!;
+            const headers: Record<string, string> = {};
+
+            injectTraceContext(createDispatchSpanContext(upstream), headers);
+
+            expect(headers.tracestate).toBe("congo=t61rcWkgMzE");
         });
     });
 });
