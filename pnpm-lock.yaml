@@ -888,6 +888,103 @@ importers:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
 
+  apps/cloud:
+    dependencies:
+      '@lunora/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
+      '@lunora/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@lunora/bindings':
+        specifier: workspace:*
+        version: link:../../packages/bindings
+      '@lunora/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@lunora/d1':
+        specifier: workspace:*
+        version: link:../../packages/d1
+      '@lunora/do':
+        specifier: workspace:*
+        version: link:../../packages/do
+      '@lunora/fingerprint':
+        specifier: workspace:*
+        version: link:../../packages/fingerprint
+      '@lunora/mail':
+        specifier: workspace:*
+        version: link:../../packages/mail
+      '@lunora/payment':
+        specifier: workspace:*
+        version: link:../../packages/payment
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../../packages/ratelimit
+      '@lunora/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@lunora/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
+      '@lunora/server':
+        specifier: workspace:*
+        version: link:../../packages/server
+      '@lunora/values':
+        specifier: workspace:*
+        version: link:../../packages/values
+      better-auth:
+        specifier: catalog:auth
+        version: 1.6.23(cc563d2b2e753fed45a5b59bfab9f362)
+      creem:
+        specifier: ^1.5.3
+        version: 1.5.4(supports-color@10.2.2)
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: 19.2.7
+        version: 19.2.7(react@19.2.7)
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20260719.1
+      '@lunora/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
+      '@lunora/codegen':
+        specifier: workspace:*
+        version: link:../../packages/codegen
+      '@lunora/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@lunora/vite':
+        specifier: workspace:*
+        version: link:../../packages/vite
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.1
+      '@types/react':
+        specifier: catalog:frontend
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: catalog:frontend
+        version: 19.2.3(@types/react@19.2.17)
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vite:
+        specifier: catalog:vite
+        version: 8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.112.0(@cloudflare/workers-types@5.20260719.1)
+
   apps/docs:
     dependencies:
       '@babel/core':

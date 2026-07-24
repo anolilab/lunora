@@ -55,6 +55,21 @@ export {
     resolveRelationPredicates,
 } from "./relation-predicates";
 export { applyOnDelete, distinctValues, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
+export {
+    AGGREGATE_SQL_FUNCTION,
+    aggregateSqlFunction,
+    matchesStaticWhere,
+    normalizeCountArgument,
+    throwingScheduler,
+} from "./aggregate-sql";
+export type { AggregateTally } from "./aggregate-tally";
+export {
+    aggregateTableName,
+    coerceAggregateNumber,
+    encodeAggregateKey,
+    foldAggregateTally,
+    readAggregateValue,
+} from "./aggregate-tally";
 export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ConflictKind } from "./transaction";
 export type { TransactionSqlLike } from "./transaction";

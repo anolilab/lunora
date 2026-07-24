@@ -18,9 +18,9 @@
 import { param } from "@lunora/shard-engine";
 import { sql as dsql } from "drizzle-orm";
 
-import { matchesStaticWhere } from "./aggregate-sql";
-import type { AggregateTally } from "./aggregate-tally";
-import { aggregateTableName, encodeAggregateKey, foldAggregateTally } from "./aggregate-tally";
+import { matchesStaticWhere } from "@lunora/shard-engine";
+import type { AggregateTally } from "@lunora/shard-engine";
+import { aggregateTableName, encodeAggregateKey, foldAggregateTally } from "@lunora/shard-engine";
 import type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).

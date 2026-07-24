@@ -10,7 +10,7 @@
  * identically.
  */
 
-import type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
+import type { AggregateIndexDefinitionLike } from "./schema-types";
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
 const compareStrings = (a: string, b: string): number => {

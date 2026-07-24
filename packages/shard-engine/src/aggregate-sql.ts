@@ -12,10 +12,8 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-import type { WhereInput } from "@lunora/shard-engine";
-
-import type { RestrictableQueryOptions } from "@lunora/shard-engine";
-import type { SchedulerLike } from "./triggers";
+import type { RestrictableQueryOptions, SchedulerLike } from "./schema-types";
+import type { WhereInput } from "./where-types";
 
 /** Marker keys distinguishing a restrictable-query option set from a bare `WhereInput` tree. */
 const COUNT_OPTION_KEYS = new Set(["baseWhere", "relationBaseWhere", "restrictsCounts", "where"]);

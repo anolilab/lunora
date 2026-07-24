@@ -20,7 +20,7 @@ import { ftsTableName } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
-import { aggregateTableName } from "./aggregate-tally";
+import { aggregateTableName } from "@lunora/shard-engine";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";

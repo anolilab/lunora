@@ -16,9 +16,9 @@ export {
     selectExportTables,
     validateImportRow,
 } from "./admin-export-import";
-export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
-export type { AggregateTally } from "./aggregate-tally";
-export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally";
+export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "@lunora/shard-engine";
+export type { AggregateTally } from "@lunora/shard-engine";
+export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "@lunora/shard-engine";
 export type {
     AggregateIndexDefinitionLike,
     AggregateOp,

@@ -78,8 +78,8 @@ import type { SQL } from "drizzle-orm";
 // Aliased: this module already uses `sql` for the workerd `SqlExec` (see `runSql`), so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
 
-import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
-import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "./aggregate-tally";
+import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from "@lunora/shard-engine";
+import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "@lunora/shard-engine";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "@lunora/shard-engine";
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange } from "./ctx-db-cdc";
