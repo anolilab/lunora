@@ -64,6 +64,17 @@ export const teardownPorts = (database: ControlPlaneDb, destroy: TeardownPorts["
     markTornDown: async (id) => {
         await database.patch(id, { teardownAt: now, updatedAt: now }, "deployments");
     },
+    releaseAlias: async (alias) => {
+        // Drop the ownership ledger row(s) for a fully-torn-down alias so the label
+        // is free to re-claim. Idempotent: no row (already released, or a pre-ledger
+        // deployment) is a no-op.
+        const { page } = await database.findMany("aliasOwnership", { where: { alias } });
+
+        for (const row of page as { _id: string }[]) {
+            // eslint-disable-next-line no-await-in-loop -- at most one row per alias (by_alias is unique)
+            await database.delete(row._id, "aliasOwnership");
+        }
+    },
 });
 
 interface AttributionRow {

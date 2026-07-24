@@ -6,6 +6,7 @@ import { runAlertSweep } from "../src/telemetry/sweep";
 
 /** A fake ControlPlaneDb answering findMany per-table, mirroring uptime.test.ts. */
 const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => ({
+    delete: () => Promise.resolve(undefined),
     findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
     insert: () => Promise.resolve("row_id"),
     patch: () => Promise.resolve(undefined),
