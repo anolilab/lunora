@@ -108,7 +108,21 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
 /** Floor a timestamp to its minute-bucket, so all measurements in a window fold into one row. */
 const bucketFloor = (ts: number): number => Math.floor(ts / METRIC_HISTORY_BUCKET_MS) * METRIC_HISTORY_BUCKET_MS;
 
+/**
+ * SQL handles whose history table has already been ensured this instance. The
+ * DDL is idempotent, but `CREATE TABLE IF NOT EXISTS` still parses + checks the
+ * catalog on every call, and `recordMetricHistory` runs per `ctx.metrics.*` call.
+ * Memoizing per handle drops that statement off the hot path after the first
+ * measurement. A `WeakSet` so a torn-down shard's handle is collectable; a fresh
+ * handle (a new isolate after hibernation) re-ensures, which is correct.
+ */
+const ensuredHandles = new WeakSet<SqlExec>();
+
 const ensureMetricHistoryTable = (sql: SqlExec): void => {
+    if (ensuredHandles.has(sql)) {
+        return;
+    }
+
     runSql(
         sql,
         `CREATE TABLE IF NOT EXISTS "${METRIC_HISTORY_TABLE}" (
@@ -129,13 +143,39 @@ const ensureMetricHistoryTable = (sql: SqlExec): void => {
             PRIMARY KEY (series_key, bucket_ms)
         )`,
     );
+
+    ensuredHandles.add(sql);
+};
+
+/**
+ * `(series, bucket)` keys this instance has already written, per SQL handle — so
+ * the hot in-minute repeat skips even the PK existence `SELECT` below and goes
+ * straight to the upsert. Only membership is cached, never values, so it can never
+ * make a stored aggregate wrong: a hit means the row exists (we wrote it), which
+ * is exactly what the `SELECT` would report. Bounded (cleared past
+ * {@link KNOWN_BUCKETS_CAP}) and a `WeakMap` so a torn-down handle is collectable;
+ * a fresh handle (post-hibernation isolate) starts cold and re-consults the DB.
+ */
+const KNOWN_BUCKETS_CAP = 4096;
+const knownBuckets = new WeakMap<SqlExec, Set<string>>();
+
+const knownBucketsFor = (sql: SqlExec): Set<string> => {
+    let set = knownBuckets.get(sql);
+
+    if (set === undefined) {
+        set = new Set<string>();
+        knownBuckets.set(sql, set);
+    }
+
+    return set;
 };
 
 /**
  * Fold one measurement into its `(series, minute)` bucket. Runs per
  * `ctx.metrics.*` call (unlike `function-metrics.ts`, which runs once per
- * dispatch), so it's tuned for the in-minute repeat: an existing bucket costs a
- * single point-lookup + upsert, and only a genuinely new bucket also pays the
+ * dispatch), so it's tuned for the in-minute repeat: a bucket this instance has
+ * already written is a single upsert (no reads), a bucket only in the DB costs one
+ * PK point-lookup + upsert, and only a genuinely new bucket also pays the
  * distinct-series cap scan + retention trim. Still a durable SQLite write per
  * measurement, so a hot loop recording thousands of points a second should
  * pre-aggregate and record once (see `shared/metric-event.ts`). Creates the table
@@ -153,10 +193,15 @@ const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?:
 
     // Fast path for a metrics-heavy handler (a tight `ctx.metrics.*` loop): a
     // repeated measurement of the same series within the same minute just bumps an
-    // existing bucket. One PK point-lookup detects that, so the common in-minute
-    // case is a single upsert — the distinct-series cap scan and the retention trim
-    // both run only when a *new* bucket appears (≈ once per series per minute).
+    // existing bucket. A bucket already written by this instance is known from the
+    // in-memory set (no read); otherwise one PK point-lookup detects it. The
+    // distinct-series cap scan and the retention trim both run only when a
+    // *genuinely new* bucket appears (≈ once per series per minute).
+    const cache = knownBucketsFor(sql);
+    const cacheKey = `${key} ${bucket.toString()}`;
+
     const bucketExists =
+        cache.has(cacheKey) ||
         runSql<{ c: number }>(sql, `SELECT 1 AS c FROM "${METRIC_HISTORY_TABLE}" WHERE series_key = ? AND bucket_ms = ? LIMIT 1`, key, bucket).toArray()
             .length > 0;
 
@@ -224,6 +269,22 @@ const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?:
             METRIC_HISTORY_BUCKET_RETENTION * METRIC_HISTORY_BUCKET_MS,
             key,
         );
+    }
+
+    // Remember only a bucket that ALREADY existed before this call, so the next
+    // in-minute repeat skips the existence read. A freshly-created bucket is
+    // deliberately NOT cached: the retention trim above may have removed it (a
+    // late, out-of-window sample inserted past the retention horizon is deleted
+    // immediately), and caching it would let its next write skip both the
+    // existence check and the trim, resurrecting an expired row. Leaving it
+    // uncached means the second write re-checks and caches it only once it's
+    // confirmed durable. Bound the set: a cleared cache only costs a re-read.
+    if (bucketExists && !cache.has(cacheKey)) {
+        if (cache.size >= KNOWN_BUCKETS_CAP) {
+            cache.clear();
+        }
+
+        cache.add(cacheKey);
     }
 };
 
