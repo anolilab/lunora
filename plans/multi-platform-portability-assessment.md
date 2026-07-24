@@ -261,8 +261,10 @@ The CLI and Vite plugin assume wrangler. A multi-platform Lunora needs:
 
     **Not measured:** the `__bench__` suites run under CodSpeed instrumentation, which emits no local timings, and none of them exercise `runInTransaction` — the path that gained closure hops. Plan 114's perf-regression watch is therefore still open; it needs either a bench over the transaction path or a CodSpeed CI baseline.
 
-10. **Create `@lunora/platform-cloudflare`** as the default composition root: re-export the adapters from `@lunora/do`, add the `@lunora/scheduler` host, and run the full four-contract TCK from one place (today's Cloudflare run reports `SchedulerHost` as a gap because `@lunora/do` has no scheduler to offer).
+10. **Codegen is target-aware.** `@lunora/codegen` gained a `target` option (default `"cloudflare"`). It intersects the `discoverFeatureUsage` probe with the target's `@lunora/platform` capability matrix: a used feature the target marks `unsupported` is dropped from the emitted `ctx.*` surface (by flipping its `has*` flag off before emission, reusing the existing conditional-emit machinery) and reported as a `platform_unsupported_feature` diagnostic on `CodegenResult.platformDiagnostics`; the CLI `codegen` command surfaces them like advisories. `emulated`/`native` emit as-is; an unknown target emits the full surface un-gated with a `platform_unknown_target` diagnostic (fail-safe — never omit against a matrix we don't have). The default Cloudflare target marks nothing unsupported, so the gate is the identity and the goldens are byte-identical. This gives `CLOUDFLARE_CAPABILITIES` its first production consumer. (The end-to-end omission against a _real_ second target is unexercised until a non-Cloudflare matrix exists; the gate itself is unit-tested against a synthetic matrix, and the omission mechanism is the same `has*`-flag path the existing goldens already cover.)
 
-11. **Build `@lunora/platform-aws`** (plan 115) as the first non-Cloudflare target.
+11. **Create `@lunora/platform-cloudflare`** as the default composition root: re-export the adapters from `@lunora/do`, add the `@lunora/scheduler` host, and run the full four-contract TCK from one place (today's Cloudflare run reports `SchedulerHost` as a gap because `@lunora/do` has no scheduler to offer).
 
-12. **Update `lunorash` exports, the Vite plugin, and the CLI** to support host selection (`target` field, default `cloudflare`).
+12. **Build `@lunora/platform-aws`** (plan 115) as the first non-Cloudflare target.
+
+13. **Update `lunorash` exports, the Vite plugin, and the CLI** to support host selection (`target` field, default `cloudflare`).
