@@ -12,6 +12,7 @@ import { handleGitHubWebhook } from "../github/webhook";
 import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createCloudflareProvisioner } from "../provision";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
+import { constantTimeEqual } from "../security/constant-time-equal";
 import { resolveTelemetryConfig } from "../telemetry/ingest-key";
 import type { OtlpLogEntry, OtlpLogsPayload, OtlpMetricsPayload, OtlpTracePayload } from "../telemetry/otlp";
 import { decodeLogRecords, decodeMetricPoints, decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
@@ -460,21 +461,6 @@ const handleLogsIngestRoute = async (request: Request, environment: RouterEnv): 
     }
 };
 
-/** Constant-time string compare (no early return on the first mismatched byte). Mirrors `src/github/webhook.ts`. */
-const tailSecretEqual = (a: string, b: string): boolean => {
-    if (a.length !== b.length) {
-        return false;
-    }
-
-    let diff = 0;
-
-    for (let index = 0; index < a.length; index += 1) {
-        diff |= a.charCodeAt(index) ^ b.charCodeAt(index);
-    }
-
-    return diff === 0;
-};
-
 /** One per-script batch in a {@link TailBody}. */
 interface TailBatchBody {
     lines?: unknown[];
@@ -509,7 +495,7 @@ const handleLogsTailRoute = async (request: Request, environment: RouterEnv): Pr
 
     const presented = request.headers.get("x-lunora-tail-secret");
 
-    if (presented === null || !tailSecretEqual(presented, secret)) {
+    if (presented === null || !constantTimeEqual(presented, secret)) {
         return jsonError(403, "invalid tail secret");
     }
 
@@ -1007,6 +993,11 @@ export const createDeployRouter = (): HttpRouterLike => {
             // keyed on the ingest token (per org), so a busy exporter isn't throttled
             // by the shared per-IP `api` limit and one noisy tenant can't starve others.
             telemetry: { capacity: 6000, kind: "token bucket", period: 60_000, rate: 6000 },
+            // Per-IP backstop for telemetry paths. The per-token bucket alone is
+            // bypassable — a caller rotating the bearer value gets a fresh bucket each
+            // request. This IP cap (well above the per-token rate to tolerate a few
+            // exporters behind one NAT) bounds that abuse regardless of token churn.
+            telemetryIp: { capacity: 12_000, kind: "token bucket", period: 60_000, rate: 12_000 },
         },
     });
 
@@ -1209,9 +1200,20 @@ export const createDeployRouter = (): HttpRouterLike => {
     const telemetryPaths = new Set(["/v1/logs", "/v1/metrics", "/v1/telemetry", "/v1/traces"]);
 
     const rateLimited = async (request: Request, pathname: string): Promise<Response | undefined> => {
-        const verdict = telemetryPaths.has(pathname)
-            ? await limiter.limit("telemetry", { key: bearerToken(request) ?? request.headers.get("cf-connecting-ip") ?? "unknown" })
-            : await limiter.limit("api", { key: request.headers.get("cf-connecting-ip") ?? "unknown" });
+        const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+
+        // Telemetry paths must clear BOTH the per-IP backstop and the per-token bucket:
+        // the IP cap bounds token-rotation abuse, the token bucket keeps one org from
+        // starving others. Non-telemetry paths use the shared per-IP `api` limit.
+        let verdict;
+
+        if (telemetryPaths.has(pathname)) {
+            const ipVerdict = await limiter.limit("telemetryIp", { key: ip });
+
+            verdict = ipVerdict.ok ? await limiter.limit("telemetry", { key: bearerToken(request) ?? ip }) : ipVerdict;
+        } else {
+            verdict = await limiter.limit("api", { key: ip });
+        }
 
         if (verdict.ok) {
             return undefined;
