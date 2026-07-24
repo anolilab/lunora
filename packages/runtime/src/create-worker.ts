@@ -2371,7 +2371,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const instanceName = typeof candidate.instanceName === "string" && candidate.instanceName.length > 0 ? candidate.instanceName : "default";
 
         try {
-            await schedulerDO.get(schedulerDO.idFromName(instanceName)).fetch(
+            await resolveShard(schedulerDO, instanceName).fetch(
                 new Request("https://scheduler.internal/complete", {
                     body: JSON.stringify({ id: candidate.id, pool }),
                     headers: { "content-type": "application/json" },

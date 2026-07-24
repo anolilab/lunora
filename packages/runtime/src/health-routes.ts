@@ -23,6 +23,8 @@
  */
 import { LunoraError } from "./errors";
 import { methodGuard } from "./method-guard";
+import type { ShardNamespaceLike } from "./resolve-shard";
+import { resolveShard } from "./resolve-shard";
 
 const HEALTH_PATH = "/_lunora/health";
 const HEALTH_READY_PATH = "/_lunora/health/ready";
@@ -292,15 +294,11 @@ const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Requ
  * an unknown path) proves the DO answered; only a thrown error means the object
  * is unreachable. Never inspects the response body, so it cannot leak state.
  */
-const durableObjectProbe = (
-    name: string,
-    namespace: { get: (id: unknown) => { fetch: (request: Request) => Promise<Response> }; idFromName: (id: string) => unknown },
-    shardKey: string,
-): HealthProbe => {
+const durableObjectProbe = (name: string, namespace: ShardNamespaceLike, shardKey: string): HealthProbe => {
     return {
         check: async () => {
             try {
-                const stub = namespace.get(namespace.idFromName(shardKey));
+                const stub = resolveShard(namespace, shardKey);
 
                 await stub.fetch(new Request("https://shard.internal/_lunora/status", { method: "GET" }));
 

@@ -3415,6 +3415,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare

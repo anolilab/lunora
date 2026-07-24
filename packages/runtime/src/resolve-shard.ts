@@ -1,3 +1,42 @@
+import type { ShardDirectory, ShardJurisdiction } from "@lunora/platform";
+import { resolveShard as resolveShardStub } from "@lunora/platform";
+
+/**
+ * Adapt a Cloudflare-shaped {@link ShardNamespaceLike} to the provider-neutral
+ * {@link ShardDirectory} contract.
+ *
+ * The two are near-identical — the only real skew is the method name
+ * (`idFromName` vs the contract's `idForName`). Mapping here rather than
+ * renaming the namespace keeps `ShardNamespaceLike` matching the runtime's
+ * `DurableObjectNamespace` binding, while routing every resolution through the
+ * one contract `@lunora/platform` defines. A namespace that exposes `getByName`
+ * lands on the direct branch; one that doesn't lands on the two-step
+ * `idForName` + `get` branch — the same preference the contract's own
+ * `resolveShard` encodes.
+ */
+const toDirectory = (namespace: ShardNamespaceLike): ShardDirectory => {
+    const jurisdiction =
+        typeof namespace.jurisdiction === "function"
+            ? (hint: ShardJurisdiction) =>
+                  toDirectory((namespace.jurisdiction as NonNullable<ShardNamespaceLike["jurisdiction"]>)(hint as DurableObjectJurisdiction))
+            : undefined;
+
+    if (typeof namespace.getByName === "function") {
+        return {
+            get: (id) => namespace.get(id),
+            getByName: namespace.getByName,
+            idForName: (name) => namespace.idFromName(name),
+            jurisdiction,
+        };
+    }
+
+    return {
+        get: (id) => namespace.get(id),
+        idForName: (name) => namespace.idFromName(name),
+        jurisdiction,
+    };
+};
+
 /**
  * Cloudflare Durable Object jurisdictions restrict where a DO runs and persists
  * data, for data-residency / compliance regimes (GDPR, FedRAMP, US data
@@ -61,13 +100,10 @@ export const applyJurisdiction = (namespace: ShardNamespaceLike, jurisdiction?: 
     return namespace.jurisdiction(jurisdiction);
 };
 
-/** Look up a shard stub by name, preferring `getByName` when present. */
-export const resolveShard = (namespace: ShardNamespaceLike, shardKey: string): ResolvedShard => {
-    if (typeof namespace.getByName === "function") {
-        return namespace.getByName(shardKey);
-    }
-
-    const id = namespace.idFromName(shardKey);
-
-    return namespace.get(id);
-};
+/**
+ * Look up a shard stub by name through the `@lunora/platform` `ShardDirectory`
+ * contract. Preserves the historical preference — `getByName` when present,
+ * else `idFromName` + `get` — but the preference now lives in one place (the
+ * contract's `resolveShard`) rather than being restated per resolution path.
+ */
+export const resolveShard = (namespace: ShardNamespaceLike, shardKey: string): ResolvedShard => resolveShardStub(toDirectory(namespace), shardKey);
