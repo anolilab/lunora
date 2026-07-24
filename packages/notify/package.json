@@ -57,6 +57,7 @@
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
