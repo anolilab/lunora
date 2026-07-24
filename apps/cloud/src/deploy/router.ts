@@ -130,8 +130,8 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
         // installation created/deleted → link/unlink the org (GAPS.md A4).
         onInstallation: async (intent) => {
             await (intent.action === "created"
-                ? context.runMutation(api.github_installations.record, { accountLogin: intent.accountLogin, installationId: intent.installationId })
-                : context.runMutation(api.github_installations.remove, { installationId: intent.installationId }));
+                ? context.runMutation(internal.github_installations.record, { accountLogin: intent.accountLogin, installationId: intent.installationId })
+                : context.runMutation(internal.github_installations.remove, { installationId: intent.installationId }));
         },
         // PR upsert → server-side preview build (same pipeline, GAPS.md A3).
         onPreviewBuild: (intent) =>

@@ -46,9 +46,25 @@ export const list = query.query(async ({ ctx: context }): Promise<OrganizationRo
  * `by_slug` unique index still enforces correctness on insert.
  */
 export const getBySlug = query.input({ slug: v.string() }).query(async ({ ctx: context, args: { slug } }): Promise<OrganizationRow | null> => {
-    const { page } = await context.db.organizations.findMany();
+    const { userId } = context.auth;
 
-    return (page as unknown as OrganizationRow[]).find((organization) => organization.slug === slug) ?? null;
+    if (!userId) {
+        return null;
+    }
+
+    const { page } = await context.db.organizations.findMany();
+    const organization = (page as unknown as OrganizationRow[]).find((row) => row.slug === slug) ?? null;
+
+    if (!organization) {
+        return null;
+    }
+
+    // Only reveal the org to its own members. A non-member (or signed-out caller)
+    // gets `null` — identical to not-found — so this can neither leak cross-tenant
+    // org metadata nor act as a slug-enumeration oracle.
+    const { page: membership } = await context.db.members.findMany({ where: { organizationId: organization._id, userId } });
+
+    return membership.length > 0 ? organization : null;
 });
 
 /**
