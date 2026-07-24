@@ -11,7 +11,10 @@ import type {
     LunoraNotify,
     LunoraPush,
     NotifyDefinition,
+    NotifyDeliveryStatus,
     NotifyEnv,
+    NotifyLogger,
+    NotifyMetrics,
     PushContent,
     RegisterInput,
     StoredSubscription,
@@ -23,6 +26,19 @@ const resolveMaybeFactory = <T>(value: T | ((env: NotifyEnv) => T | undefined) |
     typeof value === "function" ? (value as (env: NotifyEnv) => T | undefined)(env) : value;
 
 const receiptError = (receipt: Receipt): string | undefined => (receipt.successful ? undefined : receipt.errorMessages.join("; "));
+
+/**
+ * Map a push send's receipt to the observability {@link NotifyDeliveryStatus}:
+ * `accepted` on success, `gone` when the endpoint is unregistered (404/410, FCM
+ * `UNREGISTERED` — the subscription is pruned), else `failed`.
+ */
+const pushDeliveryStatus = (receipt: Receipt, error: string | undefined): NotifyDeliveryStatus => {
+    if (receipt.successful) {
+        return "accepted";
+    }
+
+    return isGoneError(error) ? "gone" : "failed";
+};
 
 /** Run `task` over `items` with a bounded number in flight (order-independent). */
 const mapWithConcurrency = async <T, R>(items: ReadonlyArray<T>, limit: number, task: (item: T) => Promise<R>): Promise<R[]> => {
@@ -108,6 +124,25 @@ export interface CreateNotifyOptions {
      * config resolution entirely.
      */
     engine?: Notification;
+
+    /**
+     * The request's `ctx.log` (structural {@link NotifyLogger}). Codegen threads
+     * `ctx.log` in; when present the facade emits one `warn` line per FAILED
+     * delivery — trace-correlated to the enclosing action and durably archived by
+     * the log sink. Successes and prunes stay off the log to keep the archive
+     * clean; they are counted on `metrics` instead. Absent ⇒ no log emits.
+     */
+    log?: NotifyLogger;
+
+    /**
+     * The request's `ctx.metrics` (structural {@link NotifyMetrics}). Codegen
+     * threads `ctx.metrics` in; when present the facade counts every send on the
+     * `notify.send` series (dimensions `channel` / `provider` / `status`) and every
+     * no-op on `notify.skipped` (`channel` / `reason`) — feeding the durable metric
+     * history + trend charts. Absent ⇒ no metric emits.
+     */
+    metrics?: NotifyMetrics;
+
     /** Suppress the in-memory-store dev warning (tests set this). */
     silent?: boolean;
 }
@@ -156,6 +191,34 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
 
     const subscriptionStore = store;
     const concurrency = Math.max(1, options.concurrency ?? 10);
+    const { log, metrics } = options;
+
+    /**
+     * Count `count` (default 1) settled sends of one (channel, provider, status)
+     * on the `notify.send` series — dimensions are low-cardinality so identifiers
+     * stay on the log, not the metric; `provider` falls back to the channel name.
+     * A single/channel send passes the default 1; a broadcast aggregates per
+     * bucket and passes the bucket total, so the durable metric write (a SQLite
+     * upsert — see the metrics-emit bench) happens once per bucket, not per
+     * recipient.
+     */
+    const countSend = (channel: string, provider: string | undefined, status: NotifyDeliveryStatus, count = 1): void => {
+        metrics?.count("notify.send", count, { channel, provider: provider ?? channel, status });
+    };
+
+    /**
+     * Emit the per-recipient failure `warn`. Called only from a `status ===
+     * "failed"` guard, so its fields object is built only on a failure — never on
+     * the (hot, O(N)) success path of a broadcast.
+     */
+    const warnFailedSend = (channel: string, provider: string | undefined, fields: Record<string, unknown>): void => {
+        log?.warn(`notify ${channel} delivery failed`, { channel, provider: provider ?? channel, status: "failed", ...fields });
+    };
+
+    /** Emit a `notify.skipped` count for a send that reached no recipient (the "sent 0 because…" signal). */
+    const observeSkip = (channel: string, reason: string): void => {
+        metrics?.count("notify.skipped", 1, { channel, reason });
+    };
 
     const resolveSubscription = async (target: StoredSubscription | string): Promise<StoredSubscription> => {
         if (typeof target !== "string") {
@@ -171,35 +234,89 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         return found;
     };
 
-    const deliver = async (subscription: StoredSubscription, payload: PushContent): Promise<Receipt> => {
+    /**
+     * Send one push and settle its store lifecycle + observability. Returns the
+     * receipt and the derived {@link NotifyDeliveryStatus} (so a broadcast reuses
+     * it instead of re-deriving). The FAILURE LOG is per-recipient regardless of
+     * path. The metric is counted inline ONLY when `countInline` (a single
+     * `push.send`); a broadcast passes `false` and counts aggregated buckets once.
+     */
+    const deliver = async (
+        subscription: StoredSubscription,
+        payload: PushContent,
+        countInline: boolean,
+    ): Promise<{ receipt: Receipt; status: NotifyDeliveryStatus }> => {
         const receipt = await engine.sendToChannel("push", { ...payload, to: targetOf(subscription) });
         const error = receiptError(receipt);
+        // The observability status vocabulary (accepted/failed/gone). The store's
+        // own `SubscriptionStatus` (ok/failed) is set below and left unchanged.
+        const status = pushDeliveryStatus(receipt, error);
 
-        if (receipt.successful) {
+        if (status === "accepted") {
             await subscriptionStore.markStatus(subscription.id, "ok");
-        } else if (isGoneError(error)) {
+        } else if (status === "gone") {
             await subscriptionStore.delete(subscription.id);
         } else {
             await subscriptionStore.markStatus(subscription.id, "failed", error);
         }
 
-        return receipt;
+        if (status === "failed") {
+            // `provider` is the push kind (web-push/fcm) — a push send's own provider.
+            warnFailedSend("push", subscription.kind, { error, subscriptionId: subscription.id, userId: subscription.userId ?? null });
+        }
+
+        if (countInline) {
+            countSend("push", subscription.kind, status);
+        }
+
+        return { receipt, status };
     };
 
     const push: LunoraPush = {
         broadcast: async (payload: PushContent, filter?: SubscriptionFilter): Promise<BroadcastResult> => {
             const subscriptions = await subscriptionStore.list(filter);
 
-            const outcomes = await mapWithConcurrency(subscriptions, concurrency, async (subscription): Promise<BroadcastOutcome> => {
-                const receipt = await deliver(subscription, payload);
+            if (subscriptions.length === 0) {
+                // A broadcast that matched nobody — surface the no-op rather than
+                // returning a silent all-zero result (per-send metrics never fire).
+                observeSkip("push", "no-subscriptions-matched");
+            }
 
-                if (receipt.successful) {
+            const rows = await mapWithConcurrency(subscriptions, concurrency, async (subscription) => {
+                const { receipt, status } = await deliver(subscription, payload, false);
+
+                return { kind: subscription.kind, receipt, status, subscription };
+            });
+
+            // Fold the per-recipient statuses into one metric count per (kind,
+            // status) bucket — at most kinds×3 emits — instead of one durable
+            // SQLite write per recipient. (The per-recipient FAILURE LOGS already
+            // fired inside `deliver`.)
+            const buckets = new Map<string, { count: number; kind: string; status: NotifyDeliveryStatus }>();
+
+            for (const { kind, status } of rows) {
+                const key = `${kind} ${status}`;
+                const bucket = buckets.get(key);
+
+                if (bucket === undefined) {
+                    buckets.set(key, { count: 1, kind, status });
+                } else {
+                    bucket.count += 1;
+                }
+            }
+
+            for (const { count, kind, status } of buckets.values()) {
+                countSend("push", kind, status, count);
+            }
+
+            const outcomes: BroadcastOutcome[] = rows.map(({ receipt, status, subscription }) => {
+                if (status === "accepted") {
                     return { id: subscription.id, status: "ok" };
                 }
 
                 const error = receiptError(receipt);
 
-                return isGoneError(error) ? { error, id: subscription.id, status: "expired" } : { error, id: subscription.id, status: "failed" };
+                return status === "gone" ? { error, id: subscription.id, status: "expired" } : { error, id: subscription.id, status: "failed" };
             });
 
             return {
@@ -212,23 +329,56 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         },
         list: (filter?: SubscriptionFilter): Promise<StoredSubscription[]> => subscriptionStore.list(filter),
         register: (input: RegisterInput): Promise<StoredSubscription> => subscriptionStore.put(normalizeRegisterInput(input)),
-        send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => deliver(await resolveSubscription(target), payload),
+        send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => {
+            const { receipt } = await deliver(await resolveSubscription(target), payload, true);
+
+            return receipt;
+        },
         unregister: (id: string): Promise<void> => subscriptionStore.delete(id),
     };
 
     const sendToChannel = async (channel: "chat" | "inapp" | "webhook", payload: unknown): Promise<Receipt> => {
         if (engine.getProvider(channel) === undefined) {
+            observeSkip(channel, "channel-not-configured");
+
             throw new LunoraError("BAD_REQUEST", `@lunora/notify: the "${channel}" channel is not configured in defineNotify(...)`);
         }
 
-        return engine.sendToChannel(channel, payload as never);
+        const receipt = await engine.sendToChannel(channel, payload as never);
+        const status: NotifyDeliveryStatus = receipt.successful ? "accepted" : "failed";
+
+        countSend(channel, receipt.provider, status);
+
+        if (status === "failed") {
+            warnFailedSend(channel, receipt.provider, { error: receiptError(receipt) });
+        }
+
+        return receipt;
     };
 
     const notify: LunoraNotify = {
         chat: (payload) => sendToChannel("chat", payload),
         inApp: (payload) => sendToChannel("inapp", payload),
         push,
-        send: (message) => engine.send(message),
+        send: async (message) => {
+            const receipts = await engine.send(message);
+
+            // One measurement per channel receipt — `channel`/`provider` come off
+            // the receipt (the multi-channel engine labels each), defaulting when
+            // absent so an unlabeled receipt still counts.
+            for (const receipt of receipts) {
+                const channel = receipt.channel ?? "unknown";
+                const status: NotifyDeliveryStatus = receipt.successful ? "accepted" : "failed";
+
+                countSend(channel, receipt.provider, status);
+
+                if (status === "failed") {
+                    warnFailedSend(channel, receipt.provider, { error: receiptError(receipt) });
+                }
+            }
+
+            return receipts;
+        },
         webhook: (payload) => sendToChannel("webhook", payload),
     };
 

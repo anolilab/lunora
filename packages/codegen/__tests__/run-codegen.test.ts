@@ -693,7 +693,8 @@ export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
             // Runtime wiring (shard): the definition import + createNotify build + both ctx fields.
             expect(result.generated.shard).toContain('import { createNotify } from "@lunora/notify"');
             expect(result.generated.shard).toContain('import notifyConfig from "../notify.js"');
-            expect(result.generated.shard).toContain("const { notify, push } = createNotify(notifyConfig, env);");
+            // The facade is threaded `ctx.log` / `ctx.metrics` for delivery observability.
+            expect(result.generated.shard).toContain("const { notify, push } = createNotify(notifyConfig, env, { log, metrics });");
             expect(result.generated.shard).toContain("\n                notify,\n                push,");
             // Notify rides every ctx, so it must NOT be gated behind the action-only block.
             expect(result.generated.shard).not.toContain("ctx.notify = notify;");
