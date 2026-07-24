@@ -39,6 +39,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./suite": {
+            "types": "./dist/suite.d.ts",
+            "import": "./dist/suite.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

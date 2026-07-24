@@ -19,14 +19,51 @@ import type {
  * can stand up a complete, isolated test environment.
  */
 interface ConformanceHost {
+    /**
+     * Resolve once a pending alarm has actually fired. Optional: hosts whose
+     * alarm delivery is owned by the platform and can't be observed from inside
+     * a shard callback (Cloudflare wakes a separate `alarm()` invocation) omit
+     * it, and the suite then asserts only the set/read/delete half of the alarm
+     * contract — platform delivery is the platform's test, not the adapter's.
+     */
+    awaitAlarmFired?: (target: number) => Promise<void>;
     /** Optional cleanup hook (close DBs, release timers). */
     cleanup?: () => void;
+
+    /**
+     * Mint a raw socket for {@link SocketHost.accept}. Optional: what a socket
+     * actually _is_ differs per host (Cloudflare needs a live `WebSocketPair` end), and
+     * the provider-neutral suite can't know. Defaults to an opaque object for
+     * hosts that don't care.
+     */
+    createSocket?: () => unknown;
     /** The shard directory under test. */
     directory: ShardDirectory;
-    /** The scheduler host under test. */
-    scheduler: SchedulerHost;
+
+    /**
+     * Re-create a runtime socket from its durable state. Optional: only hosts
+     * that can be driven through a recycle from inside a test implement it
+     * (see {@link ConformanceHost.simulateRecycle}).
+     */
+    restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
+
+    /**
+     * The scheduler host under test. Optional: a package that implements only
+     * the shard/socket half of the platform (`@lunora/do`) has no scheduler to
+     * offer, and the suite reports the gap instead of asserting against a stub.
+     * A full composition root must supply one.
+     */
+    scheduler?: SchedulerHost;
     /** The shard execution slot under test. */
     shard: ShardHost;
+
+    /**
+     * Drop runtime socket state while keeping durable state, so the suite can
+     * assert attachments survive. Optional: a host whose recycle is owned by
+     * the platform (Cloudflare hibernation) cannot trigger one on demand, and
+     * the suite skips the recycle leg rather than faking it.
+     */
+    simulateRecycle?: () => void;
     /** The socket subscription host under test. */
     socket: SocketHost;
 }
@@ -119,10 +156,13 @@ const createReferenceHost = (): ReferenceHost => {
     };
 
     // Socket state is split into "runtime" (in-memory handles) and "durable"
-    // (serialized attachments). Tests call `simulateRecycle()` to clear runtime
-    // state, then `restoreSocket()` to rehydrate from durable attachments.
+    // (serialized attachments plus fan-out tags). Tests call `simulateRecycle()`
+    // to clear runtime state, then `restoreSocket()` to rehydrate from the
+    // durable side — tags come back with the socket, exactly as they do on a
+    // host that persists them alongside the connection.
     const runtimeSockets = new Map<string, ReferenceSocket>();
     const durableAttachments = new Map<string, unknown>();
+    const durableTags = new Map<string, Set<string>>();
 
     const sql: ShardSqlExec = {
         exec: (query, ...bindings) => {
@@ -265,7 +305,7 @@ const createReferenceHost = (): ReferenceHost => {
     };
 
     const socket: SocketHost = {
-        accept: (_socket, attachment) => {
+        accept: (_socket, attachment, tags) => {
             const id = nextSocketId();
             const socketState: ReferenceSocket = {
                 attachment,
@@ -273,9 +313,10 @@ const createReferenceHost = (): ReferenceHost => {
                 handle: null as unknown as SocketHandle,
                 id,
                 received: [],
-                tags: new Set(),
+                tags: new Set(tags),
             };
             runtimeSockets.set(id, socketState);
+            durableTags.set(id, new Set(tags));
 
             if (attachment !== undefined) {
                 durableAttachments.set(id, attachment);
@@ -301,12 +342,15 @@ const createReferenceHost = (): ReferenceHost => {
             } else {
                 socketState.tags.delete(tag);
             }
+
+            durableTags.set(handle.id, new Set(socketState.tags));
         },
         setTag: (handle, tag) => {
             const socketState = runtimeSockets.get(handle.id);
 
             if (socketState !== undefined) {
                 socketState.tags.add(tag);
+                durableTags.set(handle.id, new Set(socketState.tags));
             }
         },
     };
@@ -379,6 +423,13 @@ const createReferenceHost = (): ReferenceHost => {
     };
 
     return {
+        awaitAlarmFired: async (target) => {
+            // The reference host clears `alarmAt` from a real timer, so waiting
+            // past the target (plus a small margin) is enough to observe it.
+            await new Promise((resolve) => {
+                setTimeout(resolve, Math.max(0, target - Date.now()) + 30);
+            });
+        },
         cleanup: () => {
             database.close();
 
@@ -398,7 +449,7 @@ const createReferenceHost = (): ReferenceHost => {
                 handle: null as unknown as SocketHandle,
                 id,
                 received: [],
-                tags: new Set(),
+                tags: new Set(durableTags.get(id)),
             };
             runtimeSockets.set(id, socketState);
 
@@ -418,9 +469,9 @@ const createReferenceHost = (): ReferenceHost => {
  * reference-host-specific helpers for simulating recycle/rehydrate.
  */
 interface ReferenceHost extends ConformanceHost {
-    /** Re-create a runtime socket from its durable attachment. */
+    /** Re-create a runtime socket from its durable attachment and tags. */
     restoreSocket: (id: string, attachment: unknown) => SocketHandle;
-    /** Drop runtime socket state while keeping durable attachments. */
+    /** Drop runtime socket state while keeping durable attachments and tags. */
     simulateRecycle: () => void;
 }
 
