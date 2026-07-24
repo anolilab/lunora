@@ -615,6 +615,42 @@ export interface RankIndexNamesByTable {
 
 export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
 
+/** Per-table geo-index name union. `never` for tables without a geoIndex. */
+export interface GeoIndexNamesByTable {
+    cells: never;
+    organizations: never;
+    members: never;
+    projects: never;
+    deployments: never;
+    deployKeys: never;
+    overageDebits: never;
+    tenantLogs: never;
+    observations: never;
+    githubInstallations: never;
+    builds: never;
+    buildLogs: never;
+    domains: never;
+    auditLog: never;
+    invitations: never;
+    platformUsage: never;
+    issues: never;
+    incidents: never;
+    alertRules: never;
+    alertRuleState: never;
+    alerts: never;
+    uptimeChecks: never;
+    uptimeState: never;
+    secrets: never;
+    dashboards: never;
+    customers: never;
+    events: never;
+    paymentSessions: never;
+    subscriptions: never;
+    usageEvents: never;
+}
+
+export type GeoIndexName<T extends keyof DataModel> = GeoIndexNamesByTable[T];
+
 /** Union of declared vector index names. `never` when none are declared. */
 export type VectorIndexName = never;
 
@@ -1142,16 +1178,16 @@ export type WithArg<T extends keyof DataModel> = WithArgOf<DataModel, Relations,
 export type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;
 
 /** Read-only typed table accessor exposed on `QueryCtx.db.<table>`. */
-export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T>;
+export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
 
 /** Read-write typed table accessor exposed on `MutationCtx.db.<table>` / `ActionCtx.db.<table>`. */
-export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T>;
+export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
 
 /** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
-export type DatabaseReaderFacade = DatabaseReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable>;
+export type DatabaseReaderFacade = DatabaseReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
 
 /** Per-table read-write facade — `ctx.db.<table>` on a `MutationCtx` / `ActionCtx`. */
-export type DatabaseWriterFacade = DatabaseWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable>;
+export type DatabaseWriterFacade = DatabaseWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
 
 /** Insert builder returned by `ctx.orm.insert(table)`. */
 export interface OrmInsertBuilder<T extends keyof DataModel> {

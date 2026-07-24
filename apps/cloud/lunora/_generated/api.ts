@@ -71,8 +71,6 @@ export interface ApiTypes {
     github_installations: {
         claim: FunctionReference<"mutation", { installationId: number; organizationId: Id<"organizations"> }, void>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; organizationId?: Id<"organizations"> }[]>;
-        record: FunctionReference<"mutation", { accountLogin: string; installationId: number }, Id<"githubInstallations">>;
-        remove: FunctionReference<"mutation", { installationId: number }, void>;
     };
     incidents: {
         investigate: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { by: "deterministic" | "llm"; confidence: "high" | "low" | "medium"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>;
@@ -166,6 +164,10 @@ export interface InternalApiTypes {
     };
     fanout: {
         tick: FunctionReference<"mutation", {}, { ok: true; }>;
+    };
+    github_installations: {
+        record: FunctionReference<"mutation", { accountLogin: string; installationId: number }, Id<"githubInstallations">>;
+        remove: FunctionReference<"mutation", { installationId: number }, void>;
     };
     logs: {
         ingestInternal: FunctionReference<"mutation", { lines: Array<unknown>; organizationId: Id<"organizations">; scriptName: string }, { ingested: number; }>;
