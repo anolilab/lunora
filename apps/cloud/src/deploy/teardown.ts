@@ -40,6 +40,8 @@ export interface TeardownPorts {
     listPending: () => Promise<TeardownTarget[]>;
     /** Record that a deployment's Cloudflare resources are gone (stamps `teardownAt`). */
     markTornDown: (id: string) => Promise<void>;
+    /** Release the alias's ownership row once its last deployment is gone. Idempotent. */
+    releaseAlias: (alias: string) => Promise<void>;
 }
 
 export interface TeardownResult {
@@ -68,6 +70,17 @@ export const runTeardownSweep = async (ports: TeardownPorts): Promise<TeardownRe
                 dispatchNamespace: target.dispatchNamespace,
                 scriptName: target.scriptName,
             });
+
+            // The alias is only free once its last deployment's resources are gone
+            // (`deleteResources`) — release its ownership row so the label can be
+            // re-claimed. Released BEFORE `markTornDown` so a failure here leaves the
+            // row pending and the (idempotent) release retries next tick; a routine
+            // version prune (deleteResources=false) never touches ownership.
+            if (target.deleteResources) {
+                // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small
+                await ports.releaseAlias(target.alias);
+            }
+
             // eslint-disable-next-line no-await-in-loop -- must mark before moving on so a mid-sweep crash doesn't re-delete
             await ports.markTornDown(target.id);
             tornDown += 1;
