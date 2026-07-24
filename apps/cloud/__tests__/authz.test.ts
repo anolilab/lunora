@@ -74,4 +74,17 @@ describe(authorizeDeployKey, () => {
 
         await expect(authorizeDeployKey(context, org, key)).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
+
+    it("rejects a project-scoped key used against another project (rollback/activate IDOR guard)", async () => {
+        const key = "production:org_1|secret";
+        const hashedKey = await hashDeployKey(key);
+        const context = makeCtx(null, { deployKeys: [{ _id: "dk1", hashedKey, organizationId: "org_1", projectId: "proj_A" }] });
+
+        // A key scoped to proj_A must not authorize an operation on proj_B — this is
+        // the contract `deployments.rollback` relies on by passing `target.projectId`.
+        await expect(authorizeDeployKey(context, org, key, "proj_B" as Parameters<typeof authorizeDeployKey>[3])).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+        await expect(authorizeDeployKey(context, org, key, "proj_A" as Parameters<typeof authorizeDeployKey>[3])).resolves.toBe("dk1");
+    });
 });

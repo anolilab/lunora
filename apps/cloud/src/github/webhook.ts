@@ -5,26 +5,11 @@
  */
 
 import { previewScriptName } from "../deploy/preview";
+import { constantTimeEqual } from "../security/constant-time-equal";
 
 const encoder = new TextEncoder();
 
 const toHex = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-
-/** Constant-time string compare (avoids leaking how much of a signature matched). */
-const timingSafeEqual = (a: string, b: string): boolean => {
-    if (a.length !== b.length) {
-        return false;
-    }
-
-    let mismatch = 0;
-
-    for (let index = 0; index < a.length; index += 1) {
-        // eslint-disable-next-line no-bitwise -- constant-time comparison requires bitwise accumulation
-        mismatch |= (a.codePointAt(index) ?? 0) ^ (b.codePointAt(index) ?? 0);
-    }
-
-    return mismatch === 0;
-};
 
 /**
  * Verify a GitHub `x-hub-signature-256` header (`sha256=&lt;hex>`) against the raw
@@ -38,7 +23,7 @@ export const verifyGitHubSignature = async (secret: string, body: string, signat
     const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
     const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
 
-    return timingSafeEqual(`sha256=${toHex(signature)}`, signatureHeader);
+    return constantTimeEqual(`sha256=${toHex(signature)}`, signatureHeader);
 };
 
 export interface PreviewIntent {
