@@ -111,4 +111,6 @@ A **failed** send also emits one `ctx.log.warn` line carrying the error and, for
 
 ## Status
 
-Phases 0–2 and the Phase-3 advisor lints + queue-backed fan-out are shipped. Remaining: the codegen ctx-splice that auto-wires `ctx.notify` / `ctx.push` from `lunora/notify.ts` (mirroring `defineFlags` → `ctx.flags`; `createNotify` is the factory it calls), the codegen advisor feeder, and the Studio Notifications page. See `plans/165-push-notifications.md`.
+Shipped: Web Push + FCM channels, chat / in-app / webhook senders, device-subscription storage (memory + D1), queue-backed fan-out, the codegen ctx-splice that auto-wires `ctx.notify` / `ctx.push` from `lunora/notify.ts` (via `createNotify`, mirroring `defineFlags` → `ctx.flags`), the `notify_send_outside_action` advisor lint, the Studio **Notifications** page (registered-device inspector), and [delivery observability](#delivery-observability).
+
+Deferred: a filterable per-delivery **activity feed** and per-device history (a Novu-style drill-down). Web Push / FCM give no delivery/open receipts, so it would report only the send-attempt outcome; it needs a field-level predicate on the durable log reader (or a dedicated store) and is not planned until asked for.
