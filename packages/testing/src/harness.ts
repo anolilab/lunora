@@ -7,6 +7,7 @@ import type {
     AuthState,
     DatabaseWriter,
     InferArgs,
+    LogFields,
     LunoraLogger,
     LunoraMetrics,
     LunoraTracer,
@@ -209,6 +210,20 @@ interface TestHarness {
         <R>(inline: InlineQueryFunction<R>): TestSubscription<R>;
     };
 
+    /**
+     * What handlers attached to `ctx.span` — the **wide event** — during this
+     * harness's runs, so a test can assert the instrumentation itself:
+     *
+     * ```ts
+     * await t.mutation(checkout, { items: 3 });
+     * expect(t.wideEvent().attributes["cart.items"]).toBe(3);
+     * ```
+     *
+     * Accumulates across calls on this view (it is not reset per run), mirroring
+     * the harness's single shared database. Shared with any `withIdentity` view.
+     */
+    wideEvent: () => RecordedWideEvent;
+
     /** Return a harness view that shares this harness's db but reports the given identity on `ctx.auth`. */
     withIdentity: (identity: TestIdentity) => TestHarness;
 }
@@ -250,13 +265,88 @@ const stubProxy = (surface: string): unknown =>
         get: () => unavailable(surface),
     });
 
+/** What a handler attached to the dispatch's span (`ctx.span`) during a harness run. */
+interface RecordedWideEvent {
+    /**
+     * Attributes accumulated across the run, merged in call order. Values are
+     * recorded AS PASSED (not coerced the way the real pipeline normalizes them),
+     * so a test asserts on what the handler meant rather than on the wire form.
+     */
+    attributes: LogFields;
+    /** Span events recorded via `ctx.span.addEvent` / `recordException`, in order. */
+    events: { attributes?: LogFields; name: string }[];
+    /** Links recorded via `ctx.span.addLink`, in order. */
+    links: { spanId: string; traceId: string }[];
+}
+
 /**
- * A no-op {@link SpanHandle} for the harness: post-hoc attributes have nowhere
- * to go without a sink, so accept and drop them (like `noopMetrics`).
+ * Fixed, well-formed trace ids for the harness.
+ *
+ * Constant rather than random so a snapshot or an assertion that happens to
+ * include them stays stable across runs; well-formed (32/16 lowercase hex) so
+ * code under test that parses or builds a `traceparent` from them behaves as it
+ * would in production instead of hitting a validation path only tests can reach.
+ */
+const HARNESS_SPAN_CONTEXT = { spanId: "0000000000000001", traceId: "00000000000000000000000000000001" };
+
+/**
+ * A no-op {@link SpanHandle} for a `ctx.trace` body under test: a child span has
+ * nowhere to go without a sink, so accept and drop what the body attaches (like
+ * `noopMetrics`).
+ *
+ * The DISPATCH span (`ctx.span`) is deliberately NOT this — see
+ * {@link createRecordingSpan}. What a handler records about the request as a
+ * whole is exactly the kind of thing a test wants to assert on, and dropping it
+ * would make the wide-event API the one part of `ctx` that is untestable.
  */
 const noopSpan: SpanHandle = {
+    addEvent: () => undefined,
+    addLink: () => undefined,
+    recordException: () => undefined,
     setAttribute: () => undefined,
     setAttributes: () => undefined,
+    spanContext: () => HARNESS_SPAN_CONTEXT,
+};
+
+/**
+ * A recording {@link SpanHandle} backing `ctx.span` in the harness, so a test can
+ * assert on the wide event a handler builds:
+ *
+ * ```ts
+ * await t.mutation(checkout, { … });
+ * expect(t.wideEvent().attributes["payment.provider"]).toBe("stripe");
+ * ```
+ *
+ * Without this, the recommended way to instrument a handler would have no
+ * assertion story at all, and "did we record the right thing?" would only be
+ * answerable by deploying.
+ */
+const createRecordingSpan = (): { handle: SpanHandle; recorded: RecordedWideEvent } => {
+    const recorded: RecordedWideEvent = { attributes: {}, events: [], links: [] };
+
+    const handle: SpanHandle = {
+        addEvent: (name, attributes) => {
+            recorded.events.push({ ...(attributes === undefined ? {} : { attributes: { ...attributes } }), name });
+        },
+        addLink: (link) => {
+            recorded.links.push({ spanId: link.spanId, traceId: link.traceId });
+        },
+        recordException: (error) => {
+            handle.addEvent("exception", {
+                "exception.message": error instanceof Error ? error.message : String(error),
+                "exception.type": error instanceof Error ? error.constructor.name : "Error",
+            });
+        },
+        setAttribute: (key, value) => {
+            recorded.attributes[key] = value;
+        },
+        setAttributes: (fields) => {
+            Object.assign(recorded.attributes, fields);
+        },
+        spanContext: () => HARNESS_SPAN_CONTEXT,
+    };
+
+    return { handle, recorded };
 };
 
 /**
@@ -279,6 +369,7 @@ const noopMetrics: LunoraMetrics = {
 const noopLog: LunoraLogger = {
     debug: () => undefined,
     error: () => undefined,
+    event: () => undefined,
     fatal: () => undefined,
     info: () => undefined,
     log: () => undefined,
@@ -654,6 +745,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     // `ctx.scheduler.runAt(ctx.now + delay, …)` schedules against a clock that
     // disagrees with `ctx.now`.
     const harnessNow = options?.now ?? Date.now();
+    // One recorder per harness (shared by the query/mutation/action contexts, so a
+    // `ctx.runMutation` from a query accumulates onto the same wide event the real
+    // runtime would — a composed call reuses the outer dispatch's span).
+    const dispatchSpan = createRecordingSpan();
 
     const { controls: schedulerControls, scheduler: fakeScheduler } = createFakeScheduler(
         () => {
@@ -705,6 +800,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             log: noopLog,
             metrics: noopMetrics,
             now: harnessNow,
+            span: dispatchSpan.handle,
             trace: passthroughTrace,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
             runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
@@ -720,6 +816,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             log: noopLog,
             metrics: noopMetrics,
             now: harnessNow,
+            span: dispatchSpan.handle,
             trace: passthroughTrace,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runMutation, after construction completes
             runMutation: (reference, args) => runInternal("mutation", reference, mutationContext, args) as Promise<never>,
@@ -746,6 +843,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             log: noopLog,
             metrics: noopMetrics,
             now: harnessNow,
+            span: dispatchSpan.handle,
             trace: passthroughTrace,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runAction, after construction completes
             runAction: (reference, args) => runInternal("action", reference, actionContext, args) as Promise<never>,
@@ -861,6 +959,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 }),
             scheduler: schedulerControls,
             subscribe,
+            wideEvent: () => dispatchSpan.recorded,
             // A scoped view shares the SAME sql/db handle (created once above), so
             // writes performed under an identity persist for every accessor.
             withIdentity: (next) => makeHarness(next),
@@ -875,4 +974,4 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 
 export { lunoraTest };
 export type { FakeScheduledJob, FakeSchedulerControls, ScheduledJobFailure, SweepOptions } from "./fake-scheduler";
-export type { FunctionRegistry, LunoraTestOptions, TestHarness, TestIdentity, TestSubscription };
+export type { FunctionRegistry, LunoraTestOptions, RecordedWideEvent, TestHarness, TestIdentity, TestSubscription };
