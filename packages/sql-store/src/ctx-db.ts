@@ -83,7 +83,7 @@ import {
     tokenizeSearch,
 } from "@lunora/do";
 import { LunoraError } from "@lunora/errors";
-import type {WhereSqlStrategy} from "@lunora/shard-engine";
+import type { WhereSqlStrategy } from "@lunora/shard-engine";
 import { compileWhereSql, NotFoundError, renderSql } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";

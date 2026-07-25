@@ -1,5 +1,5 @@
 import type { WhereInput, WhereSqlStrategy } from "@lunora/shard-engine";
-import { compileWhereSql,renderSql } from "@lunora/shard-engine";
+import { compileWhereSql, renderSql } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
