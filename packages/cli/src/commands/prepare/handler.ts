@@ -6,7 +6,7 @@
  */
 import type { CodegenResult } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import { inferLunoraBindings, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, reconcileWranglerCrons } from "@lunora/config";
+import { CLOUDFLARE_DRIVER } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -42,53 +42,50 @@ interface PrepareCommandResult {
 }
 
 /**
- * Auto-provision bindings implied by the project's code into `wrangler.jsonc`.
- * Best-effort: a failure here is logged as a warning and does not abort
- * `prepare`, because the subsequent `validateWrangler` call will catch any
- * truly-missing requirement.
+ * Auto-provision the resources implied by the project's code into the deploy
+ * target's configuration, through the `DeployDriver` seam.
+ *
+ * Best-effort: a driver folds a failed step into a warning rather than throwing,
+ * because the subsequent `validateWrangler` call is the real gate on a
+ * genuinely-missing requirement.
+ *
+ * Cloudflare is the only registered driver today, so this is behavior-identical
+ * to the inline `inferLunoraBindings` + `reconcileWrangler*` sequence it
+ * replaces — the driver delegates to exactly those functions.
  */
 const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> = []): Promise<void> => {
+    const context = { crons: cronTriggers, projectRoot: cwd };
+
+    // The portable summary of what the app needs — target-independent, so it
+    // reads the same whichever driver is selected. Best-effort: a failed
+    // inference must not stop provisioning, which reports its own warnings.
     try {
-        const inferred = await inferLunoraBindings({ projectRoot: cwd });
-        const reconciled = reconcileWranglerBindings(cwd, inferred);
+        const graph = await CLOUDFLARE_DRIVER.infer(context);
+        const requirements = [
+            graph.shardNamespaces.length > 0 ? `${String(graph.shardNamespaces.length)} shard namespace(s)` : undefined,
+            graph.queues.length > 0 ? `${String(graph.queues.length)} queue(s)` : undefined,
+            graph.workflows.length > 0 ? `${String(graph.workflows.length)} workflow(s)` : undefined,
+            graph.containers.length > 0 ? `${String(graph.containers.length)} container(s)` : undefined,
+            graph.globalDatabase ? "global database" : undefined,
+            graph.objectStorage ? "object storage" : undefined,
+            graph.keyValueStore ? "key-value store" : undefined,
+        ].filter((entry): entry is string => entry !== undefined);
 
-        if (reconciled.changed) {
-            logger.success(`provisioned bindings: ${reconciled.added.join(", ")} → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        if (requirements.length > 0) {
+            logger.info(`${CLOUDFLARE_DRIVER.name} target requires: ${requirements.join(", ")}`);
         }
-
-        for (const warning of reconciled.warnings) {
-            logger.warn(warning);
-        }
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.warn(`binding inference skipped: ${message}`);
+    } catch {
+        // Inference is reporting-only here; `provision` surfaces the real problem.
     }
 
-    try {
-        const reconciled = reconcileWranglerCompatibilityDate(cwd);
+    const provisioned = await CLOUDFLARE_DRIVER.provision(context);
 
-        if (reconciled.changed) {
-            logger.success(
-                `bumped compatibility_date to ${reconciled.date ?? "unknown"} (Workers Cache enabled) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`,
-            );
-        }
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.warn(`compatibility date sync skipped: ${message}`);
+    if (provisioned.changed) {
+        logger.success(`provisioned: ${provisioned.added.join(", ")} → ${provisioned.configPath ?? "wrangler.jsonc"}`);
     }
 
-    try {
-        const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
-
-        if (reconciled.changed) {
-            logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
-        }
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.warn(`cron trigger sync skipped: ${message}`);
+    for (const warning of provisioned.warnings) {
+        logger.warn(warning);
     }
 };
 
