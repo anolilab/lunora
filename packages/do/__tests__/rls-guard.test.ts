@@ -184,6 +184,75 @@ describe("guardWriter — generic id-based access resolves the owning table", ()
     });
 });
 
+describe("guardWriter — erase primitives under .rls('required')", () => {
+    /** The fake writer plus the erase methods the guard has to gate. */
+    const createEraseWriter = () => {
+        return {
+            ...createFakeWriter(),
+            deleteAll: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`deleteAll:${tableName}`)),
+            wipeShard: vi.fn<() => Promise<string>>(() => Promise.resolve("wipeShard")),
+        };
+    };
+
+    it("denies deleteAll against the protected table", () => {
+        expect.assertions(2);
+
+        const raw = createEraseWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { deleteAll: (t: string) => unknown };
+
+        // The most destructive method on the writer: without an explicit override the
+        // `...raw` spread would expose it unguarded.
+        expect(() => guarded.deleteAll("posts")).toThrow(RlsRequiredError);
+        expect(raw.deleteAll).not.toHaveBeenCalled();
+    });
+
+    it("allows deleteAll against the .public() table", () => {
+        expect.assertions(1);
+
+        const raw = createEraseWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { deleteAll: (t: string) => unknown };
+
+        guarded.deleteAll("stats");
+
+        expect(raw.deleteAll).toHaveBeenCalledTimes(1);
+    });
+
+    it("denies wipeShard while any swept table is protected", () => {
+        expect.assertions(2);
+
+        const raw = createEraseWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as { wipeShard: (o?: unknown) => unknown };
+
+        expect(() => guarded.wipeShard()).toThrow(RlsRequiredError);
+        expect(raw.wipeShard).not.toHaveBeenCalled();
+    });
+
+    it("allows wipeShard when the sweep is restricted to .public() tables", () => {
+        expect.assertions(1);
+
+        const raw = createEraseWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as {
+            wipeShard: (o?: { tables?: string[] }) => unknown;
+        };
+
+        guarded.wipeShard({ tables: ["stats"] });
+
+        expect(raw.wipeShard).toHaveBeenCalledTimes(1);
+    });
+
+    it("still denies wipeShard when only the public table is excluded", () => {
+        expect.assertions(1);
+
+        const raw = createEraseWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as {
+            wipeShard: (o?: { exclude?: string[] }) => unknown;
+        };
+
+        // Excluding `stats` leaves the protected `posts` in the sweep.
+        expect(() => guarded.wipeShard({ exclude: ["stats"] })).toThrow(RlsRequiredError);
+    });
+});
+
 describe("guardWriter — unwrap seam", () => {
     it("exposes the raw writer under RLS_UNWRAP_SYMBOL so the middleware can recover it", () => {
         expect.assertions(1);

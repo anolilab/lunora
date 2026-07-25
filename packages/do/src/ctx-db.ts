@@ -549,6 +549,22 @@ interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
 
     /**
+     * The throwing sibling of `normalizeId`: returns the id when it is
+     * structurally an id, and throws `BAD_REQUEST` otherwise. Pure — it never reads
+     * the database. Same check as `normalizeId` (ids are opaque strings, so empty /
+     * whitespace-bearing / NUL-bearing values are rejected), just non-nullable.
+     *
+     * This is the parse boundary for an id that arrived as a plain `string` (a wire
+     * payload, a mutator's args, a change plan). Without it every such call site
+     * writes `value as Id&lt;"table">`, which asserts rather than checks.
+     *
+     * Optional on the interface (like the batch methods): the DO writer — the only one
+     * ever assigned to `ctx.db` — always implements it, while the `.global()` (D1 /
+     * Hyperdrive) twins that also satisfy this shape structurally do not.
+     */
+    asId?: (tableName: string, id: string) => string;
+
+    /**
      * Count rows in `tableName`. Uses a declared `aggregateIndex` when one
      * covers the `where` keys (no scan); otherwise scans. Throws
      * `COUNT_RLS_UNSUPPORTED` when `options.restrictsCounts` is `true` (the
@@ -564,6 +580,18 @@ interface DatabaseWriterLike {
      * `options.hard` — they always delete physically.
      */
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
+
+    /**
+     * Delete EVERY row in `tableName`, chunking internally until the table is
+     * empty. Unlike `deleteWhere(tableName, {})` there is no batch cap — the whole
+     * point is a table of unknown size (GDPR erasure, a tenant teardown), where a
+     * `BATCH_LIMIT_EXCEEDED` at row 501 is a bug rather than a safety rail. Every
+     * row still goes through the single-row delete pipeline so triggers, cascades,
+     * companions, CDC, and broadcast stay correct.
+     *
+     * Optional on the interface (like `deleteMany`): the DO writer implements it.
+     */
+    deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
 
     /**
      * Delete many rows by id in one call (a loop over `delete()`). The returned
@@ -592,6 +620,7 @@ interface DatabaseWriterLike {
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
+
     get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
 
     /**
@@ -788,6 +817,23 @@ interface DatabaseWriterLike {
      * to `ctx.db`, omits it — same pattern as the optional `rankBefore` above.
      */
     system?: SystemDatabaseReader;
+
+    /**
+     * Erase every shard-local table in the schema — the account-deletion /
+     * tenant-teardown primitive. Iterates the non-`.global()` tables and
+     * `deleteAll`s each, returning the per-table counts.
+     *
+     * `.global()` tables are deliberately skipped: their rows live in D1 and are
+     * shared across shards, so "wipe this shard" must not touch them. Pass
+     * `options.tables` to restrict the sweep, or `options.exclude` to spare a table
+     * (e.g. an audit log that must outlive the data).
+     *
+     * Optional on the interface, like the other batch primitives.
+     */
+    wipeShard?: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => Promise<{
+        deleted: number;
+        tables: Record<string, number>;
+    }>;
 }
 
 interface SearchStage {
@@ -2378,6 +2424,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return value;
         },
 
+        asId(tableName, id) {
+            const normalized = normalizeIdStructurally(schema, tableName, id);
+
+            if (normalized === null) {
+                throw new LunoraError("BAD_REQUEST", `asId("${tableName}", …): "${id}" is not a valid id for table "${tableName}"`, { status: 400 });
+            }
+
+            return normalized;
+        },
+
         async count(tableName, whereOrOptions) {
             const global = globalWriterFor(tableName, "count");
 
@@ -2603,6 +2659,46 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             await onWrite({ id, op: "delete", table: tableName });
+        },
+
+        async deleteAll(tableName, allOptions) {
+            if (!schema.tables[tableName]) {
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
+            }
+
+            const chunkSize = Math.max(1, allOptions?.chunkSize ?? DEFAULT_BATCH_LIMIT);
+            let deleted = 0;
+
+            // Resolve-then-delete in chunks until the table is empty. Deliberately
+            // uncapped: this is the erasure primitive, so stopping at
+            // DEFAULT_BATCH_LIMIT would leave data behind — the opposite of the
+            // guarantee the caller needs. On a `.softDelete()` table the default
+            // flips the marker (so the loop must not re-read the same rows forever);
+            // `{ hard: true }` removes them physically.
+            for (;;) {
+                // eslint-disable-next-line no-await-in-loop -- chunked by design: one page of ids at a time, single-threaded SQLite
+                const page = await writer.findMany(tableName, { limit: chunkSize });
+                const ids = page.page.map((row) => String(row["_id"]));
+
+                if (ids.length === 0) {
+                    break;
+                }
+
+                for (const id of ids) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential by design: each row reuses the full delete pipeline (triggers, cascades, CDC, broadcast)
+                    await writer.delete(id, tableName, allOptions?.hard === undefined ? undefined : { hard: allOptions.hard });
+                    deleted += 1;
+                }
+
+                // A short page means the table is drained. This also makes the
+                // soft-delete case terminate: `findMany` hides soft-deleted rows, so
+                // each pass sees only rows still to erase, never the ones just marked.
+                if (ids.length < chunkSize) {
+                    break;
+                }
+            }
+
+            return { deleted };
         },
 
         async deleteMany(ids, batchOptions, expectedTable) {
@@ -3684,6 +3780,58 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             await onWrite({ doc: replaced, id, op: "update", table: tableName });
+        },
+
+        async wipeShard(wipeOptions) {
+            const excluded = new Set(wipeOptions?.exclude);
+            const requested = wipeOptions?.tables;
+
+            // Shard-local tables only. A `.global()` table's rows live in D1 and are
+            // shared by every shard, so sweeping them here would erase other tenants'
+            // data — "wipe this shard" must stop at the shard boundary.
+            const names = Object.entries(schema.tables)
+                .filter(([name, table]) => {
+                    if (excluded.has(name) || (requested !== undefined && !requested.includes(name))) {
+                        return false;
+                    }
+
+                    return (table as { shardMode?: { kind?: string } }).shardMode?.kind !== "global";
+                })
+                .map(([name]) => name);
+
+            if (requested !== undefined) {
+                for (const name of requested) {
+                    if (!schema.tables[name]) {
+                        throw new LunoraError("INTERNAL", `wipeShard: unknown table: ${name}`);
+                    }
+                }
+            }
+
+            const tables: Record<string, number> = {};
+            let deleted = 0;
+
+            // `deleteAll` is optional on the structural interface (the `.global()`
+            // twins omit it); this writer always implements it.
+            const { deleteAll } = writer;
+
+            if (deleteAll === undefined) {
+                throw new LunoraError("INTERNAL", "wipeShard: this writer has no deleteAll");
+            }
+
+            for (const name of names) {
+                // eslint-disable-next-line no-await-in-loop -- sequential by design: one table at a time so cascades from an earlier table are already applied
+                const result = await deleteAll(name, {
+                    ...(wipeOptions?.chunkSize === undefined ? {} : { chunkSize: wipeOptions.chunkSize }),
+                    // Erasure means gone, not marked: a soft delete would leave the
+                    // rows on disk, which defeats the point of the primitive.
+                    hard: true,
+                });
+
+                tables[name] = result.deleted;
+                deleted += result.deleted;
+            }
+
+            return { deleted, tables };
         },
     };
 

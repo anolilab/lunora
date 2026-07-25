@@ -71,6 +71,7 @@ interface GuardableWriter {
     aggregate: (tableName: string, options: unknown) => unknown;
     count: (tableName: string, whereOrArgs?: unknown) => unknown;
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => unknown;
+    deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => unknown;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => unknown;
     deleteWhere?: (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => unknown;
     findFirst: (tableName: string, args?: unknown) => unknown;
@@ -94,7 +95,68 @@ interface GuardableWriter {
     rankPage: (tableName: string, indexName: string, options?: unknown) => unknown;
     replace: (id: string, document: unknown, expectedTable?: string, options?: { allowExplicitId?: boolean }) => unknown;
     restore?: (id: string, expectedTable?: string) => unknown;
+    wipeShard?: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => unknown;
 }
+
+/**
+ * Gate a whole-shard sweep: every table the sweep would touch must pass `guardTable`.
+ *
+ * Under `.rls("required")` that means any non-`.public()` table in range denies the
+ * whole call — a shard-wide erase from a procedure that never engaged RLS is precisely
+ * what secure-by-default exists to stop. Hoisted out of {@link guardWriter} so its own
+ * complexity stays within budget.
+ */
+const guardShardSweep = (
+    tables: ReadonlyArray<string>,
+    options: { exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> } | undefined,
+    guardTable: (tableName: string) => void,
+): void => {
+    const requested = options?.tables;
+    const excluded = new Set(options?.exclude);
+
+    for (const tableName of tables) {
+        const inRange = (requested === undefined || requested.includes(tableName)) && !excluded.has(tableName);
+
+        if (inRange) {
+            guardTable(tableName);
+        }
+    }
+};
+
+/**
+ * The guarded forms of the two erase primitives, as a spreadable partial.
+ *
+ * Both are optional on {@link GuardableWriter} (the `.global()` twins omit them), and
+ * both are destructive enough that the `...raw` spread must never expose them
+ * unguarded. Built here rather than inline so {@link guardWriter} stays within its
+ * complexity budget.
+ */
+const guardEraseMethods = (base: GuardableWriter, schema: GuardableSchema, guardTable: (tableName: string) => void): Record<string, unknown> => {
+    const overrides: Record<string, unknown> = {};
+    const { deleteAll, wipeShard } = base;
+
+    if (deleteAll) {
+        // Table-level gate, like `deleteWhere` — this is the most destructive method
+        // on the writer.
+        overrides["deleteAll"] = (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => {
+            guardTable(tableName);
+
+            return deleteAll(tableName, options);
+        };
+    }
+
+    if (wipeShard) {
+        overrides["wipeShard"] = (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => {
+            // Denied outright while any swept table is protected — erase from an
+            // admin/system writer (built without `enforceRls`) instead.
+            guardShardSweep(Object.keys(schema.tables), options, guardTable);
+
+            return wipeShard(options);
+        };
+    }
+
+    return overrides;
+};
 
 /**
  * Wrap `raw` in the secure-by-default guard. A no-op (returns `raw` untouched)
@@ -157,6 +219,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
 
     const guarded: Record<PropertyKey, unknown> = {
         ...(raw as Record<string, unknown>),
+        ...guardEraseMethods(base, schema, guardTable),
         [RLS_UNWRAP_SYMBOL]: raw,
 
         aggregate: (tableName: string, options: unknown) => {
