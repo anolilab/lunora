@@ -1873,6 +1873,7 @@ interface TelemetrySink {
 ```ts
 interface TraceAnchor {
     rootSpanId: string;
+    sampled?: boolean;
     traceId: string;
 }
 ```

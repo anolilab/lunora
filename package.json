@@ -95,7 +95,7 @@
         "fallow": "catalog:lint",
         "prettier": "catalog:lint",
         "prettier-plugin-svelte": "catalog:lint",
-        "react-doctor": "0.8.1",
+        "react-doctor": "0.9.1",
         "rimraf": "catalog:node",
         "semantic-release": "catalog:web",
         "ts-morph": "catalog:tooling",

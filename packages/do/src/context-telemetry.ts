@@ -129,6 +129,14 @@ export interface ContextMetrics {
 /** The trace a ctx's spans hang off: the shared id, and the span they parent to. */
 export interface TraceAnchor {
     rootSpanId: string;
+
+    /**
+     * The W3C `sampled` verdict for this trace, inherited from the inbound
+     * `traceparent` when there was one. Carried on the anchor rather than
+     * re-derived per outbound call so every `ctx.fetch` of one dispatch
+     * propagates the same answer.
+     */
+    sampled?: boolean;
     traceId: string;
 }
 
@@ -590,7 +598,10 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
             // Set, not appended: a caller that already put a `traceparent` on the
             // request meant it, but our span is the immediate parent of whatever
             // the callee records, so ours is the correct one to send.
-            request.headers.set("traceparent", buildTraceparent(anchor.traceId, spanId, true));
+            // `anchor.sampled` — NOT a hardcoded `true`. Telling the callee a trace
+            // is sampled when it was sampled out upstream makes it record spans
+            // for a trace nobody kept, and the collector holds an orphan.
+            request.headers.set("traceparent", buildTraceparent(anchor.traceId, spanId, anchor.sampled ?? true));
         }
 
         // No separate `ok` flag: it is exactly `error === undefined` on every path
