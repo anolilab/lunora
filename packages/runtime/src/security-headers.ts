@@ -58,6 +58,23 @@ interface CorsOptions {
 
 /** Origin/CSRF guard configuration. */
 interface CsrfOptions {
+    /**
+     * Whether a loopback `Origin` is trusted **when the worker itself is serving on
+     * loopback**. Defaults to `true`.
+     *
+     * This is the local-development shape: the browser loads the app from the dev
+     * server on `localhost:3000` which proxies `/_lunora` to wrangler on
+     * `localhost:8787`. With `changeOrigin`, the worker sees its own URL as
+     * `:8787` while the browser's `Origin` stays `:3000`, so the two don't match and
+     * the cookie-bearing WS upgrade is rejected — the app then hangs on its loading
+     * state with no clue why. Both ends are loopback, so nothing cross-site can
+     * reach them.
+     *
+     * It cannot loosen production: the exemption requires the worker's OWN origin to
+     * be loopback, which a deployed worker's never is. Set `false` for a hardened
+     * local setup that wants the strict same-origin rule.
+     */
+    allowLoopback?: boolean;
     /** Extra origins (beyond same-origin and the CORS allowlist) accepted on unsafe cookie requests. */
     trustedOrigins?: string[];
 }
@@ -105,6 +122,7 @@ interface ResolvedCors {
 }
 
 interface ResolvedCsrf {
+    allowLoopback: boolean;
     enabled: boolean;
     trustedOrigins: string[];
 }
@@ -282,12 +300,12 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
 
 const resolveCsrf = (input: boolean | CsrfOptions | undefined): ResolvedCsrf => {
     if (input === false) {
-        return { enabled: false, trustedOrigins: [] };
+        return { allowLoopback: false, enabled: false, trustedOrigins: [] };
     }
 
     const options: CsrfOptions = input === undefined || input === true ? {} : input;
 
-    return { enabled: true, trustedOrigins: options.trustedOrigins ?? [] };
+    return { allowLoopback: options.allowLoopback ?? true, enabled: true, trustedOrigins: options.trustedOrigins ?? [] };
 };
 
 /** Env values that read as "disable this layer" for the `LUNORA_SECURITY_*` opt-out vars. */
@@ -369,6 +387,25 @@ const resolveSecurity = (security: SecurityOptions | undefined, env?: Record<str
  * Origin component of a URL string (e.g. a `Referer`), or `undefined` if unparseable.
  * @returns the origin string, or `undefined` when `value` is null/empty/unparseable.
  */
+/** Hostnames that can only ever be the local machine. */
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
+
+/**
+ * Whether `origin` addresses the local machine. Matches `localhost`, IPv4
+ * `127.0.0.1`, and IPv6 `[::1]` on any port/scheme.
+ *
+ * Deliberately narrow: a `*.localhost` subdomain or any other 127/8 address is NOT
+ * matched, because those can be pointed at by public DNS and are a known way to
+ * smuggle a "local" origin. Only the three canonical spellings count.
+ */
+const isLoopbackOrigin = (origin: string): boolean => {
+    try {
+        return LOOPBACK_HOSTNAMES.has(new URL(origin).hostname);
+    } catch {
+        return false;
+    }
+};
+
 const originOf = (value: string | null): string | undefined => {
     if (!value) {
         return undefined;
@@ -400,8 +437,40 @@ const isTrustedOrigin = (origin: string, selfOrigin: string, resolved: ResolvedS
         return true;
     }
 
+    // Dev-proxy exemption: both ends on loopback. Gated on the worker's OWN origin
+    // being loopback too, so a deployed worker (whose origin never is) cannot reach
+    // this branch. See `CsrfOptions.allowLoopback`.
+    if (resolved.csrf.allowLoopback && isLoopbackOrigin(selfOrigin) && isLoopbackOrigin(origin)) {
+        return true;
+    }
+
     return resolved.cors.enabled && resolved.cors.isExplicitlyAllowed(origin);
 };
+
+/**
+ * The 403 body for a rejected origin.
+ *
+ * Names the origin received, the origin expected, and the knob that fixes it. The
+ * old body said only "cross-origin state-changing request rejected", which behind a
+ * dev proxy is actively misleading: the request wasn't cross-*site*, the ports
+ * simply differed, and there was nothing in the response pointing at
+ * `security.csrf.trustedOrigins`.
+ */
+const forbiddenOriginResponse = (what: string, received: string | undefined, selfOrigin: string): Response =>
+    Response.json(
+        {
+            error: {
+                code: "FORBIDDEN_ORIGIN",
+                expectedOrigin: selfOrigin,
+                message:
+                    `${what} rejected: Origin ${received === undefined ? "was missing" : `"${received}"`} is not trusted (this worker serves "${selfOrigin}"). ` +
+                    "Add it to `security.csrf.trustedOrigins` (or LUNORA_ALLOWED_ORIGINS) if it is yours. " +
+                    "Behind a dev proxy this usually means the proxy rewrote the host: keep both ends on loopback, or list the dev-server origin.",
+                receivedOrigin: received,
+            },
+        },
+        { headers: { "content-type": "application/json" }, status: 403 },
+    );
 
 /**
  * CSRF defense: reject an unsafe (state-changing), **cookie-authenticated**
@@ -426,10 +495,7 @@ const enforceOrigin = (request: Request, resolved: ResolvedSecurity): Response |
         return undefined;
     }
 
-    return Response.json(
-        { error: { code: "FORBIDDEN_ORIGIN", message: "cross-origin state-changing request rejected" } },
-        { headers: { "content-type": "application/json" }, status: 403 },
-    );
+    return forbiddenOriginResponse("cross-origin state-changing request", source, selfOrigin);
 };
 
 /**
@@ -461,10 +527,7 @@ const enforceWebSocketOrigin = (request: Request, resolved: ResolvedSecurity): R
         return undefined;
     }
 
-    return Response.json(
-        { error: { code: "FORBIDDEN_ORIGIN", message: "cross-origin websocket upgrade rejected" } },
-        { headers: { "content-type": "application/json" }, status: 403 },
-    );
+    return forbiddenOriginResponse("cross-origin websocket upgrade", source, selfOrigin);
 };
 
 /** Build the `Access-Control-Allow-*` headers for an allowed cross-origin request. */
