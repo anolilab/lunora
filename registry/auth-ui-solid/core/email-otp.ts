@@ -115,9 +115,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
 
     return {
         actions,
-        destroy: () => {
-            store.set({ code: emptyField(), email: emptyField(), status: "idle", step: "request" });
-        },
+        destroy: store.clear,
         getState: store.get,
         subscribe: store.subscribe,
     };

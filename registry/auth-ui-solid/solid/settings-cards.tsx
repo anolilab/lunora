@@ -180,17 +180,20 @@ const SessionsCard = (): JSX.Element => {
                                 {(session) => (
                                     <li class="lunora-auth-list__item">
                                         <span class="lunora-auth-list__label">{sessionLabel(session, t)}</span>
-                                        <Show when={session.token !== undefined}>
-                                            <button
-                                                class="lunora-auth-link"
-                                                disabled={state.busy}
-                                                onClick={() => {
-                                                    void actions.revoke(session.token);
-                                                }}
-                                                type="button"
-                                            >
-                                                {t.revoke}
-                                            </button>
+                                        <Show when={session.token}>
+                                            {/* `Show` hands the narrowed value to the callback — no cast needed. */}
+                                            {(token) => (
+                                                <button
+                                                    class="lunora-auth-link"
+                                                    disabled={state.busy}
+                                                    onClick={() => {
+                                                        void actions.revoke(token());
+                                                    }}
+                                                    type="button"
+                                                >
+                                                    {t.revoke}
+                                                </button>
+                                            )}
                                         </Show>
                                     </li>
                                 )}
@@ -246,17 +249,20 @@ const PasskeysCard = (): JSX.Element => {
                             {(passkey) => (
                                 <li class="lunora-auth-list__item">
                                     <span class="lunora-auth-list__label">{passkeyLabel(passkey, t)}</span>
-                                    <Show when={passkey.id !== undefined}>
-                                        <button
-                                            class="lunora-auth-link"
-                                            disabled={state.busy}
-                                            onClick={() => {
-                                                void actions.remove(passkey.id);
-                                            }}
-                                            type="button"
-                                        >
-                                            {t.remove}
-                                        </button>
+                                    <Show when={passkey.id}>
+                                        {/* `Show` hands the narrowed value to the callback — no cast needed. */}
+                                        {(id) => (
+                                            <button
+                                                class="lunora-auth-link"
+                                                disabled={state.busy}
+                                                onClick={() => {
+                                                    void actions.remove(id());
+                                                }}
+                                                type="button"
+                                            >
+                                                {t.remove}
+                                            </button>
+                                        )}
                                     </Show>
                                 </li>
                             )}

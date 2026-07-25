@@ -32,13 +32,7 @@ export type { MembersActions, MembersController, MembersState } from "./members"
 export { createMembersController } from "./members";
 export type { OrganizationsActions, OrganizationsController } from "./organization-list";
 export { createOrganizationsController } from "./organization-list";
-export type {
-    OrganizationSettingsActions,
-    OrganizationSettingsController,
-    OrganizationSettingsField,
-    OrganizationSettingsOptions,
-    OrganizationSettingsState,
-} from "./organization-settings";
+export type { OrganizationSettingsField, OrganizationSettingsOptions } from "./organization-settings";
 export { createOrganizationSettingsController } from "./organization-settings";
 export type { PasskeysActions, PasskeysController } from "./passkeys";
 export { createPasskeysController } from "./passkeys";

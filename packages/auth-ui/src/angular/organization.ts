@@ -11,10 +11,11 @@ import { ChangeDetectionStrategy, Component, DestroyRef, inject, input, signal }
 
 import type {
     AuthOrganization,
+    FormActions,
+    FormState,
     MembersActions,
     MembersState,
-    OrganizationSettingsActions,
-    OrganizationSettingsState,
+    OrganizationSettingsField,
     OrganizationsActions,
     ResourceState,
 } from "../core";
@@ -257,8 +258,8 @@ class OrganizationSettingsCardComponent implements OnInit {
     private readonly destroyRef = inject(DestroyRef);
     protected readonly enabled = isFlowEnabled(this.context, "organization", "OrganizationSettingsCard");
     protected readonly t = this.context.localization;
-    protected state!: Signal<OrganizationSettingsState>;
-    protected actions!: OrganizationSettingsActions;
+    protected state!: Signal<FormState<OrganizationSettingsField>>;
+    protected actions!: FormActions<OrganizationSettingsField>;
 
     // Built in ngOnInit, not a field initializer: `organizationId()` is unbound
     // until Angular has set the inputs, so initializing here would silently pin

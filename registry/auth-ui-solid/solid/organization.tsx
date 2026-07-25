@@ -52,27 +52,32 @@ const OrganizationsCard = (): JSX.Element => {
                                     <li class="lunora-auth-list__item">
                                         <span class="lunora-auth-list__label">{organization.name ?? organization.slug}</span>
                                         <span class="lunora-auth-list__actions">
-                                            <Show when={organization.id !== undefined}>
-                                                <button
-                                                    class="lunora-auth-link"
-                                                    disabled={state.busy}
-                                                    onClick={() => {
-                                                        void actions.setActive(organization.id);
-                                                    }}
-                                                    type="button"
-                                                >
-                                                    {t.switchOrganization}
-                                                </button>
-                                                <button
-                                                    class="lunora-auth-link"
-                                                    disabled={state.busy}
-                                                    onClick={() => {
-                                                        void actions.remove(organization.id);
-                                                    }}
-                                                    type="button"
-                                                >
-                                                    {t.remove}
-                                                </button>
+                                            <Show when={organization.id}>
+                                                {/* `Show` hands the narrowed id to the callback — no cast needed. */}
+                                                {(id) => (
+                                                    <>
+                                                        <button
+                                                            class="lunora-auth-link"
+                                                            disabled={state.busy}
+                                                            onClick={() => {
+                                                                void actions.setActive(id());
+                                                            }}
+                                                            type="button"
+                                                        >
+                                                            {t.switchOrganization}
+                                                        </button>
+                                                        <button
+                                                            class="lunora-auth-link"
+                                                            disabled={state.busy}
+                                                            onClick={() => {
+                                                                void actions.remove(id());
+                                                            }}
+                                                            type="button"
+                                                        >
+                                                            {t.remove}
+                                                        </button>
+                                                    </>
+                                                )}
                                             </Show>
                                         </span>
                                     </li>
@@ -156,17 +161,20 @@ const MembersCard = (): JSX.Element => {
                                     <span class="lunora-auth-list__label">
                                         {member.user?.email ?? member.user?.name ?? member.userId} · {member.role}
                                     </span>
-                                    <Show when={member.id !== undefined}>
-                                        <button
-                                            class="lunora-auth-link"
-                                            disabled={state.busy}
-                                            onClick={() => {
-                                                void actions.removeMember(member.id);
-                                            }}
-                                            type="button"
-                                        >
-                                            {t.remove}
-                                        </button>
+                                    <Show when={member.id}>
+                                        {/* `Show` hands the narrowed value to the callback — no cast needed. */}
+                                        {(id) => (
+                                            <button
+                                                class="lunora-auth-link"
+                                                disabled={state.busy}
+                                                onClick={() => {
+                                                    id();
+                                                }}
+                                                type="button"
+                                            >
+                                                {t.remove}
+                                            </button>
+                                        )}
                                     </Show>
                                 </li>
                             )}
@@ -187,17 +195,20 @@ const MembersCard = (): JSX.Element => {
                                 <span class="lunora-auth-list__label">
                                     {invitation.email} · {invitation.role}
                                 </span>
-                                <Show when={invitation.id !== undefined}>
-                                    <button
-                                        class="lunora-auth-link"
-                                        disabled={state.busy}
-                                        onClick={() => {
-                                            void actions.cancelInvitation(invitation.id);
-                                        }}
-                                        type="button"
-                                    >
-                                        {t.cancel}
-                                    </button>
+                                <Show when={invitation.id}>
+                                    {/* `Show` hands the narrowed value to the callback — no cast needed. */}
+                                    {(id) => (
+                                        <button
+                                            class="lunora-auth-link"
+                                            disabled={state.busy}
+                                            onClick={() => {
+                                                void actions.cancelInvitation(id());
+                                            }}
+                                            type="button"
+                                        >
+                                            {t.cancel}
+                                        </button>
+                                    )}
                                 </Show>
                             </li>
                         )}

@@ -165,6 +165,8 @@ interface FormState<TField extends string> {
     fields: Record<TField, FieldState>;
     /** A top-level error not tied to a single field (mapped via `mapAuthError`). */
     formError?: string;
+    /** A `prefill` is in flight. Always false for flows that start empty. */
+    loading: boolean;
     status: FlowStatus;
     /** A human-readable success line (e.g. "Check your email"). */
     successMessage?: string;
@@ -173,13 +175,18 @@ interface FormState<TField extends string> {
 /** Actions every form controller exposes to its view. */
 interface FormActions<TField extends string> {
     blur: (field: TField) => void;
+    /** Re-run the flow's `prefill`; a no-op for flows that start empty. */
+    load: () => Promise<void>;
     reset: () => void;
     setField: (field: TField, value: string) => void;
     submit: () => Promise<void>;
 }
 
 /**
- * The external-store contract every controller implements. Frameworks wrap this:
+ * The external-store contract every controller implements.
+ *
+ * `destroy()` means **release subscribers** — it must not push a blanked state
+ * at views that are about to unmount. Frameworks wrap this:
  * React `useSyncExternalStore(subscribe, getState)`, Vue `shallowRef` +
  * `onScopeDispose`, Svelte `readable`, Solid `createStore`, Angular `signal`.
  */

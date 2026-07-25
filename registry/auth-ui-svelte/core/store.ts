@@ -1,11 +1,16 @@
 /**
- * A tiny immutable external store — the shared primitive under the bespoke
- * controllers (email OTP, and the later resource/list controllers) that don't
- * fit the single-form engine. `get` returns a stable reference between `set`s
+ * A tiny immutable external store — the shared primitive under every controller,
+ * the form engine included. `get` returns a stable reference between `set`s
  * (required by React's `useSyncExternalStore`); `set`/`update` swap in a fresh
- * object and notify.
+ * object and notify; `clear` drops subscribers for teardown.
  */
 interface Store<T> {
+    /**
+     * Drop every subscriber. This is what a controller's `destroy()` means:
+     * releasing listeners, **not** pushing an emptied state at views that are
+     * about to unmount.
+     */
+    clear: () => void;
     get: () => T;
     set: (next: T) => void;
     subscribe: (onChange: () => void) => () => void;
@@ -23,6 +28,9 @@ const createStore = <T extends object>(initial: T): Store<T> => {
     };
 
     return {
+        clear: () => {
+            listeners.clear();
+        },
         get: () => state,
         set: (next: T) => {
             state = next;

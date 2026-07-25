@@ -83,15 +83,20 @@ step, and what you read here is exactly what the user gets.
 
 ## Type-checking scope
 
-`tsconfig.json` and `eslint.config.js` cover `core/`, `react/`, and `angular/`.
-The Angular port earns its place by being plain `.ts` with inline templates — and
-it pays for itself: putting it in scope immediately caught a missing `input`
-import that would have shipped broken.
+`lint:types` runs two programs. `tsconfig.json` covers `core/`, `react/` and
+`angular/` (plain `.ts` with inline templates); `tsconfig.solid.json` covers the
+Solid port, which needs its own because one program can hold only one
+`jsx`/`jsxImportSource` pair.
 
-Vue and Svelte SFCs need their own toolchains, and Solid's JSX runtime clashes
-with `react-jsx`, so those three stay copy-only templates checked where they
-actually run: in the consumer's project, and in `examples/auth-playground` for
-React. Prettier still formats all five.
+Both earn their place. Putting Angular in scope immediately caught a missing
+`input` import; adding the Solid program caught six calls that had lost their
+type narrowing. Neither was visible to any test.
+
+Vue and Svelte SFCs need `vue-tsc` / `svelte-check` — separate toolchains rather
+than another tsconfig — so those two remain copy-only templates checked where
+they actually run: in the consumer's project. `eslint.config.js` still scopes to
+`core/` + `react/` (its type-aware rules follow the main program); Prettier
+formats all five.
 
 For the same reason `registry/tsconfig.json` excludes the `auth-ui-*` items from
 the backend-oriented registry typecheck.

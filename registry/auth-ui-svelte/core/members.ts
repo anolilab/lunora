@@ -73,9 +73,7 @@ const createMembersController = (context: ControllerContext, options: { autoLoad
             updateRole: (memberId: string, role: string) =>
                 mutate(async () => assertOk(await context.authClient.organization.updateMemberRole({ memberId, role }))),
         },
-        destroy: () => {
-            store.set({ busy: false, invitations: [], loading: false, members: [] });
-        },
+        destroy: store.clear,
         getState: store.get,
         subscribe: store.subscribe,
     };

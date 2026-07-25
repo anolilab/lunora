@@ -75,9 +75,7 @@ const createResourceController = <T>(
     }
 
     return {
-        destroy: () => {
-            store.set({ busy: false, items: [], loading: false, status: "idle" });
-        },
+        destroy: store.clear,
         getState: store.get,
         mutate,
         refetch,

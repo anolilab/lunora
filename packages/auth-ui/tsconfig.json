@@ -14,11 +14,14 @@
         // neither is load-bearing. Mirrors packages/react/tsconfig.json.
     },
     "include": ["src/**/*", "__tests__/**/*"],
-    // Vue/Svelte SFCs need their own toolchains and Solid's JSX runtime clashes
-    // with `react-jsx`, so those three ports stay copy-only templates, checked in
-    // the consumer's project after `lunora add auth-ui`. The Angular port is
-    // plain `.ts` with inline templates, so it type-checks here alongside `core/`
-    // (shared) + `react/`.
+    // This program covers `core/`, `react/` and `angular/` (plain `.ts` with
+    // inline templates). The Solid port has its own program — `tsconfig.solid.json`
+    // — because one program can hold only one `jsx`/`jsxImportSource` pair and
+    // this one is React's; `lint:types` runs both.
+    //
+    // Vue and Svelte SFCs still need `vue-tsc` / `svelte-check`, separate
+    // toolchains rather than another tsconfig, so those two remain copy-only
+    // templates checked in the consumer's project after `lunora add auth-ui`.
     "exclude": [
         "src/vue/**",
         "src/svelte/**",

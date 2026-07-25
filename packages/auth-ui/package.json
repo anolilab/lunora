@@ -34,7 +34,7 @@
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsc --noEmit && tsc -p tsconfig.solid.json --noEmit",
         "sync:registry": "node ../../scripts/sync-auth-ui-registry.mjs",
         "sync:registry:check": "node ../../scripts/sync-auth-ui-registry.mjs --check",
         "test": "vitest run",

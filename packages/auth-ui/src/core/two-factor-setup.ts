@@ -130,9 +130,7 @@ const createTwoFactorSetupController = (context: ControllerContext): TwoFactorSe
             },
             verify,
         },
-        destroy: () => {
-            store.set(initialState());
-        },
+        destroy: store.clear,
         getState: store.get,
         subscribe: store.subscribe,
     };
