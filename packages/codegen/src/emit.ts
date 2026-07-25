@@ -108,6 +108,9 @@ const assertIdentifier = (value: string, context: string): void => {
     }
 };
 
+/** Upper-case the first character — turns an emitted value name into its PascalCase type name. */
+const pascalCase = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1);
+
 /**
  * Emit a TS interface property: bare `name: T` when `name` is a JS identifier,
  * otherwise a quoted property name (`"weird name": T`). Quoted property names
@@ -1100,11 +1103,28 @@ export const createSeedClient = (options?: SeedClientOptions): SeedClient<Insert
 };
 
 /**
- * Emit `_generated/collections.ts` — one TanStack DB collection factory per
- * `defineShape` in `lunora/shapes.ts` (the local-first partial-replication
- * surface). Each factory builds a live collection that syncs its shape's rowset
- * through the client's poke protocol (`subscribeShape`), so an app feeds the
- * result straight to `useLiveQuery`.
+ * Emit `_generated/collections.ts` — a typed TanStack DB binding per `defineShape`
+ * in `lunora/shapes.ts` (the local-first partial-replication surface).
+ *
+ * Each shape emits **two** entry points.
+ *
+ * `&lt;shape>CollectionOptions(options)` is the composable form: it returns the full
+ * `LunoraCollectionOptions` — `config` for `createCollection`, plus `checkpoints`
+ * (which `bindMutators` gates optimistic overlays on) and `scope`. This is what an app
+ * with custom mutators needs, and what the old single-factory form made impossible: it
+ * built the collection internally and dropped `checkpoints` on the floor, so there was
+ * no way to wire mutators to the collection codegen produced.
+ *
+ * `&lt;shape>Collection(options)` is the convenience form for a read-only collection: it
+ * returns `{ checkpoints, collection, scope }` rather than a bare `Collection`, so the
+ * sync controls stay reachable even from the short path.
+ *
+ * Both are typed: `args` comes from the shape's own validators (a parameterless
+ * shape takes none), rows resolve to `Doc&lt;"table">` when the shape names its table
+ * with a literal, and `shardKey` / `getKey` / `load` / `onError` / `checkpoints` are
+ * all threadable — a sharded table needs `shardKey` for its watermark to land in the
+ * right bucket, and a server-minted `_id` that differs from the app's natural key
+ * needs `getKey`.
  *
  * Returns `""` (so `writeIfPresent` skips the file) unless the project both
  * declares shapes AND installs `@lunora/db` — the add-on that ships
@@ -1120,22 +1140,82 @@ const emitCollections = (shapes: ReadonlyArray<ShapeIR>, hasDatabase: boolean, u
 
     const base = baseSpecifiers(useUmbrella);
 
+    // `Doc<"table">` when the shape named its table with a string literal;
+    // otherwise the permissive `Row` (the runtime object stays authoritative).
+    const rowTypeOf = (shape: ShapeIR): string => (shape.table === undefined ? "Row" : `Doc<${JSON.stringify(shape.table)}> & Row`);
+
     const factories = shapes
         .map((shape) => {
             assertIdentifier(shape.exportName, "shape export name");
 
-            return `/** Live collection for the \`${shape.exportName}\` replication shape — pass the shape's validated \`args\` (its partition selector). */
-export const ${shape.exportName}Collection = (client: LunoraClient, args?: Record<string, unknown>): Collection<Row, string> =>
-    createCollection(lunoraCollectionOptions({ client, shape: { args, name: "${shape.exportName}" } }).config);`;
+            const rowType = rowTypeOf(shape);
+            const argsType = renderArgsType(shape.args);
+            const hasArgs = Object.keys(shape.args).length > 0;
+            // A parameterless shape must not demand an empty object; a parameterized
+            // one must not let the caller forget its partition selector.
+            const argsField = hasArgs ? `        args: ${argsType};` : `        args?: ${argsType};`;
+            const optionsType = `${shape.exportName}CollectionOptions`;
+
+            return `/** Options for the \`${shape.exportName}\` shape binding. */
+export interface ${pascalCase(optionsType)} {
+${argsField}
+    /**
+     * Share the optimistic-overlay gate with other collections + mutators on this
+     * shard. Defaults to the shared per-shard registry, which is almost always what
+     * you want — pass one only to isolate this collection's gate.
+     */
+    checkpoints?: CheckpointRegistry;
+    /** The Lunora client to subscribe through. */
+    client: LunoraClient;
+    /** Row key extractor — defaults to \`row._id\`. Override when the app keys rows by a natural column. */
+    getKey?: (row: ${rowType}) => string;
+    /** \`"eager"\` starts syncing at creation; \`"lazy"\` (default) on the first subscriber. */
+    load?: "eager" | "lazy";
+    /** Notified when the underlying subscription errors; the collection always leaves \`loading\`. */
+    onError?: (error: SubscriptionError) => void;
+    /** Routes the subscription to a shard's DO. **Required for a \`.shardBy()\` table** — without it the watermark lands in the default bucket. */
+    shardKey?: string;
+}
+
+/**
+ * Collection options for the \`${shape.exportName}\` replication shape: \`config\` for
+ * \`createCollection\`, plus the \`checkpoints\` registry to hand \`bindMutators\` and
+ * \`scope\` to re-point the subscription.
+ */
+export const ${shape.exportName}CollectionOptions = (options: ${pascalCase(optionsType)}): LunoraCollectionOptions<${rowType}> =>
+    lunoraCollectionOptions<${rowType}>({
+        client: options.client,
+        ...(options.checkpoints === undefined ? {} : { checkpoints: options.checkpoints }),
+        ...(options.getKey === undefined ? {} : { getKey: options.getKey }),
+        ...(options.load === undefined ? {} : { load: options.load }),
+        ...(options.onError === undefined ? {} : { onError: options.onError }),
+        ...(options.shardKey === undefined ? {} : { shardKey: options.shardKey }),
+        shape: { args: options.args, name: ${JSON.stringify(shape.exportName)}, ...(options.shardKey === undefined ? {} : { shardKey: options.shardKey }) },
+    });
+
+/** Live collection for the \`${shape.exportName}\` shape, with its sync controls. */
+export const ${shape.exportName}Collection = (
+    options: ${pascalCase(optionsType)},
+): { checkpoints: CheckpointRegistry; collection: Collection<${rowType}, string>; scope: (args?: Record<string, unknown>) => void } => {
+    const { checkpoints, config, scope } = ${shape.exportName}CollectionOptions(options);
+
+    return { checkpoints, collection: createCollection(config), scope };
+};`;
         })
         .join("\n\n");
 
-    return `${GENERATED_HEADER}import type { LunoraClient } from "${base.client}";
+    // Import only the dataModel helpers the rendered types actually reference —
+    // `Doc` for a row type, `Id` when a shape's args carry a `v.id(...)`. Importing
+    // an unused one trips noUnusedLocals in the consuming project.
+    const dataModelImports = referencedDataModelImports(factories);
+    const dataModelImportLine = dataModelImports.length > 0 ? `import type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
+
+    return `${GENERATED_HEADER}import type { LunoraClient, SubscriptionError } from "${base.client}";
 import { lunoraCollectionOptions } from "@lunora/db/collections";
-import type { Row } from "@lunora/db";
+import type { CheckpointRegistry, LunoraCollectionOptions, Row } from "@lunora/db";
 import type { Collection } from "@tanstack/db";
 import { createCollection } from "@tanstack/db";
-
+${dataModelImportLine}
 ${factories}
 `;
 };
@@ -3747,7 +3827,12 @@ const emitShard = ({
             // args then runs the shape's \`where(ctx, args)\` under that identity,
             // so which rows replicate is a server decision (reads-as-permissions).
             const ctx = this.buildCtx({ functionPath: \`__shape__:\${name}\`, identity });
-            const shapeWhere = shape.compileWhere(ctx, args) as unknown as WhereInput;
+            // \`ownerField\` resolves an \`owner: true\` shape: only here is the table's
+            // \`.ownedBy(field)\` column in scope, so the DO hands it to the shape
+            // rather than every shape restating the ownership check in its \`where\`.
+            const shapeWhere = shape.compileWhere(ctx, args, {
+                ownerField: (schema as unknown as { tables: Record<string, { ownerField?: string }> }).tables[shape.table]?.ownerField,
+            }) as unknown as WhereInput;
 
             // AND-compose with the table's RLS read base-where. A shape runs no
             // procedure, so the \`.use(rls(...))\` middleware never fires; without

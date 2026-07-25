@@ -245,8 +245,8 @@ export const sendMessage = defineMutator({
                 expect(result.generated.shard).toContain("protected override isCustomMutator");
             });
 
-            it("emits _generated/collections.ts (one factory per shape) when @lunora/db is a dependency", () => {
-                expect.assertions(4);
+            it("emits _generated/collections.ts (options factory + collection per shape) when @lunora/db is a dependency", () => {
+                expect.assertions(9);
 
                 writeShapes();
                 writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/db": "*" }, name: "db-app" }));
@@ -254,9 +254,21 @@ export const sendMessage = defineMutator({
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
                 expect(result.generated.collections).toContain('import { lunoraCollectionOptions } from "@lunora/db/collections"');
-                expect(result.generated.collections).toContain('import type { LunoraClient } from "@lunora/client"');
+                expect(result.generated.collections).toContain('import type { LunoraClient, SubscriptionError } from "@lunora/client"');
+                // The composable form returns `checkpoints` + `scope`, so an app with
+                // custom mutators can actually use what codegen produced.
+                expect(result.generated.collections).toContain("export const channelMessagesCollectionOptions");
                 expect(result.generated.collections).toContain("export const channelMessagesCollection");
-                expect(result.generated.collections).toContain('shape: { args, name: "channelMessages" }');
+                // eslint-disable-next-line no-secrets/no-secrets -- a generated TS type name, not a credential
+                expect(result.generated.collections).toContain('LunoraCollectionOptions<Doc<"messages"> & Row>');
+                expect(result.generated.collections).toContain('name: "channelMessages"');
+                // The shape's own validators type its partition selector, instead of the
+                // caller passing an opaque `Record<string, unknown>`.
+                expect(result.generated.collections).toContain('args: { channelId: Id<"channels"> };');
+                // `shardKey` reaches the subscription (a `.shardBy()` table needs it for
+                // the watermark to land in the right bucket) and `getKey` is overridable.
+                expect(result.generated.collections).toContain("shardKey?: string;");
+                expect(result.generated.collections).toContain('getKey?: (row: Doc<"messages"> & Row) => string;');
             });
 
             it("routes the collection client import through the umbrella but keeps @lunora/db scoped", () => {
@@ -268,7 +280,7 @@ export const sendMessage = defineMutator({
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
                 // @lunora/client is in the umbrella base → remapped.
-                expect(result.generated.collections).toContain('import type { LunoraClient } from "lunorash/client"');
+                expect(result.generated.collections).toContain('import type { LunoraClient, SubscriptionError } from "lunorash/client"');
                 // @lunora/db is an opt-in add-on → stays scoped even under the umbrella.
                 expect(result.generated.collections).toContain('from "@lunora/db/collections"');
                 expect(result.generated.collections).not.toContain('from "lunorash/db');
@@ -1847,7 +1859,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).not.toContain("config.d1?.(env");
         });
 
-        const settingsShape: ShapeIR = { exportName: "allSettings", filePath: "shapes", table: "settings" };
+        const settingsShape: ShapeIR = { args: {}, exportName: "allSettings", filePath: "shapes", table: "settings" };
 
         it("emits the global-shape poll override when a project has shapes AND a `.global()` table", () => {
             expect.assertions(3);
@@ -1871,7 +1883,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                     ],
                     vectorIndexes: [],
                 },
-                shapes: [{ exportName: "msgs", filePath: "shapes", table: "messages" }],
+                shapes: [{ args: {}, exportName: "msgs", filePath: "shapes", table: "messages" }],
             });
 
             expect(output).not.toContain("protected override async readGlobalShapeRows");

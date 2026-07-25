@@ -304,6 +304,12 @@ export interface MigrationIR {
  * because the runtime object (`columns`/`compileWhere`) carries the authority.
  */
 export interface ShapeIR {
+    /**
+     * The shape's `args` validator map — its partition selector. Lifted so
+     * `_generated/collections.ts` can type the selector a caller passes instead of
+     * widening it to `Record&lt;string, unknown>`. `{}` for a parameterless shape.
+     */
+    args: Record<string, ValidatorIR>;
     /** Export binding name — the shape's registry key and import member. */
     exportName: string;
     /** Path relative to `&lt;projectRoot>/lunora/` without extension — always `"shapes"`. */
