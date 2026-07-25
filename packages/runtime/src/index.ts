@@ -152,6 +152,16 @@ export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, Res
 export { argsFromQuery, buildRestRoutes, createRestRateLimit, readShardKey, restSurfaceFromRegistry } from "./rest-routes";
 export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
 export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
+export type {
+    ShardCallArgs,
+    ShardCallerIdentity,
+    ShardCallOptions,
+    ShardCallReturn,
+    ShardClient,
+    ShardClientOptions,
+    ShardFunctionReference,
+} from "./shard-client";
+export { createShardClient } from "./shard-client";
 export type { TraceTrustSignal, TrustInboundTraceContext } from "./trace-trust";
 
 export const VERSION: string = "0.0.0";
