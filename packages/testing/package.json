@@ -1,6 +1,6 @@
 {
     "name": "@lunora/testing",
-    "version": "1.0.0-alpha.57",
+    "version": "1.0.0-alpha.58",
     "description": "Testing toolkit for Lunora: an in-memory harness for queries, mutations, and actions",
     "keywords": [
         "cloudflare",
@@ -65,7 +65,7 @@
     },
     "dependencies": {
         "@lunora/agent": "1.0.0-alpha.12",
-        "@lunora/do": "1.0.0-alpha.46",
+        "@lunora/do": "1.0.0-alpha.47",
         "@lunora/errors": "1.0.0-alpha.8",
         "@lunora/mail": "1.0.0-alpha.18",
         "@lunora/server": "1.0.0-alpha.33"
