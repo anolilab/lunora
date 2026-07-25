@@ -44,7 +44,7 @@ describe("@lunora/platform contracts", () => {
                 // three shapes the engine's read paths use.
                 exec: () => {
                     return {
-                        * [Symbol.iterator]() {
+                        *[Symbol.iterator]() {
                             // no rows
                         },
                         one: () => {
