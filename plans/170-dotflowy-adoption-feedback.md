@@ -9,6 +9,21 @@ editor replacing a hand-rolled per-user-DO sync engine with `defineTable().shard
 Better Auth / Stripe / MCP Worker. Every workaround in it is a spec for something Lunora
 should own. Findings below are ordered by severity; each states the evidence.
 
+> **Status.** All 21 findings were implemented in PR #187, so the "**Fix.**" paragraphs
+> below read as the rationale for a change that has already landed, not as a proposal.
+> Three sub-items of those fixes were deliberately left out and are **still open**:
+>
+> - **#8** — the advisor lint for a `where` branch returning `{}` / `undefined`. `deny()`
+>   is exported and documented, but nothing yet _catches_ the dangerous near-miss
+>   statically, which is the half that would have prevented the original mistake.
+> - **#10** — `ctx.db.asId` is generic over `T extends string`, not narrowed to the
+>   generated `TableName` the way `db.get` / `db.query` are, so `asId("typo", id)` still
+>   compiles. And schema extensions have no namespace, so `ratelimit_buckets` still leaks
+>   into an app's hand-written table unions.
+> - **#21** — `client.debug()` exists; the Studio panel that reads it does not.
+>
+> Each is a smaller, self-contained follow-up rather than a gap in the shipped surface.
+
 ---
 
 ## P0 — Confirmed defects
