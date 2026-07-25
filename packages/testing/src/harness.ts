@@ -332,10 +332,23 @@ const createRecordingSpan = (): { handle: SpanHandle; recorded: RecordedWideEven
             recorded.links.push({ spanId: link.spanId, traceId: link.traceId });
         },
         recordException: (error) => {
-            handle.addEvent("exception", {
+            // Mirrors the production recorder's attribute set, `exception.stacktrace`
+            // included: a test that asserts on the harness's exception events should
+            // see the same shape a collector would, or it silently passes against a
+            // narrower record than the one that ships.
+            const attributes: LogFields = {
                 "exception.message": error instanceof Error ? error.message : String(error),
+                // NOTE: production prefers a `LunoraError`'s stable `code` here (via
+                // `toErrorType`), which is not exported from `@lunora/do`. For a
+                // plain Error — the common case in a test — the two agree.
                 "exception.type": error instanceof Error ? error.constructor.name : "Error",
-            });
+            };
+
+            if (error instanceof Error && error.stack !== undefined) {
+                attributes["exception.stacktrace"] = error.stack;
+            }
+
+            handle.addEvent("exception", attributes);
         },
         setAttribute: (key, value) => {
             recorded.attributes[key] = value;

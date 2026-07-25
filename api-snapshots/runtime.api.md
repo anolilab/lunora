@@ -1094,6 +1094,7 @@ interface LogArchiveConfig {
 ```ts
 interface LogEvent {
     args: unknown[];
+    eventName?: string;
     fields?: LogFields;
     functionPath: string;
     level: ContextLogLevel;
@@ -1307,11 +1308,16 @@ interface ObservabilityEvent {
 
 ```ts
 interface ObservabilitySink {
+    flush?: (context?: ObservabilitySinkContext) => void;
     fuseCloudflareTraces?: boolean;
+    instrumentDatabase?: "off" | "spans" | "summary";
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
     onMetric?: (event: MetricEvent, context?: ObservabilitySinkContext) => void;
     onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
     onSpan?: (event: SpanEvent, context?: ObservabilitySinkContext) => void;
+    traceFetch?: boolean | {
+        propagate?: ((url: URL) => boolean) | boolean;
+    };
 }
 ```
 
@@ -1331,14 +1337,17 @@ type OtlpResourceAttributes = Record<string, OtlpAttributeValue>;
 
 ```ts
 interface OtlpSinkOptions extends OnlyErrorsOption {
+    batch?: OtlpBatchOptions | false;
     deploymentEnvironment?: string;
     detectResources?: boolean;
     endpoint: string;
     headers?: Record<string, string>;
+    postProcessor?: OtlpPostProcessor;
     resourceAttributes?: OtlpResourceAttributes;
     serviceName?: string;
     serviceNamespace?: string;
     serviceVersion?: string;
+    tailSampler?: TailSampler;
     token?: string;
 }
 ```
@@ -1496,7 +1505,7 @@ interface RankFanOutResult {
 
 ### `RankPageDirection` (type)
 
-Re-exported from `@lunora/do` — signature tracked at its source.
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `RankPageFanOutRequest` (interface)
 
@@ -1528,11 +1537,11 @@ interface RankPageFanOutResult {
 
 ### `RankPageKey` (interface)
 
-Re-exported from `@lunora/do` — signature tracked at its source.
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `RankPageRow` (interface)
 
-Re-exported from `@lunora/do` — signature tracked at its source.
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `RateLimiterLike` (interface)
 
@@ -1889,7 +1898,7 @@ interface ShardRankPageOutcome {
 
 ### `ShardRankPageResult` (interface)
 
-Re-exported from `@lunora/do` — signature tracked at its source.
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ShardRegistry` (interface)
 
@@ -1944,11 +1953,14 @@ interface ShardingInfo {
 interface SpanEvent {
     attributes?: LogFields;
     durationMs: number;
+    events?: SpanEventPoint[];
     error?: {
         message: string;
         type: string;
     };
     functionPath: string;
+    kind?: OtlpSpanKind;
+    links?: SpanLink[];
     name: string;
     ok: boolean;
     parentSpanId: string;
@@ -2290,12 +2302,7 @@ const defineRpcEnvelope: (envelope: RpcEnvelope) => RpcEnvelope;
 ### `durableObjectProbe` (const)
 
 ```ts
-const durableObjectProbe: (name: string, namespace: {
-    get: (id: unknown) => {
-        fetch: (request: Request) => Promise<Response>;
-    };
-    idFromName: (id: string) => unknown;
-}, shardKey: string) => HealthProbe;
+const durableObjectProbe: (name: string, namespace: ShardNamespaceLike, shardKey: string) => HealthProbe;
 ```
 
 ### `emitLogEvent` (const)

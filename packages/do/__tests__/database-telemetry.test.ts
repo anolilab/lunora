@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
-import { instrumentDatabase } from "../src/database-telemetry";
+import type { SpanEvent } from "../../../shared/span-event";
+import type { DatabaseTally } from "../src/database-telemetry";
+import { createDatabaseTally, formatTally, instrumentDatabase } from "../src/database-telemetry";
 
 /**
  * Automatic `ctx.db` instrumentation.
@@ -13,46 +14,14 @@ import { instrumentDatabase } from "../src/database-telemetry";
  * a cheap-but-present proxy.
  */
 
-/** A recording {@link SpanHandle} standing in for `ctx.span`. */
-const recordingSpan = (): { handle: SpanHandle; recorded: Record<string, unknown> } => {
-    const recorded: Record<string, unknown> = {};
-
-    return {
-        handle: {
-            addEvent: () => undefined,
-            addLink: () => undefined,
-            recordException: () => undefined,
-            setAttribute: (key, value) => {
-                recorded[key] = value;
-            },
-            setAttributes: (fields) => {
-                Object.assign(recorded, fields);
-            },
-            spanContext: () => {
-                return { spanId: "0000000000000001", traceId: "00000000000000000000000000000001" };
-            },
-        },
-        recorded,
-    };
-};
-
-/**
- * The tally is published once, at dispatch end, through `registerFlush`. Tests
- * capture that callback and invoke it where the dispatch would, so what they
- * assert on is the same fold the shard performs rather than a side effect of
- * the per-call path.
- */
-const deps = (mode: "off" | "spans" | "summary", span: SpanHandle, record: (span: SpanEvent) => void, flushes: (() => void)[] = []) => {
+const deps = (mode: "off" | "spans" | "summary", tally: DatabaseTally, record: (span: SpanEvent) => void) => {
     return {
         anchor: { rootSpanId: "b7ad6b7169203331", traceId: "0af7651916cd43dd8448eb211c80319c" },
         functionPath: "orders:checkout",
         mode,
         record,
-        registerFlush: (flush: () => void) => {
-            flushes.push(flush);
-        },
         shardKey: "tenant-1",
-        span,
+        tally,
         userId: () => "u-1",
     };
 };
@@ -71,62 +40,43 @@ const fakeDatabase = () => {
     };
 };
 
-/** Fold the dispatch's deferred attributes, standing in for the shard's `finally`. */
-const endDispatch = (flushes: (() => void)[]): void => {
-    for (const flush of flushes) {
-        flush();
-    }
-};
-
 describe("instrumentDatabase", () => {
     it("returns the database untouched when off", () => {
         expect.assertions(1);
 
         const database = fakeDatabase();
-        const span = recordingSpan();
+        const tally = createDatabaseTally();
 
         // Identity, not an equivalent proxy: a deployment collecting nothing
         // should not pay even for the indirection.
         expect(
             instrumentDatabase(
                 database,
-                deps("off", span.handle, () => undefined),
+                deps("off", tally, () => undefined),
             ),
         ).toBe(database);
     });
 
     it("folds aggregate counters onto the wide event in summary mode", async () => {
-        expect.assertions(5);
+        expect.assertions(4);
 
         const database = fakeDatabase();
-        const span = recordingSpan();
+        const tally = createDatabaseTally();
         const spans: SpanEvent[] = [];
-        const flushes: (() => void)[] = [];
         const instrumented = instrumentDatabase(
             database,
-            deps(
-                "summary",
-                span.handle,
-                (recorded) => {
-                    spans.push(recorded);
-                },
-                flushes,
-            ),
+            deps("summary", tally, (recorded) => {
+                spans.push(recorded);
+            }),
         );
 
         await instrumented.findMany("orders");
         await instrumented.findMany("orders");
         await instrumented.insert("orders", { total: 1 });
 
-        // Nothing is on the wide event until the dispatch ends: the tally is
-        // folded once, not republished after each call.
-        expect(span.recorded["db.calls"]).toBeUndefined();
-
-        endDispatch(flushes);
-
-        expect(span.recorded["db.calls"]).toBe(3);
-        expect(span.recorded["db.op.findMany"]).toBe(2);
-        expect(span.recorded["db.op.insert"]).toBe(1);
+        expect(formatTally(tally)["db.calls"]).toBe(3);
+        expect(formatTally(tally)["db.op.findMany"]).toBe(2);
+        expect(formatTally(tally)["db.op.insert"]).toBe(1);
         // The defining property of summary mode: no spans, however many calls.
         expect(spans).toHaveLength(0);
     });
@@ -138,31 +88,28 @@ describe("instrumentDatabase", () => {
 
         database.insert.mockRejectedValueOnce(new Error("constraint violated"));
 
-        const span = recordingSpan();
-        const flushes: (() => void)[] = [];
+        const tally = createDatabaseTally();
         const instrumented = instrumentDatabase(
             database,
-            deps("summary", span.handle, () => undefined, flushes),
+            deps("summary", tally, () => undefined),
         );
 
         // Instrumentation, never flow control — the original error reaches the caller.
         await expect(instrumented.insert("orders", {})).rejects.toThrow("constraint violated");
 
-        endDispatch(flushes);
-
-        expect(span.recorded["db.errors"]).toBe(1);
-        expect(span.recorded["db.calls"]).toBe(1);
+        expect(formatTally(tally)["db.errors"]).toBe(1);
+        expect(formatTally(tally)["db.calls"]).toBe(1);
     });
 
     it("emits one CLIENT span per call in spans mode, named without row ids", async () => {
         expect.assertions(4);
 
         const database = fakeDatabase();
-        const span = recordingSpan();
+        const tally = createDatabaseTally();
         const spans: SpanEvent[] = [];
         const instrumented = instrumentDatabase(
             database,
-            deps("spans", span.handle, (recorded) => {
+            deps("spans", tally, (recorded) => {
                 spans.push(recorded);
             }),
         );
@@ -180,19 +127,13 @@ describe("instrumentDatabase", () => {
         expect.assertions(3);
 
         const database = fakeDatabase();
-        const span = recordingSpan();
+        const tally = createDatabaseTally();
         const spans: SpanEvent[] = [];
-        const flushes: (() => void)[] = [];
         const instrumented = instrumentDatabase(
             database,
-            deps(
-                "spans",
-                span.handle,
-                (recorded) => {
-                    spans.push(recorded);
-                },
-                flushes,
-            ),
+            deps("spans", tally, (recorded) => {
+                spans.push(recorded);
+            }),
         );
 
         for (let index = 0; index < 150; index += 1) {
@@ -200,24 +141,22 @@ describe("instrumentDatabase", () => {
             await instrumented.findMany("orders");
         }
 
-        endDispatch(flushes);
-
         expect(spans).toHaveLength(100);
         // Every call still counts toward the summary — only the individual spans
         // are dropped, so the totals stay honest.
-        expect(span.recorded["db.calls"]).toBe(150);
+        expect(formatTally(tally)["db.calls"]).toBe(150);
         // A silently partial waterfall is worse than a labelled one.
-        expect(span.recorded["db.spans_truncated"]).toBe(true);
+        expect(formatTally(tally)["db.spans_truncated"]).toBe(true);
     });
 
     it("passes non-storage members through untouched", () => {
         expect.assertions(2);
 
         const database = fakeDatabase();
-        const span = recordingSpan();
+        const tally = createDatabaseTally();
         const instrumented = instrumentDatabase(
             database,
-            deps("spans", span.handle, () => undefined),
+            deps("spans", tally, () => undefined),
         );
 
         // `query` returns a chainable builder and does no I/O; wrapping it would
@@ -230,10 +169,10 @@ describe("instrumentDatabase", () => {
         expect.assertions(1);
 
         const database = fakeDatabase();
-        const span = recordingSpan();
+        const tally = createDatabaseTally();
         const instrumented = instrumentDatabase(
             database,
-            deps("spans", span.handle, () => undefined),
+            deps("spans", tally, () => undefined),
         );
 
         // Repeated property access must not mint a new closure each time —

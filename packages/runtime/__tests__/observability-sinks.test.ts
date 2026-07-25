@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LogEvent, LogLevel, MetricEvent, ObservabilityEvent, SpanEvent } from "../src/observability";
 import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks";
 import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, sentrySink, webhookSink } from "../src/observability-sinks";
+import { createResourceAttributeResolver } from "../src/resource-detect";
 
 const okEvent: ObservabilityEvent = { durationMs: 5, functionPath: "messages:list", ok: true, shardKey: "channel-1" };
 
@@ -69,8 +70,6 @@ interface ParsedSpan {
         name: string;
         timeUnixNano: string;
     }[];
-    /** W3C trace flags — the sampled bit. Set on the RPC dispatch span. */
-    flags?: number;
     kind: number;
     name: string;
     /** Absent on the RPC dispatch span; set on a `ctx.trace` span. */
@@ -538,6 +537,48 @@ describe("observability-sinks", () => {
     });
 
     describe("combineSinks", () => {
+        it("forwards flush to every batching child", async () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const plain = vi.fn<(event: ObservabilityEvent) => void>();
+            // The documented pairing: a batching network sink behind combineSinks
+            // alongside a non-batching one.
+            const sink = combineSinks(otlpSink({ endpoint: "https://collector.example" }), { onRpc: plain });
+
+            sink.onRpc!(okEvent);
+
+            expect(fetchMock).toHaveBeenCalledTimes(0);
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            // Without flush fan-out the wrapped sink never ships at the invocation
+            // boundary, and its buffer dies with the isolate.
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(plain).toHaveBeenCalledTimes(1);
+
+            vi.unstubAllGlobals();
+        });
+
+        it("tolerates a child with no flush", () => {
+            expect.assertions(1);
+
+            const sink = combineSinks({ onRpc: vi.fn<(event: ObservabilityEvent) => void>() });
+
+            expect(() => {
+                sink.flush!();
+            }).not.toThrow();
+        });
+
         it("fans out to every child sink", () => {
             expect.assertions(2);
 
@@ -786,33 +827,6 @@ describe("observability-sinks", () => {
             // The span rides the ids the runtime propagated as `traceparent`, not fresh ones.
             expect(span.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
             expect(span.spanId).toBe("b7ad6b7169203331");
-        });
-
-        // The sampled bit is the only thing telling a collector whether a trace
-        // was head-sampled. It was silently dropped once in a hand-merge; this is
-        // the assertion that would have caught it.
-        it("propagates W3C trace flags onto the RPC span", async () => {
-            expect.assertions(2);
-
-            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
-            vi.stubGlobal("fetch", fetchMock);
-
-            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
-
-            sink.onRpc!({ ...okEvent, traceFlags: 1 });
-            await otlpCalls(fetchMock, 1);
-
-            const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
-
-            expect(span.flags).toBe(1);
-
-            // An unsampled trace must say so rather than omit the field, or a
-            // collector cannot distinguish "not sampled" from "old exporter".
-            fetchMock.mockClear();
-            sink.onRpc!({ ...okEvent, traceFlags: 0 });
-            await otlpCalls(fetchMock, 1);
-
-            expect(spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]).span.flags).toBe(0);
         });
 
         it("encodes error status, error.type, and the status message for a failed event", async () => {
@@ -1125,9 +1139,6 @@ describe("observability-sinks", () => {
             vi.stubGlobal("fetch", fetchMock);
 
             const sink = otlpSink({
-                // Per-event POSTs: this asserts one envelope per signal, which is
-                // the unbatched shape. Batching (now the default) coalesces them.
-                batch: false,
                 deploymentEnvironment: "production",
                 endpoint: "https://collector.example",
                 resourceAttributes: { "host.name": "worker-1", "service.instance.id": "i-abc" },
@@ -1142,22 +1153,9 @@ describe("observability-sinks", () => {
 
             await otlpCalls(fetchMock, 3);
 
-            // Select by endpoint, not call order: a body over OTLP_GZIP_THRESHOLD
-            // is compressed first and therefore POSTs a microtask later than a
-            // smaller one, so positional indexing is order-dependent.
-            const callFor = (suffix: string): RequestInit => {
-                const call = (fetchMock.mock.calls as unknown as [string, RequestInit][]).find(([url]) => url.endsWith(suffix));
-
-                if (call === undefined) {
-                    throw new Error(`no OTLP post to ${suffix}`);
-                }
-
-                return call[1];
-            };
-
-            const { resourceAttributes: spanResource } = spanFrom(callFor("/v1/traces"));
-            const { resourceAttributes: logResource } = logFrom(callFor("/v1/logs"));
-            const { metric, resourceAttributes: metricResource } = metricExportFrom(callFor("/v1/metrics"));
+            const { resourceAttributes: spanResource } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+            const { resourceAttributes: logResource } = logFrom((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1]);
+            const { metric, resourceAttributes: metricResource } = metricExportFrom((fetchMock.mock.calls[2] as unknown as [string, RequestInit])[1]);
 
             // service.name is always present; convenience fields + custom resourceAttributes are merged.
             expect(attrValue(spanResource, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
@@ -1209,124 +1207,6 @@ describe("observability-sinks", () => {
             expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "overridden" });
         });
 
-        describe("detectResources", () => {
-            /** A sink context carrying pre-resolved detected attributes, as the runtime builds it. */
-            const contextWith = (attributes: Record<string, string>) => {
-                return { resourceAttributes: () => attributes };
-            };
-
-            it("ignores detected attributes unless detectResources is enabled", async () => {
-                expect.assertions(2);
-
-                const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
-                vi.stubGlobal("fetch", fetchMock);
-
-                const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
-
-                sink.onRpc!(okEvent, contextWith({ "cloud.region": "weur" }));
-                await otlpCalls(fetchMock, 1);
-
-                const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
-
-                expect(attrValue(resourceAttributes, "cloud.region")).toBeUndefined();
-                expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "lunora" });
-            });
-
-            it("merges detected attributes under the explicit options when enabled", async () => {
-                expect.assertions(3);
-
-                const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
-                vi.stubGlobal("fetch", fetchMock);
-
-                const sink = otlpSink({
-                    batch: false,
-                    detectResources: true,
-                    endpoint: "https://collector.example",
-                    serviceVersion: "explicit",
-                });
-
-                // `service.version` is set both ways: the explicit option must win.
-                sink.onRpc!(okEvent, contextWith({ "cloud.region": "weur", "service.version": "detected" }));
-                await otlpCalls(fetchMock, 1);
-
-                const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
-
-                expect(attrValue(resourceAttributes, "cloud.region")).toStrictEqual({ stringValue: "weur" });
-                expect(attrValue(resourceAttributes, "service.version")).toStrictEqual({ stringValue: "explicit" });
-                expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "lunora" });
-            });
-
-            it("resolves the detected bag once per request, not once per event", async () => {
-                expect.assertions(1);
-
-                const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
-                vi.stubGlobal("fetch", fetchMock);
-
-                const resolve = vi.fn<() => Record<string, string>>(() => {
-                    return { "cloud.region": "weur" };
-                });
-                const context = { resourceAttributes: resolve };
-                const sink = otlpSink({ batch: false, detectResources: true, endpoint: "https://collector.example" });
-
-                // Four events, one request. Detection is a per-request constant, so
-                // re-running it per event would put the probes on the hot path.
-                sink.onRpc!(okEvent, context);
-                sink.onRpc!(okEvent, context);
-                sink.onMetric!(metricEvent, context);
-                sink.onSpan!(spanEvent, context);
-                await otlpCalls(fetchMock, 4);
-
-                expect(resolve).toHaveBeenCalledTimes(1);
-            });
-
-            it("splits a batch into one envelope per resource so requests are not mis-attributed", async () => {
-                expect.assertions(3);
-
-                const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
-                vi.stubGlobal("fetch", fetchMock);
-
-                const sink = otlpSink({ batch: { maxItems: 10 }, detectResources: true, endpoint: "https://collector.example" });
-
-                // Two requests in one flush window, landing in different colos. One
-                // OTLP envelope carries exactly one Resource, so a single POST here
-                // would stamp both spans with whichever region happened to be first.
-                sink.onRpc!(okEvent, contextWith({ "cloud.region": "weur" }));
-                sink.onRpc!(okEvent, contextWith({ "cloud.region": "enam" }));
-                sink.flush!();
-
-                await otlpCalls(fetchMock, 2);
-
-                const regions = (fetchMock.mock.calls as unknown as [string, RequestInit][])
-                    .map((call) => attrValue(spanFrom(call[1]).resourceAttributes, "cloud.region")?.stringValue)
-                    .toSorted((a, b) => String(a).localeCompare(String(b)));
-
-                expect(fetchMock).toHaveBeenCalledTimes(2);
-                expect(regions).toStrictEqual(["enam", "weur"]);
-
-                // Each envelope carries exactly the one span recorded under it.
-                expect(spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]).span).toBeDefined();
-            });
-
-            it("keeps a batch in one envelope per signal when detection is off", async () => {
-                expect.assertions(1);
-
-                const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
-                vi.stubGlobal("fetch", fetchMock);
-
-                const sink = otlpSink({ batch: { maxItems: 10 }, endpoint: "https://collector.example" });
-
-                // Different contexts, but detection off — every signal shares the
-                // static bag by reference, so grouping must not fragment the batch.
-                sink.onRpc!(okEvent, contextWith({ "cloud.region": "weur" }));
-                sink.onRpc!(okEvent, contextWith({ "cloud.region": "enam" }));
-                sink.flush!();
-
-                await otlpCalls(fetchMock, 1);
-
-                expect(fetchMock).toHaveBeenCalledTimes(1);
-            });
-        });
-
         it("emits HTTP semantic-convention attributes on the RPC dispatch span", async () => {
             expect.assertions(9);
 
@@ -1374,6 +1254,62 @@ describe("observability-sinks", () => {
 
             expect(attrValue(span.attributes, "http.response.status_code")).toStrictEqual({ intValue: "409" });
             expect(attrValue(span.attributes, "http.request.method")).toStrictEqual({ stringValue: "POST" });
+        });
+
+        it("auto-detects Cloudflare Worker resource attributes when detectResources is true", async () => {
+            expect.assertions(5);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const request = new Request("https://api.example.com/_lunora/rpc", { headers: { "user-agent": "cloudflare" } });
+            // Attach the Cloudflare `cf` object so the detector sees a Workers request.
+            Object.defineProperty(request, "cf", { value: { colo: "SFO" }, writable: false });
+
+            const sink = otlpSink({ detectResources: true, endpoint: "https://collector.example", serviceName: "checkout-api" });
+
+            sink.onRpc!(okEvent, {
+                resourceAttributes: createResourceAttributeResolver({ CF_ACCOUNT_ID: "abc", ENVIRONMENT: "production", SERVICE_VERSION: "v1.2.3" }, request),
+                waitUntil: vi.fn<(promise: Promise<unknown>) => void>(),
+            });
+
+            await otlpCalls(fetchMock, 1);
+
+            const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
+            expect(attrValue(resourceAttributes, "service.version")).toStrictEqual({ stringValue: "v1.2.3" });
+            expect(attrValue(resourceAttributes, "deployment.environment")).toStrictEqual({ stringValue: "production" });
+            expect(attrValue(resourceAttributes, "cloud.provider")).toStrictEqual({ stringValue: "cloudflare" });
+            expect(attrValue(resourceAttributes, "cloud.region")).toStrictEqual({ stringValue: "SFO" });
+        });
+
+        it("lets explicit resource attributes override detected ones", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({
+                deploymentEnvironment: "staging",
+                detectResources: true,
+                endpoint: "https://collector.example",
+                resourceAttributes: { "cloud.region": "overridden-region" },
+            });
+
+            sink.onRpc!(okEvent, {
+                resourceAttributes: createResourceAttributeResolver(
+                    { CF_ACCOUNT_ID: "abc", CF_COLO: "SFO", ENVIRONMENT: "production" },
+                    new Request("https://api.example.com/_lunora/rpc"),
+                ),
+                waitUntil: vi.fn<(promise: Promise<unknown>) => void>(),
+            });
+
+            await otlpCalls(fetchMock, 1);
+
+            const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(attrValue(resourceAttributes, "cloud.region")).toStrictEqual({ stringValue: "overridden-region" });
         });
 
         it("registers the send with ctx.waitUntil when a request context is provided", () => {
@@ -1769,51 +1705,6 @@ describe("observability-sinks", () => {
             expect(fetchMock).toHaveBeenCalledTimes(1);
         });
 
-        it("reports a throwing tail sampler once per flush window, then goes quiet", async () => {
-            expect.assertions(4);
-
-            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
-            vi.stubGlobal("fetch", fetchMock);
-
-            const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-
-            const sink = otlpSink({
-                batch: { maxItems: 100 },
-                endpoint: "https://collector.example",
-                tailSampler: () => {
-                    throw new Error("bad predicate");
-                },
-            });
-
-            // Two traces in one window: the operator needs one report, not two.
-            sink.onRpc!({ ...okEvent, traceId: "a".repeat(32) });
-            sink.onRpc!({ ...okEvent, traceId: "b".repeat(32) });
-            sink.flush!();
-            await otlpCalls(fetchMock, 1);
-
-            expect(errorSpy).toHaveBeenCalledTimes(1);
-            expect(String(errorSpy.mock.calls[0]?.[0])).toContain("2 trace(s)");
-            // Fail-open: a broken predicate must not delete telemetry.
-            expect(spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]).span).toBeDefined();
-
-            // A sampler that throws throws every window; the reporting is capped
-            // so one bad predicate cannot become a log stream of its own.
-            for (let index = 0; index < 10; index += 1) {
-                sink.onRpc!({ ...okEvent, traceId: String(index).repeat(32).slice(0, 32) });
-                sink.flush!();
-            }
-
-            await vi.waitFor(() => {
-                if (errorSpy.mock.calls.length < 5) {
-                    throw new Error("not yet capped");
-                }
-            });
-
-            expect(errorSpy.mock.calls.length).toBeLessThanOrEqual(5);
-
-            errorSpy.mockRestore();
-        });
-
         it("keeps a whole trace when the tail sampler accepts it", async () => {
             expect.assertions(2);
 
@@ -1928,10 +1819,7 @@ describe("observability-sinks", () => {
             expect(attrValue(span.attributes, "email")).toStrictEqual({ stringValue: "[redacted]" });
         });
 
-        // Fails CLOSED. `postProcessor` is the PII-scrubbing seam, so a hook that
-        // throws has not finished redacting — exporting what it was mid-way
-        // through would leak exactly what it exists to remove.
-        it("drops the event when a post-processor hook throws, rather than exporting it unredacted", async () => {
+        it("drops the event when a post-processor hook throws", async () => {
             expect.assertions(1);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1946,7 +1834,7 @@ describe("observability-sinks", () => {
                 },
             });
 
-            sink.onSpan!({ ...spanEvent, attributes: { email: "user@example.com" } });
+            sink.onSpan!(spanEvent);
 
             const pending: Promise<unknown>[] = [];
 
@@ -1957,9 +1845,9 @@ describe("observability-sinks", () => {
             });
             await Promise.all(pending);
 
-            // Nothing left the worker at all — not the span, and so not the PII
-            // the half-run redactor was still holding.
-            expect(fetchMock).not.toHaveBeenCalled();
+            // Fails CLOSED: `postProcessor` is the PII seam, so a broken rule must
+            // lose the span rather than ship the payload it existed to scrub.
+            expect(fetchMock).toHaveBeenCalledTimes(0);
         });
 
         it("keeps the trace when the tail sampler itself throws", async () => {
@@ -1989,6 +1877,76 @@ describe("observability-sinks", () => {
             expect(fetchMock).toHaveBeenCalledTimes(1);
         });
 
+        it("reports a throwing tail sampler once per flush window, not once per trace", async () => {
+            expect.assertions(2);
+
+            vi.stubGlobal(
+                "fetch",
+                vi.fn<typeof fetch>(async () => new Response("ok")),
+            );
+
+            const errorMock = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const sink = otlpSink({
+                endpoint: "https://collector.example",
+                tailSampler: () => {
+                    throw new Error("bad policy");
+                },
+            });
+
+            // Three distinct traces in one window: fail-open is per trace, but the
+            // operator only needs telling once that the policy stopped applying.
+            sink.onSpan!({ ...spanEvent, traceId: "0af7651916cd43dd8448eb211c80319c" });
+            sink.onSpan!({ ...spanEvent, traceId: "1af7651916cd43dd8448eb211c80319c" });
+            sink.onSpan!({ ...spanEvent, traceId: "2af7651916cd43dd8448eb211c80319c" });
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            expect(errorMock).toHaveBeenCalledTimes(1);
+            expect(errorMock.mock.calls[0]?.[0]).toContain("3 trace(s)");
+        });
+
+        it("stops reporting tail-sampler failures after the per-sink cap", async () => {
+            expect.assertions(2);
+
+            vi.stubGlobal(
+                "fetch",
+                vi.fn<typeof fetch>(async () => new Response("ok")),
+            );
+
+            const errorMock = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const sink = otlpSink({
+                endpoint: "https://collector.example",
+                tailSampler: () => {
+                    throw new Error("bad policy");
+                },
+            });
+
+            // A sampler that throws throws on every window; the diagnostic must not
+            // become the log volume that sampling exists to hold down.
+            for (let index = 0; index < 12; index += 1) {
+                const pending: Promise<unknown>[] = [];
+
+                sink.onSpan!(spanEvent);
+                sink.flush!({
+                    waitUntil: (promise) => {
+                        pending.push(promise);
+                    },
+                });
+                // eslint-disable-next-line no-await-in-loop
+                await Promise.all(pending);
+            }
+
+            expect(errorMock).toHaveBeenCalledTimes(5);
+            expect(errorMock.mock.calls[4]?.[0]).toContain("silenced");
+        });
+
         it("is a no-op to flush an empty buffer", () => {
             expect.assertions(1);
 
@@ -2000,60 +1958,6 @@ describe("observability-sinks", () => {
             sink.flush!();
 
             expect(fetchMock).toHaveBeenCalledTimes(0);
-        });
-    });
-
-    describe("otlpSink resource attributes", () => {
-        afterEach(() => {
-            vi.restoreAllMocks();
-            vi.unstubAllGlobals();
-        });
-
-        it("emits the full service triple plus telemetry.sdk.* on the resource", async () => {
-            expect.assertions(6);
-
-            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
-            vi.stubGlobal("fetch", fetchMock);
-
-            const sink = otlpSink({
-                batch: false,
-                deploymentEnvironment: "production",
-                endpoint: "https://collector.example",
-                resourceAttributes: { "cloud.region": "weur" },
-                serviceName: "checkout-api",
-                serviceNamespace: "payments",
-                serviceVersion: "1.4.2",
-            });
-
-            sink.onRpc!(okEvent);
-            await otlpCalls(fetchMock, 1);
-
-            const { resourceAttributes } = spanFrom(fetchMock.mock.calls[0]![1] as RequestInit);
-
-            expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
-            expect(attrValue(resourceAttributes, "service.version")).toStrictEqual({ stringValue: "1.4.2" });
-            expect(attrValue(resourceAttributes, "service.namespace")).toStrictEqual({ stringValue: "payments" });
-            expect(attrValue(resourceAttributes, "deployment.environment")).toStrictEqual({ stringValue: "production" });
-            expect(attrValue(resourceAttributes, "cloud.region")).toStrictEqual({ stringValue: "weur" });
-            expect(attrValue(resourceAttributes, "telemetry.sdk.name")).toStrictEqual({ stringValue: "lunora" });
-        });
-
-        it("omits an unset optional rather than emitting it empty", () => {
-            expect.assertions(2);
-
-            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
-            vi.stubGlobal("fetch", fetchMock);
-
-            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
-
-            sink.onRpc!(okEvent);
-
-            const { resourceAttributes } = spanFrom(fetchMock.mock.calls[0]![1] as RequestInit);
-
-            // A present-but-empty `service.version` looks like a real value to a
-            // collector's grouping, which is worse than its absence.
-            expect(attrValue(resourceAttributes, "service.version")).toBeUndefined();
-            expect(attrValue(resourceAttributes, "service.namespace")).toBeUndefined();
         });
     });
 

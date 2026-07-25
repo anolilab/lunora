@@ -1,5 +1,5 @@
 /**
- * `@lunora/otel-bridge` — hand a Lunora `ctx` to anything that speaks
+ * `@lunora/server/otel` — hand a Lunora `ctx` to anything that speaks
  * `@opentelemetry/api`.
  *
  * **The problem.** Lunora's tracing is hand-rolled and zero-dependency, which is
@@ -13,7 +13,7 @@
  * the library's spans become real `ctx.trace` spans in the request's trace:
  *
  * ```ts
- * import { createOtelTracer } from "@lunora/otel-bridge";
+ * import { createOtelTracer } from "@lunora/server/otel";
  *
  * export const summarize = action.action(async ({ args, ctx }) =>
  *     generateText({
@@ -39,37 +39,36 @@
  * `@opentelemetry/api` is a PEER dependency: it keeps a module-global registry,
  * so a second copy in the tree would silently split it.
  */
-import type { Attributes, AttributeValue, Context, Exception, Link, Span, SpanContext, SpanOptions, SpanStatus, TimeInput, Tracer } from "@opentelemetry/api";
+import type {
+    Attributes,
+    AttributeValue,
+    Context,
+    Exception,
+    Link,
+    Span,
+    SpanContext,
+    SpanOptions as OtelSpanOptions,
+    SpanStatus,
+    TimeInput,
+    Tracer,
+} from "@opentelemetry/api";
 import { SpanKind, SpanStatusCode, TraceFlags } from "@opentelemetry/api";
 
+import type { LunoraTracer, SpanHandle } from "./types";
+
 /**
- * The slice of a Lunora function `ctx` this bridge needs.
+ * The slice of a Lunora function `ctx` this bridge needs — the dispatch's span
+ * handle and the span factory.
  *
- * Declared structurally rather than importing `@lunora/server`'s `QueryCtx` so
- * the bridge works with any context type (query, mutation, action) and takes no
- * dependency on the server package — it needs two members, not the whole surface.
+ * Structural rather than `QueryCtx`/`MutationCtx`/`ActionCtx` so one signature
+ * accepts all three (and a test double), while still being expressed in the real
+ * {@link SpanHandle} / {@link LunoraTracer} types now that this lives beside them.
  */
 interface LunoraTraceContext {
     /** The dispatch's own span handle — supplies the trace this bridge joins. */
-    span: {
-        spanContext: () => { spanId: string; traceId: string };
-    };
+    readonly span: SpanHandle;
     /** The span factory: `ctx.trace(name, fn, options)`. */
-    trace: <T>(
-        name: string,
-        function_: (
-            trace: unknown,
-            span: {
-                addEvent: (name: string, attributes?: Record<string, unknown>) => void;
-                addLink: (link: { attributes?: Record<string, unknown>; spanId: string; traceId: string }) => void;
-                recordException: (error: unknown) => void;
-                setAttribute: (key: string, value: unknown) => void;
-                setAttributes: (fields: Record<string, unknown>) => void;
-                spanContext: () => { spanId: string; traceId: string };
-            },
-        ) => Promise<T> | T,
-        options?: unknown,
-    ) => Promise<T>;
+    readonly trace: LunoraTracer;
 }
 
 /** Options for {@link createOtelTracer}. */
@@ -104,7 +103,6 @@ const KIND_NAMES: Record<number, "client" | "consumer" | "internal" | "producer"
 const randomHex = (bytes: number): string => {
     const buffer = new Uint8Array(bytes);
 
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- the Web Crypto global, not node:crypto; available in every runtime this ships to
     crypto.getRandomValues(buffer);
 
     let hex = "";
@@ -138,9 +136,6 @@ const flattenAttributes = (attributes: Attributes | undefined): Record<string, u
     return flat;
 };
 
-/** The `SpanHandle` shape a `ctx.trace` body receives, as this bridge consumes it. */
-type LunoraSpanHandle = Parameters<Parameters<LunoraTraceContext["trace"]>[1]>[1];
-
 /**
  * An OTel `Span` backed by a live `ctx.trace` span.
  *
@@ -160,12 +155,12 @@ class BridgeSpan implements Span {
     /** Resolves the suspended `ctx.trace` body, causing the span to be recorded. */
     private finish: (() => void) | undefined;
 
-    private handle: LunoraSpanHandle | undefined;
+    private handle: SpanHandle | undefined;
 
     private readonly ids: SpanContext;
 
     /** Buffers writes that arrive before the `ctx.trace` body hands over its handle. */
-    private readonly pending: ((handle: LunoraSpanHandle) => void)[] = [];
+    private readonly pending: ((handle: SpanHandle) => void)[] = [];
 
     private thrown: Error | undefined;
 
@@ -214,7 +209,7 @@ class BridgeSpan implements Span {
      * while `ctx.trace` invokes its body on a microtask. A library that sets an
      * attribute immediately would otherwise lose it.
      */
-    public attach(handle: LunoraSpanHandle, finish: () => void): void {
+    public attach(handle: SpanHandle, finish: () => void): void {
         this.handle = handle;
         this.finish = finish;
 
@@ -246,7 +241,27 @@ class BridgeSpan implements Span {
 
     public recordException(exception: Exception, _time?: TimeInput): void {
         this.write((handle) => {
-            handle.recordException(exception);
+            // OTel's `Exception` is `string | Error | { code?, message?, name?, stack? }`.
+            // The object form is not an Error, so forwarding it verbatim would have
+            // `String(value)` render it as "[object Object]" and lose the message —
+            // the one part a reader actually needs.
+            if (exception instanceof Error || typeof exception === "string") {
+                handle.recordException(exception);
+
+                return;
+            }
+
+            const normalized = new Error(exception.message ?? String(exception.code ?? "exception"));
+
+            if (exception.name !== undefined) {
+                normalized.name = exception.name;
+            }
+
+            if (exception.stack !== undefined) {
+                normalized.stack = exception.stack;
+            }
+
+            handle.recordException(normalized);
         });
     }
 
@@ -297,7 +312,7 @@ class BridgeSpan implements Span {
      * Apply a write to the live handle, or buffer it until `attach` supplies one.
      * Last in the class so the public `Span` surface reads first.
      */
-    private write(write: (handle: LunoraSpanHandle) => void): void {
+    private write(write: (handle: SpanHandle) => void): void {
         if (this.handle === undefined) {
             this.pending.push(write);
 
@@ -331,7 +346,7 @@ class BridgeSpan implements Span {
 const createOtelTracer = (context: LunoraTraceContext, options: OtelTracerOptions = {}): Tracer => {
     const { namePrefix = "" } = options;
 
-    const startSpan = (name: string, spanOptions?: SpanOptions, _context?: Context): Span => {
+    const startSpan = (name: string, spanOptions?: OtelSpanOptions, _context?: Context): Span => {
         // The trace is fixed by the dispatch; only the span id is new. It is
         // minted here rather than read back from `ctx.trace` because `startSpan`
         // is synchronous and callers may read `spanContext()` immediately — e.g.
@@ -393,7 +408,7 @@ const createOtelTracer = (context: LunoraTraceContext, options: OtelTracerOption
             // The interface has three overloads; the callback is always last, and
             // the two optional arguments are positional in a fixed order.
             const callback = rest.at(-1) as (span: Span) => unknown;
-            const spanOptions = typeof rest[0] === "object" && rest[0] !== null ? (rest[0] as SpanOptions) : undefined;
+            const spanOptions = typeof rest[0] === "object" && rest[0] !== null ? (rest[0] as OtelSpanOptions) : undefined;
             const span = startSpan(name, spanOptions);
 
             // No ambient activation — see the parenting note above. The span IS

@@ -162,6 +162,12 @@ interface BadgeSpec {
 }
 ```
 
+### `CLOUDFLARE_DRIVER` (const)
+
+```ts
+const CLOUDFLARE_DRIVER: DeployDriver;
+```
+
 ### `ClaimDevServerStateResult` (interface)
 
 ```ts
@@ -220,6 +226,12 @@ interface ContainerLogStreamOptions {
 }
 ```
 
+### `DEFAULT_DEPLOY_TARGET` (const)
+
+```ts
+const DEFAULT_DEPLOY_TARGET = "cloudflare";
+```
+
 ### `DEV_DAEMON_ENV` (const)
 
 ```ts
@@ -274,6 +286,31 @@ const DEV_VARS_FILE: string;
 const DEV_VARS_KEY_PATTERN: RegExp;
 ```
 
+### `DeployDriver` (interface)
+
+```ts
+interface DeployDriver {
+    readonly id: string;
+    infer: (context: DriverContext) => Promise<ResourceGraph>;
+    readonly name: string;
+    provision: (context: DriverContext) => Promise<ProvisionResult>;
+    readonly toolchain?: DriverToolchain;
+}
+```
+
+### `DeployRequest` (interface)
+
+```ts
+interface DeployRequest {
+    dryRun?: boolean;
+    entry?: string;
+    environment?: string;
+    outDir?: string;
+    preview?: boolean;
+    temporary?: boolean;
+}
+```
+
 ### `DestructiveEdit` (interface)
 
 ```ts
@@ -300,6 +337,16 @@ interface DestructivePolicyEdit {
 
 ```ts
 type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid";
+```
+
+### `DevRequest` (interface)
+
+```ts
+interface DevRequest {
+    configPath?: string;
+    environment?: string;
+    extraArgs?: ReadonlyArray<string>;
+}
 ```
 
 ### `DevSecretsFillPlan` (interface)
@@ -394,6 +441,27 @@ interface DockerLike {
     modem: {
         demuxStream: (stream: DockerLogStream, stdout: Writable, stderr: Writable) => void;
     };
+}
+```
+
+### `DriverContext` (interface)
+
+```ts
+interface DriverContext {
+    crons?: ReadonlyArray<string>;
+    projectRoot: string;
+}
+```
+
+### `DriverToolchain` (interface)
+
+```ts
+interface DriverToolchain {
+    deploy: (request: DeployRequest) => ToolchainCommand;
+    dev: (request: DevRequest) => ToolchainCommand;
+    secretList: (request: SecretRequest) => ToolchainCommand;
+    secretPut: (request: SecretRequest) => ToolchainCommand;
+    tail: (request: TailRequest) => ToolchainCommand;
 }
 ```
 
@@ -659,6 +727,15 @@ interface MaterializeResult {
 type MultiSelectOption<T extends string> = SelectOption<T>;
 ```
 
+### `NamedResource` (interface)
+
+```ts
+interface NamedResource {
+    exported?: boolean;
+    name: string;
+}
+```
+
 ### `PACKAGE_SECRETS_REGISTRY` (const)
 
 ```ts
@@ -687,6 +764,17 @@ type PolicyEdit = AdditivePolicyEdit | DestructivePolicyEdit;
 
 ```ts
 type PolicyScaffoldFailureReason = "already-wired" | "destructive" | "invalid-identifier" | "unknown-procedure" | "unsupported-procedure-shape";
+```
+
+### `ProvisionResult` (interface)
+
+```ts
+interface ProvisionResult {
+    added: ReadonlyArray<string>;
+    changed: boolean;
+    configPath?: string;
+    warnings: ReadonlyArray<string>;
+}
 ```
 
 ### `REMOTE_ELIGIBLE_KEYS` (const)
@@ -828,6 +916,22 @@ interface RemoteWranglerShape {
 }
 ```
 
+### `ResourceGraph` (interface)
+
+```ts
+interface ResourceGraph {
+    containers: ReadonlyArray<NamedResource>;
+    crons: ReadonlyArray<string>;
+    globalDatabase: boolean;
+    keyValueStore: boolean;
+    objectStorage: boolean;
+    queues: ReadonlyArray<NamedResource>;
+    shardNamespaces: ReadonlyArray<ShardNamespaceResource>;
+    signals: ReadonlyArray<string>;
+    workflows: ReadonlyArray<NamedResource>;
+}
+```
+
 ### `STEP_BADGE_NAMES` (const)
 
 ```ts
@@ -929,6 +1033,16 @@ interface SecretEntry {
 }
 ```
 
+### `SecretRequest` (interface)
+
+```ts
+interface SecretRequest {
+    environment?: string;
+    key?: string;
+    temporary?: boolean;
+}
+```
+
 ### `SelectOption` (interface)
 
 ```ts
@@ -936,6 +1050,16 @@ interface SelectOption<T extends string> {
     description?: string;
     label: string;
     value: T;
+}
+```
+
+### `ShardNamespaceResource` (interface)
+
+```ts
+interface ShardNamespaceResource {
+    className: string;
+    exported: boolean;
+    name: string;
 }
 ```
 
@@ -951,6 +1075,28 @@ type StepBadgeName = "add" | "deps" | "dir" | "git" | "lunora" | "next" | "tmpl"
 interface TailConsumer {
     environment?: string;
     service?: string;
+}
+```
+
+### `TailRequest` (interface)
+
+```ts
+interface TailRequest {
+    environment?: string;
+    format?: string;
+    search?: string;
+    status?: string;
+    temporary?: boolean;
+    worker?: string;
+}
+```
+
+### `ToolchainCommand` (interface)
+
+```ts
+interface ToolchainCommand {
+    args: ReadonlyArray<string>;
+    tool: string;
 }
 ```
 
@@ -1243,6 +1389,12 @@ const collectWranglerSecretVariables: (projectRoot: string) => WranglerVariableI
 
 ```ts
 const createConfirm: (prefix?: string) => ((message: string) => Promise<boolean>);
+```
+
+### `deployTargetIds` (const)
+
+```ts
+const deployTargetIds: () => ReadonlyArray<string>;
 ```
 
 ### `detectAgentRules` (const)
@@ -1557,6 +1709,12 @@ const reconcileWranglerCrons: (projectRoot: string, cronTriggers: ReadonlyArray<
 
 ```ts
 const requiredSecrets: (packageNames: ReadonlyArray<string>) => SecretEntry[];
+```
+
+### `resolveDeployDriver` (const)
+
+```ts
+const resolveDeployDriver: (target?: string) => DeployDriver;
 ```
 
 ### `resolveRemoteEnabled` (const)

@@ -615,7 +615,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
                 storage,
-            }), logFunctionPath, traceAnchor, span, observability);
+            }), logFunctionPath, traceAnchor, observability);
 
             const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
             facade["messages"] = bindTableFacade(db, "messages");

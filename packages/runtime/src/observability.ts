@@ -118,12 +118,12 @@ export interface ObservabilitySink {
     /**
      * Ship anything the sink is holding, now.
      *
-     * A batching sink (`otlpSink` by default) buffers events and exports
-     * them as one request instead of one request per event. That is only safe
-     * because a Workers isolate can be frozen the instant a response is returned:
-     * the runtime calls this at every invocation boundary — end of `fetch`,
-     * `queue`, `scheduled`, and each Durable Object dispatch — passing the
-     * request's `waitUntil` so the export outlives the response.
+     * A batching sink (`otlpSink` by default) buffers events and exports them as
+     * one request instead of one request per event. That is only safe because a
+     * Workers isolate can be frozen the instant a response is returned: the
+     * runtime calls this at every invocation boundary — end of `fetch`, `queue`,
+     * `scheduled`, and each Durable Object dispatch — passing the request's
+     * `waitUntil` so the export outlives the response.
      *
      * Optional and idempotent: a non-buffering sink simply omits it, and calling
      * it with an empty buffer is a no-op. A sink must never throw from here; like
@@ -168,7 +168,7 @@ export interface ObservabilitySink {
      * `"summary"` (**default**) — aggregate counters (`db.calls`, `db.duration_ms`,
      * per-operation counts) folded onto the dispatch's wide event. No extra spans
      * and no extra log records, so the cost is flat no matter how many queries a
-     * handler makes. Enough to answer "was this request database-bound, and doing what?".
+     * handler makes.
      *
      * `"spans"` — one span per database call: the full waterfall, for when you are
      * chasing a specific slow query. Capped per dispatch so a query loop cannot
@@ -209,9 +209,6 @@ export interface ObservabilitySink {
      * `{ propagate }` to keep the spans but control who receives trace context, e.g.
      * `propagate: (url) => url.host.endsWith(".internal")` to send it to your own
      * services and not to third parties.
-     *
-     * Pass this on the SAME sink object given to both `createWorker` and
-     * `createShardDO` — the DO reads it when building `ctx.fetch`.
      */
     traceFetch?: boolean | { propagate?: ((url: URL) => boolean) | boolean };
 }

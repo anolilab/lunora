@@ -20,7 +20,7 @@
  */
 import type { LogFields } from "../../../shared/log-fields";
 import { otlpRandomHex } from "../../../shared/otlp";
-import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
+import type { SpanEvent } from "../../../shared/span-event";
 import type { TraceAnchor } from "./context-telemetry";
 import { toErrorType } from "./trace-context";
 
@@ -93,16 +93,6 @@ const TABLE_FIRST_METHODS = new Set([
     "rankPageRows",
 ]);
 
-/** Running totals for `"summary"` mode. */
-interface DatabaseTally {
-    calls: number;
-    durationMs: number;
-    errors: number;
-    perOperation: Record<string, number>;
-    spansEmitted: number;
-    spansTruncated: boolean;
-}
-
 /** Table name from a call's arguments, when the method takes it first. */
 const tableOf = (method: string, arguments_: unknown[]): string | undefined => {
     if (!TABLE_FIRST_METHODS.has(method)) {
@@ -112,37 +102,6 @@ const tableOf = (method: string, arguments_: unknown[]): string | undefined => {
     const first = arguments_[0];
 
     return typeof first === "string" && first.length > 0 ? first : undefined;
-};
-
-/**
- * Fold the running tally onto the dispatch's wide event.
- *
- * Called once, from the dispatch's end (see
- * {@link DatabaseTelemetryDeps.registerFlush}), not after every call. The totals
- * are cumulative and the handle is last-write-wins per key, so an intermediate
- * publish is always overwritten by the next one — N publishes and one publish
- * produce the same wide event, and only one of them puts an attribute-bag
- * allocation on every `ctx.db` call.
- */
-const publishTally = (span: SpanHandle, tally: DatabaseTally): void => {
-    const fields: LogFields = {
-        "db.calls": tally.calls,
-        "db.duration_ms": tally.durationMs,
-    };
-
-    if (tally.errors > 0) {
-        fields["db.errors"] = tally.errors;
-    }
-
-    if (tally.spansTruncated) {
-        fields["db.spans_truncated"] = true;
-    }
-
-    for (const [operation, count] of Object.entries(tally.perOperation)) {
-        fields[`db.op.${operation}`] = count;
-    }
-
-    span.setAttributes(fields);
 };
 
 /** Render a thrown value for a span's `error.message` without relying on `Object`'s default stringification. */
@@ -194,6 +153,16 @@ const buildDatabaseSpan = (input: {
     };
 };
 
+/** Running totals for `"summary"` mode; created by the caller, read once at the dispatch boundary. */
+interface DatabaseTally {
+    calls: number;
+    durationMs: number;
+    errors: number;
+    perOperation: Record<string, number>;
+    spansEmitted: number;
+    spansTruncated: boolean;
+}
+
 /**
  * How much detail `ctx.db` auto-instrumentation produces.
  *
@@ -205,10 +174,10 @@ const buildDatabaseSpan = (input: {
  *
  * `"off"` — no database telemetry at all.
  */
-export type DatabaseInstrumentation = "off" | "spans" | "summary";
+type DatabaseInstrumentation = "off" | "spans" | "summary";
 
 /** What {@link instrumentDatabase} needs to record what it observes. */
-export interface DatabaseTelemetryDeps {
+interface DatabaseTelemetryDeps {
     /** The trace produced spans belong to (`"spans"` mode only). */
     anchor: TraceAnchor;
     /** Function path spans and attributes are attributed to. */
@@ -218,24 +187,22 @@ export interface DatabaseTelemetryDeps {
     /** Hand a finished span to the buffer + sink (`"spans"` mode only). */
     record: (span: SpanEvent) => void;
 
-    /**
-     * Register a callback the dispatch invokes exactly once, at its end, before
-     * it decides whether the dispatch produced telemetry worth recording.
-     *
-     * The tally is published there rather than after every call. Both are
-     * equivalent — the totals are cumulative and the handle is last-write-wins,
-     * so every publish but the final one is overwritten — but the per-call form
-     * rebuilt an attribute bag on each `ctx.db` call, which is dead weight on
-     * exactly the path `"summary"` mode exists to keep cheap.
-     *
-     * "Before the gate" matters: a handler that touched only `ctx.db` has no
-     * span collector yet, so folding after the gate would drop its tally.
-     */
-    registerFlush: (flush: () => void) => void;
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey: string | undefined;
-    /** The dispatch's wide-event handle — where `"summary"` mode writes its tallies. */
-    span: SpanHandle;
+
+    /**
+     * Caller-supplied accumulator for `"summary"` mode. The instrumenter only ever
+     * increments numbers on it; the shard reads it ONCE at the dispatch boundary
+     * and formats it with {@link formatTally}.
+     *
+     * Two properties fall out of that split. Per-call cost stays at a few integer
+     * increments — no object allocation, no lookup — which matters because this is
+     * on the path of every query. And because nothing is written through the
+     * dispatch's `SpanHandle`, the wide-event collector is never materialized, so
+     * a handler that instrumented nothing still doesn't trip the root-span gate.
+     */
+    tally: DatabaseTally;
+
     /** Read lazily — the acting user is resolved per span. */
     userId: () => string | undefined;
 }
@@ -253,22 +220,12 @@ export interface DatabaseTelemetryDeps {
  * and is transparently correct for everything else, including members added
  * later — an enumeration would silently stop covering them.
  */
-export const instrumentDatabase = <T extends object>(database: T, deps: DatabaseTelemetryDeps): T => {
+const instrumentDatabase = <T extends object>(database: T, deps: DatabaseTelemetryDeps): T => {
     if (deps.mode === "off") {
         return database;
     }
 
-    const tally: DatabaseTally = { calls: 0, durationMs: 0, errors: 0, perOperation: {}, spansEmitted: 0, spansTruncated: false };
-
-    // No calls means nothing to say. Publishing an empty tally would attach
-    // `db.calls: 0` to the wide event and, worse, force a span collector into
-    // existence for a dispatch that never touched the database — which is what
-    // the dispatch's gate reads to decide whether there is any telemetry at all.
-    deps.registerFlush(() => {
-        if (tally.calls > 0) {
-            publishTally(deps.span, tally);
-        }
-    });
+    const { tally } = deps;
 
     /** Wrapped methods are memoized so repeated property access returns a stable function identity. */
     const wrapped = new Map<string, unknown>();
@@ -338,3 +295,40 @@ export const instrumentDatabase = <T extends object>(database: T, deps: Database
         },
     });
 };
+
+/** A zero'd tally for one dispatch. */
+const createDatabaseTally = (): DatabaseTally => {
+    return { calls: 0, durationMs: 0, errors: 0, perOperation: {}, spansEmitted: 0, spansTruncated: false };
+
+    /**
+     * Render the running tally as span attributes.
+     *
+     * Called ONCE per dispatch, from the shard's root-span recorder — not per query.
+     * Building this object on every call was pure waste on a hot path. It is a handful of keys, so the per-call cost is a small object
+     * assignment — the property that makes `"summary"` mode scale to any call count.
+     */
+};
+
+const formatTally = (tally: DatabaseTally): LogFields => {
+    const fields: LogFields = {
+        "db.calls": tally.calls,
+        "db.duration_ms": tally.durationMs,
+    };
+
+    if (tally.errors > 0) {
+        fields["db.errors"] = tally.errors;
+    }
+
+    if (tally.spansTruncated) {
+        fields["db.spans_truncated"] = true;
+    }
+
+    for (const [operation, count] of Object.entries(tally.perOperation)) {
+        fields[`db.op.${operation}`] = count;
+    }
+
+    return fields;
+};
+
+export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps };
+export { createDatabaseTally, formatTally, instrumentDatabase };

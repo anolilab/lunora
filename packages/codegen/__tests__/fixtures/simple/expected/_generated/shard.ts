@@ -802,7 +802,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 sql: this.sql as SqlExec,
                 storage,
                 globalDb,
-            }), logFunctionPath, traceAnchor, span, observability);
+            }), logFunctionPath, traceAnchor, observability);
 
             const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
             facade["messages"] = bindTableFacade(db, "messages");

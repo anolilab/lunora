@@ -1,6 +1,6 @@
 {
     "name": "@lunora/server",
-    "version": "1.0.0-alpha.31",
+    "version": "1.0.0-alpha.33",
     "description": "Server primitives for Lunora: defineSchema, defineTable, query, mutation, and action",
     "keywords": [
         "backend",
@@ -56,6 +56,10 @@
             "types": "./dist/rls/testing.d.ts",
             "import": "./dist/rls/testing.mjs"
         },
+        "./otel": {
+            "types": "./dist/otel.d.ts",
+            "import": "./dist/otel.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -85,6 +89,7 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
+        "@opentelemetry/api": "catalog:otel",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
@@ -92,6 +97,14 @@
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@opentelemetry/api": "catalog:otel"
+    },
+    "peerDependenciesMeta": {
+        "@opentelemetry/api": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

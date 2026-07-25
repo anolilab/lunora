@@ -54,7 +54,28 @@ const snapshotsDir = join(rootDir, "api-snapshots");
  * experimental packages (agent, replica, x402, react-native, angular, ai,
  * browser, container, payment) are deliberately NOT covered.
  */
-const TIER_1 = ["server", "values", "errors", "runtime", "do", "client", "codegen", "cli", "vite", "config", "d1", "react", "testing", "lunora"];
+const TIER_1 = [
+    "server",
+    "values",
+    "errors",
+    "runtime",
+    "do",
+    "client",
+    "codegen",
+    "cli",
+    "vite",
+    "config",
+    "d1",
+    "react",
+    "testing",
+    "lunora",
+    // The platform family: `platform` is contracts-only, so its surface IS the
+    // product and drifting it silently is the failure this guard exists to catch.
+    "platform",
+    "platform-cloudflare",
+    "platform-conformance",
+    "shard-engine",
+];
 
 const TIER_2 = [
     "vue",

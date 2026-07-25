@@ -1,8 +1,9 @@
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { describe, expect, it } from "vitest";
 
-import type { LunoraTraceContext } from "../src/index";
-import { createOtelTracer } from "../src/index";
+import type { SpanHandle } from "../src/index";
+import type { LunoraTraceContext } from "../src/otel";
+import { createOtelTracer } from "../src/otel";
 
 /**
  * The bridge's contract is narrow but load-bearing: a third-party library's
@@ -32,8 +33,18 @@ interface Recorded {
 const fakeContext = (): { ctx: LunoraTraceContext; recorded: Recorded[] } => {
     const recorded: Recorded[] = [];
 
+    /** A no-op handle for the DISPATCH span; the bridge only reads its ids. */
+    const dispatchSpan: SpanHandle = {
+        addEvent: () => undefined,
+        addLink: () => undefined,
+        recordException: () => undefined,
+        setAttribute: () => undefined,
+        setAttributes: () => undefined,
+        spanContext: () => DISPATCH,
+    };
+
     const ctx: LunoraTraceContext = {
-        span: { spanContext: () => DISPATCH },
+        span: dispatchSpan,
         trace: async (name, function_, options) => {
             const entry: Recorded = {
                 attributes: { ...(options as { attributes?: Record<string, unknown> } | undefined)?.attributes },
@@ -64,7 +75,7 @@ const fakeContext = (): { ctx: LunoraTraceContext; recorded: Recorded[] } => {
             };
 
             try {
-                return await function_(undefined, handle);
+                return await function_(ctx.trace, handle);
             } catch (error) {
                 entry.ok = false;
 

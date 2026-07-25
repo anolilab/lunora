@@ -126,6 +126,7 @@ interface DeployCommandOptions {
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
     skipCodegen?: boolean;
     spawner?: Spawner;
+    target?: string;
     temporary?: boolean;
     updateSchemaBaseline?: boolean;
 }

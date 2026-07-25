@@ -16,9 +16,9 @@ import { createTracedFetch } from "../src/context-telemetry";
 
 const anchor = { rootSpanId: "b7ad6b7169203331", traceId: "0af7651916cd43dd8448eb211c80319c" };
 
-const makeDeps = (spans: SpanEvent[], propagate?: ((url: URL) => boolean) | boolean, anchorOverride?: typeof anchor & { sampled?: boolean }) => {
+const makeDeps = (spans: SpanEvent[], propagate?: ((url: URL) => boolean) | boolean) => {
     return {
-        anchor: anchorOverride ?? anchor,
+        anchor,
         functionPath: "orders:checkout",
         ...(propagate === undefined ? {} : { propagate }),
         record: (span: SpanEvent) => {
@@ -47,33 +47,6 @@ describe("createTracedFetch", () => {
         // callee parented to a span that was never exported.
         expect(sent?.parentSpanId).toBe(spans[0]?.spanId);
         expect(spans[0]?.traceId).toBe(anchor.traceId);
-    });
-
-    it("propagates the anchor's sampled verdict rather than always claiming sampled", async () => {
-        expect.assertions(2);
-
-        const spans: SpanEvent[] = [];
-        const seen: (null | string)[] = [];
-        const base = vi.fn<(request: Request) => Promise<Response>>(async (request) => {
-            seen.push(request.headers.get("traceparent"));
-
-            return new Response("ok");
-        });
-
-        // An upstream that sampled this trace OUT. Telling the callee otherwise
-        // makes it record spans for a trace nobody kept.
-        const unsampled = createTracedFetch(makeDeps(spans, undefined, { ...anchor, sampled: false }), base as never);
-
-        await unsampled("https://api.stripe.com/v1/charges");
-
-        expect(parseTraceparent(seen[0])?.sampled).toBe(false);
-
-        // No inbound verdict to honour — the shard is the trace root, so it samples.
-        const sampled = createTracedFetch(makeDeps(spans, undefined, { ...anchor, sampled: true }), base as never);
-
-        await sampled("https://api.stripe.com/v1/charges");
-
-        expect(parseTraceparent(seen[1])?.sampled).toBe(true);
     });
 
     it("records a CLIENT span with a low-cardinality name", async () => {

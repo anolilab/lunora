@@ -18,19 +18,10 @@ import { otlpRandomHex, parseTraceparent } from "../../../shared/otlp";
  * dispatch with no inbound context — a subscription re-run, a server-initiated
  * call — still produces a coherent, self-contained local trace.
  */
-export const resolveTraceAnchor = (traceparent: string | undefined): { rootSpanId: string; sampled: boolean; traceId: string } => {
+export const resolveTraceAnchor = (traceparent: string | undefined): { rootSpanId: string; traceId: string } => {
     const inbound = parseTraceparent(traceparent);
 
-    return {
-        rootSpanId: inbound?.parentSpanId ?? otlpRandomHex(8),
-        // Honour the upstream verdict. An unsampled inbound trace stays unsampled
-        // through the shard and out to whatever the handler calls, which is the
-        // whole point of the bit — deciding again downstream produces a trace the
-        // collector holds only the middle of. Absent a `traceparent` there is no
-        // verdict to honour and the shard is the trace root, so it samples.
-        sampled: inbound?.sampled ?? true,
-        traceId: inbound?.traceId ?? otlpRandomHex(16),
-    };
+    return { rootSpanId: inbound?.parentSpanId ?? otlpRandomHex(8), traceId: inbound?.traceId ?? otlpRandomHex(16) };
 };
 
 /**

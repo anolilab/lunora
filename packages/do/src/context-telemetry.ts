@@ -129,14 +129,6 @@ export interface ContextMetrics {
 /** The trace a ctx's spans hang off: the shared id, and the span they parent to. */
 export interface TraceAnchor {
     rootSpanId: string;
-
-    /**
-     * The W3C `sampled` verdict for this trace, inherited from the inbound
-     * `traceparent` when there was one. Carried on the anchor rather than
-     * re-derived per outbound call so every `ctx.fetch` of one dispatch
-     * propagates the same answer.
-     */
-    sampled?: boolean;
     traceId: string;
 }
 
@@ -598,13 +590,12 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
             // Set, not appended: a caller that already put a `traceparent` on the
             // request meant it, but our span is the immediate parent of whatever
             // the callee records, so ours is the correct one to send.
-            // `anchor.sampled` — NOT a hardcoded `true`. Telling the callee a trace
-            // is sampled when it was sampled out upstream makes it record spans
-            // for a trace nobody kept, and the collector holds an orphan.
-            request.headers.set("traceparent", buildTraceparent(anchor.traceId, spanId, anchor.sampled ?? true));
+            request.headers.set("traceparent", buildTraceparent(anchor.traceId, spanId, true));
         }
 
-        let ok = true;
+        // No separate `ok` flag: it is exactly `error === undefined` on every path
+        // (a non-2xx response sets `error` just as a thrown failure does), and a
+        // seeded `let ok = true` was a dead write CodeQL rightly flagged.
         let error: SpanEvent["error"];
         let status: number | undefined;
 
@@ -612,7 +603,6 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
             const response = await base(request);
 
             status = response.status;
-            ok = response.ok;
 
             if (!response.ok) {
                 error = { message: `HTTP ${String(response.status)}`, type: `HTTP_${String(response.status)}` };
@@ -620,7 +610,6 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
 
             return response;
         } catch (error_) {
-            ok = false;
             error = { message: error_ instanceof Error ? error_.message : String(error_), type: toErrorType(error_) };
 
             throw error_;
@@ -641,7 +630,7 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
                     // every request its own group in a collector, which is how a
                     // trace backend's aggregate views get destroyed.
                     name: `${request.method} ${safeHost(request.url)}`,
-                    ok,
+                    ok: error === undefined,
                     parentSpanId: anchor.rootSpanId,
                     shardKey,
                     spanId,

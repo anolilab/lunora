@@ -227,63 +227,12 @@ const mergeHeaders = (defaults: Record<string, string>, overrides: Record<string
 };
 
 /**
- * Build the OTLP `Resource.attributes` list for a signal envelope. `service.name`
- * is the default and `extra` is merged over it, so a caller-supplied
- * `service.name` in `extra` wins.
+ * Normalize "one item or many" into an array. The wrappers below all accept
+ * either so a batching exporter and a single-shot one share one encoder: an
+ * `ExportXServiceRequest` carrying N items in one `scope*` list is the same
+ * envelope as one carrying a single item, and every collector accepts both.
  */
-const buildResourceAttributes = (serviceName: string, extra?: OtlpResourceAttributes): OtlpAttribute[] => {
-    const merged: OtlpResourceAttributes = { "service.name": serviceName };
-
-    for (const [key, value] of Object.entries(extra ?? {})) {
-        merged[key] = value;
-    }
-
-    return Object.entries(merged).map(([key, value]) => encodeAttribute(key, value));
-};
-
 const toArray = (value: unknown[] | unknown): unknown[] => (Array.isArray(value) ? value : [value]);
-
-/**
- * Wrap encoded OTLP span(s) in the `ExportTraceServiceRequest` envelope.
- *
- * Accepts an array so a whole invocation's spans ship in ONE request. That is
- * the difference between a handler with twenty spans costing twenty Workers
- * subrequests (against a 50/1000 cap) and costing one.
- */
-const wrapResourceSpans = (spans: unknown[] | unknown, scopeName: string, serviceName: string, resourceAttributes?: OtlpResourceAttributes): unknown => {
-    return {
-        resourceSpans: [
-            {
-                resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
-                scopeSpans: [{ scope: { name: scopeName }, spans: toArray(spans) }],
-            },
-        ],
-    };
-};
-
-/** Wrap encoded OTLP log record(s) in the `ExportLogsServiceRequest` envelope. */
-const wrapResourceLogs = (logRecords: unknown[] | unknown, scopeName: string, serviceName: string, resourceAttributes?: OtlpResourceAttributes): unknown => {
-    return {
-        resourceLogs: [
-            {
-                resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
-                scopeLogs: [{ logRecords: toArray(logRecords), scope: { name: scopeName } }],
-            },
-        ],
-    };
-};
-
-/** Wrap encoded OTLP metric(s) in the `ExportMetricsServiceRequest` envelope. */
-const wrapResourceMetrics = (metrics: unknown[] | unknown, scopeName: string, serviceName: string, resourceAttributes?: OtlpResourceAttributes): unknown => {
-    return {
-        resourceMetrics: [
-            {
-                resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
-                scopeMetrics: [{ metrics: toArray(metrics), scope: { name: scopeName } }],
-            },
-        ],
-    };
-};
 
 /**
  * The OTel `SpanKind` union, in the spec's own words rather than its wire
@@ -306,66 +255,80 @@ const OTLP_SPAN_KIND: Record<OtlpSpanKind, number> = {
 };
 
 /**
- * One OTel span **event** — a timestamped occurrence *inside* a span, for things
- * that have a moment but no duration (a retry, a cache miss, a thrown
- * exception). The alternative — a child span of near-zero width, or a separate
- * log line — either clutters the waterfall or loses the span correlation.
+ * Build the OTLP `Resource.attributes` list for a signal envelope. `service.name`
+ * is the default and `extra` is merged over it, so a caller-supplied
+ * `service.name` in `extra` wins. Kept as a separate helper so `wrapResource*`
+ * callers don't duplicate the merge logic.
  */
-interface OtlpSpanEventInput {
-    attributes?: Record<string, OtlpAttributeValue>;
-    name: string;
-    /** Wall-clock millis when it happened. */
-    ts: number;
-}
+const buildResourceAttributes = (serviceName: string, extra?: Record<string, OtlpAttributeValue>): OtlpAttribute[] => {
+    const merged: Record<string, OtlpAttributeValue> = { "service.name": serviceName };
 
-/**
- * One OTel span **link** — a causal reference to a span in another trace. This
- * is how a batch job points back at the N requests that enqueued its items:
- * parenting would force them all into one absurdly wide trace, while a link
- * keeps the traces separate and still navigable.
- */
-interface OtlpSpanLinkInput {
-    attributes?: Record<string, OtlpAttributeValue>;
-    spanId: string;
-    traceId: string;
-}
-
-/** Encode span events into the OTLP `Span.events` list. */
-const encodeSpanEvents = (events: OtlpSpanEventInput[] | undefined): unknown[] | undefined => {
-    if (events === undefined || events.length === 0) {
-        return undefined;
+    for (const [key, value] of Object.entries(extra ?? {})) {
+        merged[key] = value;
     }
 
-    return events.map((event) => ({
-        attributes: encodeAttributes(event.attributes),
-        name: event.name,
-        timeUnixNano: otlpUnixNano(event.ts),
-    }));
+    return Object.entries(merged).map(([key, value]) => encodeAttribute(key, value));
 };
 
-/** Encode span links into the OTLP `Span.links` list. */
-const encodeSpanLinks = (links: OtlpSpanLinkInput[] | undefined): unknown[] | undefined => {
-    if (links === undefined || links.length === 0) {
-        return undefined;
-    }
-
-    return links.map((link) => ({
-        attributes: encodeAttributes(link.attributes),
-        spanId: link.spanId,
-        traceId: link.traceId,
-    }));
+/** Wrap one encoded OTLP span in the `ExportTraceServiceRequest` envelope. */
+const wrapResourceSpans = (
+    spans: unknown[] | unknown,
+    scopeName: string,
+    serviceName: string,
+    resourceAttributes?: Record<string, OtlpAttributeValue>,
+): unknown => {
+    return {
+        resourceSpans: [
+            {
+                resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
+                scopeSpans: [{ scope: { name: scopeName }, spans: toArray(spans) }],
+            },
+        ],
+    };
 };
 
-export type { OtlpAnyValue, OtlpAttribute, OtlpAttributeValue, OtlpLevel, OtlpResourceAttributes, OtlpSpanEventInput, OtlpSpanKind, OtlpSpanLinkInput };
+/** Wrap one encoded OTLP log record in the `ExportLogsServiceRequest` envelope. */
+const wrapResourceLogs = (
+    logRecords: unknown[] | unknown,
+    scopeName: string,
+    serviceName: string,
+    resourceAttributes?: Record<string, OtlpAttributeValue>,
+): unknown => {
+    return {
+        resourceLogs: [
+            {
+                resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
+                scopeLogs: [{ logRecords: toArray(logRecords), scope: { name: scopeName } }],
+            },
+        ],
+    };
+};
+
+/** Wrap one encoded OTLP metric in the `ExportMetricsServiceRequest` envelope. */
+const wrapResourceMetrics = (
+    metrics: unknown[] | unknown,
+    scopeName: string,
+    serviceName: string,
+    resourceAttributes?: Record<string, OtlpAttributeValue>,
+): unknown => {
+    return {
+        resourceMetrics: [
+            {
+                resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
+                scopeMetrics: [{ metrics: toArray(metrics), scope: { name: scopeName } }],
+            },
+        ],
+    };
+};
+
+export type { OtlpAnyValue, OtlpAttribute, OtlpAttributeValue, OtlpLevel, OtlpResourceAttributes, OtlpSpanKind };
 export {
     buildTraceparent,
+    OTLP_SPAN_KIND,
     encodeAttribute,
     encodeAttributes,
-    encodeSpanEvents,
-    encodeSpanLinks,
     mergeHeaders,
     OTLP_SEVERITY,
-    OTLP_SPAN_KIND,
     otlpRandomHex,
     otlpUnixNano,
     parseTraceparent,
