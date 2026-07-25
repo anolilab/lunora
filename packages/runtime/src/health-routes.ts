@@ -93,7 +93,12 @@ interface HealthRouteDeps {
 
     /**
      * Cache the last computed report for this many ms so an orchestrator polling
-     * every few seconds does not hammer the bindings. Defaults to `0` (no cache).
+     * every few seconds does not hammer the bindings (each uncached request runs
+     * a real Durable Object subrequest plus one `SELECT 1` per detected D1
+     * binding, which an unauthenticated flood would otherwise amplify). Cached
+     * independently for the aggregate and readiness probes, since their bodies
+     * differ. When omitted it defaults to `5000` in the `public` posture and `0`
+     * (no cache) in the bearer-gated `admin` posture.
      */
     cacheTtlMs?: number;
     /** Admin-bearer predicate, consulted only when `auth === "admin"`. */
@@ -271,10 +276,19 @@ const buildBody = (
 
 /** Build the health + readiness route map merged into the worker's internal route table. */
 const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
-    // `cacheTtlMs` is accepted for API/back-compat but is currently a no-op: a
-    // fresh registry is built per request, so there is no cross-request cache to
-    // TTL. (It never cached across requests under the old dependency either.)
-    const { appName = "lunora", appVersion = "0.0.0", auth = "public", isAdmin, resolveProbes } = deps;
+    const { appName = "lunora", appVersion = "0.0.0", auth = "public", cacheTtlMs, isAdmin, resolveProbes } = deps;
+
+    // Cache the computed report so a frequent poller (and, more importantly, an
+    // unauthenticated flood) does not re-run the live probes — a real Durable
+    // Object subrequest plus one `SELECT 1` per detected D1 binding — on every
+    // request. The default is `5000` ms for the unauthenticated `public` posture
+    // (the amplification vector) and `0` (no cache) for the bearer-gated `admin`
+    // posture, where the operator wants a fresh read and cannot be flooded. Keyed
+    // by probe kind because the aggregate and readiness endpoints, though served
+    // under the same posture, produce different bodies. This closure is built
+    // once per worker, so the cache persists across requests in the isolate.
+    const effectiveCacheTtlMs = cacheTtlMs ?? (auth === "public" ? 5000 : 0);
+    const cache: Partial<Record<"aggregate" | "readiness", { body: HealthBody; down: boolean; expiresAt: number }>> = {};
 
     const gate = (request: Request): void => {
         if (auth === "admin" && !isAdmin(request)) {
@@ -291,6 +305,14 @@ const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Requ
 
         gate(request);
 
+        if (effectiveCacheTtlMs > 0) {
+            const hit = cache[probeKind];
+
+            if (hit !== undefined && Date.now() < hit.expiresAt) {
+                return Response.json(hit.body, { headers: { "cache-control": "no-store" }, status: hit.down ? 503 : 200 });
+            }
+        }
+
         const { criticalNames, registry } = buildRegistry(resolveProbes(env));
         const { healthy, report } = await registry.getReport(probeKind === "readiness" ? "readiness" : undefined);
         const { anyCriticalDown, body } = buildBody(report, criticalNames, auth, appName, appVersion);
@@ -299,6 +321,10 @@ const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Requ
         // the readiness gate is `503` whenever any readiness check is unhealthy
         // (a load balancer should stop routing on any readiness failure).
         const down = probeKind === "readiness" ? !healthy : anyCriticalDown;
+
+        if (effectiveCacheTtlMs > 0) {
+            cache[probeKind] = { body, down, expiresAt: Date.now() + effectiveCacheTtlMs };
+        }
 
         return Response.json(body, { headers: { "cache-control": "no-store" }, status: down ? 503 : 200 });
     };

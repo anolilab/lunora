@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
-import type { HealthBody } from "../src/health-routes";
+import type { HealthBody, HealthProbe } from "../src/health-routes";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 const fakeContext: ExecutionContextLike = {
@@ -187,5 +187,79 @@ describe("createWorker — health / readiness endpoints", () => {
         const adminRaw = await adminResponse.text();
 
         expect(adminRaw).toContain("d1:SECRET_DB");
+    });
+
+    it("caches the public report across requests within the TTL, and re-runs when disabled", async () => {
+        expect.assertions(2);
+
+        // A counting probe proves whether the live probes re-ran between requests.
+        const makeCountingProbe = (): { probe: HealthProbe; runs: () => number } => {
+            let runs = 0;
+
+            return {
+                probe: {
+                    check: () => {
+                        runs += 1;
+
+                        return { healthy: true };
+                    },
+                    critical: false,
+                    name: "counter",
+                },
+                runs: () => runs,
+            };
+        };
+
+        const cached = makeCountingProbe();
+        const cachedWorker = createWorker({ health: { cacheTtlMs: 60_000, probes: [cached.probe] }, shardDO: reachableNamespace });
+
+        await cachedWorker.fetch(get("/_lunora/health"), {}, fakeContext);
+        await cachedWorker.fetch(get("/_lunora/health"), {}, fakeContext);
+
+        expect(cached.runs()).toBe(1);
+
+        const uncached = makeCountingProbe();
+        const uncachedWorker = createWorker({ health: { cacheTtlMs: 0, probes: [uncached.probe] }, shardDO: reachableNamespace });
+
+        await uncachedWorker.fetch(get("/_lunora/health"), {}, fakeContext);
+        await uncachedWorker.fetch(get("/_lunora/health"), {}, fakeContext);
+
+        expect(uncached.runs()).toBe(2);
+    });
+
+    it("re-runs the probes once the cache TTL has expired", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        try {
+            let runs = 0;
+            const probe: HealthProbe = {
+                check: () => {
+                    runs += 1;
+
+                    return { healthy: true };
+                },
+                critical: false,
+                name: "counter",
+            };
+            const worker = createWorker({ health: { cacheTtlMs: 1000, probes: [probe] }, shardDO: reachableNamespace });
+
+            await worker.fetch(get("/_lunora/health"), {}, fakeContext);
+
+            expect(runs).toBe(1);
+
+            await worker.fetch(get("/_lunora/health"), {}, fakeContext);
+
+            expect(runs).toBe(1);
+
+            vi.advanceTimersByTime(1001);
+
+            await worker.fetch(get("/_lunora/health"), {}, fakeContext);
+
+            expect(runs).toBe(2);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

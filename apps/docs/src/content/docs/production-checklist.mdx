@@ -160,9 +160,10 @@ Checklist:
       `LUNORA_ADMIN_TOKEN`) and include the runtime-authored per-check
       `message`s **and** the full `kind:key` binding names to aid an operator —
       but a monitor polling it must then send the token.
-- [ ] Set `cacheTtlMs` if an orchestrator polls every few seconds, so repeated
-      probes don't re-hit the bindings on every request — the last computed
-      report is reused within the window.
+- [ ] Tune `cacheTtlMs` if needed. The last computed report is reused within the
+      window so repeated probes (or an unauthenticated flood) don't re-hit the
+      bindings on every request. It defaults to `5000` ms in the `"public"`
+      posture and `0` (no cache) in `"admin"`; set `0` to always run live.
 - [ ] The Studio's **Deployment health** page (under Observability) reads these
       same endpoints live — a quick operator view of liveness, readiness, and
       per-binding status.

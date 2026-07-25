@@ -504,7 +504,7 @@ interface HealthOptions {
      * includes the (runtime-authored) messages.
      */
     auth?: "admin" | "public";
-    /** Cache the computed report for this many ms so a frequent poller does not re-run every probe. Defaults to `0`. */
+    /** Cache the computed report for this many ms so a frequent poller (or an unauthenticated flood) does not re-run every probe. Defaults to `5000` for the public posture and `0` (no cache) for the bearer-gated admin posture. */
     cacheTtlMs?: number;
     /** Skip the auto-registered D1 / R2 / queue / Hyperdrive binding probes (keep only the DO probe + `probes`). Defaults to `false`. */
     disableBindingProbes?: boolean;
