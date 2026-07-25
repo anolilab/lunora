@@ -67,6 +67,17 @@ describe("defineTable", () => {
         expect(documents.shardMode).toEqual({ field: "workspaceId", kind: "shardBy" });
     });
 
+    it(".ownedBy records the owning column for owner-scoped shapes", () => {
+        expect.assertions(2);
+
+        // Independent of `.shardBy` even when both name the same column: the shard
+        // key routes storage, `ownedBy` states who the rows belong to.
+        const nodes = defineTable({ text: v.string(), userId: v.string() }).shardBy("userId").ownedBy("userId");
+
+        expect(nodes.ownerField).toBe("userId");
+        expect(defineTable({ text: v.string() }).ownerField).toBeUndefined();
+    });
+
     it(".global marks the table as global", () => {
         expect.assertions(1);
 

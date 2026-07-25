@@ -47,6 +47,7 @@ import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
 import { tagRlsMiddleware } from "./policy-tag";
+import { deny } from "./predicates";
 import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types";
 
 /**
@@ -266,8 +267,8 @@ interface RlsContextIn {
     db: RlsDatabase;
 }
 
-/** Sentinel `WhereInput` that compiles to a vacuously-false predicate. */
-const FALSE_PREDICATE: WhereInput = { OR: [] };
+/** Sentinel `WhereInput` that compiles to a vacuously-false predicate. See `./predicates`. */
+const FALSE_PREDICATE: WhereInput = deny();
 
 /**
  * Well-known key the secure-by-default guard (`@lunora/do`'s `guardWriter`)
