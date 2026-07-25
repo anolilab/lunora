@@ -24,7 +24,20 @@ export type {
     DockerLike,
 } from "./container-logs";
 export { streamContainerLogs } from "./container-logs";
-export type { DeployDriver, DriverContext, NamedResource, ProvisionResult, ResourceGraph, ShardNamespaceResource } from "./deploy-driver";
+export type {
+    DeployDriver,
+    DeployRequest,
+    DevRequest,
+    DriverContext,
+    DriverToolchain,
+    NamedResource,
+    ProvisionResult,
+    ResourceGraph,
+    SecretRequest,
+    ShardNamespaceResource,
+    TailRequest,
+    ToolchainCommand,
+} from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework, readProjectDependencyNames } from "./detect-framework";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
@@ -45,6 +58,7 @@ export {
     writeDevServerState,
 } from "./dev-server-state";
 export { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "./dev-variables-format";
+export { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "./driver-registry";
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";

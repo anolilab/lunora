@@ -18,10 +18,16 @@
  * `reconcileWrangler*` functions the CLI called directly before, so routing a
  * command through the driver is behavior-preserving by construction.
  *
- * **Scope.** This is the inference/provisioning half of §5.3. The `deploy` /
- * `dev` / `tail` / `secret` command surfaces are not modelled yet — those
- * handlers still call wrangler directly, and folding them in is a separate
- * slice.
+ * The second half is the **toolchain surface**: which command a host runs to
+ * deploy, serve, tail, or set a secret. A driver only *describes* that command
+ * ({@link ToolchainCommand}); it never spawns. The CLI keeps ownership of
+ * running it — package-manager resolution (`pnpm exec` / `npx --` / `bun x`)
+ * and the injected spawner its tests substitute — so the driver stays free of
+ * process concerns and remains trivially testable as a pure function.
+ *
+ * Each request type below is deliberately neutral: `preview`, `environment`,
+ * `temporary` are concepts, not wrangler flags. A second host maps the same
+ * request onto its own CLI without the caller changing.
  */
 
 /** A durable, single-writer shard namespace (a Durable Object namespace on Cloudflare). */
@@ -88,6 +94,90 @@ export interface ProvisionResult {
     warnings: ReadonlyArray<string>;
 }
 
+/**
+ * A host CLI invocation, described but not run.
+ *
+ * `tool` is the binary name only (`"wrangler"`); the caller resolves how to
+ * execute it through the project's package manager. Keeping that split means a
+ * driver never has to know whether the project uses pnpm, npm, yarn, or bun.
+ */
+export interface ToolchainCommand {
+    /** Arguments for {@link ToolchainCommand.tool}. */
+    args: ReadonlyArray<string>;
+    /** The host CLI binary, e.g. `"wrangler"`. */
+    tool: string;
+}
+
+/** Neutral options for a deploy. */
+export interface DeployRequest {
+    /** Validate and bundle without publishing — nothing ships. */
+    dryRun?: boolean;
+    /** Deploy this entry file instead of the host config's default (framework composition). */
+    entry?: string;
+    /** Named deployment environment, when the host supports them. */
+    environment?: string;
+    /** Write the built bundle (and any build metadata) to this directory. */
+    outDir?: string;
+    /** Upload a preview/versioned artifact instead of taking production traffic. */
+    preview?: boolean;
+    /** Deploy to a short-lived, unauthenticated account where the host offers one. */
+    temporary?: boolean;
+}
+
+/** Neutral options for a local dev server. */
+export interface DevRequest {
+    /** Host config file to run against, when the flow uses a generated one. */
+    configPath?: string;
+    /** Named environment. */
+    environment?: string;
+    /** Extra host-specific flags the caller has already resolved. */
+    extraArgs?: ReadonlyArray<string>;
+}
+
+/** Neutral options for tailing live logs. */
+export interface TailRequest {
+    /** Named environment. */
+    environment?: string;
+    /** Output format the host tail supports (`"json"`, `"pretty"`, …). */
+    format?: string;
+    /** Free-text filter. */
+    search?: string;
+    /** Status filter (`"error"`, `"ok"`, …). */
+    status?: string;
+    /** Tail a short-lived account's deployment. */
+    temporary?: boolean;
+    /** Tail a specific deployed worker/service by name, when the host addresses them individually. */
+    worker?: string;
+}
+
+/** Neutral options for reading or writing deployment secrets. */
+export interface SecretRequest {
+    /** Named environment. */
+    environment?: string;
+    /** The secret's name — required for `put`, unused for `list`. */
+    key?: string;
+    /** Operate against a short-lived account. */
+    temporary?: boolean;
+}
+
+/**
+ * The host's command-line surface. Optional as a whole: a host with no CLI (a
+ * hypothetical API-driven target) implements `infer`/`provision` only, and the
+ * caller falls back to its own handling.
+ */
+export interface DriverToolchain {
+    /** The command that deploys the app. */
+    deploy: (request: DeployRequest) => ToolchainCommand;
+    /** The command that runs a local dev server. */
+    dev: (request: DevRequest) => ToolchainCommand;
+    /** The command that lists remote secret names. */
+    secretList: (request: SecretRequest) => ToolchainCommand;
+    /** The command that writes one secret. Its value is passed on stdin, never argv. */
+    secretPut: (request: SecretRequest) => ToolchainCommand;
+    /** The command that tails live logs. */
+    tail: (request: TailRequest) => ToolchainCommand;
+}
+
 /** Options every driver method receives. */
 export interface DriverContext {
     /** Cron expressions codegen discovered, threaded in because they come from the app's code rather than its config. */
@@ -135,4 +225,10 @@ export interface DeployDriver {
      * must fold a failed step into a warning rather than throwing.
      */
     provision: (context: DriverContext) => Promise<ProvisionResult>;
+
+    /**
+     * The host's command-line surface, or `undefined` for a host that has none.
+     * Pure: these build argv, they never spawn.
+     */
+    readonly toolchain?: DriverToolchain;
 }
