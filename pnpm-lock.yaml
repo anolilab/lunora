@@ -3062,6 +3062,49 @@ importers:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
 
+  packages/platform-cloudflare:
+    dependencies:
+      '@lunora/do':
+        specifier: workspace:*
+        version: link:../do
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
+      '@lunora/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
+    devDependencies:
+      '@cloudflare/vitest-pool-workers':
+        specifier: catalog:cloudflare
+        version: 0.18.6(@cloudflare/workers-types@5.20260719.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10)
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20260719.1
+      '@lunora/platform-conformance':
+        specifier: workspace:*
+        version: link:../platform-conformance
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.96(3d4e7b75906ff814ce07002a62702e8f)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.112.0(@cloudflare/workers-types@5.20260719.1)
+
   packages/platform-conformance:
     dependencies:
       '@lunora/platform':
