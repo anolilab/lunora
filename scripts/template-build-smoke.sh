@@ -8,7 +8,10 @@
 #   2. Injects pnpm overrides that map every @lunora/* dep to a local
 #      packed tarball so pnpm install never touches the npm registry.
 #   3. Runs `pnpm install`.
-#   4. Runs `pnpm run build` (skipped with a notice if no build script).
+#   4. For React templates, runs `lunora add auth-ui` and asserts the copy-in
+#      screens landed and their deps were injected (then re-installs).
+#   5. Runs `pnpm run build` (skipped with a notice if no build script) — which
+#      is what proves the copied auth screens actually compile in a real app.
 #   5. Records PASS / XFAIL(expected failure) / XPASS(unexpected pass) / FAIL.
 #
 # Exit codes:
@@ -237,6 +240,55 @@ for tname in "${TEMPLATES[@]}"; do
         continue
     fi
     echo "  ==> install OK"
+
+    # -- lunora add auth-ui -------------------------------------------------
+    # Only for React templates: the auth-ui payload is per-framework, and the
+    # point here is that the copy lands and compiles inside a real scaffold —
+    # the CLI's own tests copy into a bare fixture directory that never builds.
+    if [[ -f "$scaffold_dir/package.json" ]] && node -e "
+        const p = require('$scaffold_dir/package.json');
+        const deps = { ...p.dependencies, ...p.devDependencies };
+        process.exit(deps['@lunora/react'] || deps.react ? 0 : 1);
+    " 2>/dev/null; then
+        echo "  ==> lunora add auth-ui"
+        authui_log="$RESULTS_DIR/${tname}-auth-ui.log"
+        if ! (cd "$scaffold_dir" && node "$REPO_ROOT/packages/cli/dist/index.mjs" add auth-ui --yes --from "$REPO_ROOT/registry" 2>&1) > "$authui_log"; then
+            echo "  FAIL: lunora add auth-ui failed for $tname (see $authui_log)"
+            FAIL+=("$tname(auth-ui)")
+            continue
+        fi
+
+        # The user-owned copy landed where the item promises…
+        for expected in \
+            "lunora/auth-ui/core/sign-in.ts" \
+            "lunora/auth-ui/react/auth-cards.tsx" \
+            "lunora/auth-ui/client.ts" \
+            "lunora/auth-ui/styles.css"; do
+            if [[ ! -f "$scaffold_dir/$expected" ]]; then
+                echo "  FAIL: auth-ui did not write $expected in $tname"
+                FAIL+=("$tname(auth-ui:$expected)")
+                continue 2
+            fi
+        done
+
+        # …and the item's deps were injected into the scaffold's manifest.
+        if ! node -e "
+            const p = require('$scaffold_dir/package.json');
+            const deps = { ...p.dependencies, ...p.devDependencies };
+            process.exit(deps['better-auth'] && deps['@lunora/auth'] ? 0 : 1);
+        " 2>/dev/null; then
+            echo "  FAIL: auth-ui deps missing from $tname package.json"
+            FAIL+=("$tname(auth-ui:deps)")
+            continue
+        fi
+
+        echo "  ==> auth-ui OK (re-installing for the injected deps)"
+        if ! (cd "$scaffold_dir" && pnpm install --no-frozen-lockfile 2>&1) >> "$install_log"; then
+            echo "  FAIL: pnpm install after auth-ui failed for $tname (see $install_log)"
+            FAIL+=("$tname(auth-ui:install)")
+            continue
+        fi
+    fi
 
     # -- pnpm run build -----------------------------------------------------
     build_script="$(node -e "

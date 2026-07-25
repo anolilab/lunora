@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactElement } from "react";
 
 import { authClient } from "./auth-client.js";
+import { AuthUiDemo } from "./AuthUiDemo.js";
 import { Chat } from "./Chat.js";
 import { Login } from "./Login.js";
 
@@ -23,7 +24,9 @@ export const App = (): ReactElement => {
     }
 
     if (!session.data) {
-        return <Login />;
+        // `?authui=1` renders the copy-in auth screens instead of the hand-rolled
+        // form, so the E2E suite can drive them against this worker.
+        return globalThis.location.search.includes("authui=1") ? <AuthUiDemo /> : <Login />;
     }
 
     return (

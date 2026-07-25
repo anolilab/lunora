@@ -181,6 +181,15 @@ const reconcileWholeFile = (
         return write("update");
     }
 
+    if (base === hashContent(incoming)) {
+        // Only the user changed it; upstream is exactly what they started from.
+        // A `.new` here would just be a copy of their pre-edit file — pure noise
+        // on every re-add, and the conflict warning below would be a lie.
+        logger.warn(`skip (locally edited): ${file.to}`);
+
+        return { kind: "skipped", path: destinationPath };
+    }
+
     // Changed on both sides — never clobber; drop the incoming copy for manual merge.
     writeFileSync(`${destinationPath}.new`, incoming, "utf8");
     logger.warn(`conflict: ${file.to} has local edits and an upstream update — wrote ${file.to}.new (use --overwrite to take theirs)`);
