@@ -195,17 +195,41 @@ export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): Befor
         // guard invocation for another in-flight payment sees this reservation.
         state.add(amount);
 
-        if (policy.onPaymentRequired !== undefined) {
-            const approved = await policy.onPaymentRequired(requirement);
-
-            if (!approved) {
-                state.release(amount);
-
-                return { abort: true, reason: "x402 policy: payment was declined by onPaymentRequired." };
+        // A per-invocation token makes this reservation's release idempotent: the
+        // decline branch, the throw branch, and (later) `releaseSpendOnFailure` can
+        // each try to release, but only the first actually does. Without it, a throw
+        // that releases here plus `@x402/core` also firing `onPaymentCreationFailure`
+        // for the same amount would double-release and under-count the run.
+        let released = false;
+        const releaseOnce = (): void => {
+            if (released) {
+                return;
             }
-        }
 
-        return undefined;
+            released = true;
+            state.release(amount);
+        };
+
+        try {
+            if (policy.onPaymentRequired !== undefined) {
+                const approved = await policy.onPaymentRequired(requirement);
+
+                if (!approved) {
+                    releaseOnce();
+
+                    return { abort: true, reason: "x402 policy: payment was declined by onPaymentRequired." };
+                }
+            }
+
+            return undefined;
+        } catch (error) {
+            // A throw from the confirmation gate (UI-prompt timeout, rejected
+            // remote-approval fetch) must not leave the reservation held for the
+            // rest of the run — release it and rethrow so the payment still aborts.
+            releaseOnce();
+
+            throw error;
+        }
     };
 };
 

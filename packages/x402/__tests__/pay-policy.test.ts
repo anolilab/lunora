@@ -123,6 +123,66 @@ describe("buildPaymentGuard", () => {
         expect(state.spentAtomic).toBe(10_000n);
     });
 
+    it("releases its reservation and rethrows when the confirmation gate throws", async () => {
+        const onPaymentRequired = vi.fn<(r: PaymentRequirements) => boolean>(() => {
+            throw new Error("approval prompt timed out");
+        });
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ maxPerRun: "$1", onPaymentRequired }, state);
+
+        // A throw (UI-prompt timeout, rejected remote-approval fetch) must propagate…
+        await expect(guard(guardContext(requirement({ amount: "10000" })))).rejects.toThrow(/approval prompt timed out/);
+        // …but never leave the reservation held: the spend returns to its pre-reservation baseline.
+        expect(state.spentAtomic).toBe(0n);
+    });
+
+    it("a transient gate throw does not fail the run closed: a later payment under the same cap still succeeds", async () => {
+        let calls = 0;
+        const onPaymentRequired = vi.fn<(r: PaymentRequirements) => boolean>(() => {
+            calls += 1;
+
+            if (calls === 1) {
+                throw new Error("transient approval failure");
+            }
+
+            return true;
+        });
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ maxPerRun: "$0.02", onPaymentRequired }, state);
+
+        await expect(guard(guardContext(requirement({ amount: "15000" })))).rejects.toThrow(/transient approval failure/);
+        // Had the reservation leaked, this second 15000 would exceed the $0.02 (20000) cap.
+        await expect(guard(guardContext(requirement({ amount: "15000" })))).resolves.toBeUndefined();
+        expect(state.spentAtomic).toBe(15_000n);
+    });
+
+    it("does not under-count when a throwing gate is followed by onPaymentCreationFailure for the same amount", async () => {
+        // @x402/core (v2) runs before-hooks *outside* the try/catch that fires
+        // onPaymentCreationFailure, so a guard throw provably never triggers the
+        // failure hook — but the local release token + SpendState's clamp keep the
+        // ledger correct even if a future rail did call both for one reservation.
+        const state = createSpendState();
+        const guard = buildPaymentGuard(
+            {
+                maxPerRun: "$1",
+                onPaymentRequired: () => {
+                    throw new Error("gate threw");
+                },
+            },
+            state,
+        );
+        const release = releaseSpendOnFailure(state);
+
+        await expect(guard(guardContext(requirement({ amount: "10000" })))).rejects.toThrow(/gate threw/);
+        // The guard's catch already released the one reservation.
+        expect(state.spentAtomic).toBe(0n);
+
+        // A stray second release for the same amount must not drive the ledger below baseline.
+        await release(failureContext(requirement({ amount: "10000" })));
+
+        expect(state.spentAtomic).toBe(0n);
+    });
+
     it("closes the check-then-act race: two concurrent calls against one shared state cannot both pass (X402-02)", async () => {
         const state = createSpendState();
         // An async gate creates an await point between the cap check/reserve and the
