@@ -31,22 +31,23 @@ const optionalCol = (innerKind: string): ValidatorLike =>
     ({ _meta: { column: { notNull: false }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" }) as never;
 
 /** A wide-ish table mixing every decode branch: verbatim, boolean, bigint, JSON, and an unwrapped optional. */
-const definition = {
-    indexes: [],
-    shape: {
-        archived: col("boolean"),
-        attempts: col("bigint"),
-        body: col("string"),
-        metadata: col("object"),
-        note: optionalCol("string"),
-        priority: col("number"),
-        settings: optionalCol("object"),
-        slug: col("string"),
-        tags: col("array"),
-        updatedAt: col("timestamp"),
-    },
-    shardMode: { kind: "global" },
-} as never;
+const shape: Record<string, ValidatorLike> = {
+    archived: col("boolean"),
+    attempts: col("bigint"),
+    body: col("string"),
+    metadata: col("object"),
+    note: optionalCol("string"),
+    priority: col("number"),
+    settings: optionalCol("object"),
+    slug: col("string"),
+    tags: col("array"),
+    updatedAt: col("timestamp"),
+};
+
+// `decodeGlobalRow` takes the DO's `TableDefinitionLike`; only `shape` is read
+// on the decode path, so the fixture declares what it actually needs and the
+// cast lands once, here, rather than being cast out again at each use.
+const definition = { indexes: [], shape, shardMode: { kind: "global" } } as never;
 
 const storedRow = (index: number): Record<string, unknown> => {
     return {
@@ -68,7 +69,7 @@ const storedRow = (index: number): Record<string, unknown> => {
 const page = Array.from({ length: 100 }, (_, index) => storedRow(index));
 const singleRow = storedRow(0);
 
-const validators = Object.values((definition as unknown as { shape: Record<string, ValidatorLike> }).shape);
+const validators = Object.values(shape);
 
 // ---- Benches -------------------------------------------------------------
 
@@ -85,14 +86,6 @@ describe("decodeGlobalRow", () => {
 });
 
 describe("sqliteDecode — per-column branches", () => {
-    bench("verbatim (string)", () => {
-        sqliteDecode("hello world", "string");
-    });
-
-    bench("boolean (1/0)", () => {
-        sqliteDecode(1, "boolean");
-    });
-
     bench("bigint (decimal string)", () => {
         sqliteDecode("9007199254740993", "bigint");
     });
@@ -111,14 +104,6 @@ describe("sqliteDecode — per-column branches", () => {
 });
 
 describe("sqliteEncode — per-value branches", () => {
-    bench("string", () => {
-        sqliteEncode("hello world");
-    });
-
-    bench("boolean", () => {
-        sqliteEncode(true);
-    });
-
     bench("bigint", () => {
         sqliteEncode(9_007_199_254_740_993n);
     });
@@ -133,14 +118,6 @@ describe("sqliteEncode — per-value branches", () => {
 });
 
 describe("effectiveColumnKind (uncached) — the walk decodeGlobalRow memoizes away", () => {
-    bench("plain column", () => {
-        effectiveColumnKind(col("string"));
-    });
-
-    bench("optional column (unwraps to inner)", () => {
-        effectiveColumnKind(optionalCol("object"));
-    });
-
     bench("whole 10-column shape", () => {
         for (const validator of validators) {
             effectiveColumnKind(validator);

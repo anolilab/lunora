@@ -1,11 +1,10 @@
 import type { TableDiff } from "./table-diff";
 
 /**
- * Append a canonical JSON encoding of `value` onto `parts`.
- *
- * "Canonical" means structurally identical values always encode identically
- * regardless of object-key insertion order at ANY nesting depth — arrays keep
- * their order, only object keys are sorted.
+ * Recursively canonicalize a JSON-serialisable value so structurally
+ * identical `data` always encodes identically regardless of object-key
+ * insertion order at ANY nesting depth — not just the top level. Arrays
+ * keep their order; only object keys are sorted.
  *
  * Keys are sorted by UTF-16 code unit (`Array.prototype.sort`'s default), NOT
  * by `localeCompare`. `localeCompare` resolves against the runtime's default
@@ -16,122 +15,70 @@ import type { TableDiff } from "./table-diff";
  * prevent (REPLICA-05). Code-unit ordering is locale-independent and is the
  * ordering canonical-JSON schemes (JCS, RFC 8785) specify.
  *
- * Emitting straight into `parts` avoids materializing an intermediate
- * canonicalized copy of the whole value tree and then walking it a second time
- * with `JSON.stringify` — the encoding is produced in a single pass. Leaf
- * scalars and object keys still go through `JSON.stringify` so string escaping
- * matches it exactly.
+ * MIGRATION: this changed derived ids more broadly than "mixed-case keys".
+ * Code-unit order differs from ICU collation for punctuation and separators
+ * (`a-b` / `a_b` / `aXb`) and for non-ASCII keys (`"é"` now sorts after `"z"`),
+ * so in practice any row whose keys are not all lowercase ASCII letters hashes
+ * differently than before. One class was never locale-dependent at all: keys
+ * are sorted but then reassigned into a fresh object, and JS re-orders
+ * integer-like keys ("2", "10") into ascending numeric order on any object — so
+ * `JSON.stringify` emits a spec-determined order the sort never controlled.
+ * Nothing in this repo persists these ids and all three exports are
+ * `@experimental`, so this is a release note rather than a migration.
  *
- * The `undefined`/function/symbol handling mirrors `JSON.stringify`: such
- * values are omitted as object entries and become `null` as array elements.
+ * The caller hands the result to `JSON.stringify`. Encoding it here by hand
+ * instead — one pass, no intermediate copy — was tried and REVERTED: it
+ * measured 1.3-2.2x SLOWER on nested payloads, because `JSON.stringify` is a
+ * native fast path that JS-side string building cannot beat, and it meant
+ * re-implementing `JSON.stringify`'s escaping and `undefined`/`toJSON` rules by
+ * hand for no gain. See `__bench__/apply-diff-hotpath.bench.ts`, which keeps
+ * that comparison so the conclusion stays checkable.
  */
-/*
- * The three encoders below are mutually recursive — a value contains arrays and
- * objects, which contain values — so whichever is declared first necessarily
- * references one declared later. That is inherent to the shape, not an ordering
- * mistake, hence the scoped exemption.
- */
-/* eslint-disable @typescript-eslint/no-use-before-define -- mutually recursive encoders; no declaration order satisfies the rule */
-const appendCanonicalJson = (value: unknown, parts: string[]): void => {
+const canonicalizeForHash = (value: unknown): unknown => {
     if (Array.isArray(value)) {
-        appendCanonicalArray(value, parts);
-
-        return;
+        return value.map((item) => canonicalizeForHash(item));
     }
 
     if (value !== null && typeof value === "object") {
-        appendCanonicalObject(value as Record<string, unknown>, parts);
+        const record = value as Record<string, unknown>;
+        const sortedKeys = Object.keys(record);
 
-        return;
+        // The bare (code-unit) sort is deliberate and must NOT gain a
+        // `localeCompare` comparator — see the ordering rationale above. Sorting
+        // in place is safe because `Object.keys` returns a fresh array.
+        // eslint-disable-next-line sonarjs/no-alphabetical-sort -- code-unit order is required for cross-locale determinism; a localeCompare comparator is the bug, not the fix
+        sortedKeys.sort();
+
+        const result: Record<string, unknown> = {};
+
+        for (const key of sortedKeys) {
+            result[key] = canonicalizeForHash(record[key]);
+        }
+
+        return result;
     }
 
-    // Scalars (and `null`). `JSON.stringify` returns `undefined` only for
-    // undefined/function/symbol, which the callers below already filtered out,
-    // so the result here is always a string.
-    parts.push(JSON.stringify(value));
+    return value;
 };
-
-/** True for the values `JSON.stringify` refuses to encode (omitted in objects, `null` in arrays). */
-const isUnencodable = (value: unknown): boolean => value === undefined || typeof value === "function" || typeof value === "symbol";
-
-const appendCanonicalArray = (value: ReadonlyArray<unknown>, parts: string[]): void => {
-    parts.push("[");
-
-    for (const [index, item] of value.entries()) {
-        if (index > 0) {
-            parts.push(",");
-        }
-
-        if (isUnencodable(item)) {
-            parts.push("null");
-        } else {
-            appendCanonicalJson(item, parts);
-        }
-    }
-
-    parts.push("]");
-};
-
-const appendCanonicalObject = (record: Record<string, unknown>, parts: string[]): void => {
-    /*
-     * `Object.keys` returns a fresh array, so sorting it in place is correct and
-     * avoids the extra allocation `toSorted()` would add to this hot path —
-     * hence the `unicorn/no-array-sort` exemption. The bare (code-unit) sort is
-     * deliberate and must NOT gain a `localeCompare` comparator: see the
-     * canonical-ordering rationale on `appendCanonicalJson`. A locale-sensitive
-     * comparator here would make derived row ids differ between clients.
-     */
-    // eslint-disable-next-line unicorn/no-array-sort, sonarjs/no-alphabetical-sort -- code-unit order is required for cross-locale determinism; in-place sort of a fresh array is safe
-    const keys = Object.keys(record).sort();
-
-    parts.push("{");
-
-    let first = true;
-
-    for (const key of keys) {
-        const child = record[key];
-
-        if (isUnencodable(child)) {
-            continue;
-        }
-
-        if (first) {
-            first = false;
-        } else {
-            parts.push(",");
-        }
-
-        parts.push(JSON.stringify(key), ":");
-        appendCanonicalJson(child, parts);
-    }
-
-    parts.push("}");
-};
-/* eslint-enable @typescript-eslint/no-use-before-define */
 
 const hex4 = (limb: number): string => limb.toString(16).padStart(4, "0");
 
 /**
- * 64-bit FNV-1a over the concatenation of `parts`, as 16 lowercase hex digits.
+ * 64-bit FNV-1a over `input`, as 16 lowercase hex digits.
  *
  * The hash state is held as four 16-bit limbs in plain `number`s rather than a
  * `BigInt`. BigInt allocates a heap object per operation, and this runs once
- * per character of the hash input — the limb form is ~8x faster and produces
- * bit-identical digests (verified against the BigInt implementation in
- * `__tests__/apply-diff.test.ts`).
+ * per character of the hash input — the limb form measured ~8x faster in
+ * isolation (`__bench__/apply-diff-hotpath.bench.ts` benches it against the
+ * BigInt form over a fixed string) and produces bit-identical digests
+ * (`__tests__/apply-diff.test.ts` pins the two together).
  *
  * The FNV-1a prime `0x0000_0100_0000_01b3` has only two non-zero 16-bit limbs
  * (`0x01b3` at limb 0 and `0x0100` at limb 2), so the full 4x4 limb product
  * collapses to the two multiplications per limb below. Every intermediate stays
  * well under 2^32, so `>>> 16` is a valid carry extraction.
- *
- * Hashing `parts` without joining them first is equivalent to hashing the
- * concatenated string: FNV-1a is a left-to-right fold over code points, and no
- * surrogate pair can straddle a part boundary (every part is either an ASCII
- * delimiter or a complete, well-formed `JSON.stringify` token).
- * @param parts Fragments whose concatenation is the hash input.
  */
-const fnv1a64Hex = (parts: ReadonlyArray<string>): string => {
+const fnv1a64Hex = (input: string): string => {
     /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and multiplication; the bit ops ARE the algorithm */
     // Offset basis 0xcbf29ce484222325, low limb first.
     let h0 = 0x23_25;
@@ -139,28 +86,26 @@ const fnv1a64Hex = (parts: ReadonlyArray<string>): string => {
     let h2 = 0x9c_e4;
     let h3 = 0xcb_f2;
 
-    for (const part of parts) {
-        for (let index = 0; index < part.length; index += 1) {
-            const point = part.codePointAt(index) ?? 0;
+    for (let index = 0; index < input.length; index += 1) {
+        const point = input.codePointAt(index) ?? 0;
 
-            // A code point above the BMP occupies limbs 0 and 1.
-            h0 ^= point & 0xff_ff;
-            h1 ^= (point >>> 16) & 0xff_ff;
+        // A code point above the BMP occupies limbs 0 and 1.
+        h0 ^= point & 0xff_ff;
+        h1 ^= (point >>> 16) & 0xff_ff;
 
-            const p0 = h0 * 0x01_b3;
-            const p1 = h1 * 0x01_b3;
-            const p2 = h2 * 0x01_b3 + h0 * 0x01_00;
-            const p3 = h3 * 0x01_b3 + h1 * 0x01_00;
+        const p0 = h0 * 0x01_b3;
+        const p1 = h1 * 0x01_b3;
+        const p2 = h2 * 0x01_b3 + h0 * 0x01_00;
+        const p3 = h3 * 0x01_b3 + h1 * 0x01_00;
 
-            const c1 = p1 + (p0 >>> 16);
-            const c2 = p2 + (c1 >>> 16);
-            const c3 = p3 + (c2 >>> 16);
+        const c1 = p1 + (p0 >>> 16);
+        const c2 = p2 + (c1 >>> 16);
+        const c3 = p3 + (c2 >>> 16);
 
-            h0 = p0 & 0xff_ff;
-            h1 = c1 & 0xff_ff;
-            h2 = c2 & 0xff_ff;
-            h3 = c3 & 0xff_ff;
-        }
+        h0 = p0 & 0xff_ff;
+        h1 = c1 & 0xff_ff;
+        h2 = c2 & 0xff_ff;
+        h3 = c3 & 0xff_ff;
     }
 
     return hex4(h3) + hex4(h2) + hex4(h1) + hex4(h0);
@@ -186,11 +131,14 @@ const fnv1a64Hex = (parts: ReadonlyArray<string>): string => {
  */
 const deriveInsertId = (diff: Pick<TableDiff, "id" | "table" | "timestamp">, changeIndex: number, data: Record<string, unknown>): string => {
     const diffIdentity = diff.id ?? String(diff.timestamp);
-    const parts = [diff.table, "::", diffIdentity, "::", String(changeIndex), "::"];
+    // Interpolation (not array-of-parts) is load-bearing: `table` and `id` are
+    // declared `string` but arrive as untyped JSON over the poke protocol, and a
+    // template literal coerces a stray number into the digest instead of
+    // silently contributing nothing to it — which would make two distinct diffs
+    // derive the SAME row key. Covered in `apply-diff-canonical.test.ts`.
+    const input = `${diff.table}::${diffIdentity}::${String(changeIndex)}::${JSON.stringify(canonicalizeForHash(data))}`;
 
-    appendCanonicalJson(data, parts);
-
-    return `row-${fnv1a64Hex(parts)}`;
+    return `row-${fnv1a64Hex(input)}`;
 };
 
 /**
@@ -201,11 +149,7 @@ const deriveInsertId = (diff: Pick<TableDiff, "id" | "table" | "timestamp">, cha
  * into one map with a single copy up front instead of one copy per diff.
  */
 const applyDiffInto = (target: Map<string, Record<string, unknown>>, diff: TableDiff): void => {
-    const { changes } = diff;
-
-    for (let changeIndex = 0; changeIndex < changes.length; changeIndex += 1) {
-        const change = changes[changeIndex] as (typeof changes)[number];
-
+    for (const [changeIndex, change] of diff.changes.entries()) {
         switch (change.type) {
             case "delete": {
                 target.delete(change.id);

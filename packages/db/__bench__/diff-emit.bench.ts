@@ -84,8 +84,12 @@ const halfRemoved = toMap(rows(SNAPSHOT_SIZE).slice(0, SNAPSHOT_SIZE / 2), byId)
  * against the state the first one left behind and measure a no-op instead of
  * the intended delta. Re-priming inside the body would instead fold a full
  * 500-row serialization into every sample and swamp the difference between the
- * cases. Copying a precomputed `Map` of short strings is cheap, constant across
- * every bench below, and leaves each iteration starting from the same state.
+ * cases. Copying a precomputed `Map` of short strings is far cheaper than
+ * re-serializing, and every bench below pays it — including cold start, which
+ * copies an empty map of the same shape purely so the setup cost is identical
+ * across all five. Without that, cold start would be the only case not paying
+ * it, and the local run showed the skew flipping `small delta` and `full churn`
+ * into an impossible order.
  */
 const primedCache = ((): Map<string, string> => {
     const cache = new Map<string, string>();
@@ -95,20 +99,43 @@ const primedCache = ((): Map<string, string> => {
     return cache;
 })();
 
+/** An empty cache, copied per iteration so cold start pays the same setup as the rest. */
+const emptyCache = new Map<string, string>();
+
 /** A fresh emitter whose synced cache already reflects `snapshot`. */
 const primed = (): ((next: Map<string, Row>) => void) => makeDiffEmit<Row>(new Map(primedCache), sink);
+
+/**
+ * Emitting the SAME snapshot is idempotent — it leaves the cache exactly as it
+ * found it — so this one emitter can be reused across every iteration with no
+ * per-iteration copy at all. That matters here specifically: this is the case
+ * whose whole point is that it does no writes, so it is the smallest number on
+ * the board and the one a constant setup cost would distort most.
+ */
+const steadyEmit = makeDiffEmit<Row>(new Map(primedCache), sink);
+
+/** Prebuilt row list for the `toMap` bench — building it is not what is measured. */
+const rowList = rows(SNAPSHOT_SIZE);
 
 // ---- Benches -------------------------------------------------------------
 
 describe("makeDiffEmit — 500-row snapshot", () => {
     bench("cold start (every row an insert)", () => {
-        makeDiffEmit<Row>(new Map<string, string>(), sink)(snapshot);
+        makeDiffEmit<Row>(new Map(emptyCache), sink)(snapshot);
     });
 
     bench("steady state (identical snapshot, zero writes)", () => {
-        primed()(snapshot);
+        steadyEmit(snapshot);
     });
 
+    /*
+     * Do not be surprised that this lands at or just below `full churn` despite
+     * writing 25 rows instead of 500. The writes are the cheap part (the sink is
+     * a no-op); the cost is the per-row string compare, and an UNCHANGED row is
+     * the expensive case — two equal strings with different backing objects
+     * compare character by character to the end, while a changed row can differ
+     * early and bail. 5% changed therefore means 95% full-length compares.
+     */
     bench("small delta (5% of rows changed)", () => {
         primed()(smallDelta);
     });
@@ -124,6 +151,6 @@ describe("makeDiffEmit — 500-row snapshot", () => {
 
 describe("toMap — indexing a row list by key", () => {
     bench("500 rows", () => {
-        toMap(rows(SNAPSHOT_SIZE), byId);
+        toMap(rowList, byId);
     });
 });

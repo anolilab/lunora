@@ -1,8 +1,7 @@
 import { bench, describe } from "vitest";
 
 import { LunoraError } from "../src/base";
-import { findSolutionByMessage, flattenHint, getCatalogEntry, isInternalCode, resolveHint } from "../src/catalog";
-import { isLunoraError } from "../src/guards";
+import { findSolutionByMessage, flattenHint, resolveHint } from "../src/catalog";
 import { toErrorBody } from "../src/to-error-body";
 
 /*
@@ -19,8 +18,11 @@ import { toErrorBody } from "../src/to-error-body";
  * "unmatched message" bench (a full scan that finds nothing) is the worst case
  * and the number to watch as the rule list grows.
  *
- * `getCatalogEntry` / `isInternalCode` are `Object.hasOwn` guarded object reads
- * rather than a Map lookup; they are benched to confirm that stays free.
+ * `getCatalogEntry`, `isInternalCode` and `isLunoraError` are deliberately NOT
+ * benched on their own. Each is a property read plus a guard — a handful of
+ * instructions that CodSpeed's instrumentation dwarfs, so a standalone bench
+ * would emit noise-driven regression alerts without guarding anything. They sit
+ * on the `toErrorBody` path above, where a real regression would surface.
  */
 
 // ---- Fixtures ------------------------------------------------------------
@@ -85,32 +87,6 @@ describe("resolveHint — hint resolution order", () => {
 describe("findSolutionByMessage — linear rule scan", () => {
     bench("unmatched message (worst case)", () => {
         findSolutionByMessage(unmatchedMessage);
-    });
-});
-
-describe("catalog + guard primitives", () => {
-    bench("getCatalogEntry — known code", () => {
-        getCatalogEntry("NOT_FOUND");
-    });
-
-    bench("getCatalogEntry — unknown code", () => {
-        getCatalogEntry("NOT_A_REAL_CODE");
-    });
-
-    bench("getCatalogEntry — inherited key (prototype guard)", () => {
-        getCatalogEntry("constructor");
-    });
-
-    bench("isInternalCode", () => {
-        isInternalCode("INTERNAL");
-    });
-
-    bench("isLunoraError — match", () => {
-        isLunoraError(publicError);
-    });
-
-    bench("isLunoraError — foreign error", () => {
-        isLunoraError(foreignError);
     });
 });
 

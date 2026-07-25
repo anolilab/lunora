@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { bench, describe } from "vitest";
 
+import type { Lint } from "../src";
 import { ALL_LINTS, fromServerSchema, runAdvisor, STATIC_LINTS } from "../src";
 
 /*
@@ -108,8 +109,27 @@ const medium = { schema: buildSchema(25) };
 const large = { schema: buildSchema(100) };
 const ring = { schema: buildRingSchema(100) };
 
-const circularFkLint = STATIC_LINTS.find((lint) => lint.name === "circular_fk");
-const duplicateIndexLint = STATIC_LINTS.find((lint) => lint.name === "duplicate_index");
+/**
+ * Resolve a lint by name, throwing when it is gone.
+ *
+ * Deliberately not `find(...)?.run(...)`: if a lint is renamed or split, the
+ * optional chain would turn its bench into a no-op that reports a near-zero
+ * time — which reads on a CodSpeed dashboard as a spectacular improvement. A
+ * perf guard that fails silently into "everything got faster" is worse than no
+ * guard, so this fails the bench run instead.
+ */
+const lintNamed = (name: string): Lint => {
+    const lint = STATIC_LINTS.find((candidate) => candidate.name === name);
+
+    if (lint === undefined) {
+        throw new Error(`bench fixture is stale: no static lint named "${name}"`);
+    }
+
+    return lint;
+};
+
+const circularFkLint = lintNamed("circular_fk");
+const duplicateIndexLint = lintNamed("duplicate_index");
 
 // ---- Benches -------------------------------------------------------------
 
@@ -139,14 +159,14 @@ describe("runAdvisor — every lint, 25-table schema", () => {
 
 describe("individual lints with super-linear shapes — 100-table schema", () => {
     bench("circular_fk (relation-graph walk, realistic fan-out)", () => {
-        circularFkLint?.run(large);
+        circularFkLint.run(large);
     });
 
     bench("circular_fk (worst case: every table in one FK ring)", () => {
-        circularFkLint?.run(ring);
+        circularFkLint.run(ring);
     });
 
     bench("duplicate_index (pairwise index compare)", () => {
-        duplicateIndexLint?.run(large);
+        duplicateIndexLint.run(large);
     });
 });
