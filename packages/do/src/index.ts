@@ -29,7 +29,7 @@ export {
 } from "./auth-metrics";
 // Cloudflare implementations of the `@lunora/platform` host contracts. These
 // are what `@lunora/platform-cloudflare` will re-export as the default host.
-export { createShardDirectory, createShardHost, createSocketHost } from "./cloudflare-host";
+export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "./cloudflare-host";
 export type { ContextMetrics, ContextTracer, MetricsDeps, SpanHandle, TraceAnchor, TracerDeps } from "./context-telemetry";
 export { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
 export type {

@@ -54,10 +54,19 @@ export interface SchedulerHost {
     cancel: (id: string) => Promise<boolean>;
 
     /**
-     * Register a cron schedule. The `cron` expression uses standard cron
-     * syntax; the `functionPath` is dispatched on each tick.
+     * Register a cron schedule at runtime. The `cron` expression uses standard
+     * cron syntax; the `functionPath` is dispatched on each tick.
+     *
+     * **Optional, and omitted by hosts whose crons are declared rather than
+     * registered.** Cloudflare is one: `triggers.crons` lives in
+     * `wrangler.jsonc` and is reconciled at build time by the config layer, so
+     * there is no runtime call that could add one. Such a host omits this
+     * method rather than supplying one that throws or silently no-ops —
+     * presence is the host's declaration that dynamic cron works, exactly as
+     * with `SocketHost.setTag`. A caller that finds it absent must fall
+     * back to the target's declarative configuration.
      */
-    cron: (cron: string, functionPath: string, args?: Record<string, unknown>) => Promise<void>;
+    cron?: (cron: string, functionPath: string, args?: Record<string, unknown>) => Promise<void>;
 
     /**
      * Schedule a function call for later execution. The `functionPath` and
