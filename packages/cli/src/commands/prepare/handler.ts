@@ -6,7 +6,7 @@
  */
 import type { CodegenResult } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import { CLOUDFLARE_DRIVER } from "@lunora/config";
+import { resolveDeployDriver } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -25,6 +25,13 @@ interface PrepareCommandOptions {
     apiSpec?: ApiSpec;
     cwd?: string;
     logger: Logger;
+
+    /**
+     * Deploy target, matching `deploy` and `logs`. Defaults to `"cloudflare"`.
+     * Resolved through the same registry they use so a second driver does not
+     * have to be found here separately.
+     */
+    target?: string;
     /** Re-bless the committed schema baseline with the current shape. */
     updateSchemaBaseline?: boolean;
 }
@@ -53,14 +60,15 @@ interface PrepareCommandResult {
  * to the inline `inferLunoraBindings` + `reconcileWrangler*` sequence it
  * replaces — the driver delegates to exactly those functions.
  */
-const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> = []): Promise<void> => {
+const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> = [], target?: string): Promise<void> => {
     const context = { crons: cronTriggers, projectRoot: cwd };
+    const driver = resolveDeployDriver(target);
 
     // The portable summary of what the app needs — target-independent, so it
     // reads the same whichever driver is selected. Best-effort: a failed
     // inference must not stop provisioning, which reports its own warnings.
     try {
-        const graph = await CLOUDFLARE_DRIVER.infer(context);
+        const graph = await driver.infer(context);
         const requirements = [
             graph.shardNamespaces.length > 0 ? `${String(graph.shardNamespaces.length)} shard namespace(s)` : undefined,
             graph.queues.length > 0 ? `${String(graph.queues.length)} queue(s)` : undefined,
@@ -72,13 +80,13 @@ const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: Read
         ].filter((entry): entry is string => entry !== undefined);
 
         if (requirements.length > 0) {
-            logger.info(`${CLOUDFLARE_DRIVER.name} target requires: ${requirements.join(", ")}`);
+            logger.info(`${driver.name} target requires: ${requirements.join(", ")}`);
         }
     } catch {
         // Inference is reporting-only here; `provision` surfaces the real problem.
     }
 
-    const provisioned = await CLOUDFLARE_DRIVER.provision(context);
+    const provisioned = await driver.provision(context);
 
     if (provisioned.changed) {
         logger.success(`provisioned: ${provisioned.added.join(", ")} → ${provisioned.configPath ?? "wrangler.jsonc"}`);
@@ -139,7 +147,7 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
         };
     }
 
-    await provisionBindings(cwd, options.logger, codegen.cronTriggers);
+    await provisionBindings(cwd, options.logger, codegen.cronTriggers, options.target);
 
     const validation = validateWrangler({ projectRoot: cwd });
 

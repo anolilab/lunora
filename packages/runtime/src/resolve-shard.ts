@@ -13,28 +13,46 @@ import { resolveShard as resolveShardStub } from "@lunora/platform";
  * lands on the direct branch; one that doesn't lands on the two-step
  * `idForName` + `get` branch — the same preference the contract's own
  * `resolveShard` encodes.
+ *
+ * Memoized per namespace: bindings are long-lived (one per worker, or one per
+ * jurisdiction view of one), while `resolveShard` runs on the per-request
+ * routing path. Building a fresh object and three closures on every resolution
+ * to describe an object that never changes is pure allocation churn. Keyed
+ * weakly so a discarded namespace — a one-off jurisdiction view — does not
+ * outlive its binding.
  */
+const directoryCache = new WeakMap<ShardNamespaceLike, ShardDirectory>();
+
 const toDirectory = (namespace: ShardNamespaceLike): ShardDirectory => {
+    const cached = directoryCache.get(namespace);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
     const jurisdiction =
         typeof namespace.jurisdiction === "function"
             ? (hint: ShardJurisdiction) =>
                   toDirectory((namespace.jurisdiction as NonNullable<ShardNamespaceLike["jurisdiction"]>)(hint as DurableObjectJurisdiction))
             : undefined;
 
-    if (typeof namespace.getByName === "function") {
-        return {
-            get: (id) => namespace.get(id),
-            getByName: namespace.getByName,
-            idForName: (name) => namespace.idFromName(name),
-            jurisdiction,
-        };
-    }
+    const directory: ShardDirectory =
+        typeof namespace.getByName === "function"
+            ? {
+                  get: (id) => namespace.get(id),
+                  getByName: namespace.getByName,
+                  idForName: (name) => namespace.idFromName(name),
+                  jurisdiction,
+              }
+            : {
+                  get: (id) => namespace.get(id),
+                  idForName: (name) => namespace.idFromName(name),
+                  jurisdiction,
+              };
 
-    return {
-        get: (id) => namespace.get(id),
-        idForName: (name) => namespace.idFromName(name),
-        jurisdiction,
-    };
+    directoryCache.set(namespace, directory);
+
+    return directory;
 };
 
 /**
