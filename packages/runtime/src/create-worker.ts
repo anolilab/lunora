@@ -4,6 +4,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+import { otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -30,7 +31,7 @@ import { buildKvAdminRoutes, KV_VALUE_MAX_BODY_BYTES, KV_VALUE_PATH } from "./kv
 import type { LogArchiveConfig } from "./log-archive-admin-routes";
 import { buildLogArchiveAdminRoutes } from "./log-archive-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
-import { emitRpcEvent } from "./observability";
+import { emitRpcEvent, flushSink } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { DispatchTraceContext } from "./otel-trace";
 import { beginDispatchTrace, injectTraceContext } from "./otel-trace";
@@ -561,6 +562,22 @@ interface NotifySubscriptionStoreLike {
 }
 
 interface WorkerOptions {
+    /**
+     * Whether an inbound W3C `traceparent` is adopted, making a dispatch a child
+     * of the caller's span instead of the root of its own trace. Default `true`.
+     *
+     * Leave it on behind a gateway or when another service calls this worker —
+     * that is what joins the two into one navigable trace, and it is what every
+     * upstream OTel producer assumes.
+     *
+     * Turn it **off** on an endpoint reachable by untrusted clients. The trace id
+     * is attacker-controlled: a client that pins every request to one id collapses
+     * a collector's per-trace view into a single unusable blob. With it off,
+     * dispatches always mint their own ids (the pre-existing behaviour) and an
+     * inbound header is ignored.
+     */
+    acceptTraceContext?: boolean;
+
     /**
      * An additional, async authorization gate for the `/_lunora/admin/*` plane
      * (the Studio's HTTP + WS endpoints), OR-ed with the static {@link WorkerOptions.adminToken}
@@ -1465,8 +1482,62 @@ const identityExpiryMs = (identity: ResolvedIdentity): number | undefined => {
  * DO reconstructs from the `x-lunora-userid` / `x-lunora-identity` headers.
  */
 
-const resolveForwardContext = async (request: Request, env: unknown, resolveIdentity: WorkerOptions["resolveIdentity"]): Promise<ForwardContext> => {
+/**
+ * The upstream `traceparent` to adopt for this request, or `undefined` to mint a
+ * fresh trace.
+ *
+ * Adopting it is what lets a Lunora dispatch appear as a child of the caller's
+ * span instead of as the root of a separate, unlinkable trace — the entire point
+ * of distributed tracing.
+ *
+ * Gated because the id is attacker-controlled on a public endpoint: a client can
+ * pin every request to one trace id and make a collector's per-trace view
+ * useless. Default on (the OTel norm, and what every gateway assumes); set
+ * `acceptTraceContext: false` on an endpoint exposed to untrusted callers, where
+ * dispatches then mint their own ids exactly as before.
+ *
+ * Validated, not trusted verbatim: `parseTraceparent` rejects a malformed or
+ * all-zero header, so a garbage value falls back to minting rather than poisoning
+ * the trace with an unparseable id.
+ */
+const adoptedTraceparent = (request: Request, acceptTraceContext: boolean): string | undefined => {
+    if (!acceptTraceContext) {
+        return undefined;
+    }
+
+    const inbound = request.headers.get("traceparent");
+
+    return inbound !== null && parseTraceparent(inbound) !== undefined ? inbound : undefined;
+};
+
+/**
+ * Name of the queue a consumer batch came from, for the trigger's span name.
+ *
+ * The batch is typed `unknown` at this boundary (the consumer handler is
+ * codegen-built and the worker deliberately doesn't depend on `@lunora/queue`'s
+ * types), so the name is read defensively: a batch without a string `queue`
+ * falls back to a constant rather than stringifying `undefined` into the span
+ * name, which would show up in a collector as a literal `queue:undefined` group.
+ */
+const queueNameOf = (batch: unknown): string => {
+    const name = (batch as { queue?: unknown } | null | undefined)?.queue;
+
+    return typeof name === "string" && name.length > 0 ? name : "unknown";
+};
+
+const resolveForwardContext = async (
+    request: Request,
+    env: unknown,
+    resolveIdentity: WorkerOptions["resolveIdentity"],
+    acceptTraceContext = true,
+): Promise<ForwardContext> => {
     const headers: Record<string, string> = { "content-type": "application/json" };
+
+    const inboundTraceparent = adoptedTraceparent(request, acceptTraceContext);
+
+    if (inboundTraceparent !== undefined) {
+        headers["traceparent"] = inboundTraceparent;
+    }
     const authorization = request.headers.get("authorization");
     const cookie = request.headers.get("cookie");
     const bookmark = request.headers.get("x-d1-bookmark");
@@ -2762,7 +2833,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     });
 
     const buildHttpActionContext = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<HttpActionContext> => {
-        const { claims, headers, userId } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { claims, headers, userId } = await resolveForwardContext(request, env, publicResolveIdentity, options.acceptTraceContext);
 
         const run = async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
             const functionPath = (reference as { __lunoraRef?: unknown }).__lunoraRef;
@@ -2869,7 +2940,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // forwarded to the DO so the socket carries a verified userId (the basis
         // for trusted `onConnect`/`onDisconnect` lifecycle hooks). Mirrors the
         // RPC path's `resolveForwardContext` → `authorize*` ordering.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.acceptTraceContext);
 
         if (options.authorizeShard) {
             const allowed = await options.authorizeShard(identity, shardKey);
@@ -2999,7 +3070,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Resolve the caller's identity once and forward it to the voice DO so the
         // session's `agents:*` thread writes are attributed to the caller (RLS /
         // ownership). Same shape/authorization ordering as the RPC/WS paths.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.acceptTraceContext);
 
         if (options.authorizeShard) {
             const allowed = await options.authorizeShard(identity, threadKey);
@@ -3297,7 +3368,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Forward selected headers from the inbound request so the DO can
         // honour auth, sessions, and D1 read-your-writes consistency.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.acceptTraceContext);
 
         await authorizeRpcEnvelope(envelope, identity);
 
@@ -3433,7 +3504,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Use `publicResolveIdentity` (the contract-wrapped resolver) so this public
         // data path enforces `defineIdentity(...)` exactly like `handleRpc` — the raw
         // resolver would let contract-violating claims through to the shard verbatim.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.acceptTraceContext);
 
         // Validate + group by target shard (throws on a malformed/reserved/oversized batch).
         const groups = groupBatchCallsByShard(calls, defaultShard);
@@ -3686,7 +3757,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // Resolve identity off the SAME inbound request the HTTP path uses, so
             // cookies / bearer / bookmark and the derived `x-lunora-*` headers are
             // byte-identical to `handleRpc`'s.
-            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.acceptTraceContext);
 
             // Run the IDENTICAL per-shard authorization gate. A `shardKey` of
             // `undefined` resolves to `defaultShard` for both the gate and the
@@ -3857,6 +3928,54 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * collected and rethrown together so one failure neither masks the other nor
      * is silently swallowed — the platform sees the cron invocation fail.
      */
+
+    /**
+     * Wrap a NON-`fetch` worker trigger — a queue batch, a cron fire — in the same
+     * telemetry the RPC path gets: its own trace, one SERVER span, and a flush of
+     * the batching sink at the invocation boundary.
+     *
+     * Without this, everything a queue consumer or cron job does is invisible:
+     * `ctx.log`/`ctx.trace` inside the dispatched function still fire, but they
+     * hang off a trace with no root, so a collector shows orphan spans and no
+     * "this cron took 40s" bar to hang them under. Background work is exactly
+     * where you least want a blind spot, since nobody is watching a response time.
+     *
+     * The trace is always minted here rather than adopted: a queue message or a
+     * cron controller carries no `traceparent`. Linking a consumer span back to
+     * the producing request is instead the job of `span.addLink`, since parenting
+     * would be wrong — the producer's request is long over by then.
+     */
+    const instrumentTrigger = async <T>(functionPath: string, context: ExecutionContextLike, run: () => Promise<T>): Promise<T> => {
+        const { observability, sampling } = options;
+        const startedAt = Date.now();
+        const traceId = otlpRandomHex(16);
+        const spanId = otlpRandomHex(8);
+        const sinkContext: ObservabilitySinkContext | undefined = context.waitUntil
+            ? {
+                  waitUntil: (promise) => {
+                      context.waitUntil?.(promise);
+                  },
+              }
+            : undefined;
+
+        try {
+            const result = await run();
+
+            emitRpcEvent(observability, { durationMs: Date.now() - startedAt, functionPath, ok: true, spanId, traceId }, sinkContext, sampling);
+
+            return result;
+        } catch (error) {
+            emitRpcEvent(observability, { ...buildErrorEvent(functionPath, Date.now() - startedAt, error, {}), spanId, traceId }, sinkContext, sampling);
+
+            throw error;
+        } finally {
+            // The invocation boundary. A Workers isolate can be frozen the moment
+            // this returns, so a batching sink that has not been told to ship
+            // would simply lose everything it buffered.
+            flushSink(observability, sinkContext);
+        }
+    };
+
     const handleScheduled = async (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike): Promise<void> => {
         // A cron can fire on an isolate that never served a `fetch`, so resolve
         // `env.LUNORA_ADMIN_TOKEN` here too — the built-in backup authenticates its
@@ -3978,7 +4097,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // a non-exposed procedure has no route (default-closed).
     const invokeExposed: RestInvoke = async ({ args, env, functionPath, request, shardKey, waitUntil }) => {
         const envelope: RpcEnvelope = { args, functionPath, ...(shardKey === undefined ? {} : { shardKey }) };
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.acceptTraceContext);
 
         await authorizeRpcEnvelope(envelope, identity);
 
@@ -4249,16 +4368,40 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return decorateResponse(response, request, resolvedSecurity);
             } catch (error: unknown) {
                 return decorateResponse(toErrorResponse(error), request, resolvedSecurity);
+            } finally {
+                // Invocation boundary: ship whatever the (batching) sink buffered
+                // during this request. Registered through `waitUntil` so the export
+                // outlives the response instead of racing isolate teardown.
+                flushSink(
+                    options.observability,
+                    context.waitUntil
+                        ? {
+                              waitUntil: (promise) => {
+                                  context.waitUntil?.(promise);
+                              },
+                          }
+                        : undefined,
+                );
             }
         },
         async queue(batch, env, context) {
             // Forward to the codegen-built push-consumer handler (which routes by
             // `batch.queue` via `@lunora/queue`). A no-op when the app declares no
             // push queues, so re-exporting `queue` unconditionally is harmless.
-            await options.queue?.(batch, env, context);
+            //
+            // Named after the queue so a collector groups consumer invocations per
+            // queue rather than lumping every batch under one span name.
+            await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async () => {
+                await options.queue?.(batch, env, context);
+            });
         },
         async scheduled(controller, env, context) {
-            await handleScheduled(controller, env, context);
+            // Named after the cron EXPRESSION, which is the stable identity of a
+            // trigger — `scheduledTime` varies per fire and would make every run
+            // its own group in a collector.
+            await instrumentTrigger(`cron:${controller.cron}`, context, async () => {
+                await handleScheduled(controller, env, context);
+            });
         },
         serverQuery,
     };
