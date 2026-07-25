@@ -351,7 +351,7 @@ interface ContextMetrics {
 ### `ContextTracer` (type)
 
 ```ts
-type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, options?: LogFields | SpanOptions) => Promise<T>;
 ```
 
 ### `CountArgs` (type)
@@ -1982,11 +1982,16 @@ abstract class ShardDO {
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
     protected recordChangedTable(table: string): void;
     protected flushMigrationProgress(): Promise<void>;
-    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink): void;
+    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor): void;
     protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger;
     protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer;
+    protected resolveDispatchAnchor(identityScoped: boolean): TraceAnchor;
+    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T;
+    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): ContextFetch;
+    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle;
     protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics;
     protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void;
+    protected handleWebSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void>;
     protected recordSpan(span: SpanEvent, sink?: TelemetrySink): void;
     protected isIdentityIndependent(functionPath: string): boolean;
     protected readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): {
@@ -2105,8 +2110,15 @@ type SourceRefresh = "manual" | {
 
 ```ts
 interface SpanHandle {
+    addEvent: (name: string, attributes?: LogFields) => void;
+    addLink: (link: SpanLink) => void;
+    recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;
+    spanContext: () => {
+        spanId: string;
+        traceId: string;
+    };
 }
 ```
 
@@ -2385,10 +2397,15 @@ interface TablesColumnsResult {
 
 ```ts
 interface TelemetrySink {
+    flush?: (context?: LogSinkContext) => void;
     fuseCloudflareTraces?: boolean;
+    instrumentDatabase?: DatabaseInstrumentation;
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
+    traceFetch?: boolean | {
+        propagate?: ((url: URL) => boolean) | boolean;
+    };
 }
 ```
 
@@ -2740,6 +2757,7 @@ const diffExternalSource: (pulled: ReadonlyArray<Record<string, unknown>>, basel
 ```ts
 const dispatchRootSpan: (input: {
     anchor: TraceAnchor;
+    collected?: SpanCollection;
     durationMs: number;
     failure: {
         thrown: unknown;

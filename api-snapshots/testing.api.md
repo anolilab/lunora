@@ -240,6 +240,7 @@ interface TestHarness {
         <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): TestSubscription<R>;
         <R>(inline: InlineQueryFunction<R>): TestSubscription<R>;
     };
+    wideEvent: () => RecordedWideEvent;
     withIdentity: (identity: TestIdentity) => TestHarness;
 }
 ```

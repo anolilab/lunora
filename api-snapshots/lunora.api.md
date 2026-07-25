@@ -333,6 +333,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LunoraWideEvent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ManyRelation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -594,6 +598,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanKind` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanLink` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -4699,6 +4715,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LunoraWideEvent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ManyRelation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -4960,6 +4980,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanKind` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanLink` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6527,6 +6559,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LunoraWideEvent` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MutationCtx` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6624,6 +6660,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanKind` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanLink` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

@@ -51,6 +51,7 @@ interface ActionCtx {
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: Storage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
@@ -875,6 +876,7 @@ interface LunoraLogMethod {
 interface LunoraLogger {
     readonly debug: LunoraLogMethod;
     readonly error: LunoraLogMethod;
+    readonly event: (name: string, fields?: LogFields) => void;
     readonly fatal: LunoraLogMethod;
     readonly info: LunoraLogMethod;
     readonly log: LunoraLogMethod;
@@ -903,7 +905,13 @@ type LunoraRouteHandler = (c: Context<LunoraHttpEnv>) => Promise<Response>;
 ### `LunoraTracer` (type)
 
 ```ts
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions) => Promise<T>;
+```
+
+### `LunoraWideEvent` (type)
+
+```ts
+type LunoraWideEvent = SpanHandle;
 ```
 
 ### `ManyRelation` (interface)
@@ -1051,6 +1059,7 @@ interface MutationCtx {
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
@@ -1300,6 +1309,7 @@ interface QueryCtx {
     readonly now: number;
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearchReader;
@@ -1616,8 +1626,41 @@ type ShardMode = {
 
 ```ts
 interface SpanHandle {
+    addEvent: (name: string, attributes?: LogFields) => void;
+    addLink: (link: SpanLink) => void;
+    recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;
+    spanContext: () => {
+        spanId: string;
+        traceId: string;
+    };
+}
+```
+
+### `SpanKind` (type)
+
+```ts
+type SpanKind = "client" | "consumer" | "internal" | "producer" | "server";
+```
+
+### `SpanLink` (interface)
+
+```ts
+interface SpanLink {
+    attributes?: LogFields;
+    spanId: string;
+    traceId: string;
+}
+```
+
+### `SpanOptions` (interface)
+
+```ts
+interface SpanOptions {
+    attributes?: LogFields;
+    kind?: SpanKind;
+    links?: SpanLink[];
 }
 ```
 
@@ -3856,6 +3899,31 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+## `@lunora/server/otel`
+
+### `LunoraTraceContext` (interface)
+
+```ts
+interface LunoraTraceContext {
+    readonly span: SpanHandle;
+    readonly trace: LunoraTracer;
+}
+```
+
+### `OtelTracerOptions` (interface)
+
+```ts
+interface OtelTracerOptions {
+    namePrefix?: string;
+}
+```
+
+### `createOtelTracer` (const)
+
+```ts
+const createOtelTracer: (context: LunoraTraceContext, options?: OtelTracerOptions) => Tracer;
+```
+
 ## `@lunora/server/rls/testing`
 
 ### `BoundPolicyAssertion` (interface)
@@ -3920,6 +3988,7 @@ interface ActionCtx {
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: Storage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
@@ -4220,6 +4289,7 @@ interface LunoraLogMethod {
 interface LunoraLogger {
     readonly debug: LunoraLogMethod;
     readonly error: LunoraLogMethod;
+    readonly event: (name: string, fields?: LogFields) => void;
     readonly fatal: LunoraLogMethod;
     readonly info: LunoraLogMethod;
     readonly log: LunoraLogMethod;
@@ -4242,7 +4312,13 @@ interface LunoraMetrics {
 ### `LunoraTracer` (type)
 
 ```ts
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions) => Promise<T>;
+```
+
+### `LunoraWideEvent` (type)
+
+```ts
+type LunoraWideEvent = SpanHandle;
 ```
 
 ### `MutationCtx` (interface)
@@ -4260,6 +4336,7 @@ interface MutationCtx {
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
@@ -4307,6 +4384,7 @@ interface QueryCtx {
     readonly now: number;
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearchReader;
@@ -4517,8 +4595,41 @@ type ShardMode = {
 
 ```ts
 interface SpanHandle {
+    addEvent: (name: string, attributes?: LogFields) => void;
+    addLink: (link: SpanLink) => void;
+    recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;
+    spanContext: () => {
+        spanId: string;
+        traceId: string;
+    };
+}
+```
+
+### `SpanKind` (type)
+
+```ts
+type SpanKind = "client" | "consumer" | "internal" | "producer" | "server";
+```
+
+### `SpanLink` (interface)
+
+```ts
+interface SpanLink {
+    attributes?: LogFields;
+    spanId: string;
+    traceId: string;
+}
+```
+
+### `SpanOptions` (interface)
+
+```ts
+interface SpanOptions {
+    attributes?: LogFields;
+    kind?: SpanKind;
+    links?: SpanLink[];
 }
 ```
 
