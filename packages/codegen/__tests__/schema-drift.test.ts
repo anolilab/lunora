@@ -52,6 +52,26 @@ describe("schema-drift", () => {
             expect(snapshot.migrationIds).toStrictEqual(["m1", "m2"]);
         });
 
+        it("orders tables and migration ids by code unit, not locale collation", () => {
+            expect.assertions(2);
+
+            /*
+             * `.lunora-schema.json` is committed, so its byte order must not depend
+             * on the machine that generated it. `localeCompare` resolves against the
+             * runtime's default locale and ICU version — under ICU collation "a"
+             * sorts BEFORE "B", while by code unit "B" (0x42) sorts before "a"
+             * (0x61). These fixtures are chosen so the two orderings disagree: a
+             * regression to a locale-aware comparator flips both assertions.
+             */
+            const snapshot = buildSchemaSnapshot(
+                schema([table("apples", { x: stringField }), table("Berries", { x: stringField }), table("_hidden", { x: stringField })]),
+                ["b_two", "A_one"],
+            );
+
+            expect(Object.keys(snapshot.tables)).toStrictEqual(["Berries", "_hidden", "apples"]);
+            expect(snapshot.migrationIds).toStrictEqual(["A_one", "b_two"]);
+        });
+
         it("encodes shard mode as a stable string", () => {
             expect.assertions(3);
 
