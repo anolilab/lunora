@@ -28,6 +28,7 @@ export default createConfig(
             // linting can't parse them — don't lint doc snippets as source.
             "**/*.md/**",
             "**/vitest.config.ts",
+            "**/vitest.bench.config.ts",
             "**/packem.config.ts",
             "**/package.json",
             "**/tsconfig*.json",
@@ -84,7 +85,7 @@ export default createConfig(
     // mocks/typing, inline regex, null fixtures, async helpers without await, toEqual,
     // describe titles). Source files still enforce all of these.
     {
-        files: ["**/__tests__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
+        files: ["**/__tests__/**/*.{ts,tsx}", "**/__bench__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/*.bench.{ts,tsx}"],
         rules: {
             "@typescript-eslint/naming-convention": "off",
             "@typescript-eslint/no-base-to-string": "off",

@@ -62,6 +62,7 @@
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
         "fallow:dead-code": "fallow dead-code",
@@ -72,6 +73,7 @@
         "@lunora/errors": "1.0.0-alpha.7"
     },
     "devDependencies": {
+        "@codspeed/vitest-plugin": "catalog:test",
         "@tanstack/db": "catalog:frontend",
         "@tanstack/offline-transactions": "catalog:frontend",
         "@types/node": "catalog:types",
