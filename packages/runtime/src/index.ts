@@ -77,6 +77,8 @@ export type { HealthAuthPosture, HealthBody, HealthCheckReport, HealthProbe, Hea
 export { buildHealthRoutes, d1Probe, durableObjectProbe, HEALTH_PATH, HEALTH_READY_PATH, presenceProbe } from "./health-routes";
 export type { LogArchiveConfig } from "./log-archive-admin-routes";
 export { LOG_ARCHIVE_NOT_CONFIGURED, LOG_ARCHIVE_PATH, resolveLogArchiveFromEnv } from "./log-archive-admin-routes";
+export type { MemoizeIdentityOptions } from "./memoize-identity";
+export { memoizeIdentity, memoizeIdentityPerRequest } from "./memoize-identity";
 export type {
     LogEvent,
     LogFields,
