@@ -36,15 +36,33 @@ const predicateOwnerName = (call: TsNode): string | undefined => {
     }
 
     const callee = call.getExpression();
-    let name: string | undefined;
 
-    if (Node.isIdentifier(callee)) {
-        name = callee.getText();
-    } else if (Node.isPropertyAccessExpression(callee)) {
-        name = callee.getName();
+    // `ns.defineShape(...)` — the member name is the declared name, aliases don't apply.
+    if (Node.isPropertyAccessExpression(callee)) {
+        const name = callee.getName();
+
+        return PREDICATE_OWNERS.has(name) ? name : undefined;
     }
 
-    return name !== undefined && PREDICATE_OWNERS.has(name) ? name : undefined;
+    if (!Node.isIdentifier(callee)) {
+        return undefined;
+    }
+
+    // Resolve through the import so `import { defineShape as shape }` still counts —
+    // the local spelling is `shape`, but the *imported* name is what identifies the
+    // predicate owner. Mirrors how the shape/migration feeders resolve their markers.
+    for (const declaration of callee.getSymbol()?.getDeclarations() ?? []) {
+        if (Node.isImportSpecifier(declaration)) {
+            const imported = declaration.getNameNode().getText();
+
+            return PREDICATE_OWNERS.has(imported) ? imported : undefined;
+        }
+    }
+
+    // No symbol (an un-typechecked fixture) — fall back to the surface text.
+    const text = callee.getText();
+
+    return PREDICATE_OWNERS.has(text) ? text : undefined;
 };
 
 /** `true` for an object literal with no properties — the everything-matches predicate. */
@@ -91,6 +109,24 @@ const unrestrictedForm = (node: TsNode | undefined): "empty-object" | "undefined
 };
 
 /**
+ * The nearest enclosing function of `node`, or `undefined` at the top level.
+ *
+ * `getDescendantsOfKind` recurses through nested functions, so a `return {}` inside a
+ * helper callback would otherwise be read as one of the predicate's own exits — turning
+ * a single-exit predicate into an apparent guard and reporting a false positive.
+ */
+const enclosingFunction = (node: TsNode): TsNode | undefined =>
+    node.getAncestors().find((ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor) || Node.isFunctionDeclaration(ancestor));
+
+/** `return` statements belonging to `predicate` itself, not to a nested callback. */
+const ownReturnStatements = (predicate: PredicateFunction): TsNode[] =>
+    predicate.getDescendantsOfKind(SyntaxKind.ReturnStatement).filter((statement) => enclosingFunction(statement) === predicate);
+
+/** Ternaries belonging to `predicate` itself, not to a nested callback. */
+const ownConditionals = (predicate: PredicateFunction) =>
+    predicate.getDescendantsOfKind(SyntaxKind.ConditionalExpression).filter((conditional) => enclosingFunction(conditional) === predicate);
+
+/**
  * Whether the predicate has more than one exit — i.e. it *branches*.
  *
  * A single-exit `where: () => ({})` is an author deliberately writing "replicate
@@ -100,7 +136,7 @@ const unrestrictedForm = (node: TsNode | undefined): "empty-object" | "undefined
  * form is only reported when the function has a conditional exit alongside it.
  */
 const hasBranchingExits = (predicate: PredicateFunction): boolean => {
-    const returns = predicate.getDescendantsOfKind(SyntaxKind.ReturnStatement);
+    const returns = ownReturnStatements(predicate);
 
     if (returns.length > 1) {
         return true;
@@ -108,10 +144,7 @@ const hasBranchingExits = (predicate: PredicateFunction): boolean => {
 
     // One `return` inside an `if` (with the fall-through being the other exit), or a
     // ternary in a concise body, both count as branching.
-    return (
-        returns.some((statement) => statement.getFirstAncestorByKind(SyntaxKind.IfStatement) !== undefined) ||
-        predicate.getDescendantsOfKind(SyntaxKind.ConditionalExpression).length > 0
-    );
+    return returns.some((statement) => statement.getFirstAncestorByKind(SyntaxKind.IfStatement) !== undefined) || ownConditionals(predicate).length > 0;
 };
 
 /** Every returned expression of `predicate`, including a concise arrow body. */
@@ -124,15 +157,15 @@ const returnedExpressions = (predicate: PredicateFunction): TsNode[] => {
         found.push(body);
     }
 
-    for (const statement of predicate.getDescendantsOfKind(SyntaxKind.ReturnStatement)) {
-        const expression = statement.getExpression();
+    for (const statement of ownReturnStatements(predicate)) {
+        const expression = Node.isReturnStatement(statement) ? statement.getExpression() : undefined;
 
         // A bare `return;` yields undefined — record the statement so the line is right.
         found.push(expression ?? statement);
     }
 
     // A ternary's two arms are each an exit.
-    for (const conditional of predicate.getDescendantsOfKind(SyntaxKind.ConditionalExpression)) {
+    for (const conditional of ownConditionals(predicate)) {
         found.push(conditional.getWhenTrue(), conditional.getWhenFalse());
     }
 

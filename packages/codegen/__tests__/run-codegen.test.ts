@@ -64,13 +64,17 @@ describe("run-codegen", () => {
         });
 
         it("narrows ctx.db.asId to a real TableName", () => {
-            expect.assertions(3);
+            expect.assertions(5);
 
             const result = runCodegen({ projectRoot: workdir });
 
-            // Without the narrowing, `asId("typo", id)` compiles and hands back a
-            // confidently-branded id for a table that doesn't exist.
-            expect(result.generated.server).toContain("type TypedAsId = (<T extends TableName>(tableName: T, id: string) => IdOfTable<T>)");
+            // The conditional `AsIdTable` is what makes a misspelled literal fail. An
+            // intersection with a wide `(string, string) => string` overload would look
+            // narrowed but silently fall through for a bad literal — verified by probe —
+            // so assert the emitted form has no such overload.
+            expect(result.generated.server).toContain("type AsIdTable<T extends string> = T extends TableName ? T : string extends T ? T : never;");
+            expect(result.generated.server).toContain("type TypedAsId = <T extends string>(tableName: AsIdTable<T>, id: string) => IdOfTable<T & TableName>;");
+            expect(result.generated.server).not.toContain("(tableName: string, id: string) => string)");
             expect(ctxInterface(result.generated.server, "QueryCtx")).toContain("asId: TypedAsId");
             // Overridden, so the wide `<T extends string>` signature is omitted first.
             expect(result.generated.server).toContain('Omit<DatabaseReader, "asId" | "query" | "get">');

@@ -73,16 +73,29 @@ type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) 
 type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
 
 /**
- * The id parse boundary `ctx.db.asId(table, id)`, bound to this schema: the table
- * argument is narrowed to a real {@link TableName}, so a typo is a compile error
- * rather than a call that returns a confidently-branded id for a table that does
- * not exist. Mirrors {@link TypedTableQuery} / {@link TypedTableGet}.
+ * Resolves the `asId` table argument: a literal in {@link TableName} passes through, a
+ * genuinely-wide `string` (a computed name) passes through, and any OTHER literal
+ * collapses to `never` so it fails to typecheck.
  *
- * Intersected with the wide `(string, string) => string` signature for the same
- * reason `TypedTableQuery` is: `ctx.db` must stay structurally assignable to
- * schema-agnostic consumers that pass a computed table name.
+ * The `string extends T` arm is what distinguishes "the caller passed a computed
+ * string" from "the caller passed a misspelled literal" — only the wide `string` type
+ * is a supertype of `string`.
  */
-type TypedAsId = (<T extends TableName>(tableName: T, id: string) => IdOfTable<T>) & ((tableName: string, id: string) => string);
+type AsIdTable<T extends string> = T extends TableName ? T : string extends T ? T : never;
+
+/**
+ * The id parse boundary `ctx.db.asId(table, id)`, bound to this schema: a misspelled
+ * table literal is a compile error rather than a call that hands back a confidently-
+ * branded id for a table that does not exist. Mirrors {@link TypedTableQuery} /
+ * {@link TypedTableGet}.
+ *
+ * Deliberately NOT an intersection with a wide `(string, string) => string` overload:
+ * overload resolution would fall through to it for a bad literal, silently restoring
+ * the very typo hole this narrowing exists to close. {@link AsIdTable} instead keeps a
+ * computed table name working — and keeps `ctx.db` structurally assignable to
+ * schema-agnostic consumers — without accepting an invalid literal.
+ */
+type TypedAsId = <T extends string>(tableName: AsIdTable<T>, id: string) => IdOfTable<T & TableName>;
 
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
     readonly db: Omit<DatabaseReader, "asId" | "query" | "get"> & DatabaseReaderFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };

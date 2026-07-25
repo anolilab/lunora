@@ -177,6 +177,58 @@ export const notAShape = somethingElse({ where: (x: { ok: boolean }) => (x.ok ? 
         expect(discover()).toStrictEqual([]);
     });
 
+    it("resolves an aliased defineShape import", () => {
+        expect.assertions(1);
+
+        write(
+            "shapes.ts",
+            `import { defineShape as shape } from "@lunora/server";
+
+export const s = shape({
+    table: "nodes",
+    where: (ctx) => {
+        if (!ctx.auth.userId) {
+            return {};
+        }
+
+        return { userId: ctx.auth.userId };
+    },
+});
+`,
+        );
+
+        expect(discover()).toMatchObject([{ exportName: "s", key: "where", owner: "defineShape" }]);
+    });
+
+    it("ignores a nested callback's returns, which are not predicate exits", () => {
+        expect.assertions(1);
+
+        // The predicate itself has ONE exit, so it isn't a guard. The `{}` belongs to a
+        // helper callback — treating it as a branch arm would be a false positive.
+        write(
+            "shapes.ts",
+            `import { defineShape } from "@lunora/server";
+
+export const s = defineShape({
+    table: "nodes",
+    where: (ctx) => {
+        const extra = ["a"].map((key) => {
+            if (key === "a") {
+                return {};
+            }
+
+            return { key };
+        });
+
+        return { AND: extra, userId: ctx.auth.userId };
+    },
+});
+`,
+        );
+
+        expect(discover()).toStrictEqual([]);
+    });
+
     it("returns [] when the lunora dir has no shapes or policies", () => {
         expect.assertions(1);
 
