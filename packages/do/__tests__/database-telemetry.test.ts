@@ -36,12 +36,21 @@ const recordingSpan = (): { handle: SpanHandle; recorded: Record<string, unknown
     };
 };
 
-const deps = (mode: "off" | "spans" | "summary", span: SpanHandle, record: (span: SpanEvent) => void) => {
+/**
+ * The tally is published once, at dispatch end, through `registerFlush`. Tests
+ * capture that callback and invoke it where the dispatch would, so what they
+ * assert on is the same fold the shard performs rather than a side effect of
+ * the per-call path.
+ */
+const deps = (mode: "off" | "spans" | "summary", span: SpanHandle, record: (span: SpanEvent) => void, flushes: (() => void)[] = []) => {
     return {
         anchor: { rootSpanId: "b7ad6b7169203331", traceId: "0af7651916cd43dd8448eb211c80319c" },
         functionPath: "orders:checkout",
         mode,
         record,
+        registerFlush: (flush: () => void) => {
+            flushes.push(flush);
+        },
         shardKey: "tenant-1",
         span,
         userId: () => "u-1",
@@ -62,6 +71,13 @@ const fakeDatabase = () => {
     };
 };
 
+/** Fold the dispatch's deferred attributes, standing in for the shard's `finally`. */
+const endDispatch = (flushes: (() => void)[]): void => {
+    for (const flush of flushes) {
+        flush();
+    }
+};
+
 describe("instrumentDatabase", () => {
     it("returns the database untouched when off", () => {
         expect.assertions(1);
@@ -80,21 +96,33 @@ describe("instrumentDatabase", () => {
     });
 
     it("folds aggregate counters onto the wide event in summary mode", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const database = fakeDatabase();
         const span = recordingSpan();
         const spans: SpanEvent[] = [];
+        const flushes: (() => void)[] = [];
         const instrumented = instrumentDatabase(
             database,
-            deps("summary", span.handle, (recorded) => {
-                spans.push(recorded);
-            }),
+            deps(
+                "summary",
+                span.handle,
+                (recorded) => {
+                    spans.push(recorded);
+                },
+                flushes,
+            ),
         );
 
         await instrumented.findMany("orders");
         await instrumented.findMany("orders");
         await instrumented.insert("orders", { total: 1 });
+
+        // Nothing is on the wide event until the dispatch ends: the tally is
+        // folded once, not republished after each call.
+        expect(span.recorded["db.calls"]).toBeUndefined();
+
+        endDispatch(flushes);
 
         expect(span.recorded["db.calls"]).toBe(3);
         expect(span.recorded["db.op.findMany"]).toBe(2);
@@ -111,13 +139,16 @@ describe("instrumentDatabase", () => {
         database.insert.mockRejectedValueOnce(new Error("constraint violated"));
 
         const span = recordingSpan();
+        const flushes: (() => void)[] = [];
         const instrumented = instrumentDatabase(
             database,
-            deps("summary", span.handle, () => undefined),
+            deps("summary", span.handle, () => undefined, flushes),
         );
 
         // Instrumentation, never flow control — the original error reaches the caller.
         await expect(instrumented.insert("orders", {})).rejects.toThrow("constraint violated");
+
+        endDispatch(flushes);
 
         expect(span.recorded["db.errors"]).toBe(1);
         expect(span.recorded["db.calls"]).toBe(1);
@@ -151,17 +182,25 @@ describe("instrumentDatabase", () => {
         const database = fakeDatabase();
         const span = recordingSpan();
         const spans: SpanEvent[] = [];
+        const flushes: (() => void)[] = [];
         const instrumented = instrumentDatabase(
             database,
-            deps("spans", span.handle, (recorded) => {
-                spans.push(recorded);
-            }),
+            deps(
+                "spans",
+                span.handle,
+                (recorded) => {
+                    spans.push(recorded);
+                },
+                flushes,
+            ),
         );
 
         for (let index = 0; index < 150; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- sequential on purpose: the cap is about cumulative count, not concurrency
             await instrumented.findMany("orders");
         }
+
+        endDispatch(flushes);
 
         expect(spans).toHaveLength(100);
         // Every call still counts toward the summary — only the individual spans

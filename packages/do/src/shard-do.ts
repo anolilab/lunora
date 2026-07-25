@@ -591,6 +591,23 @@ interface SubscriptionMemo {
  * always re-sends a full snapshot rather than a delta against a value the client
  * never saw. See {@link ShardDO.pushSubscriptionData}.
  */
+
+/**
+ * Run a dispatch's deferred attribute contributions — today just the `ctx.db`
+ * tally — onto its wide event.
+ *
+ * These are folded once, at the end, rather than republished after every call
+ * they aggregate. Best-effort: a dispatch that already returned must not be
+ * failed by the bookkeeping that describes it.
+ */
+const foldDeferredAttributes = (entry: { finalize?: () => void } | undefined): void => {
+    try {
+        entry?.finalize?.();
+    } catch {
+        // Telemetry is never allowed to break the dispatch it is measuring.
+    }
+};
+
 const UNDELIVERED_BASELINE = "<undelivered>";
 
 /**
@@ -1998,7 +2015,7 @@ abstract class ShardDO {
      * subscription re-run) mints its own anchor and has no such boundary, so the
      * map is FIFO-capped rather than trusted to drain.
      */
-    private dispatchSpans = new Map<string, { collector?: SpanCollector; sink?: TelemetrySink }>();
+    private dispatchSpans = new Map<string, { collector?: SpanCollector; finalize?: () => void; sink?: TelemetrySink }>();
 
     /**
      * The most recent telemetry sink seen while building a ctx — the flush handle
@@ -2994,6 +3011,11 @@ abstract class ShardDO {
             // the span the attributes live on, so skipping it would silently
             // discard everything the handler attached.
             const dispatchSpan = this.dispatchSpans.get(dispatchTrace.traceId);
+
+            // Before the gate, not after: a handler that touched only `ctx.db`
+            // has no collector yet, and this is what creates one. Folding after
+            // the gate would silently drop its tally.
+            foldDeferredAttributes(dispatchSpan);
 
             if (this.spans.hasTrace(dispatchTrace.traceId) || dispatchSpan?.collector !== undefined) {
                 this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace);
@@ -5048,6 +5070,16 @@ abstract class ShardDO {
             record: (recorded) => {
                 this.recordSpan(recorded, sink);
             },
+            registerFlush: (flush) => {
+                // Onto this dispatch's entry, so the fold happens once at the end
+                // rather than after every `ctx.db` call. `makeDispatchSpan` has
+                // already created the entry for this anchor; the `??=` covers the
+                // ordering rather than relying on it.
+                const entry = this.dispatchSpans.get(anchor.traceId) ?? {};
+
+                entry.finalize = flush;
+                this.dispatchSpans.set(anchor.traceId, entry);
+            },
             shardKey: this.runner.shardKey,
             span,
             userId: () => this.getCurrentUserId(),
@@ -5261,7 +5293,11 @@ abstract class ShardDO {
 
             // Only when the trigger actually produced telemetry — an idle alarm
             // that did nothing should not mint a bar in the studio waterfall and
-            // evict a real trace from the bounded ring.
+            // evict a real trace from the bounded ring. The deferred fold runs
+            // first for the same reason as the dispatch path: it is what turns
+            // "this alarm only touched the database" into recorded telemetry.
+            foldDeferredAttributes(this.dispatchSpans.get(anchor.traceId));
+
             if (this.spans.hasTrace(anchor.traceId) || this.dispatchSpans.get(anchor.traceId)?.collector !== undefined) {
                 this.recordDispatchRootSpan(name, startedAt, failure, anchor);
             }

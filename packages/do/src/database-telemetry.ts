@@ -117,11 +117,12 @@ const tableOf = (method: string, arguments_: unknown[]): string | undefined => {
 /**
  * Fold the running tally onto the dispatch's wide event.
  *
- * Rewritten in full after every call rather than incremented in place: the
- * handle's contract is last-write-wins per key, and these are cumulative totals,
- * so re-setting them is both correct and cheaper than reading back through the
- * handle. It is a handful of keys, so the per-call cost is a small object
- * assignment — the property that makes `"summary"` mode scale to any call count.
+ * Called once, from the dispatch's end (see
+ * {@link DatabaseTelemetryDeps.registerFlush}), not after every call. The totals
+ * are cumulative and the handle is last-write-wins per key, so an intermediate
+ * publish is always overwritten by the next one — N publishes and one publish
+ * produce the same wide event, and only one of them puts an attribute-bag
+ * allocation on every `ctx.db` call.
  */
 const publishTally = (span: SpanHandle, tally: DatabaseTally): void => {
     const fields: LogFields = {
@@ -216,6 +217,21 @@ export interface DatabaseTelemetryDeps {
     mode: DatabaseInstrumentation;
     /** Hand a finished span to the buffer + sink (`"spans"` mode only). */
     record: (span: SpanEvent) => void;
+
+    /**
+     * Register a callback the dispatch invokes exactly once, at its end, before
+     * it decides whether the dispatch produced telemetry worth recording.
+     *
+     * The tally is published there rather than after every call. Both are
+     * equivalent — the totals are cumulative and the handle is last-write-wins,
+     * so every publish but the final one is overwritten — but the per-call form
+     * rebuilt an attribute bag on each `ctx.db` call, which is dead weight on
+     * exactly the path `"summary"` mode exists to keep cheap.
+     *
+     * "Before the gate" matters: a handler that touched only `ctx.db` has no
+     * span collector yet, so folding after the gate would drop its tally.
+     */
+    registerFlush: (flush: () => void) => void;
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey: string | undefined;
     /** The dispatch's wide-event handle — where `"summary"` mode writes its tallies. */
@@ -243,6 +259,16 @@ export const instrumentDatabase = <T extends object>(database: T, deps: Database
     }
 
     const tally: DatabaseTally = { calls: 0, durationMs: 0, errors: 0, perOperation: {}, spansEmitted: 0, spansTruncated: false };
+
+    // No calls means nothing to say. Publishing an empty tally would attach
+    // `db.calls: 0` to the wide event and, worse, force a span collector into
+    // existence for a dispatch that never touched the database — which is what
+    // the dispatch's gate reads to decide whether there is any telemetry at all.
+    deps.registerFlush(() => {
+        if (tally.calls > 0) {
+            publishTally(deps.span, tally);
+        }
+    });
 
     /** Wrapped methods are memoized so repeated property access returns a stable function identity. */
     const wrapped = new Map<string, unknown>();
@@ -300,8 +326,6 @@ export const instrumentDatabase = <T extends object>(database: T, deps: Database
                                 deps.record(buildDatabaseSpan({ deps, durationMs, failure, operation: property, startTs, table }));
                             }
                         }
-
-                        publishTally(deps.span, tally);
                     } catch {
                         // Best-effort throughout — see the note above.
                     }
