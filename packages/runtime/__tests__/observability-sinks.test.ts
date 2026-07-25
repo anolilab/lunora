@@ -133,6 +133,33 @@ const spanFrom = (init: RequestInit): { resourceAttributes: OtlpKeyValue[]; scop
     return { resourceAttributes: resourceSpan.resource.attributes, scopeName: scopeSpan.scope.name, span: scopeSpan.spans[0]! };
 };
 
+/**
+ * Read a POSTed body back to text, gunzipping when the sink compressed it.
+ *
+ * A batched export routinely clears the 1KB gzip threshold, so a batching test
+ * that assumed a plain string body would be asserting on "[object ArrayBuffer]".
+ */
+const bodyText = async (init: RequestInit): Promise<string> => {
+    const headers = init.headers as Record<string, string> | undefined;
+
+    if (headers?.["content-encoding"] !== "gzip") {
+        return init.body as string;
+    }
+
+    const stream = new Blob([init.body as ArrayBuffer]).stream().pipeThrough(new DecompressionStream("gzip"));
+
+    return new Response(stream).text();
+};
+
+/** Decode a POSTed OTLP trace-export body down to ALL of its spans — the batched shape. */
+const spansFrom = async (init: RequestInit): Promise<ParsedSpan[]> => {
+    const parsed = JSON.parse(await bodyText(init)) as {
+        resourceSpans: { scopeSpans: { spans: ParsedSpan[] }[] }[];
+    };
+
+    return parsed.resourceSpans[0]!.scopeSpans[0]!.spans;
+};
+
 /** The subset of an OTLP metric the tests assert on. */
 interface ParsedMetric {
     gauge?: { dataPoints: { asDouble: number; attributes: OtlpKeyValue[] }[] };
@@ -701,6 +728,11 @@ describe("observability-sinks", () => {
         });
     });
 
+    // These cover the OTLP *encoding* — one event in, one well-formed body out —
+    // so they pin `batch: false`. Batching is what the sink does by DEFAULT and is
+    // covered separately in "otlpSink batching" below; asserting a synchronous
+    // `fetch` per event would otherwise be testing the buffer's timing, not the wire
+    // format.
     describe("otlpSink", () => {
         afterEach(() => {
             vi.restoreAllMocks();
@@ -713,7 +745,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onRpc!(okEvent);
 
@@ -742,7 +774,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onRpc!({ ...okEvent, spanId: "b7ad6b7169203331", traceId: "0af7651916cd43dd8448eb211c80319c" });
 
@@ -761,7 +793,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onRpc!(errorEvent);
             await otlpCalls(fetchMock, 1);
@@ -792,7 +824,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onRpc!(okEvent);
 
@@ -819,7 +851,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onRpc!(fanOutEvent);
 
@@ -840,7 +872,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onLog!({ args: ["hi"], functionPath: "messages:list", level: "info", message: "hello", shardKey: "channel-1", ts: 1700, userId: "user-1" });
 
@@ -864,7 +896,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
             const levels: LogLevel[] = ["trace", "debug", "info", "log", "warn", "error", "fatal"];
 
             for (const level of levels) {
@@ -883,7 +915,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onLog!({
                 args: ["order placed"],
@@ -916,7 +948,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onLog!({
                 args: [],
@@ -944,7 +976,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example///" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example///" });
 
             sink.onRpc!(okEvent);
 
@@ -959,7 +991,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example", onlyErrors: true });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example", onlyErrors: true });
 
             sink.onRpc!(okEvent);
 
@@ -980,6 +1012,7 @@ describe("observability-sinks", () => {
             vi.stubGlobal("fetch", fetchMock);
 
             const sink = otlpSink({
+                batch: false,
                 endpoint: "https://collector.example",
                 headers: { authorization: "Bearer tok", "x-lunora-deployment": "dep_1", "x-lunora-org": "org_1" },
             });
@@ -1003,6 +1036,7 @@ describe("observability-sinks", () => {
             vi.stubGlobal("fetch", fetchMock);
 
             const sink = otlpSink({
+                batch: false,
                 endpoint: "https://collector.example",
                 headers: { Authorization: "Bearer stale" },
                 token: "svc-token",
@@ -1025,7 +1059,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example", headers: { "Content-Type": "application/x-protobuf" } });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example", headers: { "Content-Type": "application/x-protobuf" } });
 
             sink.onRpc!(okEvent);
 
@@ -1042,7 +1076,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example", serviceName: "checkout-api" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example", serviceName: "checkout-api" });
 
             sink.onRpc!(okEvent);
             sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "m", ts: 1 });
@@ -1243,7 +1277,7 @@ describe("observability-sinks", () => {
             vi.stubGlobal("fetch", fetchMock);
 
             const waitUntil = vi.fn<(promise: Promise<unknown>) => void>();
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onRpc!(okEvent, { waitUntil });
 
@@ -1257,7 +1291,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onSpan!(spanEvent);
 
@@ -1287,7 +1321,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onSpan!({ ...spanEvent, attributes: { "lunora.shard_key": "override", orderId: "o-1" } });
 
@@ -1307,7 +1341,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onSpan!({ ...spanEvent, error: { message: "card declined", type: "PAYMENT_FAILED" }, ok: false });
 
@@ -1326,7 +1360,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onMetric!(metricEvent);
 
@@ -1350,7 +1384,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onMetric!({ ...metricEvent, kind: "gauge", name: "cart.items", value: 7 });
 
@@ -1370,7 +1404,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             sink.onMetric!({ ...metricEvent, kind: "histogram", name: "checkout.latency_ms", value: 128 });
 
@@ -1394,7 +1428,7 @@ describe("observability-sinks", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example", onlyErrors: true });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example", onlyErrors: true });
 
             sink.onSpan!(spanEvent);
 
@@ -1411,7 +1445,7 @@ describe("observability-sinks", () => {
             });
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "https://collector.example" });
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
 
             expect(() => {
                 sink.onRpc!(okEvent);
@@ -1429,7 +1463,7 @@ describe("observability-sinks", () => {
             });
             vi.stubGlobal("fetch", fetchMock);
 
-            const sink = otlpSink({ endpoint: "not-a-url" });
+            const sink = otlpSink({ batch: false, endpoint: "not-a-url" });
 
             expect(() => {
                 sink.onRpc!(okEvent);
@@ -1529,6 +1563,443 @@ describe("observability-sinks", () => {
             expect(() => {
                 sink.onLog!(logEvent);
             }).not.toThrow();
+        });
+    });
+
+    /**
+     * The DEFAULT path: events are buffered and shipped as one request per signal
+     * at the invocation boundary. This is what keeps a well-instrumented handler
+     * from spending its Workers subrequest budget (50 free / 1000 paid) on
+     * telemetry, and it is what makes real tail sampling possible.
+     */
+    describe("otlpSink batching", () => {
+        afterEach(() => {
+            vi.restoreAllMocks();
+            vi.unstubAllGlobals();
+        });
+
+        it("buffers events and ships them as ONE request per signal on flush", async () => {
+            expect.assertions(4);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onRpc!(okEvent);
+            sink.onSpan!(spanEvent);
+            sink.onSpan!({ ...spanEvent, name: "db.read", spanId: "1111111111111111" });
+
+            // Nothing has left yet: that is the whole point of buffering.
+            expect(fetchMock).toHaveBeenCalledTimes(0);
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+
+            await Promise.all(pending);
+
+            // Three spans, ONE POST — not three.
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(url).toBe("https://collector.example/v1/traces");
+            await expect(spansFrom(init)).resolves.toHaveLength(3);
+        });
+
+        it("splits the flush across the three signal endpoints", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.onSpan!(spanEvent);
+            sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "m", ts: 1 });
+            sink.onMetric!(metricEvent);
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            // OTLP has no combined envelope, so three signals means three URLs —
+            // but still only one request each, regardless of event count.
+            expect(fetchMock).toHaveBeenCalledTimes(3);
+            expect(new Set(fetchMock.mock.calls.map((call) => call[0]))).toStrictEqual(
+                new Set(["https://collector.example/v1/logs", "https://collector.example/v1/metrics", "https://collector.example/v1/traces"]),
+            );
+        });
+
+        it("flushes early once maxItems is reached, without waiting", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: { maxItems: 2 }, endpoint: "https://collector.example" });
+
+            sink.onSpan!(spanEvent);
+            sink.onSpan!(spanEvent);
+
+            // No `flush()` and no timer wait: hitting the cap drains immediately,
+            // which is what bounds both the body size and the buffer's memory.
+            await vi.waitFor(() => {
+                if (fetchMock.mock.calls.length === 0) {
+                    throw new Error("not flushed yet");
+                }
+            });
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+        });
+
+        it("keeps a whole trace when the tail sampler accepts it", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({
+                endpoint: "https://collector.example",
+                // The canonical policy head sampling cannot express: keep it if
+                // anything in the trace was slow.
+                tailSampler: ({ spans }) => spans.some((span) => span.durationMs > 20),
+            });
+
+            sink.onSpan!(spanEvent);
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            await expect(spansFrom(fetchMock.mock.calls[0]![1] as RequestInit)).resolves.toHaveLength(1);
+        });
+
+        it("drops a whole trace — spans AND its logs — when the tail sampler rejects it", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example", tailSampler: () => false });
+
+            sink.onSpan!(spanEvent);
+            sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "m", traceId: spanEvent.traceId, ts: 1 });
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            // A dropped trace must take its correlated logs with it, or the
+            // backend keeps orphan lines pointing at a trace that does not exist.
+            expect(fetchMock).toHaveBeenCalledTimes(0);
+        });
+
+        it("keeps events that carry no trace id, which the sampler cannot judge", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example", tailSampler: () => false });
+
+            // A metric has no trace, so there is nothing for a TRACE sampler to
+            // reject — dropping it would silently discard a measurement the
+            // developer explicitly recorded.
+            sink.onMetric!(metricEvent);
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+        });
+
+        it("applies the post-processor before encoding, and drops on undefined", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({
+                endpoint: "https://collector.example",
+                postProcessor: {
+                    log: () => undefined,
+                    span: (event) => {
+                        return { ...event, attributes: { ...event.attributes, email: "[redacted]" } };
+                    },
+                },
+            });
+
+            sink.onSpan!({ ...spanEvent, attributes: { email: "user@example.com" } });
+            sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "secret", ts: 1 });
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            // Logs were dropped wholesale, so only the traces endpoint was hit.
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            const { span } = spanFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            expect(attrValue(span.attributes, "email")).toStrictEqual({ stringValue: "[redacted]" });
+        });
+
+        it("keeps the event unmodified when a post-processor hook throws", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({
+                endpoint: "https://collector.example",
+                postProcessor: {
+                    span: () => {
+                        throw new Error("bad redaction rule");
+                    },
+                },
+            });
+
+            sink.onSpan!(spanEvent);
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            // Fails OPEN: a redaction bug shows up as un-redacted data, never as
+            // a service whose telemetry silently vanished.
+            await expect(spansFrom(fetchMock.mock.calls[0]![1] as RequestInit)).resolves.toHaveLength(1);
+        });
+
+        it("keeps the trace when the tail sampler itself throws", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({
+                endpoint: "https://collector.example",
+                tailSampler: () => {
+                    throw new Error("bad policy");
+                },
+            });
+
+            sink.onSpan!(spanEvent);
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+        });
+
+        it("is a no-op to flush an empty buffer", () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ endpoint: "https://collector.example" });
+
+            sink.flush!();
+
+            expect(fetchMock).toHaveBeenCalledTimes(0);
+        });
+    });
+
+    describe("otlpSink resource attributes", () => {
+        afterEach(() => {
+            vi.restoreAllMocks();
+            vi.unstubAllGlobals();
+        });
+
+        it("emits the full service triple plus telemetry.sdk.* on the resource", () => {
+            expect.assertions(6);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({
+                batch: false,
+                deploymentEnvironment: "production",
+                endpoint: "https://collector.example",
+                resourceAttributes: { "cloud.region": "weur" },
+                serviceName: "checkout-api",
+                serviceNamespace: "payments",
+                serviceVersion: "1.4.2",
+            });
+
+            sink.onRpc!(okEvent);
+
+            const { resourceAttributes } = spanFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "checkout-api" });
+            expect(attrValue(resourceAttributes, "service.version")).toStrictEqual({ stringValue: "1.4.2" });
+            expect(attrValue(resourceAttributes, "service.namespace")).toStrictEqual({ stringValue: "payments" });
+            expect(attrValue(resourceAttributes, "deployment.environment.name")).toStrictEqual({ stringValue: "production" });
+            expect(attrValue(resourceAttributes, "cloud.region")).toStrictEqual({ stringValue: "weur" });
+            expect(attrValue(resourceAttributes, "telemetry.sdk.name")).toStrictEqual({ stringValue: "lunora" });
+        });
+
+        it("omits an unset optional rather than emitting it empty", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+
+            sink.onRpc!(okEvent);
+
+            const { resourceAttributes } = spanFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            // A present-but-empty `service.version` looks like a real value to a
+            // collector's grouping, which is worse than its absence.
+            expect(attrValue(resourceAttributes, "service.version")).toBeUndefined();
+            expect(attrValue(resourceAttributes, "service.namespace")).toBeUndefined();
+        });
+    });
+
+    describe("otlpSink span model", () => {
+        afterEach(() => {
+            vi.restoreAllMocks();
+            vi.unstubAllGlobals();
+        });
+
+        it("encodes an explicit span kind, defaulting to INTERNAL", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+
+            sink.onSpan!({ ...spanEvent, kind: "client" });
+            sink.onSpan!(spanEvent);
+
+            // SPAN_KIND_CLIENT (3) — what lets a collector draw the edge to the
+            // downstream service in a service map.
+            expect(spanFrom(fetchMock.mock.calls[0]![1] as RequestInit).span.kind).toBe(3);
+            expect(spanFrom(fetchMock.mock.calls[1]![1] as RequestInit).span.kind).toBe(1);
+        });
+
+        it("encodes span events and links, and omits them entirely when empty", () => {
+            expect.assertions(5);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+
+            sink.onSpan!({
+                ...spanEvent,
+                events: [{ attributes: { attempts: 2 }, name: "payment.retried", ts: 1_700_000_000_100 }],
+                links: [{ attributes: { "link.kind": "enqueued_by" }, spanId: "aaaaaaaaaaaaaaaa", traceId: "b".repeat(32) }],
+            });
+            sink.onSpan!(spanEvent);
+
+            const withExtras = spanFrom(fetchMock.mock.calls[0]![1] as RequestInit).span as ParsedSpan & {
+                events?: { attributes: OtlpKeyValue[]; name: string; timeUnixNano: string }[];
+                links?: { spanId: string; traceId: string }[];
+            };
+
+            expect(withExtras.events).toHaveLength(1);
+            expect(withExtras.events![0]!.name).toBe("payment.retried");
+            expect(withExtras.links![0]!.spanId).toBe("aaaaaaaaaaaaaaaa");
+
+            const plain = spanFrom(fetchMock.mock.calls[1]![1] as RequestInit).span as ParsedSpan & { events?: unknown; links?: unknown };
+
+            // Omitted, not `[]`: an ordinary span stays byte-identical to what
+            // this encoder produced before events and links existed.
+            expect(plain.events).toBeUndefined();
+            expect(plain.links).toBeUndefined();
+        });
+
+        it("carries the upstream parent on an RPC span only when one was accepted", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+
+            sink.onRpc!({ ...okEvent, parentSpanId: "b7ad6b7169203331" });
+            sink.onRpc!(okEvent);
+
+            expect(spanFrom(fetchMock.mock.calls[0]![1] as RequestInit).span.parentSpanId).toBe("b7ad6b7169203331");
+            // Self-originated: stays the root rather than dangling off a parent
+            // that was never exported.
+            expect(spanFrom(fetchMock.mock.calls[1]![1] as RequestInit).span.parentSpanId).toBeUndefined();
+        });
+
+        it("marks a ctx.log.event line as an OTel Event in both spellings", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+
+            sink.onLog!({
+                args: ["checkout.completed"],
+                eventName: "checkout.completed",
+                fields: { plan: "pro" },
+                functionPath: "orders:checkout",
+                level: "info",
+                message: "checkout.completed",
+                ts: 1,
+            });
+
+            const init = fetchMock.mock.calls[0]![1] as RequestInit;
+            const { record } = logFrom(init);
+
+            // `eventName` is the proto >= 1.5 field; the `event.name` attribute is
+            // how collectors recognised events before it. Emitting only one loses
+            // the event's identity on half the pipelines in the wild.
+            expect((record as ParsedLogRecord & { eventName?: string }).eventName).toBe("checkout.completed");
+            expect(attrValue(record.attributes, "event.name")).toStrictEqual({ stringValue: "checkout.completed" });
         });
     });
 });
