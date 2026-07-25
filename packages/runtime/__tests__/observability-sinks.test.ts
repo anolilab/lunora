@@ -1769,6 +1769,51 @@ describe("observability-sinks", () => {
             expect(fetchMock).toHaveBeenCalledTimes(1);
         });
 
+        it("reports a throwing tail sampler once per flush window, then goes quiet", async () => {
+            expect.assertions(4);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            const sink = otlpSink({
+                batch: { maxItems: 100 },
+                endpoint: "https://collector.example",
+                tailSampler: () => {
+                    throw new Error("bad predicate");
+                },
+            });
+
+            // Two traces in one window: the operator needs one report, not two.
+            sink.onRpc!({ ...okEvent, traceId: "a".repeat(32) });
+            sink.onRpc!({ ...okEvent, traceId: "b".repeat(32) });
+            sink.flush!();
+            await otlpCalls(fetchMock, 1);
+
+            expect(errorSpy).toHaveBeenCalledTimes(1);
+            expect(String(errorSpy.mock.calls[0]?.[0])).toContain("2 trace(s)");
+            // Fail-open: a broken predicate must not delete telemetry.
+            expect(spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]).span).toBeDefined();
+
+            // A sampler that throws throws every window; the reporting is capped
+            // so one bad predicate cannot become a log stream of its own.
+            for (let index = 0; index < 10; index += 1) {
+                sink.onRpc!({ ...okEvent, traceId: String(index).repeat(32).slice(0, 32) });
+                sink.flush!();
+            }
+
+            await vi.waitFor(() => {
+                if (errorSpy.mock.calls.length < 5) {
+                    throw new Error("not yet capped");
+                }
+            });
+
+            expect(errorSpy.mock.calls.length).toBeLessThanOrEqual(5);
+
+            errorSpy.mockRestore();
+        });
+
         it("keeps a whole trace when the tail sampler accepts it", async () => {
             expect.assertions(2);
 

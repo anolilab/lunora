@@ -435,11 +435,12 @@ const traceIdOf = (signal: BufferedSignal): string | undefined => {
  * and never dropped: there is no trace for the sampler to judge, and silently
  * discarding them would lose the one signal the caller explicitly recorded.
  */
-const applyTailSampler = (signals: BufferedSignal[], tailSampler: TailSampler | undefined): BufferedSignal[] => {
-    if (tailSampler === undefined) {
-        return signals;
-    }
 
+/**
+ * Split a flush window into per-trace buckets plus the signals that carry no
+ * trace context at all (a fan-out aggregation, a metric).
+ */
+const groupByTrace = (signals: BufferedSignal[]): { byTrace: Map<string, BufferedSignal[]>; untraced: BufferedSignal[] } => {
     const byTrace = new Map<string, BufferedSignal[]>();
     const untraced: BufferedSignal[] = [];
 
@@ -461,7 +462,35 @@ const applyTailSampler = (signals: BufferedSignal[], tailSampler: TailSampler | 
         }
     }
 
+    return { byTrace, untraced };
+};
+
+/**
+ * How many tail-sampler failures one sink instance reports before going quiet.
+ *
+ * A sampler that throws usually throws on every flush window, so an unbounded
+ * warning would turn one bad predicate into a log stream of its own — the exact
+ * cost tail sampling exists to control, and on a hot Worker it would outweigh
+ * the telemetry it is complaining about. Five is enough to be unmissable in a
+ * tail without ever being the loudest thing there; the count lives on the sink,
+ * so a fresh isolate reports again and a persistently broken sampler stays
+ * visible over time rather than being silenced permanently by the first burst.
+ */
+const MAX_TAIL_SAMPLER_FAILURE_REPORTS = 5;
+
+const applyTailSampler = (
+    signals: BufferedSignal[],
+    tailSampler: TailSampler | undefined,
+    onFailure: (error: unknown, traces: number) => void,
+): BufferedSignal[] => {
+    if (tailSampler === undefined) {
+        return signals;
+    }
+
+    const { byTrace, untraced } = groupByTrace(signals);
     const kept = [...untraced];
+    let failures = 0;
+    let firstFailure: unknown;
 
     for (const [traceId, bucket] of byTrace) {
         let verdict: boolean;
@@ -477,14 +506,27 @@ const applyTailSampler = (signals: BufferedSignal[], tailSampler: TailSampler | 
                 spans: bucket.filter((s): s is Extract<BufferedSignal, { kind: "span" }> => s.kind === "span").map((s) => s.event),
                 traceId,
             });
-        } catch {
+        } catch (error) {
             // A throwing sampler must not silently delete telemetry — fail open.
             verdict = true;
+
+            if (failures === 0) {
+                firstFailure = error;
+            }
+
+            failures += 1;
         }
 
         if (verdict) {
             kept.push(...bucket);
         }
+    }
+
+    // Reported once per flush window, not once per trace: a sampler that throws
+    // throws for every trace in the window, and the operator needs to know the
+    // policy silently stopped applying — not to read the same stack N times.
+    if (failures > 0) {
+        onFailure(firstFailure, failures);
     }
 
     return kept;
@@ -1234,6 +1276,37 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
     // authorization in `headers`, matching the container exporter's precedence.
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers, token);
 
+    /** Failures already reported by {@link reportTailSamplerFailure} on this sink. */
+    let tailSamplerFailureReports = 0;
+
+    /**
+     * Surface a throwing `tailSampler`, at most
+     * {@link MAX_TAIL_SAMPLER_FAILURE_REPORTS} times per sink.
+     *
+     * Failing open is the right call — a broken predicate must not delete
+     * telemetry — but doing it silently is not: the operator sees a full-volume
+     * export and concludes their sampling policy is configured wrong, when in
+     * fact it never ran. The message says exactly that.
+     */
+    const reportTailSamplerFailure = (error: unknown, traces: number): void => {
+        if (tailSamplerFailureReports >= MAX_TAIL_SAMPLER_FAILURE_REPORTS) {
+            return;
+        }
+
+        tailSamplerFailureReports += 1;
+
+        const silencing =
+            tailSamplerFailureReports === MAX_TAIL_SAMPLER_FAILURE_REPORTS
+                ? " Further tailSampler failures from this sink are silenced until the isolate restarts."
+                : "";
+
+        // eslint-disable-next-line no-console
+        console.error(
+            `[lunora:otlp] tailSampler threw for ${String(traces)} trace(s) in this flush window; keeping them (fail-open), so the sampling policy did NOT apply.${silencing}`,
+            error,
+        );
+    };
+
     /**
      * Ship one flush window: tail-sample, encode by signal, then POST at most one
      * request per resource per signal endpoint.
@@ -1246,7 +1319,7 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
      * collapses to one group and the same three POSTs as before.
      */
     const exportBatch = async (signals: BufferedSignal[]): Promise<void> => {
-        const kept = applyTailSampler(signals, tailSampler);
+        const kept = applyTailSampler(signals, tailSampler, reportTailSamplerFailure);
         const groups = new Map<OtlpResourceAttributes, { logs: unknown[]; metrics: unknown[]; spans: unknown[] }>();
 
         for (const signal of kept) {
