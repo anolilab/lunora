@@ -930,6 +930,25 @@ describe("rls — batch write path", () => {
         expect(database.calls.some((call) => call.method === "delete")).toBe(false);
     });
 
+    it("deleteAll does not pin the table, so a .global() row still routes to its backend", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        // Pinning `expectedTable` would block the writer's global fallback, making every
+        // delete on a `.global()` table a silent no-op. It costs nothing to omit: the ids
+        // came from this table's own policy-filtered read, and `gateById` still resolves
+        // each row's real table to pick its delete policy.
+        const deletes = database.calls.filter((call) => call.method === "delete");
+
+        expect(deletes).toHaveLength(1);
+        expect(deletes[0]?.args).toBeUndefined();
+    });
+
     it("wipeShard fails closed under rls() instead of erasing only policy-visible rows", async () => {
         expect.assertions(2);
 

@@ -2667,6 +2667,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             const chunkSize = Math.max(1, allOptions?.chunkSize ?? DEFAULT_BATCH_LIMIT);
+            const deleteOptions = allOptions?.hard === undefined ? undefined : { hard: allOptions.hard };
+            // A `.global()` row's id lives in D1, not this DO, so the by-id delete only
+            // reaches it through `globalFallback()` — which is gated on NO table being
+            // pinned (the IDOR guard: a non-global by-id facade must not reach a global
+            // row). Pinning `tableName` here would therefore make every global delete a
+            // silent no-op: the count would inflate, the rows would survive, and a table
+            // with at least `chunkSize` rows would loop forever because `findMany` kept
+            // returning the same page. Leave the table unpinned for a global table —
+            // exactly what `deleteWhere` does when it hands ids to `deleteMany`.
+            const expectedTable = isGlobalTable(tableName) ? undefined : tableName;
             let deleted = 0;
 
             // Resolve-then-delete in chunks until the table is empty. Deliberately
@@ -2686,7 +2696,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                 for (const id of ids) {
                     // eslint-disable-next-line no-await-in-loop -- sequential by design: each row reuses the full delete pipeline (triggers, cascades, CDC, broadcast)
-                    await writer.delete(id, tableName, allOptions?.hard === undefined ? undefined : { hard: allOptions.hard });
+                    await writer.delete(id, expectedTable, deleteOptions);
                     deleted += 1;
                 }
 

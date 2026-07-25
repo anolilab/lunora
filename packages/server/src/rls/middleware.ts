@@ -1082,14 +1082,16 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
                 }
 
                 for (const id of ids) {
+                    // `expectedTable` is deliberately NOT pinned. Pinning it would block
+                    // the writer's global fallback, so every delete on a `.global()`
+                    // table would be a silent no-op — inflating the count while the rows
+                    // survive. It costs nothing here: these ids came from this table's
+                    // own policy-filtered read, so they are provably its rows, and
+                    // `gateById` still resolves each row's real table and applies that
+                    // table's delete policy. Same reasoning as `deleteWhere`, which hands
+                    // its ids to `deleteMany` unpinned.
                     // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
-                    await gateById(
-                        id,
-                        "delete",
-                        (writer) => writer.delete(id, tableName, options?.hard === undefined ? undefined : { hard: options.hard }),
-                        undefined,
-                        tableName,
-                    );
+                    await gateById(id, "delete", (writer) => writer.delete(id, undefined, options?.hard === undefined ? undefined : { hard: options.hard }));
                     deleted += 1;
                 }
 

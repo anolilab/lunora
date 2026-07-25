@@ -240,6 +240,27 @@ describe("guardWriter — erase primitives under .rls('required')", () => {
         expect(raw.wipeShard).toHaveBeenCalledTimes(1);
     });
 
+    it("ignores a protected .global() table, which wipeShard never touches anyway", () => {
+        expect.assertions(1);
+
+        const raw = createEraseWriter();
+        // A protected GLOBAL table must not block the sweep: `wipeShard` skips global
+        // tables by design (their rows live in D1, shared across shards), so gating them
+        // would deny a wipe whose real, shard-local targets are all `.public()`.
+        const schema = {
+            rlsMode: "required" as const,
+            tables: {
+                globalSecrets: { isPublic: false, shardMode: { kind: "global" } },
+                stats: { isPublic: true },
+            },
+        };
+        const guarded = guardWriter(raw as never, schema as never, tableOfId) as unknown as { wipeShard: (o?: unknown) => unknown };
+
+        guarded.wipeShard();
+
+        expect(raw.wipeShard).toHaveBeenCalledTimes(1);
+    });
+
     it("still denies wipeShard when only the public table is excluded", () => {
         expect.assertions(1);
 

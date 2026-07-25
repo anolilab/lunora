@@ -47,10 +47,10 @@ class RlsRequiredError extends LunoraError {
     }
 }
 
-/** Minimal schema projection the guard reads: the RLS mode + per-table opt-out. */
+/** Minimal schema projection the guard reads: the RLS mode + per-table opt-out and shard mode. */
 interface GuardableSchema {
     readonly rlsMode?: "required";
-    readonly tables: Record<string, { readonly isPublic?: boolean }>;
+    readonly tables: Record<string, { readonly isPublic?: boolean; readonly shardMode?: { readonly kind?: string } }>;
 }
 
 /**
@@ -97,6 +97,12 @@ interface GuardableWriter {
     restore?: (id: string, expectedTable?: string) => unknown;
     wipeShard?: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => unknown;
 }
+
+/** The tables a `wipeShard` sweep actually reaches — `.global()` tables are excluded. */
+const shardLocalTableNames = (schema: GuardableSchema): string[] =>
+    Object.entries(schema.tables)
+        .filter(([, table]) => table.shardMode?.kind !== "global")
+        .map(([name]) => name);
 
 /**
  * Gate a whole-shard sweep: every table the sweep would touch must pass `guardTable`.
@@ -149,7 +155,12 @@ const guardEraseMethods = (base: GuardableWriter, schema: GuardableSchema, guard
         overrides["wipeShard"] = (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => {
             // Denied outright while any swept table is protected — erase from an
             // admin/system writer (built without `enforceRls`) instead.
-            guardShardSweep(Object.keys(schema.tables), options, guardTable);
+            //
+            // Only the tables `wipeShard` actually touches are gated. It skips
+            // `.global()` tables by design (their rows live in D1, shared across
+            // shards), so gating them here would let a protected global table block a
+            // wipe whose real, shard-local targets are all `.public()`.
+            guardShardSweep(shardLocalTableNames(schema), options, guardTable);
 
             return wipeShard(options);
         };
