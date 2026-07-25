@@ -39,6 +39,125 @@ interface OnlyErrorsOption {
 /** Returns true when the event should be skipped under an `onlyErrors` filter. */
 const shouldSkip = (event: ObservabilityEvent, onlyErrors: boolean | undefined): boolean => onlyErrors === true && event.ok;
 
+/** One buffered event, tagged with its signal and the resource bag it was captured under. */
+type BufferedSignal = (
+    | { event: LogEvent; kind: "log" }
+    | { event: MetricEvent; kind: "metric" }
+    | { endMs: number; event: ObservabilityEvent; kind: "rpc" }
+    | { event: SpanEvent; kind: "span" }
+) & { resource: OtlpResourceAttributes };
+
+/** The trace id an event belongs to, or `undefined` when it carries no trace context. */
+const traceIdOf = (signal: BufferedSignal): string | undefined => (signal.kind === "metric" ? undefined : signal.event.traceId);
+
+/**
+ * Group a flush window by trace and apply the tail sampler, returning only the
+ * signals that survive.
+ *
+ * Events with no trace id (a fan-out aggregation, a metric) are never grouped
+ * and never dropped: there is no trace for the sampler to judge, and silently
+ * discarding them would lose the one signal the caller explicitly recorded.
+ */
+const applyTailSampler = (signals: BufferedSignal[], tailSampler: TailSampler | undefined): BufferedSignal[] => {
+    if (tailSampler === undefined) {
+        return signals;
+    }
+
+    const byTrace = new Map<string, BufferedSignal[]>();
+    const untraced: BufferedSignal[] = [];
+
+    for (const signal of signals) {
+        const traceId = traceIdOf(signal);
+
+        if (traceId === undefined) {
+            untraced.push(signal);
+
+            continue;
+        }
+
+        const bucket = byTrace.get(traceId);
+
+        if (bucket === undefined) {
+            byTrace.set(traceId, [signal]);
+        } else {
+            bucket.push(signal);
+        }
+    }
+
+    const kept = [...untraced];
+
+    for (const [traceId, bucket] of byTrace) {
+        let verdict: boolean;
+
+        try {
+            verdict = tailSampler({
+                logs: bucket.filter((entry) => entry.kind === "log").map((entry) => entry.event),
+                rpc: bucket.filter((entry) => entry.kind === "rpc").map((entry) => entry.event),
+                spans: bucket.filter((entry) => entry.kind === "span").map((entry) => entry.event),
+                traceId,
+            });
+        } catch {
+            // A throwing sampler must not silently delete telemetry — fail open.
+            verdict = true;
+        }
+
+        if (verdict) {
+            kept.push(...bucket);
+        }
+    }
+
+    return kept;
+};
+
+/**
+ * Run one event through its post-processor hook. A throwing hook keeps the event
+ * unmodified rather than dropping it — a redaction bug should not silently delete
+ * a service's telemetry, and the failure is more useful visible as un-redacted
+ * data than invisible as absence.
+ */
+const postProcess = <T>(event: T, hook: ((event: T) => T | undefined) | undefined): T | undefined => {
+    if (hook === undefined) {
+        return event;
+    }
+
+    try {
+        return hook(event);
+    } catch {
+        return event;
+    }
+};
+
+/**
+ * Post-process and encode one buffered signal, tagged with the OTLP endpoint
+ * bucket it belongs to. `undefined` when the post-processor dropped it.
+ */
+const encodeSignal = (
+    signal: BufferedSignal,
+    postProcessor: OtlpPostProcessor | undefined,
+): { bucket: "logs" | "metrics" | "spans"; encoded: unknown } | undefined => {
+    if (signal.kind === "rpc") {
+        const processed = postProcess(signal.event, postProcessor?.rpc);
+
+        return processed === undefined ? undefined : { bucket: "spans", encoded: otlpTraceBody(processed, signal.endMs) };
+    }
+
+    if (signal.kind === "span") {
+        const processed = postProcess(signal.event, postProcessor?.span);
+
+        return processed === undefined ? undefined : { bucket: "spans", encoded: otlpSpanBody(processed) };
+    }
+
+    if (signal.kind === "log") {
+        const processed = postProcess(signal.event, postProcessor?.log);
+
+        return processed === undefined ? undefined : { bucket: "logs", encoded: otlpLogBody(processed) };
+    }
+
+    const processed = postProcess(signal.event, postProcessor?.metric);
+
+    return processed === undefined ? undefined : { bucket: "metrics", encoded: otlpMetricBody(processed) };
+};
+
 /**
  * A sink that logs each event via `console`.
  *
@@ -514,125 +633,6 @@ export interface OtlpBatchOptions {
     maxItems?: number;
 }
 
-/** One buffered event, tagged with its signal and the resource bag it was captured under. */
-type BufferedSignal = { resource: OtlpResourceAttributes } & (
-    | { event: LogEvent; kind: "log" }
-    | { event: MetricEvent; kind: "metric" }
-    | { endMs: number; event: ObservabilityEvent; kind: "rpc" }
-    | { event: SpanEvent; kind: "span" }
-);
-
-/** The trace id an event belongs to, or `undefined` when it carries no trace context. */
-const traceIdOf = (signal: BufferedSignal): string | undefined => (signal.kind === "metric" ? undefined : signal.event.traceId);
-
-/**
- * Group a flush window by trace and apply the tail sampler, returning only the
- * signals that survive.
- *
- * Events with no trace id (a fan-out aggregation, a metric) are never grouped
- * and never dropped: there is no trace for the sampler to judge, and silently
- * discarding them would lose the one signal the caller explicitly recorded.
- */
-const applyTailSampler = (signals: BufferedSignal[], tailSampler: TailSampler | undefined): BufferedSignal[] => {
-    if (tailSampler === undefined) {
-        return signals;
-    }
-
-    const byTrace = new Map<string, BufferedSignal[]>();
-    const untraced: BufferedSignal[] = [];
-
-    for (const signal of signals) {
-        const traceId = traceIdOf(signal);
-
-        if (traceId === undefined) {
-            untraced.push(signal);
-
-            continue;
-        }
-
-        const bucket = byTrace.get(traceId);
-
-        if (bucket === undefined) {
-            byTrace.set(traceId, [signal]);
-        } else {
-            bucket.push(signal);
-        }
-    }
-
-    const kept = [...untraced];
-
-    for (const [traceId, bucket] of byTrace) {
-        let verdict: boolean;
-
-        try {
-            verdict = tailSampler({
-                logs: bucket.filter((entry) => entry.kind === "log").map((entry) => entry.event as LogEvent),
-                rpc: bucket.filter((entry) => entry.kind === "rpc").map((entry) => entry.event as ObservabilityEvent),
-                spans: bucket.filter((entry) => entry.kind === "span").map((entry) => entry.event as SpanEvent),
-                traceId,
-            });
-        } catch {
-            // A throwing sampler must not silently delete telemetry — fail open.
-            verdict = true;
-        }
-
-        if (verdict) {
-            kept.push(...bucket);
-        }
-    }
-
-    return kept;
-};
-
-/**
- * Run one event through its post-processor hook. A throwing hook keeps the event
- * unmodified rather than dropping it — a redaction bug should not silently delete
- * a service's telemetry, and the failure is more useful visible as un-redacted
- * data than invisible as absence.
- */
-const postProcess = <T>(event: T, hook: ((event: T) => T | undefined) | undefined): T | undefined => {
-    if (hook === undefined) {
-        return event;
-    }
-
-    try {
-        return hook(event);
-    } catch {
-        return event;
-    }
-};
-
-/**
- * Post-process and encode one buffered signal, tagged with the OTLP endpoint
- * bucket it belongs to. `undefined` when the post-processor dropped it.
- */
-const encodeSignal = (
-    signal: BufferedSignal,
-    postProcessor: OtlpPostProcessor | undefined,
-): { bucket: "logs" | "metrics" | "spans"; encoded: unknown } | undefined => {
-    if (signal.kind === "rpc") {
-        const processed = postProcess(signal.event, postProcessor?.rpc);
-
-        return processed === undefined ? undefined : { bucket: "spans", encoded: otlpTraceBody(processed, signal.endMs) };
-    }
-
-    if (signal.kind === "span") {
-        const processed = postProcess(signal.event, postProcessor?.span);
-
-        return processed === undefined ? undefined : { bucket: "spans", encoded: otlpSpanBody(processed) };
-    }
-
-    if (signal.kind === "log") {
-        const processed = postProcess(signal.event, postProcessor?.log);
-
-        return processed === undefined ? undefined : { bucket: "logs", encoded: otlpLogBody(processed) };
-    }
-
-    const processed = postProcess(signal.event, postProcessor?.metric);
-
-    return processed === undefined ? undefined : { bucket: "metrics", encoded: otlpMetricBody(processed) };
-};
-
 /** Options for {@link otlpSink}. */
 export interface OtlpSinkOptions extends OnlyErrorsOption {
     /**
@@ -645,16 +645,6 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
      * `fetch` per span can exhaust the budget its own business logic needs.
      */
     batch?: OtlpBatchOptions | false;
-
-    /** Redact or drop events just before they are encoded — see {@link OtlpPostProcessor}. */
-    postProcessor?: OtlpPostProcessor;
-
-    /**
-     * Decide per trace, at flush time, whether it is exported — see
-     * {@link TailSampler}. Requires batching (the default); ignored when
-     * `batch: false`, because an unbuffered exporter has no trace to judge.
-     */
-    tailSampler?: TailSampler;
 
     /**
      * Value of the `deployment.environment` resource attribute (e.g.
@@ -696,6 +686,9 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
      */
     headers?: Record<string, string>;
 
+    /** Redact or drop events just before they are encoded — see {@link OtlpPostProcessor}. */
+    postProcessor?: OtlpPostProcessor;
+
     /**
      * Additional resource attributes to attach to every exported signal. These
      * ride alongside the built-in `service.name` and any convenience fields
@@ -722,6 +715,13 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
      * release tag).
      */
     serviceVersion?: string;
+
+    /**
+     * Decide per trace, at flush time, whether it is exported — see
+     * {@link TailSampler}. Requires batching (the default); ignored when
+     * `batch: false`, because an unbuffered exporter has no trace to judge.
+     */
+    tailSampler?: TailSampler;
 
     /**
      * Convenience bearer token: when set, an `Authorization: Bearer` header
@@ -890,7 +890,12 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
                 const processed = postProcess(event, postProcessor?.log);
 
                 if (processed !== undefined) {
-                    otlpPost(logsUrl, wrapResourceLogs(otlpLogBody(processed), "@lunora/runtime", serviceName, resourceAttributesFor(context)), mergedHeaders, context);
+                    otlpPost(
+                        logsUrl,
+                        wrapResourceLogs(otlpLogBody(processed), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
+                        mergedHeaders,
+                        context,
+                    );
                 }
             },
             onMetric: (event, context) => {

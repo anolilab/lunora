@@ -271,7 +271,12 @@ const buildResourceAttributes = (serviceName: string, extra?: Record<string, Otl
 };
 
 /** Wrap one encoded OTLP span in the `ExportTraceServiceRequest` envelope. */
-const wrapResourceSpans = (spans: unknown[] | unknown, scopeName: string, serviceName: string, resourceAttributes?: Record<string, OtlpAttributeValue>): unknown => {
+const wrapResourceSpans = (
+    spans: unknown[] | unknown,
+    scopeName: string,
+    serviceName: string,
+    resourceAttributes?: Record<string, OtlpAttributeValue>,
+): unknown => {
     return {
         resourceSpans: [
             {
@@ -283,7 +288,12 @@ const wrapResourceSpans = (spans: unknown[] | unknown, scopeName: string, servic
 };
 
 /** Wrap one encoded OTLP log record in the `ExportLogsServiceRequest` envelope. */
-const wrapResourceLogs = (logRecords: unknown[] | unknown, scopeName: string, serviceName: string, resourceAttributes?: Record<string, OtlpAttributeValue>): unknown => {
+const wrapResourceLogs = (
+    logRecords: unknown[] | unknown,
+    scopeName: string,
+    serviceName: string,
+    resourceAttributes?: Record<string, OtlpAttributeValue>,
+): unknown => {
     return {
         resourceLogs: [
             {
@@ -295,7 +305,12 @@ const wrapResourceLogs = (logRecords: unknown[] | unknown, scopeName: string, se
 };
 
 /** Wrap one encoded OTLP metric in the `ExportMetricsServiceRequest` envelope. */
-const wrapResourceMetrics = (metrics: unknown[] | unknown, scopeName: string, serviceName: string, resourceAttributes?: Record<string, OtlpAttributeValue>): unknown => {
+const wrapResourceMetrics = (
+    metrics: unknown[] | unknown,
+    scopeName: string,
+    serviceName: string,
+    resourceAttributes?: Record<string, OtlpAttributeValue>,
+): unknown => {
     return {
         resourceMetrics: [
             {

@@ -4,6 +4,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+import { otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -30,7 +31,6 @@ import { buildKvAdminRoutes, KV_VALUE_MAX_BODY_BYTES, KV_VALUE_PATH } from "./kv
 import type { LogArchiveConfig } from "./log-archive-admin-routes";
 import { buildLogArchiveAdminRoutes } from "./log-archive-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
-import { otlpRandomHex } from "../../../shared/otlp";
 import { emitRpcEvent, flushSink } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { DispatchTraceContext } from "./otel-trace";
@@ -1465,6 +1465,21 @@ const identityExpiryMs = (identity: ResolvedIdentity): number | undefined => {
  * the RPC path and HTTP-action context. `userId` and `claims` mirror what the
  * DO reconstructs from the `x-lunora-userid` / `x-lunora-identity` headers.
  */
+
+/**
+ * Name of the queue a consumer batch came from, for the trigger's span name.
+ *
+ * The batch is typed `unknown` at this boundary (the consumer handler is
+ * codegen-built and the worker deliberately doesn't depend on `@lunora/queue`'s
+ * types), so the name is read defensively: a batch without a string `queue`
+ * falls back to a constant rather than stringifying `undefined` into the span
+ * name, which would show up in a collector as a literal `queue:undefined` group.
+ */
+const queueNameOf = (batch: unknown): string => {
+    const name = (batch as { queue?: unknown } | null | undefined)?.queue;
+
+    return typeof name === "string" && name.length > 0 ? name : "unknown";
+};
 
 const resolveForwardContext = async (request: Request, env: unknown, resolveIdentity: WorkerOptions["resolveIdentity"]): Promise<ForwardContext> => {
     const headers: Record<string, string> = { "content-type": "application/json" };
@@ -3858,6 +3873,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * collected and rethrown together so one failure neither masks the other nor
      * is silently swallowed — the platform sees the cron invocation fail.
      */
+
     /**
      * Wrap a NON-`fetch` worker trigger — a queue batch, a cron fire — in the same
      * telemetry the RPC path gets: its own trace, one SERVER span, and a flush of
@@ -4389,21 +4405,6 @@ type FrameworkWorkerOptions = Omit<WorkerOptions, "httpRouter">;
 type FrameworkWorkerOptionsInput = ((env: unknown) => FrameworkWorkerOptions) | FrameworkWorkerOptions;
 
 const toHttpRouter = (handler: FrameworkHostHandler): HttpRouterLike => (typeof handler === "function" ? { fetch: handler } : handler);
-
-/**
- * Name of the queue a consumer batch came from, for the trigger's span name.
- *
- * The batch is typed `unknown` at this boundary (the consumer handler is
- * codegen-built and the worker deliberately doesn't depend on `@lunora/queue`'s
- * types), so the name is read defensively: a batch without a string `queue`
- * falls back to a constant rather than stringifying `undefined` into the span
- * name, which would show up in a collector as a literal `queue:undefined` group.
- */
-const queueNameOf = (batch: unknown): string => {
-    const name = (batch as { queue?: unknown } | null | undefined)?.queue;
-
-    return typeof name === "string" && name.length > 0 ? name : "unknown";
-};
 
 /** Whether the Lunora options configure any cron surface (so Lunora owns `scheduled` rather than the framework host). */
 const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean => Boolean(options.crons ?? options.cronJobs ?? options.backupCron);

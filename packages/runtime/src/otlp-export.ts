@@ -15,9 +15,9 @@
  * and container speak an identical wire format.
  */
 import { coerceFieldValue } from "../../../shared/log-fields";
-import type { KeepAlive } from "../../../shared/otlp-batch";
 import type { OtlpAttribute } from "../../../shared/otlp";
 import { encodeAttribute, encodeAttributes, OTLP_SEVERITY, OTLP_SPAN_KIND, otlpRandomHex, otlpUnixNano } from "../../../shared/otlp";
+import type { KeepAlive } from "../../../shared/otlp-batch";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySinkContext, SpanEvent } from "./observability";
 
 /** Build the OTLP trace-export body for one RPC dispatch event. */
@@ -190,19 +190,23 @@ const otlpSpanBody = (event: SpanEvent): unknown => {
     };
 
     if (event.events !== undefined && event.events.length > 0) {
-        span.events = event.events.map((point) => ({
-            attributes: encodeAttributes(Object.fromEntries(Object.entries(point.attributes ?? {}).map(([key, value]) => [key, coerceFieldValue(value)]))),
-            name: point.name,
-            timeUnixNano: otlpUnixNano(point.ts),
-        }));
+        span.events = event.events.map((point) => {
+            return {
+                attributes: encodeAttributes(Object.fromEntries(Object.entries(point.attributes ?? {}).map(([key, value]) => [key, coerceFieldValue(value)]))),
+                name: point.name,
+                timeUnixNano: otlpUnixNano(point.ts),
+            };
+        });
     }
 
     if (event.links !== undefined && event.links.length > 0) {
-        span.links = event.links.map((link) => ({
-            attributes: encodeAttributes(Object.fromEntries(Object.entries(link.attributes ?? {}).map(([key, value]) => [key, coerceFieldValue(value)]))),
-            spanId: link.spanId,
-            traceId: link.traceId,
-        }));
+        span.links = event.links.map((link) => {
+            return {
+                attributes: encodeAttributes(Object.fromEntries(Object.entries(link.attributes ?? {}).map(([key, value]) => [key, coerceFieldValue(value)]))),
+                spanId: link.spanId,
+                traceId: link.traceId,
+            };
+        });
     }
 
     return span;
@@ -243,16 +247,16 @@ const otlpMetricBody = (event: MetricEvent): unknown => {
                 aggregationTemporality: 1,
                 dataPoints: [
                     {
-                    attributes,
-                    bucketCounts: ["1"],
-                    count: "1",
-                    explicitBounds: [],
-                    max: event.value,
-                    min: event.value,
-                    // `startTimeUnixNano` omitted for the same reason as
-                    // the Sum data point above — see the comment there.
-                    sum: event.value,
-                    timeUnixNano,
+                        attributes,
+                        bucketCounts: ["1"],
+                        count: "1",
+                        explicitBounds: [],
+                        max: event.value,
+                        min: event.value,
+                        // `startTimeUnixNano` omitted for the same reason as
+                        // the Sum data point above — see the comment there.
+                        sum: event.value,
+                        timeUnixNano,
                     },
                 ],
             },

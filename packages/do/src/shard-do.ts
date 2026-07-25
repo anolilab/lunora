@@ -2712,247 +2712,6 @@ abstract class ShardDO {
         // Subclasses can override with proper logging. Avoid throwing.
     }
 
-    /** The decode + route body of {@link webSocketMessage}, split out so the trace wrapper stays a one-liner. */
-    // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
-    protected async handleWebSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-        // Token-expiry: a socket whose credential lapsed is dropped before its
-        // frame is processed, so the client reconnects and re-resolves identity.
-        // This is the inbound-activity check; the load-bearing one is in
-        // `refreshSubscriptions`, which drops an expired socket BEFORE pushing it
-        // the user's live data (a passive subscriber sends no frames — its
-        // keepalive pings auto-respond and never reach here — so inbound checks
-        // alone would never fire for the common case).
-        if (this.isSocketExpired(ws)) {
-            this.dropExpiredSocket(ws);
-
-            return;
-        }
-
-        const text = typeof message === "string" ? message : new TextDecoder().decode(message);
-        let envelope: SubscriptionEnvelope;
-
-        try {
-            envelope = JSON.parse(text) as SubscriptionEnvelope;
-        } catch {
-            ws.send(JSON.stringify({ message: "invalid envelope", type: "error" }));
-
-            return;
-        }
-
-        if (envelope.type === "connect") {
-            // One-shot control frame the client sends right after the socket
-            // opens: record its connection `context` on the attachment (so it
-            // survives hibernation and can be replayed at close) and fire the
-            // `onConnect` lifecycle hooks under the socket's verified identity.
-            const attachment = this.readAttachment(ws);
-
-            // Idempotent: a socket announces `connect` exactly once. A re-sent
-            // (or duplicate) frame must not re-fire `onConnect`, or it would
-            // out-number the single `onDisconnect` at close.
-            if (attachment.connected === true) {
-                return;
-            }
-
-            if (envelope.context !== undefined) {
-                attachment.context = envelope.context;
-            }
-
-            // Record the client's stable id so shape pokes to this socket can
-            // echo its `__client_watermark` as `lastMutationId` (overlay-drop).
-            if (envelope.clientId !== undefined) {
-                attachment.clientId = envelope.clientId;
-            }
-
-            attachment.connected = true;
-
-            try {
-                (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
-            } catch {
-                // Over-large context can't be persisted; the hook still runs
-                // with the supplied context this turn, but it won't survive
-                // to disconnect. Never throw out of webSocketMessage.
-            }
-
-            await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
-
-            return;
-        }
-
-        if (envelope.type === "subscribe" && envelope.query) {
-            const { functionPath } = envelope.query;
-            const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
-
-            // Admin introspection subscriptions read shard internals (raw rows,
-            // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
-            // as the HTTP admin RPCs — recorded on the socket at upgrade. A
-            // socket that only cleared the user-subscription gate must never be
-            // able to read admin data by naming a reserved functionPath.
-            if (isAdmin && this.readAttachment(ws).admin !== true) {
-                ws.send(JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
-
-                return;
-            }
-
-            // Decode the wire-encoded subscription args ONCE, at the entry point —
-            // BEFORE the attachment store and the seed — so every downstream
-            // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
-            // eval) sees REAL values (`bigint`/`Date`/bytes), and the
-            // structured-clone attachment carries them through hibernation.
-            // `decodeWire` is identity for pure-JSON args (legacy frames included).
-            let query: SubscriptionQuery;
-
-            try {
-                query =
-                    envelope.query.args === undefined
-                        ? envelope.query
-                        : { ...envelope.query, args: decodeWire(envelope.query.args) as Record<string, unknown> };
-            } catch {
-                // A malformed tagged payload (over-long bigint, over-deep nesting)
-                // must not throw out of `webSocketMessage` — surface a structured
-                // error frame instead, mirroring the persist-failure path.
-                try {
-                    ws.send(
-                        JSON.stringify({
-                            code: "BAD_SUBSCRIPTION_ARGS",
-                            error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
-                            id: envelope.id,
-                            type: "error",
-                        }),
-                    );
-                } catch {
-                    // Socket may already be closed; never throw out of webSocketMessage.
-                }
-
-                return;
-            }
-
-            const status = this.subscribe(ws, envelope.id, query);
-
-            if (status !== "ok") {
-                const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
-                const errorMessage =
-                    status === "too_many"
-                        ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
-                        : "failed to persist subscription attachment";
-
-                try {
-                    ws.send(JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
-                } catch {
-                    // Socket may already be closed; nothing else we can do —
-                    // never let the webSocketMessage handler throw.
-                }
-
-                return;
-            }
-
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
-
-            // Seed the subscriber with the query's current result so the first
-            // value arrives over the same channel as later updates. When the
-            // subclass doesn't support re-execution (base default), this is a
-            // no-op and the subscriber relies on its initial HTTP query.
-            if (functionPath) {
-                await this.seedSubscription(ws, envelope.id, query, functionPath, isAdmin);
-            }
-
-            return;
-        }
-
-        if (envelope.type === "shape_subscribe" && envelope.shape) {
-            // Decode-at-entry, mirroring the `subscribe` branch above: the stored
-            // descriptor and every `resolveShape` see real values.
-            let shapeArgs: Record<string, unknown> | undefined;
-
-            try {
-                shapeArgs = envelope.shape.args === undefined ? undefined : (decodeWire(envelope.shape.args) as Record<string, unknown>);
-            } catch {
-                this.sendShapeSubscribeError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
-
-                return;
-            }
-
-            await this.handleShapeSubscribe(ws, envelope.id, {
-                args: shapeArgs,
-                name: envelope.shape.name,
-                sinceEpoch: envelope.sinceEpoch,
-                sinceSeq: envelope.sinceCheckpoint,
-            });
-
-            return;
-        }
-
-        if (envelope.type === "shape_unsubscribe") {
-            this.shapeUnsubscribe(ws, envelope.id);
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
-
-            return;
-        }
-
-        if (envelope.type === "stream" && envelope.query?.functionPath) {
-            // Streams are public-only: there is no admin-streaming surface, so
-            // anything matching the admin prefix is rejected up front rather
-            // than allowed to slip through executeStream().
-            if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-                ws.send(JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
-
-                return;
-            }
-
-            // Fire-and-forget: handleStream owns its own error reporting (it
-            // sends `type:"error"` frames to the socket). The trailing no-op
-            // catch only guards the rare pre-try throw path (e.g. ws.send on a
-            // socket the runtime already tore down) so a dead socket can't
-            // surface as an unhandled rejection.
-            // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
-            // before handing them to the stream handler — mirrors the `/rpc` path.
-            this.handleStream(ws, envelope.id, envelope.query.functionPath, decodeWire(envelope.query.args ?? {}) as Record<string, unknown>).catch(() => {
-                /* socket already gone; nothing to report */
-            });
-
-            return;
-        }
-
-        if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
-            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
-                const join = envelope.type === "whisper_subscribe";
-
-                this.setWhisperMembership(ws, envelope.topic, join);
-
-                // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
-                // announces itself so the owner forwards whisper frames to it.
-                if (join) {
-                    await this.relay?.announce();
-                }
-            }
-
-            return;
-        }
-
-        if (envelope.type === "whisper") {
-            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
-                await this.broadcastWhisper(ws, envelope.topic, envelope.data);
-            }
-
-            return;
-        }
-
-        if (envelope.type === "unsubscribe") {
-            // Stream cancel: abort the in-flight iterator (if any) before
-            // touching the subscription registry. unsubscribe() on a non-sub
-            // id is a no-op, so this stays safe even when id namespaces overlap.
-            const cancellers = this.streamCancellers.get(ws);
-            const controller = cancellers?.get(envelope.id);
-
-            if (controller) {
-                controller.abort();
-                cancellers?.delete(envelope.id);
-            }
-
-            this.unsubscribe(ws, envelope.id);
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
-        }
-    }
-
     /**
      * Durable Object alarm handler — the heartbeat for `.global()`-table shapes
      * AND external-source (`.source(...)`) ingest, which share one alarm. The
@@ -2968,71 +2727,6 @@ abstract class ShardDO {
      */
     public async alarm(): Promise<void> {
         return this.withTriggerTrace("alarm", async () => this.handleAlarmBody());
-    }
-
-    /**
-     * The alarm's actual work, split out so {@link alarm} is a one-line trace
-     * wrapper. An alarm drives `.global()` shape refreshes and external-source
-     * ingest with no client waiting on a response, which is exactly where a
-     * silent failure hides longest — so it gets a root span like any dispatch.
-     */
-    private async handleAlarmBody(): Promise<void> {
-        this.globalPollScheduled = false;
-
-        let globalShapesRemaining: number;
-
-        try {
-            globalShapesRemaining = await this.pollGlobalShapes();
-        } catch (error) {
-            // `pollGlobalShapes` already contains per-socket/per-shape failures;
-            // this guards a catastrophic failure (e.g. `getWebSockets` throwing)
-            // so the poll heartbeat re-arms and retries next tick instead of
-            // dying permanently and silently dropping every global subscriber.
-            this.recordShapeError("shape:poll", error);
-            globalShapesRemaining = 1;
-        }
-
-        // External-source (`.source(...)`) ingest shares this alarm (plan 077). The
-        // base hook returns `undefined` (dormant); the codegen subclass overrides
-        // it to materialize each sourced table and report the earliest NEXT-DUE
-        // timestamp across every non-manual source. A contained failure re-arms
-        // at the fixed floor (a conservative retry) rather than stranding the
-        // ingest loop or spinning immediately.
-        let nextSourceDueAt: number | undefined;
-
-        try {
-            nextSourceDueAt = await this.pollExternalSources();
-        } catch (error) {
-            this.recordShapeError("source:poll", error);
-            nextSourceDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
-        }
-
-        // Declarative TTL expiry (`.ttl(...)`) shares this alarm too. The base hook
-        // returns `undefined` (no TTL tables); the codegen subclass overrides
-        // `ttlSweeps()` from the schema so the sweep pages + removes expired rows and
-        // reports its next-due. A contained failure re-arms at the fixed floor.
-        let nextTtlDueAt: number | undefined;
-
-        try {
-            nextTtlDueAt = await this.pollTtlSweeps();
-        } catch (error) {
-            this.recordShapeError("ttl:sweep", error);
-            nextTtlDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
-        }
-
-        // Drain the tables the ingest poll just wrote: a sourced table is local, so
-        // its `defineShape` subscribers are poked through the standard
-        // changed-table → `pokeShapeSubscribers` path (the same one a mutation
-        // uses), NOT the global-shape poke path. Without this, materialized rows land
-        // in SQLite but live subscribers never see the incremental update. A no-op
-        // when nothing was queued (non-sourced DOs, or a steady-state tick).
-        await this.flushChangedTables();
-
-        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, nextTtlDueAt, Date.now());
-
-        if (nextAlarmAt !== undefined) {
-            await this.scheduleGlobalPoll(nextAlarmAt);
-        }
     }
 
     /** Subclasses implement function dispatch. */
@@ -5161,6 +4855,312 @@ abstract class ShardDO {
         // Optional export sink (the durable, cross-instance path).
         if (sink?.onMetric) {
             bestEffort(() => sink.onMetric?.(stamped, { waitUntil: this.state.waitUntil?.bind(this.state) }));
+        }
+    }
+
+    /** The decode + route body of {@link webSocketMessage}, split out so the trace wrapper stays a one-liner. */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
+    protected async handleWebSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+        // Token-expiry: a socket whose credential lapsed is dropped before its
+        // frame is processed, so the client reconnects and re-resolves identity.
+        // This is the inbound-activity check; the load-bearing one is in
+        // `refreshSubscriptions`, which drops an expired socket BEFORE pushing it
+        // the user's live data (a passive subscriber sends no frames — its
+        // keepalive pings auto-respond and never reach here — so inbound checks
+        // alone would never fire for the common case).
+        if (this.isSocketExpired(ws)) {
+            this.dropExpiredSocket(ws);
+
+            return;
+        }
+
+        const text = typeof message === "string" ? message : new TextDecoder().decode(message);
+        let envelope: SubscriptionEnvelope;
+
+        try {
+            envelope = JSON.parse(text) as SubscriptionEnvelope;
+        } catch {
+            ws.send(JSON.stringify({ message: "invalid envelope", type: "error" }));
+
+            return;
+        }
+
+        if (envelope.type === "connect") {
+            // One-shot control frame the client sends right after the socket
+            // opens: record its connection `context` on the attachment (so it
+            // survives hibernation and can be replayed at close) and fire the
+            // `onConnect` lifecycle hooks under the socket's verified identity.
+            const attachment = this.readAttachment(ws);
+
+            // Idempotent: a socket announces `connect` exactly once. A re-sent
+            // (or duplicate) frame must not re-fire `onConnect`, or it would
+            // out-number the single `onDisconnect` at close.
+            if (attachment.connected === true) {
+                return;
+            }
+
+            if (envelope.context !== undefined) {
+                attachment.context = envelope.context;
+            }
+
+            // Record the client's stable id so shape pokes to this socket can
+            // echo its `__client_watermark` as `lastMutationId` (overlay-drop).
+            if (envelope.clientId !== undefined) {
+                attachment.clientId = envelope.clientId;
+            }
+
+            attachment.connected = true;
+
+            try {
+                (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            } catch {
+                // Over-large context can't be persisted; the hook still runs
+                // with the supplied context this turn, but it won't survive
+                // to disconnect. Never throw out of webSocketMessage.
+            }
+
+            await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
+
+            return;
+        }
+
+        if (envelope.type === "subscribe" && envelope.query) {
+            const { functionPath } = envelope.query;
+            const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
+
+            // Admin introspection subscriptions read shard internals (raw rows,
+            // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
+            // as the HTTP admin RPCs — recorded on the socket at upgrade. A
+            // socket that only cleared the user-subscription gate must never be
+            // able to read admin data by naming a reserved functionPath.
+            if (isAdmin && this.readAttachment(ws).admin !== true) {
+                ws.send(JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
+
+                return;
+            }
+
+            // Decode the wire-encoded subscription args ONCE, at the entry point —
+            // BEFORE the attachment store and the seed — so every downstream
+            // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
+            // eval) sees REAL values (`bigint`/`Date`/bytes), and the
+            // structured-clone attachment carries them through hibernation.
+            // `decodeWire` is identity for pure-JSON args (legacy frames included).
+            let query: SubscriptionQuery;
+
+            try {
+                query =
+                    envelope.query.args === undefined
+                        ? envelope.query
+                        : { ...envelope.query, args: decodeWire(envelope.query.args) as Record<string, unknown> };
+            } catch {
+                // A malformed tagged payload (over-long bigint, over-deep nesting)
+                // must not throw out of `webSocketMessage` — surface a structured
+                // error frame instead, mirroring the persist-failure path.
+                try {
+                    ws.send(
+                        JSON.stringify({
+                            code: "BAD_SUBSCRIPTION_ARGS",
+                            error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
+                            id: envelope.id,
+                            type: "error",
+                        }),
+                    );
+                } catch {
+                    // Socket may already be closed; never throw out of webSocketMessage.
+                }
+
+                return;
+            }
+
+            const status = this.subscribe(ws, envelope.id, query);
+
+            if (status !== "ok") {
+                const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
+                const errorMessage =
+                    status === "too_many"
+                        ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
+                        : "failed to persist subscription attachment";
+
+                try {
+                    ws.send(JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
+                } catch {
+                    // Socket may already be closed; nothing else we can do —
+                    // never let the webSocketMessage handler throw.
+                }
+
+                return;
+            }
+
+            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
+
+            // Seed the subscriber with the query's current result so the first
+            // value arrives over the same channel as later updates. When the
+            // subclass doesn't support re-execution (base default), this is a
+            // no-op and the subscriber relies on its initial HTTP query.
+            if (functionPath) {
+                await this.seedSubscription(ws, envelope.id, query, functionPath, isAdmin);
+            }
+
+            return;
+        }
+
+        if (envelope.type === "shape_subscribe" && envelope.shape) {
+            // Decode-at-entry, mirroring the `subscribe` branch above: the stored
+            // descriptor and every `resolveShape` see real values.
+            let shapeArgs: Record<string, unknown> | undefined;
+
+            try {
+                shapeArgs = envelope.shape.args === undefined ? undefined : (decodeWire(envelope.shape.args) as Record<string, unknown>);
+            } catch {
+                this.sendShapeSubscribeError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
+
+                return;
+            }
+
+            await this.handleShapeSubscribe(ws, envelope.id, {
+                args: shapeArgs,
+                name: envelope.shape.name,
+                sinceEpoch: envelope.sinceEpoch,
+                sinceSeq: envelope.sinceCheckpoint,
+            });
+
+            return;
+        }
+
+        if (envelope.type === "shape_unsubscribe") {
+            this.shapeUnsubscribe(ws, envelope.id);
+            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
+
+            return;
+        }
+
+        if (envelope.type === "stream" && envelope.query?.functionPath) {
+            // Streams are public-only: there is no admin-streaming surface, so
+            // anything matching the admin prefix is rejected up front rather
+            // than allowed to slip through executeStream().
+            if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+                ws.send(JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
+
+                return;
+            }
+
+            // Fire-and-forget: handleStream owns its own error reporting (it
+            // sends `type:"error"` frames to the socket). The trailing no-op
+            // catch only guards the rare pre-try throw path (e.g. ws.send on a
+            // socket the runtime already tore down) so a dead socket can't
+            // surface as an unhandled rejection.
+            // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
+            // before handing them to the stream handler — mirrors the `/rpc` path.
+            this.handleStream(ws, envelope.id, envelope.query.functionPath, decodeWire(envelope.query.args ?? {}) as Record<string, unknown>).catch(() => {
+                /* socket already gone; nothing to report */
+            });
+
+            return;
+        }
+
+        if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
+            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
+                const join = envelope.type === "whisper_subscribe";
+
+                this.setWhisperMembership(ws, envelope.topic, join);
+
+                // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
+                // announces itself so the owner forwards whisper frames to it.
+                if (join) {
+                    await this.relay?.announce();
+                }
+            }
+
+            return;
+        }
+
+        if (envelope.type === "whisper") {
+            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
+                await this.broadcastWhisper(ws, envelope.topic, envelope.data);
+            }
+
+            return;
+        }
+
+        if (envelope.type === "unsubscribe") {
+            // Stream cancel: abort the in-flight iterator (if any) before
+            // touching the subscription registry. unsubscribe() on a non-sub
+            // id is a no-op, so this stays safe even when id namespaces overlap.
+            const cancellers = this.streamCancellers.get(ws);
+            const controller = cancellers?.get(envelope.id);
+
+            if (controller) {
+                controller.abort();
+                cancellers?.delete(envelope.id);
+            }
+
+            this.unsubscribe(ws, envelope.id);
+            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
+        }
+    }
+
+    /**
+     * The alarm's actual work, split out so {@link alarm} is a one-line trace
+     * wrapper. An alarm drives `.global()` shape refreshes and external-source
+     * ingest with no client waiting on a response, which is exactly where a
+     * silent failure hides longest — so it gets a root span like any dispatch.
+     */
+    private async handleAlarmBody(): Promise<void> {
+        this.globalPollScheduled = false;
+
+        let globalShapesRemaining: number;
+
+        try {
+            globalShapesRemaining = await this.pollGlobalShapes();
+        } catch (error) {
+            // `pollGlobalShapes` already contains per-socket/per-shape failures;
+            // this guards a catastrophic failure (e.g. `getWebSockets` throwing)
+            // so the poll heartbeat re-arms and retries next tick instead of
+            // dying permanently and silently dropping every global subscriber.
+            this.recordShapeError("shape:poll", error);
+            globalShapesRemaining = 1;
+        }
+
+        // External-source (`.source(...)`) ingest shares this alarm (plan 077). The
+        // base hook returns `undefined` (dormant); the codegen subclass overrides
+        // it to materialize each sourced table and report the earliest NEXT-DUE
+        // timestamp across every non-manual source. A contained failure re-arms
+        // at the fixed floor (a conservative retry) rather than stranding the
+        // ingest loop or spinning immediately.
+        let nextSourceDueAt: number | undefined;
+
+        try {
+            nextSourceDueAt = await this.pollExternalSources();
+        } catch (error) {
+            this.recordShapeError("source:poll", error);
+            nextSourceDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
+        }
+
+        // Declarative TTL expiry (`.ttl(...)`) shares this alarm too. The base hook
+        // returns `undefined` (no TTL tables); the codegen subclass overrides
+        // `ttlSweeps()` from the schema so the sweep pages + removes expired rows and
+        // reports its next-due. A contained failure re-arms at the fixed floor.
+        let nextTtlDueAt: number | undefined;
+
+        try {
+            nextTtlDueAt = await this.pollTtlSweeps();
+        } catch (error) {
+            this.recordShapeError("ttl:sweep", error);
+            nextTtlDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
+        }
+
+        // Drain the tables the ingest poll just wrote: a sourced table is local, so
+        // its `defineShape` subscribers are poked through the standard
+        // changed-table → `pokeShapeSubscribers` path (the same one a mutation
+        // uses), NOT the global-shape poke path. Without this, materialized rows land
+        // in SQLite but live subscribers never see the incremental update. A no-op
+        // when nothing was queued (non-sourced DOs, or a steady-state tick).
+        await this.flushChangedTables();
+
+        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, nextTtlDueAt, Date.now());
+
+        if (nextAlarmAt !== undefined) {
+            await this.scheduleGlobalPoll(nextAlarmAt);
         }
     }
 
