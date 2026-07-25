@@ -17,9 +17,12 @@
  * Security posture (plan 177 exit criteria): the body leaks NO secrets or PII. A
  * probe returns only a boolean and a message string the runtime controls — never
  * an env value, connection string, or binding name from user config. In the
- * default `"public"` posture the per-check `message` is omitted entirely; in the
- * `"admin"` posture the endpoint is bearer-gated AND the (still runtime-authored)
- * messages are included to aid an operator.
+ * default `"public"` posture the per-check `message` is omitted entirely AND the
+ * check `name` is reduced to its probe kind (`d1`, `r2`, …) so the operator's
+ * real binding keys never reach an unauthenticated caller (see `buildBody`); in
+ * the `"admin"` posture the endpoint is bearer-gated AND the (still
+ * runtime-authored) messages plus the full `kind:key` names are included to aid
+ * an operator.
  */
 import { LunoraError } from "./errors";
 import { methodGuard } from "./method-guard";
@@ -65,6 +68,7 @@ interface HealthCheckReport {
     critical: boolean;
     /** Present only in the `admin` posture. */
     message?: string;
+    /** The redacted probe kind (`d1`, `r2`, `d1#2`, …) in the `public` posture; the full `kind:key` name in `admin`. */
     name: string;
     status: "down" | "up";
 }
@@ -192,11 +196,16 @@ const buildRegistry = (probes: ReadonlyArray<HealthProbe>): { criticalNames: Set
 
 /**
  * Assemble the sanitised response body from a registry report. In the `public`
- * posture the per-check `message` is dropped (only name + up/down survive), so
- * no runtime-authored detail — however benign — reaches an unauthenticated
- * caller. The overall `status` is `unhealthy` when any CRITICAL check is down
- * (drives the `503`), `degraded` when only non-critical checks are down, else
- * `healthy`.
+ * posture two things are redacted: the per-check `message` is dropped (only name
+ * + up/down survive), and the check `name` is reduced to its probe KIND — the
+ * name prefix up to the first `:` (`d1`, `r2`, `queue`, …) with a `#n`
+ * disambiguator when a kind repeats. This keeps the operator's real binding keys
+ * (`d1:BILLING_LEGACY`, `queue:PII_EXPORT`) out of an unauthenticated response,
+ * where they would otherwise leak internal systems / environments / tenant
+ * structure. The `admin` posture keeps the full `kind:key` names (Studio and
+ * operators depend on their readability). The overall `status` is `unhealthy`
+ * when any CRITICAL check is down (drives the `503`), `degraded` when only
+ * non-critical checks are down, else `healthy`.
  */
 const buildBody = (
     report: Record<string, { health: { healthy: boolean; message?: string } }>,
@@ -208,6 +217,10 @@ const buildBody = (
     const checks: HealthCheckReport[] = [];
     let anyCriticalDown = false;
     let anyDown = false;
+    // Public-posture disambiguation: how many times each redacted kind has been
+    // seen so far, so a second `d1` binding surfaces as `d1#2` rather than
+    // colliding. Keyed by kind; unused in the admin posture.
+    const kindCounts = new Map<string, number>();
 
     for (const [name, entry] of Object.entries(report)) {
         const critical = criticalNames.has(name);
@@ -221,10 +234,20 @@ const buildBody = (
             }
         }
 
+        let reportedName = name;
+
+        if (posture !== "admin") {
+            const kind = name.includes(":") ? name.slice(0, name.indexOf(":")) : name;
+            const seen = (kindCounts.get(kind) ?? 0) + 1;
+
+            kindCounts.set(kind, seen);
+            reportedName = seen === 1 ? kind : `${kind}#${String(seen)}`;
+        }
+
         checks.push({
             critical,
             ...(posture === "admin" && entry.health.message !== undefined ? { message: entry.health.message } : {}),
-            name,
+            name: reportedName,
             status: up ? "up" : "down",
         });
     }

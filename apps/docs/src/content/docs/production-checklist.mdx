@@ -152,12 +152,14 @@ Checklist:
       `/_lunora/health` (open in dashboard: Traffic → Health Checks) so a
       critical-binding outage pages you. Use `/_lunora/health/ready` for a load
       balancer's origin health / readiness pool.
-- [ ] Decide the **auth posture**. The default is `"public"`: unauthenticated
-      and message-redacted (only a check name and `up`/`down` survive — no
-      per-check detail reaches an anonymous caller). Set it to `"admin"` to
-      bearer-gate the endpoint (via `LUNORA_ADMIN_TOKEN`) and include the
-      runtime-authored per-check `message`s to aid an operator — but a monitor
-      polling it must then send the token.
+- [ ] Decide the **auth posture**. The default is `"public"`: unauthenticated,
+      message-redacted, and **name-redacted** — each check surfaces only its
+      probe _kind_ (`d1`, `r2`, `queue`, …, with a `#2` suffix if a kind
+      repeats) plus `up`/`down`, so the operator's real binding keys never reach
+      an anonymous caller. Set it to `"admin"` to bearer-gate the endpoint (via
+      `LUNORA_ADMIN_TOKEN`) and include the runtime-authored per-check
+      `message`s **and** the full `kind:key` binding names to aid an operator —
+      but a monitor polling it must then send the token.
 - [ ] Set `cacheTtlMs` if an orchestrator polls every few seconds, so repeated
       probes don't re-hit the bindings on every request — the last computed
       report is reused within the window.

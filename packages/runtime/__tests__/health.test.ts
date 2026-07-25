@@ -79,7 +79,8 @@ describe("createWorker — health / readiness endpoints", () => {
 
         expect(body.status).toBe("healthy");
         expect(body.checks.find((c) => c.name === "durable-object")?.status).toBe("up");
-        expect(body.checks.find((c) => c.name === "d1:DB")?.status).toBe("up");
+        // Public posture: the D1 check surfaces as its redacted kind `d1`, never the `DB` binding key.
+        expect(body.checks.find((c) => c.name === "d1")?.status).toBe("up");
     });
 
     it("returns 503 + unhealthy when a critical dependency (D1) is down", async () => {
@@ -93,7 +94,7 @@ describe("createWorker — health / readiness endpoints", () => {
         const body: HealthBody = JSON.parse(await response.text());
 
         expect(body.status).toBe("unhealthy");
-        expect(body.checks.find((c) => c.name === "d1:DB")?.status).toBe("down");
+        expect(body.checks.find((c) => c.name === "d1")?.status).toBe("down");
     });
 
     it("returns 503 when the Durable Object is unreachable", async () => {
@@ -160,8 +161,31 @@ describe("createWorker — health / readiness endpoints", () => {
 
         const body: HealthBody = JSON.parse(await response.text());
 
-        expect(body.checks.map((check) => check.name)).toEqual(expect.arrayContaining(["r2:BUCKET", "queue:QUEUE", "hyperdrive:HYPERDRIVE"]));
+        // Public posture: presence checks surface as their redacted kinds, never the binding keys.
+        expect(body.checks.map((check) => check.name)).toEqual(expect.arrayContaining(["r2", "queue", "hyperdrive"]));
         // Hyperdrive connection string must never appear in the body.
         expect(JSON.stringify(body)).not.toContain("postgres://redacted");
+    });
+
+    it("redacts the configured binding key from the public body but keeps it under admin", async () => {
+        expect.assertions(2);
+
+        // Public posture: a D1 binding named `SECRET_DB` must surface only as `d1`.
+        const publicWorker = createWorker({ shardDO: reachableNamespace });
+        const publicResponse = await publicWorker.fetch(get("/_lunora/health"), { SECRET_DB: healthyD1() }, fakeContext);
+        const publicRaw = await publicResponse.text();
+
+        expect(publicRaw).not.toContain("SECRET_DB");
+
+        // Admin posture: the full `d1:SECRET_DB` name is retained for the operator.
+        const adminWorker = createWorker({ adminToken: "tok", health: { auth: "admin" }, shardDO: reachableNamespace });
+        const adminResponse = await adminWorker.fetch(
+            new Request("https://app.example/_lunora/health", { headers: { authorization: "Bearer tok" }, method: "GET" }),
+            { SECRET_DB: healthyD1() },
+            fakeContext,
+        );
+        const adminRaw = await adminResponse.text();
+
+        expect(adminRaw).toContain("d1:SECRET_DB");
     });
 });
