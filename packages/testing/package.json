@@ -70,14 +70,6 @@
         "@lunora/mail": "1.0.0-alpha.17",
         "@lunora/server": "1.0.0-alpha.30"
     },
-    "peerDependencies": {
-        "@playwright/test": "catalog:e2e"
-    },
-    "peerDependenciesMeta": {
-        "@playwright/test": {
-            "optional": true
-        }
-    },
     "devDependencies": {
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -86,6 +78,14 @@
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@playwright/test": "catalog:e2e"
+    },
+    "peerDependenciesMeta": {
+        "@playwright/test": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
