@@ -2333,9 +2333,9 @@ abstract class ShardDO {
             computeOpLogShapeSeed: (shape, resolved) => this.computeOpLogShapeSeed(shape, resolved),
             currentCdcEpoch: () => this.currentCdcEpoch(),
             deliverWhisperLocal: (topic, frame, exclude) => this.deliverWhisperLocal(topic, frame, exclude),
-            doName: () => this.shardHost.shardKey,
+            doName: () => this.runner.shardKey,
             env: () => this.env,
-            getWebSockets: () => this.socketHost.getSockets(),
+            getWebSockets: () => this.runner.sockets(),
             maskMetadata: () => this.maskMetadata(),
             nextPokeId: () => {
                 this.pokeSequence += 1;
@@ -2384,7 +2384,7 @@ abstract class ShardDO {
         // per-socket memo state is keyed identically on both paths. Falls back
         // to the raw socket only when the host cannot map it — in which case
         // enumeration cannot see it either, so the two stay consistent.
-        const socket = this.socketHost.handleFor(ws) ?? ws;
+        const socket = this.runner.socketFor(ws);
 
         return this.withTriggerTrace("websocket.message", async () => this.handleWebSocketMessage(socket, message));
     }
@@ -2398,7 +2398,7 @@ abstract class ShardDO {
         // Same boundary conversion as `webSocketMessage`: per-socket state is
         // keyed on the handle, so the close path must resolve the same identity
         // or it would tear down nothing.
-        const ws = this.socketHost.handleFor(rawSocket) ?? rawSocket;
+        const ws = this.runner.socketFor(rawSocket);
 
         // Fire `onDisconnect` lifecycle hooks the instant the socket drops —
         // replaying the identity + context recorded at connect — so presence and
@@ -3356,11 +3356,11 @@ abstract class ShardDO {
         // these map to `blockConcurrencyWhile` and `storage.transaction`; on
         // another host they map to whatever that host offers, which is the whole
         // point of routing through the seam rather than `state.*` directly.
-        return this.shardHost.runSerialized(async () => {
+        return this.runner.runInTransaction(async () => {
             this.transactionDepth = 1;
 
             try {
-                return await this.shardHost.transaction(async () => handler());
+                return await handler();
             } finally {
                 this.transactionDepth = 0;
             }
@@ -4468,7 +4468,7 @@ abstract class ShardDO {
      * identical, so we build a payload keyed by `subId` lazily.
      */
     protected broadcastDelta(delta: MutationDelta): void {
-        const sockets = this.socketHost.getSockets();
+        const sockets = this.runner.sockets();
         // Pre-stringify the immutable portion. The only per-message variation
         // is `id`, which we splice in below — cheaper than calling
         // JSON.stringify(...) for every (socket, sub) pair.
@@ -4672,7 +4672,7 @@ abstract class ShardDO {
 
     /** This DO's shard key (its DO name), or `__root__` for the single-DO default. The `tenantBy` mapper binds it into the source query. */
     protected currentShardKey(): string {
-        return this.shardHost.shardKey ?? ROOT_SHARD_NAME;
+        return this.runner.shardKey ?? ROOT_SHARD_NAME;
     }
 
     /** Record a contained external-source ingest failure (one sourced table's poll) into the log ring without aborting the others. */
@@ -4893,7 +4893,7 @@ abstract class ShardDO {
             functionPath,
             level,
             message,
-            shardKey: this.shardHost.shardKey,
+            shardKey: this.runner.shardKey,
             spanId: trace?.rootSpanId,
             traceId: trace?.traceId,
             ts: Date.now(),
@@ -4993,7 +4993,7 @@ abstract class ShardDO {
                 this.recordSpan(span, sink);
             },
             resolveCloudflareTracing,
-            shardKey: this.shardHost.shardKey,
+            shardKey: this.runner.shardKey,
             userId: () => this.getCurrentUserId(),
         });
     }
@@ -5067,7 +5067,7 @@ abstract class ShardDO {
             record: (recorded) => {
                 this.recordSpan(recorded, sink);
             },
-            shardKey: this.shardHost.shardKey,
+            shardKey: this.runner.shardKey,
             span,
             userId: () => this.getCurrentUserId(),
         });
@@ -5088,7 +5088,7 @@ abstract class ShardDO {
                 record: (span) => {
                     this.recordSpan(span, sink);
                 },
-                shardKey: this.shardHost.shardKey,
+                shardKey: this.runner.shardKey,
                 userId: () => this.getCurrentUserId(),
             },
             base,
@@ -5160,7 +5160,7 @@ abstract class ShardDO {
             record: (event) => {
                 this.recordMetric(event, sink);
             },
-            shardKey: this.shardHost.shardKey,
+            shardKey: this.runner.shardKey,
         });
     }
 
@@ -5317,7 +5317,7 @@ abstract class ShardDO {
                     durationMs,
                     failure,
                     functionPath,
-                    shardKey: this.shardHost.shardKey,
+                    shardKey: this.runner.shardKey,
                     startTs: startedAt,
                     userId: this.getCurrentUserId(),
                 }),
@@ -5489,7 +5489,7 @@ abstract class ShardDO {
     private lifecycleInfo(attachment: SocketAttachment): LifecycleDispatchInfo {
         const event: LifecycleEvent = {
             connectionId: attachment.connectionId ?? "",
-            shardKey: this.shardHost.shardKey ?? ROOT_SHARD_NAME,
+            shardKey: this.runner.shardKey ?? ROOT_SHARD_NAME,
             // eslint-disable-next-line unicorn/no-null -- LifecycleEvent.userId is `string | null`; null is the contractual anonymous sentinel mirrored on ctx.auth
             userId: attachment.userId ?? null,
             ...(attachment.context === undefined ? {} : { context: attachment.context }),
@@ -5603,7 +5603,7 @@ abstract class ShardDO {
             indexHits,
             queryStats,
             requests,
-            shard: this.shardHost.shardKey ?? ROOT_SHARD_NAME,
+            shard: this.runner.shardKey ?? ROOT_SHARD_NAME,
             sinceMs: this.metrics.sinceMs,
             uptimeMs: Date.now() - this.metrics.sinceMs,
         };
@@ -5786,7 +5786,7 @@ abstract class ShardDO {
             return;
         }
 
-        const idName = this.shardHost.shardKey;
+        const idName = this.runner.shardKey;
 
         if (idName !== ROOT_SHARD_NAME) {
             return;
@@ -6264,7 +6264,7 @@ abstract class ShardDO {
                 errorMessage: entry.message,
                 functionPath: entry.functionPath,
                 outcome: "error",
-                shardKey: this.shardHost.shardKey,
+                shardKey: this.runner.shardKey,
                 ts: entry.timestamp,
             };
 
@@ -6705,7 +6705,7 @@ abstract class ShardDO {
             identity: this.currentRequestIdentity,
             outcome,
             redactedArgs: Object.keys(args).length === 0 ? undefined : args,
-            shardKey: this.shardHost.shardKey,
+            shardKey: this.runner.shardKey,
             tablesRead: this.currentRequestReadTables === undefined ? [] : [...this.currentRequestReadTables],
             tablesWritten,
             ts: Date.now(),
@@ -7146,7 +7146,7 @@ abstract class ShardDO {
      * Read-only: it touches no SQLite and mutates no socket state.
      */
     private collectSubscriptions(): SubscriptionsResult {
-        return summarizeSubscriptions(this.socketHost.getSockets().map((socket) => this.readAttachment(socket)));
+        return summarizeSubscriptions(this.runner.sockets().map((socket) => this.readAttachment(socket)));
     }
 
     /**
@@ -7163,7 +7163,7 @@ abstract class ShardDO {
      * same count, never a divergent one.
      */
     private collectFanoutMetrics(): FanoutMetricsResult {
-        const summary = summarizeFanoutTopics(this.socketHost.getSockets().map((socket) => this.readAttachment(socket)));
+        const summary = summarizeFanoutTopics(this.runner.sockets().map((socket) => this.readAttachment(socket)));
         const relayCount = this.relay?.relayCount() ?? 0;
 
         return {
@@ -7683,13 +7683,15 @@ abstract class ShardDO {
         // writes collapses into one extra pass, and both defer off the response
         // path when `waitUntil` is available so the write's tail latency stays
         // flat.
-        if (this.shardHost.waitUntil !== undefined) {
-            this.shardHost.waitUntil(this.drainSubscriptionRefreshes());
+        // Start the drain exactly once, then decide who owns it: the host keeps
+        // it alive past the response when it can, otherwise this call awaits it.
+        const drain = this.drainSubscriptionRefreshes();
 
+        if (this.runner.background(drain)) {
             return;
         }
 
-        await this.drainSubscriptionRefreshes();
+        await drain;
     }
 
     /**
@@ -7795,7 +7797,7 @@ abstract class ShardDO {
      * into this loop.
      */
     private async refreshSubscriptions(changed: Set<string>): Promise<void> {
-        const sockets = [...this.socketHost.getSockets()];
+        const sockets = [...this.runner.sockets()];
 
         // The post-write high-watermark is the same for every sub flushed in
         // this pass (they all observe the committed state), so resolve it once
@@ -8146,7 +8148,7 @@ abstract class ShardDO {
      * carrying a part per changed shape. No-op when no socket holds a shape.
      */
     private async pokeShapeSubscribers(changed: Set<string>, frameCursor: number | undefined, frameEpoch: string | undefined): Promise<void> {
-        const sockets = [...this.socketHost.getSockets()];
+        const sockets = [...this.runner.sockets()];
         const checkpoint = frameCursor ?? this.currentCdcCursor() ?? 0;
         const sql = this.sql as SqlExec;
 
@@ -8634,7 +8636,7 @@ abstract class ShardDO {
      * are dropped in passing (mirrors {@link ShardDO.pokeShapeSubscribers}).
      */
     private async pollGlobalShapes(): Promise<number> {
-        const sockets = [...this.socketHost.getSockets()];
+        const sockets = [...this.runner.sockets()];
         let remaining = 0;
 
         for (const ws of sockets) {
@@ -9266,7 +9268,7 @@ abstract class ShardDO {
         // Both the sender (converted at the message boundary) and the enumerated
         // sockets are the host's cached handle for the same connection, so plain
         // identity is exact — the same comparison this made before the seam.
-        for (const socket of this.socketHost.getSockets()) {
+        for (const socket of this.runner.sockets()) {
             scanned += 1;
 
             if (socket === exclude || this.readAttachment(socket).whispers?.includes(topic) !== true) {
