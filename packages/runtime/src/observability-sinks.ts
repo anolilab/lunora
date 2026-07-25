@@ -110,10 +110,17 @@ const applyTailSampler = (signals: BufferedSignal[], tailSampler: TailSampler | 
 };
 
 /**
- * Run one event through its post-processor hook. A throwing hook keeps the event
- * unmodified rather than dropping it — a redaction bug should not silently delete
- * a service's telemetry, and the failure is more useful visible as un-redacted
- * data than invisible as absence.
+ * Run one event through its post-processor hook, dropping the event if the hook
+ * throws.
+ *
+ * Fails **closed**, deliberately. An earlier version returned the event
+ * unmodified on a throw, reasoning that visible un-redacted data beats silent
+ * absence — which is right for observability in general and wrong for this hook
+ * in particular. `postProcessor` exists to strip PII before telemetry leaves for
+ * a third-party collector, and `error.message` routinely carries user input. A
+ * dropped span is a monitoring gap you notice; a leaked payload is an incident
+ * you cannot retract. So a broken redaction rule loses telemetry rather than
+ * exporting secrets.
  */
 const postProcess = <T>(event: T, hook: ((event: T) => T | undefined) | undefined): T | undefined => {
     if (hook === undefined) {
@@ -123,7 +130,7 @@ const postProcess = <T>(event: T, hook: ((event: T) => T | undefined) | undefine
     try {
         return hook(event);
     } catch {
-        return event;
+        return undefined;
     }
 };
 
@@ -614,6 +621,10 @@ export type TailSampler = (input: TailSamplerInput) => boolean;
  * input, and once a payload leaves for a third-party collector it is out of your
  * control. Doing it here rather than at each call site means one auditable place
  * to prove PII cannot escape.
+ *
+ * A hook that THROWS also drops the event. Redaction is a privacy control, so it
+ * fails closed — losing a span beats exporting the thing the hook existed to
+ * remove.
  */
 export interface OtlpPostProcessor {
     log?: (event: LogEvent) => LogEvent | undefined;
@@ -686,7 +697,11 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
      */
     headers?: Record<string, string>;
 
-    /** Redact or drop events just before they are encoded — see {@link OtlpPostProcessor}. */
+    /**
+     * Redact or drop events just before they are encoded — see
+     * {@link OtlpPostProcessor}. A hook that throws drops the event (fail-closed);
+     * see {@link postProcess}.
+     */
     postProcessor?: OtlpPostProcessor;
 
     /**

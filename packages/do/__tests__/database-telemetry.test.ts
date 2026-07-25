@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { LogFields } from "../../../shared/log-fields";
 import type { SpanEvent } from "../../../shared/span-event";
-import { instrumentDatabase } from "../src/database-telemetry";
+import type { DatabaseTally } from "../src/database-telemetry";
+import { createDatabaseTally, formatTally, instrumentDatabase } from "../src/database-telemetry";
 
 /**
  * Automatic `ctx.db` instrumentation.
@@ -14,26 +14,14 @@ import { instrumentDatabase } from "../src/database-telemetry";
  * a cheap-but-present proxy.
  */
 
-/** A recorder standing in for the shard's tally slot. */
-const recordingTally = (): { record: (fields: LogFields) => void; recorded: Record<string, unknown> } => {
-    const recorded: Record<string, unknown> = {};
-
-    return {
-        record: (fields) => {
-            Object.assign(recorded, fields);
-        },
-        recorded,
-    };
-};
-
-const deps = (mode: "off" | "spans" | "summary", recordTally: (fields: LogFields) => void, record: (span: SpanEvent) => void) => {
+const deps = (mode: "off" | "spans" | "summary", tally: DatabaseTally, record: (span: SpanEvent) => void) => {
     return {
         anchor: { rootSpanId: "b7ad6b7169203331", traceId: "0af7651916cd43dd8448eb211c80319c" },
         functionPath: "orders:checkout",
         mode,
         record,
-        recordTally,
         shardKey: "tenant-1",
+        tally,
         userId: () => "u-1",
     };
 };
@@ -57,14 +45,14 @@ describe("instrumentDatabase", () => {
         expect.assertions(1);
 
         const database = fakeDatabase();
-        const tally = recordingTally();
+        const tally = createDatabaseTally();
 
         // Identity, not an equivalent proxy: a deployment collecting nothing
         // should not pay even for the indirection.
         expect(
             instrumentDatabase(
                 database,
-                deps("off", tally.record, () => undefined),
+                deps("off", tally, () => undefined),
             ),
         ).toBe(database);
     });
@@ -73,11 +61,11 @@ describe("instrumentDatabase", () => {
         expect.assertions(4);
 
         const database = fakeDatabase();
-        const tally = recordingTally();
+        const tally = createDatabaseTally();
         const spans: SpanEvent[] = [];
         const instrumented = instrumentDatabase(
             database,
-            deps("summary", tally.record, (recorded) => {
+            deps("summary", tally, (recorded) => {
                 spans.push(recorded);
             }),
         );
@@ -86,9 +74,9 @@ describe("instrumentDatabase", () => {
         await instrumented.findMany("orders");
         await instrumented.insert("orders", { total: 1 });
 
-        expect(tally.recorded["db.calls"]).toBe(3);
-        expect(tally.recorded["db.op.findMany"]).toBe(2);
-        expect(tally.recorded["db.op.insert"]).toBe(1);
+        expect(formatTally(tally)["db.calls"]).toBe(3);
+        expect(formatTally(tally)["db.op.findMany"]).toBe(2);
+        expect(formatTally(tally)["db.op.insert"]).toBe(1);
         // The defining property of summary mode: no spans, however many calls.
         expect(spans).toHaveLength(0);
     });
@@ -100,28 +88,28 @@ describe("instrumentDatabase", () => {
 
         database.insert.mockRejectedValueOnce(new Error("constraint violated"));
 
-        const tally = recordingTally();
+        const tally = createDatabaseTally();
         const instrumented = instrumentDatabase(
             database,
-            deps("summary", tally.record, () => undefined),
+            deps("summary", tally, () => undefined),
         );
 
         // Instrumentation, never flow control — the original error reaches the caller.
         await expect(instrumented.insert("orders", {})).rejects.toThrow("constraint violated");
 
-        expect(tally.recorded["db.errors"]).toBe(1);
-        expect(tally.recorded["db.calls"]).toBe(1);
+        expect(formatTally(tally)["db.errors"]).toBe(1);
+        expect(formatTally(tally)["db.calls"]).toBe(1);
     });
 
     it("emits one CLIENT span per call in spans mode, named without row ids", async () => {
         expect.assertions(4);
 
         const database = fakeDatabase();
-        const tally = recordingTally();
+        const tally = createDatabaseTally();
         const spans: SpanEvent[] = [];
         const instrumented = instrumentDatabase(
             database,
-            deps("spans", tally.record, (recorded) => {
+            deps("spans", tally, (recorded) => {
                 spans.push(recorded);
             }),
         );
@@ -139,11 +127,11 @@ describe("instrumentDatabase", () => {
         expect.assertions(3);
 
         const database = fakeDatabase();
-        const tally = recordingTally();
+        const tally = createDatabaseTally();
         const spans: SpanEvent[] = [];
         const instrumented = instrumentDatabase(
             database,
-            deps("spans", tally.record, (recorded) => {
+            deps("spans", tally, (recorded) => {
                 spans.push(recorded);
             }),
         );
@@ -156,19 +144,19 @@ describe("instrumentDatabase", () => {
         expect(spans).toHaveLength(100);
         // Every call still counts toward the summary — only the individual spans
         // are dropped, so the totals stay honest.
-        expect(tally.recorded["db.calls"]).toBe(150);
+        expect(formatTally(tally)["db.calls"]).toBe(150);
         // A silently partial waterfall is worse than a labelled one.
-        expect(tally.recorded["db.spans_truncated"]).toBe(true);
+        expect(formatTally(tally)["db.spans_truncated"]).toBe(true);
     });
 
     it("passes non-storage members through untouched", () => {
         expect.assertions(2);
 
         const database = fakeDatabase();
-        const tally = recordingTally();
+        const tally = createDatabaseTally();
         const instrumented = instrumentDatabase(
             database,
-            deps("spans", tally.record, () => undefined),
+            deps("spans", tally, () => undefined),
         );
 
         // `query` returns a chainable builder and does no I/O; wrapping it would
@@ -181,10 +169,10 @@ describe("instrumentDatabase", () => {
         expect.assertions(1);
 
         const database = fakeDatabase();
-        const tally = recordingTally();
+        const tally = createDatabaseTally();
         const instrumented = instrumentDatabase(
             database,
-            deps("spans", tally.record, () => undefined),
+            deps("spans", tally, () => undefined),
         );
 
         // Repeated property access must not mint a new closure each time —

@@ -1819,7 +1819,7 @@ describe("observability-sinks", () => {
             expect(attrValue(span.attributes, "email")).toStrictEqual({ stringValue: "[redacted]" });
         });
 
-        it("keeps the event unmodified when a post-processor hook throws", async () => {
+        it("drops the event when a post-processor hook throws", async () => {
             expect.assertions(1);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1845,9 +1845,9 @@ describe("observability-sinks", () => {
             });
             await Promise.all(pending);
 
-            // Fails OPEN: a redaction bug shows up as un-redacted data, never as
-            // a service whose telemetry silently vanished.
-            await expect(spansFrom(fetchMock.mock.calls[0]![1] as RequestInit)).resolves.toHaveLength(1);
+            // Fails CLOSED: `postProcessor` is the PII seam, so a broken rule must
+            // lose the span rather than ship the payload it existed to scrub.
+            expect(fetchMock).toHaveBeenCalledTimes(0);
         });
 
         it("keeps the trace when the tail sampler itself throws", async () => {

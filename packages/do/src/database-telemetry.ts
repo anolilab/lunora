@@ -93,16 +93,6 @@ const TABLE_FIRST_METHODS = new Set([
     "rankPageRows",
 ]);
 
-/** Running totals for `"summary"` mode. */
-interface DatabaseTally {
-    calls: number;
-    durationMs: number;
-    errors: number;
-    perOperation: Record<string, number>;
-    spansEmitted: number;
-    spansTruncated: boolean;
-}
-
 /** Table name from a call's arguments, when the method takes it first. */
 const tableOf = (method: string, arguments_: unknown[]): string | undefined => {
     if (!TABLE_FIRST_METHODS.has(method)) {
@@ -112,35 +102,6 @@ const tableOf = (method: string, arguments_: unknown[]): string | undefined => {
     const first = arguments_[0];
 
     return typeof first === "string" && first.length > 0 ? first : undefined;
-};
-
-/**
- * Fold the running tally onto the dispatch's wide event.
- *
- * Rewritten in full after every call rather than incremented in place: these are
- * cumulative totals and the sink is last-write-wins per key, so re-publishing is
- * both correct and cheaper than reading the previous value back. It is a handful of keys, so the per-call cost is a small object
- * assignment — the property that makes `"summary"` mode scale to any call count.
- */
-const publishTally = (record: (fields: LogFields) => void, tally: DatabaseTally): void => {
-    const fields: LogFields = {
-        "db.calls": tally.calls,
-        "db.duration_ms": tally.durationMs,
-    };
-
-    if (tally.errors > 0) {
-        fields["db.errors"] = tally.errors;
-    }
-
-    if (tally.spansTruncated) {
-        fields["db.spans_truncated"] = true;
-    }
-
-    for (const [operation, count] of Object.entries(tally.perOperation)) {
-        fields[`db.op.${operation}`] = count;
-    }
-
-    record(fields);
 };
 
 /** Render a thrown value for a span's `error.message` without relying on `Object`'s default stringification. */
@@ -192,6 +153,16 @@ const buildDatabaseSpan = (input: {
     };
 };
 
+/** Running totals for `"summary"` mode; created by the caller, read once at the dispatch boundary. */
+interface DatabaseTally {
+    calls: number;
+    durationMs: number;
+    errors: number;
+    perOperation: Record<string, number>;
+    spansEmitted: number;
+    spansTruncated: boolean;
+}
+
 /**
  * How much detail `ctx.db` auto-instrumentation produces.
  *
@@ -203,10 +174,10 @@ const buildDatabaseSpan = (input: {
  *
  * `"off"` — no database telemetry at all.
  */
-export type DatabaseInstrumentation = "off" | "spans" | "summary";
+type DatabaseInstrumentation = "off" | "spans" | "summary";
 
 /** What {@link instrumentDatabase} needs to record what it observes. */
-export interface DatabaseTelemetryDeps {
+interface DatabaseTelemetryDeps {
     /** The trace produced spans belong to (`"spans"` mode only). */
     anchor: TraceAnchor;
     /** Function path spans and attributes are attributed to. */
@@ -216,21 +187,21 @@ export interface DatabaseTelemetryDeps {
     /** Hand a finished span to the buffer + sink (`"spans"` mode only). */
     record: (span: SpanEvent) => void;
 
-    /**
-     * Where `"summary"` mode publishes its running totals.
-     *
-     * Deliberately NOT the dispatch's `SpanHandle`: writing through that would
-     * materialize the wide-event collector, and since `"summary"` is the default
-     * whenever a sink is configured, *every* `ctx.db`-touching request would then
-     * look like the handler had recorded a wide event — firing the root-span gate
-     * and exporting a `lunora.dispatch` record for handlers that instrumented
-     * nothing. The shard parks these on a separate slot that rides an EXISTING
-     * root span but never causes one.
-     */
-    recordTally: (fields: LogFields) => void;
-
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey: string | undefined;
+
+    /**
+     * Caller-supplied accumulator for `"summary"` mode. The instrumenter only ever
+     * increments numbers on it; the shard reads it ONCE at the dispatch boundary
+     * and formats it with {@link formatTally}.
+     *
+     * Two properties fall out of that split. Per-call cost stays at a few integer
+     * increments — no object allocation, no lookup — which matters because this is
+     * on the path of every query. And because nothing is written through the
+     * dispatch's `SpanHandle`, the wide-event collector is never materialized, so
+     * a handler that instrumented nothing still doesn't trip the root-span gate.
+     */
+    tally: DatabaseTally;
 
     /** Read lazily — the acting user is resolved per span. */
     userId: () => string | undefined;
@@ -249,12 +220,12 @@ export interface DatabaseTelemetryDeps {
  * and is transparently correct for everything else, including members added
  * later — an enumeration would silently stop covering them.
  */
-export const instrumentDatabase = <T extends object>(database: T, deps: DatabaseTelemetryDeps): T => {
+const instrumentDatabase = <T extends object>(database: T, deps: DatabaseTelemetryDeps): T => {
     if (deps.mode === "off") {
         return database;
     }
 
-    const tally: DatabaseTally = { calls: 0, durationMs: 0, errors: 0, perOperation: {}, spansEmitted: 0, spansTruncated: false };
+    const { tally } = deps;
 
     /** Wrapped methods are memoized so repeated property access returns a stable function identity. */
     const wrapped = new Map<string, unknown>();
@@ -312,8 +283,6 @@ export const instrumentDatabase = <T extends object>(database: T, deps: Database
                                 deps.record(buildDatabaseSpan({ deps, durationMs, failure, operation: property, startTs, table }));
                             }
                         }
-
-                        publishTally(deps.recordTally, tally);
                     } catch {
                         // Best-effort throughout — see the note above.
                     }
@@ -326,3 +295,40 @@ export const instrumentDatabase = <T extends object>(database: T, deps: Database
         },
     });
 };
+
+/** A zero'd tally for one dispatch. */
+const createDatabaseTally = (): DatabaseTally => {
+    return { calls: 0, durationMs: 0, errors: 0, perOperation: {}, spansEmitted: 0, spansTruncated: false };
+
+    /**
+     * Render the running tally as span attributes.
+     *
+     * Called ONCE per dispatch, from the shard's root-span recorder — not per query.
+     * Building this object on every call was pure waste on a hot path. It is a handful of keys, so the per-call cost is a small object
+     * assignment — the property that makes `"summary"` mode scale to any call count.
+     */
+};
+
+const formatTally = (tally: DatabaseTally): LogFields => {
+    const fields: LogFields = {
+        "db.calls": tally.calls,
+        "db.duration_ms": tally.durationMs,
+    };
+
+    if (tally.errors > 0) {
+        fields["db.errors"] = tally.errors;
+    }
+
+    if (tally.spansTruncated) {
+        fields["db.spans_truncated"] = true;
+    }
+
+    for (const [operation, count] of Object.entries(tally.perOperation)) {
+        fields[`db.op.${operation}`] = count;
+    }
+
+    return fields;
+};
+
+export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps };
+export { createDatabaseTally, formatTally, instrumentDatabase };

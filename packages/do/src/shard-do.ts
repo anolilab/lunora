@@ -47,8 +47,8 @@ import {
 import type { ShapeRow } from "./ctx-db-shapes";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
-import type { DatabaseInstrumentation } from "./database-telemetry";
-import { instrumentDatabase } from "./database-telemetry";
+import type { DatabaseInstrumentation, DatabaseTally } from "./database-telemetry";
+import { createDatabaseTally, formatTally, instrumentDatabase } from "./database-telemetry";
 import type { DependencyTracker } from "./dependency-tracker";
 import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
 import type { FunctionMetricBucket, FunctionMetricIndexHit, IndexHit } from "./function-metrics";
@@ -1984,7 +1984,7 @@ abstract class ShardDO {
      * subscription re-run) mints its own anchor and has no such boundary, so the
      * map is FIFO-capped rather than trusted to drain.
      */
-    private dispatchSpans = new Map<string, { collector?: SpanCollector; dbTally?: LogFields; sink?: TelemetrySink }>();
+    private dispatchSpans = new Map<string, { collector?: SpanCollector; dbTally?: DatabaseTally; sink?: TelemetrySink }>();
 
     /**
      * The most recent telemetry sink seen while building a ctx — the flush handle
@@ -2661,12 +2661,21 @@ abstract class ShardDO {
      * hibernated socket. Subclasses can override this to intercept; the
      * default decodes a {@link SubscriptionEnvelope} and updates the registry.
      *
-     * Wrapped in {@link withTriggerTrace} so the work a frame drives — a
-     * subscription subscribe/re-evaluation, a lifecycle hook — lands in a trace
-     * with a root span instead of appearing as orphans.
+     * Deliberately NOT wrapped in {@link withTriggerTrace}, unlike `alarm`. Frame
+     * rate here is unbounded — a whisper fan-out or presence stream drives many
+     * per second — and minting a trace anchor per frame costs two `crypto`
+     * draws plus hex encoding, which measurably regressed the fan-out benchmark
+     * (~30% on `broadcastWhisper` to 128 members). The trade is also worse than it
+     * looks: a frame's work is a subscription re-evaluation whose data flow is
+     * already attributable to the RPC that wrote the data, so the root span buys
+     * little. An alarm is the opposite — low frequency, and genuinely
+     * un-attributable background work — which is why that one keeps the wrapper.
+     *
+     * `ctx.trace`/`ctx.span` inside a frame still record; they just anchor to the
+     * ctx's own trace rather than a per-frame root.
      */
     public async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-        return this.withTriggerTrace("websocket.message", async () => this.handleWebSocketMessage(ws, message));
+        return this.handleWebSocketMessage(ws, message);
     }
 
     /**
@@ -4686,6 +4695,13 @@ abstract class ShardDO {
     protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
         const mode = sink === undefined ? "off" : (sink.instrumentDatabase ?? "summary");
 
+        if (mode === "off") {
+            // Bail before touching `dispatchSpans`: with nothing collecting, the
+            // tally allocation and its map insert would be per-dispatch waste on
+            // the hot path (it showed up as a benchmark regression).
+            return database;
+        }
+
         return instrumentDatabase(database, {
             anchor,
             functionPath,
@@ -4693,17 +4709,12 @@ abstract class ShardDO {
             record: (recorded) => {
                 this.recordSpan(recorded, sink);
             },
+            shardKey: this.state.id?.name,
             // Parked on the dispatch entry rather than written through `ctx.span`:
             // the counters enrich a root span that is being recorded anyway, but
-            // must never be the reason one gets recorded.
-            recordTally: (fields) => {
-                const entry = this.dispatchSpans.get(dispatchSpanKey(anchor));
-
-                if (entry !== undefined) {
-                    entry.dbTally = fields;
-                }
-            },
-            shardKey: this.state.id?.name,
+            // must never be the reason one gets recorded. Read once in
+            // `recordDispatchRootSpan`, so a query pays only integer increments.
+            tally: this.dispatchTally(anchor),
             userId: () => this.getCurrentUserId(),
         });
     }
@@ -4743,24 +4754,6 @@ abstract class ShardDO {
         );
     }
 
-    /**
-     * Build `ctx.span` — the handle onto the **dispatch's own span**, and with it
-     * the wide-event surface.
-     *
-     * `ctx.trace(...)` creates a *new* child span for a sub-operation; this
-     * attaches to the one that already exists for the request. That is the
-     * distinction between "time this thing" and "record a fact about this
-     * request", and conflating them is why instrumentation usually degrades into
-     * log spam: with nowhere to put a fact, people reach for `ctx.log.info`.
-     *
-     * Attributes accumulate across the whole dispatch and are folded into the
-     * root span in `recordDispatchRootSpan` — the OTel-native form of a
-     * wide event, needing no non-standard "canonical log line" convention on the
-     * collector side.
-     *
-     * Keyed by `dispatchSpanKey` — trace id AND root span id — so two concurrent
-     * dispatches forwarded under the same client trace accumulate separately.
-     */
     protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle {
         /**
          * Lazy on purpose. `buildCtx` builds `ctx.span` for every dispatch, but
@@ -4779,14 +4772,24 @@ abstract class ShardDO {
         // touched `ctx.span` still needs its buffered logs and spans shipped.
         this.lastTelemetrySink = sink ?? this.lastTelemetrySink;
 
-        evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
-
-        const entry = this.dispatchSpans.get(dispatchSpanKey(anchor)) ?? { sink };
-
-        this.dispatchSpans.set(dispatchSpanKey(anchor), entry);
+        // The sink is registered EAGERLY only when there is one — it is what the
+        // dispatch `finally` needs to flush a batching sink, and that lookup has no
+        // other route back to `config.observability`. With no sink there is nothing
+        // to remember, so the map is left alone entirely: a dispatch that collects
+        // nothing should pay nothing (this was a measured hot-path cost).
+        if (sink !== undefined) {
+            evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
+            this.dispatchSpans.set(dispatchSpanKey(anchor), this.dispatchSpans.get(dispatchSpanKey(anchor)) ?? { sink });
+        }
 
         const collector = (): SpanCollector => {
+            evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
+
+            const key = dispatchSpanKey(anchor);
+            const entry = this.dispatchSpans.get(key) ?? { sink };
+
             entry.collector ??= createSpanCollector({ spanId: anchor.rootSpanId, traceId: anchor.traceId });
+            this.dispatchSpans.set(key, entry);
 
             return entry.collector;
         };
@@ -5191,6 +5194,42 @@ abstract class ShardDO {
     }
 
     /**
+     * Build `ctx.span` — the handle onto the **dispatch's own span**, and with it
+     * the wide-event surface.
+     *
+     * `ctx.trace(...)` creates a *new* child span for a sub-operation; this
+     * attaches to the one that already exists for the request. That is the
+     * distinction between "time this thing" and "record a fact about this
+     * request", and conflating them is why instrumentation usually degrades into
+     * log spam: with nowhere to put a fact, people reach for `ctx.log.info`.
+     *
+     * Attributes accumulate across the whole dispatch and are folded into the
+     * root span in `recordDispatchRootSpan` — the OTel-native form of a
+     * wide event, needing no non-standard "canonical log line" convention on the
+     * collector side.
+     *
+     * Keyed by `dispatchSpanKey` — trace id AND root span id — so two concurrent
+     * dispatches forwarded under the same client trace accumulate separately.
+     */
+
+    /**
+     * The dispatch entry's db tally, created on first use. Shares the entry with
+     * `ctx.span`'s collector but is deliberately a separate slot — see
+     * `instrumentDb`.
+     */
+    private dispatchTally(anchor: TraceAnchor): DatabaseTally {
+        evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
+
+        const key = dispatchSpanKey(anchor);
+        const entry = this.dispatchSpans.get(key) ?? {};
+
+        entry.dbTally ??= createDatabaseTally();
+        this.dispatchSpans.set(key, entry);
+
+        return entry.dbTally;
+    }
+
+    /**
      * Give a NON-`fetch` Durable Object trigger — an alarm, an inbound socket
      * frame — the same telemetry an RPC dispatch gets: its own trace anchor, a
      * dispatch root span, and a flush of the batching sink when it finishes.
@@ -5281,10 +5320,11 @@ abstract class ShardDO {
         const durationMs = Date.now() - startedAt;
         // Auto-instrumentation counters ride whatever root span is being recorded;
         // they never cause one (see `instrumentDb`).
+        const databaseAttributes = wide?.dbTally === undefined || wide.dbTally.calls === 0 ? undefined : formatTally(wide.dbTally);
         const collected =
             wide?.collector === undefined
                 ? undefined
-                : { ...wide.collector.collected, attributes: { ...wide.dbTally, ...wide.collector.collected.attributes } };
+                : { ...wide.collector.collected, attributes: { ...databaseAttributes, ...wide.collector.collected.attributes } };
 
         try {
             this.spans.push(
