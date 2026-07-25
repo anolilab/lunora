@@ -98,7 +98,7 @@ describe("ctx.span wide events", () => {
     });
 
     it("records a handled exception as the OTel-conventional `exception` event", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const t = start();
 
@@ -110,6 +110,9 @@ describe("ctx.span wide events", () => {
 
         expect(event?.name).toBe("exception");
         expect(event?.attributes?.["exception.type"]).toBe("TypeError");
+        // The stack rides the event too, matching what a collector receives in
+        // production — otherwise a test would pass against a narrower record.
+        expect(event?.attributes?.["exception.stacktrace"]).toContain("upstream unavailable");
     });
 
     it("shares one wide event across a composed ctx.runMutation call", async () => {
