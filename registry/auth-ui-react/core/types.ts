@@ -68,6 +68,14 @@ interface AuthFullOrganization extends AuthOrganization {
     members?: AuthMember[];
 }
 
+/** One registered passkey, as `listUserPasskeys` returns it. */
+interface AuthPasskey {
+    createdAt?: Date | string;
+    deviceType?: string;
+    id?: string;
+    name?: string;
+}
+
 /** A resolved session payload (loosely typed — the UI only reads a couple of fields). */
 interface SessionData {
     session?: AuthSession;
@@ -103,7 +111,15 @@ interface AuthClient {
         list: () => Promise<AuthResponse<AuthOrganization[]>>;
         removeMember: (input: { memberIdOrEmail: string; organizationId?: string }) => Promise<AuthResponse<{ status?: boolean }>>;
         setActive: (input: { organizationId: string }) => Promise<AuthResponse<AuthOrganization>>;
+        update: (input: { data: { logo?: string; name?: string; slug?: string }; organizationId?: string }) => Promise<AuthResponse<AuthOrganization>>;
         updateMemberRole: (input: { memberId: string; organizationId?: string; role: string }) => Promise<AuthResponse<AuthMember>>;
+    };
+    /** The `@better-auth/passkey` plugin (a separate package from better-auth core). */
+    passkey: {
+        addPasskey: (input?: { authenticatorAttachment?: "cross-platform" | "platform"; name?: string }) => Promise<AuthResponse | undefined>;
+        deletePasskey: (input: { id: string }) => Promise<AuthResponse<{ status?: boolean }>>;
+        listUserPasskeys: () => Promise<AuthResponse<AuthPasskey[]>>;
+        updatePasskey: (input: { id: string; name: string }) => Promise<AuthResponse<AuthPasskey>>;
     };
     resetPassword: (input: { newPassword: string; token?: string }) => Promise<AuthResponse<{ status?: boolean }>>;
     revokeOtherSessions: () => Promise<AuthResponse<{ status?: boolean }>>;
@@ -176,6 +192,7 @@ export type {
     AuthInvitation,
     AuthMember,
     AuthOrganization,
+    AuthPasskey,
     AuthResponse,
     AuthSession,
     AuthUser,

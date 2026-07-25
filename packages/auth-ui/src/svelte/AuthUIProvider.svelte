@@ -7,6 +7,7 @@
 -->
 <script lang="ts">
     import type { Snippet } from "svelte";
+    import { untrack } from "svelte";
 
     import type { AuthUIConfig } from "../core";
     import { defaultNav, resolveContext } from "../core";
@@ -25,6 +26,7 @@
         plugins,
         redirects,
         social,
+        theme,
     }: Omit<AuthUIConfig, "nav"> & {
         children: Snippet;
         /** Framework `Link` for internal links; falls back to a plain `<a>`. */
@@ -33,19 +35,26 @@
         nav?: AuthUIConfig["nav"];
     } = $props();
 
-    setAuthUIContext({
-        core: resolveContext({
-            authClient,
-            basePath,
-            localization,
-            nav: nav ?? defaultNav,
-            onError,
-            onSessionChange,
-            plugins,
-            redirects,
-            social,
-        }),
-        Link,
+    // Read once, on purpose (see the note above): `untrack` states that intent
+    // to the compiler instead of emitting a `state_referenced_locally` warning
+    // per prop — warnings that would otherwise show up in every project that
+    // copies this file.
+    untrack(() => {
+        setAuthUIContext({
+            core: resolveContext({
+                authClient,
+                basePath,
+                localization,
+                nav: nav ?? defaultNav,
+                onError,
+                onSessionChange,
+                plugins,
+                redirects,
+                social,
+                theme,
+            }),
+            Link,
+        });
     });
 </script>
 

@@ -1,19 +1,23 @@
 "use client";
 
 import type { ReactElement } from "react";
+import { useState } from "react";
 
-import type { AuthSession } from "../core";
+import type { AuthPasskey, AuthSession } from "../core";
 import {
     createChangeEmailController,
     createChangePasswordController,
     createDeleteAccountController,
+    createPasskeysController,
     createProfileController,
     createSessionsController,
+    isFlowEnabled,
     signOut,
 } from "../core";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
+import { useThemeStyle } from "./use-theme-style";
 
 /** Stop the browser's native submit and run the controller action. */
 const onSubmit =
@@ -224,12 +228,86 @@ const SessionsCard = (): ReactElement => {
     );
 };
 
+const passkeyLabel = (passkey: AuthPasskey, fallback: string): string => {
+    const name = passkey.name?.trim();
+
+    return name === undefined || name === "" ? fallback : name;
+};
+
+/**
+ * Registered passkeys: list, add (WebAuthn ceremony), remove. The controller
+ * also exposes `rename`; it is left out of the default card so all five ports
+ * render the same thing — wire it up yourself if you want inline renaming.
+ */
+const PasskeysCard = (): ReactElement | null => {
+    const context = useAuthUI();
+    const { localization: t } = context;
+    const enabled = isFlowEnabled(context, "passkey", "PasskeysCard");
+    const [state, actions] = useController((context_) => createPasskeysController(context_, { autoLoad: enabled }), [enabled]);
+    const [name, setName] = useState("");
+
+    if (!enabled) {
+        return null;
+    }
+
+    const body = ((): ReactElement => {
+        if (state.loading) {
+            return <p className="lunora-auth-card__description">…</p>;
+        }
+
+        if (state.items.length === 0) {
+            return <p className="lunora-auth-card__description">{t.passkeysEmpty}</p>;
+        }
+
+        return (
+            <ul className="lunora-auth-list">
+                {state.items.map((passkey) => (
+                    <li className="lunora-auth-list__item" key={passkey.id ?? passkeyLabel(passkey, t.passkeyUnnamed)}>
+                        <span className="lunora-auth-list__label">{passkeyLabel(passkey, t.passkeyUnnamed)}</span>
+                        {passkey.id === undefined ? null : (
+                            <button
+                                className="lunora-auth-link"
+                                disabled={state.busy}
+                                onClick={() => {
+                                    void actions.remove(passkey.id as string);
+                                }}
+                                type="button"
+                            >
+                                {t.remove}
+                            </button>
+                        )}
+                    </li>
+                ))}
+            </ul>
+        );
+    })();
+
+    return (
+        <AuthCard title={t.passkeys}>
+            <FormBanner error={state.error} />
+            {body}
+            <form
+                className="lunora-auth-form"
+                noValidate
+                onSubmit={onSubmit(async () => {
+                    await actions.add(name);
+                    setName("");
+                })}
+            >
+                <Field field={{ touched: false, value: name }} label={t.passkeyName} name="passkeyName" onBlur={() => undefined} onChange={setName} />
+                <SubmitButton pending={state.busy}>{t.passkeyAdd}</SubmitButton>
+            </form>
+        </AuthCard>
+    );
+};
+
 interface SignOutButtonProps {
     children?: string;
 }
 
 const SignOutButton = ({ children }: SignOutButtonProps = {}): ReactElement => {
     const context = useAuthUI();
+    const style = useThemeStyle();
 
     return (
         <button
@@ -237,6 +315,7 @@ const SignOutButton = ({ children }: SignOutButtonProps = {}): ReactElement => {
             onClick={() => {
                 void signOut(context);
             }}
+            style={style}
             type="button"
         >
             {children ?? context.localization.signOut}
@@ -245,4 +324,4 @@ const SignOutButton = ({ children }: SignOutButtonProps = {}): ReactElement => {
 };
 
 export type { ProfileCardProps, SignOutButtonProps };
-export { ChangeEmailCard, ChangePasswordCard, DeleteAccountCard, ProfileCard, SessionsCard, SignOutButton };
+export { ChangeEmailCard, ChangePasswordCard, DeleteAccountCard, PasskeysCard, ProfileCard, SessionsCard, SignOutButton };

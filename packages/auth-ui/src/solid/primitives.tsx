@@ -2,7 +2,7 @@ import type { JSX } from "solid-js";
 import { createUniqueId, For, Show } from "solid-js";
 
 import type { FieldState } from "../core";
-import { useAuthUILink } from "./provider";
+import { useAuthUI, useAuthUILink } from "./provider";
 
 /** Card shell: heading, optional description, and body. */
 interface AuthCardProps {
@@ -12,8 +12,19 @@ interface AuthCardProps {
     title: string;
 }
 
+/**
+ * The provider's resolved `theme` tokens as an inline style. Empty (and so
+ * `undefined`) unless the app configured `theme`, which keeps the rendered
+ * markup — and the app's own design-token inheritance — untouched by default.
+ */
+const themeStyle = (): Record<string, string> | undefined => {
+    const { themeVariables } = useAuthUI();
+
+    return Object.keys(themeVariables).length === 0 ? undefined : { ...themeVariables };
+};
+
 const AuthCard = (props: AuthCardProps): JSX.Element => (
-    <section class="lunora-auth-card">
+    <section class="lunora-auth-card" style={themeStyle()}>
         <header class="lunora-auth-card__header">
             <h1 class="lunora-auth-card__title">{props.title}</h1>
             <Show when={props.description !== undefined}>
@@ -173,4 +184,4 @@ const AuthDivider = (props: { label?: string }): JSX.Element => (
 );
 
 export type { AuthCardProps, FieldProps };
-export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton };
+export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton, themeStyle };

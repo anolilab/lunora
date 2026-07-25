@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 
-import { createMembersController } from "../core";
+import { createMembersController, isFlowEnabled } from "../core";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";
@@ -10,8 +10,10 @@ import { useController } from "./use-controller";
 
 const ROLE_OPTIONS = ["member", "admin", "owner"] as const;
 
-const { localization: t } = useAuthUI();
-const { actions, state } = useController(createMembersController);
+const context = useAuthUI();
+const t = context.localization;
+const enabled = isFlowEnabled(context, "organization", "MembersCard");
+const { actions, state } = useController((context_) => createMembersController(context_, { autoLoad: enabled }));
 
 const email = ref("");
 const role = ref<string>("member");
@@ -35,7 +37,7 @@ const onCancelInvitation = (id: string): void => {
 </script>
 
 <template>
-    <AuthCard :title="t.members">
+    <AuthCard v-if="enabled" :title="t.members">
         <FormBanner :error="state.error" />
 
         <p v-if="state.loading" class="lunora-auth-card__description">…</p>

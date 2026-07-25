@@ -53,6 +53,7 @@ export { default as TwoFactorCard } from "./TwoFactorCard.svelte";
 export { default as ChangeEmailCard } from "./ChangeEmailCard.svelte";
 export { default as ChangePasswordCard } from "./ChangePasswordCard.svelte";
 export { default as DeleteAccountCard } from "./DeleteAccountCard.svelte";
+export { default as PasskeysCard } from "./PasskeysCard.svelte";
 export { default as ProfileCard } from "./ProfileCard.svelte";
 export { default as SessionsCard } from "./SessionsCard.svelte";
 export { default as SignOutButton } from "./SignOutButton.svelte";
@@ -60,4 +61,5 @@ export { default as TwoFactorSetupCard } from "./TwoFactorSetupCard.svelte";
 
 // Organization cards.
 export { default as MembersCard } from "./MembersCard.svelte";
+export { default as OrganizationSettingsCard } from "./OrganizationSettingsCard.svelte";
 export { default as OrganizationsCard } from "./OrganizationsCard.svelte";

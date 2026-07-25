@@ -2,7 +2,7 @@
 
 import type { ReactElement } from "react";
 
-import { createTwoFactorSetupController } from "../core";
+import { createTwoFactorSetupController, isFlowEnabled } from "../core";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
@@ -14,10 +14,15 @@ const onSubmit =
         void action();
     };
 
-const TwoFactorSetupCard = (): ReactElement => {
-    const { localization: t } = useAuthUI();
+const TwoFactorSetupCard = (): ReactElement | null => {
+    const context = useAuthUI();
+    const { localization: t } = context;
     const [state, actions] = useController(createTwoFactorSetupController);
     const pending = state.status === "submitting";
+
+    if (!isFlowEnabled(context, "twoFactor", "TwoFactorSetupCard")) {
+        return null;
+    }
 
     if (state.step === "enabled") {
         return (

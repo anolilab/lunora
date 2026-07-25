@@ -1,24 +1,25 @@
 /**
  * The better-auth client for your app — the one seam you own and edit.
  *
- * `lunoraAuthPlugins` assembles the standard client plugin array from toggles so
- * you don't hand-list them; flip a toggle (and run the matching `lunora add`
- * server item) to enable a flow.
+ * `createLunoraAuthClient` assembles the standard client plugin set from
+ * toggles so you don't hand-list them, and defaults `baseURL` to the current
+ * origin. Flip a toggle (and run the matching `lunora add` server item) to
+ * enable a flow — the cards for a disabled flow simply don't render.
+ *
+ * `createAuthClient` is passed in rather than chosen for you because the
+ * variant has to match your UI framework (better-auth/client here).
  */
+import { createLunoraAuthClient } from "@lunora/auth/plugins/client";
 import { createAuthClient } from "better-auth/client";
-import { lunoraAuthPlugins } from "@lunora/auth/plugins/client";
 
-const baseURL =
-    (typeof import.meta !== "undefined" && (import.meta as { env?: Record<string, string> }).env?.VITE_AUTH_URL) ??
-    (typeof globalThis !== "undefined" && globalThis.location ? globalThis.location.origin : undefined);
-
-export const authClient = createAuthClient({
-    baseURL,
-    plugins: lunoraAuthPlugins({
+export const authClient = createLunoraAuthClient(createAuthClient, {
+    // Vite exposes env on import.meta.env; omit to use the current origin.
+    baseURL: (typeof import.meta !== "undefined" && (import.meta as { env?: Record<string, string> }).env?.VITE_AUTH_URL) ?? undefined,
+    plugins: {
         emailOtp: true,
         magicLink: true,
         organization: true,
         passkey: true,
         twoFactor: true,
-    }),
+    },
 });

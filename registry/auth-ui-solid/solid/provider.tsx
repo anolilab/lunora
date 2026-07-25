@@ -47,6 +47,7 @@ const AuthUIProvider = (props: AuthUIProviderProps): JSX.Element => {
                 plugins: props.plugins,
                 redirects: props.redirects,
                 social: props.social,
+                theme: props.theme,
             }),
             Link: props.Link,
         };

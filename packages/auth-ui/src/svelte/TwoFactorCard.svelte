@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createTwoFactorVerifyController } from "../core";
+    import { createTwoFactorVerifyController, isFlowEnabled } from "../core";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
@@ -15,33 +15,37 @@
         trustDevice?: boolean;
     } = $props();
 
-    const t = useAuthUI().localization;
+    const context = useAuthUI();
+    const t = context.localization;
+    const enabled = isFlowEnabled(context, "twoFactor", "TwoFactorCard");
     // `method` / `trustDevice` are read once at mount.
     const { actions, state: form } = controllerStore((context) => createTwoFactorVerifyController(context, { method, trustDevice }));
 </script>
 
-<AuthCard title={t.twoFactor}>
-    <form
-        class="lunora-auth-form"
-        novalidate
-        onsubmit={(event) => {
-            event.preventDefault();
-            void actions.submit();
-        }}
-    >
-        <FormBanner error={$form.formError} />
-        <Field
-            autoComplete="one-time-code"
-            field={$form.fields.code}
-            label={t.codeLabel}
-            name="code"
-            onBlur={() => {
-                actions.blur("code");
+{#if enabled}
+    <AuthCard title={t.twoFactor}>
+        <form
+            class="lunora-auth-form"
+            novalidate
+            onsubmit={(event) => {
+                event.preventDefault();
+                void actions.submit();
             }}
-            onChange={(value) => {
-                actions.setField("code", value);
-            }}
-        />
-        <SubmitButton pending={$form.status === "submitting"}>{t.twoFactor}</SubmitButton>
-    </form>
-</AuthCard>
+        >
+            <FormBanner error={$form.formError} />
+            <Field
+                autoComplete="one-time-code"
+                field={$form.fields.code}
+                label={t.codeLabel}
+                name="code"
+                onBlur={() => {
+                    actions.blur("code");
+                }}
+                onChange={(value) => {
+                    actions.setField("code", value);
+                }}
+            />
+            <SubmitButton pending={$form.status === "submitting"}>{t.twoFactor}</SubmitButton>
+        </form>
+    </AuthCard>
+{/if}

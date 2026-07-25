@@ -7,8 +7,11 @@
  * receives. Keeping resolution here means the five framework providers share one
  * defaulting path instead of each re-implementing it.
  */
+import { derivePluginFlags } from "./flow-gate";
 import type { Localization } from "./localization";
 import { resolveLocalization } from "./localization";
+import type { ThemeTokens } from "./theme";
+import { resolveThemeVariables } from "./theme";
 import type { AuthClient } from "./types";
 
 /** better-auth's default mount path; matches `DEFAULT_AUTH_BASE_PATH` in the `@lunora/client` package. */
@@ -24,7 +27,12 @@ interface NavAdapter {
     replace: (to: string) => void;
 }
 
-/** Which optional flows/cards render — mirrors the enabled server + client plugins. */
+/**
+ * Which optional flows/cards render. Left unset, each flag is **detected from
+ * the auth client** (see `flow-gate.ts`), so enabling a plugin in
+ * `lunora/auth-ui/client.ts` is enough — you don't restate it here. Set a flag
+ * explicitly to override the detection in either direction.
+ */
 interface PluginFlags {
     admin?: boolean;
     apiKey?: boolean;
@@ -65,6 +73,13 @@ interface AuthUIConfig {
     redirects?: RedirectConfig;
     /** OAuth providers to render social buttons for (server-side config required). */
     social?: ReadonlyArray<string>;
+
+    /**
+     * Retint the cards from config instead of CSS: receives the default tokens,
+     * returns the ones to change. Only what you change is emitted, so an app's
+     * own design tokens keep flowing through everything you leave alone.
+     */
+    theme?: (defaults: ThemeTokens) => ThemeTokens;
 }
 
 /** The fully-resolved context every controller receives. */
@@ -78,17 +93,22 @@ interface ControllerContext {
     plugins: Required<PluginFlags>;
     redirects: Required<RedirectConfig>;
     social: ReadonlyArray<string>;
+    /** Changed theme tokens as inline custom properties; empty when unthemed. */
+    themeVariables: Readonly<Record<string, string>>;
 }
 
-const resolvePlugins = (plugins?: PluginFlags): Required<PluginFlags> => {
+/** Explicit flags win; anything left unset is detected from the client. */
+const resolvePlugins = (authClient: AuthClient, plugins?: PluginFlags): Required<PluginFlags> => {
+    const detected = derivePluginFlags(authClient);
+
     return {
-        admin: plugins?.admin ?? false,
-        apiKey: plugins?.apiKey ?? false,
-        emailOtp: plugins?.emailOtp ?? false,
-        magicLink: plugins?.magicLink ?? false,
-        organization: plugins?.organization ?? false,
-        passkey: plugins?.passkey ?? false,
-        twoFactor: plugins?.twoFactor ?? false,
+        admin: plugins?.admin ?? detected.admin,
+        apiKey: plugins?.apiKey ?? detected.apiKey,
+        emailOtp: plugins?.emailOtp ?? detected.emailOtp,
+        magicLink: plugins?.magicLink ?? detected.magicLink,
+        organization: plugins?.organization ?? detected.organization,
+        passkey: plugins?.passkey ?? detected.passkey,
+        twoFactor: plugins?.twoFactor ?? detected.twoFactor,
     };
 };
 
@@ -109,9 +129,10 @@ const resolveContext = (config: AuthUIConfig): ControllerContext => {
         nav: config.nav,
         onError: config.onError,
         onSessionChange: config.onSessionChange,
-        plugins: resolvePlugins(config.plugins),
+        plugins: resolvePlugins(config.authClient, config.plugins),
         redirects: resolveRedirects(config.redirects),
         social: config.social ?? [],
+        themeVariables: resolveThemeVariables(config.theme),
     };
 };
 

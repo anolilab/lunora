@@ -5,6 +5,7 @@ import { useId } from "react";
 
 import type { FieldState } from "../core";
 import { useAuthUILink } from "./provider";
+import { useThemeStyle } from "./use-theme-style";
 
 /** Card shell: heading, optional description, and body. */
 interface AuthCardProps {
@@ -14,16 +15,20 @@ interface AuthCardProps {
     title: string;
 }
 
-const AuthCard = ({ children, description, footer, title }: AuthCardProps): ReactElement => (
-    <section className="lunora-auth-card">
-        <header className="lunora-auth-card__header">
-            <h1 className="lunora-auth-card__title">{title}</h1>
-            {description === undefined ? null : <p className="lunora-auth-card__description">{description}</p>}
-        </header>
-        <div className="lunora-auth-card__body">{children}</div>
-        {footer === undefined ? null : <footer className="lunora-auth-card__footer">{footer}</footer>}
-    </section>
-);
+const AuthCard = ({ children, description, footer, title }: AuthCardProps): ReactElement => {
+    const style = useThemeStyle();
+
+    return (
+        <section className="lunora-auth-card" style={style}>
+            <header className="lunora-auth-card__header">
+                <h1 className="lunora-auth-card__title">{title}</h1>
+                {description === undefined ? null : <p className="lunora-auth-card__description">{description}</p>}
+            </header>
+            <div className="lunora-auth-card__body">{children}</div>
+            {footer === undefined ? null : <footer className="lunora-auth-card__footer">{footer}</footer>}
+        </section>
+    );
+};
 
 /** A labelled text input wired to a core {@link FieldState}. */
 interface FieldProps {

@@ -10,6 +10,7 @@ import {
     createSignInController,
     createSignUpController,
     createTwoFactorVerifyController,
+    isFlowEnabled,
     signInWithSocial,
 } from "../core";
 import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton } from "./primitives";
@@ -216,9 +217,14 @@ interface MagicLinkCardProps {
     signInHref?: string;
 }
 
-const MagicLinkCard = ({ signInHref = "/sign-in" }: MagicLinkCardProps = {}): ReactElement => {
-    const { localization: t } = useAuthUI();
+const MagicLinkCard = ({ signInHref = "/sign-in" }: MagicLinkCardProps = {}): ReactElement | null => {
+    const context = useAuthUI();
+    const { localization: t } = context;
     const [state, actions] = useController(createMagicLinkController);
+
+    if (!isFlowEnabled(context, "magicLink", "MagicLinkCard")) {
+        return null;
+    }
 
     return (
         <AuthCard footer={<AuthLink href={signInHref}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
@@ -243,10 +249,15 @@ const MagicLinkCard = ({ signInHref = "/sign-in" }: MagicLinkCardProps = {}): Re
     );
 };
 
-const EmailOtpCard = (): ReactElement => {
-    const { localization: t } = useAuthUI();
+const EmailOtpCard = (): ReactElement | null => {
+    const context = useAuthUI();
+    const { localization: t } = context;
     const [state, actions] = useController(createEmailOtpController);
     const pending = state.status === "submitting";
+
+    if (!isFlowEnabled(context, "emailOtp", "EmailOtpCard")) {
+        return null;
+    }
 
     if (state.step === "verify") {
         return (
@@ -299,9 +310,14 @@ interface TwoFactorCardProps {
     trustDevice?: boolean;
 }
 
-const TwoFactorCard = ({ method, trustDevice }: TwoFactorCardProps = {}): ReactElement => {
-    const { localization: t } = useAuthUI();
-    const [state, actions] = useController((context) => createTwoFactorVerifyController(context, { method, trustDevice }), [method, trustDevice]);
+const TwoFactorCard = ({ method, trustDevice }: TwoFactorCardProps = {}): ReactElement | null => {
+    const context = useAuthUI();
+    const { localization: t } = context;
+    const [state, actions] = useController((context_) => createTwoFactorVerifyController(context_, { method, trustDevice }), [method, trustDevice]);
+
+    if (!isFlowEnabled(context, "twoFactor", "TwoFactorCard")) {
+        return null;
+    }
 
     return (
         <AuthCard title={t.twoFactor}>

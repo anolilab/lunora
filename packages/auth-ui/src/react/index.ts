@@ -17,12 +17,14 @@ export * from "../core";
  */
 export type { ForgotPasswordCardProps, MagicLinkCardProps, ResetPasswordCardProps, SignInCardProps, SignUpCardProps, TwoFactorCardProps } from "./auth-cards";
 export { EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
-export { MembersCard, OrganizationsCard } from "./organization";
+export type { OrganizationSettingsCardProps } from "./organization";
+export { MembersCard, OrganizationsCard, OrganizationSettingsCard } from "./organization";
 export type { AuthCardProps, FieldProps } from "./primitives";
 export { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton } from "./primitives";
 export type { AuthUIProviderProps } from "./provider";
 export { AuthUIProvider, useAuthUI, useAuthUILink } from "./provider";
 export type { ProfileCardProps, SignOutButtonProps } from "./settings-cards";
-export { ChangeEmailCard, ChangePasswordCard, DeleteAccountCard, ProfileCard, SessionsCard, SignOutButton } from "./settings-cards";
+export { ChangeEmailCard, ChangePasswordCard, DeleteAccountCard, PasskeysCard, ProfileCard, SessionsCard, SignOutButton } from "./settings-cards";
 export { TwoFactorSetupCard } from "./two-factor-setup-card";
 export { useController } from "./use-controller";
+export { useThemeStyle } from "./use-theme-style";

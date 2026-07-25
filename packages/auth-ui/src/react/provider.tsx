@@ -44,9 +44,12 @@ const AuthUIProvider = ({
     plugins,
     redirects,
     social,
+    theme,
 }: AuthUIProviderProps): ReactElement => {
     // Stringify the plain-object config so the context (and therefore every
     // controller memoized on it) stays referentially stable across renders.
+    // `theme` is a function: it can't be JSON-stringified, so it joins the
+    // identity-compared deps below instead of the serialized config key.
     const configKey = JSON.stringify({ basePath, localization, plugins, redirects, social });
 
     const value = useMemo<AuthUIReactContext>(
@@ -62,12 +65,13 @@ const AuthUIProvider = ({
                     plugins,
                     redirects,
                     social,
+                    theme,
                 }),
                 Link,
             };
         },
         // eslint-disable-next-line react-hooks/exhaustive-deps -- object props are folded into configKey; primitives/callbacks are listed explicitly.
-        [authClient, nav, Link, onError, onSessionChange, configKey],
+        [authClient, nav, Link, onError, onSessionChange, theme, configKey],
     );
 
     return <AuthUIContext value={value}>{children}</AuthUIContext>;

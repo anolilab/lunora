@@ -8,7 +8,14 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from "@angular/core";
 
 import type { FieldState } from "../core";
-import { injectAuthUILink } from "./provider";
+import { injectAuthUI, injectAuthUILink } from "./provider";
+
+/** `{ "--border": "red" }` → `--border:red`, or null when unthemed. */
+const serializeThemeVariables = (variables: Readonly<Record<string, string>>): string | null => {
+    const entries = Object.entries(variables);
+
+    return entries.length === 0 ? null : entries.map(([property, value]) => `${property}:${value}`).join(";");
+};
 
 /** Card shell: heading, optional description, projected body, optional footer. */
 @Component({
@@ -16,7 +23,7 @@ import { injectAuthUILink } from "./provider";
     selector: "lunora-auth-card",
     standalone: true,
     template: `
-        <section class="lunora-auth-card">
+        <section class="lunora-auth-card" [attr.style]="themeStyle">
             <header class="lunora-auth-card__header">
                 <h1 class="lunora-auth-card__title">{{ title() }}</h1>
                 @if (description() !== undefined) {
@@ -35,6 +42,12 @@ import { injectAuthUILink } from "./provider";
     `,
 })
 class AuthCardComponent {
+    /**
+     * The provider's resolved `theme` tokens, serialized. Null unless the app
+     * configured `theme` — otherwise the app's own design tokens keep flowing
+     * through untouched.
+     */
+    protected readonly themeStyle = serializeThemeVariables(injectAuthUI().themeVariables);
     readonly description = input<string>();
     /** Set true when projecting `[lunoraAuthCardFooter]` content. */
     readonly footer = input(false);
@@ -182,4 +195,13 @@ class AuthLinkComponent {
     }
 }
 
-export { AuthCardComponent, AuthDividerComponent, AuthFieldComponent, AuthLinkComponent, FormBannerComponent, SocialButtonsComponent, SubmitButtonComponent };
+export {
+    AuthCardComponent,
+    AuthDividerComponent,
+    AuthFieldComponent,
+    AuthLinkComponent,
+    FormBannerComponent,
+    serializeThemeVariables,
+    SocialButtonsComponent,
+    SubmitButtonComponent,
+};

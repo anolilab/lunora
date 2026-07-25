@@ -18,6 +18,8 @@ export type { DeleteAccountField } from "./delete-account";
 export { createDeleteAccountController } from "./delete-account";
 export type { EmailOtpActions, EmailOtpController, EmailOtpState } from "./email-otp";
 export { createEmailOtpController } from "./email-otp";
+export type { FlowName } from "./flow-gate";
+export { derivePluginFlags, isFlowEnabled, resetFlowWarnings } from "./flow-gate";
 export type { ForgotPasswordField, ForgotPasswordOptions } from "./forgot-password";
 export { createForgotPasswordController } from "./forgot-password";
 export type { Localization } from "./localization";
@@ -29,6 +31,16 @@ export type { MembersActions, MembersController, MembersState } from "./members"
 export { createMembersController } from "./members";
 export type { OrganizationsActions, OrganizationsController } from "./organization-list";
 export { createOrganizationsController } from "./organization-list";
+export type {
+    OrganizationSettingsActions,
+    OrganizationSettingsController,
+    OrganizationSettingsField,
+    OrganizationSettingsOptions,
+    OrganizationSettingsState,
+} from "./organization-settings";
+export { createOrganizationSettingsController } from "./organization-settings";
+export type { PasskeysActions, PasskeysController } from "./passkeys";
+export { createPasskeysController } from "./passkeys";
 export type { ProfileField, ProfileOptions } from "./profile";
 export { createProfileController } from "./profile";
 export type { ResetPasswordField, ResetPasswordOptions } from "./reset-password";
@@ -43,6 +55,8 @@ export { createSignUpController } from "./sign-up";
 export { signInWithSocial } from "./social";
 export type { Store } from "./store";
 export { createStore } from "./store";
+export type { ThemeTokens } from "./theme";
+export { DEFAULT_THEME_TOKENS, resolveThemeVariables } from "./theme";
 export type { TwoFactorSetupActions, TwoFactorSetupController, TwoFactorSetupState } from "./two-factor-setup";
 export { createTwoFactorSetupController } from "./two-factor-setup";
 export type { TwoFactorField, TwoFactorVerifyOptions } from "./two-factor-verify";
@@ -54,6 +68,7 @@ export type {
     AuthInvitation,
     AuthMember,
     AuthOrganization,
+    AuthPasskey,
     AuthResponse,
     AuthSession,
     AuthUser,

@@ -54,10 +54,22 @@ interface Localization {
     newPasswordLabel: string;
     noAccount: string;
     noOrganizations: string;
+    organizationLogo: string;
     organizationName: string;
+    organizationNameRequired: string;
     organizations: string;
+    organizationSaved: string;
+    organizationSettings: string;
     organizationSlug: string;
+    organizationSlugRequired: string;
     otpRequired: string;
+    /** Passkeys. */
+    passkeyAdd: string;
+    passkeyName: string;
+    passkeyRename: string;
+    passkeys: string;
+    passkeysEmpty: string;
+    passkeyUnnamed: string;
     passwordLabel: string;
     passwordMismatch: string;
     passwordRequired: string;
@@ -135,10 +147,21 @@ const DEFAULT_LOCALIZATION: Localization = {
     newPasswordLabel: "New password",
     noAccount: "Don't have an account? Sign up",
     noOrganizations: "You're not in any organization yet.",
+    organizationLogo: "Logo URL",
     organizationName: "Organization name",
+    organizationNameRequired: "Organization name is required.",
     organizations: "Organizations",
+    organizationSaved: "Organization settings saved.",
+    organizationSettings: "Organization settings",
     organizationSlug: "Slug",
+    organizationSlugRequired: "Slug is required.",
     otpRequired: "Enter the code we sent you.",
+    passkeyAdd: "Add a passkey",
+    passkeyName: "Passkey name",
+    passkeyRename: "Rename",
+    passkeys: "Passkeys",
+    passkeysEmpty: "No passkeys registered yet.",
+    passkeyUnnamed: "Unnamed passkey",
     passwordLabel: "Password",
     passwordMismatch: "Passwords do not match.",
     passwordRequired: "Password is required.",

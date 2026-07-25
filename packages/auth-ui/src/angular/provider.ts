@@ -69,6 +69,7 @@ const provideAuthUI = (config: AuthUIAngularConfig): EnvironmentProviders =>
                         plugins: config.plugins,
                         redirects: config.redirects,
                         social: config.social,
+                        theme: config.theme,
                     }),
                     link: config.link,
                 };

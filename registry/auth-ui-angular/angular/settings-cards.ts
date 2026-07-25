@@ -4,20 +4,32 @@
  * and the sign-out button. Each binds a core controller to the shared primitives.
  */
 import type { OnInit, Signal } from "@angular/core";
-import { ChangeDetectionStrategy, Component, DestroyRef, inject, input } from "@angular/core";
+import { ChangeDetectionStrategy, Component, DestroyRef, inject, input, signal } from "@angular/core";
 
-import type { AuthSession, ChangeEmailField, ChangePasswordField, DeleteAccountField, FormActions, FormState, ProfileField, SessionsActions } from "../core";
+import type {
+    AuthPasskey,
+    AuthSession,
+    ChangeEmailField,
+    ChangePasswordField,
+    DeleteAccountField,
+    FormActions,
+    FormState,
+    ProfileField,
+    SessionsActions,
+} from "../core";
 import type { ResourceState } from "../core";
 import {
     createChangeEmailController,
     createChangePasswordController,
     createDeleteAccountController,
+    createPasskeysController,
     createProfileController,
     createSessionsController,
+    isFlowEnabled,
     signOut,
 } from "../core";
 import { controllerSignal } from "./controller-signal";
-import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent } from "./primitives";
+import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent, serializeThemeVariables } from "./primitives";
 import { injectAuthUI } from "./provider";
 
 @Component({
@@ -220,12 +232,79 @@ class SessionsCardComponent {
     }
 }
 
+/**
+ * Registered passkeys: list, add (WebAuthn ceremony), remove. The controller
+ * also exposes `rename`; it is left out of the default card so all five ports
+ * render the same thing — wire it up yourself if you want inline renaming.
+ */
+@Component({
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    imports: [AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent],
+    selector: "lunora-passkeys-card",
+    standalone: true,
+    template: `
+        @if (enabled) {
+            <lunora-auth-card [title]="t.passkeys">
+                <lunora-auth-banner [error]="state().error" />
+                @if (state().loading) {
+                    <p class="lunora-auth-card__description">…</p>
+                } @else if (state().items.length === 0) {
+                    <p class="lunora-auth-card__description">{{ t.passkeysEmpty }}</p>
+                } @else {
+                    <ul class="lunora-auth-list">
+                        @for (passkey of state().items; track passkey.id ?? label(passkey)) {
+                            <li class="lunora-auth-list__item">
+                                <span class="lunora-auth-list__label">{{ label(passkey) }}</span>
+                                @if (passkey.id !== undefined) {
+                                    <button class="lunora-auth-link" type="button" [disabled]="state().busy" (click)="remove(passkey.id!)">
+                                        {{ t.remove }}
+                                    </button>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+                <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); add()">
+                    <lunora-auth-field [field]="{ touched: false, value: name() }" [label]="t.passkeyName" name="passkeyName" (changed)="name.set($event)" />
+                    <lunora-auth-submit-button [pending]="state().busy">{{ t.passkeyAdd }}</lunora-auth-submit-button>
+                </form>
+            </lunora-auth-card>
+        }
+    `,
+})
+class PasskeysCardComponent {
+    private readonly context = injectAuthUI();
+    protected readonly enabled = isFlowEnabled(this.context, "passkey", "PasskeysCard");
+    protected readonly t = this.context.localization;
+    protected readonly name = signal("");
+
+    private readonly bridge = controllerSignal((context) => createPasskeysController(context, { autoLoad: this.enabled }), { context: this.context });
+    protected readonly state = this.bridge.state;
+    protected readonly actions = this.bridge.actions;
+
+    protected label(passkey: AuthPasskey): string {
+        const name = passkey.name?.trim();
+
+        return name === undefined || name === "" ? this.t.passkeyUnnamed : name;
+    }
+
+    protected add(): void {
+        void this.actions.add(this.name()).then(() => {
+            this.name.set("");
+        });
+    }
+
+    protected remove(id: string): void {
+        void this.actions.remove(id);
+    }
+}
+
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     selector: "lunora-sign-out-button",
     standalone: true,
     template: `
-        <button class="lunora-auth-button lunora-auth-button--secondary" type="button" (click)="signOut()">
+        <button class="lunora-auth-button lunora-auth-button--secondary" type="button" [attr.style]="themeStyle" (click)="signOut()">
             {{ label() ?? t.signOut }}
         </button>
     `,
@@ -235,6 +314,7 @@ class SignOutButtonComponent {
 
     private readonly context = injectAuthUI();
     protected readonly t = this.context.localization;
+    protected readonly themeStyle = serializeThemeVariables(this.context.themeVariables);
 
     protected signOut(): void {
         void signOut(this.context);
@@ -245,6 +325,7 @@ export {
     ChangeEmailCardComponent,
     ChangePasswordCardComponent,
     DeleteAccountCardComponent,
+    PasskeysCardComponent,
     ProfileCardComponent,
     SessionsCardComponent,
     SignOutButtonComponent,

@@ -32,8 +32,8 @@
 
 // `lunoraAuthPlugins` — assemble the standard client plugin array from feature
 // toggles (used by the scaffolded `lunora/auth-ui/client.ts`).
-export type { LunoraAuthClientPlugin, LunoraAuthPluginToggles } from "./auth-client-plugins";
-export { lunoraAuthPlugins } from "./auth-client-plugins";
+export type { CreateLunoraAuthClientOptions, LunoraAuthClientPlugin, LunoraAuthPluginToggles } from "./auth-client-plugins";
+export { createLunoraAuthClient, lunoraAuthPlugins } from "./auth-client-plugins";
 // Passkey/WebAuthn ships its client half under `@better-auth/passkey/client`,
 // mirroring the server `passkey` re-export from `@lunora/auth/plugins`.
 export { passkeyClient } from "@better-auth/passkey/client";

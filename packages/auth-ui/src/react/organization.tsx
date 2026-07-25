@@ -3,8 +3,8 @@
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import { createMembersController, createOrganizationsController } from "../core";
-import { AuthCard, FormBanner, SubmitButton } from "./primitives";
+import { createMembersController, createOrganizationsController, createOrganizationSettingsController, isFlowEnabled } from "../core";
+import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
 
@@ -26,11 +26,19 @@ const onSubmit =
         void action();
     };
 
-const OrganizationsCard = (): ReactElement => {
-    const { localization: t } = useAuthUI();
-    const [state, actions] = useController(createOrganizationsController);
+const OrganizationsCard = (): ReactElement | null => {
+    const context = useAuthUI();
+    const { localization: t } = context;
+    // Resolved before the controller is built: a gated-off card must not fire
+    // the resource controller's auto-load on mount just to render nothing.
+    const enabled = isFlowEnabled(context, "organization", "OrganizationsCard");
+    const [state, actions] = useController((context_) => createOrganizationsController(context_, { autoLoad: enabled }), [enabled]);
     const [name, setName] = useState("");
     const [slug, setSlug] = useState("");
+
+    if (!enabled) {
+        return null;
+    }
 
     const create = (): void => {
         if (name.trim() === "") {
@@ -126,11 +134,17 @@ const OrganizationsCard = (): ReactElement => {
     );
 };
 
-const MembersCard = (): ReactElement => {
-    const { localization: t } = useAuthUI();
-    const [state, actions] = useController(createMembersController);
+const MembersCard = (): ReactElement | null => {
+    const context = useAuthUI();
+    const { localization: t } = context;
+    const enabled = isFlowEnabled(context, "organization", "MembersCard");
+    const [state, actions] = useController((context_) => createMembersController(context_, { autoLoad: enabled }), [enabled]);
     const [email, setEmail] = useState("");
     const [role, setRole] = useState<string>("member");
+
+    if (!enabled) {
+        return null;
+    }
 
     const invite = (): void => {
         if (email.trim() === "") {
@@ -238,4 +252,71 @@ const MembersCard = (): ReactElement => {
     );
 };
 
-export { MembersCard, OrganizationsCard };
+interface OrganizationSettingsCardProps {
+    /** Defaults to the user's active organization. */
+    organizationId?: string;
+}
+
+/** Rename the active organization and edit its slug and logo. */
+const OrganizationSettingsCard = ({ organizationId }: OrganizationSettingsCardProps = {}): ReactElement | null => {
+    const context = useAuthUI();
+    const { localization: t } = context;
+    const enabled = isFlowEnabled(context, "organization", "OrganizationSettingsCard");
+    const [state, actions] = useController(
+        (context_) => createOrganizationSettingsController(context_, { autoLoad: enabled, organizationId }),
+        [enabled, organizationId],
+    );
+
+    if (!enabled) {
+        return null;
+    }
+
+    return (
+        <AuthCard title={t.organizationSettings}>
+            {state.loading ? (
+                <p className="lunora-auth-card__description">…</p>
+            ) : (
+                <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
+                    <FormBanner error={state.formError} success={state.successMessage} />
+                    <Field
+                        field={state.fields.name}
+                        label={t.organizationName}
+                        name="organizationName"
+                        onBlur={() => {
+                            actions.blur("name");
+                        }}
+                        onChange={(value) => {
+                            actions.setField("name", value);
+                        }}
+                    />
+                    <Field
+                        field={state.fields.slug}
+                        label={t.organizationSlug}
+                        name="organizationSlug"
+                        onBlur={() => {
+                            actions.blur("slug");
+                        }}
+                        onChange={(value) => {
+                            actions.setField("slug", value);
+                        }}
+                    />
+                    <Field
+                        field={state.fields.logo}
+                        label={t.organizationLogo}
+                        name="organizationLogo"
+                        onBlur={() => {
+                            actions.blur("logo");
+                        }}
+                        onChange={(value) => {
+                            actions.setField("logo", value);
+                        }}
+                    />
+                    <SubmitButton pending={state.status === "submitting"}>{t.saveChanges}</SubmitButton>
+                </form>
+            )}
+        </AuthCard>
+    );
+};
+
+export type { OrganizationSettingsCardProps };
+export { MembersCard, OrganizationsCard, OrganizationSettingsCard };

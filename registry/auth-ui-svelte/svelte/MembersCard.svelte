@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createMembersController } from "../core";
+    import { createMembersController, isFlowEnabled } from "../core";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
@@ -8,8 +8,10 @@
 
     const ROLE_OPTIONS = ["member", "admin", "owner"] as const;
 
-    const t = useAuthUI().localization;
-    const { actions, state: res } = controllerStore(createMembersController);
+    const context = useAuthUI();
+    const t = context.localization;
+    const enabled = isFlowEnabled(context, "organization", "MembersCard");
+    const { actions, state: res } = controllerStore((context_) => createMembersController(context_, { autoLoad: enabled }));
 
     let email = $state("");
     let role = $state<string>("member");
@@ -24,80 +26,82 @@
     };
 </script>
 
-<AuthCard title={t.members}>
-    <FormBanner error={$res.error} />
+{#if enabled}
+    <AuthCard title={t.members}>
+        <FormBanner error={$res.error} />
 
-    {#if $res.loading}
-        <p class="lunora-auth-card__description">…</p>
-    {:else}
-        <ul class="lunora-auth-list">
-            {#each $res.members as member (member.id ?? member.userId ?? member.user?.email)}
-                <li class="lunora-auth-list__item">
-                    <span class="lunora-auth-list__label">
-                        {member.user?.email ?? member.user?.name ?? member.userId} · {member.role}
-                    </span>
-                    {#if member.id !== undefined}
-                        <button
-                            class="lunora-auth-link"
-                            disabled={$res.busy}
-                            onclick={() => {
-                                void actions.removeMember(member.id);
-                            }}
-                            type="button"
-                        >
-                            {t.remove}
-                        </button>
-                    {/if}
-                </li>
-            {/each}
-        </ul>
-    {/if}
-
-    {#if $res.invitations.length > 0}
-        <p class="lunora-auth-card__description">{t.invitations}</p>
-        <ul class="lunora-auth-list">
-            {#each $res.invitations as invitation (invitation.id ?? invitation.email)}
-                <li class="lunora-auth-list__item">
-                    <span class="lunora-auth-list__label">
-                        {invitation.email} · {invitation.role}
-                    </span>
-                    {#if invitation.id !== undefined}
-                        <button
-                            class="lunora-auth-link"
-                            disabled={$res.busy}
-                            onclick={() => {
-                                void actions.cancelInvitation(invitation.id);
-                            }}
-                            type="button"
-                        >
-                            {t.cancel}
-                        </button>
-                    {/if}
-                </li>
-            {/each}
-        </ul>
-    {/if}
-
-    <form
-        class="lunora-auth-form"
-        novalidate
-        onsubmit={(event) => {
-            event.preventDefault();
-            invite();
-        }}
-    >
-        <div class="lunora-auth-field">
-            <label class="lunora-auth-field__label" for="lunora-invite-email">{t.inviteEmailLabel}</label>
-            <input bind:value={email} class="lunora-auth-field__input" id="lunora-invite-email" type="email" />
-        </div>
-        <div class="lunora-auth-field">
-            <label class="lunora-auth-field__label" for="lunora-invite-role">{t.roleLabel}</label>
-            <select bind:value={role} class="lunora-auth-field__input" id="lunora-invite-role">
-                {#each ROLE_OPTIONS as option (option)}
-                    <option value={option}>{option}</option>
+        {#if $res.loading}
+            <p class="lunora-auth-card__description">…</p>
+        {:else}
+            <ul class="lunora-auth-list">
+                {#each $res.members as member (member.id ?? member.userId ?? member.user?.email)}
+                    <li class="lunora-auth-list__item">
+                        <span class="lunora-auth-list__label">
+                            {member.user?.email ?? member.user?.name ?? member.userId} · {member.role}
+                        </span>
+                        {#if member.id !== undefined}
+                            <button
+                                class="lunora-auth-link"
+                                disabled={$res.busy}
+                                onclick={() => {
+                                    void actions.removeMember(member.id);
+                                }}
+                                type="button"
+                            >
+                                {t.remove}
+                            </button>
+                        {/if}
+                    </li>
                 {/each}
-            </select>
-        </div>
-        <SubmitButton pending={$res.busy}>{t.inviteMember}</SubmitButton>
-    </form>
-</AuthCard>
+            </ul>
+        {/if}
+
+        {#if $res.invitations.length > 0}
+            <p class="lunora-auth-card__description">{t.invitations}</p>
+            <ul class="lunora-auth-list">
+                {#each $res.invitations as invitation (invitation.id ?? invitation.email)}
+                    <li class="lunora-auth-list__item">
+                        <span class="lunora-auth-list__label">
+                            {invitation.email} · {invitation.role}
+                        </span>
+                        {#if invitation.id !== undefined}
+                            <button
+                                class="lunora-auth-link"
+                                disabled={$res.busy}
+                                onclick={() => {
+                                    void actions.cancelInvitation(invitation.id);
+                                }}
+                                type="button"
+                            >
+                                {t.cancel}
+                            </button>
+                        {/if}
+                    </li>
+                {/each}
+            </ul>
+        {/if}
+
+        <form
+            class="lunora-auth-form"
+            novalidate
+            onsubmit={(event) => {
+                event.preventDefault();
+                invite();
+            }}
+        >
+            <div class="lunora-auth-field">
+                <label class="lunora-auth-field__label" for="lunora-invite-email">{t.inviteEmailLabel}</label>
+                <input bind:value={email} class="lunora-auth-field__input" id="lunora-invite-email" type="email" />
+            </div>
+            <div class="lunora-auth-field">
+                <label class="lunora-auth-field__label" for="lunora-invite-role">{t.roleLabel}</label>
+                <select bind:value={role} class="lunora-auth-field__input" id="lunora-invite-role">
+                    {#each ROLE_OPTIONS as option (option)}
+                        <option value={option}>{option}</option>
+                    {/each}
+                </select>
+            </div>
+            <SubmitButton pending={$res.busy}>{t.inviteMember}</SubmitButton>
+        </form>
+    </AuthCard>
+{/if}

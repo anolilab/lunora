@@ -9,6 +9,7 @@ import {
     createSignInController,
     createSignUpController,
     createTwoFactorVerifyController,
+    isFlowEnabled,
     signInWithSocial,
 } from "../core";
 import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, SocialButtons, SubmitButton } from "./primitives";
@@ -217,8 +218,13 @@ interface MagicLinkCardProps {
 }
 
 const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
-    const { localization: t } = useAuthUI();
+    const context = useAuthUI();
+    const { localization: t } = context;
     const [state, actions] = createController(createMagicLinkController);
+
+    if (!isFlowEnabled(context, "magicLink", "MagicLinkCard")) {
+        return null;
+    }
 
     return (
         <AuthCard footer={<AuthLink href={props.signInHref ?? "/sign-in"}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
@@ -244,8 +250,13 @@ const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
 };
 
 const EmailOtpCard = (): JSX.Element => {
-    const { localization: t } = useAuthUI();
+    const context = useAuthUI();
+    const { localization: t } = context;
     const [state, actions] = createController(createEmailOtpController);
+
+    if (!isFlowEnabled(context, "emailOtp", "EmailOtpCard")) {
+        return null;
+    }
 
     return (
         <Show
@@ -300,8 +311,15 @@ interface TwoFactorCardProps {
 }
 
 const TwoFactorCard = (props: TwoFactorCardProps = {}): JSX.Element => {
-    const { localization: t } = useAuthUI();
-    const [state, actions] = createController((context) => createTwoFactorVerifyController(context, { method: props.method, trustDevice: props.trustDevice }));
+    const context = useAuthUI();
+    const { localization: t } = context;
+    const [state, actions] = createController((context_) =>
+        createTwoFactorVerifyController(context_, { method: props.method, trustDevice: props.trustDevice }),
+    );
+
+    if (!isFlowEnabled(context, "twoFactor", "TwoFactorCard")) {
+        return null;
+    }
 
     return (
         <AuthCard title={t.twoFactor}>

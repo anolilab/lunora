@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
-import { createOrganizationsController } from "../core";
+import { createOrganizationsController, isFlowEnabled } from "../core";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";
@@ -17,8 +17,12 @@ const slugify = (value: string): string =>
         .replaceAll(/[^a-z0-9]+/gu, "-")
         .replaceAll(/^-|-$/gu, "");
 
-const { localization: t } = useAuthUI();
-const { actions, state } = useController(createOrganizationsController);
+const context = useAuthUI();
+const t = context.localization;
+// Resolved before the controller is built: a gated-off card must not fire the
+// resource auto-load on mount just to render nothing.
+const enabled = isFlowEnabled(context, "organization", "OrganizationsCard");
+const { actions, state } = useController((context_) => createOrganizationsController(context_, { autoLoad: enabled }));
 
 const name = ref("");
 const slug = ref("");
@@ -44,7 +48,7 @@ const onRemove = (id: string): void => {
 </script>
 
 <template>
-    <AuthCard :title="t.organizations">
+    <AuthCard v-if="enabled" :title="t.organizations">
         <FormBanner :error="state.error" />
         <p v-if="state.loading" class="lunora-auth-card__description">…</p>
         <p v-else-if="state.items.length === 0" class="lunora-auth-card__description">{{ t.noOrganizations }}</p>

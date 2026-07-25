@@ -1,13 +1,16 @@
 /**
- * `lunoraAuthPlugins` — assemble the standard better-auth **client** plugin array
- * from a set of feature toggles, so consumers (and the scaffolded
- * `lunora/auth-ui/client.ts`) stop hand-listing `[organizationClient(),
- * twoFactorClient(), …]` and keeping it in sync by memory.
+ * Assemble the standard better-auth **client** plugin set from feature toggles,
+ * so consumers (and the scaffolded `lunora/auth-ui/client.ts`) stop hand-listing
+ * `[organizationClient(), twoFactorClient(), …]` and keeping it in sync by memory.
  *
- * It intentionally returns just the array (rather than wrapping
- * `createAuthClient`): the caller owns the `createAuthClient` call and picks the
- * framework variant (`better-auth/react` | `/vue` | `/svelte` | `/solid`), which
- * must match their UI framework. Spread the result into `plugins`:
+ * Two entry points, same toggles:
+ *
+ * - {@link createLunoraAuthClient} builds the whole client — the one-liner.
+ * - {@link lunoraAuthPlugins} returns just the array, for when you want to own
+ *   the `createAuthClient` call.
+ *
+ * Neither picks the framework variant for you (`better-auth/react` | `/vue` |
+ * `/svelte` | `/solid`) — it has to match your UI framework, so you pass it in:
  *
  * ```ts
  * import { createAuthClient } from "better-auth/react";
@@ -72,5 +75,52 @@ const lunoraAuthPlugins = (toggles: LunoraAuthPluginToggles = {}): LunoraAuthCli
     return plugins;
 };
 
-export type { LunoraAuthClientPlugin, LunoraAuthPluginToggles };
-export { lunoraAuthPlugins };
+/** Options for {@link createLunoraAuthClient}; anything else is forwarded to `createAuthClient`. */
+interface CreateLunoraAuthClientOptions {
+    [option: string]: unknown;
+    /** Defaults to the current origin, which is right for a same-origin app. */
+    baseURL?: string;
+    /** Your own client plugins, appended after the standard set. */
+    extraPlugins?: LunoraAuthClientPlugin[];
+    /** Which standard client plugins to include. */
+    plugins?: LunoraAuthPluginToggles;
+}
+
+/** Same-origin default; `undefined` off the browser (SSR passes `baseURL` explicitly). */
+const currentOrigin = (): string | undefined => (globalThis as { location?: { origin?: string } }).location?.origin;
+
+/**
+ * Build a better-auth client with Lunora's standard plugin set from toggles.
+ *
+ * You pass your framework's `createAuthClient` in — `better-auth/react`,
+ * `/vue`, `/svelte`, or `/solid` — because the variant has to match the UI
+ * framework, and a helper that picked for you would either guess wrong or drag
+ * every variant into your bundle.
+ *
+ * ```ts
+ * import { createAuthClient } from "better-auth/react";
+ * import { createLunoraAuthClient } from "@lunora/auth/plugins/client";
+ *
+ * export const authClient = createLunoraAuthClient(createAuthClient, {
+ *     plugins: { organization: true, passkey: true, twoFactor: true },
+ * });
+ * ```
+ *
+ * Reach for {@link lunoraAuthPlugins} instead when you want to own the
+ * `createAuthClient` call and only borrow the plugin array.
+ */
+const createLunoraAuthClient = <TClient>(
+    createAuthClient: (options: Record<string, unknown>) => TClient,
+    options: CreateLunoraAuthClientOptions = {},
+): TClient => {
+    const { baseURL, extraPlugins = [], plugins, ...rest } = options;
+
+    return createAuthClient({
+        ...rest,
+        baseURL: baseURL ?? currentOrigin(),
+        plugins: [...lunoraAuthPlugins(plugins), ...extraPlugins],
+    });
+};
+
+export type { CreateLunoraAuthClientOptions, LunoraAuthClientPlugin, LunoraAuthPluginToggles };
+export { createLunoraAuthClient, lunoraAuthPlugins };

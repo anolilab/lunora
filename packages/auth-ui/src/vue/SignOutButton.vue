@@ -7,6 +7,7 @@ const props = defineProps<{
 }>();
 
 const context = useAuthUI();
+const themeStyle = Object.keys(context.themeVariables).length === 0 ? undefined : context.themeVariables;
 
 const onSignOut = (): void => {
     void signOut(context);
@@ -14,7 +15,7 @@ const onSignOut = (): void => {
 </script>
 
 <template>
-    <button class="lunora-auth-button lunora-auth-button--secondary" type="button" @click="onSignOut">
+    <button class="lunora-auth-button lunora-auth-button--secondary" type="button" :style="themeStyle" @click="onSignOut">
         {{ props.label ?? context.localization.signOut }}
     </button>
 </template>

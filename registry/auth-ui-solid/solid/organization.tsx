@@ -1,8 +1,8 @@
 import type { JSX } from "solid-js";
 import { createSignal, For, Show } from "solid-js";
 
-import { createMembersController, createOrganizationsController } from "../core";
-import { AuthCard, FormBanner, SubmitButton } from "./primitives";
+import { createMembersController, createOrganizationSettingsController, createOrganizationsController, isFlowEnabled } from "../core";
+import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
 
@@ -25,8 +25,16 @@ const onSubmit =
     };
 
 const OrganizationsCard = (): JSX.Element => {
-    const { localization: t } = useAuthUI();
-    const [state, actions] = createController(createOrganizationsController);
+    const context = useAuthUI();
+    const { localization: t } = context;
+    // Resolved before the controller is built: a gated-off card must not fire
+    // the resource controller's auto-load on mount just to render nothing.
+    const enabled = isFlowEnabled(context, "organization", "OrganizationsCard");
+    const [state, actions] = createController((context_) => createOrganizationsController(context_, { autoLoad: enabled }));
+
+    if (!enabled) {
+        return null;
+    }
     const [name, setName] = createSignal("");
     const [slug, setSlug] = createSignal("");
 
@@ -120,8 +128,14 @@ const OrganizationsCard = (): JSX.Element => {
 };
 
 const MembersCard = (): JSX.Element => {
-    const { localization: t } = useAuthUI();
-    const [state, actions] = createController(createMembersController);
+    const context = useAuthUI();
+    const { localization: t } = context;
+    const enabled = isFlowEnabled(context, "organization", "MembersCard");
+    const [state, actions] = createController((context_) => createMembersController(context_, { autoLoad: enabled }));
+
+    if (!enabled) {
+        return null;
+    }
     const [email, setEmail] = createSignal("");
     const [role, setRole] = createSignal<string>("member");
 
@@ -232,4 +246,68 @@ const MembersCard = (): JSX.Element => {
     );
 };
 
-export { MembersCard, OrganizationsCard };
+interface OrganizationSettingsCardProps {
+    /** Defaults to the user's active organization. */
+    organizationId?: string;
+}
+
+/** Rename the active organization and edit its slug and logo. */
+const OrganizationSettingsCard = (props: OrganizationSettingsCardProps = {}): JSX.Element => {
+    const context = useAuthUI();
+    const { localization: t } = context;
+    const enabled = isFlowEnabled(context, "organization", "OrganizationSettingsCard");
+    const [state, actions] = createController((context_) =>
+        createOrganizationSettingsController(context_, { autoLoad: enabled, organizationId: props.organizationId }),
+    );
+
+    if (!enabled) {
+        return null;
+    }
+
+    return (
+        <AuthCard title={t.organizationSettings}>
+            <Show fallback={<p class="lunora-auth-card__description">…</p>} when={!state.loading}>
+                <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
+                    <FormBanner error={state.formError} success={state.successMessage} />
+                    <Field
+                        field={state.fields.name}
+                        label={t.organizationName}
+                        name="organizationName"
+                        onBlur={() => {
+                            actions.blur("name");
+                        }}
+                        onChange={(value) => {
+                            actions.setField("name", value);
+                        }}
+                    />
+                    <Field
+                        field={state.fields.slug}
+                        label={t.organizationSlug}
+                        name="organizationSlug"
+                        onBlur={() => {
+                            actions.blur("slug");
+                        }}
+                        onChange={(value) => {
+                            actions.setField("slug", value);
+                        }}
+                    />
+                    <Field
+                        field={state.fields.logo}
+                        label={t.organizationLogo}
+                        name="organizationLogo"
+                        onBlur={() => {
+                            actions.blur("logo");
+                        }}
+                        onChange={(value) => {
+                            actions.setField("logo", value);
+                        }}
+                    />
+                    <SubmitButton pending={state.status === "submitting"}>{t.saveChanges}</SubmitButton>
+                </form>
+            </Show>
+        </AuthCard>
+    );
+};
+
+export type { OrganizationSettingsCardProps };
+export { MembersCard, OrganizationSettingsCard, OrganizationsCard };

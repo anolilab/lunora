@@ -1,7 +1,7 @@
 import type { JSX } from "solid-js";
 import { For, Show } from "solid-js";
 
-import { createTwoFactorSetupController } from "../core";
+import { createTwoFactorSetupController, isFlowEnabled } from "../core";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
@@ -14,8 +14,13 @@ const onSubmit =
     };
 
 const TwoFactorSetupCard = (): JSX.Element => {
-    const { localization: t } = useAuthUI();
+    const context = useAuthUI();
+    const { localization: t } = context;
     const [state, actions] = createController(createTwoFactorSetupController);
+
+    if (!isFlowEnabled(context, "twoFactor", "TwoFactorSetupCard")) {
+        return null;
+    }
 
     return (
         <Show

@@ -38,7 +38,7 @@ export {
 } from "./auth-cards";
 export type { ControllerSignalOptions, ControllerSignalResult } from "./controller-signal";
 export { controllerSignal } from "./controller-signal";
-export { MembersCardComponent, OrganizationsCardComponent } from "./organization";
+export { MembersCardComponent, OrganizationSettingsCardComponent, OrganizationsCardComponent } from "./organization";
 export {
     AuthCardComponent,
     AuthDividerComponent,
@@ -54,6 +54,7 @@ export {
     ChangeEmailCardComponent,
     ChangePasswordCardComponent,
     DeleteAccountCardComponent,
+    PasskeysCardComponent,
     ProfileCardComponent,
     SessionsCardComponent,
     SignOutButtonComponent,

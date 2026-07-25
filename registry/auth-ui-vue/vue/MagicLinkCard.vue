@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { createMagicLinkController } from "../core";
+import { createMagicLinkController, isFlowEnabled } from "../core";
 import AuthCard from "./AuthCard.vue";
 import AuthLink from "./AuthLink.vue";
 import Field from "./Field.vue";
@@ -17,12 +17,14 @@ withDefaults(
     },
 );
 
-const { localization: t } = useAuthUI();
+const context = useAuthUI();
+const t = context.localization;
+const enabled = isFlowEnabled(context, "magicLink", "MagicLinkCard");
 const { actions, state } = useController(createMagicLinkController);
 </script>
 
 <template>
-    <AuthCard :title="t.magicLink">
+    <AuthCard v-if="enabled" :title="t.magicLink">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
             <Field

@@ -1,13 +1,15 @@
 <script lang="ts">
-    import { createOrganizationsController } from "../core";
+    import { createOrganizationsController, isFlowEnabled } from "../core";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
-    const t = useAuthUI().localization;
-    const { actions, state: res } = controllerStore(createOrganizationsController);
+    const context = useAuthUI();
+    const t = context.localization;
+    const enabled = isFlowEnabled(context, "organization", "OrganizationsCard");
+    const { actions, state: res } = controllerStore((context_) => createOrganizationsController(context_, { autoLoad: enabled }));
 
     let name = $state("");
     let slug = $state("");
@@ -32,61 +34,63 @@
     };
 </script>
 
-<AuthCard title={t.organizations}>
-    <FormBanner error={$res.error} />
-    {#if $res.loading}
-        <p class="lunora-auth-card__description">…</p>
-    {:else if $res.items.length === 0}
-        <p class="lunora-auth-card__description">{t.noOrganizations}</p>
-    {:else}
-        <ul class="lunora-auth-list">
-            {#each $res.items as organization (organization.id ?? organization.slug ?? organization.name)}
-                <li class="lunora-auth-list__item">
-                    <span class="lunora-auth-list__label">{organization.name ?? organization.slug}</span>
-                    <span class="lunora-auth-list__actions">
-                        {#if organization.id !== undefined}
-                            <button
-                                class="lunora-auth-link"
-                                disabled={$res.busy}
-                                onclick={() => {
-                                    void actions.setActive(organization.id);
-                                }}
-                                type="button"
-                            >
-                                {t.switchOrganization}
-                            </button>
-                            <button
-                                class="lunora-auth-link"
-                                disabled={$res.busy}
-                                onclick={() => {
-                                    void actions.remove(organization.id);
-                                }}
-                                type="button"
-                            >
-                                {t.remove}
-                            </button>
-                        {/if}
-                    </span>
-                </li>
-            {/each}
-        </ul>
-    {/if}
-    <form
-        class="lunora-auth-form"
-        novalidate
-        onsubmit={(event) => {
-            event.preventDefault();
-            create();
-        }}
-    >
-        <div class="lunora-auth-field">
-            <label class="lunora-auth-field__label" for="lunora-org-name">{t.organizationName}</label>
-            <input bind:value={name} class="lunora-auth-field__input" id="lunora-org-name" />
-        </div>
-        <div class="lunora-auth-field">
-            <label class="lunora-auth-field__label" for="lunora-org-slug">{t.organizationSlug}</label>
-            <input bind:value={slug} class="lunora-auth-field__input" id="lunora-org-slug" placeholder={slugify(name)} />
-        </div>
-        <SubmitButton pending={$res.busy}>{t.createOrganization}</SubmitButton>
-    </form>
-</AuthCard>
+{#if enabled}
+    <AuthCard title={t.organizations}>
+        <FormBanner error={$res.error} />
+        {#if $res.loading}
+            <p class="lunora-auth-card__description">…</p>
+        {:else if $res.items.length === 0}
+            <p class="lunora-auth-card__description">{t.noOrganizations}</p>
+        {:else}
+            <ul class="lunora-auth-list">
+                {#each $res.items as organization (organization.id ?? organization.slug ?? organization.name)}
+                    <li class="lunora-auth-list__item">
+                        <span class="lunora-auth-list__label">{organization.name ?? organization.slug}</span>
+                        <span class="lunora-auth-list__actions">
+                            {#if organization.id !== undefined}
+                                <button
+                                    class="lunora-auth-link"
+                                    disabled={$res.busy}
+                                    onclick={() => {
+                                        void actions.setActive(organization.id);
+                                    }}
+                                    type="button"
+                                >
+                                    {t.switchOrganization}
+                                </button>
+                                <button
+                                    class="lunora-auth-link"
+                                    disabled={$res.busy}
+                                    onclick={() => {
+                                        void actions.remove(organization.id);
+                                    }}
+                                    type="button"
+                                >
+                                    {t.remove}
+                                </button>
+                            {/if}
+                        </span>
+                    </li>
+                {/each}
+            </ul>
+        {/if}
+        <form
+            class="lunora-auth-form"
+            novalidate
+            onsubmit={(event) => {
+                event.preventDefault();
+                create();
+            }}
+        >
+            <div class="lunora-auth-field">
+                <label class="lunora-auth-field__label" for="lunora-org-name">{t.organizationName}</label>
+                <input bind:value={name} class="lunora-auth-field__input" id="lunora-org-name" />
+            </div>
+            <div class="lunora-auth-field">
+                <label class="lunora-auth-field__label" for="lunora-org-slug">{t.organizationSlug}</label>
+                <input bind:value={slug} class="lunora-auth-field__input" id="lunora-org-slug" placeholder={slugify(name)} />
+            </div>
+            <SubmitButton pending={$res.busy}>{t.createOrganization}</SubmitButton>
+        </form>
+    </AuthCard>
+{/if}

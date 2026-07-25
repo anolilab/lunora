@@ -54,6 +54,7 @@ export { default as TwoFactorCard } from "./TwoFactorCard.vue";
 export { default as ChangeEmailCard } from "./ChangeEmailCard.vue";
 export { default as ChangePasswordCard } from "./ChangePasswordCard.vue";
 export { default as DeleteAccountCard } from "./DeleteAccountCard.vue";
+export { default as PasskeysCard } from "./PasskeysCard.vue";
 export { default as ProfileCard } from "./ProfileCard.vue";
 export { default as SessionsCard } from "./SessionsCard.vue";
 export { default as SignOutButton } from "./SignOutButton.vue";
@@ -61,4 +62,5 @@ export { default as TwoFactorSetupCard } from "./TwoFactorSetupCard.vue";
 
 // Organization cards.
 export { default as MembersCard } from "./MembersCard.vue";
+export { default as OrganizationSettingsCard } from "./OrganizationSettingsCard.vue";
 export { default as OrganizationsCard } from "./OrganizationsCard.vue";

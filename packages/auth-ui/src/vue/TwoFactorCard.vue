@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { createTwoFactorVerifyController } from "../core";
+import { createTwoFactorVerifyController, isFlowEnabled } from "../core";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
@@ -12,12 +12,14 @@ const props = defineProps<{
     trustDevice?: boolean;
 }>();
 
-const { localization: t } = useAuthUI();
-const { actions, state } = useController((context) => createTwoFactorVerifyController(context, { method: props.method, trustDevice: props.trustDevice }));
+const context = useAuthUI();
+const t = context.localization;
+const enabled = isFlowEnabled(context, "twoFactor", "TwoFactorCard");
+const { actions, state } = useController((context_) => createTwoFactorVerifyController(context_, { method: props.method, trustDevice: props.trustDevice }));
 </script>
 
 <template>
-    <AuthCard :title="t.twoFactor">
+    <AuthCard v-if="enabled" :title="t.twoFactor">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" />
             <Field

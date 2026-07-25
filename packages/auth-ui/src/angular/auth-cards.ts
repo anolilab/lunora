@@ -16,6 +16,7 @@ import {
     createSignInController,
     createSignUpController,
     createTwoFactorVerifyController,
+    isFlowEnabled,
     signInWithSocial,
 } from "../core";
 import { controllerSignal } from "./controller-signal";
@@ -247,28 +248,31 @@ class ResetPasswordCardComponent implements OnInit {
     selector: "lunora-magic-link-card",
     standalone: true,
     template: `
-        <lunora-auth-card [title]="t.magicLink" [footer]="true">
-            <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
-                <lunora-auth-banner [error]="state().formError" [success]="state().successMessage" />
-                <lunora-auth-field
-                    [field]="state().fields.email"
-                    [label]="t.emailLabel"
-                    name="email"
-                    type="email"
-                    autoComplete="email"
-                    (changed)="actions.setField('email', $event)"
-                    (blurred)="actions.blur('email')"
-                />
-                <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.magicLink }}</lunora-auth-submit-button>
-            </form>
-            <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.backToSignIn }}</lunora-auth-link>
-        </lunora-auth-card>
+        @if (enabled) {
+            <lunora-auth-card [title]="t.magicLink" [footer]="true">
+                <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
+                    <lunora-auth-banner [error]="state().formError" [success]="state().successMessage" />
+                    <lunora-auth-field
+                        [field]="state().fields.email"
+                        [label]="t.emailLabel"
+                        name="email"
+                        type="email"
+                        autoComplete="email"
+                        (changed)="actions.setField('email', $event)"
+                        (blurred)="actions.blur('email')"
+                    />
+                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.magicLink }}</lunora-auth-submit-button>
+                </form>
+                <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.backToSignIn }}</lunora-auth-link>
+            </lunora-auth-card>
+        }
     `,
 })
 class MagicLinkCardComponent {
     readonly signInHref = input("/sign-in");
 
     private readonly context = injectAuthUI();
+    protected readonly enabled = isFlowEnabled(this.context, "magicLink", "MagicLinkCard");
     protected readonly t = this.context.localization;
     private readonly bridge = controllerSignal(createMagicLinkController, { context: this.context });
     protected readonly state = this.bridge.state;
@@ -281,41 +285,44 @@ class MagicLinkCardComponent {
     selector: "lunora-email-otp-card",
     standalone: true,
     template: `
-        @if (state().step === "verify") {
-            <lunora-auth-card [title]="t.emailOtp" [description]="t.emailOtpSent" [footer]="true">
-                <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.verify()">
-                    <lunora-auth-banner [error]="state().formError" />
-                    <lunora-auth-field
-                        [field]="state().code"
-                        [label]="t.codeLabel"
-                        name="code"
-                        autoComplete="one-time-code"
-                        (changed)="actions.setCode($event)"
-                    />
-                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.twoFactor }}</lunora-auth-submit-button>
-                </form>
-                <button lunoraAuthCardFooter class="lunora-auth-link" type="button" (click)="actions.back()">{{ t.sendNewCode }}</button>
-            </lunora-auth-card>
-        } @else {
-            <lunora-auth-card [title]="t.emailOtp">
-                <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.sendCode()">
-                    <lunora-auth-banner [error]="state().formError" [success]="state().successMessage" />
-                    <lunora-auth-field
-                        [field]="state().email"
-                        [label]="t.emailLabel"
-                        name="email"
-                        type="email"
-                        autoComplete="email"
-                        (changed)="actions.setEmail($event)"
-                    />
-                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.emailOtp }}</lunora-auth-submit-button>
-                </form>
-            </lunora-auth-card>
+        @if (enabled) {
+            @if (state().step === "verify") {
+                <lunora-auth-card [title]="t.emailOtp" [description]="t.emailOtpSent" [footer]="true">
+                    <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.verify()">
+                        <lunora-auth-banner [error]="state().formError" />
+                        <lunora-auth-field
+                            [field]="state().code"
+                            [label]="t.codeLabel"
+                            name="code"
+                            autoComplete="one-time-code"
+                            (changed)="actions.setCode($event)"
+                        />
+                        <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.twoFactor }}</lunora-auth-submit-button>
+                    </form>
+                    <button lunoraAuthCardFooter class="lunora-auth-link" type="button" (click)="actions.back()">{{ t.sendNewCode }}</button>
+                </lunora-auth-card>
+            } @else {
+                <lunora-auth-card [title]="t.emailOtp">
+                    <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.sendCode()">
+                        <lunora-auth-banner [error]="state().formError" [success]="state().successMessage" />
+                        <lunora-auth-field
+                            [field]="state().email"
+                            [label]="t.emailLabel"
+                            name="email"
+                            type="email"
+                            autoComplete="email"
+                            (changed)="actions.setEmail($event)"
+                        />
+                        <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.emailOtp }}</lunora-auth-submit-button>
+                    </form>
+                </lunora-auth-card>
+            }
         }
     `,
 })
 class EmailOtpCardComponent {
     private readonly context = injectAuthUI();
+    protected readonly enabled = isFlowEnabled(this.context, "emailOtp", "EmailOtpCard");
     protected readonly t = this.context.localization;
     private readonly bridge = controllerSignal(createEmailOtpController, { context: this.context });
     protected readonly state: Signal<EmailOtpState> = this.bridge.state;
@@ -328,20 +335,22 @@ class EmailOtpCardComponent {
     selector: "lunora-two-factor-card",
     standalone: true,
     template: `
-        <lunora-auth-card [title]="t.twoFactor">
-            <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
-                <lunora-auth-banner [error]="state().formError" />
-                <lunora-auth-field
-                    [field]="state().fields.code"
-                    [label]="t.codeLabel"
-                    name="code"
-                    autoComplete="one-time-code"
-                    (changed)="actions.setField('code', $event)"
-                    (blurred)="actions.blur('code')"
-                />
-                <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.twoFactor }}</lunora-auth-submit-button>
-            </form>
-        </lunora-auth-card>
+        @if (enabled) {
+            <lunora-auth-card [title]="t.twoFactor">
+                <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); actions.submit()">
+                    <lunora-auth-banner [error]="state().formError" />
+                    <lunora-auth-field
+                        [field]="state().fields.code"
+                        [label]="t.codeLabel"
+                        name="code"
+                        autoComplete="one-time-code"
+                        (changed)="actions.setField('code', $event)"
+                        (blurred)="actions.blur('code')"
+                    />
+                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.twoFactor }}</lunora-auth-submit-button>
+                </form>
+            </lunora-auth-card>
+        }
     `,
 })
 class TwoFactorCardComponent implements OnInit {
@@ -349,6 +358,7 @@ class TwoFactorCardComponent implements OnInit {
     readonly trustDevice = input<boolean>();
 
     private readonly context = injectAuthUI();
+    protected readonly enabled = isFlowEnabled(this.context, "twoFactor", "TwoFactorCard");
     private readonly destroyRef = inject(DestroyRef);
     protected readonly t = this.context.localization;
     protected state!: Signal<FormState<TwoFactorField>>;

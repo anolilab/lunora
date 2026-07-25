@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { createTwoFactorSetupController } from "../core";
+import { createTwoFactorSetupController, isFlowEnabled } from "../core";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
@@ -7,12 +7,14 @@ import { useAuthUI } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
-const { localization: t } = useAuthUI();
+const context = useAuthUI();
+const t = context.localization;
+const enabled = isFlowEnabled(context, "twoFactor", "TwoFactorSetupCard");
 const { actions, state } = useController(createTwoFactorSetupController);
 </script>
 
 <template>
-    <AuthCard v-if="state.step === 'enabled'" :title="t.twoFactorSetup">
+    <AuthCard v-if="enabled && state.step === 'enabled'" :title="t.twoFactorSetup">
         <FormBanner :error="state.error" :success="t.twoFactorEnabled" />
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.disable">
             <Field
@@ -26,7 +28,7 @@ const { actions, state } = useController(createTwoFactorSetupController);
             <SubmitButton :pending="state.status === 'submitting'">{{ t.twoFactorDisable }}</SubmitButton>
         </form>
     </AuthCard>
-    <AuthCard v-else-if="state.step === 'verify'" :title="t.twoFactorSetup" :description="t.twoFactorScan">
+    <AuthCard v-else-if="enabled && state.step === 'verify'" :title="t.twoFactorSetup" :description="t.twoFactorScan">
         <FormBanner :error="state.error" />
         <code v-if="state.totpUri !== undefined" class="lunora-auth-code">{{ state.totpUri }}</code>
         <template v-if="state.backupCodes.length > 0">
@@ -40,7 +42,7 @@ const { actions, state } = useController(createTwoFactorSetupController);
             <SubmitButton :pending="state.status === 'submitting'">{{ t.twoFactor }}</SubmitButton>
         </form>
     </AuthCard>
-    <AuthCard v-else :title="t.twoFactorSetup">
+    <AuthCard v-else-if="enabled" :title="t.twoFactorSetup">
         <FormBanner :error="state.error" />
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.enable">
             <Field

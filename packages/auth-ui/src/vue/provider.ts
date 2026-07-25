@@ -1,7 +1,7 @@
 import type { App, Component, InjectionKey } from "vue";
 import { inject, provide } from "vue";
 
-import type { AuthClient, ControllerContext, Localization, NavAdapter, PluginFlags, RedirectConfig } from "../core";
+import type { AuthClient, AuthUIConfig, ControllerContext, Localization, NavAdapter, PluginFlags, RedirectConfig } from "../core";
 import { defaultNav, resolveContext } from "../core";
 
 /**
@@ -40,6 +40,8 @@ interface AuthUIProviderProps {
     redirects?: RedirectConfig;
     /** OAuth providers to render social buttons for (server-side config required). */
     social?: ReadonlyArray<string>;
+    /** Retint the cards from config; see `core/theme.ts`. */
+    theme?: AuthUIConfig["theme"];
 }
 
 /** Normalize the user-facing config into the injectable Vue context. */
@@ -55,6 +57,7 @@ const buildContext = (config: AuthUIProviderProps): AuthUIVueContext => {
             plugins: config.plugins,
             redirects: config.redirects,
             social: config.social,
+            theme: config.theme,
         }),
         Link: config.Link,
     };
