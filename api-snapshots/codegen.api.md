@@ -374,6 +374,7 @@ interface LintSchemaOptions {
     sqlInterpolations?: ReadonlyArray<SqlInterpolationIR>;
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
+    unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
     workflowCalls?: ReadonlyArray<WorkflowCallIR>;
     workflows?: ReadonlyArray<WorkflowIR>;
@@ -688,6 +689,7 @@ interface StorageRulesMetadataIR {
 
 ```ts
 interface TableIR {
+    extensionKey?: string;
     externallyManaged?: boolean;
     externalSource?: ExternalSourceIR;
     geoIndexes?: ReadonlyArray<GeoIndexIR>;

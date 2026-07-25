@@ -901,6 +901,7 @@ interface LintContext {
     notifyCalls?: ReadonlyArray<AdvisorNotifyCall>;
     notifyConfig?: AdvisorNotifyConfig;
     ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
+    unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     paymentWebhooks?: ReadonlyArray<AdvisorPaymentWebhook>;
     privilegedDispatches?: ReadonlyArray<AdvisorPrivilegedDispatch>;
     procedureProtections?: ReadonlyArray<AdvisorProcedureProtection>;
@@ -1493,6 +1494,12 @@ const unindexedForeignKey: Lint;
 
 ```ts
 const unindexedRelationTarget: Lint;
+```
+
+### `unrestrictedWhereBranch` (const)
+
+```ts
+const unrestrictedWhereBranch: Lint;
 ```
 
 ### `userCreatingMutationWithoutCaptcha` (const)

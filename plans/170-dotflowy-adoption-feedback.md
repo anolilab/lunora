@@ -9,20 +9,20 @@ editor replacing a hand-rolled per-user-DO sync engine with `defineTable().shard
 Better Auth / Stripe / MCP Worker. Every workaround in it is a spec for something Lunora
 should own. Findings below are ordered by severity; each states the evidence.
 
-> **Status.** All 21 findings were implemented in PR #187, so the "**Fix.**" paragraphs
-> below read as the rationale for a change that has already landed, not as a proposal.
-> Three sub-items of those fixes were deliberately left out and are **still open**:
+> **Status.** All 21 findings are implemented in PR #187, so the "**Fix.**" paragraphs
+> below read as the rationale for changes that have already landed, not as a proposal.
 >
-> - **#8** — the advisor lint for a `where` branch returning `{}` / `undefined`. `deny()`
->   is exported and documented, but nothing yet _catches_ the dangerous near-miss
->   statically, which is the half that would have prevented the original mistake.
-> - **#10** — `ctx.db.asId` is generic over `T extends string`, not narrowed to the
->   generated `TableName` the way `db.get` / `db.query` are, so `asId("typo", id)` still
->   compiles. And schema extensions have no namespace, so `ratelimit_buckets` still leaks
->   into an app's hand-written table unions.
-> - **#21** — `client.debug()` exists; the Studio panel that reads it does not.
+> The three sub-items initially deferred are now done too: the advisor lint behind
+> `deny()` (`unrestricted_where_branch`), `ctx.db.asId` narrowed to the generated
+> `TableName` plus `AppTableName` so an add-on's tables stop leaking into an app's
+> table unions, and the Studio panel over `client.debug()`.
 >
-> Each is a smaller, self-contained follow-up rather than a gap in the shipped surface.
+> Two limits worth knowing, both deliberate. `dist:check` (#1) greps only React
+> dev-JSX markers, so it proves the React-family packages are production builds but
+> does not verify minification or `NODE_ENV` folding for the rest. And the Studio
+> panel (#21) introspects the client running in the Studio page, not the client in
+> your application — diagnosing a specific stuck overlay still means calling
+> `client.debug()` in the app itself.
 
 ---
 
