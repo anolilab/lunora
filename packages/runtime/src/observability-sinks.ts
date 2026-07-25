@@ -129,6 +129,10 @@ const encodeRpcSpan = (event: ObservabilityEvent, endMs: number): unknown => {
         // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
         status: event.ok ? { code: 1 } : { code: 2, message: event.error?.message ?? "" },
         traceId: event.traceId ?? otlpRandomHex(16),
+        // W3C trace flags — the sampled bit. Without it a collector cannot tell a
+        // head-sampled trace from an unsampled one, so downstream sampling and
+        // any "why is this trace incomplete?" question lose their only signal.
+        ...(event.traceFlags === undefined ? {} : { flags: event.traceFlags }),
         // On error, record an OTel exception event with the standard
         // `exception.*` attributes — the canonical error representation
         // collectors and vendors key their error views on.
@@ -472,10 +476,17 @@ const applyTailSampler = (signals: BufferedSignal[], tailSampler: TailSampler | 
 };
 
 /**
- * Run one event through its post-processor hook. A throwing hook keeps the event
- * unmodified rather than dropping it — a redaction bug should not silently delete
- * a service's telemetry, and the failure is more useful visible as un-redacted
- * data than invisible as absence.
+ * Run one event through its post-processor hook.
+ *
+ * **Fail-closed: a throwing hook DROPS the event.** `postProcessor` is the
+ * documented place to scrub PII before telemetry leaves the worker, so a hook
+ * that throws part-way — a null-deref on an unexpected event shape, a bad
+ * regex, a renamed field — has by definition not finished redacting. Exporting
+ * what it was in the middle of scrubbing would leak exactly the data it exists
+ * to remove, to a destination outside the worker's trust boundary.
+ *
+ * Losing an event is recoverable; leaking one is not. `webhookSink`'s
+ * `transform`/`transformLog` make the same trade for the same reason.
  */
 const postProcess = <T>(event: T, hook: ((event: T) => T | undefined) | undefined): T | undefined => {
     if (hook === undefined) {
@@ -485,7 +496,7 @@ const postProcess = <T>(event: T, hook: ((event: T) => T | undefined) | undefine
     try {
         return hook(event);
     } catch {
-        return event;
+        return undefined;
     }
 };
 
@@ -1034,6 +1045,10 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
     /**
      * Redact or drop events just before they are encoded — see
      * {@link OtlpPostProcessor}.
+     *
+     * Fail-closed: a hook that throws drops the event rather than exporting it
+     * half-redacted. Treat this as a security control and let it throw on input
+     * it does not recognise.
      */
     postProcessor?: OtlpPostProcessor;
 

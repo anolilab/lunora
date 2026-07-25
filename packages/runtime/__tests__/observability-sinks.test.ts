@@ -69,6 +69,8 @@ interface ParsedSpan {
         name: string;
         timeUnixNano: string;
     }[];
+    /** W3C trace flags — the sampled bit. Set on the RPC dispatch span. */
+    flags?: number;
     kind: number;
     name: string;
     /** Absent on the RPC dispatch span; set on a `ctx.trace` span. */
@@ -784,6 +786,33 @@ describe("observability-sinks", () => {
             // The span rides the ids the runtime propagated as `traceparent`, not fresh ones.
             expect(span.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
             expect(span.spanId).toBe("b7ad6b7169203331");
+        });
+
+        // The sampled bit is the only thing telling a collector whether a trace
+        // was head-sampled. It was silently dropped once in a hand-merge; this is
+        // the assertion that would have caught it.
+        it("propagates W3C trace flags onto the RPC span", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+
+            sink.onRpc!({ ...okEvent, traceFlags: 1 });
+            await otlpCalls(fetchMock, 1);
+
+            const { span } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(span.flags).toBe(1);
+
+            // An unsampled trace must say so rather than omit the field, or a
+            // collector cannot distinguish "not sampled" from "old exporter".
+            fetchMock.mockClear();
+            sink.onRpc!({ ...okEvent, traceFlags: 0 });
+            await otlpCalls(fetchMock, 1);
+
+            expect(spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]).span.flags).toBe(0);
         });
 
         it("encodes error status, error.type, and the status message for a failed event", async () => {
@@ -1736,7 +1765,10 @@ describe("observability-sinks", () => {
             expect(attrValue(span.attributes, "email")).toStrictEqual({ stringValue: "[redacted]" });
         });
 
-        it("keeps the event unmodified when a post-processor hook throws", async () => {
+        // Fails CLOSED. `postProcessor` is the PII-scrubbing seam, so a hook that
+        // throws has not finished redacting — exporting what it was mid-way
+        // through would leak exactly what it exists to remove.
+        it("drops the event when a post-processor hook throws, rather than exporting it unredacted", async () => {
             expect.assertions(1);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
@@ -1751,7 +1783,7 @@ describe("observability-sinks", () => {
                 },
             });
 
-            sink.onSpan!(spanEvent);
+            sink.onSpan!({ ...spanEvent, attributes: { email: "user@example.com" } });
 
             const pending: Promise<unknown>[] = [];
 
@@ -1762,9 +1794,9 @@ describe("observability-sinks", () => {
             });
             await Promise.all(pending);
 
-            // Fails OPEN: a redaction bug shows up as un-redacted data, never as
-            // a service whose telemetry silently vanished.
-            await expect(spansFrom(fetchMock.mock.calls[0]![1] as RequestInit)).resolves.toHaveLength(1);
+            // Nothing left the worker at all — not the span, and so not the PII
+            // the half-run redactor was still holding.
+            expect(fetchMock).not.toHaveBeenCalled();
         });
 
         it("keeps the trace when the tail sampler itself throws", async () => {
