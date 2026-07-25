@@ -234,6 +234,59 @@ type WSState = "idle" | "connecting" | "open" | "closed";
  */
 type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
 
+/** One shard's socket + watermark state in a {@link LunoraClient.debug} snapshot. */
+interface ClientDebugShard {
+    /**
+     * Highest custom-mutator watermark the server has echoed for this client on this
+     * shard. A write whose `clientSeq` is above this has been sent but not confirmed
+     * — the first thing to check when an optimistic overlay won't clear.
+     */
+    confirmedMutationWatermark: number;
+    /** Whether a `WebSocket` object currently exists (distinct from it being open). */
+    hasSocket: boolean;
+    /** `undefined` for the default (unsharded) connection. */
+    shardKey: string | undefined;
+    /** Whether this shard's socket has ever completed a handshake — gates offline queueing. */
+    wasEverConnected: boolean;
+    wsState: WSState;
+}
+
+/** One live query or shape subscription in a {@link LunoraClient.debug} snapshot. */
+interface ClientDebugSubscription {
+    /** Whether the server has acknowledged the subscription on the current socket. */
+    acked: boolean;
+    /** `namespace:fn` for a query, `shape:&lt;name>` for a replication shape. */
+    functionPath: string;
+    id: string;
+    kind: "query" | "shape";
+    /** Highest custom-mutator watermark echoed on THIS subscription (absent until a `settled`/poke frame arrives). */
+    lastMutationId?: number;
+    /** Per-call optimistic layers still folded onto this subscription's value — a non-zero count with no pending write is a leak. */
+    pendingOptimisticLayers: number;
+    /** Replicated rowset size (shapes only). */
+    rowCount?: number;
+    /** The `__cdc_log` cursor the current value reflects. */
+    serverCursor?: number;
+    shardKey: string | undefined;
+    /** How many callers share this subscription (subscriptions are deduped by `(fn, args, shard)`). */
+    subscriberCount: number;
+}
+
+/**
+ * Everything the sync engine believes at one instant — see
+ * {@link LunoraClient.debug} for why this exists.
+ */
+interface ClientDebugSnapshot {
+    /** The watermark key the server's custom-mutator protocol advances per `clientSeq`. */
+    clientId: string;
+    closed: boolean;
+    connectionStatus: ConnectionStatus;
+    /** Writes waiting in the built-in offline queue (not the `@lunora/db` outbox). */
+    pendingWrites: number;
+    shards: ClientDebugShard[];
+    subscriptions: ClientDebugSubscription[];
+}
+
 /**
  * Terminal verdict for a mutation that passed through the offline queue,
  * delivered to {@link LunoraClient.onMutationSettled}.
@@ -1446,6 +1499,86 @@ class LunoraClient {
     }
 
     /**
+     * A point-in-time snapshot of everything the sync engine believes right now:
+     * per-shard sockets and watermarks, every live query and shape subscription with
+     * its cursor and ack state, and the offline-queue depth.
+     *
+     * This exists because the alternative is `console.log`. When an optimistic
+     * overlay doesn't clear, the questions are always the same — *is the socket open?
+     * what watermark has the server confirmed for this shard? has this shape been
+     * poked since my write? is anything stuck in the queue?* — and none of them were
+     * answerable from outside the client, so every adopter ends up instrumenting the
+     * library by hand or building a bespoke policy layer around a symptom.
+     *
+     * Read it from a devtools console, log it next to a bug report, or render it in a
+     * debug panel. Pull-only and allocation-cheap; nothing here is reactive, so poll
+     * it or read it on demand.
+     *
+     * ```ts
+     * const { shards, subscriptions } = client.debug();
+     * // shards: [{ shardKey: "user-1", wsState: "open", confirmedMutationWatermark: 42, … }]
+     * ```
+     */
+    public debug(): ClientDebugSnapshot {
+        const shards: ClientDebugShard[] = [];
+        const shardKeys = new Set<string>([...this.connections.keys(), ...this.clientWatermarks.keys()]);
+
+        for (const key of shardKeys) {
+            const conn = this.connections.get(key);
+
+            shards.push({
+                confirmedMutationWatermark: this.clientWatermarks.get(key) ?? 0,
+                hasSocket: conn?.socket !== undefined,
+                shardKey: key === "" ? undefined : key,
+                wasEverConnected: conn?.wasEverConnected ?? false,
+                wsState: conn?.wsState ?? "idle",
+            });
+        }
+
+        const subscriptions: ClientDebugSubscription[] = this.subscriptions.all().map((state) => {
+            return {
+                acked: state.acked,
+                functionPath: state.fn.__lunoraRef,
+                id: state.id,
+                kind: "query",
+                lastMutationId: state.lastMutationId,
+                // A non-empty layer stack IS the "why is my optimistic row still here"
+                // answer, so it is the one count worth surfacing per subscription.
+                pendingOptimisticLayers: state.optimisticLayers.length,
+                serverCursor: state.serverCursor,
+                shardKey: state.shardKey,
+                subscriberCount: state.callbacks.size,
+            };
+        });
+
+        for (const state of this.shapeSubscriptions.values()) {
+            subscriptions.push({
+                // A shape has no separate ack frame; arrival of a cursor means the
+                // server has served it.
+                acked: state.serverCursor !== undefined,
+                functionPath: `shape:${state.name}`,
+                id: state.id,
+                kind: "shape",
+                lastMutationId: state.lastMutationId,
+                pendingOptimisticLayers: 0,
+                rowCount: state.rows.size,
+                serverCursor: state.serverCursor,
+                shardKey: state.shardKey,
+                subscriberCount: state.callbacks.size,
+            });
+        }
+
+        return {
+            clientId: this.clientId,
+            closed: this.closed,
+            connectionStatus: this.computeStatus(),
+            pendingWrites: this.offlineQueue.size,
+            shards: shards.toSorted((a, b) => (a.shardKey ?? "").localeCompare(b.shardKey ?? "")),
+            subscriptions: subscriptions.toSorted((a, b) => a.functionPath.localeCompare(b.functionPath)),
+        };
+    }
+
+    /**
      * Subscribe to changes in {@link pendingCount}. Invokes `listener` immediately
      * with the current count, then whenever the queue depth changes (a write is
      * enqueued, flushed, or discarded). Returns an unsubscribe function.
@@ -1824,6 +1957,87 @@ class LunoraClient {
         }
 
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey)) as ReturnOf<F>;
+    }
+
+    /**
+     * Bulk-import `rows` through a mutation that accepts a batch, chunked so a large
+     * dataset lands in a bounded number of round-trips.
+     *
+     * This is the one-shot migration / seed path: "I have 20k rows client-side and a
+     * server mutation that inserts many at once". Doing it by hand goes wrong in two
+     * predictable ways — a serial per-row loop pays one round-trip *and* one watermark
+     * wait per row (a 200-row import becomes 200 sequential hops), while a single
+     * giant call blows the DO's batch limit. So: chunk, send sequentially, and give
+     * each chunk a stable idempotency key derived from `importId` + its index, so a
+     * resumed or retried import doesn't double-insert the chunks that already landed.
+     *
+     * The server mutation is yours (Lunora can't guess the table or the row shape);
+     * back it with `ctx.db.insertMany(...)`, or `insertManyUnsafe(...)` for data you
+     * vouch for. `chunkSize` defaults to 500, matching the DO's default batch cap.
+     *
+     * ```ts
+     * await client.importRows(api.migrate.importNodes, nodes, {
+     *     importId: `migrate-${userId}`,
+     *     onProgress: ({ done, total }) => setProgress(done / total),
+     *     shardKey: userId,
+     *     toArgs: (chunk) => ({ nodes: chunk }),
+     * });
+     * ```
+     */
+    public async importRows(
+        function_: FunctionReference,
+        rows: ReadonlyArray<unknown>,
+        options: {
+            /** Rows per call. Defaults to 500 — the DO's default batch cap. */
+            chunkSize?: number;
+
+            /**
+             * Stable id for this import run. Each chunk is sent under
+             * `${importId}:${chunkIndex}` as its mutation id, so a retry or a resumed
+             * import is deduped server-side instead of inserting the chunk twice.
+             * Omit only for a throwaway import where double-insertion is acceptable.
+             */
+            importId?: string;
+            /** Called after each chunk commits — for a progress bar. */
+            onProgress?: (progress: { done: number; total: number }) => void;
+            /** Routes every chunk to one shard's DO. */
+            shardKey?: string;
+            /** Build the mutation args for one chunk. Defaults to `{ rows: chunk }`. */
+            toArgs?: (chunk: ReadonlyArray<unknown>) => Record<string, unknown>;
+        } = {},
+    ): Promise<{ chunks: number; imported: number }> {
+        if (this.closed) {
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
+        }
+
+        const chunkSize = Math.max(1, Math.trunc(options.chunkSize ?? 500));
+        const toArgs =
+            options.toArgs ??
+            ((chunk: ReadonlyArray<unknown>) => {
+                return { rows: chunk };
+            });
+        const total = rows.length;
+        let done = 0;
+        let chunks = 0;
+
+        for (let offset = 0; offset < total; offset += chunkSize) {
+            const chunk = rows.slice(offset, offset + chunkSize);
+            const chunkIndex = chunks;
+
+            // Sequential on purpose: concurrent chunks would race the shard's write
+            // path and give up the deterministic resume point the idempotency key buys.
+            // eslint-disable-next-line no-await-in-loop -- chunked import is sequential by design (see comment)
+            await this.mutation(function_, toArgs(chunk), {
+                ...(options.importId === undefined ? {} : { mutationId: `${options.importId}:${String(chunkIndex)}` }),
+                shardKey: options.shardKey,
+            });
+
+            chunks += 1;
+            done += chunk.length;
+            options.onProgress?.({ done, total });
+        }
+
+        return { chunks, imported: done };
     }
 
     // --- Advisor admin ------------------------------------------------------
@@ -5306,4 +5520,14 @@ class LunoraClient {
 }
 
 export { LunoraClient };
-export type { BatchSlot, ConnectionStatus, LunoraClientError, MutationCallOptions, MutationSettledEvent, SyncWatermark };
+export type {
+    BatchSlot,
+    ClientDebugShard,
+    ClientDebugSnapshot,
+    ClientDebugSubscription,
+    ConnectionStatus,
+    LunoraClientError,
+    MutationCallOptions,
+    MutationSettledEvent,
+    SyncWatermark,
+};

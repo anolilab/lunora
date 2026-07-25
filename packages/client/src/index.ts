@@ -12,7 +12,17 @@ export type { HttpStreamOptions } from "./http-stream";
 export { httpStream } from "./http-stream";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
-export type { BatchSlot, ConnectionStatus, LunoraClientError, MutationCallOptions, MutationSettledEvent, SyncWatermark } from "./lunora-client";
+export type {
+    BatchSlot,
+    ClientDebugShard,
+    ClientDebugSnapshot,
+    ClientDebugSubscription,
+    ConnectionStatus,
+    LunoraClientError,
+    MutationCallOptions,
+    MutationSettledEvent,
+    SyncWatermark,
+} from "./lunora-client";
 export { LunoraClient } from "./lunora-client";
 export type { MutationRunnerSinks } from "./mutation-runner";
 export { createMutationRunner } from "./mutation-runner";
