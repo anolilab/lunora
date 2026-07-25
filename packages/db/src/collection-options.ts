@@ -16,6 +16,10 @@ import { makeDiffEmit, toMap } from "./internals";
 interface Gate {
     advance: (value: number) => void;
     await: (threshold: number) => Promise<void>;
+    /** Whether `threshold` has already been reached (so no waiting is needed). */
+    passed: (threshold: number) => boolean;
+    /** How many waiters are still held — a diagnostics read. */
+    waiting: () => number;
 }
 
 const createGate = (): Gate => {
@@ -48,8 +52,56 @@ const createGate = (): Gate => {
                 waiters.push({ resolve, threshold });
             });
         },
+        passed: (threshold) => threshold <= highest,
+        waiting: () => waiters.length,
     };
 };
+
+/** A watermark pair — the two monotonic lines a checkpoint registry gates on. */
+export interface CheckpointWatermark {
+    /** Op-log cursor the server has durably applied. */
+    checkpoint?: number;
+    /** Highest `clientSeq` the server has echoed back for this client. */
+    mutationId?: number;
+}
+
+/** Reported when the fallback releases an overlay the sync stream never confirmed. */
+export interface CheckpointFallbackEvent {
+    /** Which gate released. */
+    kind: "checkpoint" | "mutationId";
+    /** How long the release waited past the server acknowledgement, in ms. */
+    waitedMs: number;
+    /** The watermark that was acknowledged but never confirmed by a sync frame. */
+    watermark: number;
+}
+
+/** Counters for {@link CheckpointRegistry.stats} — feeds a debug/diagnostics surface. */
+export interface CheckpointRegistryStats {
+    /** How many times the fallback timer released an overlay (a non-zero value means sync frames are being lost). */
+    fallbacks: number;
+    /** Overlays currently waiting on a checkpoint cursor. */
+    pendingCheckpointWaiters: number;
+    /** Overlays currently waiting on a mutation id. */
+    pendingMutationWaiters: number;
+}
+
+/** Tuning for {@link createCheckpointRegistry}. */
+export interface CheckpointRegistryOptions {
+    /**
+     * How long an {@link CheckpointRegistry.acknowledge}d watermark waits for the
+     * authoritative sync frame before the overlay is released anyway. Default 3000.
+     * `0` disables the fallback (an overlay then waits forever for the frame — the
+     * pre-fallback behavior, which hangs on a dropped poke).
+     */
+    fallbackMs?: number;
+    /**
+     * Notified each time the fallback fires. A fallback is never *correct* — it
+     * means a poke or `settled` frame that should have confirmed the write never
+     * arrived — so this is the hook for a warning or a metric. Defaults to a
+     * one-shot `console.warn`.
+     */
+    onFallback?: (event: CheckpointFallbackEvent) => void;
+}
 
 /**
  * Resolves the TanStack optimistic-overlay drop against the server's confirmed
@@ -58,36 +110,276 @@ const createGate = (): Gate => {
  * settles, so the row de-duplicates exactly as the synced server value lands — no
  * flash of the optimistic row disappearing then reappearing.
  *
- * `resolve` is called by whoever owns the watermark stream — a `data`/`delta`
- * frame's `lastMutationId`, or a shape poke's `checkpoint` — to advance the gates.
+ * Two inputs, deliberately distinct:
+ *
+ * - {@link resolve} is the **authoritative** advance, called by whoever owns the
+ *   watermark stream — a `data`/`delta` frame's `lastMutationId`, or a shape poke's
+ *   `checkpoint`. The synced rows have landed, so gates open immediately.
+ * - {@link acknowledge} is the **provisional** advance, called when the server has
+ *   accepted the write (the mutator RPC ack) but the matching rows have not
+ *   necessarily been delivered yet. Releasing here would drop the overlay before
+ *   the synced row exists — a visible flicker — so instead it arms a bounded
+ *   fallback. If the authoritative frame lands first the fallback is cancelled;
+ *   if it never lands, the overlay is released after `fallbackMs` and the event is
+ *   reported rather than hanging forever.
+ *
+ * That pairing is why a lost poke degrades to a late overlay drop instead of a
+ * permanently stuck `isPersisted` promise.
  */
 export interface CheckpointRegistry {
+    /**
+     * Record a server-accepted watermark whose rows may not have synced yet: arms
+     * the bounded fallback described on {@link CheckpointRegistry}. Safe to call
+     * repeatedly; a watermark already passed is a no-op.
+     */
+    acknowledge: (watermark: CheckpointWatermark) => void;
     /** Resolve once the server has acknowledged the op-log `cursor`. */
     awaitCheckpoint: (cursor: number) => Promise<void>;
     /** Resolve once the server has echoed a `lastMutationId >= id` for this client. */
     awaitMutationId: (id: number) => Promise<void>;
-    /** Advance the gates from a frame's watermark; later callers past the mark settle immediately. */
-    resolve: (watermark: { checkpoint?: number; mutationId?: number }) => void;
+    /** Advance the gates from a sync frame's watermark; later callers past the mark settle immediately. */
+    resolve: (watermark: CheckpointWatermark) => void;
+    /** Diagnostics counters — notably how often the fallback had to fire. */
+    stats: () => CheckpointRegistryStats;
 }
 
-/** A standalone checkpoint/mutation-id registry (also embedded in {@link lunoraCollectionOptions}). */
-export const createCheckpointRegistry = (): CheckpointRegistry => {
+/** Default fallback window: long enough that a slow-but-arriving poke wins, short enough that a UI isn't visibly stuck. */
+export const CHECKPOINT_FALLBACK_MS = 3000;
+
+/** One-shot warning so a lossy sync stream is noticed without spamming the console per write. */
+let warnedCheckpointFallback = false;
+
+const defaultOnFallback = (event: CheckpointFallbackEvent): void => {
+    if (warnedCheckpointFallback) {
+        return;
+    }
+
+    warnedCheckpointFallback = true;
+
+    // eslint-disable-next-line no-console
+    console.warn(
+        `[@lunora/db] released an optimistic overlay via the ${String(event.waitedMs)}ms checkpoint fallback: the server confirmed ` +
+            `${event.kind} ${String(event.watermark)} but no sync frame ever echoed it. A dropped shape poke or \`settled\` frame is the ` +
+            `usual cause — inspect the subscription rather than raising \`fallbackMs\`. (Reported once per process.)`,
+    );
+};
+
+/**
+ * A standalone checkpoint/mutation-id registry. Prefer {@link getShardCheckpoints}
+ * unless you are wiring a bespoke watermark stream — a registry must be shared by
+ * every collection on a shard (see that function for why).
+ */
+export const createCheckpointRegistry = (options: CheckpointRegistryOptions = {}): CheckpointRegistry => {
+    const fallbackMs = options.fallbackMs ?? CHECKPOINT_FALLBACK_MS;
+    const onFallback = options.onFallback ?? defaultOnFallback;
+
     const checkpointGate = createGate();
     const mutationGate = createGate();
 
+    let fallbacks = 0;
+
+    /** Armed fallback timers, so an authoritative `resolve` can cancel the ones it subsumes. */
+    const armed = new Set<{ handle: ReturnType<typeof setTimeout>; kind: "checkpoint" | "mutationId"; threshold: number }>();
+
+    const disarmUpTo = (kind: "checkpoint" | "mutationId", highest: number): void => {
+        for (const entry of armed) {
+            if (entry.kind === kind && entry.threshold <= highest) {
+                clearTimeout(entry.handle);
+                armed.delete(entry);
+            }
+        }
+    };
+
+    const arm = (kind: "checkpoint" | "mutationId", threshold: number): void => {
+        if (fallbackMs <= 0) {
+            return;
+        }
+
+        const gate = kind === "checkpoint" ? checkpointGate : mutationGate;
+
+        // Nothing to wait for: the authoritative frame already passed this mark.
+        if (gate.passed(threshold)) {
+            return;
+        }
+
+        for (const entry of armed) {
+            // An earlier-or-equal armed threshold of the same kind already covers
+            // this one — when it fires it advances the gate past both.
+            if (entry.kind === kind && entry.threshold >= threshold) {
+                return;
+            }
+        }
+
+        const entry = {
+            handle: setTimeout(() => {
+                armed.delete(entry);
+
+                if (gate.passed(threshold)) {
+                    return;
+                }
+
+                fallbacks += 1;
+                gate.advance(threshold);
+
+                try {
+                    onFallback({ kind, waitedMs: fallbackMs, watermark: threshold });
+                } catch {
+                    // A throwing diagnostics listener must not break the release.
+                }
+            }, fallbackMs),
+            kind,
+            threshold,
+        };
+
+        armed.add(entry);
+    };
+
     return {
+        acknowledge: ({ checkpoint, mutationId }) => {
+            if (checkpoint !== undefined) {
+                arm("checkpoint", checkpoint);
+            }
+
+            if (mutationId !== undefined) {
+                arm("mutationId", mutationId);
+            }
+        },
         awaitCheckpoint: (cursor) => checkpointGate.await(cursor),
         awaitMutationId: (id) => mutationGate.await(id),
         resolve: ({ checkpoint, mutationId }) => {
             if (checkpoint !== undefined) {
                 checkpointGate.advance(checkpoint);
+                disarmUpTo("checkpoint", checkpoint);
             }
 
             if (mutationId !== undefined) {
                 mutationGate.advance(mutationId);
+                disarmUpTo("mutationId", mutationId);
             }
         },
+        stats: () => ({
+            fallbacks,
+            pendingCheckpointWaiters: checkpointGate.waiting(),
+            pendingMutationWaiters: mutationGate.waiting(),
+        }),
     };
+};
+
+/**
+ * Live per-shard registries, keyed by client then shard key.
+ *
+ * A registry MUST be shared by every collection on the same shard. `clientSeq` is
+ * per-client-per-shard and `bindMutators` pushes all its mutators down one FIFO
+ * chain, so the watermark a write waits on is advanced by whichever subscription
+ * happens to be poked first. A registry minted per collection therefore hangs:
+ * writing `tagColors` advances the shard watermark, the `tagColors` registry hears
+ * the poke, and the `nodes` registry's `awaitMutationId` never settles — leaving
+ * that transaction's `isPersisted` pending forever.
+ */
+const registriesByClient = new WeakMap<LunoraClient, Map<string, CheckpointRegistry>>();
+
+/**
+ * The shared checkpoint registry for `client` + `shardKey` — created on first use.
+ * This is the registry {@link lunoraCollectionOptions} and
+ * {@link import("./define-mutators").bindMutators} default to, which is what makes
+ * a multi-collection shard work without the caller relaying pokes between
+ * registries by hand.
+ *
+ * `options` applies **only when the registry is created**. Because the point is that
+ * every collection and mutator on a shard shares one gate, a later call cannot
+ * retune an existing registry — it returns the existing one and `options` is ignored.
+ * To control `fallbackMs` / `onFallback`, build the registry yourself with
+ * {@link createCheckpointRegistry} and pass it explicitly to every
+ * `lunoraCollectionOptions` and `bindMutators` call for that shard.
+ */
+export const getShardCheckpoints = (client: LunoraClient, shardKey?: string, options?: CheckpointRegistryOptions): CheckpointRegistry => {
+    let byShard = registriesByClient.get(client);
+
+    if (!byShard) {
+        byShard = new Map<string, CheckpointRegistry>();
+        registriesByClient.set(client, byShard);
+    }
+
+    const key = shardKey ?? "";
+    const existing = byShard.get(key);
+
+    if (existing) {
+        return existing;
+    }
+
+    const registry = createCheckpointRegistry(options);
+
+    byShard.set(key, registry);
+
+    return registry;
+};
+
+/**
+ * Registries that have a sync source wired to them.
+ *
+ * `bindMutators` gates an overlay on the shard's registry only if *something*
+ * advances it — otherwise the mutator would wait out the whole fallback window on
+ * every write. A `lunoraCollectionOptions` call marks its registry here at creation
+ * time (not at first sync), because a lazily-syncing collection still means the
+ * watermark stream exists and will confirm the write.
+ *
+ * Package-internal: deliberately not re-exported from `index.ts`.
+ */
+const attachedRegistries = new WeakSet<CheckpointRegistry>();
+
+/** Mark `registry` as fed by a live sync source. */
+export const markCheckpointsAttached = (registry: CheckpointRegistry): void => {
+    attachedRegistries.add(registry);
+};
+
+/** Whether any sync source will advance `registry`'s watermarks. */
+export const hasCheckpointsAttached = (registry: CheckpointRegistry): boolean => attachedRegistries.has(registry);
+
+/**
+ * Release every pending overlay gate for `client` and drop its shard registries.
+ *
+ * The hot-reload / teardown escape hatch. When a module that owns collections and
+ * mutators is replaced — a Vite HMR update, a sign-out that rebuilds the data layer
+ * — the *old* bindings may still have transactions parked in `awaitMutationId`. The
+ * subscriptions that would have resolved them are gone with the old module, so
+ * without this those promises never settle and every one of their
+ * `transaction.isPersisted` waiters hangs forever.
+ *
+ * Resolving to `Infinity` settles the parked waiters (the writes were already sent;
+ * the server is authoritative regardless), and dropping the registries means the
+ * replacement module's bindings start from a clean per-shard gate.
+ *
+ * ```ts
+ * // In the module that owns the data layer:
+ * import.meta.hot?.dispose(() => releaseShardCheckpoints(client));
+ * ```
+ */
+export const releaseShardCheckpoints = (client: LunoraClient): void => {
+    const byShard = registriesByClient.get(client);
+
+    if (!byShard) {
+        return;
+    }
+
+    for (const registry of byShard.values()) {
+        registry.resolve({ checkpoint: Number.POSITIVE_INFINITY, mutationId: Number.POSITIVE_INFINITY });
+    }
+
+    registriesByClient.delete(client);
+};
+
+/** Every live registry for `client`, keyed by shard (`""` = unsharded) — for a debug surface. */
+export const shardCheckpointStats = (client: LunoraClient): Record<string, CheckpointRegistryStats> => {
+    const byShard = registriesByClient.get(client);
+    const out: Record<string, CheckpointRegistryStats> = {};
+
+    if (byShard) {
+        for (const [shardKey, registry] of byShard) {
+            out[shardKey] = registry.stats();
+        }
+    }
+
+    return out;
 };
 
 /**
@@ -107,6 +399,13 @@ export interface ShapeSource {
 
 /** Declarative inputs for {@link lunoraCollectionOptions}. */
 export interface LunoraCollectionConfig<TRow extends Row> {
+    /**
+     * The registry optimistic overlays are gated on. Defaults to the shared
+     * per-shard registry ({@link getShardCheckpoints}), which is what a
+     * multi-collection shard needs — pass one explicitly only to isolate a
+     * collection's gate (tests) or to supply custom {@link CheckpointRegistryOptions}.
+     */
+    checkpoints?: CheckpointRegistry;
     /** The Lunora client to subscribe through. */
     client: LunoraClient;
     /** Row key extractor — defaults to `row._id`. */
@@ -172,7 +471,14 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     }
 
     const getKey = options.getKey ?? ((row: TRow) => row._id);
-    const checkpoints = createCheckpointRegistry();
+    // Shared per-shard by default — a per-collection registry hangs any shard with
+    // more than one collection (see `getShardCheckpoints`). A `shape` carries its
+    // own shard key; the `list` path uses the top-level one.
+    const checkpoints = options.checkpoints ?? getShardCheckpoints(options.client, options.shape?.shardKey ?? options.shardKey);
+
+    // This collection's subscription is what advances the registry — record that so
+    // `bindMutators` knows gating an overlay on it will actually settle.
+    markCheckpointsAttached(checkpoints);
     // JSON-serialized form of each last-synced row, keyed by row id — the
     // `makeDiffEmit` base for one sync session. Owned outside `sync.sync` only so
     // `scope(...)` can reach the live `emit`; it is CLEARED in the sync cleanup

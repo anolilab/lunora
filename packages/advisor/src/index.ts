@@ -94,6 +94,7 @@ import ttlFieldNotTimestamp from "./lints/static/ttl-field-not-timestamp";
 import unboundedStringArgument from "./lints/static/unbounded-string-argument";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import unindexedRelationTarget from "./lints/static/unindexed-relation-target";
+import unrestrictedWhereBranch from "./lints/static/unrestricted-where-branch";
 import userCreatingMutationWithoutCaptcha from "./lints/static/user-creating-mutation-without-captcha";
 import vectorsNamespaceFromUserInput from "./lints/static/vectors-namespace-from-user-input";
 import workflowDuplicateStepName from "./lints/static/workflow-duplicate-step-name";
@@ -214,6 +215,7 @@ export { default as ttlFieldNotTimestamp } from "./lints/static/ttl-field-not-ti
 export { default as unboundedStringArgument } from "./lints/static/unbounded-string-argument";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
 export { default as unindexedRelationTarget } from "./lints/static/unindexed-relation-target";
+export { default as unrestrictedWhereBranch } from "./lints/static/unrestricted-where-branch";
 export { default as userCreatingMutationWithoutCaptcha } from "./lints/static/user-creating-mutation-without-captcha";
 export { default as vectorsNamespaceFromUserInput } from "./lints/static/vectors-namespace-from-user-input";
 export { default as workflowDuplicateStepName } from "./lints/static/workflow-duplicate-step-name";
@@ -294,6 +296,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     containerOversizedInstance,
     containerPublicInternet,
     publicMutationWithoutRatelimit,
+    unrestrictedWhereBranch,
     userCreatingMutationWithoutCaptcha,
     signupMutationWithoutDisposableGating,
     publicArgumentUsesAny,

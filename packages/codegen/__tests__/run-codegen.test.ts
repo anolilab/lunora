@@ -63,6 +63,53 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain("text: string;");
         });
 
+        it("narrows ctx.db.asId to a real TableName", () => {
+            expect.assertions(5);
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            // The conditional `AsIdTable` is what makes a misspelled literal fail. An
+            // intersection with a wide `(string, string) => string` overload would look
+            // narrowed but silently fall through for a bad literal — verified by probe —
+            // so assert the emitted form has no such overload.
+            expect(result.generated.server).toContain("type AsIdTable<T extends string> = T extends TableName ? T : string extends T ? T : never;");
+            expect(result.generated.server).toContain("type TypedAsId = <T extends string>(tableName: AsIdTable<T>, id: string) => IdOfTable<T & TableName>;");
+            expect(result.generated.server).not.toContain("(tableName: string, id: string) => string)");
+            expect(ctxInterface(result.generated.server, "QueryCtx")).toContain("asId: TypedAsId");
+            // Overridden, so the wide `<T extends string>` signature is omitted first.
+            expect(result.generated.server).toContain('Omit<DatabaseReader, "asId" | "query" | "get">');
+        });
+
+        it("excludes an add-on's tables from AppTableName while keeping them in TableName", () => {
+            expect.assertions(4);
+
+            // Replace the fixture schema with one that pulls in an extension, the shape
+            // `.extend(ratelimit.extension)` produces in a real app.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    nodes: defineTable({ text: v.string() }),
+}).extend(
+    defineSchemaExtension("ratelimit", {
+        tables: { buckets: defineTable({ key: v.string() }) },
+    }),
+);
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            // The add-on's table is real and queryable…
+            expect(result.generated.dataModel).toContain('TableName = "nodes" | "ratelimit_buckets"');
+            expect(result.generated.dataModel).toContain("export interface Doc_ratelimit_buckets");
+            // …but an app enumerating its own tables never has to mention it.
+            expect(result.generated.dataModel).toContain('AppTableName = "nodes"');
+            expect(result.generated.dataModel).not.toContain('AppTableName = "nodes" | "ratelimit_buckets"');
+        });
+
         it("rejects a workflow and an agent that share a deployed name (CODEGEN-01 cross-kind)", () => {
             expect.assertions(1);
 
@@ -245,8 +292,8 @@ export const sendMessage = defineMutator({
                 expect(result.generated.shard).toContain("protected override isCustomMutator");
             });
 
-            it("emits _generated/collections.ts (one factory per shape) when @lunora/db is a dependency", () => {
-                expect.assertions(4);
+            it("emits _generated/collections.ts (options factory + collection per shape) when @lunora/db is a dependency", () => {
+                expect.assertions(9);
 
                 writeShapes();
                 writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/db": "*" }, name: "db-app" }));
@@ -254,9 +301,21 @@ export const sendMessage = defineMutator({
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
                 expect(result.generated.collections).toContain('import { lunoraCollectionOptions } from "@lunora/db/collections"');
-                expect(result.generated.collections).toContain('import type { LunoraClient } from "@lunora/client"');
+                expect(result.generated.collections).toContain('import type { LunoraClient, SubscriptionError } from "@lunora/client"');
+                // The composable form returns `checkpoints` + `scope`, so an app with
+                // custom mutators can actually use what codegen produced.
+                expect(result.generated.collections).toContain("export const channelMessagesCollectionOptions");
                 expect(result.generated.collections).toContain("export const channelMessagesCollection");
-                expect(result.generated.collections).toContain('shape: { args, name: "channelMessages" }');
+                // eslint-disable-next-line no-secrets/no-secrets -- a generated TS type name, not a credential
+                expect(result.generated.collections).toContain('LunoraCollectionOptions<Doc<"messages"> & Row>');
+                expect(result.generated.collections).toContain('name: "channelMessages"');
+                // The shape's own validators type its partition selector, instead of the
+                // caller passing an opaque `Record<string, unknown>`.
+                expect(result.generated.collections).toContain('args: { channelId: Id<"channels"> };');
+                // `shardKey` reaches the subscription (a `.shardBy()` table needs it for
+                // the watermark to land in the right bucket) and `getKey` is overridable.
+                expect(result.generated.collections).toContain("shardKey?: string;");
+                expect(result.generated.collections).toContain('getKey?: (row: Doc<"messages"> & Row) => string;');
             });
 
             it("routes the collection client import through the umbrella but keeps @lunora/db scoped", () => {
@@ -268,7 +327,7 @@ export const sendMessage = defineMutator({
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
                 // @lunora/client is in the umbrella base → remapped.
-                expect(result.generated.collections).toContain('import type { LunoraClient } from "lunorash/client"');
+                expect(result.generated.collections).toContain('import type { LunoraClient, SubscriptionError } from "lunorash/client"');
                 // @lunora/db is an opt-in add-on → stays scoped even under the umbrella.
                 expect(result.generated.collections).toContain('from "@lunora/db/collections"');
                 expect(result.generated.collections).not.toContain('from "lunorash/db');
@@ -933,10 +992,10 @@ export default crons;
             // intersecting the legacy structural reader/writer for back-compat.
             expect(result.generated.server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage">');
             expect(result.generated.server).toContain(
-                'readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };',
+                'readonly db: Omit<DatabaseReader, "asId" | "query" | "get"> & DatabaseReaderFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };',
             );
             expect(result.generated.server).toContain(
-                'readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };',
+                'readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };',
             );
             // server.ts is the builder file user code imports, so it must NOT import
             // the user function modules (that cycle lives in functions.ts). `Id as
@@ -1350,7 +1409,10 @@ export default crons;
 
             // Always present: the builder, the entry factory, and the always-on methods.
             expect(result.generated.app).toContain("class AppBuilder");
-            expect(result.generated.app).toContain("const defineApp = <Env extends Record<string, unknown>>()");
+            // `object`, not `Record<string, unknown>`: an `interface Env` (what
+            // wrangler's worker-configuration.d.ts emits) isn't assignable to an index
+            // signature, so the stricter bound forced every app into a cast.
+            expect(result.generated.app).toContain("const defineApp = <Env extends object>()");
             expect(result.generated.app).toContain("public shard(");
             expect(result.generated.app).toContain("public admin(");
 
@@ -1847,7 +1909,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).not.toContain("config.d1?.(env");
         });
 
-        const settingsShape: ShapeIR = { exportName: "allSettings", filePath: "shapes", table: "settings" };
+        const settingsShape: ShapeIR = { args: {}, exportName: "allSettings", filePath: "shapes", table: "settings" };
 
         it("emits the global-shape poll override when a project has shapes AND a `.global()` table", () => {
             expect.assertions(3);
@@ -1871,7 +1933,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                     ],
                     vectorIndexes: [],
                 },
-                shapes: [{ exportName: "msgs", filePath: "shapes", table: "messages" }],
+                shapes: [{ args: {}, exportName: "msgs", filePath: "shapes", table: "messages" }],
             });
 
             expect(output).not.toContain("protected override async readGlobalShapeRows");

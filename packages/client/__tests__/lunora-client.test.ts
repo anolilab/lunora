@@ -3484,4 +3484,123 @@ describe("lunoraClient", () => {
             client.close();
         });
     });
+
+    /**
+     * The questions an adopter can't otherwise answer from outside the client: is the
+     * socket open, what watermark has the server confirmed, has this subscription
+     * been acked, is anything stuck in the queue.
+     */
+    describe("lunoraClient — debug snapshot", () => {
+        it("reports an idle client before anything connects", () => {
+            expect.assertions(4);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const snapshot = client.debug();
+
+            expect(snapshot.connectionStatus).toBe("idle");
+            expect(snapshot.shards).toStrictEqual([]);
+            expect(snapshot.subscriptions).toStrictEqual([]);
+            expect(snapshot.clientId).toEqual(expect.any(String));
+
+            client.close();
+        });
+
+        it("reports the socket state, ack, and cursor of a live query subscription", () => {
+            expect.assertions(6);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = firstSub(socket);
+
+            socket.receive({ cursor: 12, data: [], id: sub.id, type: "data" });
+
+            const snapshot = client.debug();
+            const subscription = snapshot.subscriptions[0];
+
+            expect(snapshot.connectionStatus).toBe("connected");
+            expect(snapshot.shards[0]?.wsState).toBe("open");
+            expect(snapshot.shards[0]?.hasSocket).toBe(true);
+            expect(subscription?.functionPath).toBe("messages:list");
+            expect(subscription?.kind).toBe("query");
+            expect(subscription?.serverCursor).toBe(12);
+
+            client.close();
+        });
+
+        it("reports a shape subscription's rowset separately from queries", () => {
+            expect.assertions(3);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribeShape({ args: {}, name: "wholeOutline" }, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const snapshot = client.debug();
+            const shape = snapshot.subscriptions.find((entry) => entry.kind === "shape");
+
+            // Named `shape:<name>` so a mixed list stays readable at a glance.
+            expect(shape?.functionPath).toBe("shape:wholeOutline");
+            expect(shape?.rowCount).toBe(0);
+            expect(shape?.subscriberCount).toBe(1);
+
+            client.close();
+        });
+
+        it("surfaces the confirmed per-shard mutation watermark", async () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(async () => jsonResponse({ lastMutationId: 4, result: null })),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await client.callMutator("mutators:send", {}, { clientSeq: 1, shardKey: "user-1" });
+
+            const shard = client.debug().shards.find((entry) => entry.shardKey === "user-1");
+
+            // The single most useful number when an overlay won't clear: what the
+            // server has actually confirmed for this client on this shard.
+            expect(shard?.confirmedMutationWatermark).toBe(4);
+            expect(shard?.wsState).toBe("idle");
+
+            client.close();
+        });
+
+        it("reports a closed client", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.close();
+
+            expect(client.debug().closed).toBe(true);
+        });
+    });
 });

@@ -3767,6 +3767,9 @@ importers:
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
+      '@playwright/test':
+        specifier: catalog:e2e
+        version: 1.61.1
     devDependencies:
       '@types/node':
         specifier: catalog:types

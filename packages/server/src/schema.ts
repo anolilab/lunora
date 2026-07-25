@@ -127,6 +127,21 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     index: (name: string, fields: ReadonlyArray<string>, options?: { unique?: boolean }) => TableBuilder<Shape>;
 
     /**
+     * Name the column holding the owning user's id, so "only the owner sees these
+     * rows" is declared once here rather than restated in every shape.
+     *
+     * A `defineShape({ table, owner: true })` over this table derives its predicate
+     * from the field: the subscriber's verified `ctx.auth.userId` must match, and an
+     * anonymous subscriber is denied. Pairs naturally with `.shardBy(field)` on the
+     * same column — the shard key routes the storage, `ownedBy` states who the rows
+     * belong to — but the two are independent and either can be used alone.
+     *
+     * This is a *shape* declaration, not an RLS policy: it narrows what a shape
+     * replicates. Guarding procedure reads/writes is still `rls(...)`'s job.
+     */
+    ownedBy: (field: keyof Shape & string) => TableBuilder<Shape>;
+
+    /**
      * Opt this table OUT of secure-by-default RLS. Under a schema marked
      * `.rls("required")`, every table is protected (the write path denies raw,
      * non-RLS `ctx.db` access); calling `.public()` exempts this one table so a
@@ -265,6 +280,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     let shardMode: ShardMode = { kind: "root" };
     let isExternallyManaged = false;
     let isPublic = false;
+    let ownerField: string | undefined;
     let softDelete: { field: string } | undefined;
     let ttl: TtlDefinition | undefined;
     let externalSource: ExternalSourceDefinition | undefined;
@@ -328,6 +344,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         },
         get indexes() {
             return indexes;
+        },
+        ownedBy(field) {
+            ownerField = field;
+
+            return builder;
+        },
+        get ownerField() {
+            return ownerField;
         },
         public() {
             isPublic = true;

@@ -23,7 +23,7 @@ import type {
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
 
-export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
+export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (`v.storage("name")`), narrowing `ctx.storage.bucket(name)`. */
 export type StorageBucketName = "default";
@@ -72,8 +72,33 @@ type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) 
  */
 type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
 
+/**
+ * Resolves the `asId` table argument: a literal in {@link TableName} passes through, a
+ * genuinely-wide `string` (a computed name) passes through, and any OTHER literal
+ * collapses to `never` so it fails to typecheck.
+ *
+ * The `string extends T` arm is what distinguishes "the caller passed a computed
+ * string" from "the caller passed a misspelled literal" — only the wide `string` type
+ * is a supertype of `string`.
+ */
+type AsIdTable<T extends string> = T extends TableName ? T : string extends T ? T : never;
+
+/**
+ * The id parse boundary `ctx.db.asId(table, id)`, bound to this schema: a misspelled
+ * table literal is a compile error rather than a call that hands back a confidently-
+ * branded id for a table that does not exist. Mirrors {@link TypedTableQuery} /
+ * {@link TypedTableGet}.
+ *
+ * Deliberately NOT an intersection with a wide `(string, string) => string` overload:
+ * overload resolution would fall through to it for a bad literal, silently restoring
+ * the very typo hole this narrowing exists to close. {@link AsIdTable} instead keeps a
+ * computed table name working — and keeps `ctx.db` structurally assignable to
+ * schema-agnostic consumers — without accepting an invalid literal.
+ */
+type TypedAsId = <T extends string>(tableName: AsIdTable<T>, id: string) => IdOfTable<T & TableName>;
+
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
-    readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseReader, "asId" | "query" | "get"> & DatabaseReaderFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
     /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */
@@ -83,7 +108,7 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
-    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
     /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */
@@ -93,7 +118,7 @@ export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
-    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;
     /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */

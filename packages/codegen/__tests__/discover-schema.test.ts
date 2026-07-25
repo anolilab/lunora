@@ -794,6 +794,29 @@ describe("discoverSchema", () => {
         expect(buckets?.indexes).toEqual([{ fields: ["key"], name: "by_key", unique: true }]);
     });
 
+    it("records the contributing extension key so app-declared tables stay distinguishable", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(
+                defineSchemaExtension("ratelimit", {
+                    tables: { buckets: defineTable({ key: v.string() }) },
+                }),
+            );
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        // Drives the emitted `AppTableName`: an add-on's table is a real table, but an
+        // app enumerating "my tables" should not have to know it exists.
+        expect(schema.tables.find((table) => table.name === "ratelimit_buckets")?.extensionKey).toBe("ratelimit");
+        expect(schema.tables.find((table) => table.name === "todos")?.extensionKey).toBeUndefined();
+    });
+
     it("rewrites an intra-extension relation to the prefixed table, leaving base references untouched", () => {
         expect.assertions(2);
 

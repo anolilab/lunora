@@ -5,14 +5,51 @@ import type { Collection, Transaction } from "@tanstack/db";
 import { createTransaction } from "@tanstack/db";
 
 import type { CheckpointRegistry } from "./collection-options";
+import { getShardCheckpoints, hasCheckpointsAttached } from "./collection-options";
 import type { Row } from "./internals";
 import { runOutboxMutation } from "./internals";
+
+/**
+ * TanStack DB's "direct transaction" marker.
+ *
+ * A completed transaction's optimistic rows are discarded as **stale** unless
+ * either a synced transaction for the same key is already queued, or the
+ * transaction carried this flag (`CollectionStateManager.recomputeOptimisticState`
+ * → `pendingOptimisticDirectUpserts`). Marked rows instead survive until a sync
+ * operation for that key actually lands, which is precisely the semantics a Lunora
+ * custom mutator needs: the server is the linearization point, so the prediction
+ * must stay visible until the authoritative row arrives. Without it, a text edit
+ * visibly reverts to the last synced value the moment the push is acked.
+ *
+ * The literal is pinned here because `@tanstack/db` does not re-export the constant
+ * from its package root (it lives in the unexported
+ * `collection/transaction-metadata` module). `__tests__/define-mutators.test.ts`
+ * reads that module off disk and fails if the upstream value ever changes.
+ */
+export const DIRECT_TRANSACTION_METADATA_KEY = "__tanstack_db_direct";
 
 /** The local store a client mutator's optimistic body writes against. */
 export interface ClientMutatorContext {
     /** The wired collections, keyed by name — apply optimistic inserts/updates/deletes here. */
     collections: Record<string, Collection<Row, string>>;
 }
+
+/**
+ * A generated mutator reference (`api.mutators.sendMessage`), accepted by
+ * {@link defineMutator} in place of a hand-written path string.
+ *
+ * Declared structurally rather than imported from `@lunora/client` so this module
+ * keeps its narrow dependency surface; the shape matches `FunctionReference`, and
+ * the phantom marker carries the server mutator's arg type so the client body's
+ * args are **inferred** instead of restated.
+ */
+export interface MutatorReference<TArgs = unknown> {
+    readonly __lunoraPhantom?: { args: TArgs; kind: unknown; returns: unknown };
+    readonly __lunoraRef: string;
+}
+
+/** Args type carried by a {@link MutatorReference}. */
+type ArgsOfReference<R> = R extends MutatorReference<infer A> ? A : never;
 
 /** A client-side custom mutator: an optimistic body plus the path of its authoritative server impl. */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Def" mirrors `CollectionDef`; "Definition" is noise
@@ -25,20 +62,63 @@ export interface ClientMutatorDef<TArgs> {
     serverRef: string;
 }
 
+/** Resolve a mutator reference (or a raw path string) to the dispatch path. */
+const MUTATOR_REF_ERROR = "defineMutator: `serverRef` must be a generated mutator reference (api.mutators.*) or a 'namespace:fn' string";
+
+const mutatorPath = (serverRef: MutatorReference<never> | string): string => {
+    // The string branch is validated too: `""` would otherwise dispatch to an empty
+    // function path at push time instead of failing at declaration.
+    //
+    // `?.` is load-bearing despite the non-nullable parameter type: the whole point of
+    // this function is to turn a bad `serverRef` into the LunoraError below, and an
+    // untyped caller (plain JS, `any`, a stale generated file) passing null/undefined
+    // would otherwise get a bare `TypeError` about `__lunoraRef` instead.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untyped JS callers despite the non-nullable type
+    const path = typeof serverRef === "string" ? serverRef : serverRef?.__lunoraRef;
+
+    if (typeof path !== "string" || path.length === 0) {
+        throw new LunoraError("INTERNAL", MUTATOR_REF_ERROR);
+    }
+
+    return path;
+};
+
 /**
  * Declare a client-side custom mutator. `apply` runs optimistically against the
  * local TanStack collections; `serverRef` names the authoritative server mutator
  * the write is pushed to over the watermark protocol. The server impl is the
  * linearization point — this body is a prediction the server can override.
+ *
+ * **Pass a generated reference, not a string.** `serverRef: api.mutators.sendMessage`
+ * both binds the path at compile time — a rename, a typo, or a moved file becomes a
+ * type error instead of a mutation that silently fails at runtime — and **infers
+ * `TArgs` from the server mutator's own validators**, so the arg type is declared
+ * once on the server rather than restated in every client body:
+ *
+ * ```ts
+ * // Typed + checked: args inferred from the server mutator.
+ * defineMutator({
+ *     apply: ({ collections }, args) => { … },   // args: { channelId: Id<"channels">; text: string }
+ *     serverRef: api.mutators.sendMessage,
+ * });
+ *
+ * // Escape hatch: a path string still works, but nothing checks it and you must
+ * // restate the args yourself.
+ * defineMutator<{ text: string }>({ apply, serverRef: "mutators:sendMessage" });
+ * ```
  */
-export const defineMutator = <TArgs = Record<string, unknown>>(definition: {
-    apply: (context: ClientMutatorContext, args: TArgs) => void;
-    serverRef: string;
-}): ClientMutatorDef<TArgs> => {
+export const defineMutator: {
+    <TArgs = Record<string, unknown>>(definition: { apply: (context: ClientMutatorContext, args: TArgs) => void; serverRef: string }): ClientMutatorDef<TArgs>;
+    <R extends MutatorReference<never>>(definition: {
+        apply: (context: ClientMutatorContext, args: ArgsOfReference<R>) => void;
+        serverRef: R;
+    }): ClientMutatorDef<ArgsOfReference<R>>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the overloads above are the checked surface; the implementation signature must accept both
+} = (definition: { apply: (context: ClientMutatorContext, args: any) => void; serverRef: MutatorReference<never> | string }): ClientMutatorDef<any> => {
     return {
         __lunoraClientMutator: true,
         apply: definition.apply,
-        serverRef: definition.serverRef,
+        serverRef: mutatorPath(definition.serverRef),
     };
 };
 
@@ -54,13 +134,20 @@ type ArgsOf<M> = M extends ClientMutatorDef<infer A> ? A : never;
 /** Inputs `bindMutators` needs to run a mutator: the local store + how the overlay drops. */
 export interface BindMutatorsContext {
     /**
-     * Resolves the optimistic-overlay drop against confirmed server watermarks.
-     * When supplied, a mutation's overlay is held until the sync stream echoes
-     * `lastMutationId >= clientSeq` (via {@link CheckpointRegistry.resolve}) — no
-     * flicker. When omitted, the overlay drops as soon as the server accepts the
-     * write (the by-value sync diff then converges the synced row in place).
+     * Resolves the optimistic-overlay drop against confirmed server watermarks: a
+     * mutation's overlay is held until the sync stream echoes
+     * `lastMutationId >= clientSeq` (via {@link CheckpointRegistry.resolve}), so the
+     * row never flashes out and back.
+     *
+     * Defaults to the shared per-shard registry for `client` + {@link shardKey}
+     * ({@link getShardCheckpoints}) — the same one
+     * {@link import("./collection-options").lunoraCollectionOptions} defaults to, so
+     * a shard's collections and its mutators gate on one watermark line without the
+     * caller wiring them together. Pass `false` to drop the overlay as soon as the
+     * server accepts the write (the by-value sync diff then converges the synced row
+     * in place).
      */
-    checkpoints?: CheckpointRegistry;
+    checkpoints?: CheckpointRegistry | false;
     /** The wired collections the optimistic bodies write against. */
     collections: Record<string, Collection<Row, string>>;
     /** Optional shard key the mutator's server push is routed to. */
@@ -163,13 +250,42 @@ export const bindMutators = <M extends AnyMutatorMap>(client: LunoraClient, cont
         return run;
     };
 
+    // The shard's shared registry unless the caller supplied one (or opted out with
+    // `false`). Deriving it here is what makes a multi-collection shard work: the
+    // collections and the mutators end up on the same watermark line.
+    //
+    // A DERIVED registry is only gated on when a `lunoraCollectionOptions` call has
+    // attached a sync source to it. Without one nothing would ever advance the
+    // watermark, so every write would stall for the full fallback window — worse
+    // than the pre-derivation behavior of not waiting at all. An EXPLICIT registry is
+    // always honored: the caller is asserting they drive it.
+    const resolveCheckpoints = (): CheckpointRegistry | undefined => {
+        if (context.checkpoints === false) {
+            return undefined;
+        }
+
+        if (context.checkpoints) {
+            return context.checkpoints;
+        }
+
+        const derived = getShardCheckpoints(client, context.shardKey);
+
+        return hasCheckpointsAttached(derived) ? derived : undefined;
+    };
+
     const bound: Record<string, (args: unknown) => Transaction> = {};
 
     for (const [name, mutator] of Object.entries(mutators)) {
         bound[name] = (args) => {
             const transaction = createTransaction({
                 autoCommit: true,
-                metadata: { serverRef: mutator.serverRef },
+                metadata: {
+                    // Keep the predicted rows visible until the authoritative row
+                    // syncs in, instead of TanStack discarding them as stale on
+                    // completion. See DIRECT_TRANSACTION_METADATA_KEY.
+                    [DIRECT_TRANSACTION_METADATA_KEY]: true,
+                    serverRef: mutator.serverRef,
+                },
                 mutationFn: async () => {
                     let appliedSeq = 0;
 
@@ -178,10 +294,21 @@ export const bindMutators = <M extends AnyMutatorMap>(client: LunoraClient, cont
                     });
 
                     // Hold the overlay until the synced row lands (the poke echoes
-                    // this client's `lastMutationId`). Skipped when no watermark
-                    // stream is wired — the by-value diff converges in place.
-                    if (context.checkpoints) {
-                        await context.checkpoints.awaitMutationId(appliedSeq);
+                    // this client's `lastMutationId`). Skipped when the caller opted
+                    // out — the by-value diff converges in place. Resolved here, not
+                    // at bind time, so collections created after `bindMutators` still
+                    // gate this write.
+                    const checkpoints = resolveCheckpoints();
+
+                    if (checkpoints) {
+                        // Register the accepted watermark first: the write IS durable
+                        // now, so if the confirming poke/`settled` frame is dropped
+                        // the registry releases the overlay after its fallback window
+                        // (and reports it) rather than leaving this promise — and the
+                        // transaction's `isPersisted` — pending forever.
+                        checkpoints.acknowledge({ mutationId: appliedSeq });
+
+                        await checkpoints.awaitMutationId(appliedSeq);
                     }
                 },
             });

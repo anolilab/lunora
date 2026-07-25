@@ -52,7 +52,7 @@
     },
     "scripts": {
         "build": "packem build --development",
-        "build:prod": "nuxt-module-build build",
+        "build:prod": "packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
