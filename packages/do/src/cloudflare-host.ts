@@ -135,6 +135,10 @@ const createShardHost = (state: DurableObjectState): ShardHost => {
     return {
         alarms,
         runSerialized,
+        // `state.id.name` is populated only for objects addressed by name
+        // (`idFromName`); a `newUniqueId()` object has none, which is exactly
+        // the `undefined` the contract allows.
+        shardKey: (state as { id?: { name?: string } }).id?.name,
         sql,
         transaction,
         waitUntil:

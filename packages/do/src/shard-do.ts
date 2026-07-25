@@ -11,6 +11,7 @@ import type {
     RpcRequest,
     ShapeSubscriptionQuery,
     ShardRankPageResult,
+    ShardSocketLike,
     SocketAttachment,
     SubscriptionEnvelope,
     SubscriptionIdentity,
@@ -2108,7 +2109,7 @@ abstract class ShardDO {
      * in memory only — it does not survive hibernation, which is safe: a cold
      * memo simply forces one re-run and (at most) one redundant push.
      */
-    private readonly subMemos = new WeakMap<WebSocket, Map<string, SubscriptionMemo>>();
+    private readonly subMemos = new WeakMap<ShardSocketLike, Map<string, SubscriptionMemo>>();
 
     /**
      * Per-socket poke baseline for shape subscriptions: maps each shape's
@@ -2118,7 +2119,7 @@ abstract class ShardDO {
      * a cold memo on a reconnected/hibernated socket re-seeds from the client's
      * `sinceCheckpoint`.
      */
-    private readonly shapeMemos = new WeakMap<WebSocket, Map<string, ShapeMemo>>();
+    private readonly shapeMemos = new WeakMap<ShardSocketLike, Map<string, ShapeMemo>>();
 
     /**
      * Per-socket, per-**global**-shape membership snapshot: maps each global
@@ -2135,7 +2136,7 @@ abstract class ShardDO {
      * against an empty baseline and a row deleted from D1 while the DO slept would
      * never be poked as a `delete`, lingering on the client as a phantom row.
      */
-    private readonly globalShapeSnapshots = new WeakMap<WebSocket, Map<string, Map<string, string>>>();
+    private readonly globalShapeSnapshots = new WeakMap<ShardSocketLike, Map<string, Map<string, string>>>();
 
     /**
      * Whether a global-shape poll alarm is currently armed. Guards
@@ -2148,7 +2149,7 @@ abstract class ShardDO {
     private pokeSequence = 0;
 
     /** Per-socket whisper-rate token bucket (see {@link ShardDO.WHISPER_RATE_BURST}). In-memory; resets on hibernation. */
-    private readonly whisperBuckets = new WeakMap<WebSocket, { last: number; tokens: number }>();
+    private readonly whisperBuckets = new WeakMap<ShardSocketLike, { last: number; tokens: number }>();
 
     /**
      * Per-socket {@link AbortController} map keyed by stream id, used to
@@ -2157,7 +2158,7 @@ abstract class ShardDO {
      * fine because the corresponding socket is gone too — the iterator
      * pumping into it would have nowhere to write.
      */
-    private readonly streamCancellers = new WeakMap<WebSocket, Map<string, AbortController>>();
+    private readonly streamCancellers = new WeakMap<ShardSocketLike, Map<string, AbortController>>();
 
     /**
      * Lifetime request counters surfaced by the `__lunora_admin__:getMetrics`
@@ -2332,9 +2333,9 @@ abstract class ShardDO {
             computeOpLogShapeSeed: (shape, resolved) => this.computeOpLogShapeSeed(shape, resolved),
             currentCdcEpoch: () => this.currentCdcEpoch(),
             deliverWhisperLocal: (topic, frame, exclude) => this.deliverWhisperLocal(topic, frame, exclude),
-            doName: () => this.state.id?.name,
+            doName: () => this.shardHost.shardKey,
             env: () => this.env,
-            getWebSockets: () => this.state.getWebSockets(),
+            getWebSockets: () => this.socketHost.getSockets(),
             maskMetadata: () => this.maskMetadata(),
             nextPokeId: () => {
                 this.pokeSequence += 1;
@@ -2379,7 +2380,13 @@ abstract class ShardDO {
      * with a root span instead of appearing as orphans.
      */
     public async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-        return this.withTriggerTrace("websocket.message", async () => this.handleWebSocketMessage(ws, message));
+        // Map the runtime socket to the handle enumeration also yields, so
+        // per-socket memo state is keyed identically on both paths. Falls back
+        // to the raw socket only when the host cannot map it — in which case
+        // enumeration cannot see it either, so the two stay consistent.
+        const socket = this.socketHost.handleFor(ws) ?? ws;
+
+        return this.withTriggerTrace("websocket.message", async () => this.handleWebSocketMessage(socket, message));
     }
 
     /**
@@ -2387,7 +2394,12 @@ abstract class ShardDO {
      * closed the socket by the time we're called — calling `ws.close()`
      * again would throw "WebSocket has been closed" in the Workers runtime.
      */
-    public async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+    public async webSocketClose(rawSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+        // Same boundary conversion as `webSocketMessage`: per-socket state is
+        // keyed on the handle, so the close path must resolve the same identity
+        // or it would tear down nothing.
+        const ws = this.socketHost.handleFor(rawSocket) ?? rawSocket;
+
         // Fire `onDisconnect` lifecycle hooks the instant the socket drops —
         // replaying the identity + context recorded at connect — so presence and
         // other cleanup happen immediately, not after a TTL. Only a socket that
@@ -2441,7 +2453,7 @@ abstract class ShardDO {
 
     /** Hibernation API: invoked on socket error. */
     // eslint-disable-next-line class-methods-use-this -- Workers hibernation handler: the platform invokes it on the instance; the signature must stay an instance method
-    public webSocketError(_ws: WebSocket, _error: unknown): void {
+    public webSocketError(_ws: ShardSocketLike, _error: unknown): void {
         // Subclasses can override with proper logging. Avoid throwing.
     }
 
@@ -2458,7 +2470,7 @@ abstract class ShardDO {
 
     /** The decode + route body of {@link webSocketMessage}, split out so the trace wrapper stays a one-liner. */
     // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
-    protected async handleWebSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    protected async handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer): Promise<void> {
         // Token-expiry: a socket whose credential lapsed is dropped before its
         // frame is processed, so the client reconnects and re-resolves identity.
         // This is the inbound-activity check; the load-bearing one is in
@@ -2995,7 +3007,7 @@ abstract class ShardDO {
             // to fill it — arbitrarily late, or never on a quiet shard.
             if (dispatchSpan?.sink?.flush) {
                 try {
-                    dispatchSpan.sink.flush({ waitUntil: this.state.waitUntil?.bind(this.state) });
+                    dispatchSpan.sink.flush({ waitUntil: this.shardHost.waitUntil });
                 } catch {
                     // Best-effort — a telemetry flush must never fail a served request.
                 }
@@ -4288,7 +4300,7 @@ abstract class ShardDO {
      * throw out of this path — the WS hibernation API treats a thrown
      * `webSocketMessage` as a fatal-channel error.
      */
-    protected subscribe(ws: WebSocket, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
+    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
         const attachment = this.readAttachment(ws);
 
         if (Object.keys(attachment.subs).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
@@ -4313,7 +4325,7 @@ abstract class ShardDO {
         return "ok";
     }
 
-    protected unsubscribe(ws: WebSocket, subId: string): void {
+    protected unsubscribe(ws: ShardSocketLike, subId: string): void {
         const attachment = this.readAttachment(ws);
 
         // Capture the current query so we can roll back on serialization failure.
@@ -4347,7 +4359,7 @@ abstract class ShardDO {
      * caller surfaces as a structured error frame; never throws (a thrown
      * `webSocketMessage` is a fatal-channel error under the hibernation API).
      */
-    protected shapeSubscribe(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
+    protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
         const attachment = this.readAttachment(ws);
         const shapes = attachment.shapes ?? {};
 
@@ -4371,7 +4383,7 @@ abstract class ShardDO {
     }
 
     /** Remove a shape subscription and its poke baseline. Mirrors {@link ShardDO.unsubscribe}'s rollback-on-serialize-failure contract. */
-    protected shapeUnsubscribe(ws: WebSocket, subId: string): void {
+    protected shapeUnsubscribe(ws: ShardSocketLike, subId: string): void {
         const attachment = this.readAttachment(ws);
         const { shapes } = attachment;
 
@@ -4456,7 +4468,7 @@ abstract class ShardDO {
      * identical, so we build a payload keyed by `subId` lazily.
      */
     protected broadcastDelta(delta: MutationDelta): void {
-        const sockets = this.state.getWebSockets();
+        const sockets = this.socketHost.getSockets();
         // Pre-stringify the immutable portion. The only per-message variation
         // is `id`, which we splice in below — cheaper than calling
         // JSON.stringify(...) for every (socket, sub) pair.
@@ -4660,7 +4672,7 @@ abstract class ShardDO {
 
     /** This DO's shard key (its DO name), or `__root__` for the single-DO default. The `tenantBy` mapper binds it into the source query. */
     protected currentShardKey(): string {
-        return this.state.id?.name ?? ROOT_SHARD_NAME;
+        return this.shardHost.shardKey ?? ROOT_SHARD_NAME;
     }
 
     /** Record a contained external-source ingest failure (one sourced table's poll) into the log ring without aborting the others. */
@@ -4881,7 +4893,7 @@ abstract class ShardDO {
             functionPath,
             level,
             message,
-            shardKey: this.state.id?.name,
+            shardKey: this.shardHost.shardKey,
             spanId: trace?.rootSpanId,
             traceId: trace?.traceId,
             ts: Date.now(),
@@ -4902,7 +4914,7 @@ abstract class ShardDO {
                 // Pipeline → R2 log sink) can keep its send alive past the
                 // response; `undefined` when the state doesn't expose it, where
                 // the sink falls back to fire-and-forget.
-                sink.onLog(event, { waitUntil: this.state.waitUntil?.bind(this.state) });
+                sink.onLog(event, { waitUntil: this.shardHost.waitUntil });
             } catch {
                 // A buggy log sink must not break the handler — see emitLogEvent.
             }
@@ -4981,7 +4993,7 @@ abstract class ShardDO {
                 this.recordSpan(span, sink);
             },
             resolveCloudflareTracing,
-            shardKey: this.state.id?.name,
+            shardKey: this.shardHost.shardKey,
             userId: () => this.getCurrentUserId(),
         });
     }
@@ -5055,7 +5067,7 @@ abstract class ShardDO {
             record: (recorded) => {
                 this.recordSpan(recorded, sink);
             },
-            shardKey: this.state.id?.name,
+            shardKey: this.shardHost.shardKey,
             span,
             userId: () => this.getCurrentUserId(),
         });
@@ -5076,7 +5088,7 @@ abstract class ShardDO {
                 record: (span) => {
                     this.recordSpan(span, sink);
                 },
-                shardKey: this.state.id?.name,
+                shardKey: this.shardHost.shardKey,
                 userId: () => this.getCurrentUserId(),
             },
             base,
@@ -5148,7 +5160,7 @@ abstract class ShardDO {
             record: (event) => {
                 this.recordMetric(event, sink);
             },
-            shardKey: this.state.id?.name,
+            shardKey: this.shardHost.shardKey,
         });
     }
 
@@ -5202,7 +5214,7 @@ abstract class ShardDO {
 
         // Optional export sink (the durable, cross-instance path).
         if (sink?.onMetric) {
-            bestEffort(() => sink.onMetric?.(stamped, { waitUntil: this.state.waitUntil?.bind(this.state) }));
+            bestEffort(() => sink.onMetric?.(stamped, { waitUntil: this.shardHost.waitUntil }));
         }
     }
 
@@ -5271,7 +5283,7 @@ abstract class ShardDO {
      */
     private flushTelemetry(): void {
         try {
-            this.lastTelemetrySink?.flush?.({ waitUntil: this.state.waitUntil?.bind(this.state) });
+            this.lastTelemetrySink?.flush?.({ waitUntil: this.shardHost.waitUntil });
         } catch {
             // Best-effort — a telemetry flush must never fail the trigger.
         }
@@ -5305,7 +5317,7 @@ abstract class ShardDO {
                     durationMs,
                     failure,
                     functionPath,
-                    shardKey: this.state.id?.name,
+                    shardKey: this.shardHost.shardKey,
                     startTs: startedAt,
                     userId: this.getCurrentUserId(),
                 }),
@@ -5427,7 +5439,7 @@ abstract class ShardDO {
         }
 
         try {
-            sink.onSpan(span, { waitUntil: this.state.waitUntil?.bind(this.state) });
+            sink.onSpan(span, { waitUntil: this.shardHost.waitUntil });
         } catch {
             // A buggy span sink must not break the handler.
         }
@@ -5477,7 +5489,7 @@ abstract class ShardDO {
     private lifecycleInfo(attachment: SocketAttachment): LifecycleDispatchInfo {
         const event: LifecycleEvent = {
             connectionId: attachment.connectionId ?? "",
-            shardKey: this.state.id?.name ?? ROOT_SHARD_NAME,
+            shardKey: this.shardHost.shardKey ?? ROOT_SHARD_NAME,
             // eslint-disable-next-line unicorn/no-null -- LifecycleEvent.userId is `string | null`; null is the contractual anonymous sentinel mirrored on ctx.auth
             userId: attachment.userId ?? null,
             ...(attachment.context === undefined ? {} : { context: attachment.context }),
@@ -5591,7 +5603,7 @@ abstract class ShardDO {
             indexHits,
             queryStats,
             requests,
-            shard: this.state.id?.name ?? ROOT_SHARD_NAME,
+            shard: this.shardHost.shardKey ?? ROOT_SHARD_NAME,
             sinceMs: this.metrics.sinceMs,
             uptimeMs: Date.now() - this.metrics.sinceMs,
         };
@@ -5774,7 +5786,7 @@ abstract class ShardDO {
             return;
         }
 
-        const idName = this.state.id?.name;
+        const idName = this.shardHost.shardKey;
 
         if (idName !== ROOT_SHARD_NAME) {
             return;
@@ -6252,7 +6264,7 @@ abstract class ShardDO {
                 errorMessage: entry.message,
                 functionPath: entry.functionPath,
                 outcome: "error",
-                shardKey: this.state.id?.name,
+                shardKey: this.shardHost.shardKey,
                 ts: entry.timestamp,
             };
 
@@ -6693,7 +6705,7 @@ abstract class ShardDO {
             identity: this.currentRequestIdentity,
             outcome,
             redactedArgs: Object.keys(args).length === 0 ? undefined : args,
-            shardKey: this.state.id?.name,
+            shardKey: this.shardHost.shardKey,
             tablesRead: this.currentRequestReadTables === undefined ? [] : [...this.currentRequestReadTables],
             tablesWritten,
             ts: Date.now(),
@@ -7525,7 +7537,7 @@ abstract class ShardDO {
      * `{type:"error"}`. Either way drop the controller.
      */
 
-    private async handleStream(ws: WebSocket, id: string, functionPath: string, args: Record<string, unknown>): Promise<void> {
+    private async handleStream(ws: ShardSocketLike, id: string, functionPath: string, args: Record<string, unknown>): Promise<void> {
         const iterable = this.executeStream(functionPath, args);
 
         if (!iterable) {
@@ -7671,8 +7683,8 @@ abstract class ShardDO {
         // writes collapses into one extra pass, and both defer off the response
         // path when `waitUntil` is available so the write's tail latency stays
         // flat.
-        if (typeof this.state.waitUntil === "function") {
-            this.state.waitUntil(this.drainSubscriptionRefreshes());
+        if (this.shardHost.waitUntil !== undefined) {
+            this.shardHost.waitUntil(this.drainSubscriptionRefreshes());
 
             return;
         }
@@ -7783,7 +7795,7 @@ abstract class ShardDO {
      * into this loop.
      */
     private async refreshSubscriptions(changed: Set<string>): Promise<void> {
-        const sockets = [...this.state.getWebSockets()];
+        const sockets = [...this.socketHost.getSockets()];
 
         // The post-write high-watermark is the same for every sub flushed in
         // this pass (they all observe the committed state), so resolve it once
@@ -7798,7 +7810,7 @@ abstract class ShardDO {
         // entirely (see resolveReactiveOutcomeDeduped).
         const reactiveRunCache = new Map<string, Promise<SubscriptionOutcome | null>>();
 
-        const refreshOne = async (ws: WebSocket): Promise<void> => {
+        const refreshOne = async (ws: ShardSocketLike): Promise<void> => {
             // Enforce token-expiry on the OUTBOUND path: a lapsed socket must not
             // keep receiving its user's live (RLS/`ctx.auth`-scoped) data. This is
             // the load-bearing check — a passive subscriber never sends an inbound
@@ -7891,7 +7903,7 @@ abstract class ShardDO {
      * Either way the fresh result memoises this socket's diff baseline so later
      * write-flushes ({@link refreshSubscriptions}) can emit incremental deltas.
      */
-    private async seedSubscription(ws: WebSocket, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
+    private async seedSubscription(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
         const seedArgs = query.args ?? {};
         // Seed under the socket's OWN verified identity (stamped on the attachment
         // at upgrade, unforgeable by the client) — read here and passed BY VALUE,
@@ -7943,7 +7955,7 @@ abstract class ShardDO {
      * acked but subscribed to a shape that will never deliver. Never throws (a
      * thrown `webSocketMessage` is fatal to the hibernating socket).
      */
-    private async handleShapeSubscribe(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery): Promise<void> {
+    private async handleShapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): Promise<void> {
         const status = this.shapeSubscribe(ws, subId, shape);
 
         if (status !== "ok") {
@@ -7981,7 +7993,7 @@ abstract class ShardDO {
 
     /** Send a structured `error` frame for a failed `shape_subscribe`, swallowing a send on an already-closed socket. */
     // eslint-disable-next-line class-methods-use-this -- groups with the shape-subscribe flow; uses only its args + the socket
-    private sendShapeSubscribeError(ws: WebSocket, subId: string, code: string, message: string): void {
+    private sendShapeSubscribeError(ws: ShardSocketLike, subId: string, code: string, message: string): void {
         try {
             ws.send(JSON.stringify({ code, error: { code, message }, id: subId, type: "error" }));
         } catch {
@@ -8010,7 +8022,7 @@ abstract class ShardDO {
      * back the persisted attachment and errors instead of acking, so a client is
      * never left subscribed to a shape that will never deliver.
      */
-    private async seedShapeSubscription(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery): Promise<"ok" | { code: string; message: string }> {
+    private async seedShapeSubscription(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): Promise<"ok" | { code: string; message: string }> {
         const attachment = this.readAttachment(ws);
         const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
 
@@ -8077,7 +8089,7 @@ abstract class ShardDO {
      * throw (a stub `sql` handle, a membership probe failure); the caller converts
      * it to a structured `shape_subscribe` error.
      */
-    private async seedOpLogShape(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery, resolved: ResolvedShape): Promise<"ok"> {
+    private async seedOpLogShape(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery, resolved: ResolvedShape): Promise<"ok"> {
         const { baseCheckpoint, cursor, epoch, rowsPatch } = this.computeOpLogShapeSeed(shape, resolved);
 
         // Await drain before the (potentially large) seed poke so a slow consumer
@@ -8134,7 +8146,7 @@ abstract class ShardDO {
      * carrying a part per changed shape. No-op when no socket holds a shape.
      */
     private async pokeShapeSubscribers(changed: Set<string>, frameCursor: number | undefined, frameEpoch: string | undefined): Promise<void> {
-        const sockets = [...this.state.getWebSockets()];
+        const sockets = [...this.socketHost.getSockets()];
         const checkpoint = frameCursor ?? this.currentCdcCursor() ?? 0;
         const sql = this.sql as SqlExec;
 
@@ -8149,7 +8161,7 @@ abstract class ShardDO {
         // Pure measurement — it never alters which sockets are poked.
         let delivered = 0;
 
-        const pokeOne = async (ws: WebSocket): Promise<void> => {
+        const pokeOne = async (ws: ShardSocketLike): Promise<void> => {
             if (this.isSocketExpired(ws)) {
                 this.dropExpiredSocket(ws);
 
@@ -8224,7 +8236,7 @@ abstract class ShardDO {
      * caller confirms the poke was delivered.
      */
     private collectShapePokeParts(
-        ws: WebSocket,
+        ws: ShardSocketLike,
         shapes: Record<string, ShapeSubscriptionQuery>,
         identity: SubscriptionIdentity,
         changed: Set<string>,
@@ -8387,7 +8399,7 @@ abstract class ShardDO {
      * carries no resume base — a reconnect always re-seeds full.
      */
     private async seedGlobalShape(
-        ws: WebSocket,
+        ws: ShardSocketLike,
         subId: string,
         resolved: ResolvedShape,
         identity: SubscriptionIdentity,
@@ -8432,7 +8444,7 @@ abstract class ShardDO {
      * No frame is sent when nothing changed (the common steady-state tick).
      */
     private async refreshGlobalShape(
-        ws: WebSocket,
+        ws: ShardSocketLike,
         subId: string,
         resolved: ResolvedShape,
         identity: SubscriptionIdentity,
@@ -8478,7 +8490,7 @@ abstract class ShardDO {
      * `connectionId` (a socket that never went through the lifecycle-aware upgrade,
      * e.g. a unit harness) skips the durable read and behaves as in-memory-only.
      */
-    private readGlobalSnapshot(ws: WebSocket, subId: string, connectionId: string): Map<string, string> {
+    private readGlobalSnapshot(ws: ShardSocketLike, subId: string, connectionId: string): Map<string, string> {
         const cached = this.globalShapeSnapshots.get(ws)?.get(subId);
 
         if (cached) {
@@ -8493,7 +8505,7 @@ abstract class ShardDO {
     }
 
     /** Record a socket's latest global-shape membership snapshot in the in-memory cache (creating the per-socket map lazily). */
-    private recordGlobalSnapshot(ws: WebSocket, subId: string, snapshot: Map<string, string>): void {
+    private recordGlobalSnapshot(ws: ShardSocketLike, subId: string, snapshot: Map<string, string>): void {
         let snapshots = this.globalShapeSnapshots.get(ws);
 
         if (!snapshots) {
@@ -8622,7 +8634,7 @@ abstract class ShardDO {
      * are dropped in passing (mirrors {@link ShardDO.pokeShapeSubscribers}).
      */
     private async pollGlobalShapes(): Promise<number> {
-        const sockets = [...this.state.getWebSockets()];
+        const sockets = [...this.socketHost.getSockets()];
         let remaining = 0;
 
         for (const ws of sockets) {
@@ -8656,7 +8668,7 @@ abstract class ShardDO {
      * polling and retries next tick.
      */
     private async pollSocketGlobalShapes(
-        ws: WebSocket,
+        ws: ShardSocketLike,
         shapes: Record<string, ShapeSubscriptionQuery>,
         identity: SubscriptionIdentity,
         connectionId: string,
@@ -8700,7 +8712,7 @@ abstract class ShardDO {
      * re-receives the rows on its next flush/reconnect instead of losing them.
      */
     private sendPoke(
-        ws: WebSocket,
+        ws: ShardSocketLike,
         parts: ReadonlyArray<ShapePokePart>,
         checkpoint: number,
         epoch: string | undefined,
@@ -8728,7 +8740,7 @@ abstract class ShardDO {
      * (a client that doesn't use custom mutators — nothing to drop an overlay
      * for). Read off the attachment so it survives hibernation.
      */
-    private socketClientWatermark(ws: WebSocket): number | undefined {
+    private socketClientWatermark(ws: ShardSocketLike): number | undefined {
         const attachment = this.readAttachment(ws);
         const { clientId } = attachment;
 
@@ -8748,7 +8760,7 @@ abstract class ShardDO {
     }
 
     /** Record a shape's poke baseline cursor on a socket (creating the per-socket map lazily). */
-    private recordShapeMemo(ws: WebSocket, subId: string, cursor: number): void {
+    private recordShapeMemo(ws: ShardSocketLike, subId: string, cursor: number): void {
         let memos = this.shapeMemos.get(ws);
 
         if (!memos) {
@@ -8765,7 +8777,7 @@ abstract class ShardDO {
      * cached value but the server still needs a baseline so the next
      * write-flush can diff against it.
      */
-    private seedSubscriptionMemo(ws: WebSocket, subId: string, outcome: SubscriptionOutcome): void {
+    private seedSubscriptionMemo(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome): void {
         let memos = this.subMemos.get(ws);
 
         if (!memos) {
@@ -8795,7 +8807,7 @@ abstract class ShardDO {
      * (Pillar 1b). Omitted on shards without CDC, keeping the wire byte-identical
      * to the pre-cursor format.
      */
-    private pushSubscriptionData(ws: WebSocket, subId: string, outcome: SubscriptionOutcome, cursor?: number, epoch?: string): void {
+    private pushSubscriptionData(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome, cursor?: number, epoch?: string): void {
         let memos = this.subMemos.get(ws);
 
         if (!memos) {
@@ -9111,7 +9123,7 @@ abstract class ShardDO {
     }
 
     /** Whether `ws` carries a credential whose expiry (stamped at upgrade) is now past. */
-    private isSocketExpired(ws: WebSocket): boolean {
+    private isSocketExpired(ws: ShardSocketLike): boolean {
         const { expiresAt } = this.readAttachment(ws);
 
         return typeof expiresAt === "number" && Date.now() >= expiresAt;
@@ -9124,10 +9136,10 @@ abstract class ShardDO {
      * gone) is swallowed — this must never escape the hibernation handlers.
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with isSocketExpired; operates only on the passed socket
-    private dropExpiredSocket(ws: WebSocket): void {
+    private dropExpiredSocket(ws: ShardSocketLike): void {
         try {
             ws.send(JSON.stringify({ code: "TOKEN_EXPIRED", error: { code: "TOKEN_EXPIRED", message: "authentication token expired" }, type: "error" }));
-            ws.close(4001, "token_expired");
+            ws.close?.(4001, "token_expired");
         } catch {
             /* socket already gone */
         }
@@ -9140,7 +9152,7 @@ abstract class ShardDO {
      * whispering is never acked, and an over-cap join or a serialize failure is
      * simply dropped (the join just doesn't take).
      */
-    private setWhisperMembership(ws: WebSocket, topic: string, join: boolean): void {
+    private setWhisperMembership(ws: ShardSocketLike, topic: string, join: boolean): void {
         const attachment = this.readAttachment(ws);
         const topics = attachment.whispers ?? [];
         const has = topics.includes(topic);
@@ -9179,7 +9191,7 @@ abstract class ShardDO {
      * the bucket is empty. Per-socket, in-memory — a hibernation resets it to a
      * full burst, which is the safe direction (never under-counts into a denial).
      */
-    private allowWhisper(ws: WebSocket): boolean {
+    private allowWhisper(ws: ShardSocketLike): boolean {
         const now = Date.now();
         const bucket = this.whisperBuckets.get(ws) ?? { last: now, tokens: ShardDO.WHISPER_RATE_BURST };
         const refilled = Math.min(ShardDO.WHISPER_RATE_BURST, bucket.tokens + ((now - bucket.last) / 1000) * ShardDO.WHISPER_RATE_PER_SEC);
@@ -9207,7 +9219,7 @@ abstract class ShardDO {
      * topic name. That matches the AnyCable model (and `from` is unforgeable),
      * but per-topic auth does not exist here; see `whisperSubscribe` on the client.
      */
-    private async broadcastWhisper(sender: WebSocket, topic: string, data: unknown): Promise<void> {
+    private async broadcastWhisper(sender: ShardSocketLike, topic: string, data: unknown): Promise<void> {
         // Rate-limit first — cheapest rejection, and it bounds the O(connections)
         // fan-out cost a tight whisper loop would otherwise impose.
         if (!this.allowWhisper(sender)) {
@@ -9247,19 +9259,17 @@ abstract class ShardDO {
      * for `getFanoutMetrics` (plan 075 Phase 1). Pure delivery — no SQLite, no CDC.
      * @returns the number of sockets the frame was sent to
      */
-    private deliverWhisperLocal(topic: string, frame: string, exclude: undefined | WebSocket): number {
+    private deliverWhisperLocal(topic: string, frame: string, exclude: undefined | ShardSocketLike): number {
         let scanned = 0;
         let delivered = 0;
 
-        // The sender arrives as a runtime socket (it came off `webSocketMessage`)
-        // while enumeration yields handles, so bridge it once up front rather
-        // than comparing across the two worlds inside the loop.
-        const excludeId = exclude === undefined ? undefined : this.socketHost.handleFor(exclude)?.id;
-
+        // Both the sender (converted at the message boundary) and the enumerated
+        // sockets are the host's cached handle for the same connection, so plain
+        // identity is exact — the same comparison this made before the seam.
         for (const socket of this.socketHost.getSockets()) {
             scanned += 1;
 
-            if (socket.id === excludeId || this.readAttachment(socket).whispers?.includes(topic) !== true) {
+            if (socket === exclude || this.readAttachment(socket).whispers?.includes(topic) !== true) {
                 continue;
             }
 

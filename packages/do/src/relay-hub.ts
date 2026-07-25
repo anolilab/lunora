@@ -22,7 +22,7 @@
 /* eslint-disable max-classes-per-file -- the role-split is three cohesive collaborators by design: a shared RelayLink base plus the OwnerRelay and RelayMember role classes. */
 
 import { LunoraError, toErrorBody } from "@lunora/errors";
-import type { ResolvedShape, ShapeSubscriptionQuery, SocketAttachment, SubscriptionIdentity } from "@lunora/shard-engine";
+import type { ResolvedShape, ShapeSubscriptionQuery, ShardSocketLike, SocketAttachment, SubscriptionIdentity } from "@lunora/shard-engine";
 import { awaitWsDrain, stableWireKey, trySendFrame } from "@lunora/shard-engine";
 
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
@@ -140,19 +140,25 @@ interface RelayHost {
     /** The current CDC epoch (changelog timeline token); `undefined` when CDC is off. */
     currentCdcEpoch: () => string | undefined;
     /** Deliver an already-serialized whisper frame to the DO's local `topic` members (the base whisper fan-out, used whether or not the relay tier is active). */
-    deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | WebSocket) => number;
+    deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | ShardSocketLike) => number;
     /** This DO's name (the shard key for an owner, the `…::relay::N` name for a relay), or `undefined` for an unnamed DO. */
     doName: () => string | undefined;
     /** This DO's env record (read for relay binding + threshold/fan/cap knobs). */
     env: () => unknown;
     /** This DO's live hibernatable sockets. */
-    getWebSockets: () => WebSocket[];
+
+    /**
+     * The shard's live sockets, as the host's handles — the same identity the
+     * relay's per-socket memos are keyed on. Raw provider sockets would key
+     * differently and silently miss every memo lookup.
+     */
+    getWebSockets: () => ShardSocketLike[];
     /** The schema's masked columns (codegen-emitted), for the gate's mask check. */
     maskMetadata: () => MaskPoliciesResult;
     /** A fresh, process-unique poke id (shared monotonic counter with the owner-local poke path). */
     nextPokeId: () => string;
     /** Deserialize a socket's hibernation attachment. */
-    readAttachment: (ws: WebSocket) => SocketAttachment;
+    readAttachment: (ws: ShardSocketLike) => SocketAttachment;
     /** Record a shape-poke fan-out pass into `getFanoutMetrics.shapePoke`. */
     recordShapePokeFanout: (iterated: number, delivered: number, elapsedMs: number) => void;
     /** Resolve a shape under a given identity (RLS-correct); the codegen subclass dispatches via its generated registry. */
@@ -336,7 +342,7 @@ abstract class RelayLink {
 
     /** Seed a shape held by a socket on a relay through the owner; `undefined` on an owner (the caller falls through to its local seed path). */
     public abstract seedRelayShape(
-        ws: WebSocket,
+        ws: ShardSocketLike,
         subId: string,
         shape: ShapeSubscriptionQuery,
         identity: SubscriptionIdentity,
@@ -346,7 +352,7 @@ abstract class RelayLink {
     public abstract announce(): Promise<void>;
 
     /** A relay detaches from its owner once its last socket closes; a no-op on an owner. */
-    public abstract announceDrain(closing: WebSocket): Promise<void>;
+    public abstract announceDrain(closing: ShardSocketLike): Promise<void>;
 
     /** How many relays the runtime should spread new connections across for this shard (owner decides; a relay returns 0). */
     public abstract relayCount(): number;
@@ -888,7 +894,7 @@ class RelayMember extends RelayLink {
     private relayAnnounced = false;
 
     /** Per-socket cohort memo `ws → subId → { cursor, epoch }`: the relay delivers a poke to a socket only while its memo matches the poke's `fromCursor`+`epoch`. */
-    private readonly shapeRelayMemos = new WeakMap<WebSocket, Map<string, { cursor: number; epoch?: string }>>();
+    private readonly shapeRelayMemos = new WeakMap<ShardSocketLike, Map<string, { cursor: number; epoch?: string }>>();
 
     public constructor(host: RelayHost, ownerKey: string, relayIndex: number) {
         super(host, { ownerKey, relayIndex });
@@ -916,7 +922,7 @@ class RelayMember extends RelayLink {
      * (surfaced as a `shape_subscribe` error) when the owner can't be reached.
      */
     public override async seedRelayShape(
-        ws: WebSocket,
+        ws: ShardSocketLike,
         subId: string,
         shape: ShapeSubscriptionQuery,
         identity: SubscriptionIdentity,
@@ -996,7 +1002,7 @@ class RelayMember extends RelayLink {
     }
 
     /** Once this relay loses its last socket (the `closing` one excluded), detach from the owner and re-arm the announce latch for a future subscriber. */
-    public override async announceDrain(closing: WebSocket): Promise<void> {
+    public override async announceDrain(closing: ShardSocketLike): Promise<void> {
         if (!this.canAddressSiblings()) {
             return;
         }
@@ -1044,7 +1050,7 @@ class RelayMember extends RelayLink {
     }
 
     /** Record a relay socket's cohort cursor + epoch for `subId` (creating the per-socket map lazily). */
-    private recordRelayShapeMemo(ws: WebSocket, subId: string, cursor: number, epoch: string | undefined): void {
+    private recordRelayShapeMemo(ws: ShardSocketLike, subId: string, cursor: number, epoch: string | undefined): void {
         let memos = this.shapeRelayMemos.get(ws);
 
         if (memos === undefined) {
