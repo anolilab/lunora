@@ -42,15 +42,19 @@ describe("@lunora/platform contracts", () => {
             sql: {
                 // A minimal cursor: iterable, buffered, and single-row — the
                 // three shapes the engine's read paths use.
-                exec: () => {
+                exec: <Row>() => {
+                    // Delegate iteration to a real empty array rather than a
+                    // generator method: prettier and `generator-star-spacing`
+                    // disagree on how to space `*[Symbol.iterator]()`, and the
+                    // array form needs no arbitration to say the same thing.
+                    const rows: Row[] = [];
+
                     return {
-                        *[Symbol.iterator]() {
-                            // no rows
-                        },
+                        [Symbol.iterator]: () => rows[Symbol.iterator](),
                         one: () => {
                             throw new Error("no rows");
                         },
-                        toArray: () => [],
+                        toArray: () => rows,
                     };
                 },
             },
