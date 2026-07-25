@@ -35,6 +35,7 @@
         "concepts/ttl",
         "concepts/migrations",
         "---Auth & security---",
+        "concepts/adopt-in-an-existing-app",
         "concepts/authentication",
         "concepts/rls",
         "concepts/masking",
