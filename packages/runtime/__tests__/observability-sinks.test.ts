@@ -1877,6 +1877,76 @@ describe("observability-sinks", () => {
             expect(fetchMock).toHaveBeenCalledTimes(1);
         });
 
+        it("reports a throwing tail sampler once per flush window, not once per trace", async () => {
+            expect.assertions(2);
+
+            vi.stubGlobal(
+                "fetch",
+                vi.fn<typeof fetch>(async () => new Response("ok")),
+            );
+
+            const errorMock = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const sink = otlpSink({
+                endpoint: "https://collector.example",
+                tailSampler: () => {
+                    throw new Error("bad policy");
+                },
+            });
+
+            // Three distinct traces in one window: fail-open is per trace, but the
+            // operator only needs telling once that the policy stopped applying.
+            sink.onSpan!({ ...spanEvent, traceId: "0af7651916cd43dd8448eb211c80319c" });
+            sink.onSpan!({ ...spanEvent, traceId: "1af7651916cd43dd8448eb211c80319c" });
+            sink.onSpan!({ ...spanEvent, traceId: "2af7651916cd43dd8448eb211c80319c" });
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            expect(errorMock).toHaveBeenCalledTimes(1);
+            expect(errorMock.mock.calls[0]?.[0]).toContain("3 trace(s)");
+        });
+
+        it("stops reporting tail-sampler failures after the per-sink cap", async () => {
+            expect.assertions(2);
+
+            vi.stubGlobal(
+                "fetch",
+                vi.fn<typeof fetch>(async () => new Response("ok")),
+            );
+
+            const errorMock = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const sink = otlpSink({
+                endpoint: "https://collector.example",
+                tailSampler: () => {
+                    throw new Error("bad policy");
+                },
+            });
+
+            // A sampler that throws throws on every window; the diagnostic must not
+            // become the log volume that sampling exists to hold down.
+            for (let index = 0; index < 12; index += 1) {
+                const pending: Promise<unknown>[] = [];
+
+                sink.onSpan!(spanEvent);
+                sink.flush!({
+                    waitUntil: (promise) => {
+                        pending.push(promise);
+                    },
+                });
+                // eslint-disable-next-line no-await-in-loop
+                await Promise.all(pending);
+            }
+
+            expect(errorMock).toHaveBeenCalledTimes(5);
+            expect(errorMock.mock.calls[4]?.[0]).toContain("silenced");
+        });
+
         it("is a no-op to flush an empty buffer", () => {
             expect.assertions(1);
 
