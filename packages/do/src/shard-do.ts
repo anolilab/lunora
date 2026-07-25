@@ -3191,7 +3191,7 @@ abstract class ShardDO {
      * after the handler fully resolves.
      */
     protected get sql(): unknown {
-        const rawSql = this.state.storage.sql;
+        const rawSql = this.shardHost.sql;
         const samples = this.currentStmtSamples;
 
         // Only instrument during a live user dispatch.
@@ -3340,7 +3340,7 @@ abstract class ShardDO {
             throw new LunoraError("NESTED_TRANSACTION", "nested transactions are not supported in SQLite-in-DO", { status: 500 });
         }
 
-        const sqlHandle = this.state.storage.sql as TransactionSqlLike | undefined;
+        const sqlHandle = this.shardHost.sql as TransactionSqlLike | undefined;
 
         if (!sqlHandle || typeof sqlHandle.exec !== "function") {
             throw new LunoraError("SQL_UNAVAILABLE", "storage.sql is not available on this ShardDO state", { status: 500 });
@@ -5206,7 +5206,7 @@ abstract class ShardDO {
         // during a dispatch, and these housekeeping writes would be misattributed
         // to the user function that recorded the metric (matching recordFunctionMetric
         // et al., which all write through the raw handle for the same reason).
-        const rawSql = this.state.storage.sql as unknown as SqlExec;
+        const rawSql = this.shardHost.sql as unknown as SqlExec;
 
         bestEffort(() => {
             recordMetricHistory(rawSql, stamped, exemplarTraceId);
@@ -5553,8 +5553,7 @@ abstract class ShardDO {
         sinceMs: number;
         uptimeMs: number;
     } {
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- structural state: a test double may omit `storage.sql` even though the type marks it required
-        const size = this.state.storage.sql?.databaseSize;
+        const size = this.shardHost.sql.databaseSize;
 
         // Durable totals are the source of truth; fall back to the in-memory
         // counters only if the persisted read is unavailable.
@@ -5562,7 +5561,7 @@ abstract class ShardDO {
         let { errors } = this.metrics;
 
         try {
-            const totals = readFunctionMetricsTotals(this.state.storage.sql as unknown as SqlExec);
+            const totals = readFunctionMetricsTotals(this.shardHost.sql);
 
             requests = totals.requests;
             errors = totals.errors;
@@ -5576,7 +5575,7 @@ abstract class ShardDO {
         let indexHits: FunctionMetricIndexHit[] = [];
 
         try {
-            indexHits = readFunctionMetricIndexHits(this.state.storage.sql as unknown as SqlExec);
+            indexHits = readFunctionMetricIndexHits(this.shardHost.sql);
         } catch {
             // No durable index-hit table yet — report an empty feed.
         }
@@ -5587,7 +5586,7 @@ abstract class ShardDO {
         let queryStats: QueryStatEntry[] = [];
 
         try {
-            queryStats = readQueryMetrics(this.state.storage.sql as unknown as SqlExec);
+            queryStats = readQueryMetrics(this.shardHost.sql);
         } catch {
             // No durable query-metrics table yet — report an empty feed.
         }
@@ -5648,7 +5647,7 @@ abstract class ShardDO {
         // statements plus a bounded bucket trim, plus one upsert per scanned
         // table and one per exercised index. Survives restart/hibernation.
         try {
-            recordFunctionMetric(this.state.storage.sql as unknown as SqlExec, {
+            recordFunctionMetric(this.shardHost.sql, {
                 conflicted,
                 durationMs,
                 errored: errorMessage !== undefined,
@@ -5727,7 +5726,7 @@ abstract class ShardDO {
         }
 
         try {
-            const sqlHandle = this.state.storage.sql as unknown as SqlExec;
+            const sqlHandle = this.shardHost.sql as unknown as SqlExec;
 
             for (const [rawSql, durationMs, rowsRead, rowsWritten] of samples) {
                 try {
@@ -5757,7 +5756,7 @@ abstract class ShardDO {
      */
     private collectFunctionStats(): FunctionStatsResult {
         try {
-            const functions = readFunctionMetrics(this.state.storage.sql as unknown as SqlExec);
+            const functions = readFunctionMetrics(this.shardHost.sql);
 
             return { functions, sinceMs: this.metrics.sinceMs };
         } catch {
@@ -5775,7 +5774,7 @@ abstract class ShardDO {
      */
     private collectFunctionMetricBuckets(): (FunctionMetricBucket & { path: string })[] {
         try {
-            return readFunctionMetricBuckets(this.state.storage.sql as unknown as SqlExec);
+            return readFunctionMetricBuckets(this.shardHost.sql);
         } catch {
             return [];
         }
@@ -5792,8 +5791,7 @@ abstract class ShardDO {
             return;
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- structural state: a test double may omit `storage.sql` even though the type marks it required
-        const size = this.state.storage.sql?.databaseSize;
+        const size = this.shardHost.sql.databaseSize;
 
         if (typeof size !== "number" || size < ROOT_DO_SIZE_WARN_BYTES) {
             return;
@@ -6166,7 +6164,7 @@ abstract class ShardDO {
 
         const hash = parseIssueHash(args);
         const updatedBy = typeof args["updatedBy"] === "string" ? args["updatedBy"] : undefined;
-        const sql = this.state.storage.sql as unknown as SqlExec;
+        const sql = this.shardHost.sql as unknown as SqlExec;
         const state: IssueState = upsertIssueState(sql, hash, patch, Date.now(), updatedBy);
 
         this.recordChangedTable(ISSUE_STATE_TABLE);
@@ -6218,7 +6216,7 @@ abstract class ShardDO {
         const parsed = parseRecordAuthEventArgs(args);
 
         try {
-            recordAuthEvent(this.state.storage.sql as unknown as SqlExec, { outcome: parsed.outcome, ts: Date.now() });
+            recordAuthEvent(this.shardHost.sql, { outcome: parsed.outcome, ts: Date.now() });
         } catch {
             // Best-effort: a metrics write must never fail the call.
         }
@@ -6458,14 +6456,14 @@ abstract class ShardDO {
      */
     private handleRecordMail(args: Record<string, unknown>): Response {
         const parsed = parseRecordMailArgs(args);
-        const result = recordCapturedMail(this.state.storage.sql as unknown as SqlExec, parsed, Date.now());
+        const result = recordCapturedMail(this.shardHost.sql, parsed, Date.now());
 
         return jsonResponse({ result }, 200);
     }
 
     /** Empty the dev mail-catcher inbox (studio "clear inbox" action). Admin-gated by the caller. */
     private handleClearCapturedMail(): Response {
-        const result = clearCapturedMail(this.state.storage.sql as unknown as SqlExec);
+        const result = clearCapturedMail(this.shardHost.sql);
 
         return jsonResponse({ result }, 200);
     }
@@ -6479,7 +6477,7 @@ abstract class ShardDO {
      */
     private handleSendTestMail(args: Record<string, unknown>): Response {
         const input = buildTestMailInput(args);
-        const result = recordCapturedMail(this.state.storage.sql as unknown as SqlExec, input, Date.now());
+        const result = recordCapturedMail(this.shardHost.sql, input, Date.now());
 
         return jsonResponse({ result }, 200);
     }
@@ -6495,14 +6493,14 @@ abstract class ShardDO {
      */
     private handleRecordQueueMessage(args: Record<string, unknown>): Response {
         const messages = parseRecordQueueMessageArgs(args);
-        const result = recordQueueMessages(this.state.storage.sql as unknown as SqlExec, messages, Date.now());
+        const result = recordQueueMessages(this.shardHost.sql, messages, Date.now());
 
         return jsonResponse({ result }, 200);
     }
 
     /** Empty the dev queue consumed-message log (studio "clear log" action). Admin-gated by the caller. */
     private handleClearQueueMessages(): Response {
-        const result = clearQueueMessages(this.state.storage.sql as unknown as SqlExec);
+        const result = clearQueueMessages(this.shardHost.sql);
 
         return jsonResponse({ result }, 200);
     }
@@ -6549,7 +6547,7 @@ abstract class ShardDO {
      */
     private async handleReplayQueueMessage(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseReplayQueueMessageArgs(args);
-        const row = readQueueMessageById(this.state.storage.sql as unknown as SqlExec, parsed.id);
+        const row = readQueueMessageById(this.shardHost.sql, parsed.id);
 
         if (row === undefined) {
             throw new LunoraError("BAD_REQUEST", `replayQueueMessage: captured message "${parsed.id}" was not found`, { status: 404 });
@@ -6635,7 +6633,7 @@ abstract class ShardDO {
      * never blocks or fails the response.
      */
     private recordAudit(op: string, fields: { detail?: Record<string, unknown>; id?: string; table?: string } = {}): void {
-        const sql = this.state.storage.sql as unknown as SqlExec;
+        const sql = this.shardHost.sql as unknown as SqlExec;
         const userId = this.getCurrentUserId();
         const detail = userId === undefined ? fields.detail : { ...fields.detail, userId };
 
@@ -6737,7 +6735,7 @@ abstract class ShardDO {
         const writeOptions: RequestLogWriteOptions = { captureRaw: config.captureRaw, retention: config.retention };
 
         try {
-            appendRequestLogEntry(this.state.storage.sql as unknown as SqlExec, entry, writeOptions);
+            appendRequestLogEntry(this.shardHost.sql, entry, writeOptions);
         } catch {
             // Best-effort: never let request-log persistence fail the caller.
         }
@@ -6850,7 +6848,7 @@ abstract class ShardDO {
         // data browser sees a freshly-provisioned shard instead of an empty one.
         this.ensureMigrated();
 
-        const sql = this.state.storage.sql as unknown as SqlExec;
+        const sql = this.shardHost.sql as unknown as SqlExec;
 
         // The wildcard-bound counter/config reads aren't tied to a single table,
         // so they share one branch and the {@link ADMIN_WILDCARD} sentinel; a
@@ -7016,7 +7014,7 @@ abstract class ShardDO {
     // eslint-disable-next-line sonarjs/cognitive-complexity -- a flat admin-RPC dispatch chain (one trivial branch per function); #149 added the getTraces/getMetrics branches. A lookup table would obscure the 1:1 path→reader mapping this deliberately keeps.
     private readAdminWildcardOp(functionPath: string): unknown {
         if (functionPath === ADMIN_FUNCTIONS.listTables) {
-            return listTables(this.state.storage.sql as unknown as SqlExec);
+            return listTables(this.shardHost.sql);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getMetrics) {
@@ -8573,16 +8571,13 @@ abstract class ShardDO {
             return;
         }
 
-        const { setAlarm } = this.state.storage;
-
-        if (!setAlarm) {
-            return;
-        }
-
         this.globalPollScheduled = true;
 
         try {
-            await setAlarm.call(this.state.storage, atMs ?? Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS);
+            // `ShardAlarms.set` is a no-op on a host without alarm support, so
+            // the previous capability probe is no longer needed: arming is
+            // simply ineffective there, which is what it already degraded to.
+            await this.shardHost.alarms.set(atMs ?? Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS);
         } catch {
             // A failed arm clears the flag so a later seed/tick retries.
             this.globalPollScheduled = false;

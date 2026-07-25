@@ -27,10 +27,14 @@ import type {
     SocketHost,
 } from "@lunora/platform";
 
-/** Raw SQL cursor returned by Cloudflare's `SqlStorage.exec`. */
-type SqlStorageCursor = {
-    readonly rowsAffected?: number;
-    readonly toArray?: () => Record<string, unknown>[];
+/**
+ * Raw cursor returned by Cloudflare's `SqlStorage.exec` — already iterable with
+ * `one()` and `toArray()`, which is exactly the contract's cursor, so the
+ * adapter passes it straight through rather than re-wrapping.
+ */
+type SqlStorageCursor = Iterable<Record<string, unknown>> & {
+    readonly one: () => Record<string, unknown>;
+    readonly toArray: () => Record<string, unknown>[];
 };
 
 /**
@@ -94,7 +98,12 @@ const createShardHost = (state: DurableObjectState): ShardHost => {
     const { storage } = state;
 
     const sql: ShardSqlExec = {
-        exec: (query, ...bindings) => execSql(state, query, bindings),
+        // A live getter: workerd recomputes the size on each read, so caching it
+        // here would report a stale number for the life of the shard.
+        get databaseSize(): number | undefined {
+            return (state.storage.sql as undefined | { databaseSize?: number })?.databaseSize;
+        },
+        exec: (query, ...bindings) => execSql(state, query, bindings) as never,
     };
 
     const alarms = createShardAlarms(storage);
