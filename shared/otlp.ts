@@ -369,7 +369,6 @@ export {
     otlpRandomHex,
     otlpUnixNano,
     parseTraceparent,
-    TELEMETRY_SDK_NAME,
     wrapResourceLogs,
     wrapResourceMetrics,
     wrapResourceSpans,

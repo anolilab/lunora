@@ -4,7 +4,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
-import { otlpRandomHex } from "../../../shared/otlp";
+import { otlpRandomHex, parseTraceparent } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";

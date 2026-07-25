@@ -40,7 +40,6 @@ import {
 import type { KeepAlive } from "../../../shared/otlp-batch";
 import { createSignalBatcher } from "../../../shared/otlp-batch";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
-import { otlpLogBody, otlpMetricBody, otlpPost, otlpSpanBody, otlpTraceBody } from "./otlp-export";
 
 /** Shared shape for sinks that can be limited to error events only. */
 interface OnlyErrorsOption {
@@ -61,9 +60,43 @@ const shouldSkip = (event: ObservabilityEvent, onlyErrors: boolean | undefined):
 const encodeRpcSpan = (event: ObservabilityEvent, endMs: number): unknown => {
     const attributes = [encodeAttribute("lunora.function_path", event.functionPath), encodeAttribute("lunora.ok", event.ok)];
 
+    // HTTP server semantic conventions: from a collector's point of view the RPC
+    // endpoint is an HTTP handler, so method/route/status belong on the span even
+    // though the transport path is fixed. `http.route` carries the Lunora
+    // function path — that is the logical route being invoked.
+    if (event.method !== undefined) {
+        attributes.push(encodeAttribute("http.request.method", event.method));
+    }
+
+    if (event.path !== undefined) {
+        attributes.push(encodeAttribute("url.path", event.path));
+    }
+
+    attributes.push(encodeAttribute("http.route", event.functionPath));
+
+    if (event.scheme !== undefined) {
+        attributes.push(encodeAttribute("url.scheme", event.scheme));
+    }
+
+    if (event.host !== undefined) {
+        attributes.push(encodeAttribute("server.address", event.host));
+    }
+
+    if (event.port !== undefined) {
+        attributes.push(encodeAttribute("server.port", event.port));
+    }
+
+    if (event.userAgent !== undefined) {
+        attributes.push(encodeAttribute("user_agent.original", event.userAgent));
+    }
+
     if (event.shardKey !== undefined) {
         attributes.push(encodeAttribute("lunora.shard_key", event.shardKey));
     }
+
+    // Present on every RPC span: a success carries no explicit status in the
+    // event, so it defaults to 200; an error uses the error's HTTP-ish status.
+    attributes.push(encodeAttribute("http.response.status_code", event.error?.status ?? 200));
 
     if (event.error) {
         // `error.type` is the OTel semantic-convention key; keep the numeric
@@ -96,6 +129,20 @@ const encodeRpcSpan = (event: ObservabilityEvent, endMs: number): unknown => {
         // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
         status: event.ok ? { code: 1 } : { code: 2, message: event.error?.message ?? "" },
         traceId: event.traceId ?? otlpRandomHex(16),
+        // On error, record an OTel exception event with the standard
+        // `exception.*` attributes — the canonical error representation
+        // collectors and vendors key their error views on.
+        ...(event.error === undefined
+            ? {}
+            : {
+                  events: [
+                      {
+                          attributes: [encodeAttribute("exception.type", event.error.code), encodeAttribute("exception.message", event.error.message)],
+                          name: "exception",
+                          timeUnixNano: otlpUnixNano(endMs),
+                      },
+                  ],
+              }),
     };
 };
 
@@ -1019,18 +1066,6 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
     tailSampler?: TailSampler;
 
     /**
-     * Value of the `service.namespace` resource attribute, useful when multiple
-     * services share the same `service.name` under a tenant or team boundary.
-     */
-    serviceNamespace?: string;
-
-    /**
-     * Value of the `service.version` resource attribute (e.g. a git sha or
-     * release tag).
-     */
-    serviceVersion?: string;
-
-    /**
      * Convenience bearer token: when set, an `Authorization: Bearer` header
      * carrying it is added to every POST (overriding any authorization in
      * `headers`). Mirrors the container exporter so the platform can inject the
@@ -1089,9 +1124,13 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
         "telemetry.sdk.name": "lunora",
         ...(options.serviceVersion === undefined ? {} : { "service.version": options.serviceVersion }),
         ...(options.serviceNamespace === undefined ? {} : { "service.namespace": options.serviceNamespace }),
-        ...(options.deploymentEnvironment === undefined ? {} : { "deployment.environment.name": options.deploymentEnvironment }),
+        // `deployment.environment`, not the newer `deployment.environment.name`:
+        // alpha's exporter contract uses this spelling and its tests assert it.
+        // Emitting both was tried and rejected — the extra attribute pushed the
+        // envelope past OTLP_GZIP_THRESHOLD, silently switching the wire format.
+        ...(options.deploymentEnvironment === undefined ? {} : { "deployment.environment": options.deploymentEnvironment }),
         ...(options.serviceInstanceId === undefined ? {} : { "service.instance.id": options.serviceInstanceId }),
-        ...(options.resourceAttributes ?? {}),
+        ...options.resourceAttributes,
     };
 
     // Strip trailing slashes without a regex — a `/\/+$/`-style pattern trips
@@ -1139,8 +1178,12 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
         // to the `waitUntil` for no benefit.
         await Promise.all([
             spans.length === 0 ? undefined : otlpSend(tracesUrl, wrapResourceSpans(spans, "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders),
-            logRecords.length === 0 ? undefined : otlpSend(logsUrl, wrapResourceLogs(logRecords, "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders),
-            metrics.length === 0 ? undefined : otlpSend(metricsUrl, wrapResourceMetrics(metrics, "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders),
+            logRecords.length === 0
+                ? undefined
+                : otlpSend(logsUrl, wrapResourceLogs(logRecords, "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders),
+            metrics.length === 0
+                ? undefined
+                : otlpSend(metricsUrl, wrapResourceMetrics(metrics, "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders),
         ]);
     };
 
@@ -1160,7 +1203,12 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
                 const processed = postProcess(event, postProcessor?.metric);
 
                 if (processed !== undefined) {
-                    otlpPost(metricsUrl, wrapResourceMetrics(encodeMetric(processed), "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders, context);
+                    otlpPost(
+                        metricsUrl,
+                        wrapResourceMetrics(encodeMetric(processed), "@lunora/runtime", serviceName, resourceAttributes),
+                        mergedHeaders,
+                        context,
+                    );
                 }
             },
             onRpc: (event, context) => {
@@ -1171,14 +1219,24 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
                 const processed = postProcess(event, postProcessor?.rpc);
 
                 if (processed !== undefined) {
-                    otlpPost(tracesUrl, wrapResourceSpans(encodeRpcSpan(processed, Date.now()), "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders, context);
+                    otlpPost(
+                        tracesUrl,
+                        wrapResourceSpans(encodeRpcSpan(processed, Date.now()), "@lunora/runtime", serviceName, resourceAttributes),
+                        mergedHeaders,
+                        context,
+                    );
                 }
             },
             onSpan: (event, context) => {
                 const processed = postProcess(event, postProcessor?.span);
 
                 if (processed !== undefined) {
-                    otlpPost(tracesUrl, wrapResourceSpans(encodeUserSpan(processed), "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders, context);
+                    otlpPost(
+                        tracesUrl,
+                        wrapResourceSpans(encodeUserSpan(processed), "@lunora/runtime", serviceName, resourceAttributes),
+                        mergedHeaders,
+                        context,
+                    );
                 }
             },
         };
