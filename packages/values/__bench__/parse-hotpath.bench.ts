@@ -98,14 +98,25 @@ const arrayBaseline = (input: unknown[]): unknown[] => {
  * array-like through the generic iteration protocol. Keeping it benched means a
  * future edit that reintroduces it shows up as a large, obvious gap instead of
  * quietly making every array parse several times slower again.
+ *
+ * Deliberately identical to the shipped parser in EVERY other respect — one
+ * reused context with a push/pop path stack, `length` hoisted, indexed loop — so
+ * the only variable against the `optimized` arm is how the result array is
+ * built. Allocating a fresh `{ path: [index] }` per element here instead would
+ * fold per-element path allocation into the reading and stop it isolating
+ * `Array.from` at all.
  */
 const arrayFromPreallocationRegression = (input: unknown[]): unknown[] => {
     const inner = asInternal(stringElement);
     const { length } = input;
     const out: unknown[] = Array.from({ length });
+    const context: ParseContext = { path: [] };
+    const { path } = context;
 
     for (let index = 0; index < length; index += 1) {
-        out[index] = inner._parse(input[index], { path: [index] });
+        path.push(index);
+        out[index] = inner._parse(input[index], context);
+        path.pop();
     }
 
     return out;

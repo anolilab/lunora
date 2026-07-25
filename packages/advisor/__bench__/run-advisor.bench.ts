@@ -1,3 +1,4 @@
+import type { TableDefinition } from "@lunora/server";
 import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { bench, describe } from "vitest";
@@ -43,10 +44,7 @@ import { ALL_LINTS, fromServerSchema, runAdvisor, STATIC_LINTS } from "../src";
  * suite's number and misrepresent what codegen actually pays.
  */
 const buildSchema = (size: number) => {
-    // Loosely typed accumulator: `defineTable` returns a builder generic in its
-    // own shape, so a shared annotation across differently-shaped tables cannot
-    // be written without erasing that. The cast lands once, at `defineSchema`.
-    const tables: Record<string, unknown> = {
+    const tables: Record<string, TableDefinition> = {
         orgs: defineTable({ name: v.string(), tier: v.string() }).index("by_name", ["name"]),
         users: defineTable({ email: v.string(), orgId: v.id("orgs") })
             .index("by_email", ["email"])
@@ -82,7 +80,7 @@ const buildSchema = (size: number) => {
         return { a: r.one("cycleA", { field: "aId" }) };
     });
 
-    return fromServerSchema(defineSchema(tables as never));
+    return fromServerSchema(defineSchema(tables));
 };
 
 /**
@@ -91,7 +89,7 @@ const buildSchema = (size: number) => {
  * without being mistaken for the cost of a normal schema.
  */
 const buildRingSchema = (size: number) => {
-    const tables: Record<string, unknown> = {};
+    const tables: Record<string, TableDefinition> = {};
 
     for (let index = 0; index < size; index += 1) {
         const next = `ring${String((index + 1) % size)}`;
@@ -101,7 +99,7 @@ const buildRingSchema = (size: number) => {
         });
     }
 
-    return fromServerSchema(defineSchema(tables as never));
+    return fromServerSchema(defineSchema(tables));
 };
 
 const small = { schema: buildSchema(5) };
