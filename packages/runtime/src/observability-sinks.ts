@@ -39,6 +39,7 @@ import {
 } from "../../../shared/otlp";
 import type { KeepAlive } from "../../../shared/otlp-batch";
 import { createSignalBatcher } from "../../../shared/otlp-batch";
+import { mergeResourceAttributes } from "../../../shared/otlp-resource";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
 
 /** Shared shape for sinks that can be limited to error events only. */
@@ -400,12 +401,22 @@ const otlpPost = (url: string, body: unknown, headers: Record<string, string>, c
     otlpSend(url, body, headers, context?.waitUntil).catch(() => undefined);
 };
 
-/** One buffered event, tagged with the signal it belongs to so a flush can group it. */
-type BufferedSignal =
+/**
+ * One buffered event, tagged with the signal it belongs to so a flush can group
+ * it, and with the resource bag it was recorded under.
+ *
+ * `resource` is captured at enqueue rather than read at flush because it is a
+ * property of the *request that produced the event*, and a flush window spans
+ * requests. It is compared by identity downstream, which is exactly right: the
+ * per-context memo hands back the same object for every event of one request, so
+ * identity groups a request's events together without hashing an attribute bag.
+ */
+type BufferedSignal = (
     | { event: LogEvent; kind: "log" }
     | { event: MetricEvent; kind: "metric" }
     | { endMs: number; event: ObservabilityEvent; kind: "rpc" }
-    | { event: SpanEvent; kind: "span" };
+    | { event: SpanEvent; kind: "span" }
+) & { resource: OtlpResourceAttributes };
 
 /** The trace id an event belongs to, or `undefined` when it carries no trace context. */
 const traceIdOf = (signal: BufferedSignal): string | undefined => {
@@ -457,9 +468,13 @@ const applyTailSampler = (signals: BufferedSignal[], tailSampler: TailSampler | 
 
         try {
             verdict = tailSampler({
-                logs: bucket.filter((s): s is { event: LogEvent; kind: "log" } => s.kind === "log").map((s) => s.event),
-                rpc: bucket.filter((s): s is { endMs: number; event: ObservabilityEvent; kind: "rpc" } => s.kind === "rpc").map((s) => s.event),
-                spans: bucket.filter((s): s is { event: SpanEvent; kind: "span" } => s.kind === "span").map((s) => s.event),
+                // `Extract` rather than a restated literal shape: these predicates
+                // are narrowing the union above, and spelling the members out by
+                // hand meant every field added to a buffered signal had to be
+                // mirrored here or the predicate silently stopped matching.
+                logs: bucket.filter((s): s is Extract<BufferedSignal, { kind: "log" }> => s.kind === "log").map((s) => s.event),
+                rpc: bucket.filter((s): s is Extract<BufferedSignal, { kind: "rpc" }> => s.kind === "rpc").map((s) => s.event),
+                spans: bucket.filter((s): s is Extract<BufferedSignal, { kind: "span" }> => s.kind === "span").map((s) => s.event),
                 traceId,
             });
         } catch {
@@ -1026,6 +1041,29 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
      */
     deploymentEnvironment?: string;
 
+    /** Extra resource attributes (`cloud.region`, a tenant id, …), merged last. */
+
+    /**
+     * Merge per-request detected resource attributes (`service.version`,
+     * `deployment.environment`, `cloud.provider`, `cloud.region`) into every
+     * envelope. Off by default, because detection reads deployment-shaped
+     * identity that not every operator wants leaving the worker.
+     *
+     * The sink never touches `env` or the `Request`. Detection runs once per
+     * request in the runtime and arrives pre-resolved on the sink context, so no
+     * sink — including third-party and user-authored ones — is ever handed raw
+     * bindings. See `./resource-detect`.
+     *
+     * Detected attributes merge *under* the explicit options below, so anything
+     * you configure by hand always wins on collision.
+     *
+     * Events raised inside a shard (`ctx.log`, `ctx.trace`, `ctx.metrics`) carry
+     * no detected attributes — a shard has no `env` of its own — so they export
+     * with the explicit options only. Configure the values explicitly if you
+     * need them identical across worker and shard spans of one trace.
+     */
+    detectResources?: boolean;
+
     /**
      * The OTLP-over-HTTP collector base endpoint (e.g.
      * `https://collector.example.com`). Following the OTel base-endpoint
@@ -1052,7 +1090,6 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
      */
     postProcessor?: OtlpPostProcessor;
 
-    /** Extra resource attributes (`cloud.region`, a tenant id, …), merged last. */
     resourceAttributes?: Record<string, boolean | number | string>;
 
     /** `service.instance.id` resource attribute — distinguishes replicas. */
@@ -1123,18 +1160,13 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
  * @param options See {@link OtlpSinkOptions}.
  */
 export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
-    const { batch, endpoint, headers, onlyErrors, postProcessor, tailSampler, token } = options;
+    const { batch, detectResources, endpoint, headers, onlyErrors, postProcessor, tailSampler, token } = options;
 
     const serviceName = options.serviceName ?? "lunora";
 
-    // The resource every exported envelope carries, built once per sink.
-    //
-    // Per-request resource detection was deliberately dropped when batching
-    // landed: a batch ships N events under ONE `Resource`, so attributes that
-    // vary per request have nowhere to attach without keying batches by
-    // resource identity. Static configuration is the honest shape for a batched
-    // exporter.
-    const resourceAttributes: OtlpResourceAttributes = {
+    // The explicit half of the resource, built once per sink. Detected
+    // attributes merge *under* this, so hand-configured values always win.
+    const staticAttributes: OtlpResourceAttributes = {
         "telemetry.sdk.language": "nodejs",
         "telemetry.sdk.name": "lunora",
         ...(options.serviceVersion === undefined ? {} : { "service.version": options.serviceVersion }),
@@ -1146,6 +1178,39 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
         ...(options.deploymentEnvironment === undefined ? {} : { "deployment.environment": options.deploymentEnvironment }),
         ...(options.serviceInstanceId === undefined ? {} : { "service.instance.id": options.serviceInstanceId }),
         ...options.resourceAttributes,
+    };
+
+    // Per-request memo of the merged bag. Every log line, metric, and span of one
+    // request shares a sink context, and both halves of the merge are fixed for
+    // that request — so this runs at most once per request instead of once per
+    // event on the hot dispatch path. Keyed weakly so a finished request's entry
+    // is collectable rather than pinned for the isolate's lifetime.
+    const mergedByContext = new WeakMap<ObservabilitySinkContext, OtlpResourceAttributes>();
+
+    /**
+     * The resource bag for one event: detected attributes merged *under* the
+     * static options, so explicit configuration always wins on collision.
+     *
+     * With `detectResources` off — the default — this returns the static bag by
+     * reference, so the common case allocates nothing and every event of every
+     * request shares one group at flush time.
+     */
+    const resourceAttributesFor = (context?: ObservabilitySinkContext): OtlpResourceAttributes => {
+        if (detectResources !== true || context?.resourceAttributes === undefined) {
+            return staticAttributes;
+        }
+
+        const memoized = mergedByContext.get(context);
+
+        if (memoized !== undefined) {
+            return memoized;
+        }
+
+        const merged = mergeResourceAttributes(context.resourceAttributes(), staticAttributes);
+
+        mergedByContext.set(context, merged);
+
+        return merged;
     };
 
     // Strip trailing slashes without a regex — a `/\/+$/`-style pattern trips
@@ -1163,13 +1228,20 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
     // authorization in `headers`, matching the container exporter's precedence.
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers, token);
 
-    /** Ship one flush window: tail-sample, encode by signal, and POST at most one request per signal. */
+    /**
+     * Ship one flush window: tail-sample, encode by signal, then POST at most one
+     * request per resource per signal endpoint.
+     *
+     * Events are grouped by their RESOURCE bag before wrapping. One OTLP envelope
+     * carries exactly one `Resource`, so with `detectResources` on — where two
+     * requests in the same flush window legitimately differ in `cloud.region` or
+     * `service.version` — a single envelope would mis-attribute half the batch.
+     * With detection off every signal shares the static bag by reference, so this
+     * collapses to one group and the same three POSTs as before.
+     */
     const exportBatch = async (signals: BufferedSignal[]): Promise<void> => {
         const kept = applyTailSampler(signals, tailSampler);
-
-        const spans: unknown[] = [];
-        const logRecords: unknown[] = [];
-        const metrics: unknown[] = [];
+        const groups = new Map<OtlpResourceAttributes, { logs: unknown[]; metrics: unknown[]; spans: unknown[] }>();
 
         for (const signal of kept) {
             const encoded = encodeSignal(signal, postProcessor);
@@ -1178,28 +1250,35 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
                 continue;
             }
 
-            if (encoded.bucket === "spans") {
-                spans.push(encoded.encoded);
-            } else if (encoded.bucket === "logs") {
-                logRecords.push(encoded.encoded);
-            } else {
-                metrics.push(encoded.encoded);
+            let group = groups.get(signal.resource);
+
+            if (group === undefined) {
+                group = { logs: [], metrics: [], spans: [] };
+                groups.set(signal.resource, group);
+            }
+
+            group[encoded.bucket].push(encoded.encoded);
+        }
+
+        const sends: Promise<void>[] = [];
+
+        for (const [resource, group] of groups) {
+            if (group.spans.length > 0) {
+                sends.push(otlpSend(tracesUrl, wrapResourceSpans(group.spans, "@lunora/runtime", serviceName, resource), mergedHeaders));
+            }
+
+            if (group.logs.length > 0) {
+                sends.push(otlpSend(logsUrl, wrapResourceLogs(group.logs, "@lunora/runtime", serviceName, resource), mergedHeaders));
+            }
+
+            if (group.metrics.length > 0) {
+                sends.push(otlpSend(metricsUrl, wrapResourceMetrics(group.metrics, "@lunora/runtime", serviceName, resource), mergedHeaders));
             }
         }
 
-        // Three independent POSTs at most — one per OTLP signal endpoint, since
-        // the protocol has no combined envelope. Sent concurrently: they are
-        // unrelated, and serialising them would add a round-trip of tail latency
-        // to the `waitUntil` for no benefit.
-        await Promise.all([
-            spans.length === 0 ? undefined : otlpSend(tracesUrl, wrapResourceSpans(spans, "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders),
-            logRecords.length === 0
-                ? undefined
-                : otlpSend(logsUrl, wrapResourceLogs(logRecords, "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders),
-            metrics.length === 0
-                ? undefined
-                : otlpSend(metricsUrl, wrapResourceMetrics(metrics, "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders),
-        ]);
+        // Concurrent: the signal endpoints are unrelated, and serialising them
+        // would add a round-trip of tail latency to the `waitUntil` for no benefit.
+        await Promise.all(sends);
     };
 
     if (batch === false) {
@@ -1211,7 +1290,12 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
                 const processed = postProcess(event, postProcessor?.log);
 
                 if (processed !== undefined) {
-                    otlpPost(logsUrl, wrapResourceLogs(encodeLogRecord(processed), "@lunora/runtime", serviceName, resourceAttributes), mergedHeaders, context);
+                    otlpPost(
+                        logsUrl,
+                        wrapResourceLogs(encodeLogRecord(processed), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
+                        mergedHeaders,
+                        context,
+                    );
                 }
             },
             onMetric: (event, context) => {
@@ -1220,7 +1304,7 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
                 if (processed !== undefined) {
                     otlpPost(
                         metricsUrl,
-                        wrapResourceMetrics(encodeMetric(processed), "@lunora/runtime", serviceName, resourceAttributes),
+                        wrapResourceMetrics(encodeMetric(processed), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
                         mergedHeaders,
                         context,
                     );
@@ -1236,7 +1320,7 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
                 if (processed !== undefined) {
                     otlpPost(
                         tracesUrl,
-                        wrapResourceSpans(encodeRpcSpan(processed, Date.now()), "@lunora/runtime", serviceName, resourceAttributes),
+                        wrapResourceSpans(encodeRpcSpan(processed, Date.now()), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
                         mergedHeaders,
                         context,
                     );
@@ -1248,7 +1332,7 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
                 if (processed !== undefined) {
                     otlpPost(
                         tracesUrl,
-                        wrapResourceSpans(encodeUserSpan(processed), "@lunora/runtime", serviceName, resourceAttributes),
+                        wrapResourceSpans(encodeUserSpan(processed), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
                         mergedHeaders,
                         context,
                     );
@@ -1272,12 +1356,12 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
         onLog: (event, context) => {
             // Application log lines are buffered whole; `onlyErrors` scopes the
             // RPC span stream, not the developer's `ctx.log` output.
-            batcher.add({ event, kind: "log" }, context?.waitUntil);
+            batcher.add({ event, kind: "log", resource: resourceAttributesFor(context) }, context?.waitUntil);
         },
         onMetric: (event, context) => {
             // Like logs and spans, a measurement the developer explicitly recorded
             // is never scoped by `onlyErrors`.
-            batcher.add({ event, kind: "metric" }, context?.waitUntil);
+            batcher.add({ event, kind: "metric", resource: resourceAttributesFor(context) }, context?.waitUntil);
         },
         onRpc: (event, context) => {
             if (shouldSkip(event, onlyErrors)) {
@@ -1287,13 +1371,13 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
             // `endMs` is captured on arrival, not at flush: the span's end time is
             // when the dispatch finished, and deriving it from the flush clock
             // would stretch every span by however long it sat in the buffer.
-            batcher.add({ endMs: Date.now(), event, kind: "rpc" }, context?.waitUntil);
+            batcher.add({ endMs: Date.now(), event, kind: "rpc", resource: resourceAttributesFor(context) }, context?.waitUntil);
         },
         onSpan: (event, context) => {
             // `onlyErrors` scopes the RPC span stream; a handler that explicitly
             // instrumented a sub-operation always gets its span exported, the same
             // way `ctx.log` output is never scoped by it.
-            batcher.add({ event, kind: "span" }, context?.waitUntil);
+            batcher.add({ event, kind: "span", resource: resourceAttributesFor(context) }, context?.waitUntil);
         },
     };
 };

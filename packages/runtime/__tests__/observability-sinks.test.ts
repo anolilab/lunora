@@ -1209,6 +1209,124 @@ describe("observability-sinks", () => {
             expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "overridden" });
         });
 
+        describe("detectResources", () => {
+            /** A sink context carrying pre-resolved detected attributes, as the runtime builds it. */
+            const contextWith = (attributes: Record<string, string>) => {
+                return { resourceAttributes: () => attributes };
+            };
+
+            it("ignores detected attributes unless detectResources is enabled", async () => {
+                expect.assertions(2);
+
+                const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+                vi.stubGlobal("fetch", fetchMock);
+
+                const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+
+                sink.onRpc!(okEvent, contextWith({ "cloud.region": "weur" }));
+                await otlpCalls(fetchMock, 1);
+
+                const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+                expect(attrValue(resourceAttributes, "cloud.region")).toBeUndefined();
+                expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "lunora" });
+            });
+
+            it("merges detected attributes under the explicit options when enabled", async () => {
+                expect.assertions(3);
+
+                const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+                vi.stubGlobal("fetch", fetchMock);
+
+                const sink = otlpSink({
+                    batch: false,
+                    detectResources: true,
+                    endpoint: "https://collector.example",
+                    serviceVersion: "explicit",
+                });
+
+                // `service.version` is set both ways: the explicit option must win.
+                sink.onRpc!(okEvent, contextWith({ "cloud.region": "weur", "service.version": "detected" }));
+                await otlpCalls(fetchMock, 1);
+
+                const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+                expect(attrValue(resourceAttributes, "cloud.region")).toStrictEqual({ stringValue: "weur" });
+                expect(attrValue(resourceAttributes, "service.version")).toStrictEqual({ stringValue: "explicit" });
+                expect(attrValue(resourceAttributes, "service.name")).toStrictEqual({ stringValue: "lunora" });
+            });
+
+            it("resolves the detected bag once per request, not once per event", async () => {
+                expect.assertions(1);
+
+                const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+                vi.stubGlobal("fetch", fetchMock);
+
+                const resolve = vi.fn<() => Record<string, string>>(() => {
+                    return { "cloud.region": "weur" };
+                });
+                const context = { resourceAttributes: resolve };
+                const sink = otlpSink({ batch: false, detectResources: true, endpoint: "https://collector.example" });
+
+                // Four events, one request. Detection is a per-request constant, so
+                // re-running it per event would put the probes on the hot path.
+                sink.onRpc!(okEvent, context);
+                sink.onRpc!(okEvent, context);
+                sink.onMetric!(metricEvent, context);
+                sink.onSpan!(spanEvent, context);
+                await otlpCalls(fetchMock, 4);
+
+                expect(resolve).toHaveBeenCalledTimes(1);
+            });
+
+            it("splits a batch into one envelope per resource so requests are not mis-attributed", async () => {
+                expect.assertions(3);
+
+                const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+                vi.stubGlobal("fetch", fetchMock);
+
+                const sink = otlpSink({ batch: { maxItems: 10 }, detectResources: true, endpoint: "https://collector.example" });
+
+                // Two requests in one flush window, landing in different colos. One
+                // OTLP envelope carries exactly one Resource, so a single POST here
+                // would stamp both spans with whichever region happened to be first.
+                sink.onRpc!(okEvent, contextWith({ "cloud.region": "weur" }));
+                sink.onRpc!(okEvent, contextWith({ "cloud.region": "enam" }));
+                sink.flush!();
+
+                await otlpCalls(fetchMock, 2);
+
+                const regions = (fetchMock.mock.calls as unknown as [string, RequestInit][])
+                    .map((call) => attrValue(spanFrom(call[1]).resourceAttributes, "cloud.region")?.stringValue)
+                    .toSorted((a, b) => String(a).localeCompare(String(b)));
+
+                expect(fetchMock).toHaveBeenCalledTimes(2);
+                expect(regions).toStrictEqual(["enam", "weur"]);
+
+                // Each envelope carries exactly the one span recorded under it.
+                expect(spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]).span).toBeDefined();
+            });
+
+            it("keeps a batch in one envelope per signal when detection is off", async () => {
+                expect.assertions(1);
+
+                const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+                vi.stubGlobal("fetch", fetchMock);
+
+                const sink = otlpSink({ batch: { maxItems: 10 }, endpoint: "https://collector.example" });
+
+                // Different contexts, but detection off — every signal shares the
+                // static bag by reference, so grouping must not fragment the batch.
+                sink.onRpc!(okEvent, contextWith({ "cloud.region": "weur" }));
+                sink.onRpc!(okEvent, contextWith({ "cloud.region": "enam" }));
+                sink.flush!();
+
+                await otlpCalls(fetchMock, 1);
+
+                expect(fetchMock).toHaveBeenCalledTimes(1);
+            });
+        });
+
         it("emits HTTP semantic-convention attributes on the RPC dispatch span", async () => {
             expect.assertions(9);
 
