@@ -27,6 +27,16 @@ const makeMutationContext = (): MutationContext => {
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
+        span: {
+            addEvent: () => undefined,
+            addLink: () => undefined,
+            recordException: () => undefined,
+            setAttribute: () => undefined,
+            setAttributes: () => undefined,
+            spanContext: () => {
+                return { spanId: "0000000000000001", traceId: "00000000000000000000000000000001" };
+            },
+        },
         now: 0,
         runMutation: vi.fn<MutationContext["runMutation"]>() as MutationContext["runMutation"],
         secrets: { get: async () => "secret" },

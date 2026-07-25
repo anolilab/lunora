@@ -1437,6 +1437,29 @@ interface LunoraLogMethod {
 interface LunoraLogger {
     readonly debug: LunoraLogMethod;
     readonly error: LunoraLogMethod;
+
+    /**
+     * Emit a **structured event** instead of a log line — OpenTelemetry's Events
+     * API, on the wire as `LogRecord.eventName` (plus an `event.name` attribute
+     * for collectors predating that field).
+     *
+     * ```ts
+     * ctx.log.event("checkout.completed", { plan: user.plan, total, currency });
+     * ```
+     *
+     * The difference from `ctx.log.info("checkout completed", { … })` is what a
+     * backend can do with it. A log line's payload is its message: prose, written
+     * for a human, free to be reworded next sprint — so "how many checkouts
+     * completed, by plan, this hour" degrades into a substring search over
+     * English. An event's payload is its `fields` under a **stable name**, which a
+     * collector can index, group, and alert on directly.
+     *
+     * Rule of thumb: `log.*` for narration you'd read while debugging, `event` for
+     * anything you'd ever put on a dashboard. And for facts about the request as a
+     * whole, prefer `ctx.span` — one wide event beats a dozen
+     * events, however well named.
+     */
+    readonly event: (name: string, fields?: LogFields) => void;
     readonly fatal: LunoraLogMethod;
     readonly info: LunoraLogMethod;
     readonly log: LunoraLogMethod;
@@ -1462,10 +1485,77 @@ interface LunoraLogger {
  * handle writes are merged over them at record time, post-hoc winning on a clash.
  */
 interface SpanHandle {
+    /**
+     * Record a timestamped event on the enclosing span — a retry, a cache miss, a
+     * state transition. Prefer this over an extra `ctx.log` line for anything that
+     * only makes sense *relative to this span*: it rides the span's own export, so
+     * it costs no additional record and can never be separated from its context.
+     */
+    addEvent: (name: string, attributes?: LogFields) => void;
+
+    /**
+     * Link this span to one in another trace — how a queue consumer points back at
+     * the request that enqueued its message without collapsing every producer into
+     * one giant trace.
+     */
+    addLink: (link: SpanLink) => void;
+
+    /**
+     * Record a **handled** exception as the OTel-conventional `exception` span
+     * event (`exception.type` / `exception.message` / `exception.stacktrace`),
+     * without marking the span failed.
+     *
+     * For an error you swallowed — a retried request, a fallback that worked. An
+     * error that escapes the span body is recorded automatically and *does* set
+     * the error status, so don't call this for one you're re-throwing.
+     */
+    recordException: (error: unknown) => void;
+
     /** Set one attribute on the enclosing span (merged at record time; post-hoc wins on key clash). */
     setAttribute: (key: string, value: LogFields[string]) => void;
     /** Merge attributes onto the enclosing span (post-hoc wins on key clash). */
     setAttributes: (fields: LogFields) => void;
+
+    /**
+     * The W3C ids of the span this handle refers to (32-hex trace, 16-hex span).
+     *
+     * On `ctx.span` these are the DISPATCH's ids — the trace the whole request
+     * belongs to. Use it to echo a trace id back to a caller so a user can quote
+     * it in a bug report, to build a `traceparent` for a hand-rolled outbound
+     * call, or to parent a third-party library's spans onto this request.
+     */
+    spanContext: () => { spanId: string; traceId: string };
+}
+
+/**
+ * A causal reference to a span in another trace (OTel `Span.links`). Ids are
+ * lowercase hex — 32 chars for `traceId`, 16 for `spanId`.
+ */
+interface SpanLink {
+    /** Attributes describing the relationship, e.g. `{ "link.kind": "enqueued_by" }`. */
+    attributes?: LogFields;
+    spanId: string;
+    traceId: string;
+}
+
+/** OTel `SpanKind`. Drives a collector's service map — see {@link SpanOptions.kind}. */
+type SpanKind = "client" | "consumer" | "internal" | "producer" | "server";
+
+/** Options accepted by `ctx.trace(name, fn, options)` beyond a plain attribute bag. */
+interface SpanOptions {
+    /** Start attributes, snapshotted before the body runs. */
+    attributes?: LogFields;
+
+    /**
+     * OTel `SpanKind`, default `"internal"`. Set `"client"` for a call OUT to
+     * another service and `"producer"`/`"consumer"` for queue hops: a collector
+     * builds its service map from this, so leaving everything `"internal"` yields
+     * a trace with no topology.
+     */
+    kind?: SpanKind;
+
+    /** Links to spans in other traces, known at span start. */
+    links?: SpanLink[];
 }
 
 /**
@@ -1517,10 +1607,53 @@ interface SpanHandle {
  * @param fn The body to time, receiving a tracer bound to this span for any
  * nested spans and the enclosing span's {@link SpanHandle} for post-hoc
  * attributes. May be sync or async; the result is awaited.
- * @param attributes Structured attributes to stamp on the span at start,
- * normalized like a log line's `fields`.
+ * @param attributes Either a plain attribute bag to stamp on the span at start
+ * (normalized like a log line's `fields`), or a {@link SpanOptions} object when
+ * you need `kind` or `links`. It is read as options only when *every* key is one
+ * of `attributes`/`kind`/`links`; `{ attributes: { kind: "premium" } }` is the
+ * explicit form if your own attributes happen to be named that.
  */
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions) => Promise<T>;
+
+/**
+ * `ctx.span` — a handle onto **this request's own span**, and with it the
+ * wide-event API.
+ *
+ * ```ts
+ * export const checkout = mutation({ handler: async (ctx, args) => {
+ *     ctx.span.setAttributes({ "user.plan": user.plan, "cart.items": cart.length });
+ *     const payment = await charge(cart);
+ *     ctx.span.setAttributes({ "payment.provider": payment.provider, "payment.total": payment.total });
+ *     if (payment.retried) ctx.span.addEvent("payment.retried", { attempts: payment.attempts });
+ *     return payment;
+ * }});
+ * ```
+ *
+ * **Why this instead of more log lines.** The usual way to make a handler
+ * observable is to sprinkle `ctx.log.info` through it, which costs one record per
+ * call, scatters one request's facts across a dozen rows, and forces every
+ * question to be answered by correlating them back together. The wide-event
+ * pattern inverts that: accumulate the facts as you learn them, and emit **one**
+ * richly-attributed record per unit of work. Cost is flat — one span per request
+ * no matter how much you attach — and every question ("p99 checkout latency for
+ * pro-plan users with >10 items") becomes a single filter over one table instead
+ * of a join across log lines.
+ *
+ * **This is plain OpenTelemetry, not a Lunora convention.** The attributes land
+ * on the span the dispatch already emits, and are additionally exported as an
+ * OTel Event record named `lunora.dispatch`, correlated by `trace_id`/`span_id`.
+ * Any OTLP backend groups and aggregates them with no special configuration.
+ *
+ * **`span` vs `trace`.** `ctx.trace(name, fn)` creates a NEW child span to time a
+ * sub-operation; `ctx.span` attaches to the one that already exists for the
+ * request. Use `trace` for "how long did this part take", `span` for "what was
+ * true about this request". Inside a `ctx.trace` body, the handle passed as the
+ * body's second argument is that child span's equivalent of this.
+ *
+ * Attributes are normalized exactly like `ctx.log` fields, and recording is
+ * best-effort — a telemetry failure never breaks the handler.
+ */
+type LunoraWideEvent = SpanHandle;
 
 /**
  * Application metrics on every function `ctx` — the third signal alongside
@@ -1617,6 +1750,8 @@ interface QueryCtx {
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
+    /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
+    readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
     readonly trace: LunoraTracer;
@@ -1681,6 +1816,8 @@ interface MutationCtx {
     readonly scheduler: Scheduler;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
+    /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
+    readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
     readonly trace: LunoraTracer;
@@ -1741,6 +1878,8 @@ interface ActionCtx {
     readonly scheduler: Scheduler;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
+    /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
+    readonly span: LunoraWideEvent;
     readonly storage: Storage;
     /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
     readonly trace: LunoraTracer;
@@ -1830,6 +1969,7 @@ export type {
     LunoraLogMethod,
     LunoraMetrics,
     LunoraTracer,
+    LunoraWideEvent,
     MutationCtx,
     OnDeleteAction,
     PaginationOptions,
@@ -1855,6 +1995,9 @@ export type {
     SecretsStoreSecretLike,
     ShardMode,
     SpanHandle,
+    SpanKind,
+    SpanLink,
+    SpanOptions,
     Storage,
     StorageMetadata,
     SystemDatabaseReader,
