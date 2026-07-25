@@ -48,7 +48,19 @@ describe("lunora init smoke", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("lunora init → codegen → wrangler validator (Phase 5 smoke)", () => {
+    /*
+     * Each case scaffolds a whole project, parses its schema + function modules
+     * through `runCodegen` (a real TypeScript parse), and runs the wrangler
+     * validator. That is far more work than a unit test, and it lands against the
+     * shared 10s local budget (`tools/get-vitest-config.ts`; CI gets 30s). On an
+     * unloaded machine the heaviest case takes ~6.4s of that 10s — thin enough
+     * that running anything else concurrently tips it over, which surfaced as
+     * intermittent "Test timed out in 10000ms" locally while CI stayed green.
+     *
+     * Scoped to this suite rather than raising the global default, so genuinely
+     * hung unit tests elsewhere still fail fast.
+     */
+    describe("lunora init → codegen → wrangler validator (Phase 5 smoke)", { timeout: 60_000 }, () => {
         it("vite template produces a project that codegen + wrangler validator accept", async () => {
             expect.assertions(9);
 
