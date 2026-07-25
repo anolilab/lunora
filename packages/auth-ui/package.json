@@ -2,7 +2,7 @@
     "name": "@lunora/auth-ui",
     "version": "1.0.0-alpha.0",
     "private": true,
-    "description": "Internal: source-of-truth for the copy-in, user-owned auth screens distributed via the `auth-ui-*` registry items. Not published — synced into registry/auth-ui-<framework>/ and copied into consumer projects.",
+    "description": "Internal: source-of-truth for the copy-in, user-owned auth screens distributed via the `auth-ui-*` registry items. Not published \u2014 synced into registry/auth-ui-<framework>/ and copied into consumer projects.",
     "keywords": [
         "auth",
         "better-auth",
@@ -47,18 +47,35 @@
         "better-auth": "catalog:auth"
     },
     "devDependencies": {
+        "@angular/common": "^22.0.7",
+        "@angular/compiler": "^22.0.7",
+        "@angular/compiler-cli": "^22.0.7",
+        "@angular/core": "^22.0.7",
+        "@angular/platform-browser": "^22.0.7",
+        "@solidjs/testing-library": "catalog:frontend",
+        "@sveltejs/vite-plugin-svelte": "catalog:frontend",
         "@tanstack/react-query": "catalog:frontend",
         "@testing-library/dom": "catalog:frontend",
+        "@testing-library/jest-dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",
+        "@testing-library/svelte": "catalog:frontend",
+        "@testing-library/vue": "catalog:frontend",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
+        "@vitejs/plugin-vue": "catalog:frontend",
         "@vitest/coverage-v8": "catalog:test",
         "jsdom": "catalog:frontend",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
+        "rxjs": "^7.8.2",
+        "solid-js": "catalog:frontend",
+        "svelte": "catalog:frontend",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vite-plugin-solid": "catalog:frontend",
+        "vitest": "catalog:test",
+        "vue": "catalog:frontend",
+        "zone.js": "^0.16.2"
     },
     "peerDependencies": {
         "react": "^19.2.7"

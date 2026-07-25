@@ -3,16 +3,30 @@
     "compilerOptions": {
         "moduleResolution": "bundler",
         "jsx": "react-jsx",
+        // The Angular port uses TS decorators, and Angular's JIT compiler (which
+        // the Angular test project relies on) reads legacy decorator metadata.
+        // Being in this program is also how the test transform learns to emit
+        // them rather than standard decorators.
+        "experimentalDecorators": true,
         "types": ["node"]
         // No `outDir`/`rootDir`: this package is a source-of-truth synced into the
         // registry (never built/published), so `lint:types` is `tsc --noEmit` only —
         // neither is load-bearing. Mirrors packages/react/tsconfig.json.
     },
     "include": ["src/**/*", "__tests__/**/*"],
-    // The non-React ports are copy-only templates in framework dialects tsc can't
-    // check here (Solid's JSX runtime differs from react-jsx; Vue/Svelte SFCs and
-    // Angular decorators need their own toolchains). They're type-checked in the
-    // consumer's project after `lunora add auth-ui`. `core/` (shared) + `react/`
-    // are the type-checked reference.
-    "exclude": ["src/vue/**", "src/svelte/**", "src/solid/**", "src/angular/**"]
+    // Vue/Svelte SFCs need their own toolchains and Solid's JSX runtime clashes
+    // with `react-jsx`, so those three ports stay copy-only templates, checked in
+    // the consumer's project after `lunora add auth-ui`. The Angular port is
+    // plain `.ts` with inline templates, so it type-checks here alongside `core/`
+    // (shared) + `react/`.
+    "exclude": [
+        "src/vue/**",
+        "src/svelte/**",
+        "src/solid/**",
+        // Their tests too: an included test importing an excluded port would pull
+        // it straight back into the program.
+        "__tests__/vue/**",
+        "__tests__/svelte/**",
+        "__tests__/solid/**"
+    ]
 }

@@ -275,9 +275,13 @@ catalogs:
     "@tanstack/react-router": ^1.170.18
     "@tanstack/react-table": ^8.21.3
     "@tanstack/react-virtual": ^3.14.6
+    "@sveltejs/vite-plugin-svelte": ^7.2.0
     "@testing-library/dom": ^10.4.1
     "@testing-library/jest-dom": ^6.9.1
     "@testing-library/react": ^16.3.2
+    "@testing-library/svelte": ^5.4.2
+    "@testing-library/vue": ^8.1.0
+    "@vitejs/plugin-vue": ^6.0.8
     "@types/react": ^19.2.17
     "@types/react-dom": ^19.2.3
     "@xyflow/react": ^12.11.2
@@ -499,6 +503,7 @@ allowBuilds:
   core-js: false
   cpu-features: true
   esbuild: true
+  lmdb: set this to true or false
   msgpackr-extract: true
   msw: false
   protobufjs: true

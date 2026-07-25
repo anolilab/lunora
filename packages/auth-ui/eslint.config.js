@@ -17,6 +17,12 @@ export default createConfig(
             "src/svelte/**",
             "src/solid/**",
             "src/angular/**",
+            // …and their tests, which are outside the tsconfig program for the
+            // same reason (see tsconfig.json's `exclude`), so the type-aware
+            // rules here have no program to resolve them against.
+            "__tests__/vue/**",
+            "__tests__/svelte/**",
+            "__tests__/solid/**",
             "**/*.md/**",
             "**/vitest.config.ts",
             "**/wrangler.jsonc",
