@@ -24,10 +24,11 @@
  * if that is a concern.
  */
 import type { OtlpResourceAttributes } from "../../../shared/otlp";
-import { mergeHeaders } from "../../../shared/otlp";
+import { mergeHeaders, wrapResourceLogs, wrapResourceMetrics, wrapResourceSpans } from "../../../shared/otlp";
+import { createSignalBatcher } from "../../../shared/otlp-batch";
 import { mergeResourceAttributes } from "../../../shared/otlp-resource";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
-import { otlpLogBody, otlpMetricBody, otlpPost, otlpSpanBody, otlpTraceBody } from "./otlp-export";
+import { otlpLogBody, otlpMetricBody, otlpPost, otlpSend, otlpSpanBody, otlpTraceBody } from "./otlp-export";
 
 /** Shared shape for sinks that can be limited to error events only. */
 interface OnlyErrorsOption {
@@ -455,8 +456,206 @@ export const pipelineLogSink = (options: PipelineLogSinkOptions): ObservabilityS
     };
 };
 
+/**
+ * Everything the exporter buffered for one flush window, grouped so a
+ * {@link TailSampler} can judge a trace as a whole.
+ *
+ * This is what makes it *tail* sampling rather than another head decision: by
+ * flush time the trace's spans have all settled, so "keep it if anything in it
+ * was slow or failed" is answerable — which it is not at the moment the first
+ * span starts.
+ */
+export interface TailSamplerInput {
+    /** Log records emitted under this trace. */
+    logs: LogEvent[];
+    /** RPC (SERVER) dispatch events belonging to this trace. */
+    rpc: ObservabilityEvent[];
+    /** `ctx.trace` spans belonging to this trace. */
+    spans: SpanEvent[];
+    /** The trace's id, or `undefined` for events that carried no trace context. */
+    traceId: string | undefined;
+}
+
+/**
+ * Decide whether a whole trace is exported. Return `false` to drop it — spans,
+ * logs, and all.
+ *
+ * Composes with head sampling rather than replacing it: head sampling cheaply
+ * discards most traces before they cost anything, and this makes the final call
+ * on what survived. The canonical policy — "keep errors and slow requests, drop
+ * the rest" — needs both.
+ */
+export type TailSampler = (input: TailSamplerInput) => boolean;
+
+/**
+ * Last-chance transforms applied to each event immediately before encoding.
+ *
+ * Return `undefined` from any hook to drop that event entirely. This is the
+ * redaction seam: attributes, log messages, and error strings can all carry user
+ * input, and once a payload leaves for a third-party collector it is out of your
+ * control. Doing it here rather than at each call site means one auditable place
+ * to prove PII cannot escape.
+ */
+export interface OtlpPostProcessor {
+    log?: (event: LogEvent) => LogEvent | undefined;
+    metric?: (event: MetricEvent) => MetricEvent | undefined;
+    rpc?: (event: ObservabilityEvent) => ObservabilityEvent | undefined;
+    span?: (event: SpanEvent) => SpanEvent | undefined;
+}
+
+/** Batching knobs for {@link otlpSink}; pass `batch: false` to export each event immediately. */
+export interface OtlpBatchOptions {
+    /**
+     * Flush this long after the first buffered event, as a backstop for contexts
+     * with no invocation boundary. Default 200ms.
+     */
+    maxDelayMs?: number;
+    /** Flush as soon as this many events are buffered. Default 512. */
+    maxItems?: number;
+}
+
+/** One buffered event, tagged with its signal and the resource bag it was captured under. */
+type BufferedSignal = { resource: OtlpResourceAttributes } & (
+    | { event: LogEvent; kind: "log" }
+    | { event: MetricEvent; kind: "metric" }
+    | { endMs: number; event: ObservabilityEvent; kind: "rpc" }
+    | { event: SpanEvent; kind: "span" }
+);
+
+/** The trace id an event belongs to, or `undefined` when it carries no trace context. */
+const traceIdOf = (signal: BufferedSignal): string | undefined => (signal.kind === "metric" ? undefined : signal.event.traceId);
+
+/**
+ * Group a flush window by trace and apply the tail sampler, returning only the
+ * signals that survive.
+ *
+ * Events with no trace id (a fan-out aggregation, a metric) are never grouped
+ * and never dropped: there is no trace for the sampler to judge, and silently
+ * discarding them would lose the one signal the caller explicitly recorded.
+ */
+const applyTailSampler = (signals: BufferedSignal[], tailSampler: TailSampler | undefined): BufferedSignal[] => {
+    if (tailSampler === undefined) {
+        return signals;
+    }
+
+    const byTrace = new Map<string, BufferedSignal[]>();
+    const untraced: BufferedSignal[] = [];
+
+    for (const signal of signals) {
+        const traceId = traceIdOf(signal);
+
+        if (traceId === undefined) {
+            untraced.push(signal);
+
+            continue;
+        }
+
+        const bucket = byTrace.get(traceId);
+
+        if (bucket === undefined) {
+            byTrace.set(traceId, [signal]);
+        } else {
+            bucket.push(signal);
+        }
+    }
+
+    const kept = [...untraced];
+
+    for (const [traceId, bucket] of byTrace) {
+        let verdict: boolean;
+
+        try {
+            verdict = tailSampler({
+                logs: bucket.filter((entry) => entry.kind === "log").map((entry) => entry.event as LogEvent),
+                rpc: bucket.filter((entry) => entry.kind === "rpc").map((entry) => entry.event as ObservabilityEvent),
+                spans: bucket.filter((entry) => entry.kind === "span").map((entry) => entry.event as SpanEvent),
+                traceId,
+            });
+        } catch {
+            // A throwing sampler must not silently delete telemetry — fail open.
+            verdict = true;
+        }
+
+        if (verdict) {
+            kept.push(...bucket);
+        }
+    }
+
+    return kept;
+};
+
+/**
+ * Run one event through its post-processor hook. A throwing hook keeps the event
+ * unmodified rather than dropping it — a redaction bug should not silently delete
+ * a service's telemetry, and the failure is more useful visible as un-redacted
+ * data than invisible as absence.
+ */
+const postProcess = <T>(event: T, hook: ((event: T) => T | undefined) | undefined): T | undefined => {
+    if (hook === undefined) {
+        return event;
+    }
+
+    try {
+        return hook(event);
+    } catch {
+        return event;
+    }
+};
+
+/**
+ * Post-process and encode one buffered signal, tagged with the OTLP endpoint
+ * bucket it belongs to. `undefined` when the post-processor dropped it.
+ */
+const encodeSignal = (
+    signal: BufferedSignal,
+    postProcessor: OtlpPostProcessor | undefined,
+): { bucket: "logs" | "metrics" | "spans"; encoded: unknown } | undefined => {
+    if (signal.kind === "rpc") {
+        const processed = postProcess(signal.event, postProcessor?.rpc);
+
+        return processed === undefined ? undefined : { bucket: "spans", encoded: otlpTraceBody(processed, signal.endMs) };
+    }
+
+    if (signal.kind === "span") {
+        const processed = postProcess(signal.event, postProcessor?.span);
+
+        return processed === undefined ? undefined : { bucket: "spans", encoded: otlpSpanBody(processed) };
+    }
+
+    if (signal.kind === "log") {
+        const processed = postProcess(signal.event, postProcessor?.log);
+
+        return processed === undefined ? undefined : { bucket: "logs", encoded: otlpLogBody(processed) };
+    }
+
+    const processed = postProcess(signal.event, postProcessor?.metric);
+
+    return processed === undefined ? undefined : { bucket: "metrics", encoded: otlpMetricBody(processed) };
+};
+
 /** Options for {@link otlpSink}. */
 export interface OtlpSinkOptions extends OnlyErrorsOption {
+    /**
+     * Buffer events and export them as one request per signal instead of one
+     * request per event (the default). Pass `false` to restore per-event POSTs.
+     *
+     * Batching is on by default because the alternative is a correctness problem,
+     * not just an efficiency one: a Worker is capped at 50 (free) / 1000 (paid)
+     * subrequests per invocation, so a well-instrumented handler exporting one
+     * `fetch` per span can exhaust the budget its own business logic needs.
+     */
+    batch?: OtlpBatchOptions | false;
+
+    /** Redact or drop events just before they are encoded — see {@link OtlpPostProcessor}. */
+    postProcessor?: OtlpPostProcessor;
+
+    /**
+     * Decide per trace, at flush time, whether it is exported — see
+     * {@link TailSampler}. Requires batching (the default); ignored when
+     * `batch: false`, because an unbuffered exporter has no trace to judge.
+     */
+    tailSampler?: TailSampler;
+
     /**
      * Value of the `deployment.environment` resource attribute (e.g.
      * `"production"`, `"staging"`, `"development"`).
@@ -560,7 +759,20 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
  * resource `service.name`, and `onlyErrors` exports error spans only.
  */
 export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
-    const { deploymentEnvironment, detectResources, endpoint, headers, onlyErrors, resourceAttributes, serviceNamespace, serviceVersion, token } = options;
+    const {
+        batch,
+        deploymentEnvironment,
+        detectResources,
+        endpoint,
+        headers,
+        onlyErrors,
+        postProcessor,
+        resourceAttributes,
+        serviceNamespace,
+        serviceVersion,
+        tailSampler,
+        token,
+    } = options;
     const serviceName = options.serviceName ?? "lunora";
 
     // The explicit half of the resource, built once per sink. Convenience fields
@@ -618,29 +830,149 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
     // authorization in `headers`, matching the container exporter's precedence.
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers, token);
 
+    /**
+     * Ship one flush window: tail-sample, encode by signal, then POST at most one
+     * request per signal endpoint.
+     *
+     * Events are grouped by their RESOURCE bag before wrapping. With
+     * `detectResources` on, two requests in the same flush window can legitimately
+     * carry different host attributes, and one envelope has exactly one resource —
+     * so mixing them would silently mis-attribute half the batch.
+     */
+    const exportBatch = async (signals: BufferedSignal[]): Promise<void> => {
+        const kept = applyTailSampler(signals, tailSampler);
+        const groups = new Map<OtlpResourceAttributes, { logs: unknown[]; metrics: unknown[]; spans: unknown[] }>();
+
+        for (const signal of kept) {
+            const encoded = encodeSignal(signal, postProcessor);
+
+            if (encoded === undefined) {
+                continue;
+            }
+
+            let group = groups.get(signal.resource);
+
+            if (group === undefined) {
+                group = { logs: [], metrics: [], spans: [] };
+                groups.set(signal.resource, group);
+            }
+
+            group[encoded.bucket].push(encoded.encoded);
+        }
+
+        const sends: Promise<void>[] = [];
+
+        for (const [resource, group] of groups) {
+            if (group.spans.length > 0) {
+                sends.push(otlpSend(tracesUrl, wrapResourceSpans(group.spans, "@lunora/runtime", serviceName, resource), mergedHeaders));
+            }
+
+            if (group.logs.length > 0) {
+                sends.push(otlpSend(logsUrl, wrapResourceLogs(group.logs, "@lunora/runtime", serviceName, resource), mergedHeaders));
+            }
+
+            if (group.metrics.length > 0) {
+                sends.push(otlpSend(metricsUrl, wrapResourceMetrics(group.metrics, "@lunora/runtime", serviceName, resource), mergedHeaders));
+            }
+        }
+
+        // Concurrent: the signal endpoints are unrelated, and serialising them
+        // would add a round-trip of tail latency to the `waitUntil` for no benefit.
+        await Promise.all(sends);
+    };
+
+    if (batch === false) {
+        // Unbatched: encode and POST each event on arrival. `tailSampler` is
+        // inapplicable here (there is no buffered trace to judge) and documented
+        // as such; `postProcessor` still applies.
+        return {
+            onLog: (event, context) => {
+                const processed = postProcess(event, postProcessor?.log);
+
+                if (processed !== undefined) {
+                    otlpPost(logsUrl, wrapResourceLogs(otlpLogBody(processed), "@lunora/runtime", serviceName, resourceAttributesFor(context)), mergedHeaders, context);
+                }
+            },
+            onMetric: (event, context) => {
+                const processed = postProcess(event, postProcessor?.metric);
+
+                if (processed !== undefined) {
+                    otlpPost(
+                        metricsUrl,
+                        wrapResourceMetrics(otlpMetricBody(processed), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
+                        mergedHeaders,
+                        context,
+                    );
+                }
+            },
+            onRpc: (event, context) => {
+                if (shouldSkip(event, onlyErrors)) {
+                    return;
+                }
+
+                const processed = postProcess(event, postProcessor?.rpc);
+
+                if (processed !== undefined) {
+                    otlpPost(
+                        tracesUrl,
+                        wrapResourceSpans(otlpTraceBody(processed, Date.now()), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
+                        mergedHeaders,
+                        context,
+                    );
+                }
+            },
+            onSpan: (event, context) => {
+                const processed = postProcess(event, postProcessor?.span);
+
+                if (processed !== undefined) {
+                    otlpPost(
+                        tracesUrl,
+                        wrapResourceSpans(otlpSpanBody(processed), "@lunora/runtime", serviceName, resourceAttributesFor(context)),
+                        mergedHeaders,
+                        context,
+                    );
+                }
+            },
+        };
+    }
+
+    const batcher = createSignalBatcher<BufferedSignal>({
+        export: exportBatch,
+        ...(batch?.maxDelayMs === undefined ? {} : { maxDelayMs: batch.maxDelayMs }),
+        ...(batch?.maxItems === undefined ? {} : { maxItems: batch.maxItems }),
+    });
+
     return {
+        flush: (context) => {
+            // Detached: `waitUntil` (threaded into the batcher) owns the lifetime,
+            // and the drain swallows its own failures.
+            batcher.flush(context?.waitUntil).catch(() => undefined);
+        },
         onLog: (event, context) => {
-            // Application log lines are exported whole; `onlyErrors` scopes the
+            // Application log lines are buffered whole; `onlyErrors` scopes the
             // RPC span stream, not the developer's `ctx.log` output.
-            otlpPost(logsUrl, otlpLogBody(event, serviceName, resourceAttributesFor(context)), mergedHeaders, context);
+            batcher.add({ event, kind: "log", resource: resourceAttributesFor(context) }, context?.waitUntil);
         },
         onMetric: (event, context) => {
             // Like logs and spans, a measurement the developer explicitly recorded
             // is never scoped by `onlyErrors`.
-            otlpPost(metricsUrl, otlpMetricBody(event, serviceName, resourceAttributesFor(context)), mergedHeaders, context);
+            batcher.add({ event, kind: "metric", resource: resourceAttributesFor(context) }, context?.waitUntil);
         },
         onRpc: (event, context) => {
             if (shouldSkip(event, onlyErrors)) {
                 return;
             }
 
-            otlpPost(tracesUrl, otlpTraceBody(event, serviceName, Date.now(), resourceAttributesFor(context)), mergedHeaders, context);
+            // `endMs` is captured on arrival, not at flush: the span's end time is
+            // when the dispatch finished, and deriving it from the flush clock
+            // would stretch every span by however long it sat in the buffer.
+            batcher.add({ endMs: Date.now(), event, kind: "rpc", resource: resourceAttributesFor(context) }, context?.waitUntil);
         },
         onSpan: (event, context) => {
             // `onlyErrors` scopes the RPC span stream; a handler that explicitly
             // instrumented a sub-operation always gets its span exported, the same
             // way `ctx.log` output is never scoped by it.
-            otlpPost(tracesUrl, otlpSpanBody(event, serviceName, resourceAttributesFor(context)), mergedHeaders, context);
+            batcher.add({ event, kind: "span", resource: resourceAttributesFor(context) }, context?.waitUntil);
         },
     };
 };
