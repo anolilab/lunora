@@ -1,6 +1,6 @@
 {
     "name": "@lunora/fingerprint",
-    "version": "1.0.0-alpha.3",
+    "version": "1.0.0-alpha.4",
     "description": "Zero-dependency, cross-runtime error fingerprinting for Lunora: a stable grouping hash that collapses noisy errors into Issues across the local Studio and the Cloud",
     "keywords": [
         "cloudflare",

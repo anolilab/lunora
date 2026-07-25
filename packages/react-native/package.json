@@ -1,6 +1,6 @@
 {
     "name": "@lunora/react-native",
-    "version": "1.0.0-alpha.7",
+    "version": "1.0.0-alpha.8",
     "description": "React Native / Expo integration for Lunora: an AsyncStorage-backed client factory, the useQuery/useMutation/useSubscription hooks, and a one-call better-auth Expo client",
     "keywords": [
         "cloudflare",
@@ -64,8 +64,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.27",
-        "@lunora/react": "1.0.0-alpha.31"
+        "@lunora/client": "1.0.0-alpha.28",
+        "@lunora/react": "1.0.0-alpha.32"
     },
     "devDependencies": {
         "@better-auth/expo": "catalog:auth",
