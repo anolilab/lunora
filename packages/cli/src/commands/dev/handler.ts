@@ -31,6 +31,7 @@ import {
     readLiveDevServerState,
     readProjectRemotePreference,
     readWranglerJsonc,
+    resolveDeployDriver,
     resolveRemoteEnabled,
     streamContainerLogs,
     updateDevServerState,
@@ -319,7 +320,11 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
             // The sidecar runs `--config wrangler.dev.jsonc`, not the deploy
             // `wrangler.jsonc` — check its own `dev.ip` first.
             const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback, DEV_WRANGLER_CONFIG);
-            const sidecarExec = execArgsFor(manager, "wrangler", ["dev", "--config", DEV_WRANGLER_CONFIG, ...loopbackArgs, "--var", "WORKER_ENV:development"]);
+            const devCommand = resolveDeployDriver().toolchain?.dev({
+                configPath: DEV_WRANGLER_CONFIG,
+                extraArgs: [...loopbackArgs, "--var", "WORKER_ENV:development"],
+            });
+            const sidecarExec = execArgsFor(manager, devCommand?.tool ?? "wrangler", devCommand?.args ?? []);
 
             sidecar = { args: sidecarExec.args, command: sidecarExec.command, cwd, tag: "worker" };
         }

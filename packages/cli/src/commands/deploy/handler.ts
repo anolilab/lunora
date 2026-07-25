@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { discoverMigrations, runCodegen } from "@lunora/codegen";
+import type { ToolchainCommand } from "@lunora/config";
 import {
     DEV_VARS_FILE,
     discoverContainerInfo,
@@ -17,6 +18,7 @@ import {
     reconcileWranglerCompatibilityDate,
     reconcileWranglerCrons,
     requiredSecrets,
+    resolveDeployDriver,
 } from "@lunora/config";
 import { join } from "@visulima/path";
 import { Spinner } from "@visulima/spinner";
@@ -129,6 +131,14 @@ interface DeployCommandOptions {
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
     skipCodegen?: boolean;
     spawner?: Spawner;
+
+    /**
+     * Deploy target. Defaults to `"cloudflare"`, which selects the wrangler
+     * toolchain — i.e. today's behavior for every project. An unregistered name
+     * throws rather than falling back, so a typo can never ship the app to the
+     * wrong provider.
+     */
+    target?: string;
 
     /**
      * Deploy to a temporary Cloudflare account (`wrangler deploy --temporary`).
@@ -462,18 +472,17 @@ const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, k
     const manager = detectPackageManager(cwd);
     const environmentFlag = options.env === undefined ? "" : ` --env ${options.env}`;
 
+    const { toolchain } = resolveDeployDriver(options.target);
+
+    if (toolchain === undefined) {
+        logger.error("deploy target has no command-line toolchain; cannot push secrets");
+
+        return false;
+    }
+
     for (const key of keys) {
-        const args = ["secret", "put", key];
-
-        if (options.env !== undefined) {
-            args.push("--env", options.env);
-        }
-
-        if (options.temporary === true) {
-            args.push("--temporary");
-        }
-
-        const exec = execArgsFor(manager, "wrangler", args);
+        const secretCommand = toolchain.secretPut({ environment: options.env, key, temporary: options.temporary });
+        const exec = execArgsFor(manager, secretCommand.tool, secretCommand.args);
 
         // `wrangler secret put <name>` reads the value from stdin, so the generated
         // secret never lands on the command line, in env, or in shell history.
@@ -860,47 +869,53 @@ const runPreDeployGates = async (cwd: string, options: DeployCommandOptions): Pr
  * caller via {@link execArgsFor}. Extracted from {@link executeDeploy} to keep
  * its cognitive complexity within budget.
  */
-const buildWranglerDeployArgs = (cwd: string, options: DeployCommandOptions): string[] => {
-    // `--preview` uploads a new Version (with a preview URL) instead of going
-    // live, so production traffic is untouched.
-    const args = options.preview ? ["versions", "upload"] : ["deploy"];
-
+const buildDeployCommand = (cwd: string, options: DeployCommandOptions): ToolchainCommand => {
     // Class-B composition: bundle the `src/worker.ts` wrapper (which the
     // framework's CF adapter can't clobber) instead of the adapter-owned `main`.
     const composedEntry = resolveComposedWorkerEntry(cwd);
 
     if (composedEntry !== undefined) {
-        args.push(composedEntry);
         options.logger.info(`class-B composition: deploying ${composedEntry} (overrides wrangler main)`);
     }
 
-    if (options.env !== undefined) {
-        args.push("--env", options.env);
-    }
-
-    // `--temporary` deploys to a wrangler-provisioned short-lived account when
-    // unauthenticated. Passed straight through — wrangler errors itself if
-    // credentials are already present.
+    // A short-lived account is wrangler-provisioned when unauthenticated; it
+    // errors itself if credentials are already present.
     if (options.temporary) {
-        args.push("--temporary");
         options.logger.info("temporary account: deploying to a short-lived Cloudflare account (~60min); wrangler will print a claim URL");
     }
 
-    // `--dry-run` validates + bundles without publishing. Nothing ships, so the
+    // A dry run validates + bundles without publishing. Nothing ships, so the
     // post-deploy finalize (migrations, baseline re-bless) is skipped by the caller.
     if (options.dryRun) {
-        args.push("--dry-run");
         options.logger.info("dry run: validating + bundling without publishing");
     }
 
     // `lunora build` writes the bundled worker (+ esbuild metafile) to disk for
     // CI artifacting / bundle inspection.
     if (options.outDir !== undefined) {
-        args.push("--outdir", options.outDir, "--metafile");
         options.logger.info(`build artifact: emitting bundle to ${options.outDir}`);
     }
 
-    return args;
+    // The target's own CLI decides the flags; this command only says what it
+    // wants done. Logging stays here because it is the CLI's voice, not the
+    // driver's.
+    const driver = resolveDeployDriver(options.target);
+    const request = {
+        dryRun: options.dryRun,
+        entry: composedEntry,
+        environment: options.env,
+        outDir: options.outDir,
+        preview: options.preview,
+        temporary: options.temporary,
+    };
+
+    // Every registered driver ships a toolchain; the optionality on the contract
+    // is for a hypothetical API-only host, which cannot be selected today.
+    if (driver.toolchain === undefined) {
+        throw new Error(`deploy target "${driver.id}" has no command-line toolchain`);
+    }
+
+    return driver.toolchain.deploy(request);
 };
 
 /** Log wrangler.jsonc validation problems (if any) and report whether the deploy must abort. */
@@ -1018,7 +1033,8 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // existing links are never clobbered and subsequent deploys keep full TTY output.
     const shouldAutoLink = !isJsonFormat(options.format) && options.dryRun !== true && options.preview !== true && readLinkedProject(cwd) === undefined;
 
-    const exec = execArgsFor(detectPackageManager(cwd), "wrangler", buildWranglerDeployArgs(cwd, options));
+    const deployCommand = buildDeployCommand(cwd, options);
+    const exec = execArgsFor(detectPackageManager(cwd), deployCommand.tool, deployCommand.args);
     const descriptor: SpawnDescriptor = {
         args: exec.args,
         captureStdout: shouldAutoLink,
