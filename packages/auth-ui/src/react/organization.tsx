@@ -1,23 +1,12 @@
 "use client";
 
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
-import { createMembersController, createOrganizationsController, createOrganizationSettingsController, isFlowEnabled } from "../core";
+import { createMembersController, createOrganizationsController, createOrganizationSettingsController, isFlowEnabled, ROLE_OPTIONS, slugify } from "../core";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
-
-const ROLE_OPTIONS = ["member", "admin", "owner"] as const;
-
-const slugify = (value: string): string =>
-    // Runs of non-alphanumerics collapse to a single "-", so trimming one edge
-    // dash each side is enough (keeps the regex linear — no `+` quantifier).
-    value
-        .toLowerCase()
-        .trim()
-        .replaceAll(/[^a-z0-9]+/gu, "-")
-        .replaceAll(/^-|-$/gu, "");
 
 const onSubmit =
     (action: () => unknown) =>
@@ -61,37 +50,43 @@ const OrganizationsCard = (): ReactElement | null => {
 
         return (
             <ul className="lunora-auth-list">
-                {state.items.map((organization) => (
-                    <li className="lunora-auth-list__item" key={organization.id ?? organization.slug ?? organization.name}>
-                        <span className="lunora-auth-list__label">{organization.name ?? organization.slug}</span>
-                        <span className="lunora-auth-list__actions">
-                            {organization.id === undefined ? null : (
-                                <>
-                                    <button
-                                        className="lunora-auth-link"
-                                        disabled={state.busy}
-                                        onClick={() => {
-                                            void actions.setActive(organization.id as string);
-                                        }}
-                                        type="button"
-                                    >
-                                        {t.switchOrganization}
-                                    </button>
-                                    <button
-                                        className="lunora-auth-link"
-                                        disabled={state.busy}
-                                        onClick={() => {
-                                            void actions.remove(organization.id as string);
-                                        }}
-                                        type="button"
-                                    >
-                                        {t.remove}
-                                    </button>
-                                </>
-                            )}
-                        </span>
-                    </li>
-                ))}
+                {state.items.map((organization) => {
+                    // Bound once: TS can't narrow an optional property through a
+                    // closure, and a local beats an `as string` at each call site.
+                    const { id } = organization;
+
+                    return (
+                        <li className="lunora-auth-list__item" key={id ?? organization.slug ?? organization.name}>
+                            <span className="lunora-auth-list__label">{organization.name ?? organization.slug}</span>
+                            <span className="lunora-auth-list__actions">
+                                {id === undefined ? null : (
+                                    <>
+                                        <button
+                                            className="lunora-auth-link"
+                                            disabled={state.busy}
+                                            onClick={() => {
+                                                void actions.setActive(id);
+                                            }}
+                                            type="button"
+                                        >
+                                            {t.switchOrganization}
+                                        </button>
+                                        <button
+                                            className="lunora-auth-link"
+                                            disabled={state.busy}
+                                            onClick={() => {
+                                                void actions.remove(id);
+                                            }}
+                                            type="button"
+                                        >
+                                            {t.remove}
+                                        </button>
+                                    </>
+                                )}
+                            </span>
+                        </li>
+                    );
+                })}
             </ul>
         );
     })();
@@ -101,33 +96,15 @@ const OrganizationsCard = (): ReactElement | null => {
             <FormBanner error={state.error} />
             {list}
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(create)}>
-                <div className="lunora-auth-field">
-                    <label className="lunora-auth-field__label" htmlFor="lunora-org-name">
-                        {t.organizationName}
-                    </label>
-                    <input
-                        className="lunora-auth-field__input"
-                        id="lunora-org-name"
-                        onChange={(event) => {
-                            setName(event.target.value);
-                        }}
-                        value={name}
-                    />
-                </div>
-                <div className="lunora-auth-field">
-                    <label className="lunora-auth-field__label" htmlFor="lunora-org-slug">
-                        {t.organizationSlug}
-                    </label>
-                    <input
-                        className="lunora-auth-field__input"
-                        id="lunora-org-slug"
-                        onChange={(event) => {
-                            setSlug(event.target.value);
-                        }}
-                        placeholder={slugify(name)}
-                        value={slug}
-                    />
-                </div>
+                <Field field={{ touched: false, value: name }} label={t.organizationName} name="organizationName" onBlur={() => undefined} onChange={setName} />
+                <Field
+                    field={{ touched: false, value: slug }}
+                    label={t.organizationSlug}
+                    name="organizationSlug"
+                    onBlur={() => undefined}
+                    onChange={setSlug}
+                    placeholder={slugify(name)}
+                />
                 <SubmitButton pending={state.busy}>{t.createOrganization}</SubmitButton>
             </form>
         </AuthCard>
@@ -141,6 +118,8 @@ const MembersCard = (): ReactElement | null => {
     const [state, actions] = useController((context_) => createMembersController(context_, { autoLoad: enabled }), [enabled]);
     const [email, setEmail] = useState("");
     const [role, setRole] = useState<string>("member");
+    // Generated, not hard-coded: two cards on one page must not collide.
+    const roleId = useId();
 
     if (!enabled) {
         return null;
@@ -163,25 +142,30 @@ const MembersCard = (): ReactElement | null => {
                 <p className="lunora-auth-card__description">…</p>
             ) : (
                 <ul className="lunora-auth-list">
-                    {state.members.map((member) => (
-                        <li className="lunora-auth-list__item" key={member.id ?? member.userId ?? member.user?.email}>
-                            <span className="lunora-auth-list__label">
-                                {member.user?.email ?? member.user?.name ?? member.userId} · {member.role}
-                            </span>
-                            {member.id === undefined ? null : (
-                                <button
-                                    className="lunora-auth-link"
-                                    disabled={state.busy}
-                                    onClick={() => {
-                                        void actions.removeMember(member.id as string);
-                                    }}
-                                    type="button"
-                                >
-                                    {t.remove}
-                                </button>
-                            )}
-                        </li>
-                    ))}
+                    {state.members.map((member) => {
+                        // Bound once: TS can't narrow an optional through a closure.
+                        const memberId = member.id;
+
+                        return (
+                            <li className="lunora-auth-list__item" key={memberId ?? member.userId ?? member.user?.email}>
+                                <span className="lunora-auth-list__label">
+                                    {member.user?.email ?? member.user?.name ?? member.userId} · {member.role}
+                                </span>
+                                {memberId === undefined ? null : (
+                                    <button
+                                        className="lunora-auth-link"
+                                        disabled={state.busy}
+                                        onClick={() => {
+                                            void actions.removeMember(memberId);
+                                        }}
+                                        type="button"
+                                    >
+                                        {t.remove}
+                                    </button>
+                                )}
+                            </li>
+                        );
+                    })}
                 </ul>
             )}
 
@@ -189,51 +173,49 @@ const MembersCard = (): ReactElement | null => {
                 <>
                     <p className="lunora-auth-card__description">{t.invitations}</p>
                     <ul className="lunora-auth-list">
-                        {state.invitations.map((invitation) => (
-                            <li className="lunora-auth-list__item" key={invitation.id ?? invitation.email}>
-                                <span className="lunora-auth-list__label">
-                                    {invitation.email} · {invitation.role}
-                                </span>
-                                {invitation.id === undefined ? null : (
-                                    <button
-                                        className="lunora-auth-link"
-                                        disabled={state.busy}
-                                        onClick={() => {
-                                            void actions.cancelInvitation(invitation.id as string);
-                                        }}
-                                        type="button"
-                                    >
-                                        {t.cancel}
-                                    </button>
-                                )}
-                            </li>
-                        ))}
+                        {state.invitations.map((invitation) => {
+                            const invitationId = invitation.id;
+
+                            return (
+                                <li className="lunora-auth-list__item" key={invitationId ?? invitation.email}>
+                                    <span className="lunora-auth-list__label">
+                                        {invitation.email} · {invitation.role}
+                                    </span>
+                                    {invitationId === undefined ? null : (
+                                        <button
+                                            className="lunora-auth-link"
+                                            disabled={state.busy}
+                                            onClick={() => {
+                                                void actions.cancelInvitation(invitationId);
+                                            }}
+                                            type="button"
+                                        >
+                                            {t.cancel}
+                                        </button>
+                                    )}
+                                </li>
+                            );
+                        })}
                     </ul>
                 </>
             )}
 
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(invite)}>
+                <Field
+                    field={{ touched: false, value: email }}
+                    label={t.inviteEmailLabel}
+                    name="inviteEmail"
+                    onBlur={() => undefined}
+                    onChange={setEmail}
+                    type="email"
+                />
                 <div className="lunora-auth-field">
-                    <label className="lunora-auth-field__label" htmlFor="lunora-invite-email">
-                        {t.inviteEmailLabel}
-                    </label>
-                    <input
-                        className="lunora-auth-field__input"
-                        id="lunora-invite-email"
-                        onChange={(event) => {
-                            setEmail(event.target.value);
-                        }}
-                        type="email"
-                        value={email}
-                    />
-                </div>
-                <div className="lunora-auth-field">
-                    <label className="lunora-auth-field__label" htmlFor="lunora-invite-role">
+                    <label className="lunora-auth-field__label" htmlFor={roleId}>
                         {t.roleLabel}
                     </label>
                     <select
                         className="lunora-auth-field__input"
-                        id="lunora-invite-role"
+                        id={roleId}
                         onChange={(event) => {
                             setRole(event.target.value);
                         }}

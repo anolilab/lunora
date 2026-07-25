@@ -1,21 +1,10 @@
 import type { JSX } from "solid-js";
-import { createSignal, For, Show } from "solid-js";
+import { For, Show, createSignal, createUniqueId } from "solid-js";
 
-import { createMembersController, createOrganizationSettingsController, createOrganizationsController, isFlowEnabled } from "../core";
+import { ROLE_OPTIONS, createMembersController, createOrganizationSettingsController, createOrganizationsController, isFlowEnabled, slugify } from "../core";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
-
-const ROLE_OPTIONS = ["member", "admin", "owner"] as const;
-
-const slugify = (value: string): string =>
-    // Runs of non-alphanumerics collapse to a single "-", so trimming one edge
-    // dash each side is enough (keeps the regex linear — no `+` quantifier).
-    value
-        .toLowerCase()
-        .trim()
-        .replaceAll(/[^a-z0-9]+/gu, "-")
-        .replaceAll(/^-|-$/gu, "");
 
 const onSubmit =
     (action: () => unknown) =>
@@ -37,6 +26,9 @@ const OrganizationsCard = (): JSX.Element => {
     }
     const [name, setName] = createSignal("");
     const [slug, setSlug] = createSignal("");
+    // Generated, not hard-coded: two cards on one page must not collide.
+    const nameId = createUniqueId();
+    const slugId = createUniqueId();
 
     const create = (): void => {
         if (name().trim() === "") {
@@ -65,7 +57,7 @@ const OrganizationsCard = (): JSX.Element => {
                                                     class="lunora-auth-link"
                                                     disabled={state.busy}
                                                     onClick={() => {
-                                                        void actions.setActive(organization.id as string);
+                                                        void actions.setActive(organization.id);
                                                     }}
                                                     type="button"
                                                 >
@@ -75,7 +67,7 @@ const OrganizationsCard = (): JSX.Element => {
                                                     class="lunora-auth-link"
                                                     disabled={state.busy}
                                                     onClick={() => {
-                                                        void actions.remove(organization.id as string);
+                                                        void actions.remove(organization.id);
                                                     }}
                                                     type="button"
                                                 >
@@ -95,12 +87,12 @@ const OrganizationsCard = (): JSX.Element => {
             </Show>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(create)}>
                 <div class="lunora-auth-field">
-                    <label class="lunora-auth-field__label" for="lunora-org-name">
+                    <label class="lunora-auth-field__label" for={nameId}>
                         {t.organizationName}
                     </label>
                     <input
                         class="lunora-auth-field__input"
-                        id="lunora-org-name"
+                        id={nameId}
                         onInput={(event) => {
                             setName(event.currentTarget.value);
                         }}
@@ -108,12 +100,12 @@ const OrganizationsCard = (): JSX.Element => {
                     />
                 </div>
                 <div class="lunora-auth-field">
-                    <label class="lunora-auth-field__label" for="lunora-org-slug">
+                    <label class="lunora-auth-field__label" for={slugId}>
                         {t.organizationSlug}
                     </label>
                     <input
                         class="lunora-auth-field__input"
-                        id="lunora-org-slug"
+                        id={slugId}
                         onInput={(event) => {
                             setSlug(event.currentTarget.value);
                         }}
@@ -138,6 +130,9 @@ const MembersCard = (): JSX.Element => {
     }
     const [email, setEmail] = createSignal("");
     const [role, setRole] = createSignal<string>("member");
+    // Generated, not hard-coded: two cards on one page must not collide.
+    const emailId = createUniqueId();
+    const roleId = createUniqueId();
 
     const invite = (): void => {
         if (email().trim() === "") {
@@ -166,7 +161,7 @@ const MembersCard = (): JSX.Element => {
                                             class="lunora-auth-link"
                                             disabled={state.busy}
                                             onClick={() => {
-                                                void actions.removeMember(member.id as string);
+                                                void actions.removeMember(member.id);
                                             }}
                                             type="button"
                                         >
@@ -197,7 +192,7 @@ const MembersCard = (): JSX.Element => {
                                         class="lunora-auth-link"
                                         disabled={state.busy}
                                         onClick={() => {
-                                            void actions.cancelInvitation(invitation.id as string);
+                                            void actions.cancelInvitation(invitation.id);
                                         }}
                                         type="button"
                                     >
@@ -212,12 +207,12 @@ const MembersCard = (): JSX.Element => {
 
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(invite)}>
                 <div class="lunora-auth-field">
-                    <label class="lunora-auth-field__label" for="lunora-invite-email">
+                    <label class="lunora-auth-field__label" for={emailId}>
                         {t.inviteEmailLabel}
                     </label>
                     <input
                         class="lunora-auth-field__input"
-                        id="lunora-invite-email"
+                        id={emailId}
                         onInput={(event) => {
                             setEmail(event.currentTarget.value);
                         }}
@@ -226,12 +221,12 @@ const MembersCard = (): JSX.Element => {
                     />
                 </div>
                 <div class="lunora-auth-field">
-                    <label class="lunora-auth-field__label" for="lunora-invite-role">
+                    <label class="lunora-auth-field__label" for={roleId}>
                         {t.roleLabel}
                     </label>
                     <select
                         class="lunora-auth-field__input"
-                        id="lunora-invite-role"
+                        id={roleId}
                         onChange={(event) => {
                             setRole(event.currentTarget.value);
                         }}

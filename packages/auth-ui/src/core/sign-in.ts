@@ -1,4 +1,11 @@
-/** Sign-in flow: email + password against `authClient.signIn.email`. */
+/**
+ * Sign-in flow: email + password against `authClient.signIn.email`.
+ *
+ * When the account has two-factor enabled, better-auth answers with a **success**
+ * payload carrying `twoFactorRedirect: true` and no session — not an error. Left
+ * unhandled that reads as a completed sign-in and drops the user into the app
+ * with no session, so the flow branches to the two-factor route instead.
+ */
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk } from "./map-error";
@@ -17,13 +24,17 @@ const createSignInController = (context: ControllerContext): FormController<Sign
         },
         sessionChanging: true,
         submit: async (values, context_) => {
-            assertOk(
+            const response = assertOk(
                 await context_.authClient.signIn.email({
                     callbackURL: context_.redirects.afterSignIn,
                     email: values.email.trim(),
                     password: values.password,
                 }),
             );
+
+            if (response.data?.twoFactorRedirect === true) {
+                return { redirectTo: context_.redirects.twoFactor };
+            }
 
             return { redirectTo: context_.redirects.afterSignIn };
         },

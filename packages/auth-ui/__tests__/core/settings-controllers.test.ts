@@ -93,7 +93,7 @@ describe("createChangePasswordController", () => {
         const controller = createChangePasswordController(context);
 
         controller.actions.setField("currentPassword", "oldpass12");
-        controller.actions.setField("newPassword", "newpass123");
+        controller.actions.setField("newPassword", "newpass123" /* gitleaks:allow */);
         controller.actions.setField("confirmPassword", "different99");
         await controller.actions.submit();
 
@@ -108,13 +108,13 @@ describe("createChangePasswordController", () => {
         const controller = createChangePasswordController(context);
 
         controller.actions.setField("currentPassword", "oldpass12");
-        controller.actions.setField("newPassword", "newpass123");
-        controller.actions.setField("confirmPassword", "newpass123");
+        controller.actions.setField("newPassword", "newpass123" /* gitleaks:allow */);
+        controller.actions.setField("confirmPassword", "newpass123" /* gitleaks:allow */);
         await controller.actions.submit();
 
         expect(client.changePassword as ReturnType<typeof vi.fn>).toHaveBeenCalledWith({
             currentPassword: "oldpass12",
-            newPassword: "newpass123",
+            newPassword: "newpass123" /* gitleaks:allow */,
             revokeOtherSessions: true,
         });
     });

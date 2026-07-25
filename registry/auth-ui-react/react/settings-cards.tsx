@@ -3,7 +3,6 @@
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import type { AuthPasskey, AuthSession } from "../core";
 import {
     createChangeEmailController,
     createChangePasswordController,
@@ -12,6 +11,8 @@ import {
     createProfileController,
     createSessionsController,
     isFlowEnabled,
+    passkeyLabel,
+    sessionLabel,
     signOut,
 } from "../core";
 import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
@@ -168,12 +169,6 @@ const DeleteAccountCard = (): ReactElement => {
     );
 };
 
-const sessionLabel = (session: AuthSession): string => {
-    const agent = session.userAgent?.trim();
-
-    return agent === undefined || agent === "" ? (session.ipAddress ?? "Unknown device") : agent;
-};
-
 const SessionsCard = (): ReactElement => {
     const { localization: t } = useAuthUI();
     const [state, actions] = useController(createSessionsController);
@@ -189,23 +184,28 @@ const SessionsCard = (): ReactElement => {
 
         return (
             <ul className="lunora-auth-list">
-                {state.items.map((session) => (
-                    <li className="lunora-auth-list__item" key={session.id ?? session.token ?? sessionLabel(session)}>
-                        <span className="lunora-auth-list__label">{sessionLabel(session)}</span>
-                        {session.token === undefined ? null : (
-                            <button
-                                className="lunora-auth-link"
-                                disabled={state.busy}
-                                onClick={() => {
-                                    void actions.revoke(session.token as string);
-                                }}
-                                type="button"
-                            >
-                                {t.revoke}
-                            </button>
-                        )}
-                    </li>
-                ))}
+                {state.items.map((session) => {
+                    // Bound once: TS can't narrow an optional through a closure.
+                    const { token } = session;
+
+                    return (
+                        <li className="lunora-auth-list__item" key={session.id ?? token ?? sessionLabel(session, t)}>
+                            <span className="lunora-auth-list__label">{sessionLabel(session, t)}</span>
+                            {token === undefined ? null : (
+                                <button
+                                    className="lunora-auth-link"
+                                    disabled={state.busy}
+                                    onClick={() => {
+                                        void actions.revoke(token);
+                                    }}
+                                    type="button"
+                                >
+                                    {t.revoke}
+                                </button>
+                            )}
+                        </li>
+                    );
+                })}
             </ul>
         );
     })();
@@ -226,12 +226,6 @@ const SessionsCard = (): ReactElement => {
             </button>
         </AuthCard>
     );
-};
-
-const passkeyLabel = (passkey: AuthPasskey, fallback: string): string => {
-    const name = passkey.name?.trim();
-
-    return name === undefined || name === "" ? fallback : name;
 };
 
 /**
@@ -261,23 +255,27 @@ const PasskeysCard = (): ReactElement | null => {
 
         return (
             <ul className="lunora-auth-list">
-                {state.items.map((passkey) => (
-                    <li className="lunora-auth-list__item" key={passkey.id ?? passkeyLabel(passkey, t.passkeyUnnamed)}>
-                        <span className="lunora-auth-list__label">{passkeyLabel(passkey, t.passkeyUnnamed)}</span>
-                        {passkey.id === undefined ? null : (
-                            <button
-                                className="lunora-auth-link"
-                                disabled={state.busy}
-                                onClick={() => {
-                                    void actions.remove(passkey.id as string);
-                                }}
-                                type="button"
-                            >
-                                {t.remove}
-                            </button>
-                        )}
-                    </li>
-                ))}
+                {state.items.map((passkey) => {
+                    const { id } = passkey;
+
+                    return (
+                        <li className="lunora-auth-list__item" key={id ?? passkeyLabel(passkey, t)}>
+                            <span className="lunora-auth-list__label">{passkeyLabel(passkey, t)}</span>
+                            {id === undefined ? null : (
+                                <button
+                                    className="lunora-auth-link"
+                                    disabled={state.busy}
+                                    onClick={() => {
+                                        void actions.remove(id);
+                                    }}
+                                    type="button"
+                                >
+                                    {t.remove}
+                                </button>
+                            )}
+                        </li>
+                    );
+                })}
             </ul>
         );
     })();

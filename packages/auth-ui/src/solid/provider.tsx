@@ -31,8 +31,12 @@ interface AuthUIProviderProps extends Omit<AuthUIConfig, "nav"> {
 /**
  * Provides the resolved auth-UI context to the tree. One base Solid component set
  * serves every setup: pass your router into `nav`/`Link` and the cards navigate
- * through it. Props are read lazily inside a {@link createMemo} so swapping any of
- * them re-resolves the context for descendants.
+ * through it.
+ *
+ * The config is resolved in a {@link createMemo}, but treat it as read once:
+ * cards capture the context when they are created, so swapping `authClient` or
+ * `nav` afterwards won't reach an already-mounted card. Configure the provider
+ * at mount, as you would a router.
  */
 const AuthUIProvider = (props: AuthUIProviderProps): JSX.Element => {
     const value = createMemo<AuthUISolidContext>(() => {

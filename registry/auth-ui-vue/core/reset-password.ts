@@ -9,7 +9,7 @@ import { assertOk } from "./map-error";
 import type { FormController } from "./types";
 import { password as validatePassword } from "./validators";
 
-type ResetPasswordField = "confirmPassword" | "password";
+type ResetPasswordField = "confirmPassword" | "password"; // gitleaks:allow — field names, not credentials
 
 interface ResetPasswordOptions {
     /** The reset token from the URL query (`?token=...`). */

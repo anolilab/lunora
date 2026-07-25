@@ -2,7 +2,7 @@
     "name": "@lunora/auth-ui",
     "version": "1.0.0-alpha.0",
     "private": true,
-    "description": "Internal: source-of-truth for the copy-in, user-owned auth screens distributed via the `auth-ui-*` registry items. Not published \u2014 synced into registry/auth-ui-<framework>/ and copied into consumer projects.",
+    "description": "Internal: source-of-truth for the copy-in, user-owned auth screens distributed via the `auth-ui-*` registry items. Not published — synced into registry/auth-ui-<framework>/ and copied into consumer projects.",
     "keywords": [
         "auth",
         "better-auth",

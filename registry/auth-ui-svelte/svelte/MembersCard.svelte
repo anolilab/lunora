@@ -1,13 +1,17 @@
+<script module lang="ts">
+    // Per-instance ids: two cards on one page must not collide.
+    let counter = 0;
+</script>
+
 <script lang="ts">
-    import { createMembersController, isFlowEnabled } from "../core";
+    import { ROLE_OPTIONS, createMembersController, isFlowEnabled } from "../core";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
-    const ROLE_OPTIONS = ["member", "admin", "owner"] as const;
-
+    const uid = `lunora-auth-${(counter += 1)}`;
     const context = useAuthUI();
     const t = context.localization;
     const enabled = isFlowEnabled(context, "organization", "MembersCard");
@@ -90,12 +94,12 @@
             }}
         >
             <div class="lunora-auth-field">
-                <label class="lunora-auth-field__label" for="lunora-invite-email">{t.inviteEmailLabel}</label>
-                <input bind:value={email} class="lunora-auth-field__input" id="lunora-invite-email" type="email" />
+                <label class="lunora-auth-field__label" for="{uid}-invite-email">{t.inviteEmailLabel}</label>
+                <input bind:value={email} class="lunora-auth-field__input" id="{uid}-invite-email" type="email" />
             </div>
             <div class="lunora-auth-field">
-                <label class="lunora-auth-field__label" for="lunora-invite-role">{t.roleLabel}</label>
-                <select bind:value={role} class="lunora-auth-field__input" id="lunora-invite-role">
+                <label class="lunora-auth-field__label" for="{uid}-invite-role">{t.roleLabel}</label>
+                <select bind:value={role} class="lunora-auth-field__input" id="{uid}-invite-role">
                     {#each ROLE_OPTIONS as option (option)}
                         <option value={option}>{option}</option>
                     {/each}

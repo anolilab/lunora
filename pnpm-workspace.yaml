@@ -503,7 +503,6 @@ allowBuilds:
   core-js: false
   cpu-features: true
   esbuild: true
-  lmdb: set this to true or false
   msgpackr-extract: true
   msw: false
   protobufjs: true

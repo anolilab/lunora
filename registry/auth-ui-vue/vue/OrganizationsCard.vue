@@ -1,22 +1,15 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, useId } from "vue";
 
-import { createOrganizationsController, isFlowEnabled } from "../core";
+import { createOrganizationsController, isFlowEnabled, slugify } from "../core";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
-const slugify = (value: string): string =>
-    // Runs of non-alphanumerics collapse to a single "-", so trimming one edge
-    // dash each side is enough (keeps the regex linear — no `+` quantifier).
-    value
-        .toLowerCase()
-        .trim()
-        .replaceAll(/[^a-z0-9]+/gu, "-")
-        .replaceAll(/^-|-$/gu, "");
-
+// Generated, not hard-coded: two cards on one page must not collide.
+const uid = useId();
 const context = useAuthUI();
 const t = context.localization;
 // Resolved before the controller is built: a gated-off card must not fire the
@@ -38,12 +31,20 @@ const create = (): void => {
     slug.value = "";
 };
 
-const onSetActive = (id: string): void => {
-    void actions.setActive(id);
+// Takes the optional id straight from the row: the template can't narrow,
+// so the guard lives here rather than as a cast at the call site.
+const onSetActive = (id?: string): void => {
+    if (id !== undefined) {
+        void actions.setActive(id);
+    }
 };
 
-const onRemove = (id: string): void => {
-    void actions.remove(id);
+// Takes the optional id straight from the row: the template can't narrow,
+// so the guard lives here rather than as a cast at the call site.
+const onRemove = (id?: string): void => {
+    if (id !== undefined) {
+        void actions.remove(id);
+    }
 };
 </script>
 
@@ -56,10 +57,10 @@ const onRemove = (id: string): void => {
             <li v-for="organization in state.items" :key="organization.id ?? organization.slug ?? organization.name" class="lunora-auth-list__item">
                 <span class="lunora-auth-list__label">{{ organization.name ?? organization.slug }}</span>
                 <span v-if="organization.id !== undefined" class="lunora-auth-list__actions">
-                    <button class="lunora-auth-link" type="button" :disabled="state.busy" @click="onSetActive(organization.id as string)">
+                    <button class="lunora-auth-link" type="button" :disabled="state.busy" @click="onSetActive(organization.id)">
                         {{ t.switchOrganization }}
                     </button>
-                    <button class="lunora-auth-link" type="button" :disabled="state.busy" @click="onRemove(organization.id as string)">
+                    <button class="lunora-auth-link" type="button" :disabled="state.busy" @click="onRemove(organization.id)">
                         {{ t.remove }}
                     </button>
                 </span>
@@ -67,12 +68,12 @@ const onRemove = (id: string): void => {
         </ul>
         <form class="lunora-auth-form" novalidate @submit.prevent="create">
             <div class="lunora-auth-field">
-                <label class="lunora-auth-field__label" for="lunora-org-name">{{ t.organizationName }}</label>
-                <input id="lunora-org-name" v-model="name" class="lunora-auth-field__input" />
+                <label class="lunora-auth-field__label" :for="`${uid}-org-name`">{{ t.organizationName }}</label>
+                <input :id="`${uid}-org-name`" v-model="name" class="lunora-auth-field__input" />
             </div>
             <div class="lunora-auth-field">
-                <label class="lunora-auth-field__label" for="lunora-org-slug">{{ t.organizationSlug }}</label>
-                <input id="lunora-org-slug" v-model="slug" class="lunora-auth-field__input" :placeholder="slugPlaceholder" />
+                <label class="lunora-auth-field__label" :for="`${uid}-org-slug`">{{ t.organizationSlug }}</label>
+                <input :id="`${uid}-org-slug`" v-model="slug" class="lunora-auth-field__input" :placeholder="slugPlaceholder" />
             </div>
             <SubmitButton :pending="state.busy">{{ t.createOrganization }}</SubmitButton>
         </form>

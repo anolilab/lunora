@@ -1,20 +1,12 @@
+import { createAuthClient } from "better-auth/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AuthClient, ControllerContext } from "../../src/core";
-import { derivePluginFlags, isFlowEnabled, resetFlowWarnings, resolveContext } from "../../src/core";
+import type { AuthClient, ControllerContext, PluginFlags } from "../../src/core";
+import { derivePluginFlags, isFlowEnabled, registerAuthClientPlugins, resetFlowWarnings, resolveContext } from "../../src/core";
 
-const bare = { getSession: vi.fn() } as unknown as AuthClient;
+const stub = (): AuthClient => ({ getSession: vi.fn() }) as unknown as AuthClient;
 
-const withPlugins = {
-    ...bare,
-    emailOtp: { sendVerificationOtp: vi.fn() },
-    organization: { list: vi.fn() },
-    passkey: { addPasskey: vi.fn() },
-    signIn: { magicLink: vi.fn() },
-    twoFactor: { enable: vi.fn() },
-} as unknown as AuthClient;
-
-const contextFor = (authClient: AuthClient, plugins?: Parameters<typeof resolveContext>[0]["plugins"]): ControllerContext =>
+const contextFor = (authClient: AuthClient, plugins?: PluginFlags): ControllerContext =>
     resolveContext({ authClient, nav: { navigate: vi.fn(), replace: vi.fn() }, plugins });
 
 // eslint-disable-next-line vitest/require-top-level-describe -- one cross-suite teardown hook belongs at the top level.
@@ -24,10 +16,28 @@ afterEach(() => {
 });
 
 describe("derivePluginFlags", () => {
-    it("reports every flow off for a client built without plugins", () => {
+    it("returns what the client registered", () => {
+        expect.assertions(3);
+
+        const client = stub();
+
+        registerAuthClientPlugins(client, { magicLink: true, organization: true });
+
+        const flags = derivePluginFlags(client);
+
+        expect(flags.magicLink).toBe(true);
+        expect(flags.organization).toBe(true);
+        expect(flags.twoFactor).toBe(false);
+    });
+
+    it("reports every flow off for a client registered with no plugins", () => {
         expect.assertions(1);
 
-        expect(derivePluginFlags(bare)).toStrictEqual({
+        const client = stub();
+
+        registerAuthClientPlugins(client, {});
+
+        expect(derivePluginFlags(client)).toStrictEqual({
             admin: false,
             apiKey: false,
             emailOtp: false,
@@ -38,38 +48,70 @@ describe("derivePluginFlags", () => {
         });
     });
 
-    it("detects each plugin from the method it installs on the client", () => {
-        expect.assertions(5);
+    it("leaves every flow on for a client that never registered", () => {
+        expect.assertions(2);
 
-        const flags = derivePluginFlags(withPlugins);
-
-        expect(flags.magicLink).toBe(true);
-        expect(flags.emailOtp).toBe(true);
-        expect(flags.organization).toBe(true);
-        expect(flags.passkey).toBe(true);
-        expect(flags.twoFactor).toBe(true);
+        // An app that built its client by hand tells us nothing, and hiding a card
+        // we cannot reason about is the worse failure — so nothing is hidden.
+        expect(derivePluginFlags(stub()).organization).toBe(true);
+        expect(derivePluginFlags(stub()).passkey).toBe(true);
     });
 
     it("survives a null or undefined client instead of throwing", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        expect(derivePluginFlags(undefined).organization).toBe(false);
+        expect(derivePluginFlags(undefined).organization).toBe(true);
+        expect(derivePluginFlags(null).organization).toBe(true);
+    });
+
+    /**
+     * The regression that made the first version of this module a no-op:
+     * `createAuthClient` returns a dynamic-path proxy, so *any* property path
+     * answers with a callable. Probing the client cannot work, in either
+     * direction — this test fails the moment someone reintroduces it.
+     */
+    it("does not try to infer plugins from a real better-auth client's shape", () => {
+        expect.assertions(3);
+
+        const real = createAuthClient({ baseURL: "http://localhost" }) as unknown as Record<string, Record<string, unknown>>;
+
+        // Proof the proxy answers for anything at all…
+        expect(real.organization?.list).toBeTypeOf("function");
+        expect(real.notAPlugin?.notAMethod).toBeTypeOf("function");
+
+        // …so an unregistered real client is treated as unknown, not as fully-featured detection.
+        expect(derivePluginFlags(real)).toStrictEqual(derivePluginFlags(stub()));
     });
 });
 
 describe("resolveContext plugin flags", () => {
-    it("defaults each flag to what the client supports", () => {
+    it("defaults each flag to the client's registration", () => {
         expect.assertions(2);
 
-        expect(contextFor(withPlugins).plugins.organization).toBe(true);
-        expect(contextFor(bare).plugins.organization).toBe(false);
+        const enabled = stub();
+        const disabled = stub();
+
+        registerAuthClientPlugins(enabled, { organization: true });
+        registerAuthClientPlugins(disabled, {});
+
+        expect(contextFor(enabled).plugins.organization).toBe(true);
+        expect(contextFor(disabled).plugins.organization).toBe(false);
     });
 
-    it("lets an explicit flag override detection in both directions", () => {
+    it("lets an explicit flag override the registration in both directions", () => {
         expect.assertions(2);
 
-        expect(contextFor(bare, { organization: true }).plugins.organization).toBe(true);
-        expect(contextFor(withPlugins, { organization: false }).plugins.organization).toBe(false);
+        const client = stub();
+
+        registerAuthClientPlugins(client, {});
+
+        expect(contextFor(client, { organization: true }).plugins.organization).toBe(true);
+
+        const enabled = stub();
+
+        registerAuthClientPlugins(enabled, { organization: true });
+
+        expect(contextFor(enabled, { organization: false }).plugins.organization).toBe(false);
     });
 });
 
@@ -78,8 +120,11 @@ describe("isFlowEnabled", () => {
         expect.assertions(2);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const client = stub();
 
-        expect(isFlowEnabled(contextFor(withPlugins), "organization", "OrganizationsCard")).toBe(true);
+        registerAuthClientPlugins(client, { organization: true });
+
+        expect(isFlowEnabled(contextFor(client), "organization", "OrganizationsCard")).toBe(true);
         expect(warn).not.toHaveBeenCalled();
     });
 
@@ -87,7 +132,11 @@ describe("isFlowEnabled", () => {
         expect.assertions(3);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-        const context = contextFor(bare);
+        const client = stub();
+
+        registerAuthClientPlugins(client, {});
+
+        const context = contextFor(client);
 
         expect(isFlowEnabled(context, "magicLink", "MagicLinkCard")).toBe(false);
 

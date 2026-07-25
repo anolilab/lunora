@@ -19,9 +19,14 @@
     // Only set when the app configured `theme` — otherwise the app's own design
     // tokens keep flowing through untouched.
     const { themeVariables } = useAuthUI();
-    const themeStyle = Object.entries(themeVariables)
-        .map(([property, value]) => `${property}:${value}`)
-        .join(";");
+    // `null` rather than "" so an unthemed card renders no style attribute at
+    // all, matching the other four ports.
+    const themeStyle =
+        Object.keys(themeVariables).length === 0
+            ? null
+            : Object.entries(themeVariables)
+                  .map(([property, value]) => `${property}:${value}`)
+                  .join(";");
 </script>
 
 <section class="lunora-auth-card" style={themeStyle}>

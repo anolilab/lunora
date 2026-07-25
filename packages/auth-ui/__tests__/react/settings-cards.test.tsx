@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthClient, AuthResponse } from "../../src/core";
+import { resetFlowWarnings } from "../../src/core";
 import { AuthUIProvider, SessionsCard, SignOutButton } from "../../src/react";
 
 const ok = <T,>(data: T = null as T): Promise<AuthResponse<T>> => Promise.resolve({ data, error: null });
@@ -27,6 +28,11 @@ const renderWith = (client: AuthClient, node: ReactElement): { nav: { navigate: 
 
     return { nav };
 };
+
+// eslint-disable-next-line vitest/require-top-level-describe -- one cross-suite teardown hook belongs at the top level.
+afterEach(() => {
+    resetFlowWarnings();
+});
 
 describe("sessionsCard", () => {
     it("loads and lists the active sessions, then revokes one", async () => {

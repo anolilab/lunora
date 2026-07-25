@@ -177,9 +177,19 @@ const collectEmailFeature = async (deps: OfferDeps): Promise<FeatureApply> => {
  * and — because it `requires` the base `auth` item — prompt for the D1 database
  * name, reusing the same transform as {@link collectAuthFeature} so Auth UI alone
  * is enough to stand up a working auth setup.
+ *
+ * `authAlsoPicked` skips that prompt when Authentication was selected too: the
+ * two sit next to each other in the multi-select and are a natural pair, and
+ * asking the same question twice invites two different answers for one `auth`
+ * item.
  */
-const collectAuthUiFeature = async (deps: OfferDeps): Promise<FeatureApply> => {
+const collectAuthUiFeature = async (deps: OfferDeps, authAlsoPicked: boolean): Promise<FeatureApply> => {
     const item = deps.resolveAuthUiItem?.() ?? "auth-ui-react";
+
+    if (authAlsoPicked) {
+        return { label: "auth-ui", names: [item] };
+    }
+
     const databaseName = await promptDatabaseName(deps.text, deps.projectName);
 
     return { label: "auth-ui", names: [item], transformManifest: (manifest) => withAuthDatabaseName(manifest, databaseName) };
@@ -197,9 +207,9 @@ const collectStorageFeature = async (deps: OfferDeps): Promise<FeatureApply> => 
 };
 
 /** Per-feature collectors that need a sub-prompt; everything else applies as its bare item name. */
-const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps) => Promise<FeatureApply>>> = {
+const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps, picked: ReadonlyArray<StackFeature>) => Promise<FeatureApply>>> = {
     auth: collectAuthFeature,
-    "auth-ui": collectAuthUiFeature,
+    "auth-ui": async (deps, picked) => collectAuthUiFeature(deps, picked.includes("auth")),
     email: collectEmailFeature,
     storage: collectStorageFeature,
 };
@@ -258,7 +268,7 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
         const collect = FEATURE_COLLECTORS[feature];
 
         // eslint-disable-next-line no-await-in-loop -- serial by design (one prompt at a time).
-        plans.push(collect ? await collect(deps) : { label: feature, names: [feature] });
+        plans.push(collect ? await collect(deps, picked) : { label: feature, names: [feature] });
     }
 
     // Then apply them all in one batch — one progress line for the whole stack.

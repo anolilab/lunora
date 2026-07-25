@@ -15,7 +15,7 @@ const createDeleteAccountController = (context: ControllerContext): FormControll
         },
         sessionChanging: true,
         submit: async (values, context_) => {
-            assertOk(await context_.authClient.deleteUser({ password: values.password }));
+            assertOk(await context_.authClient.deleteUser({ password: values.password })); // gitleaks:allow — forwards the typed value, no literal
 
             return { redirectTo: context_.redirects.afterSignOut };
         },

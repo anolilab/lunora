@@ -1,28 +1,27 @@
+let organizationFieldId = 0;
+
 /**
  * Organization cards, mirroring the React `organization.tsx` 1:1: an
  * organizations list with a create form (name + auto-slug), and a members list
  * with pending invitations and an invite form. Local form fields are plain
  * signals; the lists come from the core controllers.
  */
-import type { Signal } from "@angular/core";
-import { ChangeDetectionStrategy, Component, input, signal } from "@angular/core";
+import type { OnInit, Signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, DestroyRef, inject, input, signal } from "@angular/core";
 
-import type { AuthOrganization, MembersActions, MembersState, OrganizationsActions, ResourceState } from "../core";
-import { createMembersController, createOrganizationSettingsController, createOrganizationsController, isFlowEnabled } from "../core";
+import type {
+    AuthOrganization,
+    MembersActions,
+    MembersState,
+    OrganizationSettingsActions,
+    OrganizationSettingsState,
+    OrganizationsActions,
+    ResourceState,
+} from "../core";
+import { ROLE_OPTIONS, createMembersController, createOrganizationSettingsController, createOrganizationsController, isFlowEnabled, slugify } from "../core";
 import { controllerSignal } from "./controller-signal";
 import { AuthCardComponent, AuthFieldComponent, FormBannerComponent, SubmitButtonComponent } from "./primitives";
 import { injectAuthUI } from "./provider";
-
-const ROLE_OPTIONS = ["member", "admin", "owner"] as const;
-
-const slugify = (value: string): string =>
-    // Runs of non-alphanumerics collapse to a single "-", so trimming one edge
-    // dash each side is enough (keeps the regex linear — no `+` quantifier).
-    value
-        .toLowerCase()
-        .trim()
-        .replaceAll(/[^a-z0-9]+/gu, "-")
-        .replaceAll(/^-|-$/gu, "");
 
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
@@ -58,14 +57,14 @@ const slugify = (value: string): string =>
                 }
                 <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); create()">
                     <div class="lunora-auth-field">
-                        <label class="lunora-auth-field__label" for="lunora-org-name">{{ t.organizationName }}</label>
-                        <input class="lunora-auth-field__input" id="lunora-org-name" [value]="name()" (input)="name.set($any($event.target).value)" />
+                        <label class="lunora-auth-field__label" [attr.for]="uid + '-org-name'">{{ t.organizationName }}</label>
+                        <input class="lunora-auth-field__input" [attr.id]="uid + '-org-name'" [value]="name()" (input)="name.set($any($event.target).value)" />
                     </div>
                     <div class="lunora-auth-field">
-                        <label class="lunora-auth-field__label" for="lunora-org-slug">{{ t.organizationSlug }}</label>
+                        <label class="lunora-auth-field__label" [attr.for]="uid + '-org-slug'">{{ t.organizationSlug }}</label>
                         <input
                             class="lunora-auth-field__input"
-                            id="lunora-org-slug"
+                            [attr.id]="uid + '-org-slug'"
                             [value]="slug()"
                             [attr.placeholder]="slugify(name())"
                             (input)="slug.set($any($event.target).value)"
@@ -78,6 +77,8 @@ const slugify = (value: string): string =>
     `,
 })
 class OrganizationsCardComponent {
+    // Per-instance ids: two cards on one page must not collide.
+    protected readonly uid = `lunora-auth-${(organizationFieldId += 1)}`;
     private readonly context = injectAuthUI();
     protected readonly enabled = isFlowEnabled(this.context, "organization", "OrganizationsCard");
     protected readonly t = this.context.localization;
@@ -152,18 +153,23 @@ class OrganizationsCardComponent {
 
                 <form class="lunora-auth-form" novalidate (submit)="$event.preventDefault(); invite()">
                     <div class="lunora-auth-field">
-                        <label class="lunora-auth-field__label" for="lunora-invite-email">{{ t.inviteEmailLabel }}</label>
+                        <label class="lunora-auth-field__label" [attr.for]="uid + '-invite-email'">{{ t.inviteEmailLabel }}</label>
                         <input
                             class="lunora-auth-field__input"
-                            id="lunora-invite-email"
+                            [attr.id]="uid + '-invite-email'"
                             type="email"
                             [value]="email()"
                             (input)="email.set($any($event.target).value)"
                         />
                     </div>
                     <div class="lunora-auth-field">
-                        <label class="lunora-auth-field__label" for="lunora-invite-role">{{ t.roleLabel }}</label>
-                        <select class="lunora-auth-field__input" id="lunora-invite-role" [value]="role()" (change)="role.set($any($event.target).value)">
+                        <label class="lunora-auth-field__label" [attr.for]="uid + '-invite-role'">{{ t.roleLabel }}</label>
+                        <select
+                            class="lunora-auth-field__input"
+                            [attr.id]="uid + '-invite-role'"
+                            [value]="role()"
+                            (change)="role.set($any($event.target).value)"
+                        >
                             @for (option of roleOptions; track option) {
                                 <option [value]="option">{{ option }}</option>
                             }
@@ -176,6 +182,8 @@ class OrganizationsCardComponent {
     `,
 })
 class MembersCardComponent {
+    // Per-instance ids: two cards on one page must not collide.
+    protected readonly uid = `lunora-auth-${(organizationFieldId += 1)}`;
     private readonly context = injectAuthUI();
     protected readonly enabled = isFlowEnabled(this.context, "organization", "MembersCard");
     protected readonly t = this.context.localization;
@@ -241,20 +249,29 @@ class MembersCardComponent {
         }
     `,
 })
-class OrganizationSettingsCardComponent {
+class OrganizationSettingsCardComponent implements OnInit {
     /** Defaults to the user's active organization. */
     readonly organizationId = input<string>();
 
     private readonly context = injectAuthUI();
+    private readonly destroyRef = inject(DestroyRef);
     protected readonly enabled = isFlowEnabled(this.context, "organization", "OrganizationSettingsCard");
     protected readonly t = this.context.localization;
+    protected state!: Signal<OrganizationSettingsState>;
+    protected actions!: OrganizationSettingsActions;
 
-    private readonly bridge = controllerSignal(
-        (context) => createOrganizationSettingsController(context, { autoLoad: this.enabled, organizationId: this.organizationId() }),
-        { context: this.context },
-    );
-    protected readonly state = this.bridge.state;
-    protected readonly actions = this.bridge.actions;
+    // Built in ngOnInit, not a field initializer: `organizationId()` is unbound
+    // until Angular has set the inputs, so initializing here would silently pin
+    // every instance to the active organization.
+    ngOnInit(): void {
+        const bridge = controllerSignal(
+            (context) => createOrganizationSettingsController(context, { autoLoad: this.enabled, organizationId: this.organizationId() }),
+            { context: this.context, destroyRef: this.destroyRef },
+        );
+
+        this.state = bridge.state;
+        this.actions = bridge.actions;
+    }
 }
 
 export { MembersCardComponent, OrganizationSettingsCardComponent, OrganizationsCardComponent };

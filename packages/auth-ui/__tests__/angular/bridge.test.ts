@@ -58,7 +58,7 @@ describe("provideAuthUI / injectAuthUI", () => {
         expect(() => runInInjectionContext(TestBed.inject(Injector), () => injectAuthUI())).toThrow(PROVIDE_AUTH_UI);
     });
 
-    it("derives the plugin flags from the injected client", () => {
+    it("carries the client's registered plugin flags through DI", () => {
         expect.assertions(2);
 
         expect(withProvider(pluginClient(), () => injectAuthUI()).plugins.magicLink).toBe(true);

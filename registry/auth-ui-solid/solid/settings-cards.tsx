@@ -1,7 +1,6 @@
 import type { JSX } from "solid-js";
 import { createSignal, For, Show } from "solid-js";
 
-import type { AuthPasskey, AuthSession } from "../core";
 import {
     createChangeEmailController,
     createChangePasswordController,
@@ -10,6 +9,8 @@ import {
     createProfileController,
     createSessionsController,
     isFlowEnabled,
+    passkeyLabel,
+    sessionLabel,
     signOut,
 } from "../core";
 import { AuthCard, Field, FormBanner, SubmitButton, themeStyle } from "./primitives";
@@ -164,12 +165,6 @@ const DeleteAccountCard = (): JSX.Element => {
     );
 };
 
-const sessionLabel = (session: AuthSession): string => {
-    const agent = session.userAgent?.trim();
-
-    return agent === undefined || agent === "" ? (session.ipAddress ?? "Unknown device") : agent;
-};
-
 const SessionsCard = (): JSX.Element => {
     const { localization: t } = useAuthUI();
     const [state, actions] = createController(createSessionsController);
@@ -184,13 +179,13 @@ const SessionsCard = (): JSX.Element => {
                             <For each={state.items}>
                                 {(session) => (
                                     <li class="lunora-auth-list__item">
-                                        <span class="lunora-auth-list__label">{sessionLabel(session)}</span>
+                                        <span class="lunora-auth-list__label">{sessionLabel(session, t)}</span>
                                         <Show when={session.token !== undefined}>
                                             <button
                                                 class="lunora-auth-link"
                                                 disabled={state.busy}
                                                 onClick={() => {
-                                                    void actions.revoke(session.token as string);
+                                                    void actions.revoke(session.token);
                                                 }}
                                                 type="button"
                                             >
@@ -225,12 +220,6 @@ interface SignOutButtonProps {
     children?: string;
 }
 
-const passkeyLabel = (passkey: AuthPasskey, fallback: string): string => {
-    const label = passkey.name?.trim();
-
-    return label === undefined || label === "" ? fallback : label;
-};
-
 /**
  * Registered passkeys: list, add (WebAuthn ceremony), remove. The controller
  * also exposes `rename`; it is left out of the default card so all five ports
@@ -256,13 +245,13 @@ const PasskeysCard = (): JSX.Element => {
                         <For each={state.items}>
                             {(passkey) => (
                                 <li class="lunora-auth-list__item">
-                                    <span class="lunora-auth-list__label">{passkeyLabel(passkey, t.passkeyUnnamed)}</span>
+                                    <span class="lunora-auth-list__label">{passkeyLabel(passkey, t)}</span>
                                     <Show when={passkey.id !== undefined}>
                                         <button
                                             class="lunora-auth-link"
                                             disabled={state.busy}
                                             onClick={() => {
-                                                void actions.remove(passkey.id as string);
+                                                void actions.remove(passkey.id);
                                             }}
                                             type="button"
                                         >

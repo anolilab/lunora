@@ -7,9 +7,13 @@
     let { children }: { children?: Snippet } = $props();
 
     const context = useAuthUI();
-    const themeStyle = Object.entries(context.themeVariables)
-        .map(([property, value]) => `${property}:${value}`)
-        .join(";");
+    // `null` rather than "" so an unthemed button renders no style attribute.
+    const themeStyle =
+        Object.keys(context.themeVariables).length === 0
+            ? null
+            : Object.entries(context.themeVariables)
+                  .map(([property, value]) => `${property}:${value}`)
+                  .join(";");
 </script>
 
 <button

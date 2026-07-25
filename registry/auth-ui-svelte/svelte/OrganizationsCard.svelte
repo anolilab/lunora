@@ -1,11 +1,17 @@
+<script module lang="ts">
+    // Per-instance ids: two cards on one page must not collide.
+    let counter = 0;
+</script>
+
 <script lang="ts">
-    import { createOrganizationsController, isFlowEnabled } from "../core";
+    import { createOrganizationsController, isFlowEnabled, slugify } from "../core";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
+    const uid = `lunora-auth-${(counter += 1)}`;
     const context = useAuthUI();
     const t = context.localization;
     const enabled = isFlowEnabled(context, "organization", "OrganizationsCard");
@@ -13,15 +19,6 @@
 
     let name = $state("");
     let slug = $state("");
-
-    const slugify = (value: string): string =>
-        // Runs of non-alphanumerics collapse to a single "-", so trimming one edge
-        // dash each side is enough (keeps the regex linear — no `+` quantifier).
-        value
-            .toLowerCase()
-            .trim()
-            .replaceAll(/[^a-z0-9]+/gu, "-")
-            .replaceAll(/^-|-$/gu, "");
 
     const create = (): void => {
         if (name.trim() === "") {
@@ -83,12 +80,12 @@
             }}
         >
             <div class="lunora-auth-field">
-                <label class="lunora-auth-field__label" for="lunora-org-name">{t.organizationName}</label>
-                <input bind:value={name} class="lunora-auth-field__input" id="lunora-org-name" />
+                <label class="lunora-auth-field__label" for="{uid}-org-name">{t.organizationName}</label>
+                <input bind:value={name} class="lunora-auth-field__input" id="{uid}-org-name" />
             </div>
             <div class="lunora-auth-field">
-                <label class="lunora-auth-field__label" for="lunora-org-slug">{t.organizationSlug}</label>
-                <input bind:value={slug} class="lunora-auth-field__input" id="lunora-org-slug" placeholder={slugify(name)} />
+                <label class="lunora-auth-field__label" for="{uid}-org-slug">{t.organizationSlug}</label>
+                <input bind:value={slug} class="lunora-auth-field__input" id="{uid}-org-slug" placeholder={slugify(name)} />
             </div>
             <SubmitButton pending={$res.busy}>{t.createOrganization}</SubmitButton>
         </form>

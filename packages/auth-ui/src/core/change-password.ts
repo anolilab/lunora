@@ -5,7 +5,7 @@ import { assertOk } from "./map-error";
 import type { FormController } from "./types";
 import { password as validatePassword, required } from "./validators";
 
-type ChangePasswordField = "confirmPassword" | "currentPassword" | "newPassword";
+type ChangePasswordField = "confirmPassword" | "currentPassword" | "newPassword"; // gitleaks:allow — field names, not credentials
 
 const createChangePasswordController = (context: ControllerContext): FormController<ChangePasswordField> =>
     createFormController<ChangePasswordField>(context, {

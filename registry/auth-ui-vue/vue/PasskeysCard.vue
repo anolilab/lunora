@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 
-import type { AuthPasskey } from "../core";
-import { createPasskeysController, isFlowEnabled } from "../core";
+import { createPasskeysController, isFlowEnabled, passkeyLabel } from "../core";
 import AuthCard from "./AuthCard.vue";
 import Field from "./Field.vue";
 import FormBanner from "./FormBanner.vue";
@@ -17,19 +16,17 @@ const { actions, state } = useController((context_) => createPasskeysController(
 
 const name = ref("");
 
-const passkeyLabel = (passkey: AuthPasskey): string => {
-    const label = passkey.name?.trim();
-
-    return label === undefined || label === "" ? t.passkeyUnnamed : label;
-};
-
 const onAdd = async (): Promise<void> => {
     await actions.add(name.value);
     name.value = "";
 };
 
-const onRemove = (id: string): void => {
-    void actions.remove(id);
+// Takes the optional id straight from the row: the template can't narrow,
+// so the guard lives here rather than as a cast at the call site.
+const onRemove = (id?: string): void => {
+    if (id !== undefined) {
+        void actions.remove(id);
+    }
 };
 </script>
 
@@ -39,9 +36,9 @@ const onRemove = (id: string): void => {
         <p v-if="state.loading" class="lunora-auth-card__description">…</p>
         <p v-else-if="state.items.length === 0" class="lunora-auth-card__description">{{ t.passkeysEmpty }}</p>
         <ul v-else class="lunora-auth-list">
-            <li v-for="passkey in state.items" :key="passkey.id ?? passkeyLabel(passkey)" class="lunora-auth-list__item">
-                <span class="lunora-auth-list__label">{{ passkeyLabel(passkey) }}</span>
-                <button v-if="passkey.id !== undefined" class="lunora-auth-link" type="button" :disabled="state.busy" @click="onRemove(passkey.id as string)">
+            <li v-for="passkey in state.items" :key="passkey.id ?? passkeyLabel(passkey, t)" class="lunora-auth-list__item">
+                <span class="lunora-auth-list__label">{{ passkeyLabel(passkey, t) }}</span>
+                <button v-if="passkey.id !== undefined" class="lunora-auth-link" type="button" :disabled="state.busy" @click="onRemove(passkey.id)">
                     {{ t.remove }}
                 </button>
             </li>

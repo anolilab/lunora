@@ -28,10 +28,10 @@ interface NavAdapter {
 }
 
 /**
- * Which optional flows/cards render. Left unset, each flag is **detected from
- * the auth client** (see `flow-gate.ts`), so enabling a plugin in
- * `lunora/auth-ui/client.ts` is enough — you don't restate it here. Set a flag
- * explicitly to override the detection in either direction.
+ * Which optional flows/cards render. Left unset, each flag comes from what
+ * `lunora/auth-ui/client.ts` registered for this client (see `flow-gate.ts`), so
+ * enabling a plugin there is enough — you don't restate it here. Set a flag
+ * explicitly to override that in either direction.
  */
 interface PluginFlags {
     admin?: boolean;
@@ -50,6 +50,8 @@ interface RedirectConfig {
     afterSignOut?: string;
     /** The route hosting the sign-in screen (used by redirect-to-sign-in guards). */
     signIn?: string;
+    /** Where to send a user whose account requires a second factor. */
+    twoFactor?: string;
 }
 
 /** The user-facing config passed to a framework `&lt;AuthUIProvider>`. */
@@ -97,18 +99,18 @@ interface ControllerContext {
     themeVariables: Readonly<Record<string, string>>;
 }
 
-/** Explicit flags win; anything left unset is detected from the client. */
+/** Explicit flags win; anything left unset comes from the client's registration. */
 const resolvePlugins = (authClient: AuthClient, plugins?: PluginFlags): Required<PluginFlags> => {
-    const detected = derivePluginFlags(authClient);
+    const registered = derivePluginFlags(authClient);
 
     return {
-        admin: plugins?.admin ?? detected.admin,
-        apiKey: plugins?.apiKey ?? detected.apiKey,
-        emailOtp: plugins?.emailOtp ?? detected.emailOtp,
-        magicLink: plugins?.magicLink ?? detected.magicLink,
-        organization: plugins?.organization ?? detected.organization,
-        passkey: plugins?.passkey ?? detected.passkey,
-        twoFactor: plugins?.twoFactor ?? detected.twoFactor,
+        admin: plugins?.admin ?? registered.admin,
+        apiKey: plugins?.apiKey ?? registered.apiKey,
+        emailOtp: plugins?.emailOtp ?? registered.emailOtp,
+        magicLink: plugins?.magicLink ?? registered.magicLink,
+        organization: plugins?.organization ?? registered.organization,
+        passkey: plugins?.passkey ?? registered.passkey,
+        twoFactor: plugins?.twoFactor ?? registered.twoFactor,
     };
 };
 
@@ -117,6 +119,7 @@ const resolveRedirects = (redirects?: RedirectConfig): Required<RedirectConfig> 
         afterSignIn: redirects?.afterSignIn ?? "/",
         afterSignOut: redirects?.afterSignOut ?? "/",
         signIn: redirects?.signIn ?? "/sign-in",
+        twoFactor: redirects?.twoFactor ?? "/two-factor",
     };
 };
 

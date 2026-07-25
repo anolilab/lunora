@@ -2,10 +2,10 @@
 
 import { LunoraError } from "@lunora/errors";
 import type { ComponentType, ReactElement, ReactNode } from "react";
-import { createContext, use, useMemo } from "react";
+import { createContext, use, useEffect, useMemo, useRef } from "react";
 
 import type { AuthUIConfig, ControllerContext } from "../core";
-import { defaultNav, resolveContext } from "../core";
+import { defaultNav, resolveContext, resolveThemeVariables } from "../core";
 
 /** The React context also carries an optional framework `Link` for internal navigation. */
 interface AuthUIReactContext {
@@ -46,33 +46,67 @@ const AuthUIProvider = ({
     social,
     theme,
 }: AuthUIProviderProps): ReactElement => {
-    // Stringify the plain-object config so the context (and therefore every
-    // controller memoized on it) stays referentially stable across renders.
-    // `theme` is a function: it can't be JSON-stringified, so it joins the
-    // identity-compared deps below instead of the serialized config key.
+    /*
+     * Callbacks and `nav` are naturally written inline (`nav={{ navigate: (to) =>
+     * navigate(to) }}`), so a new identity arrives on every parent render. If those
+     * identities reached the memo below, the context — and with it every controller
+     * memoized on it — would be rebuilt mid-typing: fields blank, resource cards
+     * refetch. So they are held in refs and reached through stable wrappers, and
+     * only *values* participate in the key.
+     */
+    const latest = useRef({ nav, onError, onSessionChange });
+
+    useEffect(() => {
+        latest.current = { nav, onError, onSessionChange };
+    }, [nav, onError, onSessionChange]);
+
+    // `useRef(...).current`, not a `useMemo` with empty deps: only the first
+    // object is kept, and every field reads through `latest` at call time.
+    const handlers = useRef({
+        nav: {
+            navigate: (to: string): void => {
+                (latest.current.nav ?? defaultNav).navigate(to);
+            },
+            replace: (to: string): void => {
+                (latest.current.nav ?? defaultNav).replace(to);
+            },
+        },
+        onError: (error: unknown): void => {
+            latest.current.onError?.(error);
+        },
+        onSessionChange: (): void => {
+            latest.current.onSessionChange?.();
+        },
+    }).current;
+
+    // `theme` is a function, so its identity is as unstable as the callbacks —
+    // key on what it *returns* instead, which is what the cards actually consume.
+    const themeKey = JSON.stringify(resolveThemeVariables(theme));
     const configKey = JSON.stringify({ basePath, localization, plugins, redirects, social });
 
-    const value = useMemo<AuthUIReactContext>(
-        () => {
-            return {
-                core: resolveContext({
-                    authClient,
-                    basePath,
-                    localization,
-                    nav: nav ?? defaultNav,
-                    onError,
-                    onSessionChange,
-                    plugins,
-                    redirects,
-                    social,
-                    theme,
-                }),
-                Link,
-            };
-        },
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- object props are folded into configKey; primitives/callbacks are listed explicitly.
-        [authClient, nav, Link, onError, onSessionChange, theme, configKey],
+    const core = useMemo<ControllerContext>(
+        () =>
+            resolveContext({
+                authClient,
+                basePath,
+                localization,
+                nav: handlers.nav,
+                onError: handlers.onError,
+                onSessionChange: handlers.onSessionChange,
+                plugins,
+                redirects,
+                social,
+                theme,
+            }),
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- object props are folded into configKey/themeKey; callbacks are ref-backed and stable.
+        [authClient, handlers, configKey, themeKey],
     );
+
+    // `Link` is deliberately outside the `core` memo: swapping it must not
+    // recreate the controllers, only re-render the links.
+    const value = useMemo<AuthUIReactContext>(() => {
+        return { core, Link };
+    }, [core, Link]);
 
     return <AuthUIContext value={value}>{children}</AuthUIContext>;
 };

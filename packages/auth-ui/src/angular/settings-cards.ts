@@ -6,17 +6,7 @@
 import type { OnInit, Signal } from "@angular/core";
 import { ChangeDetectionStrategy, Component, DestroyRef, inject, input, signal } from "@angular/core";
 
-import type {
-    AuthPasskey,
-    AuthSession,
-    ChangeEmailField,
-    ChangePasswordField,
-    DeleteAccountField,
-    FormActions,
-    FormState,
-    ProfileField,
-    SessionsActions,
-} from "../core";
+import type { AuthSession, ChangeEmailField, ChangePasswordField, DeleteAccountField, FormActions, FormState, ProfileField, SessionsActions } from "../core";
 import type { ResourceState } from "../core";
 import {
     createChangeEmailController,
@@ -26,6 +16,8 @@ import {
     createProfileController,
     createSessionsController,
     isFlowEnabled,
+    passkeyLabel,
+    sessionLabel,
     signOut,
 } from "../core";
 import { controllerSignal } from "./controller-signal";
@@ -200,9 +192,9 @@ class DeleteAccountCardComponent {
                 <p class="lunora-auth-card__description">{{ t.sessionsEmpty }}</p>
             } @else {
                 <ul class="lunora-auth-list">
-                    @for (session of state().items; track session.id ?? session.token ?? sessionLabel(session)) {
+                    @for (session of state().items; track session.id ?? session.token ?? sessionLabel(session, t)) {
                         <li class="lunora-auth-list__item">
-                            <span class="lunora-auth-list__label">{{ sessionLabel(session) }}</span>
+                            <span class="lunora-auth-list__label">{{ sessionLabel(session, t) }}</span>
                             @if (session.token !== undefined) {
                                 <button class="lunora-auth-link" type="button" [disabled]="state().busy" (click)="actions.revoke(session.token!)">
                                     {{ t.revoke }}
@@ -225,11 +217,8 @@ class SessionsCardComponent {
     protected readonly state: Signal<ResourceState<AuthSession>> = this.bridge.state;
     protected readonly actions: SessionsActions = this.bridge.actions;
 
-    protected sessionLabel(session: AuthSession): string {
-        const agent = session.userAgent?.trim();
-
-        return agent === undefined || agent === "" ? (session.ipAddress ?? "Unknown device") : agent;
-    }
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected sessionLabel = sessionLabel;
 }
 
 /**
@@ -252,9 +241,9 @@ class SessionsCardComponent {
                     <p class="lunora-auth-card__description">{{ t.passkeysEmpty }}</p>
                 } @else {
                     <ul class="lunora-auth-list">
-                        @for (passkey of state().items; track passkey.id ?? label(passkey)) {
+                        @for (passkey of state().items; track passkey.id ?? passkeyLabel(passkey, t)) {
                             <li class="lunora-auth-list__item">
-                                <span class="lunora-auth-list__label">{{ label(passkey) }}</span>
+                                <span class="lunora-auth-list__label">{{ passkeyLabel(passkey, t) }}</span>
                                 @if (passkey.id !== undefined) {
                                     <button class="lunora-auth-link" type="button" [disabled]="state().busy" (click)="remove(passkey.id!)">
                                         {{ t.remove }}
@@ -282,11 +271,8 @@ class PasskeysCardComponent {
     protected readonly state = this.bridge.state;
     protected readonly actions = this.bridge.actions;
 
-    protected label(passkey: AuthPasskey): string {
-        const name = passkey.name?.trim();
-
-        return name === undefined || name === "" ? this.t.passkeyUnnamed : name;
-    }
+    /** Delegates to the shared helper — Angular templates can only call members. */
+    protected passkeyLabel = passkeyLabel;
 
     protected add(): void {
         void this.actions.add(this.name()).then(() => {

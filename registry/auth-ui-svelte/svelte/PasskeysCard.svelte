@@ -1,6 +1,5 @@
 <script lang="ts">
-    import type { AuthPasskey } from "../core";
-    import { createPasskeysController, isFlowEnabled } from "../core";
+    import { createPasskeysController, isFlowEnabled, passkeyLabel } from "../core";
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
@@ -14,12 +13,6 @@
     const { actions, state: res } = controllerStore((context_) => createPasskeysController(context_, { autoLoad: enabled }));
 
     let name = $state("");
-
-    const passkeyLabel = (passkey: AuthPasskey): string => {
-        const label = passkey.name?.trim();
-
-        return label === undefined || label === "" ? t.passkeyUnnamed : label;
-    };
 </script>
 
 {#if enabled}
@@ -31,9 +24,9 @@
             <p class="lunora-auth-card__description">{t.passkeysEmpty}</p>
         {:else}
             <ul class="lunora-auth-list">
-                {#each $res.items as passkey (passkey.id ?? passkeyLabel(passkey))}
+                {#each $res.items as passkey (passkey.id ?? passkeyLabel(passkey, t))}
                     <li class="lunora-auth-list__item">
-                        <span class="lunora-auth-list__label">{passkeyLabel(passkey)}</span>
+                        <span class="lunora-auth-list__label">{passkeyLabel(passkey, t)}</span>
                         {#if passkey.id !== undefined}
                             <button
                                 class="lunora-auth-link"

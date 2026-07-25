@@ -51,7 +51,7 @@ describe("createPasskeysController", () => {
 
         expect(client.passkey.deletePasskey).toHaveBeenCalledWith({ id: "pk-1" });
         // 1 initial load + 3 post-mutation refetches.
-        expect(client.passkey.listUserPasskeys).toHaveBeenCalledTimes(4);
+        expect(client.passkey.listUserPasskeys).toHaveBeenCalledTimes(4); // gitleaks:allow — a spy assertion, not a key
     });
 
     it("adds without a name when none is given", async () => {

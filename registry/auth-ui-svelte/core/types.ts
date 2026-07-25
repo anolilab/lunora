@@ -79,7 +79,14 @@ interface AuthPasskey {
 /** A resolved session payload (loosely typed — the UI only reads a couple of fields). */
 interface SessionData {
     session?: AuthSession;
+
     token?: string;
+
+    /**
+     * Set by the two-factor plugin when the password was right but a second
+     * factor is required. It arrives as a **success** payload with no session.
+     */
+    twoFactorRedirect?: boolean;
     user?: AuthUser;
 }
 

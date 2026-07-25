@@ -19,6 +19,7 @@
         { "from": "core/flow-gate.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/flow-gate.ts" },
         { "from": "core/forgot-password.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/forgot-password.ts" },
         { "from": "core/index.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/index.ts" },
+        { "from": "core/labels.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/labels.ts" },
         { "from": "core/localization.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/localization.ts" },
         { "from": "core/magic-link.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/magic-link.ts" },
         { "from": "core/map-error.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/map-error.ts" },

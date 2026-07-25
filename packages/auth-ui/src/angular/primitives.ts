@@ -188,7 +188,11 @@ class AuthLinkComponent {
     private readonly link = injectAuthUILink();
 
     protected onClick(event: MouseEvent): void {
-        if (this.link) {
+        // Let the browser handle modified clicks and anything but the primary
+        // button, so "open in new tab" still works on an internal link.
+        const modified = event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
+
+        if (this.link && !modified) {
             event.preventDefault();
             this.link(this.href());
         }

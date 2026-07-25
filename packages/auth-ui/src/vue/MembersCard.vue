@@ -1,18 +1,19 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, useId } from "vue";
 
-import { createMembersController, isFlowEnabled } from "../core";
+import { ROLE_OPTIONS, createMembersController, isFlowEnabled } from "../core";
 import AuthCard from "./AuthCard.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
-const ROLE_OPTIONS = ["member", "admin", "owner"] as const;
-
 const context = useAuthUI();
 const t = context.localization;
 const enabled = isFlowEnabled(context, "organization", "MembersCard");
+// Generated, not hard-coded: two cards on one page must not collide.
+const uid = useId();
+const roleId = `${uid}-role`;
 const { actions, state } = useController((context_) => createMembersController(context_, { autoLoad: enabled }));
 
 const email = ref("");
@@ -27,8 +28,12 @@ const invite = (): void => {
     email.value = "";
 };
 
-const onRemoveMember = (id: string): void => {
-    void actions.removeMember(id);
+// Takes the optional id straight from the row: the template can't narrow,
+// so the guard lives here rather than as a cast at the call site.
+const onRemoveMember = (id?: string): void => {
+    if (id !== undefined) {
+        void actions.removeMember(id);
+    }
 };
 
 const onCancelInvitation = (id: string): void => {
@@ -44,13 +49,7 @@ const onCancelInvitation = (id: string): void => {
         <ul v-else class="lunora-auth-list">
             <li v-for="member in state.members" :key="member.id ?? member.userId ?? member.user?.email" class="lunora-auth-list__item">
                 <span class="lunora-auth-list__label">{{ member.user?.email ?? member.user?.name ?? member.userId }} · {{ member.role }}</span>
-                <button
-                    v-if="member.id !== undefined"
-                    class="lunora-auth-link"
-                    type="button"
-                    :disabled="state.busy"
-                    @click="onRemoveMember(member.id as string)"
-                >
+                <button v-if="member.id !== undefined" class="lunora-auth-link" type="button" :disabled="state.busy" @click="onRemoveMember(member.id)">
                     {{ t.remove }}
                 </button>
             </li>
@@ -66,7 +65,7 @@ const onCancelInvitation = (id: string): void => {
                         class="lunora-auth-link"
                         type="button"
                         :disabled="state.busy"
-                        @click="onCancelInvitation(invitation.id as string)"
+                        @click="onCancelInvitation(invitation.id)"
                     >
                         {{ t.cancel }}
                     </button>
@@ -76,12 +75,12 @@ const onCancelInvitation = (id: string): void => {
 
         <form class="lunora-auth-form" novalidate @submit.prevent="invite">
             <div class="lunora-auth-field">
-                <label class="lunora-auth-field__label" for="lunora-invite-email">{{ t.inviteEmailLabel }}</label>
-                <input id="lunora-invite-email" v-model="email" class="lunora-auth-field__input" type="email" />
+                <label class="lunora-auth-field__label" :for="`${uid}-email`">{{ t.inviteEmailLabel }}</label>
+                <input :id="`${uid}-email`" v-model="email" class="lunora-auth-field__input" type="email" />
             </div>
             <div class="lunora-auth-field">
-                <label class="lunora-auth-field__label" for="lunora-invite-role">{{ t.roleLabel }}</label>
-                <select id="lunora-invite-role" v-model="role" class="lunora-auth-field__input">
+                <label class="lunora-auth-field__label" :for="roleId">{{ t.roleLabel }}</label>
+                <select :id="roleId" v-model="role" class="lunora-auth-field__input">
                     <option v-for="option in ROLE_OPTIONS" :key="option" :value="option">{{ option }}</option>
                 </select>
             </div>
