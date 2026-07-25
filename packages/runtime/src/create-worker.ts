@@ -1467,6 +1467,23 @@ const identityExpiryMs = (identity: ResolvedIdentity): number | undefined => {
  */
 
 /**
+ * The per-event sink context for an invocation, or `undefined` when the platform
+ * exposes no `waitUntil` (where a network sink falls back to fire-and-forget).
+ *
+ * One helper because both invocation boundaries — the `fetch` flush and
+ * `instrumentTrigger` — need the identical shape, and a divergence would
+ * silently downgrade one of them.
+ */
+const sinkContextFor = (context: ExecutionContextLike): ObservabilitySinkContext | undefined =>
+    context.waitUntil
+        ? {
+              waitUntil: (promise) => {
+                  context.waitUntil?.(promise);
+              },
+          }
+        : undefined;
+
+/**
  * Name of the queue a consumer batch came from, for the trigger's span name.
  *
  * The batch is typed `unknown` at this boundary (the consumer handler is
@@ -3885,32 +3902,31 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * "this cron took 40s" bar to hang them under. Background work is exactly
      * where you least want a blind spot, since nobody is watching a response time.
      *
+     * Trigger events are exported WITHOUT the head-sampling ratio. A ratio tuned
+     * for request traffic would hide most fires of a once-an-hour cron — the exact
+     * blind spot this wrapper exists to close — and trigger volume is inherently
+     * low enough that keeping all of them costs nothing.
+     *
      * The trace is always minted here rather than adopted: a queue message or a
      * cron controller carries no `traceparent`. Linking a consumer span back to
      * the producing request is instead the job of `span.addLink`, since parenting
      * would be wrong — the producer's request is long over by then.
      */
     const instrumentTrigger = async <T>(functionPath: string, context: ExecutionContextLike, run: () => Promise<T>): Promise<T> => {
-        const { observability, sampling } = options;
+        const { observability } = options;
         const startedAt = Date.now();
         const traceId = otlpRandomHex(16);
         const spanId = otlpRandomHex(8);
-        const sinkContext: ObservabilitySinkContext | undefined = context.waitUntil
-            ? {
-                  waitUntil: (promise) => {
-                      context.waitUntil?.(promise);
-                  },
-              }
-            : undefined;
+        const sinkContext = sinkContextFor(context);
 
         try {
             const result = await run();
 
-            emitRpcEvent(observability, { durationMs: Date.now() - startedAt, functionPath, ok: true, spanId, traceId }, sinkContext, sampling);
+            emitRpcEvent(observability, { durationMs: Date.now() - startedAt, functionPath, ok: true, spanId, traceId }, sinkContext);
 
             return result;
         } catch (error) {
-            emitRpcEvent(observability, { ...buildErrorEvent(functionPath, Date.now() - startedAt, error, {}), spanId, traceId }, sinkContext, sampling);
+            emitRpcEvent(observability, { ...buildErrorEvent(functionPath, Date.now() - startedAt, error, {}), spanId, traceId }, sinkContext);
 
             throw error;
         } finally {
@@ -4317,16 +4333,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // Invocation boundary: ship whatever the (batching) sink buffered
                 // during this request. Registered through `waitUntil` so the export
                 // outlives the response instead of racing isolate teardown.
-                flushSink(
-                    options.observability,
-                    context.waitUntil
-                        ? {
-                              waitUntil: (promise) => {
-                                  context.waitUntil?.(promise);
-                              },
-                          }
-                        : undefined,
-                );
+                flushSink(options.observability, sinkContextFor(context));
             }
         },
         async queue(batch, env, context) {

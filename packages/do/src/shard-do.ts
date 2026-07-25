@@ -21,7 +21,7 @@ import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import { buildBatchEntryRequest } from "./batch";
-import type { CloudflareTracingLike, ContextFetch, ContextMetrics, ContextTracer, SpanCollector, TraceAnchor } from "./context-telemetry";
+import type { CloudflareTracingLike, ContextFetch, ContextMetrics, ContextTracer, SpanCollection, SpanCollector, TraceAnchor } from "./context-telemetry";
 import { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "./context-telemetry";
 import type { CdcChange, SqlExec } from "./ctx-db";
 import {
@@ -190,6 +190,16 @@ const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes
  */
 interface TelemetrySink {
     /**
+     * Ship anything the sink has buffered, now. Called at the end of every
+     * dispatch (and of an alarm / socket message), so a batching sink — which
+     * exports one request per invocation instead of one per event — is never left
+     * holding telemetry a quiet shard would sit on indefinitely. Optional: a
+     * non-buffering sink simply omits it. Mirror of `@lunora/runtime`'s
+     * `ObservabilitySink.flush`.
+     */
+    flush?: (context?: LogSinkContext) => void;
+
+    /**
      * **Opt-in, EXPERIMENTAL, default off.** When `true`, each `ctx.trace` span is
      * ALSO emitted as a Cloudflare **custom span** (`tracing.enterSpan` from
      * `cloudflare:workers`, GA 2026-06-16) so it nests inside CF's native trace
@@ -202,22 +212,13 @@ interface TelemetrySink {
      * EXPERIMENTAL. Mirror of `@lunora/runtime`'s `ObservabilitySink`
      * `fuseCloudflareTraces`; see {@link createTracer} for the double-export caveat.
      */
-
-    /**
-     * Ship anything the sink has buffered, now. Called at the end of every
-     * dispatch (and of an alarm / socket message), so a batching sink — which
-     * exports one request per invocation instead of one per event — is never left
-     * holding telemetry a quiet shard would sit on indefinitely. Optional: a
-     * non-buffering sink simply omits it. Mirror of `@lunora/runtime`'s
-     * `ObservabilitySink.flush`.
-     */
-    flush?: (context?: LogSinkContext) => void;
     fuseCloudflareTraces?: boolean;
 
     /**
      * Detail level for automatic `ctx.db` instrumentation. Default `"summary"` —
-     * aggregate counters folded onto the dispatch's wide event, so cost does not
-     * grow with call count. Mirror of `@lunora/runtime`'s `ObservabilitySink`.
+     * aggregate counters folded onto the dispatch's root span when one is recorded,
+     * so cost does not grow with call count and an uninstrumented handler still
+     * emits nothing extra. Mirror of `@lunora/runtime`'s `ObservabilitySink`.
      */
     instrumentDatabase?: DatabaseInstrumentation;
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
@@ -1287,6 +1288,21 @@ const parseRecordQueueMessageArgs = (args: Record<string, unknown>): RecordQueue
 const MAX_QUEUE_SEND_BATCH = 100;
 
 /**
+ * Key for {@link ShardDO.dispatchSpans}: the anchor's full span identity, not its
+ * trace id.
+ *
+ * `resolveTraceAnchor` takes `traceId` from the inbound `traceparent`, so two
+ * concurrent RPCs forwarded under the SAME client trace share it while carrying
+ * different `rootSpanId`s (the runtime mints a fresh span id per dispatch). Keyed
+ * by `traceId` alone their wide events would merge into one collector, and
+ * whichever dispatch finished first would delete the entry and drop the other's.
+ *
+ * `traceSampling` keying by `traceId` is correct because a sampling verdict IS
+ * per-trace; a wide event is per-dispatch, which is the distinction this encodes.
+ */
+const dispatchSpanKey = (anchor: TraceAnchor): string => `${anchor.traceId}:${anchor.rootSpanId}`;
+
+/**
  * FIFO bound on {@link ShardDO.dispatchSpans}. A dispatch deletes its own entry
  * in the `finally`, so this only matters for ctxs built outside one (an alarm, a
  * subscription re-run) which mint an anchor and never reach that boundary. Sized
@@ -1959,12 +1975,16 @@ abstract class ShardDO {
      * record it can group and aggregate. Cost is flat — one span per request,
      * however much you attach.
      *
+     * Keyed by {@link dispatchSpanKey} (trace id AND root span id) rather than
+     * `traceId` alone — see there for the concurrent-dispatch collision that
+     * distinction prevents.
+     *
      * Bounded by {@link MAX_TRACKED_DISPATCH_SPANS}: the dispatch `finally`
      * deletes its own entry, but a ctx built outside a dispatch (an alarm, a
      * subscription re-run) mints its own anchor and has no such boundary, so the
      * map is FIFO-capped rather than trusted to drain.
      */
-    private dispatchSpans = new Map<string, { collector?: SpanCollector; sink?: TelemetrySink }>();
+    private dispatchSpans = new Map<string, { collector?: SpanCollector; dbTally?: LogFields; sink?: TelemetrySink }>();
 
     /**
      * The most recent telemetry sink seen while building a ctx — the flush handle
@@ -2590,13 +2610,13 @@ abstract class ShardDO {
             // A wide event alone is reason enough to record the root span: it is
             // the span the attributes live on, so skipping it would silently
             // discard everything the handler attached.
-            const dispatchSpan = this.dispatchSpans.get(dispatchTrace.traceId);
+            const dispatchSpan = this.dispatchSpans.get(dispatchSpanKey(dispatchTrace));
 
             if (this.spans.hasTrace(dispatchTrace.traceId) || dispatchSpan?.collector !== undefined) {
                 this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace);
             }
 
-            this.dispatchSpans.delete(dispatchTrace.traceId);
+            this.dispatchSpans.delete(dispatchSpanKey(dispatchTrace));
 
             // Invocation boundary for the shard, mirroring the worker's: a batching
             // sink is told to ship what this dispatch produced. Without it the DO's
@@ -4639,25 +4659,6 @@ abstract class ShardDO {
     }
 
     /**
-     * Build `ctx.span` — the handle onto the **dispatch's own span**, and with it
-     * the wide-event surface.
-     *
-     * `ctx.trace(...)` creates a *new* child span for a sub-operation; this
-     * attaches to the one that already exists for the request. That is the
-     * distinction between "time this thing" and "record a fact about this
-     * request", and conflating them is why instrumentation usually degrades into
-     * log spam: with nowhere to put a fact, people reach for `ctx.log.info`.
-     *
-     * Attributes accumulate across the whole dispatch and are folded into the
-     * root span in `recordDispatchRootSpan` — the OTel-native form of a
-     * wide event, needing no non-standard "canonical log line" convention on the
-     * collector side.
-     *
-     * Keyed by the anchor's `traceId` so concurrent dispatches accumulate
-     * separately (see `dispatchSpans`).
-     */
-
-    /**
      * The trace anchor a ctx's `trace` and `span` both hang off.
      *
      * Resolved once per `buildCtx` and shared, so `ctx.trace` spans and the
@@ -4675,6 +4676,39 @@ abstract class ShardDO {
     }
 
     /**
+     * Wrap `ctx.db` in automatic instrumentation — see {@link instrumentDatabase}
+     * for why the default is aggregate counters rather than a span per call.
+     *
+     * A no-op (returning the database untouched) with no sink configured or with
+     * `instrumentDatabase: "off"`, so a deployment that collects nothing pays
+     * nothing.
+     */
+    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
+        const mode = sink === undefined ? "off" : (sink.instrumentDatabase ?? "summary");
+
+        return instrumentDatabase(database, {
+            anchor,
+            functionPath,
+            mode,
+            record: (recorded) => {
+                this.recordSpan(recorded, sink);
+            },
+            // Parked on the dispatch entry rather than written through `ctx.span`:
+            // the counters enrich a root span that is being recorded anyway, but
+            // must never be the reason one gets recorded.
+            recordTally: (fields) => {
+                const entry = this.dispatchSpans.get(dispatchSpanKey(anchor));
+
+                if (entry !== undefined) {
+                    entry.dbTally = fields;
+                }
+            },
+            shardKey: this.state.id?.name,
+            userId: () => this.getCurrentUserId(),
+        });
+    }
+
+    /**
      * Build `ctx.fetch` — the platform `fetch`, instrumented.
      *
      * Every outbound call becomes a CLIENT span and carries a `traceparent` to
@@ -4687,32 +4721,6 @@ abstract class ShardDO {
      * nobody collects, and an app calling a third party it would rather not send
      * trace ids to needs a way to say so.
      */
-
-    /**
-     * Wrap `ctx.db` in automatic instrumentation — see {@link instrumentDatabase}
-     * for why the default is aggregate counters on the wide event rather than a
-     * span per call.
-     *
-     * A no-op (returning the database untouched) with no sink configured or with
-     * `instrumentDatabase: "off"`, so a deployment that collects nothing pays
-     * nothing.
-     */
-    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, span: SpanHandle, sink?: TelemetrySink): T {
-        const mode = sink === undefined ? "off" : (sink.instrumentDatabase ?? "summary");
-
-        return instrumentDatabase(database, {
-            anchor,
-            functionPath,
-            mode,
-            record: (recorded) => {
-                this.recordSpan(recorded, sink);
-            },
-            shardKey: this.state.id?.name,
-            span,
-            userId: () => this.getCurrentUserId(),
-        });
-    }
-
     protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): ContextFetch {
         const base: ContextFetch = (input, init) => globalThis.fetch(input, init);
 
@@ -4735,6 +4743,24 @@ abstract class ShardDO {
         );
     }
 
+    /**
+     * Build `ctx.span` — the handle onto the **dispatch's own span**, and with it
+     * the wide-event surface.
+     *
+     * `ctx.trace(...)` creates a *new* child span for a sub-operation; this
+     * attaches to the one that already exists for the request. That is the
+     * distinction between "time this thing" and "record a fact about this
+     * request", and conflating them is why instrumentation usually degrades into
+     * log spam: with nowhere to put a fact, people reach for `ctx.log.info`.
+     *
+     * Attributes accumulate across the whole dispatch and are folded into the
+     * root span in `recordDispatchRootSpan` — the OTel-native form of a
+     * wide event, needing no non-standard "canonical log line" convention on the
+     * collector side.
+     *
+     * Keyed by `dispatchSpanKey` — trace id AND root span id — so two concurrent
+     * dispatches forwarded under the same client trace accumulate separately.
+     */
     protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle {
         /**
          * Lazy on purpose. `buildCtx` builds `ctx.span` for every dispatch, but
@@ -4755,9 +4781,9 @@ abstract class ShardDO {
 
         evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
 
-        const entry = this.dispatchSpans.get(anchor.traceId) ?? { sink };
+        const entry = this.dispatchSpans.get(dispatchSpanKey(anchor)) ?? { sink };
 
-        this.dispatchSpans.set(anchor.traceId, entry);
+        this.dispatchSpans.set(dispatchSpanKey(anchor), entry);
 
         const collector = (): SpanCollector => {
             entry.collector ??= createSpanCollector({ spanId: anchor.rootSpanId, traceId: anchor.traceId });
@@ -5209,11 +5235,11 @@ abstract class ShardDO {
             // Only when the trigger actually produced telemetry — an idle alarm
             // that did nothing should not mint a bar in the studio waterfall and
             // evict a real trace from the bounded ring.
-            if (this.spans.hasTrace(anchor.traceId) || this.dispatchSpans.get(anchor.traceId)?.collector !== undefined) {
+            if (this.spans.hasTrace(anchor.traceId) || this.dispatchSpans.get(dispatchSpanKey(anchor))?.collector !== undefined) {
                 this.recordDispatchRootSpan(name, startedAt, failure, anchor);
             }
 
-            this.dispatchSpans.delete(anchor.traceId);
+            this.dispatchSpans.delete(dispatchSpanKey(anchor));
             this.flushTelemetry();
         }
     }
@@ -5251,15 +5277,21 @@ abstract class ShardDO {
      * Event record rather than on the span itself.
      */
     private recordDispatchRootSpan(functionPath: string, startedAt: number, failure: { thrown: unknown } | undefined, anchor: TraceAnchor): void {
-        const wide = this.dispatchSpans.get(anchor.traceId);
+        const wide = this.dispatchSpans.get(dispatchSpanKey(anchor));
         const durationMs = Date.now() - startedAt;
+        // Auto-instrumentation counters ride whatever root span is being recorded;
+        // they never cause one (see `instrumentDb`).
+        const collected =
+            wide?.collector === undefined
+                ? undefined
+                : { ...wide.collector.collected, attributes: { ...wide.dbTally, ...wide.collector.collected.attributes } };
 
         try {
             this.spans.push(
                 dispatchRootSpan({
                     anchor,
                     // The wide event, if the handler attached one through `ctx.span`.
-                    ...(wide?.collector === undefined ? {} : { collected: wide.collector.collected }),
+                    ...(collected === undefined ? {} : { collected }),
                     durationMs,
                     failure,
                     functionPath,
@@ -5273,7 +5305,7 @@ abstract class ShardDO {
         }
 
         if (wide?.collector !== undefined) {
-            this.exportWideEvent(functionPath, durationMs, failure, anchor, { collector: wide.collector, sink: wide.sink });
+            this.exportWideEvent(functionPath, durationMs, failure, anchor, { collected: collected ?? wide.collector.collected, sink: wide.sink });
         }
     }
 
@@ -5300,10 +5332,10 @@ abstract class ShardDO {
         durationMs: number,
         failure: { thrown: unknown } | undefined,
         anchor: TraceAnchor,
-        wide: { collector: SpanCollector; sink?: TelemetrySink },
+        wide: { collected: SpanCollection; sink?: TelemetrySink },
     ): void {
         try {
-            const { attributes } = wide.collector.collected;
+            const { attributes } = wide.collected;
 
             this.recordUserLog(
                 functionPath,

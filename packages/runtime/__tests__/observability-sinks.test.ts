@@ -537,6 +537,48 @@ describe("observability-sinks", () => {
     });
 
     describe("combineSinks", () => {
+        it("forwards flush to every batching child", async () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const plain = vi.fn<(event: ObservabilityEvent) => void>();
+            // The documented pairing: a batching network sink behind combineSinks
+            // alongside a non-batching one.
+            const sink = combineSinks(otlpSink({ endpoint: "https://collector.example" }), { onRpc: plain });
+
+            sink.onRpc!(okEvent);
+
+            expect(fetchMock).toHaveBeenCalledTimes(0);
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            // Without flush fan-out the wrapped sink never ships at the invocation
+            // boundary, and its buffer dies with the isolate.
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(plain).toHaveBeenCalledTimes(1);
+
+            vi.unstubAllGlobals();
+        });
+
+        it("tolerates a child with no flush", () => {
+            expect.assertions(1);
+
+            const sink = combineSinks({ onRpc: vi.fn<(event: ObservabilityEvent) => void>() });
+
+            expect(() => {
+                sink.flush!();
+            }).not.toThrow();
+        });
+
         it("fans out to every child sink", () => {
             expect.assertions(2);
 

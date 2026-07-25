@@ -241,7 +241,27 @@ class BridgeSpan implements Span {
 
     public recordException(exception: Exception, _time?: TimeInput): void {
         this.write((handle) => {
-            handle.recordException(exception);
+            // OTel's `Exception` is `string | Error | { code?, message?, name?, stack? }`.
+            // The object form is not an Error, so forwarding it verbatim would have
+            // `String(value)` render it as "[object Object]" and lose the message —
+            // the one part a reader actually needs.
+            if (exception instanceof Error || typeof exception === "string") {
+                handle.recordException(exception);
+
+                return;
+            }
+
+            const normalized = new Error(exception.message ?? String(exception.code ?? "exception"));
+
+            if (exception.name !== undefined) {
+                normalized.name = exception.name;
+            }
+
+            if (exception.stack !== undefined) {
+                normalized.stack = exception.stack;
+            }
+
+            handle.recordException(normalized);
         });
     }
 

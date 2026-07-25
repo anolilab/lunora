@@ -593,7 +593,9 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
             request.headers.set("traceparent", buildTraceparent(anchor.traceId, spanId, true));
         }
 
-        let ok = true;
+        // No separate `ok` flag: it is exactly `error === undefined` on every path
+        // (a non-2xx response sets `error` just as a thrown failure does), and a
+        // seeded `let ok = true` was a dead write CodeQL rightly flagged.
         let error: SpanEvent["error"];
         let status: number | undefined;
 
@@ -601,7 +603,6 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
             const response = await base(request);
 
             status = response.status;
-            ok = response.ok;
 
             if (!response.ok) {
                 error = { message: `HTTP ${String(response.status)}`, type: `HTTP_${String(response.status)}` };
@@ -609,7 +610,6 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
 
             return response;
         } catch (error_) {
-            ok = false;
             error = { message: error_ instanceof Error ? error_.message : String(error_), type: toErrorType(error_) };
 
             throw error_;
@@ -630,7 +630,7 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
                     // every request its own group in a collector, which is how a
                     // trace backend's aggregate views get destroyed.
                     name: `${request.method} ${safeHost(request.url)}`,
-                    ok,
+                    ok: error === undefined,
                     parentSpanId: anchor.rootSpanId,
                     shardKey,
                     spanId,

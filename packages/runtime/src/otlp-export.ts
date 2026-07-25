@@ -96,10 +96,6 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
         traceId: event.traceId ?? otlpRandomHex(16),
     };
 
-    if (event.parentSpanId !== undefined) {
-        span.parentSpanId = event.parentSpanId;
-    }
-
     if (event.traceFlags !== undefined) {
         span.flags = event.traceFlags;
     }

@@ -4806,7 +4806,7 @@ ${globalDatabaseLine}            // \`ctx.db\`, wrapped in automatic instrumenta
             // breakdown) to the wide event rather than a span per call, so a
             // handler making hundreds of queries stays readable. See
             // \`instrumentDatabase\` for the \`"spans"\` / \`"off"\` levels.
-            const db: DatabaseWriterLike = this.instrumentDb(createShardCtxDb(${databaseOptions}), logFunctionPath, traceAnchor, span, observability);
+            const db: DatabaseWriterLike = this.instrumentDb(createShardCtxDb(${databaseOptions}), logFunctionPath, traceAnchor, observability);
 ${facadeBlock}${paymentsBuild}
 
             // \`ctx.trace\` / \`ctx.metrics\`: spans and measurements to the same sink.

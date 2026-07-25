@@ -20,7 +20,7 @@
  */
 import type { LogFields } from "../../../shared/log-fields";
 import { otlpRandomHex } from "../../../shared/otlp";
-import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
+import type { SpanEvent } from "../../../shared/span-event";
 import type { TraceAnchor } from "./context-telemetry";
 import { toErrorType } from "./trace-context";
 
@@ -117,13 +117,12 @@ const tableOf = (method: string, arguments_: unknown[]): string | undefined => {
 /**
  * Fold the running tally onto the dispatch's wide event.
  *
- * Rewritten in full after every call rather than incremented in place: the
- * handle's contract is last-write-wins per key, and these are cumulative totals,
- * so re-setting them is both correct and cheaper than reading back through the
- * handle. It is a handful of keys, so the per-call cost is a small object
+ * Rewritten in full after every call rather than incremented in place: these are
+ * cumulative totals and the sink is last-write-wins per key, so re-publishing is
+ * both correct and cheaper than reading the previous value back. It is a handful of keys, so the per-call cost is a small object
  * assignment — the property that makes `"summary"` mode scale to any call count.
  */
-const publishTally = (span: SpanHandle, tally: DatabaseTally): void => {
+const publishTally = (record: (fields: LogFields) => void, tally: DatabaseTally): void => {
     const fields: LogFields = {
         "db.calls": tally.calls,
         "db.duration_ms": tally.durationMs,
@@ -141,7 +140,7 @@ const publishTally = (span: SpanHandle, tally: DatabaseTally): void => {
         fields[`db.op.${operation}`] = count;
     }
 
-    span.setAttributes(fields);
+    record(fields);
 };
 
 /** Render a thrown value for a span's `error.message` without relying on `Object`'s default stringification. */
@@ -216,10 +215,23 @@ export interface DatabaseTelemetryDeps {
     mode: DatabaseInstrumentation;
     /** Hand a finished span to the buffer + sink (`"spans"` mode only). */
     record: (span: SpanEvent) => void;
+
+    /**
+     * Where `"summary"` mode publishes its running totals.
+     *
+     * Deliberately NOT the dispatch's `SpanHandle`: writing through that would
+     * materialize the wide-event collector, and since `"summary"` is the default
+     * whenever a sink is configured, *every* `ctx.db`-touching request would then
+     * look like the handler had recorded a wide event — firing the root-span gate
+     * and exporting a `lunora.dispatch` record for handlers that instrumented
+     * nothing. The shard parks these on a separate slot that rides an EXISTING
+     * root span but never causes one.
+     */
+    recordTally: (fields: LogFields) => void;
+
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey: string | undefined;
-    /** The dispatch's wide-event handle — where `"summary"` mode writes its tallies. */
-    span: SpanHandle;
+
     /** Read lazily — the acting user is resolved per span. */
     userId: () => string | undefined;
 }
@@ -301,7 +313,7 @@ export const instrumentDatabase = <T extends object>(database: T, deps: Database
                             }
                         }
 
-                        publishTally(deps.span, tally);
+                        publishTally(deps.recordTally, tally);
                     } catch {
                         // Best-effort throughout — see the note above.
                     }

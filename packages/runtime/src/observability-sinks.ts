@@ -999,16 +999,32 @@ export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink =
      * diverge. Forwarding `context` matters — dropping the request's `waitUntil`
      * would silently degrade every wrapped network sink to fire-and-forget.
      */
-    const fanOut = (method: "onLog" | "onMetric" | "onRpc" | "onSpan", event: unknown, context?: ObservabilitySinkContext): void => {
+
+    /**
+     * Fan one call out to every child that implements `method`.
+     *
+     * One helper rather than five near-identical loops: "invoke each child in
+     * order, isolate its throws, and forward the per-event context" is a single
+     * policy, not a per-signal one. Forwarding `context` matters — dropping the
+     * request's `waitUntil` would silently degrade every wrapped network sink to
+     * fire-and-forget.
+     *
+     * Args are passed as a list because `flush(context)` takes the context in the
+     * FIRST position while the four `on*(event, context)` hooks take it second; a
+     * fixed `(event, context)` shape would hand `flush` an undefined context and
+     * quietly break batching under `combineSinks` — which is the documented way to
+     * pair a batching network sink with a console one.
+     */
+    const fanOut = (method: "flush" | "onLog" | "onMetric" | "onRpc" | "onSpan", arguments_: unknown[]): void => {
         for (const sink of sinks) {
-            const handler = sink[method] as ((event: unknown, context?: ObservabilitySinkContext) => void) | undefined;
+            const handler = sink[method] as ((...arguments__: unknown[]) => void) | undefined;
 
             if (!handler) {
                 continue;
             }
 
             try {
-                handler.call(sink, event, context);
+                handler.apply(sink, arguments_);
             } catch {
                 // Isolate failures so one bad sink doesn't starve the rest.
             }
@@ -1016,17 +1032,22 @@ export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink =
     };
 
     return {
+        flush: (context?: ObservabilitySinkContext) => {
+            // A child without a `flush` is skipped by `fanOut`, so combining a
+            // batching sink with non-batching ones needs no special casing.
+            fanOut("flush", [context]);
+        },
         onLog: (event: LogEvent, context?: ObservabilitySinkContext) => {
-            fanOut("onLog", event, context);
+            fanOut("onLog", [event, context]);
         },
         onMetric: (event: MetricEvent, context?: ObservabilitySinkContext) => {
-            fanOut("onMetric", event, context);
+            fanOut("onMetric", [event, context]);
         },
         onRpc: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => {
-            fanOut("onRpc", event, context);
+            fanOut("onRpc", [event, context]);
         },
         onSpan: (event: SpanEvent, context?: ObservabilitySinkContext) => {
-            fanOut("onSpan", event, context);
+            fanOut("onSpan", [event, context]);
         },
     };
 };
