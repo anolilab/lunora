@@ -19,6 +19,12 @@ const DEEP_STACK = [
     "    at Object.dispatch (/app/node_modules/@lunora/do/dist/index.mjs:2201:20)",
     "    at async run (apps/worker/src/index.ts:12:3)",
     "    at async pump (packages/client/src/socket.ts:88:7)",
+    // Bare `path:line:col` frames, with no `fn (...)` wrapper — V8 emits these for
+    // top-level module code and anonymous frames. Without one the parser's
+    // bare-frame branch is never taken, and the docstring above would be claiming
+    // coverage the fixture does not provide.
+    "    at apps/worker/src/bootstrap.ts:7:1",
+    "    at /app/node_modules/@lunora/runtime/dist/index.mjs:44:9",
     "    at emit (node:events:518:28)",
 ].join("\n");
 

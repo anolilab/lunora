@@ -1,6 +1,6 @@
 import type { Provider, PushPayload } from "@visulima/notification";
 import { createNotification } from "@visulima/notification";
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import { createNotify } from "../src/notify";
 import { memorySubscriptionStore } from "../src/subscriptions/memory-store";
@@ -66,10 +66,30 @@ const buildFacade = async (outcome: "fail" | "ok", handles: { log?: typeof noopL
     return facade;
 };
 
-const okBaseline = await buildFacade("ok", {});
-const okInstrumented = await buildFacade("ok", { log: noopLog, metrics: noopMetrics });
-const failBaseline = await buildFacade("fail", {});
-const failInstrumented = await buildFacade("fail", { log: noopLog, metrics: noopMetrics });
+/*
+ * Built in `beforeAll`, NOT via top-level `await`.
+ *
+ * A top-level await makes this an async module, and CodSpeed's instrumented
+ * runner (`mode: "simulation"` in `.github/workflows/codspeed.yml`) collects the
+ * registered benches before that evaluation settles — so every `bench` body came
+ * through as `undefined` and the suite died with `TypeError: fn is not a
+ * function`. It only reproduces under instrumentation; locally the plugin is a
+ * transparent pass-through, which is why a plain `pnpm test:bench` stays green.
+ * `getBenchConfig` already raises `hookTimeout` for exactly this kind of seeding.
+ */
+type Facade = Awaited<ReturnType<typeof buildFacade>>;
+
+let okBaseline: Facade;
+let okInstrumented: Facade;
+let failBaseline: Facade;
+let failInstrumented: Facade;
+
+beforeAll(async () => {
+    okBaseline = await buildFacade("ok", {});
+    okInstrumented = await buildFacade("ok", { log: noopLog, metrics: noopMetrics });
+    failBaseline = await buildFacade("fail", {});
+    failInstrumented = await buildFacade("fail", { log: noopLog, metrics: noopMetrics });
+});
 
 const payload = { body: "New drop", title: "News" };
 

@@ -1,8 +1,8 @@
 import { bench, describe } from "vitest";
 
-import { applyDiff, applyDiffs } from "../src/apply-diff";
+import { applyDiff, applyDiffs, canonicalizeForHash, fnv1a64Hex } from "../src/apply-diff";
 import type { TableDiff } from "../src/table-diff";
-import { backlog, baseRows, nestedInsertDiff, nestedPayload } from "./apply-diff.shared";
+import { backlog, baseRows, nestedInsertDiff, nestedPayload, ROW_COUNT } from "./apply-diff.shared";
 
 /*
  * Old-vs-new contrast for the `applyDiff` hot-path optimizations. Each pair is
@@ -16,12 +16,13 @@ import { backlog, baseRows, nestedInsertDiff, nestedPayload } from "./apply-diff
  *    limbs instead of `BigInt`, which allocated a heap object per character.
  *    Benched on its own over a fixed string, so the number backs the "~8x"
  *    claim in `apply-diff.ts` directly.
- * 3. Canonicalization was NOT changed, and this pair is why. Encoding straight
- *    to a string in one pass — no intermediate copy — looks like the obvious
- *    win, but it loses: `JSON.stringify` is a native fast path that JS-side
- *    string building cannot beat. The rejected alternative stays benched so the
- *    decision is re-checkable rather than folklore, and so nobody "optimizes"
- *    it back. Read this pair as current-vs-rejected, not old-vs-new.
+ * 3. Canonicalization kept its two-pass SHAPE (build a key-sorted copy, hand it
+ *    to `JSON.stringify`); only its key ordering changed. Encoding straight to a
+ *    string in one pass — no intermediate copy — looks like the obvious win, but
+ *    it loses: `JSON.stringify` is a native fast path that JS-side string
+ *    building cannot beat. The rejected alternative stays benched so the decision
+ *    is re-checkable rather than folklore, and so nobody "optimizes" it back.
+ *    Read this pair as current-vs-rejected, not old-vs-new.
  * 4. The surviving changes combined, end to end through the public `applyDiff`.
  *
  * Splitting 2 and 3 apart is what surfaced this: measured together they showed
@@ -49,8 +50,8 @@ const applyDiffsBaseline = (current: ReadonlyMap<string, Record<string, unknown>
  *
  * Named for its ordering on purpose — it sorts with `localeCompare`, the
  * locale-dependent ordering REPLICA-05 replaced with code-unit order. Do not
- * reach for this as a canonicalization reference; the code-unit reference lives
- * in `__tests__/apply-diff-canonical.test.ts`.
+ * reach for this as a canonicalization reference; the shipped one is
+ * `canonicalizeForHash`, imported above from `../src/apply-diff`.
  */
 const canonicalizeLocaleSortedPreReplica05 = (value: unknown): unknown => {
     if (Array.isArray(value)) {
@@ -86,39 +87,6 @@ const fnv1a64BigintHex = (input: string): string => {
     }
 
     return hash.toString(16).padStart(16, "0");
-    /* eslint-enable no-bitwise */
-};
-
-/** Current hash: the same digest over four 16-bit limbs in plain numbers. */
-const fnv1a64LimbHex = (input: string): string => {
-    /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and multiplication */
-    let h0 = 0x23_25;
-    let h1 = 0x84_22;
-    let h2 = 0x9c_e4;
-    let h3 = 0xcb_f2;
-
-    for (let index = 0; index < input.length; index += 1) {
-        const point = input.codePointAt(index) ?? 0;
-
-        h0 ^= point & 0xff_ff;
-        h1 ^= (point >>> 16) & 0xff_ff;
-
-        const p0 = h0 * 0x01_b3;
-        const p1 = h1 * 0x01_b3;
-        const p2 = h2 * 0x01_b3 + h0 * 0x01_00;
-        const p3 = h3 * 0x01_b3 + h1 * 0x01_00;
-
-        const c1 = p1 + (p0 >>> 16);
-        const c2 = p2 + (c1 >>> 16);
-        const c3 = p3 + (c2 >>> 16);
-
-        h0 = p0 & 0xff_ff;
-        h1 = c1 & 0xff_ff;
-        h2 = c2 & 0xff_ff;
-        h3 = c3 & 0xff_ff;
-    }
-
-    return [h3, h2, h1, h0].map((limb) => limb.toString(16).padStart(4, "0")).join("");
     /* eslint-enable no-bitwise */
 };
 
@@ -181,7 +149,7 @@ const canonicalInput = nestedPayload(7);
 
 // ---- Benches -------------------------------------------------------------
 
-describe("applyDiffs — 64-diff catch-up backlog over a 500-row map", () => {
+describe(`applyDiffs — 64-diff catch-up backlog over a ${String(ROW_COUNT)}-row map`, () => {
     bench("optimized (single map copy for the whole backlog)", () => {
         applyDiffs(baseRows, backlog);
     });
@@ -193,7 +161,7 @@ describe("applyDiffs — 64-diff catch-up backlog over a 500-row map", () => {
 
 describe("64-bit FNV-1a over one fixed hash input", () => {
     bench("optimized (four 16-bit number limbs)", () => {
-        fnv1a64LimbHex(hashInput);
+        fnv1a64Hex(hashInput);
     });
 
     bench("baseline (BigInt)", () => {
@@ -202,8 +170,8 @@ describe("64-bit FNV-1a over one fixed hash input", () => {
 });
 
 describe("canonical encoding of one fixed nested payload", () => {
-    bench("current (canonicalized copy + native JSON.stringify)", () => {
-        JSON.stringify(canonicalizeLocaleSortedPreReplica05(canonicalInput));
+    bench("current (canonicalizeForHash + native JSON.stringify)", () => {
+        JSON.stringify(canonicalizeForHash(canonicalInput));
     });
 
     bench("rejected (one pass straight to a string)", () => {

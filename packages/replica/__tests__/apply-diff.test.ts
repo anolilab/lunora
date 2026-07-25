@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyDiff, applyDiffs, applyDiffToSnapshot } from "../src/apply-diff";
+import { applyDiff, applyDiffs, applyDiffToSnapshot, canonicalizeForHash, deriveInsertId, fnv1a64Hex } from "../src/apply-diff";
 import type { RowChange, TableDiff } from "../src/table-diff";
 
 const diffOf = (changes: RowChange[], id = "diff-1"): TableDiff => {
@@ -93,7 +93,70 @@ describe("applyDiff", () => {
     });
 });
 
+describe("fnv1a64Hex", () => {
+    it("is bit-identical to the BigInt reference across 2000 random strings", () => {
+        // Driven directly against the exported function rather than through
+        // `applyDiff`, so a divergence is attributed to the hash itself.
+        let seed = 987_654;
+        const next = (): number => {
+            seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+
+            return seed;
+        };
+
+        const mismatches: string[] = [];
+
+        for (let index = 0; index < 2000; index += 1) {
+            let input = "";
+
+            for (let position = 0; position < index % 64; position += 1) {
+                // Mix ASCII, BMP and astral code points.
+                const roll = next() % 3;
+
+                if (roll === 0) {
+                    input += String.fromCodePoint(32 + (next() % 90));
+                } else if (roll === 1) {
+                    input += String.fromCodePoint(0x01_00 + (next() % 0x0f_00));
+                } else {
+                    input += "🎉";
+                }
+            }
+
+            if (fnv1a64Hex(input) !== referenceFnv1a64(input)) {
+                mismatches.push(input);
+            }
+        }
+
+        expect(mismatches).toStrictEqual([]);
+    });
+
+    it("matches the reference on boundary inputs", () => {
+        for (const input of ["", "a", "\0", "\u{10FFFF}", "\uD800", "\uDFFF", "é中文", "x".repeat(1000)]) {
+            expect(fnv1a64Hex(input), `mismatch for ${JSON.stringify(input)}`).toBe(referenceFnv1a64(input));
+        }
+    });
+});
+
+describe("canonicalizeForHash", () => {
+    it("orders keys by code unit, so JSON.stringify is byte-stable", () => {
+        expect(JSON.stringify(canonicalizeForHash({ B: 1, a: 2 }))).toBe('{"B":1,"a":2}');
+        expect(JSON.stringify(canonicalizeForHash({ a: 2, B: 1 }))).toBe('{"B":1,"a":2}');
+        expect(JSON.stringify(canonicalizeForHash({ "a-b": 1, aXb: 3, a_b: 2 }))).toBe('{"a-b":1,"aXb":3,"a_b":2}');
+    });
+
+    it("sorts at every depth and preserves array order", () => {
+        expect(JSON.stringify(canonicalizeForHash({ o: { z: 1, a: { y: 1, b: 2 } }, list: [3, 1, 2] }))).toBe('{"list":[3,1,2],"o":{"a":{"b":2,"y":1},"z":1}}');
+    });
+});
+
 describe("deriveInsertId (via id-less inserts)", () => {
+    it("is exported and agrees with what applyDiff derives", () => {
+        const data = { name: "alice" };
+        const diff = diffOf([{ data, type: "insert" }]);
+
+        expect(onlyDerivedKey(applyDiff(new Map(), diff))).toBe(deriveInsertId(diff, 0, data));
+    });
+
     it("matches the BigInt FNV-1a reference digest", () => {
         const data = { body: "hello world", tags: ["a", "b"] };
         const diff = diffOf([{ data, type: "insert" }]);

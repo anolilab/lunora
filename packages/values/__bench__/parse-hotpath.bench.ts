@@ -11,7 +11,10 @@ import { v } from "../src/v";
  * 3. v.array builds its result with `push` onto an empty literal. It previously
  *    preallocated with `Array.from({ length })`, which has no V8 fast path and
  *    made this bench report the baseline as ~6x FASTER than the "optimized"
- *    parser — the regression that reading these numbers is meant to catch.
+ *    parser. NOTE the array pair below no longer isolates that: both arms now
+ *    push, so they differ only in iteration/path strategy. The `Array.from`
+ *    shape is therefore benched explicitly as a third arm ("regression guard"),
+ *    which is what actually pins the pessimization out.
  *
  * Each `*-baseline` bench re-implements the pre-optimization parser inline over
  * the same fixtures so the relative win is demonstrable in one run. The
@@ -87,6 +90,27 @@ const arrayBaseline = (input: unknown[]): unknown[] => {
     return out;
 };
 
+/**
+ * The REGRESSION this file exists to catch: preallocate with
+ * `Array.from({ length })` and assign by index, the shape `v.array` used to have.
+ *
+ * `Array.from` over a bare length-only object has no V8 fast path — it walks the
+ * array-like through the generic iteration protocol. Keeping it benched means a
+ * future edit that reintroduces it shows up as a large, obvious gap instead of
+ * quietly making every array parse several times slower again.
+ */
+const arrayFromPreallocationRegression = (input: unknown[]): unknown[] => {
+    const inner = asInternal(stringElement);
+    const { length } = input;
+    const out: unknown[] = Array.from({ length });
+
+    for (let index = 0; index < length; index += 1) {
+        out[index] = inner._parse(input[index], { path: [index] });
+    }
+
+    return out;
+};
+
 const recordBaseline = (input: Record<string, unknown>): Record<string, unknown> => {
     const keyInternal = asInternal(keyValidator);
     const valueInternal = asInternal(valueValidator);
@@ -122,6 +146,10 @@ describe("v.array(v.string()) — 32 items", () => {
 
     bench("optimized (push onto empty literal + mutable path)", () => {
         stringArray.parse(sampleStringArray);
+    });
+
+    bench("regression guard (Array.from({ length }) preallocation)", () => {
+        arrayFromPreallocationRegression(sampleStringArray);
     });
 });
 

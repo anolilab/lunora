@@ -109,6 +109,15 @@ const medium = { schema: buildSchema(25) };
 const large = { schema: buildSchema(100) };
 const ring = { schema: buildRingSchema(100) };
 
+/*
+ * Label from the schema itself rather than from the `size` argument. `buildSchema`
+ * adds five tables of its own (`orgs`, `users`, and the three-table cycle), so
+ * `buildSchema(5)` is a 10-table schema — hardcoding "5-table" in the title
+ * mislabels every dashboard comparison, and would drift again the moment the
+ * fixture gains another table.
+ */
+const sizeLabel = (context: { schema: { tables: ReadonlyArray<unknown> } }): string => `${String(context.schema.tables.length)}-table schema`;
+
 /**
  * Resolve a lint by name, throwing when it is gone.
  *
@@ -134,30 +143,33 @@ const duplicateIndexLint = lintNamed("duplicate_index");
 // ---- Benches -------------------------------------------------------------
 
 describe("runAdvisor — static tier", () => {
-    bench("5-table schema", () => {
+    bench(sizeLabel(small), () => {
         runAdvisor(small, { lints: STATIC_LINTS, source: "static" });
     });
 
-    bench("25-table schema", () => {
+    bench(sizeLabel(medium), () => {
         runAdvisor(medium, { lints: STATIC_LINTS, source: "static" });
     });
 
-    bench("100-table schema", () => {
+    bench(sizeLabel(large), () => {
         runAdvisor(large, { lints: STATIC_LINTS, source: "static" });
     });
 });
 
-describe("runAdvisor — every lint, 25-table schema", () => {
+describe(`runAdvisor — every lint, ${sizeLabel(medium)}`, () => {
+    // Both arms omit `source`, so they differ ONLY in the lint set. Passing
+    // `source: "static"` to one of them would add a per-lint filter comparison
+    // that the other does not pay, confounding the very overhead being measured.
     bench("ALL_LINTS (runtime lints no-op without evidence)", () => {
         runAdvisor(medium, { lints: ALL_LINTS });
     });
 
     bench("STATIC_LINTS only", () => {
-        runAdvisor(medium, { lints: STATIC_LINTS, source: "static" });
+        runAdvisor(medium, { lints: STATIC_LINTS });
     });
 });
 
-describe("individual lints with super-linear shapes — 100-table schema", () => {
+describe(`individual lints with super-linear shapes — ${sizeLabel(large)}`, () => {
     bench("circular_fk (relation-graph walk, realistic fan-out)", () => {
         circularFkLint.run(large);
     });

@@ -2,7 +2,7 @@ import type { ValidatorLike } from "@lunora/do";
 import { bench, describe } from "vitest";
 
 import { decodeGlobalRow } from "../src/ctx-db";
-import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "../src/value-codec";
+import { sqliteDecode, sqliteEncode } from "../src/value-codec";
 
 /*
  * The encode/decode codec is the per-value floor of every `.global()` table
@@ -16,8 +16,13 @@ import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "../src/value-co
  * has to walk `v.optional(...)` wrappers to find the storage kind. Without the
  * cache every decoded row re-runs `Object.entries(shape)` plus that walk. The
  * `decodeGlobalRow — 100-row page` bench is what makes a regression there
- * visible; `effectiveColumnKind (uncached)` below is the per-column cost the
- * memo is avoiding.
+ * visible — losing the memo shows up as R x M walks instead of M.
+ *
+ * `effectiveColumnKind` is NOT benched on its own: it is a property read plus an
+ * optional unwrap, small enough that CodSpeed's instrumentation dwarfs it, so a
+ * standalone bench would emit noise-driven alerts while guarding nothing the
+ * page bench above does not already cover. Same rule as
+ * `packages/errors/__bench__/to-error-body.bench.ts`.
  */
 
 // ---- Fixtures ------------------------------------------------------------
@@ -69,7 +74,10 @@ const storedRow = (index: number): Record<string, unknown> => {
 const page = Array.from({ length: 100 }, (_, index) => storedRow(index));
 const singleRow = storedRow(0);
 
-const validators = Object.values(shape);
+// Encode inputs are built once: allocating the object literal / Uint8Array inside
+// a bench body would fold fixture construction into the `sqliteEncode` timing.
+const encodeObject = { nested: { a: 1, b: [1, 2, 3] }, source: "bench" };
+const encodeBytes = new Uint8Array([1, 2, 3, 4]);
 
 // ---- Benches -------------------------------------------------------------
 
@@ -109,18 +117,10 @@ describe("sqliteEncode — per-value branches", () => {
     });
 
     bench("object (JSON.stringify)", () => {
-        sqliteEncode({ nested: { a: 1, b: [1, 2, 3] }, source: "bench" });
+        sqliteEncode(encodeObject);
     });
 
     bench("bytes (Uint8Array passthrough)", () => {
-        sqliteEncode(new Uint8Array([1, 2, 3, 4]));
-    });
-});
-
-describe("effectiveColumnKind (uncached) — the walk decodeGlobalRow memoizes away", () => {
-    bench("whole 10-column shape", () => {
-        for (const validator of validators) {
-            effectiveColumnKind(validator);
-        }
+        sqliteEncode(encodeBytes);
     });
 });

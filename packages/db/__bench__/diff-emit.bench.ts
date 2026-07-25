@@ -85,11 +85,14 @@ const halfRemoved = toMap(rows(SNAPSHOT_SIZE).slice(0, SNAPSHOT_SIZE / 2), byId)
  * the intended delta. Re-priming inside the body would instead fold a full
  * 500-row serialization into every sample and swamp the difference between the
  * cases. Copying a precomputed `Map` of short strings is far cheaper than
- * re-serializing, and every bench below pays it — including cold start, which
- * copies an empty map of the same shape purely so the setup cost is identical
- * across all five. Without that, cold start would be the only case not paying
- * it, and the local run showed the skew flipping `small delta` and `full churn`
- * into an impossible order.
+ * re-serializing.
+ *
+ * The setup cost is NOT equal across these benches, and it cannot be. Cold start
+ * is defined by having an empty synced cache, so its `new Map(emptyCache)` is
+ * O(1) while the primed cases copy 500 entries; `steady state` reuses one
+ * emitter and copies nothing at all (see below). So do not read cold-start-vs-
+ * primed as a like-for-like comparison — each bench is meaningful against ITS
+ * OWN history (which is what CodSpeed tracks), not against its siblings here.
  */
 const primedCache = ((): Map<string, string> => {
     const cache = new Map<string, string>();

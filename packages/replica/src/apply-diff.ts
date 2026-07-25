@@ -27,12 +27,22 @@ import type { TableDiff } from "./table-diff";
  * `@experimental`, so this is a release note rather than a migration.
  *
  * The caller hands the result to `JSON.stringify`. Encoding it here by hand
- * instead — one pass, no intermediate copy — was tried and REVERTED: it
- * measured 1.3-2.2x SLOWER on nested payloads, because `JSON.stringify` is a
- * native fast path that JS-side string building cannot beat, and it meant
- * re-implementing `JSON.stringify`'s escaping and `undefined`/`toJSON` rules by
- * hand for no gain. See `__bench__/apply-diff-hotpath.bench.ts`, which keeps
- * that comparison so the conclusion stays checkable.
+ * instead — one pass, no intermediate copy — was tried and REVERTED: it measured
+ * slower on nested payloads, because `JSON.stringify` is a native fast path that
+ * JS-side string building cannot beat, and it meant re-implementing
+ * `JSON.stringify`'s escaping and `undefined`/`toJSON` rules by hand for no gain.
+ * See `__bench__/apply-diff-hotpath.bench.ts`, which keeps that comparison so the
+ * conclusion stays checkable.
+ *
+ * NOT `shared/stable-key.ts`, deliberately — which is this repo's canonical
+ * stable-JSON encoder and reaches the same code-point ordering for the same
+ * locale-independence reason. It cannot be used here because it is fail-LOUD by
+ * contract: it throws a `TypeError` on `bigint` and on any non-plain object
+ * (`Date`, typed arrays, class instances). That is right for a cache key, where
+ * a silent collision would serve one caller another's data. It is wrong here —
+ * `deriveInsertId` runs on untrusted row data straight off the poke protocol, so
+ * a `Date` in a payload must hash, not throw and break replication. Those are
+ * genuinely different contracts, so the duplication is intentional.
  */
 const canonicalizeForHash = (value: unknown): unknown => {
     if (Array.isArray(value)) {
@@ -67,11 +77,12 @@ const hex4 = (limb: number): string => limb.toString(16).padStart(4, "0");
  * 64-bit FNV-1a over `input`, as 16 lowercase hex digits.
  *
  * The hash state is held as four 16-bit limbs in plain `number`s rather than a
- * `BigInt`. BigInt allocates a heap object per operation, and this runs once
- * per character of the hash input — the limb form measured ~8x faster in
- * isolation (`__bench__/apply-diff-hotpath.bench.ts` benches it against the
- * BigInt form over a fixed string) and produces bit-identical digests
- * (`__tests__/apply-diff.test.ts` pins the two together).
+ * `BigInt`. BigInt allocates a heap object per operation, and this runs once per
+ * character of the hash input — the limb form measures ~5x faster in isolation
+ * (`__bench__/apply-diff-hotpath.bench.ts` benches THIS function, imported, against
+ * the BigInt form over a fixed string) and produces bit-identical digests
+ * (`__tests__/apply-diff.test.ts` pins the two together over random and boundary
+ * inputs, including astral code points and lone surrogates).
  *
  * The FNV-1a prime `0x0000_0100_0000_01b3` has only two non-zero 16-bit limbs
  * (`0x01b3` at limb 0 and `0x0100` at limb 2), so the full 4x4 limb product
@@ -131,11 +142,19 @@ const fnv1a64Hex = (input: string): string => {
  */
 const deriveInsertId = (diff: Pick<TableDiff, "id" | "table" | "timestamp">, changeIndex: number, data: Record<string, unknown>): string => {
     const diffIdentity = diff.id ?? String(diff.timestamp);
-    // Interpolation (not array-of-parts) is load-bearing: `table` and `id` are
-    // declared `string` but arrive as untyped JSON over the poke protocol, and a
-    // template literal coerces a stray number into the digest instead of
-    // silently contributing nothing to it — which would make two distinct diffs
-    // derive the SAME row key. Covered in `apply-diff-canonical.test.ts`.
+    /*
+     * Interpolation (not an array of parts) is load-bearing: `table` and `id` are
+     * declared `string` but arrive as untyped JSON over the poke protocol, and a
+     * template literal coerces a stray number into the digest instead of silently
+     * contributing nothing to it — which would make two distinct diffs derive the
+     * SAME row key. Covered in `apply-diff-canonical.test.ts`.
+     *
+     * That fixes type erasure, not value ambiguity: the `::`-joined format still
+     * maps `id: 1` and `id: "1"` to one digest, as would an id containing a
+     * literal `::`. Both fields are server-generated and row maps are per-table,
+     * so this is noted rather than fixed — changing the separator would rewrite
+     * every derived id for no reachable benefit.
+     */
     const input = `${diff.table}::${diffIdentity}::${String(changeIndex)}::${JSON.stringify(canonicalizeForHash(data))}`;
 
     return `row-${fnv1a64Hex(input)}`;
@@ -254,3 +273,15 @@ const applyDiffToSnapshot = (
 };
 
 export { applyDiff, applyDiffs, applyDiffToSnapshot };
+
+/*
+ * Internals, exported for the bench and test suites ONLY — `src/index.ts` does
+ * not re-export them, so they are not package API.
+ *
+ * They are exported rather than left module-private because the alternative is
+ * worse: a bench that hand-copies the function it claims to measure silently
+ * becomes a fossil the moment the real one is edited, and then reports "no
+ * regression" forever. That is exactly the failure the `lintNamed` guard in
+ * `@lunora/advisor`'s bench exists to prevent, so the same standard applies here.
+ */
+export { canonicalizeForHash, deriveInsertId, fnv1a64Hex };
