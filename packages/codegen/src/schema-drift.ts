@@ -161,11 +161,25 @@ const tableSnapshotOf = (table: TableIR): TableSnapshot => {
     return { fields, indexes, relations, shardMode: encodeShardMode(table.shardMode) };
 };
 
-/** Return a new object with its keys sorted, so JSON serialization is deterministic. */
+/**
+ * Return a new object with its keys sorted, so JSON serialization is deterministic.
+ *
+ * Sorted by UTF-16 code unit, NOT `localeCompare`. `localeCompare` resolves
+ * against the runtime's default locale and ICU version, so it is not stable
+ * across machines — which defeats the entire purpose here: `.lunora-schema.json`
+ * is a COMMITTED file, so a locale-sensitive ordering means two developers (or a
+ * developer and CI, or one machine before and after a Node upgrade) can
+ * regenerate the same schema and produce different bytes, showing up as a
+ * spurious diff and a false drift signal.
+ */
 const sortKeys = <T>(record: Record<string, T>): Record<string, T> => {
     const sorted: Record<string, T> = {};
+    const keys = Object.keys(record);
 
-    for (const key of Object.keys(record).toSorted((a, b) => a.localeCompare(b))) {
+    // eslint-disable-next-line sonarjs/no-alphabetical-sort -- code-unit order is required for cross-machine byte stability; a localeCompare comparator is the bug, not the fix
+    keys.sort();
+
+    for (const key of keys) {
         sorted[key] = record[key] as T;
     }
 
@@ -175,7 +189,12 @@ const sortKeys = <T>(record: Record<string, T>): Record<string, T> => {
 /**
  * Build a {@link SchemaSnapshot} from a parsed {@link SchemaIR} and the set of
  * declared migration ids. Tables and migration ids are sorted so the emitted
- * JSON is byte-stable across runs (no spurious diffs / churn).
+ * JSON is byte-stable across runs AND across machines (no spurious diffs /
+ * churn) — see {@link sortKeys} for why that ordering must not be locale-aware.
+ *
+ * Field / index / relation keys are deliberately NOT sorted: they are emitted in
+ * declaration order from the schema source, which is already deterministic for a
+ * given source file and keeps the snapshot readable next to the schema it mirrors.
  */
 const buildSchemaSnapshot = (schema: SchemaIR, migrationIds: ReadonlyArray<string>): SchemaSnapshot => {
     const tables: Record<string, TableSnapshot> = {};
@@ -184,9 +203,12 @@ const buildSchemaSnapshot = (schema: SchemaIR, migrationIds: ReadonlyArray<strin
         tables[table.name] = tableSnapshotOf(table);
     }
 
+    // eslint-disable-next-line sonarjs/no-alphabetical-sort, unicorn/no-array-sort -- see `sortKeys`: code-unit order, not locale collation; the spread already copies
+    const sortedMigrationIds = [...migrationIds].sort();
+
     return {
         jurisdiction: schema.jurisdiction,
-        migrationIds: [...migrationIds].toSorted((a, b) => a.localeCompare(b)),
+        migrationIds: sortedMigrationIds,
         tables: sortKeys(tables),
         version: SCHEMA_SNAPSHOT_VERSION,
     };

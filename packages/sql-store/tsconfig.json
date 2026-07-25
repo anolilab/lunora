@@ -9,5 +9,5 @@
         // `../../../shared/evict-oldest` import (a file outside this package, bundled
         // in at build time). See shared/evict-oldest.ts.
     },
-    "include": ["src/**/*", "__tests__/**/*"]
+    "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"]
 }
