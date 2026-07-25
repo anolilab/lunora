@@ -164,6 +164,45 @@ describe("memoizeIdentity", () => {
         expect(resolver).toHaveBeenCalledTimes(4);
     });
 
+    it("treats a refresh as recent, so a hot credential isn't evicted before staler ones", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const resolver = vi.fn<(request: Request) => Promise<{ userId: string }>>(async (request: Request) => {
+                return { userId: request.headers.get("cookie") ?? "" };
+            });
+            const memoized = memoizeIdentity(resolver, { maxEntries: 2, ttlMs: 1000 });
+
+            await memoized(authed("session=hot"), {});
+            await memoized(authed("session=other"), {});
+
+            // Expire `hot` and refresh it. `Map.set` on an existing key keeps its ORIGINAL
+            // position, so without an explicit delete-then-set `hot` stays at the front
+            // and is the next thing evicted despite just being used.
+            vi.advanceTimersByTime(1500);
+            await memoized(authed("session=hot"), {});
+
+            // Admitting a third key evicts the least-recently-used, which is `other`.
+            await memoized(authed("session=third"), {});
+
+            const callsBefore = resolver.mock.calls.length;
+
+            // `hot` must still be cached.
+            await memoized(authed("session=hot"), {});
+
+            expect(resolver).toHaveBeenCalledTimes(callsBefore);
+
+            // …and `other` must be the one that was dropped.
+            await memoized(authed("session=other"), {});
+
+            expect(resolver).toHaveBeenCalledTimes(callsBefore + 1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("still collapses duplicate calls within one request", async () => {
         expect.assertions(1);
 

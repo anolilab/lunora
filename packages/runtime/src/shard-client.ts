@@ -197,7 +197,9 @@ const createShardClient = (namespace: ShardNamespaceLike, options: ShardClientOp
             const functionPath = referencePath(reference);
             const shardKey = callOptions?.shardKey ?? options.shardKey;
 
-            if (shardKey === undefined) {
+            // `""` is not a usable shard key: it would resolve to *some* DO rather than
+            // failing, so it has to hit the same clear error as a missing one.
+            if (shardKey === undefined || shardKey.length === 0) {
                 throw new LunoraError(
                     "INTERNAL",
                     `createShardClient: no shard key for "${functionPath}" — pass one to createShardClient({ shardKey }), .forShard(key), or the call's options`,
