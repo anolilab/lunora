@@ -15,7 +15,7 @@
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
 import type { MetricEvent } from "../../../shared/metric-event";
-import type { TraceSamplingConfig } from "../../../shared/sampling";
+import type { TraceSamplingConfig, TraceSamplingDecision } from "../../../shared/sampling";
 import { resolveTraceSampling, shouldExportTrace } from "../../../shared/sampling";
 import type { SpanEvent } from "../../../shared/span-event";
 
@@ -219,23 +219,39 @@ export interface ObservabilitySink {
  * sink-originating throw bubble up past this point. `context.waitUntil`, when
  * supplied, lets a network sink keep its send alive past the response.
  *
- * `sampling` applies the trace-sampling verdict to this dispatch's SERVER span:
- * the event is dropped unless the trace was head-sampled or (with errors
- * force-kept) this dispatch errored — the tail bias. A dispatch with no
- * `traceId` (a fan-out aggregation, which mints none) is always kept, and an
- * absent `sampling` keeps everything, so both are backward-compatible.
+ * The verdict applied to this dispatch's SERVER span comes from `decision` when
+ * the caller settled one — pass the dispatch's already-settled decision so the
+ * export gate can never disagree with the propagated `traceparent` (a trace kept
+ * or dropped as a whole, per PR #191). Its `isTraced` must carry the propagated
+ * sampled bit (`trace.sampled`), not the raw head verdict, so a trusted upstream
+ * that sampled the trace out keeps its SERVER span out here too. The event is
+ * dropped unless the trace was sampled or (with errors force-kept) this dispatch
+ * errored — the tail bias.
+ *
+ * `sampling` is the legacy fallback for callers with no settled decision: it
+ * re-derives the verdict from `event.traceId`. A dispatch with no `traceId` (a
+ * fan-out aggregation, which mints none) is always kept, and both an absent
+ * `decision` and an absent `sampling` keep everything, so all are
+ * backward-compatible.
  */
 export const emitRpcEvent = (
     sink: ObservabilitySink | undefined,
     event: ObservabilityEvent,
     context?: ObservabilitySinkContext,
     sampling?: TraceSamplingConfig,
+    decision?: TraceSamplingDecision,
 ): void => {
     if (!sink?.onRpc) {
         return;
     }
 
-    if (sampling !== undefined && event.traceId !== undefined && !shouldExportTrace(resolveTraceSampling(sampling, event.traceId), !event.ok)) {
+    if (decision !== undefined) {
+        // Settled-verdict path: honor the decision the dispatch already made
+        // (including a trusted upstream's sampled-out `00`), never re-derive it.
+        if (!shouldExportTrace(decision, !event.ok)) {
+            return;
+        }
+    } else if (sampling !== undefined && event.traceId !== undefined && !shouldExportTrace(resolveTraceSampling(sampling, event.traceId), !event.ok)) {
         return;
     }
 

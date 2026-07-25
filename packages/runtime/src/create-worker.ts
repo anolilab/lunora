@@ -3293,6 +3293,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 },
                 sinkContext,
                 sampling,
+                // The verdict `beginDispatchTrace` already settled — `trace.sampled`
+                // is the propagated bit (honoring a trusted upstream's sampled-out
+                // `00`), NOT `decision.isTraced`, so the export gate can never
+                // disagree with the `traceparent` we forwarded.
+                { isTraced: trace.sampled, keepErrors: decision.keepErrors },
             );
 
             // The DO's `x-d1-bookmark` header (which lets the client pin reads
@@ -3311,6 +3316,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 },
                 sinkContext,
                 sampling,
+                { isTraced: trace.sampled, keepErrors: decision.keepErrors },
             );
             throw error;
         }
