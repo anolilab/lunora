@@ -68,7 +68,13 @@ const MUTATOR_REF_ERROR = "defineMutator: `serverRef` must be a generated mutato
 const mutatorPath = (serverRef: MutatorReference<never> | string): string => {
     // The string branch is validated too: `""` would otherwise dispatch to an empty
     // function path at push time instead of failing at declaration.
-    const path = typeof serverRef === "string" ? serverRef : serverRef.__lunoraRef;
+    //
+    // `?.` is load-bearing despite the non-nullable parameter type: the whole point of
+    // this function is to turn a bad `serverRef` into the LunoraError below, and an
+    // untyped caller (plain JS, `any`, a stale generated file) passing null/undefined
+    // would otherwise get a bare `TypeError` about `__lunoraRef` instead.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untyped JS callers despite the non-nullable type
+    const path = typeof serverRef === "string" ? serverRef : serverRef?.__lunoraRef;
 
     if (typeof path !== "string" || path.length === 0) {
         throw new LunoraError("INTERNAL", MUTATOR_REF_ERROR);

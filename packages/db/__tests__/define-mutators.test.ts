@@ -38,6 +38,9 @@ import { createCheckpointRegistry, getShardCheckpoints } from "../src/collection
 // eslint-disable-next-line import/first -- must follow the vi.mock above
 import { bindMutators, defineMutator, DIRECT_TRANSACTION_METADATA_KEY } from "../src/define-mutators";
 
+/** The `serverRef` guidance thrown by `defineMutator` for any unusable reference. */
+const MUTATOR_REF_ERROR_RE = /must be a generated mutator reference/;
+
 /** A checkpoint registry stub that records what the runtime asked of it. */
 const stubCheckpoints = () => {
     const acknowledged: number[] = [];
@@ -270,7 +273,22 @@ describe(bindMutators, () => {
     });
 
     it("rejects a serverRef that is neither a reference nor a path", () => {
-        expect(() => defineMutator({ apply: () => undefined, serverRef: {} as never })).toThrow(/must be a generated mutator reference/);
+        expect(() => defineMutator({ apply: () => undefined, serverRef: {} as never })).toThrow(MUTATOR_REF_ERROR_RE);
+    });
+
+    it.each([
+        ["null", null],
+        ["undefined", undefined],
+    ])("rejects a %s serverRef with the guidance error rather than a TypeError", (_label, serverRef) => {
+        expect.assertions(2);
+
+        // The parameter type forbids these, but an untyped caller reaches here anyway —
+        // and `serverRef.__lunoraRef` on null throws "Cannot read properties of null",
+        // which says nothing about what a `serverRef` should be.
+        const declare = () => defineMutator({ apply: () => undefined, serverRef: serverRef as never });
+
+        expect(declare).toThrow(MUTATOR_REF_ERROR_RE);
+        expect(declare).not.toThrow(TypeError);
     });
 
     it("releases parked overlay gates on teardown so a hot reload cannot hang isPersisted", async () => {
