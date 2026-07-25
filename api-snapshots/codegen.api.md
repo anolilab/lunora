@@ -657,6 +657,7 @@ class SchemaSnapshotParseError extends LunoraError {
 
 ```ts
 interface ShapeIR {
+    args: Record<string, ValidatorIR>;
     exportName: string;
     filePath: string;
     table?: string;
