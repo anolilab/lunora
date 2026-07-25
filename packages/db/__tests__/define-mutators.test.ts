@@ -27,7 +27,43 @@ vi.mock(
 );
 
 // eslint-disable-next-line import/first -- must follow the vi.mock above
-import { bindMutators, defineMutator } from "../src/define-mutators";
+import { createRequire } from "node:module";
+// eslint-disable-next-line import/first -- must follow the vi.mock above
+import { readFileSync } from "node:fs";
+// eslint-disable-next-line import/first -- must follow the vi.mock above
+import { dirname, join } from "node:path";
+
+// eslint-disable-next-line import/first -- must follow the vi.mock above
+import { createCheckpointRegistry, getShardCheckpoints } from "../src/collection-options";
+// eslint-disable-next-line import/first -- must follow the vi.mock above
+import { bindMutators, defineMutator, DIRECT_TRANSACTION_METADATA_KEY } from "../src/define-mutators";
+
+/** The `serverRef` guidance thrown by `defineMutator` for any unusable reference. */
+const MUTATOR_REF_ERROR_RE = /must be a generated mutator reference/;
+
+/** A checkpoint registry stub that records what the runtime asked of it. */
+const stubCheckpoints = () => {
+    const acknowledged: number[] = [];
+    const awaited: number[] = [];
+
+    return {
+        acknowledged,
+        awaited,
+        registry: {
+            acknowledge: ({ mutationId }: { mutationId?: number }) => {
+                if (mutationId !== undefined) {
+                    acknowledged.push(mutationId);
+                }
+            },
+            awaitCheckpoint: async () => undefined,
+            awaitMutationId: async (id: number) => {
+                awaited.push(id);
+            },
+            resolve: () => undefined,
+            stats: () => ({ fallbacks: 0, pendingCheckpointWaiters: 0, pendingMutationWaiters: 0 }),
+        },
+    };
+};
 
 /** The reissue-exhaustion error message the runtime throws after `maxReissues`. */
 const REISSUE_EXHAUSTED = /could not claim a fresh client sequence/;
@@ -66,8 +102,9 @@ describe(bindMutators, () => {
         // The optimistic body wrote the predicted row.
         expect(inserted).toStrictEqual([{ _id: "tmp", text: "first" }]);
         // The transaction carries the mutator ref (the sequence is claimed inside
-        // the serialized push, not at dispatch).
-        expect(configs[0]?.metadata).toStrictEqual({ serverRef: "messages:send" });
+        // the serialized push, not at dispatch) plus TanStack's direct-transaction
+        // marker, without which the predicted row is discarded as stale on completion.
+        expect(configs[0]?.metadata).toStrictEqual({ [DIRECT_TRANSACTION_METADATA_KEY]: true, serverRef: "messages:send" });
 
         // Driving the mutationFn pushes the authoritative write with clientSeq 1.
         await configs[0]?.mutationFn();
@@ -81,7 +118,36 @@ describe(bindMutators, () => {
         expect(callMutator).toHaveBeenLastCalledWith("messages:send", { text: "second" }, { clientSeq: 2, shardKey: "room-1" });
     });
 
-    it("holds the overlay until the checkpoint registry echoes the watermark", async () => {
+    it("acknowledges then awaits the watermark on the checkpoint registry", async () => {
+        configs.length = 0;
+        const client = {
+            callMutator: async () => {
+                return { applied: true, result: "ok" };
+            },
+            confirmedMutationWatermark: () => 0,
+        } as never;
+        const { collection } = mockCollection();
+        const { acknowledged, awaited, registry } = stubCheckpoints();
+
+        const bound = bindMutators(
+            client,
+            { checkpoints: registry, collections: { messages: collection } },
+            {
+                touch: defineMutator({ apply: () => undefined, serverRef: "messages:touch" }),
+            },
+        );
+
+        bound.touch({});
+        await configs[0]?.mutationFn();
+
+        // `acknowledge` first (the write is durable — arm the fallback), then hold the
+        // overlay on `awaitMutationId`. Reversing the two would make a dropped poke
+        // hang forever, since the fallback would never be armed.
+        expect(acknowledged).toStrictEqual([1]);
+        expect(awaited).toStrictEqual([1]);
+    });
+
+    it("does not gate on a derived registry that has no sync source attached", async () => {
         configs.length = 0;
         const client = {
             callMutator: async () => {
@@ -91,28 +157,194 @@ describe(bindMutators, () => {
         } as never;
         const { collection } = mockCollection();
 
-        let resolved = false;
-        const checkpoints = {
-            awaitCheckpoint: async () => undefined,
-            awaitMutationId: vi.fn<(id: number) => Promise<void>>(async (id) => {
-                resolved = id === 1;
-            }),
-            resolve: () => undefined,
-        };
+        // No `lunoraCollectionOptions` call for this client, so nothing would ever
+        // advance the shard registry. Gating here would stall every write for the
+        // whole fallback window — worse than not waiting at all.
+        const registry = getShardCheckpoints(client, "unattached-shard");
+        const awaitMutationId = vi.spyOn(registry, "awaitMutationId");
 
         const bound = bindMutators(
             client,
-            { checkpoints, collections: { messages: collection } },
-            {
-                touch: defineMutator({ apply: () => undefined, serverRef: "messages:touch" }),
-            },
+            { collections: { messages: collection }, shardKey: "unattached-shard" },
+            { touch: defineMutator({ apply: () => undefined, serverRef: "messages:touch" }) },
         );
 
         bound.touch({});
         await configs[0]?.mutationFn();
 
-        expect(checkpoints.awaitMutationId).toHaveBeenCalledWith(1);
-        expect(resolved).toBe(true);
+        expect(awaitMutationId).not.toHaveBeenCalled();
+    });
+
+    it("skips the overlay gate entirely when checkpoints are disabled", async () => {
+        configs.length = 0;
+        const client = {
+            callMutator: async () => {
+                return { applied: true, result: "ok" };
+            },
+            confirmedMutationWatermark: () => 0,
+        } as never;
+        const { collection } = mockCollection();
+
+        const bound = bindMutators(
+            client,
+            { checkpoints: false, collections: { messages: collection } },
+            { touch: defineMutator({ apply: () => undefined, serverRef: "messages:touch" }) },
+        );
+
+        bound.touch({});
+
+        // Resolves without any watermark ever arriving.
+        await expect(configs[0]?.mutationFn()).resolves.toBeUndefined();
+    });
+
+    it("releases the overlay via the fallback when the confirming sync frame never arrives", async () => {
+        configs.length = 0;
+        vi.useFakeTimers();
+
+        try {
+            const client = {
+                callMutator: async () => {
+                    return { applied: true, result: "ok" };
+                },
+                confirmedMutationWatermark: () => 0,
+            } as never;
+            const { collection } = mockCollection();
+            const fallbacks: unknown[] = [];
+            const checkpoints = createCheckpointRegistry({ fallbackMs: 3000, onFallback: (event) => fallbacks.push(event) });
+
+            const bound = bindMutators(
+                client,
+                { checkpoints, collections: { messages: collection } },
+                { touch: defineMutator({ apply: () => undefined, serverRef: "messages:touch" }) },
+            );
+
+            bound.touch({});
+
+            const settled = configs[0]?.mutationFn();
+            let done = false;
+
+            void settled?.then(() => {
+                done = true;
+            });
+
+            // The push is acked but no poke echoes the watermark: still held.
+            await vi.advanceTimersByTimeAsync(2000);
+            expect(done).toBe(false);
+
+            // Past the fallback window the overlay is released and reported, instead
+            // of `isPersisted` hanging forever on a dropped poke.
+            await vi.advanceTimersByTimeAsync(1500);
+            await settled;
+
+            expect(done).toBe(true);
+            expect(fallbacks).toStrictEqual([{ kind: "mutationId", waitedMs: 3000, watermark: 1 }]);
+            expect(checkpoints.stats().fallbacks).toBe(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("accepts a generated mutator reference and resolves it to the dispatch path", async () => {
+        configs.length = 0;
+        const callMutator = vi.fn<
+            (path: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<{ applied: boolean; result: unknown }>
+        >(async () => {
+            return { applied: true, result: "ok" };
+        });
+        const client = { callMutator, confirmedMutationWatermark: () => 0 } as never;
+        const { collection } = mockCollection();
+
+        // Shape of a codegen `api.mutators.*` entry — the phantom marker is type-only,
+        // so at runtime only `__lunoraRef` exists. Binding the path this way makes a
+        // rename a type error instead of a mutation that fails at runtime.
+        const reference = { __lunoraRef: "mutators:sendMessage" } as const;
+
+        const bound = bindMutators(
+            client,
+            { checkpoints: false, collections: { messages: collection } },
+            { send: defineMutator({ apply: () => undefined, serverRef: reference }) },
+        );
+
+        bound.send({});
+        await configs[0]?.mutationFn();
+
+        expect(callMutator).toHaveBeenCalledWith("mutators:sendMessage", {}, { clientSeq: 1, shardKey: undefined });
+        expect(configs[0]?.metadata).toStrictEqual({ [DIRECT_TRANSACTION_METADATA_KEY]: true, serverRef: "mutators:sendMessage" });
+    });
+
+    it("rejects a serverRef that is neither a reference nor a path", () => {
+        expect(() => defineMutator({ apply: () => undefined, serverRef: {} as never })).toThrow(MUTATOR_REF_ERROR_RE);
+    });
+
+    it.each([
+        ["null", null],
+        ["undefined", undefined],
+    ])("rejects a %s serverRef with the guidance error rather than a TypeError", (_label, serverRef) => {
+        expect.assertions(2);
+
+        // The parameter type forbids these, but an untyped caller reaches here anyway —
+        // and `serverRef.__lunoraRef` on null throws "Cannot read properties of null",
+        // which says nothing about what a `serverRef` should be.
+        const declare = () => defineMutator({ apply: () => undefined, serverRef: serverRef as never });
+
+        expect(declare).toThrow(MUTATOR_REF_ERROR_RE);
+        expect(declare).not.toThrow(TypeError);
+    });
+
+    it("releases parked overlay gates on teardown so a hot reload cannot hang isPersisted", async () => {
+        configs.length = 0;
+
+        const client = {
+            callMutator: async () => {
+                return { applied: true, result: "ok" };
+            },
+            confirmedMutationWatermark: () => 0,
+        } as never;
+        const { collection } = mockCollection();
+
+        // Fallback disabled: this is the "the confirming frame will NEVER come"
+        // case, which is exactly what a replaced module leaves behind — the
+        // subscription that would have resolved the gate is gone with the old module.
+        const checkpoints = createCheckpointRegistry({ fallbackMs: 0 });
+
+        const bound = bindMutators(
+            client,
+            { checkpoints, collections: { messages: collection } },
+            { touch: defineMutator({ apply: () => undefined, serverRef: "messages:touch" }) },
+        );
+
+        bound.touch({});
+
+        const settled = configs[0]?.mutationFn();
+        let done = false;
+
+        void settled?.then(() => {
+            done = true;
+        });
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(done).toBe(false);
+
+        // The teardown path resolves the parked waiter instead of leaving it pending
+        // for the lifetime of the page.
+        checkpoints.resolve({ mutationId: Number.POSITIVE_INFINITY });
+        await settled;
+
+        expect(done).toBe(true);
+    });
+
+    it("pins the upstream direct-transaction metadata key", () => {
+        // `@tanstack/db` does not export this constant from its package root, so the
+        // literal is pinned in `@lunora/db`. Read the upstream module off disk (via the
+        // one path its exports map does expose) so an upstream rename fails HERE, with
+        // a clear message, instead of silently reverting every optimistic edit.
+        const require_ = createRequire(import.meta.url);
+        const packageJsonPath = require_.resolve("@tanstack/db/package.json");
+        const source = readFileSync(join(dirname(packageJsonPath), "dist", "esm", "collection", "transaction-metadata.js"), "utf8");
+
+        expect(source).toContain(DIRECT_TRANSACTION_METADATA_KEY);
     });
 
     it("seeds clientSeq from the server's confirmed watermark so a reload doesn't reissue a stale sequence", async () => {

@@ -724,6 +724,9 @@ const namespaceExtensionTable = (table: TableIR, key: string, bareNames: Readonl
 
     return {
         ...table,
+        // Provenance for the generated `AppTableName` union — this table came from
+        // an add-on, not from the app's own `defineSchema`.
+        extensionKey: key,
         name: ownPrefixed,
         relations: table.relations.map((relation) => {
             return { ...relation, table: rewriteReference(relation.table, key, bareNames) };

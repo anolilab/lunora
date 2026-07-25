@@ -433,10 +433,17 @@ type DataMigrationTransform = (document: DataMigrationDocument) => DataMigration
 ```ts
 interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
+    asId?: (tableName: string, id: string) => string;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (id: string, expectedTable?: string, options?: {
         hard?: boolean;
     }) => Promise<void>;
+    deleteAll?: (tableName: string, options?: {
+        chunkSize?: number;
+        hard?: boolean;
+    }) => Promise<{
+        deleted: number;
+    }>;
     deleteMany?: (ids: ReadonlyArray<string>, options?: {
         limit?: number;
     }, expectedTable?: string) => Promise<{
@@ -496,6 +503,14 @@ interface DatabaseWriterLike {
     }) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
     system?: SystemDatabaseReader;
+    wipeShard?: (options?: {
+        chunkSize?: number;
+        exclude?: ReadonlyArray<string>;
+        tables?: ReadonlyArray<string>;
+    }) => Promise<{
+        deleted: number;
+        tables: Record<string, number>;
+    }>;
 }
 ```
 

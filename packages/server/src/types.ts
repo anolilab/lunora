@@ -318,6 +318,18 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     isPublic?: boolean;
 
     /**
+     * Set by `.ownedBy(field)` — the column holding the owning user's id (named
+     * `ownerField`, a data field, rather than colliding with the fluent
+     * `.ownedBy()` builder method — same convention as `shardBy()`/`shardMode`).
+     *
+     * A shape over this table with `owner: true` derives its predicate from this
+     * field, so "only the owner may replicate these rows" is declared once on the
+     * table instead of being restated in every shape's `where`. Absent ⇒ the table
+     * has no single owning column and a shape must spell its predicate out.
+     */
+    ownerField?: string;
+
+    /**
      * Rank indexes declared via `.rankIndex(name, opts)`. The runtime maintains
      * a sorted companion table per declared rank with a btree on
      * `(partition, sortBy)` so `rank(row)` returns the row's 1-based position
@@ -599,6 +611,30 @@ interface SystemDatabaseReader {
  * actual SQL implementation lives in `@lunora/do`; these are signatures only.
  */
 interface DatabaseReader {
+    /**
+     * The throwing sibling of {@link DatabaseReader.normalizeId}: brand `id` as an
+     * {@link Id} for `tableName`, or throw `BAD_REQUEST` when it is not structurally
+     * an id. Pure — it never reads the database, so a valid id for a row that
+     * doesn't exist still returns.
+     *
+     * This is the **parse boundary** for an id that arrived as a plain `string`: a
+     * wire payload, a mutator's args, a change plan computed on the client. The
+     * alternative is `value as Id&lt;"table">` at every such call site — an assertion,
+     * not a check, and one that has to be repeated for every table a helper is
+     * generic over:
+     *
+     * ```ts
+     * for (const patch of plan.patches) {
+     *     await ctx.db.patch(ctx.db.asId("nodes", patch.id), patch.fields);
+     * }
+     * ```
+     *
+     * Ids are opaque strings, so the check is exactly `normalizeId`'s: it rejects
+     * empty, whitespace-bearing, and NUL-bearing values, not "an id that isn't in
+     * this table". Use it to get the brand honestly, and `get()` to learn whether
+     * the row exists.
+     */
+    asId: <T extends string>(tableName: T, id: string) => Id<T>;
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
 
     /**
@@ -775,6 +811,20 @@ interface DatabaseWriter extends DatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
 
     /**
+     * Delete EVERY row in `tableName`, chunking internally until the table is
+     * empty — the erasure primitive.
+     *
+     * Unlike `deleteWhere(tableName, {})` there is **no batch cap**: a
+     * `BATCH_LIMIT_EXCEEDED` at row 501 of an account deletion is a bug, not a
+     * safety rail. Rows still go through the single-row delete pipeline, so
+     * triggers, cascades, companions, CDC, and live subscriptions stay correct.
+     *
+     * On a `.softDelete()` table the default flips the marker column; pass
+     * `{ hard: true }` to remove the rows physically (what GDPR erasure means).
+     */
+    deleteAll: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
+
+    /**
      * Delete many rows by id in one call. Each id is deleted through the full
      * single-row pipeline (triggers + per-row RLS). The returned `deleted` is the
      * number of ids **requested**, not the rows actually removed — an unknown or
@@ -882,6 +932,26 @@ interface DatabaseWriter extends DatabaseReader {
         options?: BatchWriteOptions,
     ) => Promise<{ patched: number }>;
     replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
+
+    /**
+     * Erase every shard-local table — the account-deletion / tenant-teardown
+     * primitive. Sweeps the schema's non-`.global()` tables with
+     * {@link DatabaseWriter.deleteAll}`({ hard: true })` and returns the per-table
+     * counts.
+     *
+     * `.global()` tables are skipped by design: their rows live in D1 and are shared
+     * across shards, so "wipe this shard" must not reach them. Restrict the sweep
+     * with `options.tables`, or spare one with `options.exclude` (e.g. an audit log
+     * that must outlive the data).
+     *
+     * ```ts
+     * export const deleteAccount = internalMutation({ handler: async ({ ctx }) => ctx.db.wipeShard() });
+     * ```
+     */
+    wipeShard: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => Promise<{
+        deleted: number;
+        tables: Record<string, number>;
+    }>;
 }
 
 /** Authenticated identity surfaced into every context. */

@@ -108,6 +108,9 @@ const assertIdentifier = (value: string, context: string): void => {
     }
 };
 
+/** Upper-case the first character — turns an emitted value name into its PascalCase type name. */
+const pascalCase = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1);
+
 /**
  * Emit a TS interface property: bare `name: T` when `name` is a JS identifier,
  * otherwise a quoted property name (`"weird name": T`). Quoted property names
@@ -268,6 +271,13 @@ const emitDataModel = (schema: SchemaIR, useUmbrella = false): string => {
     }
 
     const tableNames = schema.tables.map((table) => `"${table.name}"`).join(" | ") || "never";
+    // Tables the app declared itself — an add-on's `.extend(...)` contributions are
+    // excluded. See the `AppTableName` doc in the emitted output.
+    const appTableNames =
+        schema.tables
+            .filter((table) => table.extensionKey === undefined)
+            .map((table) => `"${table.name}"`)
+            .join(" | ") || "never";
 
     const documents = schema.tables
         .map((table) => {
@@ -405,6 +415,23 @@ export type {
 } from "${base.serverDataModel}";
 
 export type TableName = ${tableNames};
+
+/**
+ * The tables **this app declared** — every {@link TableName} except those an add-on
+ * contributed through \`defineSchema(...).extend(...)\`.
+ *
+ * An add-on's tables are real tables and stay in \`TableName\` (they are queryable,
+ * they appear in \`DataModel\`), but an app enumerating "my tables" should not have to
+ * know they exist: an account-deletion sweep, an export, a migration allowlist, or a
+ * helper generic over a table union is about the app's own data, and every add-on
+ * added or removed would otherwise silently change the correct answer.
+ *
+ * \`\`\`ts
+ * // Doesn't need to mention \`ratelimit_buckets\`, and won't drift when an add-on lands.
+ * const EXPORTED: readonly AppTableName[] = ["nodes", "tagColors"];
+ * \`\`\`
+ */
+export type AppTableName = ${appTableNames};
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -1100,11 +1127,28 @@ export const createSeedClient = (options?: SeedClientOptions): SeedClient<Insert
 };
 
 /**
- * Emit `_generated/collections.ts` — one TanStack DB collection factory per
- * `defineShape` in `lunora/shapes.ts` (the local-first partial-replication
- * surface). Each factory builds a live collection that syncs its shape's rowset
- * through the client's poke protocol (`subscribeShape`), so an app feeds the
- * result straight to `useLiveQuery`.
+ * Emit `_generated/collections.ts` — a typed TanStack DB binding per `defineShape`
+ * in `lunora/shapes.ts` (the local-first partial-replication surface).
+ *
+ * Each shape emits **two** entry points.
+ *
+ * `&lt;shape>CollectionOptions(options)` is the composable form: it returns the full
+ * `LunoraCollectionOptions` — `config` for `createCollection`, plus `checkpoints`
+ * (which `bindMutators` gates optimistic overlays on) and `scope`. This is what an app
+ * with custom mutators needs, and what the old single-factory form made impossible: it
+ * built the collection internally and dropped `checkpoints` on the floor, so there was
+ * no way to wire mutators to the collection codegen produced.
+ *
+ * `&lt;shape>Collection(options)` is the convenience form for a read-only collection: it
+ * returns `{ checkpoints, collection, scope }` rather than a bare `Collection`, so the
+ * sync controls stay reachable even from the short path.
+ *
+ * Both are typed: `args` comes from the shape's own validators (a parameterless
+ * shape takes none), rows resolve to `Doc&lt;"table">` when the shape names its table
+ * with a literal, and `shardKey` / `getKey` / `load` / `onError` / `checkpoints` are
+ * all threadable — a sharded table needs `shardKey` for its watermark to land in the
+ * right bucket, and a server-minted `_id` that differs from the app's natural key
+ * needs `getKey`.
  *
  * Returns `""` (so `writeIfPresent` skips the file) unless the project both
  * declares shapes AND installs `@lunora/db` — the add-on that ships
@@ -1120,22 +1164,85 @@ const emitCollections = (shapes: ReadonlyArray<ShapeIR>, hasDatabase: boolean, u
 
     const base = baseSpecifiers(useUmbrella);
 
+    // `Doc<"table">` when the shape named its table with a string literal;
+    // otherwise the permissive `Row` (the runtime object stays authoritative).
+    const rowTypeOf = (shape: ShapeIR): string => (shape.table === undefined ? "Row" : `Doc<${JSON.stringify(shape.table)}> & Row`);
+
     const factories = shapes
         .map((shape) => {
             assertIdentifier(shape.exportName, "shape export name");
 
-            return `/** Live collection for the \`${shape.exportName}\` replication shape — pass the shape's validated \`args\` (its partition selector). */
-export const ${shape.exportName}Collection = (client: LunoraClient, args?: Record<string, unknown>): Collection<Row, string> =>
-    createCollection(lunoraCollectionOptions({ client, shape: { args, name: "${shape.exportName}" } }).config);`;
+            const rowType = rowTypeOf(shape);
+            const argsType = renderArgsType(shape.args);
+            const hasArgs = Object.keys(shape.args).length > 0;
+            // A parameterless shape must not demand an empty object; a parameterized
+            // one must not let the caller forget its partition selector.
+            const argsField = hasArgs ? `        args: ${argsType};` : `        args?: ${argsType};`;
+            // Mirror the options type: a parameterized shape must not accept `scope()`
+            // with no selector, or an arbitrary `Record<string, unknown>`.
+            const scopeType = hasArgs ? `(args: ${argsType}) => void` : `(args?: ${argsType}) => void`;
+            const optionsType = `${shape.exportName}CollectionOptions`;
+
+            return `/** Options for the \`${shape.exportName}\` shape binding. */
+export interface ${pascalCase(optionsType)} {
+${argsField}
+    /**
+     * Share the optimistic-overlay gate with other collections + mutators on this
+     * shard. Defaults to the shared per-shard registry, which is almost always what
+     * you want — pass one only to isolate this collection's gate.
+     */
+    checkpoints?: CheckpointRegistry;
+    /** The Lunora client to subscribe through. */
+    client: LunoraClient;
+    /** Row key extractor — defaults to \`row._id\`. Override when the app keys rows by a natural column. */
+    getKey?: (row: ${rowType}) => string;
+    /** \`"eager"\` starts syncing at creation; \`"lazy"\` (default) on the first subscriber. */
+    load?: "eager" | "lazy";
+    /** Notified when the underlying subscription errors; the collection always leaves \`loading\`. */
+    onError?: (error: SubscriptionError) => void;
+    /** Routes the subscription to a shard's DO. **Required for a \`.shardBy()\` table** — without it the watermark lands in the default bucket. */
+    shardKey?: string;
+}
+
+/**
+ * Collection options for the \`${shape.exportName}\` replication shape: \`config\` for
+ * \`createCollection\`, plus the \`checkpoints\` registry to hand \`bindMutators\` and
+ * \`scope\` to re-point the subscription.
+ */
+export const ${shape.exportName}CollectionOptions = (options: ${pascalCase(optionsType)}): LunoraCollectionOptions<${rowType}> =>
+    lunoraCollectionOptions<${rowType}>({
+        client: options.client,
+        ...(options.checkpoints === undefined ? {} : { checkpoints: options.checkpoints }),
+        ...(options.getKey === undefined ? {} : { getKey: options.getKey }),
+        ...(options.load === undefined ? {} : { load: options.load }),
+        ...(options.onError === undefined ? {} : { onError: options.onError }),
+        ...(options.shardKey === undefined ? {} : { shardKey: options.shardKey }),
+        shape: { args: options.args, name: ${JSON.stringify(shape.exportName)}, ...(options.shardKey === undefined ? {} : { shardKey: options.shardKey }) },
+    });
+
+/** Live collection for the \`${shape.exportName}\` shape, with its sync controls. */
+export const ${shape.exportName}Collection = (
+    options: ${pascalCase(optionsType)},
+): { checkpoints: CheckpointRegistry; collection: Collection<${rowType}, string>; scope: ${scopeType} } => {
+    const { checkpoints, config, scope } = ${shape.exportName}CollectionOptions(options);
+
+    return { checkpoints, collection: createCollection(config), scope };
+};`;
         })
         .join("\n\n");
 
-    return `${GENERATED_HEADER}import type { LunoraClient } from "${base.client}";
+    // Import only the dataModel helpers the rendered types actually reference —
+    // `Doc` for a row type, `Id` when a shape's args carry a `v.id(...)`. Importing
+    // an unused one trips noUnusedLocals in the consuming project.
+    const dataModelImports = referencedDataModelImports(factories);
+    const dataModelImportLine = dataModelImports.length > 0 ? `import type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
+
+    return `${GENERATED_HEADER}import type { LunoraClient, SubscriptionError } from "${base.client}";
 import { lunoraCollectionOptions } from "@lunora/db/collections";
-import type { Row } from "@lunora/db";
+import type { CheckpointRegistry, LunoraCollectionOptions, Row } from "@lunora/db";
 import type { Collection } from "@tanstack/db";
 import { createCollection } from "@tanstack/db";
-
+${dataModelImportLine}
 ${factories}
 `;
 };
@@ -1769,7 +1876,7 @@ import type {
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
 ${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
-export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
+export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
 export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}${agentsTypeBlock}${identityTypeBlock}${envTypeBlock}
@@ -1801,20 +1908,45 @@ type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) 
  */
 type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
 
+/**
+ * Resolves the \`asId\` table argument: a literal in {@link TableName} passes through, a
+ * genuinely-wide \`string\` (a computed name) passes through, and any OTHER literal
+ * collapses to \`never\` so it fails to typecheck.
+ *
+ * The \`string extends T\` arm is what distinguishes "the caller passed a computed
+ * string" from "the caller passed a misspelled literal" — only the wide \`string\` type
+ * is a supertype of \`string\`.
+ */
+type AsIdTable<T extends string> = T extends TableName ? T : string extends T ? T : never;
+
+/**
+ * The id parse boundary \`ctx.db.asId(table, id)\`, bound to this schema: a misspelled
+ * table literal is a compile error rather than a call that hands back a confidently-
+ * branded id for a table that does not exist. Mirrors {@link TypedTableQuery} /
+ * {@link TypedTableGet}.
+ *
+ * Deliberately NOT an intersection with a wide \`(string, string) => string\` overload:
+ * overload resolution would fall through to it for a bad literal, silently restoring
+ * the very typo hole this narrowing exists to close. {@link AsIdTable} instead keeps a
+ * computed table name working — and keeps \`ctx.db\` structurally assignable to
+ * schema-agnostic consumers — without accepting an invalid literal.
+ */
+type TypedAsId = <T extends string>(tableName: AsIdTable<T>, id: string) => IdOfTable<T & TableName>;
+
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${authOmit}${envOmit}> {
-    readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseReader, "asId" | "query" | "get"> & DatabaseReaderFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
     readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${authContextField}
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
-    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
-    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
@@ -3747,7 +3879,12 @@ const emitShard = ({
             // args then runs the shape's \`where(ctx, args)\` under that identity,
             // so which rows replicate is a server decision (reads-as-permissions).
             const ctx = this.buildCtx({ functionPath: \`__shape__:\${name}\`, identity });
-            const shapeWhere = shape.compileWhere(ctx, args) as unknown as WhereInput;
+            // \`ownerField\` resolves an \`owner: true\` shape: only here is the table's
+            // \`.ownedBy(field)\` column in scope, so the DO hands it to the shape
+            // rather than every shape restating the ownership check in its \`where\`.
+            const shapeWhere = shape.compileWhere(ctx, args, {
+                ownerField: (schema as unknown as { tables: Record<string, { ownerField?: string }> }).tables[shape.table]?.ownerField,
+            }) as unknown as WhereInput;
 
             // AND-compose with the table's RLS read base-where. A shape runs no
             // procedure, so the \`.use(rls(...))\` middleware never fires; without

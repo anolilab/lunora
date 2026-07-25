@@ -66,6 +66,7 @@ import discoverSqlInterpolation from "./discover-sql-interpolation";
 import discoverStorageKeyAccesses from "./discover-storage-key-accesses";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
 import discoverStorageUploads from "./discover-storage-uploads";
+import discoverUnrestrictedWhereBranches from "./discover-unrestricted-where-branches";
 import discoverVectorNamespaceAccesses from "./discover-vector-namespace-accesses";
 import discoverWorkflowCalls from "./discover-workflow-calls";
 import { discoverWorkflows } from "./discover-workflows";
@@ -466,6 +467,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   notifyCalls: discoverNotifyCalls(project, lunoraDirectory),
                   notifyConfig: discoverNotifyConfig(project, lunoraDirectory),
                   ownerFieldWrites: discoverOwnerFieldWrites(project, lunoraDirectory),
+                  unrestrictedWhereBranches: discoverUnrestrictedWhereBranches(project, lunoraDirectory),
                   paymentWebhooks: discoverPaymentWebhooks(project, lunoraDirectory),
                   privilegedDispatches: discoverPrivilegedDispatches(project, lunoraDirectory),
                   procedureProtections: discoverProcedureMiddleware(project, lunoraDirectory),
