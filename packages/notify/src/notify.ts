@@ -76,15 +76,17 @@ const resolveProviders = (definition: NotifyDefinition, env: NotifyEnv): Resolve
  * The per-isolate state memoized across `createNotify` calls. Codegen splices
  * `createNotify(notifyDefinition, env)` onto EVERY handler ctx, so it runs once
  * per RPC — but the engine (web-push/FCM providers + retry + circuit-breaker
- * middleware) and the dev in-memory fallback store are expensive to build and MUST
- * persist across requests (a `register()` in one request has to be visible to a
- * `broadcast()` in the next). All three fields are lazy: the engine is only built
- * when there is no `options.engine` override, the fallback store only when the
- * config supplies no real `store`.
+ * middleware), the configured subscription store, and the dev in-memory fallback
+ * store are expensive to build (or carry their own warm memos) and MUST persist
+ * across requests (a `register()` in one request has to be visible to a
+ * `broadcast()` in the next). All fields are lazy: the engine is only built when
+ * there is no `options.engine` override, `store` only when the config supplies a
+ * real `store` factory, and the fallback store only when it does not.
  */
 interface NotifyRuntime {
     engine?: Notification;
     fallbackStore?: SubscriptionStore;
+    store?: SubscriptionStore;
     warnedNoStore: boolean;
 }
 
@@ -172,7 +174,15 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         engine = options.engine;
     }
 
-    let store: SubscriptionStore | undefined = definition.store?.(env);
+    // Memoize the real store per isolate exactly like `engine`/`fallbackStore`: it
+    // is built once from `definition.store(env)` and reused across requests, so its
+    // own memos (e.g. the D1 store's `schemaReady` `CREATE TABLE` guard) stay warm
+    // instead of paying a cold schema round trip on every `ctx.push.*` call. A no-op
+    // when no `store` is configured (`?.(env)` stays `undefined` and the fallback
+    // path below owns durability).
+    runtime.store ??= definition.store?.(env);
+
+    let store: SubscriptionStore | undefined = runtime.store;
 
     if (store === undefined) {
         // Reuse ONE in-memory store per isolate so registrations survive across
