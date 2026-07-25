@@ -40,6 +40,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./playwright": {
+            "types": "./dist/playwright.d.ts",
+            "import": "./dist/playwright.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
