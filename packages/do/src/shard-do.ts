@@ -4999,25 +4999,6 @@ abstract class ShardDO {
     }
 
     /**
-     * Build `ctx.span` — the handle onto the **dispatch's own span**, and with it
-     * the wide-event surface.
-     *
-     * `ctx.trace(...)` creates a *new* child span for a sub-operation; this
-     * attaches to the one that already exists for the request. That is the
-     * distinction between "time this thing" and "record a fact about this
-     * request", and conflating them is why instrumentation usually degrades into
-     * log spam: with nowhere to put a fact, people reach for `ctx.log.info`.
-     *
-     * Attributes accumulate across the whole dispatch and are folded into the
-     * root span in `recordDispatchRootSpan` — the OTel-native form of a
-     * wide event, needing no non-standard "canonical log line" convention on the
-     * collector side.
-     *
-     * Keyed by the anchor's `traceId` so concurrent dispatches accumulate
-     * separately (see `dispatchSpans`).
-     */
-
-    /**
      * The trace anchor a ctx's `trace` and `span` both hang off.
      *
      * Resolved once per `buildCtx` and shared, so `ctx.trace` spans and the
@@ -5095,6 +5076,24 @@ abstract class ShardDO {
         );
     }
 
+    /**
+     * Build `ctx.span` — the handle onto the **dispatch's own span**, and with it
+     * the wide-event surface.
+     *
+     * `ctx.trace(...)` creates a *new* child span for a sub-operation; this
+     * attaches to the one that already exists for the request. That is the
+     * distinction between "time this thing" and "record a fact about this
+     * request", and conflating them is why instrumentation usually degrades into
+     * log spam: with nowhere to put a fact, people reach for `ctx.log.info`.
+     *
+     * Attributes accumulate across the whole dispatch and are folded into the
+     * root span in `recordDispatchRootSpan` — the OTel-native form of a
+     * wide event, needing no non-standard "canonical log line" convention on the
+     * collector side.
+     *
+     * Keyed by the anchor's `traceId` so concurrent dispatches accumulate
+     * separately (see `dispatchSpans`).
+     */
     protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle {
         /**
          * Lazy on purpose. `buildCtx` builds `ctx.span` for every dispatch, but

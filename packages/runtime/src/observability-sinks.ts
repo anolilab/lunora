@@ -7,9 +7,9 @@
  * — no bundled SDKs, no Node built-ins.
  *
  * This module is the sink *registry*: which destinations exist and how each maps
- * a Lunora event onto its wire format. The OTLP wire format itself — encoders and
- * the gzip/POST transport — lives in `./otlp-export`, and OTLP resource detection
- * in `./resource-detect`, so growing one never crowds the others.
+ * a Lunora event onto its wire format. The shared OTLP envelope helpers live in
+ * `shared/otlp*`, and per-request OTLP resource detection in `./resource-detect`,
+ * so growing one never crowds the others.
  *
  * All sinks are defensive: a failing destination (network error, throwing
  * callback) is caught and swallowed so it can never break user-facing RPC
@@ -1035,9 +1035,15 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
     batch?: OtlpBatchOptions | false;
 
     /**
-     * `deployment.environment.name` resource attribute — `production`,
-     * `preview`, … Set it: without one, a preview deployment's errors are
-     * indistinguishable from production's in the same collector.
+     * `deployment.environment` resource attribute — `production`, `preview`, …
+     * Set it: without one, a preview deployment's errors are indistinguishable
+     * from production's in the same collector.
+     *
+     * Emitted as `deployment.environment`, not the newer
+     * `deployment.environment.name`. Collectors that want the newer spelling can
+     * rename it in a processor; emitting both was tried and rejected, because
+     * the extra attribute pushed envelopes past the gzip threshold and silently
+     * changed the wire format.
      */
     deploymentEnvironment?: string;
 
