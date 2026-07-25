@@ -165,6 +165,17 @@ export interface ExternalSourceIR {
 
 export interface TableIR {
     /**
+     * The `defineSchemaExtension` key that contributed this table, set when it
+     * arrived through `defineSchema(...).extend(...)`. Absent for a table the app
+     * declared itself.
+     *
+     * Drives the generated `AppTableName` union: an add-on's tables
+     * (`ratelimit_buckets`, …) are real tables and stay in `TableName`, but an app
+     * enumerating "my tables" should not have to know about them.
+     */
+    extensionKey?: string;
+
+    /**
      * `true` when the table chain carried `.externallyManaged()` — its rows are
      * written outside Lunora's discoverable insert path (adapter/migration/
      * middleware), so advisor insert-path lints skip it. Optional: hand-built
@@ -1139,6 +1150,28 @@ export interface KvKeyAccessIR {
  * arg-derived identity write reaches here. Structurally identical to
  * `AdvisorOwnerFieldWrite`.
  */
+
+/**
+ * One branching `defineShape({ where })` / `definePolicy({ when })` predicate arm
+ * that returns an unrestricted predicate — the `unrestricted_where_branch` lint
+ * input. A denial arm must match NO rows (`deny()` / `{ OR: [] }`); `{}` matches
+ * every row, so the near-miss silently replicates the whole table.
+ */
+export interface UnrestrictedWhereBranchIR {
+    /** Export binding name of the shape / policy the predicate belongs to. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** Which unrestricted form was returned. */
+    form: "empty-object" | "undefined";
+    /** The config key carrying the predicate (`where` for a shape, `when` for a policy). */
+    key: string;
+    /** 1-based line of the offending returned expression. */
+    line: number;
+    /** The declaring call (`defineShape` / `definePolicy`). */
+    owner: string;
+}
+
 export interface OwnerFieldWriteIR {
     /** Export binding name of the procedure performing the write. */
     exportName: string;

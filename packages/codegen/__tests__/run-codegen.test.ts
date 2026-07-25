@@ -63,6 +63,49 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain("text: string;");
         });
 
+        it("narrows ctx.db.asId to a real TableName", () => {
+            expect.assertions(3);
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            // Without the narrowing, `asId("typo", id)` compiles and hands back a
+            // confidently-branded id for a table that doesn't exist.
+            expect(result.generated.server).toContain("type TypedAsId = (<T extends TableName>(tableName: T, id: string) => IdOfTable<T>)");
+            expect(ctxInterface(result.generated.server, "QueryCtx")).toContain("asId: TypedAsId");
+            // Overridden, so the wide `<T extends string>` signature is omitted first.
+            expect(result.generated.server).toContain('Omit<DatabaseReader, "asId" | "query" | "get">');
+        });
+
+        it("excludes an add-on's tables from AppTableName while keeping them in TableName", () => {
+            expect.assertions(4);
+
+            // Replace the fixture schema with one that pulls in an extension, the shape
+            // `.extend(ratelimit.extension)` produces in a real app.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    nodes: defineTable({ text: v.string() }),
+}).extend(
+    defineSchemaExtension("ratelimit", {
+        tables: { buckets: defineTable({ key: v.string() }) },
+    }),
+);
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            // The add-on's table is real and queryable…
+            expect(result.generated.dataModel).toContain('TableName = "nodes" | "ratelimit_buckets"');
+            expect(result.generated.dataModel).toContain("export interface Doc_ratelimit_buckets");
+            // …but an app enumerating its own tables never has to mention it.
+            expect(result.generated.dataModel).toContain('AppTableName = "nodes"');
+            expect(result.generated.dataModel).not.toContain('AppTableName = "nodes" | "ratelimit_buckets"');
+        });
+
         it("rejects a workflow and an agent that share a deployed name (CODEGEN-01 cross-kind)", () => {
             expect.assertions(1);
 
@@ -945,10 +988,10 @@ export default crons;
             // intersecting the legacy structural reader/writer for back-compat.
             expect(result.generated.server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage">');
             expect(result.generated.server).toContain(
-                'readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };',
+                'readonly db: Omit<DatabaseReader, "asId" | "query" | "get"> & DatabaseReaderFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };',
             );
             expect(result.generated.server).toContain(
-                'readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };',
+                'readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };',
             );
             // server.ts is the builder file user code imports, so it must NOT import
             // the user function modules (that cycle lives in functions.ts). `Id as

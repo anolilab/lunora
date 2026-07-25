@@ -23,7 +23,7 @@ import type {
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
 
-export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
+export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (`v.storage("name")`), narrowing `ctx.storage.bucket(name)`. */
 export type StorageBucketName = "default";
@@ -72,8 +72,20 @@ type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) 
  */
 type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
 
+/**
+ * The id parse boundary `ctx.db.asId(table, id)`, bound to this schema: the table
+ * argument is narrowed to a real {@link TableName}, so a typo is a compile error
+ * rather than a call that returns a confidently-branded id for a table that does
+ * not exist. Mirrors {@link TypedTableQuery} / {@link TypedTableGet}.
+ *
+ * Intersected with the wide `(string, string) => string` signature for the same
+ * reason `TypedTableQuery` is: `ctx.db` must stay structurally assignable to
+ * schema-agnostic consumers that pass a computed table name.
+ */
+type TypedAsId = (<T extends TableName>(tableName: T, id: string) => IdOfTable<T>) & ((tableName: string, id: string) => string);
+
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
-    readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseReader, "asId" | "query" | "get"> & DatabaseReaderFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
     /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */
@@ -83,7 +95,7 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
-    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
     /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */
@@ -93,7 +105,7 @@ export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
-    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;
     /** Multi-channel notifications (@lunora/notify): send / chat / inApp / webhook plus the push device sub-facade. Sends are external I/O — confine them to action handlers. */

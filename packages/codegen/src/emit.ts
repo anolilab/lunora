@@ -271,6 +271,13 @@ const emitDataModel = (schema: SchemaIR, useUmbrella = false): string => {
     }
 
     const tableNames = schema.tables.map((table) => `"${table.name}"`).join(" | ") || "never";
+    // Tables the app declared itself — an add-on's `.extend(...)` contributions are
+    // excluded. See the `AppTableName` doc in the emitted output.
+    const appTableNames =
+        schema.tables
+            .filter((table) => table.extensionKey === undefined)
+            .map((table) => `"${table.name}"`)
+            .join(" | ") || "never";
 
     const documents = schema.tables
         .map((table) => {
@@ -408,6 +415,23 @@ export type {
 } from "${base.serverDataModel}";
 
 export type TableName = ${tableNames};
+
+/**
+ * The tables **this app declared** — every {@link TableName} except those an add-on
+ * contributed through \`defineSchema(...).extend(...)\`.
+ *
+ * An add-on's tables are real tables and stay in \`TableName\` (they are queryable,
+ * they appear in \`DataModel\`), but an app enumerating "my tables" should not have to
+ * know they exist: an account-deletion sweep, an export, a migration allowlist, or a
+ * helper generic over a table union is about the app's own data, and every add-on
+ * added or removed would otherwise silently change the correct answer.
+ *
+ * \`\`\`ts
+ * // Doesn't need to mention \`ratelimit_buckets\`, and won't drift when an add-on lands.
+ * const EXPORTED: readonly AppTableName[] = ["nodes", "tagColors"];
+ * \`\`\`
+ */
+export type AppTableName = ${appTableNames};
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -1849,7 +1873,7 @@ import type {
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
 ${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
-export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
+export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
 export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}${agentsTypeBlock}${identityTypeBlock}${envTypeBlock}
@@ -1881,20 +1905,32 @@ type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) 
  */
 type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
 
+/**
+ * The id parse boundary \`ctx.db.asId(table, id)\`, bound to this schema: the table
+ * argument is narrowed to a real {@link TableName}, so a typo is a compile error
+ * rather than a call that returns a confidently-branded id for a table that does
+ * not exist. Mirrors {@link TypedTableQuery} / {@link TypedTableGet}.
+ *
+ * Intersected with the wide \`(string, string) => string\` signature for the same
+ * reason \`TypedTableQuery\` is: \`ctx.db\` must stay structurally assignable to
+ * schema-agnostic consumers that pass a computed table name.
+ */
+type TypedAsId = (<T extends TableName>(tableName: T, id: string) => IdOfTable<T>) & ((tableName: string, id: string) => string);
+
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${authOmit}${envOmit}> {
-    readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseReader, "asId" | "query" | "get"> & DatabaseReaderFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
     readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${authContextField}
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
-    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
-    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
+    readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
