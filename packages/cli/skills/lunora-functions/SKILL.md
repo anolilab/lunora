@@ -150,9 +150,31 @@ Declare the index and constrain with `.withIndex`.
 
 ## Other `ctx` capabilities
 
-`ctx.auth` (the resolved session: `ctx.auth.userId`), `ctx.scheduler`
-(`runAfter` / `runAt` for deferred work), `ctx.storage` (R2), `ctx.vectors`
-(Vectorize), and — when their packages are wired — `ctx.ai` and `ctx.containers`.
+Always available:
+
+- `ctx.auth` — the resolved session (`ctx.auth.userId`).
+- `ctx.scheduler` — `runAfter` / `runAt` for deferred work.
+- `ctx.secrets` — Cloudflare Secrets Store.
+- `ctx.span` / `ctx.trace` — the current span and a scoped tracing helper for
+  wide events.
+
+Added by their package when wired (install the registry item or add the
+dependency, then run `lunora codegen` to surface the typed context):
+
+| `ctx.*`                                                                                   | Package                       |
+| ----------------------------------------------------------------------------------------- | ----------------------------- |
+| `ctx.storage`                                                                             | `@lunora/storage` (R2)        |
+| `ctx.ai`                                                                                  | `@lunora/ai` (Workers AI)     |
+| `ctx.flags`                                                                               | `@lunora/flags` (OpenFeature) |
+| `ctx.queues.<name>`                                                                       | `@lunora/queue`               |
+| `ctx.workflows` / `ctx.runStep`                                                           | `@lunora/workflow`            |
+| `ctx.containers`                                                                          | `@lunora/container`           |
+| `ctx.browser` (action-only)                                                               | `@lunora/browser`             |
+| `ctx.sql` (action-only)                                                                   | `@lunora/hyperdrive`          |
+| `ctx.kv` / `ctx.images` / `ctx.analytics` / `ctx.pipelines` / `ctx.vectors` / `ctx.r2sql` | `@lunora/bindings` subpaths   |
+
+`ctx.browser` and `ctx.sql` are **action-only** by design — they are
+non-deterministic and would break query reactivity and mutation replay.
 
 ## HTTP endpoints
 

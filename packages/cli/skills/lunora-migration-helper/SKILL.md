@@ -39,6 +39,15 @@ A breaking change to a `.global()` table needs a generated SQL migration; a data
 backfill (either layer) is an online `defineMigration`. Both follow the same
 **widen → migrate → narrow** discipline.
 
+> **`.global()` on Hyperdrive.** A `.global()` table can also be backed by
+> Postgres/MySQL over Cloudflare Hyperdrive
+> (`.global({ backend: "hyperdrive" })`) instead of D1. The widen → migrate →
+> narrow discipline is identical; only the DDL runner differs. To move an
+> existing D1 `.global()` dataset onto it, use
+> `lunora migrate d1-to-hyperdrive --from-url <d1-worker> --to-url <hd-worker>`
+> (`--tables` scopes it; `--out` keeps the intermediate NDJSON dump). See the
+> `lunora-setup-hyperdrive-global` skill for the full flow.
+
 ## Key Principle: Widen, Migrate, Narrow
 
 The schema-drift gate (and D1 itself) will not let a breaking change deploy
