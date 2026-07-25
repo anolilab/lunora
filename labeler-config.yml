@@ -79,6 +79,9 @@
 "package: nuxt":
     - changed-files:
           - any-glob-to-any-file: "packages/nuxt/**/*"
+"package: otel-bridge":
+    - changed-files:
+          - any-glob-to-any-file: "packages/otel-bridge/**/*"
 "package: payment":
     - changed-files:
           - any-glob-to-any-file: "packages/payment/**/*"
