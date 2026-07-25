@@ -40,7 +40,13 @@ const toDirectory = (namespace: ShardNamespaceLike): ShardDirectory => {
         typeof namespace.getByName === "function"
             ? {
                   get: (id) => namespace.get(id),
-                  getByName: namespace.getByName,
+                  // Wrapped, NOT passed by reference: `DurableObjectNamespace`'s
+                  // methods are native and require their own receiver, so handing
+                  // the bare function to the contract calls it with the directory
+                  // as `this` and workerd rejects it with "Illegal invocation".
+                  // Plain-object test doubles tolerate the detached reference,
+                  // which is why only the workerd suites caught this.
+                  getByName: (name) => (namespace.getByName as NonNullable<ShardNamespaceLike["getByName"]>)(name),
                   idForName: (name) => namespace.idFromName(name),
                   jurisdiction,
               }

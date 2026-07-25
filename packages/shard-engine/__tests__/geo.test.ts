@@ -1,3 +1,5 @@
+import { describe, expect, it } from "vitest";
+
 import {
     boundingBoxCenter,
     boundingBoxGeohashes,
@@ -6,8 +8,7 @@ import {
     GEO_DEFAULT_PRECISION,
     haversineMeters,
     pointInBoundingBox,
-} from "@lunora/shard-engine";
-import { describe, expect, it } from "vitest";
+} from "../src/geo";
 
 /** Every char a geohash may contain (base-32, Niemeyer alphabet — no a/i/l/o). */
 const BASE32_ONLY = /^[0-9b-hjkmnp-z]+$/u;

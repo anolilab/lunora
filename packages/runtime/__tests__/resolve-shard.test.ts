@@ -97,6 +97,48 @@ describe("resolveShard", () => {
         expect(idFromName).not.toHaveBeenCalled();
     });
 
+    it("calls getByName with the namespace as its receiver, not the adapter", () => {
+        expect.assertions(2);
+
+        // `DurableObjectNamespace`'s methods are NATIVE and require their own
+        // receiver. Passing one by reference (`getByName: namespace.getByName`)
+        // type-checks and works against every closure-based double above, then
+        // fails in workerd with "Illegal invocation" — because the contract calls
+        // it with the `ShardDirectory` object as `this`. Only asserting the
+        // receiver catches that here rather than in a workerd suite.
+        const receivers: unknown[] = [];
+
+        const namespace = {
+            get: () => fakeStub,
+            getByName(this: unknown) {
+                receivers.push(this);
+
+                return fakeStub;
+            },
+            idFromName: (name: string) => {
+                return { __name: name };
+            },
+        };
+
+        resolveShard(namespace, "room-7");
+
+        expect(receivers[0]).toBe(namespace);
+
+        // Same hazard on the fallback path.
+        const bare = {
+            get: () => fakeStub,
+            idFromName(this: unknown, name: string) {
+                receivers.push(this);
+
+                return { __name: name };
+            },
+        };
+
+        resolveShard(bare, "room-7");
+
+        expect(receivers[1]).toBe(bare);
+    });
+
     it("falls back to idFromName + get when getByName is absent", () => {
         expect.assertions(2);
 
