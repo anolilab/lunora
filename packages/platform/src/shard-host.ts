@@ -99,6 +99,17 @@ export interface ShardHost {
     runSerialized: <T>(function_: () => Promise<T>) => Promise<T>;
 
     /**
+     * The shard key this host serves — the name the directory resolved to reach
+     * it. Used for telemetry attribution and log correlation ("which shard
+     * emitted this?"), never for routing: the host is already the shard.
+     *
+     * Optional because a host may address a shard by an opaque id with no
+     * human-readable name (Cloudflare's `newUniqueId()` objects have none).
+     * Callers must tolerate `undefined` rather than assume a key exists.
+     */
+    readonly shardKey?: string;
+
+    /**
      * The shard's local SQL executor. Reads and writes inside a `transaction`
      * closure observe the transaction's isolation.
      */

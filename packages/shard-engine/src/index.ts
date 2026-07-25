@@ -105,6 +105,7 @@ export type {
     ResolvedShape,
     RpcRequest,
     ShapeSubscriptionQuery,
+    ShardSocketLike,
     SocketAttachment,
     SubscriptionEnvelope,
     SubscriptionIdentity,

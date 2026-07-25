@@ -315,3 +315,30 @@ export interface SubscriptionIdentity {
     identity?: Record<string, unknown>;
     userId?: string;
 }
+
+/**
+ * The socket surface the shard's subscription helpers actually touch.
+ *
+ * Deliberately structural and minimal so that BOTH a runtime `WebSocket` (what
+ * the host hands to a message/close callback) and a `SocketHandle` from
+ * `@lunora/platform` (what socket enumeration yields) satisfy it. Helpers typed
+ * on this can be reached from either path, which is what lets the engine
+ * migrate off the provider socket type one call site at a time instead of in a
+ * single cut across every helper.
+ *
+ * Widening a helper from `WebSocket` to this is source-compatible: existing
+ * callers still pass, and a subclass override declaring the narrower
+ * `WebSocket` still type-checks under TypeScript's parameter bivariance.
+ */
+export interface ShardSocketLike {
+    /** Outbound queue depth, when the transport reports it — drives delivery backpressure. */
+    readonly bufferedAmount?: number;
+    /** Close the socket. Absent on doubles that only assert on sends. */
+    close?: (code?: number, reason?: string) => void;
+    /** Read the hibernation attachment, when the transport persists one. */
+    deserializeAttachment?: () => unknown;
+    /** Send one frame. The only member every caller relies on. */
+    send: (data: string) => void;
+    /** Persist hibernation state, when the transport supports it. */
+    serializeAttachment?: (value: unknown) => void;
+}
