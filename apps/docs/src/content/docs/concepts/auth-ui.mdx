@@ -83,6 +83,8 @@ once the matching provider is configured server-side.
 | `localization`    | Partial overrides for every string the cards render.                              |
 | `onSessionChange` | Fires after any successful auth mutation — refresh your app's session state here. |
 | `onError`         | Observes failures; the card still shows the error itself.                         |
+| `plugins`         | Force an optional flow on or off; detected from your client by default.           |
+| `theme`           | Retint the cards from config — see [Making them yours](#making-them-yours).       |
 
 `onSessionChange` matters more than it looks. A same-origin cookie sign-in
 changes no token, so `useAuth` has nothing to react to — wire this to whatever
@@ -98,13 +100,15 @@ Auth flows, from `lunora/auth-ui/react`:
 Account & security, for a signed-in user:
 
 `ProfileCard`, `ChangeEmailCard`, `ChangePasswordCard`, `SessionsCard` (list and
-revoke other sessions), `TwoFactorSetupCard` (password → TOTP URI + backup codes
-→ verify → enabled), `DeleteAccountCard`, `SignOutButton`.
+revoke other sessions), `PasskeysCard` (list, add, remove), `TwoFactorSetupCard`
+(password → TOTP URI + backup codes → verify → enabled), `DeleteAccountCard`,
+`SignOutButton`.
 
 Organizations:
 
-`OrganizationsCard` (list, create, switch, delete) and `MembersCard` (members and
-pending invitations: invite, change role, remove, cancel).
+`OrganizationsCard` (list, create, switch, delete), `MembersCard` (members and
+pending invitations: invite, change role, remove, cancel), and
+`OrganizationSettingsCard` (rename the active org, edit its slug and logo).
 
 Each is independent — mount the ones you want, on the routes you want. There is
 no router, layout, or shell imposed on you.
@@ -120,28 +124,32 @@ halves. The server half is a registry item or a better-auth plugin; the client
 half is a toggle in `lunora/auth-ui/client.ts`:
 
 ```ts
-import { lunoraAuthPlugins } from "@lunora/auth/plugins/client";
+import { createLunoraAuthClient } from "@lunora/auth/plugins/client";
 import { createAuthClient } from "better-auth/react";
 
-export const authClient = createAuthClient({
-    baseURL,
-    plugins: lunoraAuthPlugins({
+export const authClient = createLunoraAuthClient(createAuthClient, {
+    plugins: {
         emailOtp: true,
         magicLink: true,
         organization: true,
         passkey: true,
         twoFactor: true,
-    }),
+    },
 });
 ```
 
-`lunoraAuthPlugins` assembles the client plugin array from those toggles so you
-don't hand-list deep imports. For the server side, run `lunora add
-auth-magic-link` or `lunora add auth-otp`, and see
+`createLunoraAuthClient` assembles the client plugin set from those toggles so
+you don't hand-list deep imports, and defaults `baseURL` to the current origin.
+You pass `createAuthClient` in because the variant has to match your UI
+framework. (Prefer to own that call yourself? `lunoraAuthPlugins` returns just
+the plugin array.) For the server side, run `lunora add auth-magic-link` or
+`lunora add auth-otp`, and see
 [`@lunora/auth/plugins`](/docs/packages/auth/plugins) for the rest.
 
-A card whose plugin isn't enabled will fail at call time, not render time — mount
-the cards that match the flows you turned on.
+**That file is the only place you declare a flow.** The cards read the plugin
+set off your client, so a card whose flow is off renders nothing rather than
+failing at call time — and says why in the console during development. Override
+the detection either way with the provider's `plugins` prop.
 
 ## The other frameworks
 
@@ -185,6 +193,16 @@ Restyle `styles.css` — it reads the same design tokens as the rest of Lunora, 
 changing your token values moves the auth screens with everything else. Override
 copy through the provider's `localization` prop, or stop being precious about it
 and edit the cards directly. That is what "you own it" means.
+
+To retint just the auth screens without touching CSS, use `theme`. It receives
+the defaults and returns what you want changed:
+
+```tsx
+<AuthUIProvider authClient={authClient} theme={(defaults) => ({ ...defaults, primary: "#5b21b6", radius: "1rem" })}>
+```
+
+Only what you actually change is emitted, as custom properties on the cards —
+so every token you leave alone keeps inheriting from your app.
 
 Re-running `lunora add auth-ui` three-way merges upstream changes into your copy.
 Where a file you edited also changed upstream, you get a `.new` file next to it
