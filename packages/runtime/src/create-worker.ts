@@ -246,7 +246,16 @@ type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
  * settled. `dispatch` runs only after payment is verified — an unpaid or
  * invalid request never reaches the shard.
  */
-type X402ChargeGate = (request: Request, spec: { functionPath: string; price: number | string }, dispatch: () => Promise<Response>) => Promise<Response>;
+type X402ChargeGate = (
+    request: Request,
+    spec: { functionPath: string; price: number | string },
+    dispatch: () => Promise<Response>,
+    // Mirrors `@lunora/x402`'s `ChargeHandlerDeps` structurally — the runtime
+    // deliberately doesn't import `@lunora/x402` (the gate is injected). The
+    // request's `ctx.waitUntil`, forwarded so the settlement-receipt sink
+    // survives past the response instead of being cancelled when the request ends.
+    deps?: { waitUntil?: (promise: Promise<unknown>) => void },
+) => Promise<Response>;
 
 /**
  * Lists objects in the storage bucket for the admin file browser. Structurally
@@ -3478,7 +3487,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // presence was already asserted above when `x402Tag` is set, so the
             // `x402Charge` re-check here is only for the type system.
             if (x402Tag && options.x402Charge) {
-                return options.x402Charge(request, { functionPath: envelope.functionPath, price: x402Tag.price }, dispatch);
+                return options.x402Charge(request, { functionPath: envelope.functionPath, price: x402Tag.price }, dispatch, {
+                    waitUntil: context && ((promise) => context.waitUntil?.(promise)),
+                });
             }
 
             return dispatch();
@@ -4134,7 +4145,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const x402Tag = resolveX402Charge(envelope, options);
 
         if (x402Tag && options.x402Charge) {
-            return options.x402Charge(request, { functionPath, price: x402Tag.price }, dispatch);
+            return options.x402Charge(request, { functionPath, price: x402Tag.price }, dispatch, { waitUntil });
         }
 
         return dispatch();
