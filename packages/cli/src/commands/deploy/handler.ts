@@ -338,7 +338,7 @@ const buildContainerImages = async (cwd: string, options: DeployCommandOptions):
  * best-effort: a failure here must not abort the deploy, since the validator
  * still reports any genuinely missing requirement.
  */
-const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> = []): Promise<void> => {
+const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> | undefined): Promise<void> => {
     try {
         const inferred = await inferLunoraBindings({ projectRoot: cwd });
         const reconciled = reconcileWranglerBindings(cwd, inferred);
@@ -370,16 +370,23 @@ const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: Read
         logger.warn(`compatibility date sync skipped: ${message}`);
     }
 
-    try {
-        const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
+    // `undefined` means codegen was skipped (e.g. `--prebuilt`): we have no
+    // evidence of the project's crons, so leave the committed `triggers.crons`
+    // untouched. A defined array (including `[]`) means codegen ran and
+    // reconciling — clearing a genuinely-removed last cron — is intended.
+    // Mirrors the `if (codegen !== undefined)` guard on the schema-drift gate.
+    if (cronTriggers !== undefined) {
+        try {
+            const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
 
-        if (reconciled.changed) {
-            logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+            if (reconciled.changed) {
+                logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+            }
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            logger.warn(`cron trigger sync skipped: ${message}`);
         }
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.warn(`cron trigger sync skipped: ${message}`);
     }
 };
 
@@ -972,7 +979,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         reblessSchemaBaseline = gate.rebless;
     }
 
-    await provisionBindings(cwd, options.logger, codegen?.cronTriggers ?? []);
+    await provisionBindings(cwd, options.logger, codegen?.cronTriggers);
 
     const migratePreflightError = validateMigrateDeployPreflight(options);
 
