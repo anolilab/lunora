@@ -1178,6 +1178,9 @@ const emitCollections = (shapes: ReadonlyArray<ShapeIR>, hasDatabase: boolean, u
             // A parameterless shape must not demand an empty object; a parameterized
             // one must not let the caller forget its partition selector.
             const argsField = hasArgs ? `        args: ${argsType};` : `        args?: ${argsType};`;
+            // Mirror the options type: a parameterized shape must not accept `scope()`
+            // with no selector, or an arbitrary `Record<string, unknown>`.
+            const scopeType = hasArgs ? `(args: ${argsType}) => void` : `(args?: ${argsType}) => void`;
             const optionsType = `${shape.exportName}CollectionOptions`;
 
             return `/** Options for the \`${shape.exportName}\` shape binding. */
@@ -1220,7 +1223,7 @@ export const ${shape.exportName}CollectionOptions = (options: ${pascalCase(optio
 /** Live collection for the \`${shape.exportName}\` shape, with its sync controls. */
 export const ${shape.exportName}Collection = (
     options: ${pascalCase(optionsType)},
-): { checkpoints: CheckpointRegistry; collection: Collection<${rowType}, string>; scope: (args?: Record<string, unknown>) => void } => {
+): { checkpoints: CheckpointRegistry; collection: Collection<${rowType}, string>; scope: ${scopeType} } => {
     const { checkpoints, config, scope } = ${shape.exportName}CollectionOptions(options);
 
     return { checkpoints, collection: createCollection(config), scope };

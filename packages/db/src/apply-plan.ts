@@ -75,7 +75,22 @@ export interface ChangePlan {
     patches?: ReadonlyArray<PlanPatch>;
 }
 
-/** The `ctx.db` methods {@link applyPlanToDb} needs — structural, so any writer satisfies it. */
+/**
+ * The `ctx.db` methods {@link applyPlanToDb} needs — structural, so any writer
+ * satisfies it.
+ *
+ * The `never` parameter positions are deliberate, not laziness. `ctx.db.delete` is
+ * `<T extends string>(id: Id<T>) => …` over the **branded** `Id<T>`, and under
+ * `strictFunctionTypes` a parameter is contravariant — so declaring `id: string` here
+ * would make the real `ctx.db` un-assignable to `PlanWriter` (`string` is not
+ * assignable to `string & { __table }`), and every caller would need a cast at the
+ * call site instead. `never` accepts any branded id, which keeps `applyPlanToDb(ctx.db,
+ * plan)` cast-free for the caller and confines the two `as never` casts to this module.
+ *
+ * The trade-off is real: argument checking inside `applyPlanToDb` is erased, so a plan
+ * naming a table the schema doesn't have is a runtime error. Use `ctx.db.asId(table,
+ * id)` when building the plan to catch a malformed id at the boundary.
+ */
 export interface PlanWriter {
     delete: (id: never) => Promise<void>;
     insert: (tableName: never, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<unknown>;

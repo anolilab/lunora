@@ -1,7 +1,6 @@
 import type { ClientDebugSnapshot } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useCallback } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
@@ -56,7 +55,10 @@ const SyncClientPanel = ({ read }: SyncClientPanelProps): ReactElement => {
     // key encodes the real input, which is just "which reader".
     // `useClientQuery` wants a promise-returning fetcher; the read itself is
     // synchronous, so resolve it rather than marking the arrow `async` for nothing.
-    const sample = useCallback((): Promise<ClientDebugSnapshot> => Promise.resolve(read ? read() : client.debug()), [client, read]);
+    // Kept as a plain reference (not an inline literal) so it stays opaque to the
+    // query-key exhaustive-deps lint — the key already encodes the real input. No
+    // `useCallback`: React Compiler memoizes it.
+    const sample = (): Promise<ClientDebugSnapshot> => Promise.resolve(read ? read() : client.debug());
 
     const { data: snapshot, refetch } = useClientQuery<ClientDebugSnapshot>(["lunora-studio", "sync-client-debug", read ? "injected" : "live"], sample);
 

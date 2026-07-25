@@ -1963,6 +1963,12 @@ class LunoraClient {
      * Bulk-import `rows` through a mutation that accepts a batch, chunked so a large
      * dataset lands in a bounded number of round-trips.
      *
+     * **Offline caveat:** each chunk is sent with {@link LunoraClient.mutation}, which
+     * resolves once the write is durably queued rather than once the server has applied
+     * it. So an import run while offline resolves `{ chunks, imported }` with nothing
+     * committed yet — the counts describe what was *handed over*, and the outbox
+     * replays them on reconnect. Don't report "migration complete" on this alone.
+     *
      * This is the one-shot migration / seed path: "I have 20k rows client-side and a
      * server mutation that inserts many at once". Doing it by hand goes wrong in two
      * predictable ways — a serial per-row loop pays one round-trip *and* one watermark
@@ -1998,7 +2004,15 @@ class LunoraClient {
              * Omit only for a throwaway import where double-insertion is acceptable.
              */
             importId?: string;
-            /** Called after each chunk commits — for a progress bar. */
+
+            /**
+             * Called after each chunk is accepted — for a progress bar.
+             *
+             * "Accepted" is not always "committed": while offline (or mid-reconnect) a
+             * `mutation` resolves as soon as the write is durably **queued**, so a fully
+             * offline import reports completion with nothing yet applied server-side.
+             * Gate a migration's "done" state on connectivity, not just on this.
+             */
             onProgress?: (progress: { done: number; total: number }) => void;
             /** Routes every chunk to one shard's DO. */
             shardKey?: string;

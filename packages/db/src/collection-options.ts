@@ -284,6 +284,13 @@ const registriesByClient = new WeakMap<LunoraClient, Map<string, CheckpointRegis
  * {@link import("./define-mutators").bindMutators} default to, which is what makes
  * a multi-collection shard work without the caller relaying pokes between
  * registries by hand.
+ *
+ * `options` applies **only when the registry is created**. Because the point is that
+ * every collection and mutator on a shard shares one gate, a later call cannot
+ * retune an existing registry — it returns the existing one and `options` is ignored.
+ * To control `fallbackMs` / `onFallback`, build the registry yourself with
+ * {@link createCheckpointRegistry} and pass it explicitly to every
+ * `lunoraCollectionOptions` and `bindMutators` call for that shard.
  */
 export const getShardCheckpoints = (client: LunoraClient, shardKey?: string, options?: CheckpointRegistryOptions): CheckpointRegistry => {
     let byShard = registriesByClient.get(client);

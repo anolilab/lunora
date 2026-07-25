@@ -36,8 +36,28 @@ interface ProxyEntryLike {
     ws?: boolean;
 }
 
-/** `true` when `pattern` (a proxy key) routes a Lunora path. */
-const routesLunora = (pattern: string): boolean => LUNORA_PATH_PREFIXES.some((prefix) => pattern.startsWith(prefix) || prefix.startsWith(pattern));
+/** A concrete Lunora path used to test a regex-keyed proxy entry. */
+const LUNORA_SAMPLE_PATH = "/_lunora/ws";
+
+/**
+ * `true` when `pattern` (a proxy key) routes a Lunora path.
+ *
+ * Vite treats a key starting with `^` as a `RegExp`, not a literal prefix, so a
+ * literal-prefix comparison alone would silently skip entries like `"^/_lunora.*"` —
+ * exactly the ones this plugin exists to check.
+ */
+const routesLunora = (pattern: string): boolean => {
+    if (pattern.startsWith("^")) {
+        try {
+            return new RegExp(pattern, "u").test(LUNORA_SAMPLE_PATH);
+        } catch {
+            // An invalid regex is Vite's problem to report, not ours.
+            return false;
+        }
+    }
+
+    return LUNORA_PATH_PREFIXES.some((prefix) => pattern.startsWith(prefix) || prefix.startsWith(pattern));
+};
 
 /**
  * Warnings for one proxy table. Pure + exported so the behavior is unit-testable
@@ -67,7 +87,10 @@ const checkLunoraProxy = (proxy: Record<string, unknown> | undefined, label: str
             continue;
         }
 
-        if (typeof entry !== "object") {
+        // `typeof null === "object"`, and a null entry is plausible in an untyped
+        // `vite.config.js` — reading `.ws` off it would crash dev-server startup over a
+        // diagnostic.
+        if (typeof entry !== "object" || entry === null) {
             continue;
         }
 

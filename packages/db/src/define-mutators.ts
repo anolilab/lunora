@@ -63,15 +63,15 @@ export interface ClientMutatorDef<TArgs> {
 }
 
 /** Resolve a mutator reference (or a raw path string) to the dispatch path. */
-const mutatorPath = (serverRef: MutatorReference<never> | string): string => {
-    if (typeof serverRef === "string") {
-        return serverRef;
-    }
+const MUTATOR_REF_ERROR = "defineMutator: `serverRef` must be a generated mutator reference (api.mutators.*) or a 'namespace:fn' string";
 
-    const path = serverRef.__lunoraRef;
+const mutatorPath = (serverRef: MutatorReference<never> | string): string => {
+    // The string branch is validated too: `""` would otherwise dispatch to an empty
+    // function path at push time instead of failing at declaration.
+    const path = typeof serverRef === "string" ? serverRef : serverRef.__lunoraRef;
 
     if (typeof path !== "string" || path.length === 0) {
-        throw new LunoraError("INTERNAL", "defineMutator: `serverRef` must be a generated mutator reference (api.mutators.*) or a 'namespace:fn' string");
+        throw new LunoraError("INTERNAL", MUTATOR_REF_ERROR);
     }
 
     return path;

@@ -68,7 +68,8 @@ resolveIdentity: memoizeIdentityPerRequest(async (request, env) => { … }),
 `memoizeIdentityPerRequest` is keyed on the `Request` object, so it cannot serve a
 stale identity — it just stops the duplication. If verification is genuinely expensive
 (a JWKS fetch, a database read), `memoizeIdentity(resolver, { ttlMs: 5000 })` also
-caches across requests; that `ttlMs` is your revocation delay, so keep it in seconds.
+caches across requests. `ttlMs` is in **milliseconds** — `5000` is five seconds — and it
+is your revocation delay, so keep it to a few seconds.
 
 ## Declare ownership once
 
