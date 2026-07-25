@@ -23,6 +23,16 @@ should own. Findings below are ordered by severity; each states the evidence.
 > panel (#21) introspects the client running in the Studio page, not the client in
 > your application — diagnosing a specific stuck overlay still means calling
 > `client.debug()` in the app itself.
+>
+> **Review caught three defects in the fixes themselves**, worth recording because
+> each is a trap the next person may re-enter: `deleteAll` pinned `expectedTable`,
+> which blocks the DO's global fallback, so erasing a `.global()` table was a silent
+> no-op (inflated count, surviving rows, and an infinite loop past `chunkSize`);
+> `guardShardSweep` gated global tables that `wipeShard` never touches, so one
+> protected global table denied an otherwise-legal wipe; and the `asId` narrowing
+> (#10) was defeated by its own wide `(string, string) => string` fallthrough
+> overload, which overload resolution reaches for exactly the misspelled literal the
+> narrowing was meant to reject — the fix is a conditional `AsIdTable<T>` instead.
 
 ---
 
