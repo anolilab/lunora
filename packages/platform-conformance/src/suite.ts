@@ -88,7 +88,7 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                     }),
                 ).rejects.toThrow("boom");
 
-                const rows = host.shard.sql.exec("SELECT id FROM rollback_test WHERE id = 2").toArray?.() ?? [];
+                const rows = host.shard.sql.exec("SELECT id FROM rollback_test WHERE id = 2").toArray();
                 expect(rows).toHaveLength(0);
 
                 host.cleanup?.();
@@ -102,12 +102,33 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 const readValue = await host.shard.transaction(async () => {
                     host.shard.sql.exec("CREATE TABLE IF NOT EXISTS ryw_test (id INTEGER PRIMARY KEY, value TEXT)");
                     host.shard.sql.exec("INSERT INTO ryw_test (id, value) VALUES (1, 'hello')");
-                    const rows = host.shard.sql.exec("SELECT value FROM ryw_test WHERE id = 1").toArray?.() ?? [];
+                    const rows = host.shard.sql.exec("SELECT value FROM ryw_test WHERE id = 1").toArray();
 
                     return (rows[0] as { value: string } | undefined)?.value;
                 });
 
                 expect(readValue).toBe("hello");
+
+                host.cleanup?.();
+            });
+
+            // The engine reads rows three ways — buffered, one-at-a-time, and by
+            // iteration — so a host that implements only `toArray` type-checks
+            // and then fails at runtime. Assert all three.
+            it("returns a cursor that buffers, yields one row, and iterates", async () => {
+                expect.assertions(3);
+
+                const host = await createHost();
+
+                await host.shard.transaction(async () => {
+                    host.shard.sql.exec("CREATE TABLE IF NOT EXISTS cursor_test (id INTEGER PRIMARY KEY)");
+                    host.shard.sql.exec("INSERT INTO cursor_test (id) VALUES (1)");
+                    host.shard.sql.exec("INSERT INTO cursor_test (id) VALUES (2)");
+                });
+
+                expect(host.shard.sql.exec("SELECT id FROM cursor_test ORDER BY id").toArray()).toHaveLength(2);
+                expect(host.shard.sql.exec("SELECT id FROM cursor_test WHERE id = 1").one()).toEqual({ id: 1 });
+                expect([...host.shard.sql.exec("SELECT id FROM cursor_test ORDER BY id")]).toHaveLength(2);
 
                 host.cleanup?.();
             });

@@ -40,8 +40,18 @@ describe("@lunora/platform contracts", () => {
             },
             runSerialized: async (function_) => function_(),
             sql: {
+                // A minimal cursor: iterable, buffered, and single-row — the
+                // three shapes the engine's read paths use.
                 exec: () => {
-                    return { rowsAffected: 0 };
+                    return {
+                        * [Symbol.iterator]() {
+                            // no rows
+                        },
+                        one: () => {
+                            throw new Error("no rows");
+                        },
+                        toArray: () => [],
+                    };
                 },
             },
             transaction: async (function_) => function_(),

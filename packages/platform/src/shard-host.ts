@@ -28,9 +28,31 @@
 export type SqlRow = Record<string, unknown>;
 
 /**
- * The local, synchronous-ish SQL executor available inside a shard. Mirrors
- * the shape the DO's `state.storage.sql` exposes: `exec` runs a statement and
- * returns rows (for reads) or an affected-row count (for writes).
+ * The result of one statement: a cursor over its rows.
+ *
+ * Every member here is required, because the engine uses all three and a host
+ * that omits one fails at runtime rather than at compile time. That is not
+ * hypothetical — an earlier revision of this contract made `toArray` optional
+ * and offered a `rowsAffected` nothing reads, which meant a host could satisfy
+ * the type and still be unusable.
+ *
+ * Iteration is part of the contract because read paths stream cursors directly
+ * rather than buffering; `toArray` is the buffered form, and `one` is the
+ * exactly-one-row form used by lookups and aggregates.
+ */
+export interface ShardSqlCursor<Row = SqlRow> extends Iterable<Row> {
+    /**
+     * The single row this statement produced.
+     * @throws when the result does not hold exactly one row.
+     */
+    one: () => Row;
+    /** Buffer every row. */
+    toArray: () => Row[];
+}
+
+/**
+ * The local, synchronous-ish SQL executor available inside a shard — the
+ * engine's hot path. Mirrors the shape the DO's `state.storage.sql` exposes.
  *
  * Implementations may be sync (Cloudflare `SqlStorage`) or async-backed with
  * a sync facade; the engine treats it as fire-and-forget within a
@@ -38,16 +60,16 @@ export type SqlRow = Record<string, unknown>;
  */
 export interface ShardSqlExec {
     /**
-     * Execute a SQL statement with optional bound parameters.
-     * Returns rows for `SELECT`, or an object with `rowsAffected` for writes.
+     * Size of the shard's local database in bytes, when the host can report it
+     * cheaply. Optional: it is used for storage telemetry and quota warnings,
+     * never for correctness, so a host without the number simply omits it.
+     *
+     * Read as a live getter where the host provides one — do not cache it.
      */
-    exec: (
-        query: string,
-        ...bindings: ReadonlyArray<unknown>
-    ) => {
-        rowsAffected?: number;
-        toArray?: () => SqlRow[];
-    };
+    readonly databaseSize?: number;
+
+    /** Execute a SQL statement with optional bound parameters. */
+    exec: <Row = SqlRow>(query: string, ...bindings: ReadonlyArray<unknown>) => ShardSqlCursor<Row>;
 }
 
 /**

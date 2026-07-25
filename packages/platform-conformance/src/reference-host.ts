@@ -182,17 +182,28 @@ const createReferenceHost = (): ReferenceHost => {
             const normalized = bindings.map(normalizeBinding) as import("node:sqlite").SQLInputValue[];
             const trimmed = query.trim().toLowerCase();
 
-            // Cloudflare SqlStorage.exec returns a cursor-like object. For reads
-            // `toArray()` returns rows; for writes `rowsAffected` is present.
-            if (trimmed.startsWith("select")) {
-                return {
-                    toArray: () => statement.all(...normalized),
-                };
-            }
+            // Reads buffer their rows; writes produce none. Either way the
+            // caller gets the same cursor shape — iterable, `toArray`, `one` —
+            // because the contract requires all three of every host.
+            const rows = trimmed.startsWith("select")
+                ? statement.all(...normalized)
+                : ((): unknown[] => {
+                      statement.run(...normalized);
 
-            const result = statement.run(...normalized);
+                      return [];
+                  })();
 
-            return { rowsAffected: Number(result.changes) };
+            return {
+                [Symbol.iterator]: () => rows[Symbol.iterator](),
+                one: () => {
+                    if (rows.length !== 1) {
+                        throw new Error(`expected exactly one row, got ${String(rows.length)}`);
+                    }
+
+                    return rows[0];
+                },
+                toArray: () => [...rows],
+            } as never;
         },
     };
 
