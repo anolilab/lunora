@@ -116,6 +116,22 @@ export type ObservabilitySinkContext = LogSinkContext;
  */
 export interface ObservabilitySink {
     /**
+     * Ship anything the sink is holding, now.
+     *
+     * A batching sink (`otlpSink` by default) buffers events and exports them as
+     * one request instead of one request per event. That is only safe because a
+     * Workers isolate can be frozen the instant a response is returned: the
+     * runtime calls this at every invocation boundary — end of `fetch`, `queue`,
+     * `scheduled`, and each Durable Object dispatch — passing the request's
+     * `waitUntil` so the export outlives the response.
+     *
+     * Optional and idempotent: a non-buffering sink simply omits it, and calling
+     * it with an empty buffer is a no-op. A sink must never throw from here; like
+     * every other hook, a telemetry failure must not surface to the caller.
+     */
+    flush?: (context?: ObservabilitySinkContext) => void;
+
+    /**
      * **Opt-in, EXPERIMENTAL, default `false`.** When `true`, each `ctx.trace`
      * span the Durable Object records is ALSO emitted as a Cloudflare **custom
      * span** (`tracing.enterSpan` from `cloudflare:workers`, GA 2026-06-16) so it
@@ -146,6 +162,24 @@ export interface ObservabilitySink {
      */
     fuseCloudflareTraces?: boolean;
 
+    /**
+     * How much detail automatic `ctx.db` instrumentation produces.
+     *
+     * `"summary"` (**default**) — aggregate counters (`db.calls`, `db.duration_ms`,
+     * per-operation counts) folded onto the dispatch's wide event. No extra spans
+     * and no extra log records, so the cost is flat no matter how many queries a
+     * handler makes.
+     *
+     * `"spans"` — one span per database call: the full waterfall, for when you are
+     * chasing a specific slow query. Capped per dispatch so a query loop cannot
+     * bury the trace; truncation is reported as `db.spans_truncated`.
+     *
+     * `"off"` — no database telemetry.
+     *
+     * Applies only when a sink is configured; with none, `ctx.db` is untouched.
+     */
+    instrumentDatabase?: "off" | "spans" | "summary";
+
     /** Invoked once per `ctx.log.*` call from a function handler. */
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
 
@@ -154,6 +188,7 @@ export interface ObservabilitySink {
      * upstream, so counter values are deltas for the destination to sum.
      */
     onMetric?: (event: MetricEvent, context?: ObservabilitySinkContext) => void;
+
     /** Invoked once per dispatched RPC (single-shard or fan-out). */
     onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
 
@@ -163,6 +198,19 @@ export interface ObservabilitySink {
      * INTERNAL spans a handler creates beneath it.
      */
     onSpan?: (event: SpanEvent, context?: ObservabilitySinkContext) => void;
+
+    /**
+     * Whether `ctx.fetch` is instrumented: each outbound call becomes a **CLIENT
+     * span**, and a W3C `traceparent` naming that span is injected so the callee's
+     * spans join this trace instead of starting a disconnected one. Default `true`
+     * whenever a sink is configured.
+     *
+     * Set `false` for the bare platform `fetch` (no span, no header). Pass
+     * `{ propagate }` to keep the spans but control who receives trace context, e.g.
+     * `propagate: (url) => url.host.endsWith(".internal")` to send it to your own
+     * services and not to third parties.
+     */
+    traceFetch?: boolean | { propagate?: ((url: URL) => boolean) | boolean };
 }
 
 /**
@@ -213,6 +261,23 @@ export const emitLogEvent = (sink: ObservabilitySink | undefined, event: LogEven
 
     try {
         sink.onLog(event, context);
+    } catch {
+        // Swallow — see emitRpcEvent.
+    }
+};
+
+/**
+ * Ask a sink to ship whatever it has buffered, swallowing any error — the same
+ * failure model as {@link emitRpcEvent}. Call at every invocation boundary; a
+ * sink without a `flush` is a no-op.
+ */
+export const flushSink = (sink: ObservabilitySink | undefined, context?: ObservabilitySinkContext): void => {
+    if (!sink?.flush) {
+        return;
+    }
+
+    try {
+        sink.flush(context);
     } catch {
         // Swallow — see emitRpcEvent.
     }

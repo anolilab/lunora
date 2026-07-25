@@ -227,6 +227,34 @@ const mergeHeaders = (defaults: Record<string, string>, overrides: Record<string
 };
 
 /**
+ * Normalize "one item or many" into an array. The wrappers below all accept
+ * either so a batching exporter and a single-shot one share one encoder: an
+ * `ExportXServiceRequest` carrying N items in one `scope*` list is the same
+ * envelope as one carrying a single item, and every collector accepts both.
+ */
+const toArray = (value: unknown[] | unknown): unknown[] => (Array.isArray(value) ? value : [value]);
+
+/**
+ * The OTel `SpanKind` union, in the spec's own words rather than its wire
+ * numbers, so a call site reads `{ kind: "client" }` instead of `{ kind: 3 }`.
+ *
+ * Kind is not cosmetic: a service map is built from it. A CLIENT span with no
+ * matching SERVER span on the other side is a dropped hop; PRODUCER/CONSUMER is
+ * what makes a queue render as an async edge rather than a synchronous call.
+ * Getting it wrong is why "everything is INTERNAL" traces produce no topology.
+ */
+type OtlpSpanKind = "client" | "consumer" | "internal" | "producer" | "server";
+
+/** `SpanKind` wire numbers, keyed by the readable union above. */
+const OTLP_SPAN_KIND: Record<OtlpSpanKind, number> = {
+    client: 3,
+    consumer: 5,
+    internal: 1,
+    producer: 4,
+    server: 2,
+};
+
+/**
  * Build the OTLP `Resource.attributes` list for a signal envelope. `service.name`
  * is the default and `extra` is merged over it, so a caller-supplied
  * `service.name` in `extra` wins. Kept as a separate helper so `wrapResource*`
@@ -243,44 +271,60 @@ const buildResourceAttributes = (serviceName: string, extra?: Record<string, Otl
 };
 
 /** Wrap one encoded OTLP span in the `ExportTraceServiceRequest` envelope. */
-const wrapResourceSpans = (span: unknown, scopeName: string, serviceName: string, resourceAttributes?: Record<string, OtlpAttributeValue>): unknown => {
+const wrapResourceSpans = (
+    spans: unknown[] | unknown,
+    scopeName: string,
+    serviceName: string,
+    resourceAttributes?: Record<string, OtlpAttributeValue>,
+): unknown => {
     return {
         resourceSpans: [
             {
                 resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
-                scopeSpans: [{ scope: { name: scopeName }, spans: [span] }],
+                scopeSpans: [{ scope: { name: scopeName }, spans: toArray(spans) }],
             },
         ],
     };
 };
 
 /** Wrap one encoded OTLP log record in the `ExportLogsServiceRequest` envelope. */
-const wrapResourceLogs = (logRecord: unknown, scopeName: string, serviceName: string, resourceAttributes?: Record<string, OtlpAttributeValue>): unknown => {
+const wrapResourceLogs = (
+    logRecords: unknown[] | unknown,
+    scopeName: string,
+    serviceName: string,
+    resourceAttributes?: Record<string, OtlpAttributeValue>,
+): unknown => {
     return {
         resourceLogs: [
             {
                 resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
-                scopeLogs: [{ logRecords: [logRecord], scope: { name: scopeName } }],
+                scopeLogs: [{ logRecords: toArray(logRecords), scope: { name: scopeName } }],
             },
         ],
     };
 };
 
 /** Wrap one encoded OTLP metric in the `ExportMetricsServiceRequest` envelope. */
-const wrapResourceMetrics = (metric: unknown, scopeName: string, serviceName: string, resourceAttributes?: Record<string, OtlpAttributeValue>): unknown => {
+const wrapResourceMetrics = (
+    metrics: unknown[] | unknown,
+    scopeName: string,
+    serviceName: string,
+    resourceAttributes?: Record<string, OtlpAttributeValue>,
+): unknown => {
     return {
         resourceMetrics: [
             {
                 resource: { attributes: buildResourceAttributes(serviceName, resourceAttributes) },
-                scopeMetrics: [{ metrics: [metric], scope: { name: scopeName } }],
+                scopeMetrics: [{ metrics: toArray(metrics), scope: { name: scopeName } }],
             },
         ],
     };
 };
 
-export type { OtlpAnyValue, OtlpAttribute, OtlpAttributeValue, OtlpLevel, OtlpResourceAttributes };
+export type { OtlpAnyValue, OtlpAttribute, OtlpAttributeValue, OtlpLevel, OtlpResourceAttributes, OtlpSpanKind };
 export {
     buildTraceparent,
+    OTLP_SPAN_KIND,
     encodeAttribute,
     encodeAttributes,
     mergeHeaders,

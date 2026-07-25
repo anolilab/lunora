@@ -92,6 +92,16 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
             db: {} as QueryContext["db"],
             log: {} as QueryContext["log"],
             metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
+            span: {
+                addEvent: () => undefined,
+                addLink: () => undefined,
+                recordException: () => undefined,
+                setAttribute: () => undefined,
+                setAttributes: () => undefined,
+                spanContext: () => {
+                    return { spanId: "0000000000000001", traceId: "00000000000000000000000000000001" };
+                },
+            },
             now: 0,
             runQuery: (async () => undefined) as unknown as QueryContext["runQuery"],
             secrets: { get: async () => "secret" },

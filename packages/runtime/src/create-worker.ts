@@ -4,6 +4,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+import { otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -30,7 +31,7 @@ import { buildKvAdminRoutes, KV_VALUE_MAX_BODY_BYTES, KV_VALUE_PATH } from "./kv
 import type { LogArchiveConfig } from "./log-archive-admin-routes";
 import { buildLogArchiveAdminRoutes } from "./log-archive-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
-import { emitRpcEvent } from "./observability";
+import { emitRpcEvent, flushSink } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { DispatchTraceContext } from "./otel-trace";
 import { beginDispatchTrace, injectTraceContext } from "./otel-trace";
@@ -1464,6 +1465,38 @@ const identityExpiryMs = (identity: ResolvedIdentity): number | undefined => {
  * the RPC path and HTTP-action context. `userId` and `claims` mirror what the
  * DO reconstructs from the `x-lunora-userid` / `x-lunora-identity` headers.
  */
+
+/**
+ * The per-event sink context for an invocation, or `undefined` when the platform
+ * exposes no `waitUntil` (where a network sink falls back to fire-and-forget).
+ *
+ * One helper because both invocation boundaries — the `fetch` flush and
+ * `instrumentTrigger` — need the identical shape, and a divergence would
+ * silently downgrade one of them.
+ */
+const sinkContextFor = (context: ExecutionContextLike): ObservabilitySinkContext | undefined =>
+    context.waitUntil
+        ? {
+              waitUntil: (promise) => {
+                  context.waitUntil?.(promise);
+              },
+          }
+        : undefined;
+
+/**
+ * Name of the queue a consumer batch came from, for the trigger's span name.
+ *
+ * The batch is typed `unknown` at this boundary (the consumer handler is
+ * codegen-built and the worker deliberately doesn't depend on `@lunora/queue`'s
+ * types), so the name is read defensively: a batch without a string `queue`
+ * falls back to a constant rather than stringifying `undefined` into the span
+ * name, which would show up in a collector as a literal `queue:undefined` group.
+ */
+const queueNameOf = (batch: unknown): string => {
+    const name = (batch as { queue?: unknown } | null | undefined)?.queue;
+
+    return typeof name === "string" && name.length > 0 ? name : "unknown";
+};
 
 const resolveForwardContext = async (request: Request, env: unknown, resolveIdentity: WorkerOptions["resolveIdentity"]): Promise<ForwardContext> => {
     const headers: Record<string, string> = { "content-type": "application/json" };
@@ -3857,6 +3890,53 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * collected and rethrown together so one failure neither masks the other nor
      * is silently swallowed — the platform sees the cron invocation fail.
      */
+
+    /**
+     * Wrap a NON-`fetch` worker trigger — a queue batch, a cron fire — in the same
+     * telemetry the RPC path gets: its own trace, one SERVER span, and a flush of
+     * the batching sink at the invocation boundary.
+     *
+     * Without this, everything a queue consumer or cron job does is invisible:
+     * `ctx.log`/`ctx.trace` inside the dispatched function still fire, but they
+     * hang off a trace with no root, so a collector shows orphan spans and no
+     * "this cron took 40s" bar to hang them under. Background work is exactly
+     * where you least want a blind spot, since nobody is watching a response time.
+     *
+     * Trigger events are exported WITHOUT the head-sampling ratio. A ratio tuned
+     * for request traffic would hide most fires of a once-an-hour cron — the exact
+     * blind spot this wrapper exists to close — and trigger volume is inherently
+     * low enough that keeping all of them costs nothing.
+     *
+     * The trace is always minted here rather than adopted: a queue message or a
+     * cron controller carries no `traceparent`. Linking a consumer span back to
+     * the producing request is instead the job of `span.addLink`, since parenting
+     * would be wrong — the producer's request is long over by then.
+     */
+    const instrumentTrigger = async <T>(functionPath: string, context: ExecutionContextLike, run: () => Promise<T>): Promise<T> => {
+        const { observability } = options;
+        const startedAt = Date.now();
+        const traceId = otlpRandomHex(16);
+        const spanId = otlpRandomHex(8);
+        const sinkContext = sinkContextFor(context);
+
+        try {
+            const result = await run();
+
+            emitRpcEvent(observability, { durationMs: Date.now() - startedAt, functionPath, ok: true, spanId, traceId }, sinkContext);
+
+            return result;
+        } catch (error) {
+            emitRpcEvent(observability, { ...buildErrorEvent(functionPath, Date.now() - startedAt, error, {}), spanId, traceId }, sinkContext);
+
+            throw error;
+        } finally {
+            // The invocation boundary. A Workers isolate can be frozen the moment
+            // this returns, so a batching sink that has not been told to ship
+            // would simply lose everything it buffered.
+            flushSink(observability, sinkContext);
+        }
+    };
+
     const handleScheduled = async (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike): Promise<void> => {
         // A cron can fire on an isolate that never served a `fetch`, so resolve
         // `env.LUNORA_ADMIN_TOKEN` here too — the built-in backup authenticates its
@@ -4249,16 +4329,31 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return decorateResponse(response, request, resolvedSecurity);
             } catch (error: unknown) {
                 return decorateResponse(toErrorResponse(error), request, resolvedSecurity);
+            } finally {
+                // Invocation boundary: ship whatever the (batching) sink buffered
+                // during this request. Registered through `waitUntil` so the export
+                // outlives the response instead of racing isolate teardown.
+                flushSink(options.observability, sinkContextFor(context));
             }
         },
         async queue(batch, env, context) {
             // Forward to the codegen-built push-consumer handler (which routes by
             // `batch.queue` via `@lunora/queue`). A no-op when the app declares no
             // push queues, so re-exporting `queue` unconditionally is harmless.
-            await options.queue?.(batch, env, context);
+            //
+            // Named after the queue so a collector groups consumer invocations per
+            // queue rather than lumping every batch under one span name.
+            await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async () => {
+                await options.queue?.(batch, env, context);
+            });
         },
         async scheduled(controller, env, context) {
-            await handleScheduled(controller, env, context);
+            // Named after the cron EXPRESSION, which is the stable identity of a
+            // trigger — `scheduledTime` varies per fire and would make every run
+            // its own group in a collector.
+            await instrumentTrigger(`cron:${controller.cron}`, context, async () => {
+                await handleScheduled(controller, env, context);
+            });
         },
         serverQuery,
     };

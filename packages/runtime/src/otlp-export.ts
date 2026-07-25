@@ -15,12 +15,13 @@
  * and container speak an identical wire format.
  */
 import { coerceFieldValue } from "../../../shared/log-fields";
-import type { OtlpAttribute, OtlpResourceAttributes } from "../../../shared/otlp";
-import { encodeAttribute, OTLP_SEVERITY, otlpRandomHex, otlpUnixNano, wrapResourceLogs, wrapResourceMetrics, wrapResourceSpans } from "../../../shared/otlp";
+import type { OtlpAttribute } from "../../../shared/otlp";
+import { encodeAttribute, encodeAttributes, OTLP_SEVERITY, OTLP_SPAN_KIND, otlpRandomHex, otlpUnixNano } from "../../../shared/otlp";
+import type { KeepAlive } from "../../../shared/otlp-batch";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySinkContext, SpanEvent } from "./observability";
 
 /** Build the OTLP trace-export body for one RPC dispatch event. */
-const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: number, resourceAttributes?: OtlpResourceAttributes): unknown => {
+const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
     const attributes = [encodeAttribute("lunora.function_path", event.functionPath), encodeAttribute("lunora.ok", event.ok)];
 
     // HTTP server semantic conventions: the RPC endpoint is an HTTP handler from
@@ -80,8 +81,12 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
         attributes,
         endTimeUnixNano: otlpUnixNano(endMs),
         // SPAN_KIND_SERVER — a dispatched RPC is server-side request handling.
-        kind: 2,
+        kind: OTLP_SPAN_KIND.server,
         name: event.functionPath,
+        // Set only when the worker joined an upstream trace; omitted otherwise, so
+        // a self-originated dispatch stays the root rather than dangling off a
+        // parent that was never exported.
+        ...(event.parentSpanId === undefined ? {} : { parentSpanId: event.parentSpanId }),
         // Reuse the dispatch's trace context when the runtime set it (so this span
         // shares the id it propagated as `traceparent`); else mint fresh ids.
         spanId: event.spanId ?? otlpRandomHex(8),
@@ -90,10 +95,6 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
         status: event.ok ? { code: 1 } : { code: 2, message: event.error?.message ?? "" },
         traceId: event.traceId ?? otlpRandomHex(16),
     };
-
-    if (event.parentSpanId !== undefined) {
-        span.parentSpanId = event.parentSpanId;
-    }
 
     if (event.traceFlags !== undefined) {
         span.flags = event.traceFlags;
@@ -111,7 +112,7 @@ const otlpTraceBody = (event: ObservabilityEvent, serviceName: string, endMs: nu
         ];
     }
 
-    return wrapResourceSpans(span, "@lunora/runtime", serviceName, resourceAttributes);
+    return span;
 };
 
 /**
@@ -163,18 +164,18 @@ const encodeSignalAttributes = (
  *
  * Attribute precedence follows {@link encodeSignalAttributes}.
  */
-const otlpSpanBody = (event: SpanEvent, serviceName: string, resourceAttributes?: OtlpResourceAttributes): unknown => {
-    const span = {
+const otlpSpanBody = (event: SpanEvent): unknown => {
+    const span: Record<string, unknown> = {
         attributes: encodeSignalAttributes(
             { errorType: event.error?.type, functionPath: event.functionPath, shardKey: event.shardKey, userId: event.userId },
             event.attributes,
         ),
         endTimeUnixNano: otlpUnixNano(event.startTs + event.durationMs),
-        // Always SPAN_KIND_INTERNAL: only `ctx.trace` spans reach a sink. The
-        // synthetic dispatch span is buffered for the Studio waterfall and never
-        // exported, because the runtime already emits that dispatch to `onRpc` as
-        // a SERVER span — encoding it here too would duplicate it in every trace.
-        kind: 1,
+        // Defaults to SPAN_KIND_INTERNAL — right for the vast majority of
+        // `ctx.trace` spans — but honours an explicit kind so a call OUT to another
+        // service can be CLIENT and a queue hop PRODUCER/CONSUMER. That is what a
+        // collector builds its service map from.
+        kind: OTLP_SPAN_KIND[event.kind ?? "internal"],
         name: event.name,
         parentSpanId: event.parentSpanId,
         spanId: event.spanId,
@@ -184,7 +185,27 @@ const otlpSpanBody = (event: SpanEvent, serviceName: string, resourceAttributes?
         traceId: event.traceId,
     };
 
-    return wrapResourceSpans(span, "@lunora/runtime", serviceName, resourceAttributes);
+    if (event.events !== undefined && event.events.length > 0) {
+        span.events = event.events.map((point) => {
+            return {
+                attributes: encodeAttributes(Object.fromEntries(Object.entries(point.attributes ?? {}).map(([key, value]) => [key, coerceFieldValue(value)]))),
+                name: point.name,
+                timeUnixNano: otlpUnixNano(point.ts),
+            };
+        });
+    }
+
+    if (event.links !== undefined && event.links.length > 0) {
+        span.links = event.links.map((link) => {
+            return {
+                attributes: encodeAttributes(Object.fromEntries(Object.entries(link.attributes ?? {}).map(([key, value]) => [key, coerceFieldValue(value)]))),
+                spanId: link.spanId,
+                traceId: link.traceId,
+            };
+        });
+    }
+
+    return span;
 };
 
 /**
@@ -201,7 +222,7 @@ const otlpSpanBody = (event: SpanEvent, serviceName: string, resourceAttributes?
  * the collector build the distribution from the stream of counts/sums, without
  * the runtime having to pick bucket boundaries for the user.
  */
-const otlpMetricBody = (event: MetricEvent, serviceName: string, resourceAttributes?: OtlpResourceAttributes): unknown => {
+const otlpMetricBody = (event: MetricEvent): unknown => {
     const timeUnixNano = otlpUnixNano(event.ts);
     const attributes = encodeSignalAttributes({ functionPath: event.functionPath, shardKey: event.shardKey }, event.attributes);
     // `startTimeUnixNano` is deliberately omitted (it is optional). A delta point
@@ -213,47 +234,37 @@ const otlpMetricBody = (event: MetricEvent, serviceName: string, resourceAttribu
     const dataPoint = { asDouble: event.value, attributes, timeUnixNano };
 
     if (event.kind === "gauge") {
-        return wrapResourceMetrics({ gauge: { dataPoints: [dataPoint] }, name: event.name }, "@lunora/runtime", serviceName, resourceAttributes);
+        return { gauge: { dataPoints: [dataPoint] }, name: event.name };
     }
 
     if (event.kind === "histogram") {
-        return wrapResourceMetrics(
-            {
-                histogram: {
-                    aggregationTemporality: 1,
-                    dataPoints: [
-                        {
-                            attributes,
-                            bucketCounts: ["1"],
-                            count: "1",
-                            explicitBounds: [],
-                            max: event.value,
-                            min: event.value,
-                            // `startTimeUnixNano` omitted for the same reason as
-                            // the Sum data point above — see the comment there.
-                            sum: event.value,
-                            timeUnixNano,
-                        },
-                    ],
-                },
-                name: event.name,
+        return {
+            histogram: {
+                aggregationTemporality: 1,
+                dataPoints: [
+                    {
+                        attributes,
+                        bucketCounts: ["1"],
+                        count: "1",
+                        explicitBounds: [],
+                        max: event.value,
+                        min: event.value,
+                        // `startTimeUnixNano` omitted for the same reason as
+                        // the Sum data point above — see the comment there.
+                        sum: event.value,
+                        timeUnixNano,
+                    },
+                ],
             },
-            "@lunora/runtime",
-            serviceName,
-            resourceAttributes,
-        );
+            name: event.name,
+        };
     }
 
-    return wrapResourceMetrics(
-        { name: event.name, sum: { aggregationTemporality: 1, dataPoints: [dataPoint], isMonotonic: true } },
-        "@lunora/runtime",
-        serviceName,
-        resourceAttributes,
-    );
+    return { name: event.name, sum: { aggregationTemporality: 1, dataPoints: [dataPoint], isMonotonic: true } };
 };
 
 /** Build the OTLP log-export body for one application log line. */
-const otlpLogBody = (event: LogEvent, serviceName: string, resourceAttributes?: OtlpResourceAttributes): unknown => {
+const otlpLogBody = (event: LogEvent): unknown => {
     const logRecord: Record<string, unknown> = {
         // Caller-supplied structured fields become log-record attributes so a
         // pipeline can filter/index on them; precedence per `encodeSignalAttributes`.
@@ -275,7 +286,16 @@ const otlpLogBody = (event: LogEvent, serviceName: string, resourceAttributes?: 
         logRecord.spanId = event.spanId;
     }
 
-    return wrapResourceLogs(logRecord, "@lunora/runtime", serviceName, resourceAttributes);
+    if (event.eventName !== undefined) {
+        // Both spellings, deliberately: `eventName` is the proto >= 1.5 field, and
+        // the `event.name` attribute is how every collector recognised events
+        // before it. Emitting one or the other silently loses the event's identity
+        // on half the pipelines in the wild.
+        logRecord.eventName = event.eventName;
+        (logRecord.attributes as OtlpAttribute[]).push(encodeAttribute("event.name", event.eventName));
+    }
+
+    return logRecord;
 };
 
 /** Above this serialized size, an OTLP body is gzipped; tiny single-span posts skip it (the CPU isn't worth the few saved bytes). */
@@ -289,30 +309,44 @@ const gzipEncode = async (text: string): Promise<ArrayBuffer> => {
 };
 
 /**
- * POST an OTLP payload fire-and-forget, keeping it alive past the response when a
- * request context is present. Bodies past {@link OTLP_GZIP_THRESHOLD} are gzipped
- * (`Content-Encoding: gzip`) — standard OTLP/HTTP, which every collector (and the
- * Lunora cloud ingest) decodes.
+ * POST an OTLP payload, gzipping bodies past {@link OTLP_GZIP_THRESHOLD}, and
+ * never reject.
+ *
+ * The batcher needs the promise (its drain awaits the export before settling the
+ * window it handed to `waitUntil`), while the unbatched paths only need
+ * fire-and-forget — so this promise-returning form is the primitive and
+ * {@link otlpPost} is the thin wrapper over it.
  */
-const otlpPost = (url: string, body: unknown, headers: Record<string, string>, context?: ObservabilitySinkContext): void => {
+const otlpSend = async (url: string, body: unknown, headers: Record<string, string>, keepAlive?: KeepAlive): Promise<void> => {
     try {
         const json = JSON.stringify(body);
-        // `.catch` swallows any rejection so a failed export can never reject
-        // into the dispatch path.
         const sent = (
             json.length < OTLP_GZIP_THRESHOLD
                 ? fetch(url, { body: json, headers, method: "POST" })
                 : gzipEncode(json).then((gz) => fetch(url, { body: gz, headers: { ...headers, "content-encoding": "gzip" }, method: "POST" }))
-        ).catch(() => {
-            // Network error / non-OK response / gzip failure — intentionally ignored.
-        });
+        ).then(
+            () => undefined,
+            () => {
+                // Network error / non-OK response / gzip failure — intentionally ignored.
+            },
+        );
 
-        if (context?.waitUntil) {
-            context.waitUntil(sent);
-        }
+        keepAlive?.(sent);
+
+        await sent;
     } catch {
         // `fetch` throwing synchronously (e.g. an invalid URL) must not break dispatch.
     }
 };
 
-export { encodeSignalAttributes, OTLP_GZIP_THRESHOLD, otlpLogBody, otlpMetricBody, otlpPost, otlpSpanBody, otlpTraceBody };
+/**
+ * POST an OTLP payload fire-and-forget, keeping it alive past the response when a
+ * request context is present.
+ */
+const otlpPost = (url: string, body: unknown, headers: Record<string, string>, context?: ObservabilitySinkContext): void => {
+    // Detached by design — the caller is on the dispatch path. `otlpSend` already
+    // swallows every failure, so the `.catch` is for the floating-promise rule.
+    otlpSend(url, body, headers, context?.waitUntil).catch(() => undefined);
+};
+
+export { encodeSignalAttributes, OTLP_GZIP_THRESHOLD, otlpLogBody, otlpMetricBody, otlpPost, otlpSend, otlpSpanBody, otlpTraceBody };

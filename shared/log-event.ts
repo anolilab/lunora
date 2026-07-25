@@ -52,6 +52,20 @@ export interface LogEvent {
     /** Raw arguments passed to the `ctx.log.*` call, in order. */
     args: unknown[];
     /**
+     * OTel `LogRecord.eventName` — set when the line was emitted as a **structured
+     * event** via `ctx.log.event(name, fields)` rather than as a human-readable
+     * log line.
+     *
+     * The distinction is the whole point of the Events API: a log line's payload
+     * is its `message` (prose, for a human, unstable), while an event's payload is
+     * its `fields` (a named schema, for a query, stable). A collector that knows
+     * `eventName` can index and aggregate the latter; without it, "how many
+     * checkouts failed" degrades into a substring search over prose.
+     *
+     * Absent for ordinary `ctx.log.*` calls.
+     */
+    eventName?: string;
+    /**
      * Structured fields the caller attached (`ctx.log.info(message, fields)` or a
      * bound `ctx.log.with(fields)` child), already normalized to a fresh bag of
      * JSON-safe primitives (see `shared/log-fields.ts`). Absent for a plain

@@ -762,8 +762,33 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally
             // (its `list`/`getMetadata` throw the "no storage configured" error).
             const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
+            // `ctx.log`: the DO base builds the attributed logger (structured
+            // fields + `.with(...)` child + trace correlation) and routes each call
+            // to the optional `observability` sink. It also buffers the line (studio
+            // Logs panel) and emits a structured console event the dev-server formats.
+            //
+            // Resolved BEFORE `ctx.db` below, because the database is wrapped in
+            // auto-instrumentation that needs the sink, the trace anchor, and the
+            // dispatch's wide-event handle.
+            const observability = config.observability?.(env);
+            const logFunctionPath = options.functionPath ?? "";
+            const log = this.makeLogger(logFunctionPath, observability);
+            const traceAnchor = this.resolveDispatchAnchor(Boolean(options.identity));
+
+            // `ctx.span`: the handle onto the DISPATCH's own span — the wide-event
+            // surface. Attributes attached here accumulate for the whole request
+            // and are folded into the one span it already emits, instead of
+            // becoming N separate log lines. Shares `traceAnchor` with `ctx.trace`
+            // so both write to the same trace.
+            const span = this.makeDispatchSpan(traceAnchor, observability);
+
             const globalDb: DatabaseWriterLike = config.d1?.(env, { identity, userId }) ?? globalDbStub;
-            const db: DatabaseWriterLike = createShardCtxDb({
+            // `ctx.db`, wrapped in automatic instrumentation: by default this
+            // adds aggregate counters (call count, total time, per-operation
+            // breakdown) to the wide event rather than a span per call, so a
+            // handler making hundreds of queries stays readable. See
+            // `instrumentDatabase` for the `"spans"` / `"off"` levels.
+            const db: DatabaseWriterLike = this.instrumentDb(createShardCtxDb({
                 auth: { identity: identity ?? null, userId: userId ?? null },
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);
@@ -777,7 +802,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 sql: this.sql as SqlExec,
                 storage,
                 globalDb,
-            });
+            }), logFunctionPath, traceAnchor, observability);
 
             const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
             facade["messages"] = bindTableFacade(db, "messages");
@@ -786,19 +811,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             facade["sessions"] = bindTableFacade(db, "sessions");
             facade["attachments"] = bindTableFacade(db, "attachments");
 
-            // `ctx.log`: the DO base builds the attributed logger (structured
-            // fields + `.with(...)` child + trace correlation) and routes each call
-            // to the optional `observability` sink. It also buffers the line (studio
-            // Logs panel) and emits a structured console event the dev-server formats.
-            const observability = config.observability?.(env);
-            const logFunctionPath = options.functionPath ?? "";
-            const log = this.makeLogger(logFunctionPath, observability);
 
             // `ctx.trace` / `ctx.metrics`: spans and measurements to the same sink.
             // The trace anchor is threaded explicitly for the same reason `identity`
             // is — a deferred caller (a subscription re-run) must not inherit the
             // writing mutation's trace from the shared per-request field.
-            const trace = this.makeTracer(logFunctionPath, observability, options.identity ? undefined : this.getCurrentTrace());
+            const trace = this.makeTracer(logFunctionPath, observability, traceAnchor);
             const metrics = this.makeMetrics(logFunctionPath, observability);
 
             const { notify, push } = createNotify(notifyConfig, env, { log, metrics });
@@ -817,13 +835,18 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     userId: userId ?? null,
                 },
                 db,
-                fetch: globalThis.fetch.bind(globalThis),
+                // Instrumented `fetch`: a CLIENT span per outbound call plus W3C
+                // `traceparent` propagation, so time spent in a downstream service
+                // is visible and its spans join this trace. Degrades to the bare
+                // global when no sink is configured.
+                fetch: this.makeFetch(logFunctionPath, traceAnchor, observability),
                 ip: this.getCurrentIp(),
                 log,
                 metrics,
                 now,
                 orm: bindOrm(facade),
                 scheduler,
+                span,
                 storage,
                 trace,
                 notify,
