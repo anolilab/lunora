@@ -286,6 +286,28 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
     /** Handle cache so one WebSocket maps to one handle within a wake. */
     const liveHandles = new WeakMap<WebSocket, CloudflareSocketHandle>();
 
+    /**
+     * Memo of the mapped handle array, per tag.
+     *
+     * `getSockets` is the fan-out hot path — every whisper and every delta poke
+     * walks it — and mapping the runtime's socket array to handles on each call
+     * allocated a fresh N-element array and did N `WeakMap` lookups per
+     * broadcast. At 1024 subscribers that measured ~3x the cost of the raw walk
+     * it replaced, which is a price the abstraction should not charge.
+     *
+     * Validity is decided in O(1) from two facts, not by re-comparing the array:
+     * a socket can only ENTER through {@link SocketHost.accept}, which bumps
+     * `generation`, and can only LEAVE by closing, which shortens the runtime's
+     * array. So an unchanged generation AND an unchanged length together mean an
+     * unchanged set — including the swap case (one closes, one opens), because
+     * the open bumps the generation even though the length comes back equal.
+     *
+     * The array is handed out by reference, so callers must treat it as
+     * read-only; the ones that need to hold or reorder it already copy.
+     */
+    let generation = 0;
+    const mappedByTag = new Map<string, { generation: number; handles: SocketHandle[]; length: number }>();
+
     const getHandle = (ws: WebSocket): CloudflareSocketHandle => {
         const existing = liveHandles.get(ws);
 
@@ -309,6 +331,8 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
             // synchronous so no frame can arrive against an unstamped socket.
             state.acceptWebSocket(ws, [`${ID_TAG_PREFIX}${id}`, ...(tags ?? [])]);
             fallbackIds.set(ws, id);
+            // Invalidate every tag's memo: this socket may match any of them.
+            generation += 1;
 
             const handle = new CloudflareSocketHandle(ws, id);
             liveHandles.set(ws, handle);
@@ -321,8 +345,24 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
         },
         // `state.getWebSockets(tag)` filters natively and exactly, which is the
         // contract's requirement — a superset would fan updates out across
-        // subscriptions that never asked for them.
-        getSockets: (tag) => state.getWebSockets(tag).map((ws) => getHandle(ws)),
+        // subscriptions that never asked for them. Still called every time: it is
+        // the source of truth, and cheap. What the memo above avoids is re-mapping
+        // its result to handles on every fan-out.
+        getSockets: (tag) => {
+            const raw = state.getWebSockets(tag);
+            const key = tag ?? "";
+            const memo = mappedByTag.get(key);
+
+            if (memo?.generation === generation && memo.length === raw.length) {
+                return memo.handles;
+            }
+
+            const handles = raw.map((ws) => getHandle(ws));
+
+            mappedByTag.set(key, { generation, handles, length: raw.length });
+
+            return handles;
+        },
         handleFor: (socket) => {
             const ws = socket as WebSocket;
 
