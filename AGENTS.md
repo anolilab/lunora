@@ -31,7 +31,10 @@ pnpm run lint:prettier            # Prettier check (add :fix to autofix)
 pnpm run lint:types               # TypeScript type check
 pnpm run lint:affected:eslint     # Only changed
 pnpm run lint:affected:types      # Only changed
+pnpm run lint:package-json        # package.json key order (add :fix to autofix)
 ```
+
+> **`package.json` key-order gotcha.** Key order is enforced by its own CI job ("Lint (package.json sort)") and by **nothing else** — ESLint, Prettier, `lint:types`, `api:check`, and `dist:check` are all blind to it. So a hand-added block in the wrong position (classically `peerDependencies` placed above `devDependencies` instead of below) goes green locally and red in CI. Canonical order is whatever `vis sort-package-json` emits; run `pnpm run lint:package-json` after editing any manifest.
 
 > **Stale-`dist` gotcha.** `dist/` is gitignored and built on demand. A raw `pnpm --filter … run test` / `lint:types` does **not** rebuild workspace dependencies, so if an upstream `@lunora/*` package's source changed you may hit stale-`dist` errors (`X is not a function`, "missing export"). Build first — `pnpm run build:packages` once, or `pnpm --filter "@lunora/<pkg>..." run build` (the trailing `...` includes dependencies) — or use `pnpm run test:affected` / `pnpm run lint:affected:types`, which build dependencies for you.
 

@@ -102,7 +102,11 @@ pnpm lint:eslint:fix
 pnpm lint:prettier
 pnpm lint:prettier:fix
 pnpm lint:types         # tsc --noEmit
+pnpm lint:package-json  # canonical package.json key order (read-only check)
+pnpm lint:package-json:fix
 ```
+
+`lint:package-json` is the local twin of the "Lint (package.json sort)" CI job. No other target looks at key order, so a hand-placed block — `peerDependencies` written above `devDependencies` rather than below it — passes everything else and only fails after a push. Run it whenever you touch a `package.json`.
 
 Pre-commit hooks (Husky + `vis staged` / `vis secrets`, configured in the `staged` and `secrets` blocks of [`vis.config.ts`](../vis.config.ts)) run Prettier, ESLint, and a secrets scan on staged files. Don't `--no-verify` past them.
 
