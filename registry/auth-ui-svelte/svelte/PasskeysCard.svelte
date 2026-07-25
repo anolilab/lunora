@@ -25,14 +25,15 @@
         {:else}
             <ul class="lunora-auth-list">
                 {#each $res.items as passkey (passkey.id ?? passkeyLabel(passkey, t))}
+                    {@const id = passkey.id}
                     <li class="lunora-auth-list__item">
                         <span class="lunora-auth-list__label">{passkeyLabel(passkey, t)}</span>
-                        {#if passkey.id !== undefined}
+                        {#if id !== undefined}
                             <button
                                 class="lunora-auth-link"
                                 disabled={$res.busy}
                                 onclick={() => {
-                                    void actions.remove(passkey.id);
+                                    void actions.remove(id);
                                 }}
                                 type="button"
                             >

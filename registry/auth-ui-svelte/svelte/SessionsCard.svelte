@@ -18,14 +18,15 @@
     {:else}
         <ul class="lunora-auth-list">
             {#each $res.items as session (session.id ?? session.token ?? sessionLabel(session, t))}
+                {@const token = session.token}
                 <li class="lunora-auth-list__item">
                     <span class="lunora-auth-list__label">{sessionLabel(session, t)}</span>
-                    {#if session.token !== undefined}
+                    {#if token !== undefined}
                         <button
                             class="lunora-auth-link"
                             disabled={$res.busy}
                             onclick={() => {
-                                void actions.revoke(session.token);
+                                void actions.revoke(token);
                             }}
                             type="button"
                         >

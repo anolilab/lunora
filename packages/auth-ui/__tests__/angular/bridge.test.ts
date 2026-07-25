@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { controllerSignal } from "../../src/angular/controller-signal";
 import { injectAuthUI, provideAuthUI } from "../../src/angular/provider";
+import type { ThemeTokens } from "../../src/core";
 import { createSignInController, resetFlowWarnings } from "../../src/core";
 import type { FakeClient } from "../fake-client";
 import { bareClient, fakeNav, pluginClient } from "../fake-client";
@@ -73,7 +74,7 @@ describe("provideAuthUI / injectAuthUI", () => {
         expect.assertions(1);
 
         const context = withProvider(bareClient(), () => injectAuthUI(), {
-            theme: (defaults: Record<string, string>) => {
+            theme: (defaults: ThemeTokens) => {
                 return { ...defaults, primary: "#000" };
             },
         });

@@ -7,6 +7,7 @@
 import { fireEvent, render, screen } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ThemeTokens } from "../../src/core";
 import { resetFlowWarnings } from "../../src/core";
 import { bareClient, fakeNav, pluginClient } from "../fake-client";
 import Harness from "./Harness.svelte";
@@ -75,7 +76,7 @@ describe("svelte theme", () => {
                 authClient: bareClient().client,
                 card: "sign-in",
                 nav: fakeNav(),
-                theme: (defaults: Record<string, string>) => ({ ...defaults, primary: "rebeccapurple" }),
+                theme: (defaults: ThemeTokens) => ({ ...defaults, primary: "rebeccapurple" }),
             },
         });
 

@@ -41,15 +41,16 @@
         {:else}
             <ul class="lunora-auth-list">
                 {#each $res.items as organization (organization.id ?? organization.slug ?? organization.name)}
+                    {@const id = organization.id}
                     <li class="lunora-auth-list__item">
                         <span class="lunora-auth-list__label">{organization.name ?? organization.slug}</span>
                         <span class="lunora-auth-list__actions">
-                            {#if organization.id !== undefined}
+                            {#if id !== undefined}
                                 <button
                                     class="lunora-auth-link"
                                     disabled={$res.busy}
                                     onclick={() => {
-                                        void actions.setActive(organization.id);
+                                        void actions.setActive(id);
                                     }}
                                     type="button"
                                 >
@@ -59,7 +60,7 @@
                                     class="lunora-auth-link"
                                     disabled={$res.busy}
                                     onclick={() => {
-                                        void actions.remove(organization.id);
+                                        void actions.remove(id);
                                     }}
                                     type="button"
                                 >

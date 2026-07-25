@@ -23,7 +23,7 @@
         placeholder,
         type = "text",
     }: {
-        autoComplete?: string;
+        autoComplete?: AutoFill;
         field: FieldState;
         label: string;
         name: string;

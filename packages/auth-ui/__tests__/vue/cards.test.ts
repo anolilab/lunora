@@ -8,6 +8,7 @@ import { fireEvent, render, screen } from "@testing-library/vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
 
+import type { ThemeTokens } from "../../src/core";
 import { resetFlowWarnings } from "../../src/core";
 import AuthUIProvider from "../../src/vue/AuthUIProvider.vue";
 import MagicLinkCard from "../../src/vue/MagicLinkCard.vue";
@@ -90,7 +91,7 @@ describe("vue theme", () => {
                         {
                             authClient: bareClient().client,
                             nav: fakeNav(),
-                            theme: (defaults: Record<string, string>) => ({ ...defaults, primary: "rebeccapurple" }),
+                            theme: (defaults: ThemeTokens) => ({ ...defaults, primary: "rebeccapurple" }),
                         },
                         { default: () => h(SignInCard) },
                     ),

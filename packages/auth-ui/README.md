@@ -83,20 +83,26 @@ step, and what you read here is exactly what the user gets.
 
 ## Type-checking scope
 
-`lint:types` runs two programs. `tsconfig.json` covers `core/`, `react/` and
-`angular/` (plain `.ts` with inline templates); `tsconfig.solid.json` covers the
-Solid port, which needs its own because one program can hold only one
-`jsx`/`jsxImportSource` pair.
+`lint:types` runs four programs, so **every line that ships to a user is
+type-checked**:
 
-Both earn their place. Putting Angular in scope immediately caught a missing
-`input` import; adding the Solid program caught six calls that had lost their
-type narrowing. Neither was visible to any test.
+| Config                 | Checker        | Covers                        |
+| ---------------------- | -------------- | ----------------------------- |
+| `tsconfig.json`        | `tsc`          | `core/`, `react/`, `angular/` |
+| `tsconfig.solid.json`  | `tsc`          | `solid/`                      |
+| `tsconfig.vue.json`    | `vue-tsc`      | `vue/`                        |
+| `tsconfig.svelte.json` | `svelte-check` | `svelte/`                     |
 
-Vue and Svelte SFCs need `vue-tsc` / `svelte-check` — separate toolchains rather
-than another tsconfig — so those two remain copy-only templates checked where
-they actually run: in the consumer's project. `eslint.config.js` still scopes to
-`core/` + `react/` (its type-aware rules follow the main program); Prettier
-formats all five.
+They can't be one program: a program holds a single `jsx`/`jsxImportSource` pair
+(React's here), and `.vue`/`.svelte` files need their own compilers.
+
+Every one of them paid for itself on its first run. Angular caught a missing
+`input` import; Solid caught six calls that had lost their type narrowing;
+Svelte caught six more plus a mistyped `autoComplete`. None was visible to any
+test — the ports had been checked only by being copied into a user's project.
+
+`eslint.config.js` still scopes to `core/` + `react/` (its type-aware rules
+follow the main program); Prettier formats all five.
 
 For the same reason `registry/tsconfig.json` excludes the `auth-ui-*` items from
 the backend-oriented registry typecheck.

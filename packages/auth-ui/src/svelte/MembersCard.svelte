@@ -39,16 +39,17 @@
         {:else}
             <ul class="lunora-auth-list">
                 {#each $res.members as member (member.id ?? member.userId ?? member.user?.email)}
+                    {@const memberId = member.id}
                     <li class="lunora-auth-list__item">
                         <span class="lunora-auth-list__label">
                             {member.user?.email ?? member.user?.name ?? member.userId} · {member.role}
                         </span>
-                        {#if member.id !== undefined}
+                        {#if memberId !== undefined}
                             <button
                                 class="lunora-auth-link"
                                 disabled={$res.busy}
                                 onclick={() => {
-                                    void actions.removeMember(member.id);
+                                    void actions.removeMember(memberId);
                                 }}
                                 type="button"
                             >
@@ -64,16 +65,17 @@
             <p class="lunora-auth-card__description">{t.invitations}</p>
             <ul class="lunora-auth-list">
                 {#each $res.invitations as invitation (invitation.id ?? invitation.email)}
+                    {@const invitationId = invitation.id}
                     <li class="lunora-auth-list__item">
                         <span class="lunora-auth-list__label">
                             {invitation.email} · {invitation.role}
                         </span>
-                        {#if invitation.id !== undefined}
+                        {#if invitationId !== undefined}
                             <button
                                 class="lunora-auth-link"
                                 disabled={$res.busy}
                                 onclick={() => {
-                                    void actions.cancelInvitation(invitation.id);
+                                    void actions.cancelInvitation(invitationId);
                                 }}
                                 type="button"
                             >
