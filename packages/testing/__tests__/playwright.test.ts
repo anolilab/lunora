@@ -16,13 +16,13 @@ type Frame = Record<string, unknown>;
 
 /** A fake `page` that captures the installed route handlers so a test can drive them. */
 const createFakePage = () => {
-    let rpcHandler: ((route: MockRoute) => Promise<void> | void) | undefined;
+    const handlers = new Map<string, (route: MockRoute) => Promise<void> | void>();
     let socketHandler: ((ws: MockWebSocketRoute) => void) | undefined;
     const unrouted: string[] = [];
 
     const page: MockablePage = {
-        route: async (_url, handler) => {
-            rpcHandler = handler;
+        route: async (url, handler) => {
+            handlers.set(url, handler);
         },
         routeWebSocket: async (_url, handler) => {
             socketHandler = handler;
@@ -50,16 +50,21 @@ const createFakePage = () => {
         };
     };
 
-    /** Issue an RPC POST and return the fulfilled response body. */
-    const rpc = async (body: unknown, headers: Record<string, string> = {}): Promise<{ body: Frame; status: number }> => {
+    /** Issue an RPC POST (optionally against the batch path) and return the response. */
+    const rpc = async (
+        body: unknown,
+        headers: Record<string, string> = {},
+        options: { path?: string; raw?: string } = {},
+    ): Promise<{ body: Frame; status: number }> => {
         let captured: { body: Frame; status: number } | undefined;
+        const handler = handlers.get(options.path ?? "/_lunora/rpc");
 
-        await rpcHandler?.({
+        await handler?.({
             fulfill: async (response) => {
                 captured = { body: JSON.parse(response.body ?? "{}") as Frame, status: response.status ?? 200 };
             },
             request: () => {
-                return { headers: () => headers, postData: () => JSON.stringify(body) };
+                return { headers: () => headers, postData: () => options.raw ?? JSON.stringify(body) };
             },
         });
 
@@ -70,7 +75,7 @@ const createFakePage = () => {
         return captured;
     };
 
-    return { openSocket, page, rpc, unrouted };
+    return { handlers, openSocket, page, rpc, unrouted };
 };
 
 const row = (id: string, extra: Record<string, unknown> = {}): Record<string, unknown> & { _id: string } => {
@@ -267,6 +272,22 @@ describe("mockLunora — watermarks", () => {
         expect(lunora.watermarks()).toStrictEqual({});
     });
 
+    it("failWrites leaves reads alone", async () => {
+        expect.assertions(2);
+
+        const fake = createFakePage();
+        const lunora = await mockLunora(fake.page, { functions: { "nodes:list": [{ _id: "n1" }] } });
+
+        lunora.failWrites("CONFLICT");
+
+        // A rollback-UI test sets failWrites and still needs its reads to work —
+        // otherwise the data under test collapses and masks the behaviour.
+        const read = await fake.rpc({ functionPath: "nodes:list" });
+
+        expect(read.status).toBe(200);
+        expect(read.body["result"]).toStrictEqual([{ _id: "n1" }]);
+    });
+
     it("resumes accepting writes when failWrites is turned off", async () => {
         expect.assertions(1);
 
@@ -307,6 +328,25 @@ describe("mockLunora — failure injection", () => {
         await lunora.resync();
 
         expect((socket.frames[1] as { rowsPatch: unknown[] }).rowsPatch).toHaveLength(1);
+    });
+
+    it("suppressPokes also suppresses live-query settled frames", async () => {
+        expect.assertions(1);
+
+        const fake = createFakePage();
+        const lunora = await mockLunora(fake.page, { functions: { "nodes:list": [] }, rows: { nodes: [] } });
+
+        const socket = fake.openSocket();
+
+        socket.send({ id: "sub_1", query: { functionPath: "nodes:list" }, type: "subscribe" });
+        socket.frames.length = 0;
+
+        lunora.suppressPokes();
+        await lunora.insert("nodes", row("n1"));
+
+        // Otherwise only half the dropped-poke failure mode is reproduced: the shape
+        // goes quiet but queries still get invalidated.
+        expect(socket.frames).toStrictEqual([]);
     });
 
     it("resync re-seeds every live shape, as a reconnect would", async () => {
@@ -402,17 +442,17 @@ describe("mockLunora — queries", () => {
 
 describe("mockLunora — lifecycle", () => {
     it("clears a previous installation's routes so a stale handler can't serve stale rows", async () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         const fake = createFakePage();
 
         await mockLunora(fake.page, { rows: { nodes: [row("old")] } });
         await mockLunora(fake.page, { rows: { nodes: [row("new")] } });
 
-        // Playwright stacks route handlers newest-first, so a leftover handler from
-        // before a `page.reload()` keeps answering from its own closed-over store.
-        expect(fake.unrouted).toStrictEqual(["/_lunora/**", "/_lunora/**"]);
-        expect(fake.unrouted).toHaveLength(2);
+        // Playwright matches `unroute` against the pattern the handler was REGISTERED
+        // with, so a `/**` glob would remove nothing — these are the exact registered
+        // paths. (Two installs × two paths.)
+        expect(fake.unrouted).toStrictEqual(["/_lunora/rpc", "/_lunora/rpc-batch", "/_lunora/rpc", "/_lunora/rpc-batch"]);
     });
 
     it("stops sending frames after dispose", async () => {
@@ -433,7 +473,7 @@ describe("mockLunora — lifecycle", () => {
     });
 
     it("honors a custom base path", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const fake = createFakePage();
         const routeSpy = vi.fn<MockablePage["route"]>(async () => undefined);
@@ -441,6 +481,39 @@ describe("mockLunora — lifecycle", () => {
         await mockLunora({ ...fake.page, route: routeSpy }, { path: "/sync" });
 
         expect(routeSpy).toHaveBeenCalledWith("/sync/rpc", expect.any(Function));
+        expect(routeSpy).toHaveBeenCalledWith("/sync/rpc-batch", expect.any(Function));
+    });
+
+    it("answers the coalesced batch path, so a replayed offline write can't reach the origin", async () => {
+        expect.assertions(2);
+
+        const fake = createFakePage();
+
+        await mockLunora(fake.page, { functions: { "nodes:list": [] } });
+
+        // `client.mutation(...)` reaches `/rpc-batch` via offline replay
+        // (`replayBatched`); routing only `/rpc` would let that fall through to the real
+        // deployment.
+        expect(fake.handlers.has("/_lunora/rpc-batch")).toBe(true);
+
+        const batched = await fake.rpc({ functionPath: "nodes:list" }, {}, { path: "/_lunora/rpc-batch" });
+
+        expect(batched.status).toBe(200);
+    });
+
+    it("answers a malformed body with a 400 instead of leaving the request hanging", async () => {
+        expect.assertions(2);
+
+        const fake = createFakePage();
+
+        await mockLunora(fake.page);
+
+        // An unhandled throw in a route handler never fulfils, so the test would hang on
+        // a network timeout rather than showing the cause.
+        const answered = await fake.rpc(undefined, {}, { raw: "not json" });
+
+        expect(answered.status).toBe(400);
+        expect((answered.body["error"] as { code: string }).code).toBe("BAD_REQUEST");
     });
 
     it("throws a clear error when patching a row that does not exist", async () => {

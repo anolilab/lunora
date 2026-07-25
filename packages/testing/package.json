@@ -70,6 +70,14 @@
         "@lunora/mail": "1.0.0-alpha.17",
         "@lunora/server": "1.0.0-alpha.30"
     },
+    "peerDependencies": {
+        "@playwright/test": "catalog:e2e"
+    },
+    "peerDependenciesMeta": {
+        "@playwright/test": {
+            "optional": true
+        }
+    },
     "devDependencies": {
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

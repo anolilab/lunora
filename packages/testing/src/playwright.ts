@@ -174,6 +174,8 @@ const matchesWhere = (row: MockRow, where: Record<string, unknown> | undefined):
  */
 const mockLunora = async (page: MockablePage, options: MockLunoraOptions = {}): Promise<MockLunora> => {
     const basePath = options.path ?? "/_lunora";
+    const RPC_PATH = `${basePath}/rpc`;
+    const RPC_BATCH_PATH = `${basePath}/rpc-batch`;
     const shapes = options.shapes ?? {};
     const functions = options.functions ?? {};
 
@@ -194,11 +196,26 @@ const mockLunora = async (page: MockablePage, options: MockLunoraOptions = {}): 
     let suppressed = false;
     let failCode: false | string = false;
     let disposed = false;
+    /** Shape names warned about once, so a reconnect loop doesn't spam the test log. */
+    const warnedUnknownShapes = new Set<string>();
+
+    /**
+     * Remove this double's HTTP routes.
+     *
+     * Playwright matches `unroute` against the pattern the handler was REGISTERED
+     * with, so a glob like `${basePath}/**` removes nothing — the handlers below are
+     * registered on the exact `/rpc` and `/rpc-batch` paths. `routeWebSocket` has no
+     * unroute API at all, so a socket handler from a previous installation stays
+     * stacked; the `disposed` guard is what stops it answering.
+     */
+    const unrouteHttp = async (): Promise<void> => {
+        await page.unroute(RPC_PATH);
+        await page.unroute(RPC_BATCH_PATH);
+    };
 
     // A previous installation on this page would otherwise keep answering from its
-    // own closed-over store. Playwright stacks route handlers newest-first, so the
-    // stale one wins on any path the new one doesn't claim.
-    await page.unroute(`${basePath}/**`);
+    // own closed-over store — Playwright stacks route handlers newest-first.
+    await unrouteHttp();
 
     const tableRows = (table: string): Map<string, MockRow> => {
         const existing = store.get(table);
@@ -245,9 +262,7 @@ const mockLunora = async (page: MockablePage, options: MockLunoraOptions = {}): 
      * closing frame leaves the client's view unchanged — which is exactly how a
      * real dropped poke behaves.
      */
-    const sendPoke = (
-        parts: { ops: { key: string; op: "delete" | "insert" | "update"; table: string; value?: Record<string, unknown> }[]; shapeId: string }[],
-    ): void => {
+    const sendPoke = (parts: MockPokePart[]): void => {
         if (suppressed || parts.length === 0) {
             return;
         }
@@ -324,6 +339,13 @@ const mockLunora = async (page: MockablePage, options: MockLunoraOptions = {}): 
 
     /** Notify every live query that the data changed (queries re-fetch over RPC). */
     const pokeQueries = (): void => {
+        // Honour `suppressed` here too. A test that suppresses pokes to exercise the
+        // checkpoint fallback would otherwise still see its query subscriptions
+        // invalidated — only half the failure mode reproduced.
+        if (suppressed) {
+            return;
+        }
+
         const lastMutationId = highestWatermark();
 
         for (const live of liveQueries.values()) {
@@ -331,10 +353,29 @@ const mockLunora = async (page: MockablePage, options: MockLunoraOptions = {}): 
         }
     };
 
-    await page.route(`${basePath}/rpc`, async (route) => {
+    /** Answers both the single-call and the coalesced batch RPC path. */
+    const rpcHandler = async (route: MockRoute): Promise<void> => {
         const request = route.request();
         const raw = request.postData();
-        const body = typeof raw === "string" ? (JSON.parse(raw) as { args?: Record<string, unknown>; functionPath?: string }) : {};
+        let body: { args?: Record<string, unknown>; functionPath?: string } = {};
+
+        if (typeof raw === "string") {
+            try {
+                body = JSON.parse(raw) as typeof body;
+            } catch {
+                // Fulfil rather than throw: an unhandled throw in a route handler leaves
+                // the request unanswered, so the test hangs on a network timeout instead
+                // of seeing the problem. The socket handler already guards this way.
+                await route.fulfill({
+                    body: JSON.stringify({ error: { code: "BAD_REQUEST", message: "mockLunora: unparseable RPC body" } }),
+                    contentType: "application/json",
+                    status: 400,
+                });
+
+                return;
+            }
+        }
+
         const functionPath = body.functionPath ?? "";
 
         // A custom-mutator push carries `x-lunora-client-id` + a monotonic
@@ -347,7 +388,10 @@ const mockLunora = async (page: MockablePage, options: MockLunoraOptions = {}): 
         const clientSeq = Number.parseInt(headers["x-lunora-client-seq"] ?? "", 10);
         const isMutatorPush = clientId !== "" && Number.isFinite(clientSeq);
 
-        if (failCode !== false) {
+        // Gated on `isMutatorPush`, not on "any RPC": the contract is that `failWrites`
+        // fails WRITES. Failing reads too would collapse the data a rollback-UI test is
+        // asserting against, masking the behaviour under test.
+        if (failCode !== false && isMutatorPush) {
             // A failed write must NOT advance the watermark — the DO only advances on
             // a write it actually applied, and a mock that advances anyway hides the
             // client's reissue path.
@@ -376,9 +420,15 @@ const mockLunora = async (page: MockablePage, options: MockLunoraOptions = {}): 
             contentType: "application/json",
             status: 200,
         });
-    });
+    };
 
-    await page.routeWebSocket(new RegExp(String.raw`${basePath.replaceAll("/", String.raw`\/`)}\/ws`, "u"), (ws) => {
+    await page.route(RPC_PATH, rpcHandler);
+    // `client.mutation(...)` can also reach the coalesced batch transport through
+    // offline replay (`replayBatched`), which POSTs to `/rpc-batch`. Without this route
+    // a replayed queued write falls through to the real origin.
+    await page.route(RPC_BATCH_PATH, rpcHandler);
+
+    await page.routeWebSocket(`${basePath}/ws`, (ws) => {
         const send = (message: string): void => {
             if (!disposed) {
                 ws.send(message);
@@ -405,6 +455,20 @@ const mockLunora = async (page: MockablePage, options: MockLunoraOptions = {}): 
                 case "shape_subscribe": {
                     const name = message.shape?.name ?? "";
                     const live: LiveShape = { id, name, send };
+
+                    // A shape the test never declared replicates nothing and is never
+                    // poked, so the assertion fails far from the cause (usually a typo in
+                    // `shapes`). Say so once, loudly — the same stance the missing-carrier
+                    // warning in `@lunora/db` takes.
+                    if (shapes[name] === undefined && !warnedUnknownShapes.has(name)) {
+                        warnedUnknownShapes.add(name);
+
+                        // eslint-disable-next-line no-console
+                        console.warn(
+                            `[mockLunora] the app subscribed to shape "${name}", which is not in \`shapes\` — it will replicate nothing and never poke. ` +
+                                `Declared: ${Object.keys(shapes).length === 0 ? "(none)" : Object.keys(shapes).join(", ")}.`,
+                        );
+                    }
 
                     liveShapes.set(id, live);
                     send(JSON.stringify({ id, type: "ack" }));
@@ -449,7 +513,7 @@ const mockLunora = async (page: MockablePage, options: MockLunoraOptions = {}): 
             disposed = true;
             liveShapes.clear();
             liveQueries.clear();
-            await page.unroute(`${basePath}/**`);
+            await unrouteHttp();
         },
 
         failWrites: (code) => {
@@ -495,7 +559,12 @@ const mockLunora = async (page: MockablePage, options: MockLunoraOptions = {}): 
             pokeQueries();
         },
 
-        rows: (table) => [...tableRows(table).values()],
+        // Copies: a returned row is a read, so mutating it must not silently rewrite
+        // server state behind the poke protocol.
+        rows: (table) =>
+            [...tableRows(table).values()].map((row) => {
+                return { ...row };
+            }),
 
         suppressPokes: (value = true) => {
             suppressed = value;
