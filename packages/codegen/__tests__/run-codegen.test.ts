@@ -1362,7 +1362,10 @@ export default crons;
 
             // Always present: the builder, the entry factory, and the always-on methods.
             expect(result.generated.app).toContain("class AppBuilder");
-            expect(result.generated.app).toContain("const defineApp = <Env extends Record<string, unknown>>()");
+            // `object`, not `Record<string, unknown>`: an `interface Env` (what
+            // wrangler's worker-configuration.d.ts emits) isn't assignable to an index
+            // signature, so the stricter bound forced every app into a cast.
+            expect(result.generated.app).toContain("const defineApp = <Env extends object>()");
             expect(result.generated.app).toContain("public shard(");
             expect(result.generated.app).toContain("public admin(");
 
