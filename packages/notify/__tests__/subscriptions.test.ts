@@ -55,6 +55,57 @@ describe("normalizeRegisterInput", () => {
     });
 });
 
+describe("web-push endpoint SSRF validation", () => {
+    const withEndpoint = (endpoint: string) => {
+        return { subscription: { endpoint, keys: { auth: "AUTHKEY", p256dh: "P256KEY" } } };
+    };
+
+    it("accepts a public https endpoint", () => {
+        expect.hasAssertions();
+
+        expect(() => normalizeRegisterInput(withEndpoint("https://fcm.googleapis.com/fcm/send/abc"))).not.toThrow();
+    });
+
+    it("rejects a non-https (http) endpoint", () => {
+        expect.hasAssertions();
+
+        expect(() => normalizeRegisterInput(withEndpoint("http://push.example/abc"))).toThrow(/must use https/u);
+    });
+
+    it("rejects a non-URL endpoint", () => {
+        expect.hasAssertions();
+
+        expect(() => normalizeRegisterInput(withEndpoint("not a url"))).toThrow(/absolute https URL/u);
+    });
+
+    it("rejects private / loopback / link-local hosts", () => {
+        expect.hasAssertions();
+
+        for (const host of [
+            "https://localhost/x",
+            "https://127.0.0.1/x",
+            "https://10.0.0.5/x",
+            "https://192.168.1.1/x",
+            "https://169.254.169.254/x",
+            "https://[::1]/x",
+            "https://redis.internal/x",
+        ]) {
+            expect(() => normalizeRegisterInput(withEndpoint(host)), host).toThrow(/private\/internal address/u);
+        }
+    });
+
+    it("respects allowedPushOrigins — allows a listed origin, rejects an unlisted one", () => {
+        expect.hasAssertions();
+
+        const allowedPushOrigins = ["https://fcm.googleapis.com"];
+
+        expect(() => normalizeRegisterInput(withEndpoint("https://fcm.googleapis.com/fcm/send/abc"), undefined, { allowedPushOrigins })).not.toThrow();
+        expect(() => normalizeRegisterInput(withEndpoint("https://evil.example/abc"), undefined, { allowedPushOrigins })).toThrow(
+            /allowedPushOrigins allowlist/u,
+        );
+    });
+});
+
 describe("targetOf / ids / isGoneError", () => {
     it("produces provider targets by kind", () => {
         expect.hasAssertions();
@@ -71,6 +122,27 @@ describe("targetOf / ids / isGoneError", () => {
 
         expect(webPushId("https://a")).toBe(webPushId("https://a"));
         expect(webPushId("https://a")).not.toBe(webPushId("https://b"));
+    });
+
+    it("mints 64-bit, version-prefixed ids", () => {
+        expect.hasAssertions();
+
+        // 64-bit digest = 16 hex chars, behind the `wp2_`/`fcm2_` version prefix.
+        expect(webPushId("https://push.example/abc")).toMatch(/^wp2_[\da-f]{16}$/u);
+        expect(fcmId("device-token-1")).toMatch(/^fcm2_[\da-f]{16}$/u);
+    });
+
+    it("does not collide across a large synthetic-endpoint sample", () => {
+        expect.hasAssertions();
+
+        const sample = 50_000;
+        const ids = new Set<string>();
+
+        for (let index = 0; index < sample; index += 1) {
+            ids.add(webPushId(`https://push.example/endpoint/${index.toString()}`));
+        }
+
+        expect(ids.size).toBe(sample);
     });
 
     it("prunes on structured gone signals but never on transient errors", () => {

@@ -16,6 +16,7 @@ import type {
     NotifyLogger,
     NotifyMetrics,
     PushContent,
+    PushSubscriptionDevice,
     RegisterInput,
     StoredSubscription,
     SubscriptionFilter,
@@ -220,6 +221,21 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         metrics?.count("notify.skipped", 1, { channel, reason });
     };
 
+    /**
+     * List stored subscriptions with the delivery SECRETS stripped — the Web Push
+     * `keys` (RFC 8291 `auth`/`p256dh`) and the FCM `token`. Backs both `ctx.push.list`
+     * and `ctx.push.listDevices`: those, with the endpoint, are enough to deliver
+     * arbitrary push to a device, so they never cross the app-facing facade. Uses
+     * the same `{ keys, token, ...device }` projection as the gated Studio admin RPC
+     * (`create-worker.ts`). The raw rows stay reachable only through the internal
+     * `SubscriptionStore` (which `broadcast` uses directly).
+     */
+    const listDevices = async (filter?: SubscriptionFilter): Promise<PushSubscriptionDevice[]> => {
+        const rows = await subscriptionStore.list(filter);
+
+        return rows.map(({ keys: _keys, token: _token, ...device }) => device);
+    };
+
     const resolveSubscription = async (target: StoredSubscription | string): Promise<StoredSubscription> => {
         if (typeof target !== "string") {
             return target;
@@ -327,8 +343,10 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
                 total: outcomes.length,
             };
         },
-        list: (filter?: SubscriptionFilter): Promise<StoredSubscription[]> => subscriptionStore.list(filter),
-        register: (input: RegisterInput): Promise<StoredSubscription> => subscriptionStore.put(normalizeRegisterInput(input)),
+        list: (filter?: SubscriptionFilter): Promise<PushSubscriptionDevice[]> => listDevices(filter),
+        listDevices: (filter?: SubscriptionFilter): Promise<PushSubscriptionDevice[]> => listDevices(filter),
+        register: (input: RegisterInput): Promise<StoredSubscription> =>
+            subscriptionStore.put(normalizeRegisterInput(input, undefined, { allowedPushOrigins: definition.allowedPushOrigins })),
         send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => {
             const { receipt } = await deliver(await resolveSubscription(target), payload, true);
 

@@ -87,6 +87,15 @@ const IDENTIFIER_PATTERN = /^[A-Za-z_]\w*$/u;
  * backing table is created lazily on first use (`CREATE TABLE IF NOT EXISTS`), so
  * no migration step is required for the subscription table itself.
  *
+ * ID SCHEME / LAZY MIGRATION: `id` (the `PRIMARY KEY`, upserted via `ON
+ * CONFLICT(id) DO UPDATE`) is a version-prefixed digest of the endpoint/token —
+ * currently `wp2_`/`fcm2_` (64-bit FNV-1a; see `normalize.ts`). No table migration
+ * runs when the id scheme is revised: a returning device re-registers under its new
+ * id and upserts a fresh row, while its old-prefix row (`wp_`/`fcm_`) ages out via
+ * the normal gone-pruning on the next failed send. So a table can transiently hold
+ * both an old- and new-prefix row for one device — expected, self-healing, and the
+ * reason a prefix must NEVER be reused for a different scheme.
+ *
  * ```ts
  * export default defineNotify({
  *     webPush: (env) => webPushFromEnv(env),

@@ -177,8 +177,18 @@ export interface LunoraPush {
      * target is derived from each subscription, so it is omitted from the payload.
      */
     broadcast: (payload: PushContent, filter?: SubscriptionFilter) => Promise<BroadcastResult>;
-    /** List stored subscriptions (optionally filtered). */
-    list: (filter?: SubscriptionFilter) => Promise<StoredSubscription[]>;
+
+    /**
+     * List stored subscriptions (optionally filtered), with the delivery
+     * **secrets** stripped — the Web Push `keys` (RFC 8291 `auth`/`p256dh`) and the
+     * FCM `token`. Those, plus the endpoint, are enough to deliver arbitrary push to
+     * a device, so they never cross the app-facing facade. `list` and
+     * {@link LunoraPush.listDevices} return the same projected shape; the raw rows
+     * are reachable only through the internal `SubscriptionStore`.
+     */
+    list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
+    /** Alias of {@link LunoraPush.list} — list stored devices with delivery secrets stripped. */
+    listDevices: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
     /** Register (upsert) a device subscription and return the stored record. */
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     /** Send a push to a single stored subscription (by id or record); `to` is derived from it. */
@@ -219,6 +229,20 @@ export type FcmConfigFactory = (env: NotifyEnv) => FcmConfig | undefined;
 
 /** Options accepted by `defineNotify`. */
 export interface NotifyConfig {
+    /**
+     * Exact origins (`https://host[:port]`) a client-supplied Web Push `endpoint`
+     * may register from. When set (non-empty), `register()` requires the endpoint's
+     * origin to be one of these — the strongest anti-SSRF posture, and the way to
+     * close DNS rebinding for a facade that accepts client-controlled endpoints.
+     *
+     * When unset, the default posture applies: an endpoint must be `https:` with a
+     * non-private / non-loopback / non-link-local host. Set this to the push
+     * services your app actually uses (e.g. `["https://fcm.googleapis.com",
+     * "https://updates.push.services.mozilla.com"]` — exact origins only, no
+     * wildcards) to hard-pin the boundary.
+     */
+    allowedPushOrigins?: string[];
+
     /**
      * Optional chat provider factory (Slack/Discord/Teams/Telegram). Wire with a
      * provider from `@visulima/notification/providers/*`. Edge-safe (fetch-based).

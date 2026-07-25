@@ -40,6 +40,37 @@ describe("ctx.push lifecycle", () => {
         await expect(push.list({ userId: "u1" })).resolves.toHaveLength(1);
     });
 
+    it("list / listDevices strip the delivery secrets (keys / token)", async () => {
+        expect.hasAssertions();
+
+        const { push, store } = setup();
+
+        await push.register({ subscription: okSub, userId: "u1" });
+        await push.register({ kind: "fcm", token: "device-token-xyz", userId: "u2" });
+
+        for (const surface of [await push.list(), await push.listDevices()]) {
+            expect(surface).toHaveLength(2);
+
+            for (const device of surface) {
+                // The register() call stored keys/token; the facade must never surface them.
+                expect(device).not.toHaveProperty("keys");
+                expect(device).not.toHaveProperty("token");
+            }
+
+            // The non-secret fields the admin page renders survive the projection.
+            expect(surface.find((device) => device.kind === "web-push")).toMatchObject({ endpoint: okSub.endpoint, userId: "u1" });
+            expect(surface.find((device) => device.kind === "fcm")).toMatchObject({ kind: "fcm", userId: "u2" });
+        }
+
+        // The projection is a facade concern: the raw store row still carries the
+        // secrets (only the internal SubscriptionStore, which handlers don't hold,
+        // can read them — the broadcast path uses it directly).
+        const raw = await store.list();
+
+        expect(raw.find((row) => row.kind === "web-push")?.keys).toStrictEqual({ auth: "a", p256dh: "p" });
+        expect(raw.find((row) => row.kind === "fcm")?.token).toBe("device-token-xyz");
+    });
+
     it("send to a registered subscription marks it ok", async () => {
         expect.hasAssertions();
 
