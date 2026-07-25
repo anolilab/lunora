@@ -12,6 +12,16 @@ const makeQueryContext = (): QueryContext => {
         db: {} as QueryContext["db"],
         log: {} as QueryContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
+        span: {
+            addEvent: () => undefined,
+            addLink: () => undefined,
+            recordException: () => undefined,
+            setAttribute: () => undefined,
+            setAttributes: () => undefined,
+            spanContext: () => {
+                return { spanId: "0000000000000001", traceId: "00000000000000000000000000000001" };
+            },
+        },
         now: 0,
         runQuery: vi.fn<QueryContext["runQuery"]>() as QueryContext["runQuery"],
         storage: {} as QueryContext["storage"],
@@ -27,6 +37,16 @@ const makeMutationContext = (): MutationContext => {
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
+        span: {
+            addEvent: () => undefined,
+            addLink: () => undefined,
+            recordException: () => undefined,
+            setAttribute: () => undefined,
+            setAttributes: () => undefined,
+            spanContext: () => {
+                return { spanId: "0000000000000001", traceId: "00000000000000000000000000000001" };
+            },
+        },
         now: 0,
         runMutation: vi.fn<MutationContext["runMutation"]>() as MutationContext["runMutation"],
         runQuery: vi.fn<MutationContext["runQuery"]>() as MutationContext["runQuery"],
@@ -47,6 +67,16 @@ const makeActionContext = (): ActionContext => {
         fetch: globalThis.fetch,
         log: {} as ActionContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
+        span: {
+            addEvent: () => undefined,
+            addLink: () => undefined,
+            recordException: () => undefined,
+            setAttribute: () => undefined,
+            setAttributes: () => undefined,
+            spanContext: () => {
+                return { spanId: "0000000000000001", traceId: "00000000000000000000000000000001" };
+            },
+        },
         now: 0,
         runAction: vi.fn<ActionContext["runAction"]>() as ActionContext["runAction"],
         runMutation: vi.fn<ActionContext["runMutation"]>() as ActionContext["runMutation"],
