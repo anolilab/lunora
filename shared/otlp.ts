@@ -271,7 +271,15 @@ const OTLP_SPAN_KIND: Record<OtlpSpanKind, number> = {
  * Every emit path MUST reference these constants; a literal `"lunora.…"`
  * attribute string in an emitter is a drift bug.
  */
-const LUNORA_ATTR = Object.freeze({
+const LUNORA_ATTR: Readonly<{
+    durationMs: "lunora.duration_ms";
+    errorMessage: "error.message";
+    errorType: "error.type";
+    functionPath: "lunora.function_path";
+    ok: "lunora.ok";
+    shardKey: "lunora.shard_key";
+    userId: "lunora.user_id";
+}> = Object.freeze({
     durationMs: "lunora.duration_ms",
     errorMessage: "error.message",
     errorType: "error.type",
