@@ -200,12 +200,13 @@ class MaterializerRuntime {
             let appliedToAny = false;
             let anyChanged = false;
 
-            // Stage the per-materializer watermark advances; commit them only
+            // Stage which materializers advanced; commit their watermarks only
             // AFTER the unknown-event strategy has run without throwing (below).
             // A throwing `"fail"` strategy must leave every watermark where it
             // was, so a catch-and-retry re-surfaces this exact event instead of
-            // silently skipping it and under-reporting `count`.
-            const pendingWatermarks: { index: number; seq: number }[] = [];
+            // silently skipping it and under-reporting `count`. Every advance is
+            // to the same `entry.seq + 1`, so only the index needs staging.
+            const advancedIndices: number[] = [];
 
             for (const [i, materializer] of this.#materializers.entries()) {
                 const watermark = this.#watermarks[i] ?? 0;
@@ -223,7 +224,7 @@ class MaterializerRuntime {
                     anyChanged = true;
                 }
 
-                pendingWatermarks.push({ index: i, seq: entry.seq + 1 });
+                advancedIndices.push(i);
             }
 
             if (!appliedToAny) {
@@ -238,8 +239,8 @@ class MaterializerRuntime {
                 this.#handleUnknownEvent(entry);
             }
 
-            for (const { index, seq } of pendingWatermarks) {
-                this.#watermarks[index] = seq;
+            for (const index of advancedIndices) {
+                this.#watermarks[index] = entry.seq + 1;
             }
 
             count += 1;
