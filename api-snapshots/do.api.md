@@ -1992,7 +1992,7 @@ abstract class ShardDO {
     protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics;
     protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void;
     protected handleWebSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void>;
-    protected recordSpan(span: SpanEvent, sink?: TelemetrySink): void;
+    protected recordSpan(span: SpanEvent, sink?: TelemetrySink, sampledSnapshot?: boolean): void;
     protected isIdentityIndependent(functionPath: string): boolean;
     protected readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): {
         changes: CdcChange[];
@@ -2400,6 +2400,7 @@ interface TelemetrySink {
     flush?: (context?: LogSinkContext) => void;
     fuseCloudflareTraces?: boolean;
     instrumentDatabase?: DatabaseInstrumentation;
+    metricHistory?: boolean | MetricHistoryOptions;
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;

@@ -1,7 +1,7 @@
 import { createR2Sql } from "@lunora/bindings/r2sql";
 import { describe, expect, it } from "vitest";
 
-import type { PipelineLogQuery, PipelineLogReaderOptions } from "../src/pipeline-log-reader";
+import type { PipelineLogQuery, PipelineLogReaderOptions, PipelineLogRow } from "../src/pipeline-log-reader";
 import { createPipelineLogReader } from "../src/pipeline-log-reader";
 
 /** Captures the SQL text the reader sends and returns caller-supplied rows. */
@@ -45,6 +45,61 @@ const rowAt = (ts: number): Record<string, unknown> => {
         ts,
         userId: null,
     };
+};
+
+/**
+ * A stored record with a distinct `message` — so its identity hash is unique even
+ * when many rows share one `ts` (the dedup relies on distinguishable rows).
+ */
+const rowMsg = (ts: number, message: string): Record<string, unknown> => {
+    return { fields: null, functionPath: "messages:list", level: "info", message, shardKey: null, spanId: null, traceId: null, ts, userId: null };
+};
+
+/**
+ * A reader over a `fetch` double that actually HONORS the query — it parses the
+ * inclusive keyset bound and the row limit out of the statement and returns the
+ * matching prefix of a fixed, `ts DESC` dataset. This models a real engine closely
+ * enough to page it to exhaustion (the simple echo `makeReader` ignores the
+ * predicate, so it cannot round-trip pagination).
+ */
+const makePagingReader = (dataset: Record<string, unknown>[]): ReturnType<typeof createPipelineLogReader> => {
+    const fetch: typeof globalThis.fetch = async (_url, init) => {
+        const body = (init?.body as string | undefined) ?? "{}";
+        const statement = (JSON.parse(body) as { query: string }).query;
+
+        const limitMatch = /LIMIT (\d+)/.exec(statement);
+        const limit = limitMatch ? Number(limitMatch[1]) : dataset.length;
+
+        const boundMatch = /ts <= (\d+)/.exec(statement);
+        const bounded = boundMatch ? dataset.filter((row) => Number(row.ts) <= Number(boundMatch[1])) : dataset;
+
+        return Response.json({ result: { rows: bounded.slice(0, limit) }, success: true }, { status: 200 });
+    };
+
+    const client = createR2Sql({ accountId: "acc", apiToken: "tok", bucket: "bkt", fetch });
+
+    return createPipelineLogReader(client, { table: "logs" });
+};
+
+/** Page a reader to exhaustion, concatenating every page's rows. Throws rather than hang if pagination never terminates. */
+const drain = async (reader: ReturnType<typeof createPipelineLogReader>, query: PipelineLogQuery): Promise<PipelineLogRow[]> => {
+    const collected: PipelineLogRow[] = [];
+    let cursor: PipelineLogQuery["cursor"];
+
+    for (let guard = 0; guard < 1000; guard += 1) {
+        // eslint-disable-next-line no-await-in-loop -- paging is inherently sequential: each request needs the prior page's cursor
+        const page = await reader.query({ ...query, cursor });
+
+        collected.push(...page.rows);
+
+        if (page.nextCursor === undefined) {
+            return collected;
+        }
+
+        cursor = page.nextCursor;
+    }
+
+    throw new Error("drain: pagination did not terminate");
 };
 
 describe("createPipelineLogReader", () => {
@@ -150,10 +205,11 @@ describe("createPipelineLogReader", () => {
         expect(capture.statement).toContain("LIMIT 2");
     });
 
-    it("returns a keyset cursor from the (limit + 1)th overflow row", async () => {
-        expect.assertions(4);
+    it("mints the keyset cursor from the last RETURNED row (not the overflow row) and records its boundary hash", async () => {
+        expect.assertions(5);
 
-        // Three rows for a limit of two → one overflow row supplies the cursor.
+        // Three rows for a limit of two → the third is the overflow that only
+        // proves a next page exists; the cursor rides the last returned row (ts 200).
         const { reader } = makeReader([rowAt(300), rowAt(200), rowAt(100)]);
 
         const page = await reader.query({ limit: 2 });
@@ -161,8 +217,11 @@ describe("createPipelineLogReader", () => {
         expect(page.rows).toHaveLength(2);
         expect(page.rows[0]?.ts).toBe(300);
         expect(page.rows[1]?.ts).toBe(200);
-        // Cursor is the overflow row's ts (rows[limit]).
-        expect(page.nextCursor?.ts).toBe(100);
+        // Cursor ts is the last returned row (200), so the inclusive resume re-reads
+        // that millisecond and cannot skip a tied row the overflow-cursor would drop.
+        expect(page.nextCursor?.ts).toBe(200);
+        // The boundary row (ts 200) is carried by hash so the next page drops it.
+        expect(page.nextCursor?.seen).toHaveLength(1);
     });
 
     it("omits the cursor when the result does not overflow the page", async () => {
@@ -176,14 +235,16 @@ describe("createPipelineLogReader", () => {
         expect(page.nextCursor).toBeUndefined();
     });
 
-    it("resumes strictly past a supplied cursor ts", async () => {
-        expect.assertions(1);
+    it("resumes inclusively (<=) at a supplied cursor ts so tied rows are not skipped", async () => {
+        expect.assertions(2);
 
         const { capture, reader } = makeReader([]);
 
-        await reader.query({ cursor: { ts: 100 } });
+        await reader.query({ cursor: { seen: ["abc"], ts: 100 } });
 
-        expect(capture.statement).toContain("ts < 100");
+        expect(capture.statement).toContain("ts <= 100");
+        // The old exclusive `< 100` predicate is exactly the row-loss bug this fixes.
+        expect(capture.statement).not.toContain("ts < 100");
     });
 
     it("remaps every clause to the operator's columns via columnMap", async () => {
@@ -252,5 +313,63 @@ describe("createPipelineLogReader", () => {
         await reader.query(query);
 
         expect(capture.statement).toContain("WHERE ts >= 1 AND ts <= 9 AND functionPath LIKE 'm:%' AND shardKey = 's'");
+    });
+
+    it("pages a duplicate-ts dataset to exhaustion losslessly — the union of all pages equals the full result, no gaps, no dupes", async () => {
+        expect.assertions(4);
+
+        // 25 rows, ts DESC, with ties (ts 400 ×10, 300 ×6, 200 ×5) engineered so the
+        // limit-10 page boundaries land *inside* a tie — exactly where the old
+        // exclusive `< cursor.ts` cursor dropped every co-millisecond row.
+        const dataset: Record<string, unknown>[] = [];
+        let id = 0;
+        const push = (ts: number, count: number): void => {
+            for (let index = 0; index < count; index += 1) {
+                dataset.push(rowMsg(ts, `m${String(id)}`));
+                id += 1;
+            }
+        };
+
+        push(500, 1);
+        push(490, 1);
+        push(480, 1);
+        push(470, 1);
+        push(400, 10);
+        push(300, 6);
+        push(200, 5);
+
+        const reader = makePagingReader(dataset);
+
+        // The full unpaged result: one query large enough to return everything.
+        const full = await reader.query({ limit: 100 });
+        const paged = await drain(reader, { limit: 10 });
+
+        const fullKeys = full.rows.map((row) => `${String(row.ts)}:${row.message}`);
+        const pagedKeys = paged.map((row) => `${String(row.ts)}:${row.message}`);
+
+        // Every row exactly once, in the same order, with nothing lost or repeated.
+        expect(full.rows).toHaveLength(25);
+        expect(paged).toHaveLength(25);
+        expect(new Set(pagedKeys).size).toBe(25);
+        expect(pagedKeys).toStrictEqual(fullKeys);
+    });
+
+    it("terminates and returns every row exactly once when a whole page shares one ts (degenerate tie)", async () => {
+        expect.assertions(2);
+
+        // 15 rows all at ts 100 with a limit of 10: the boundary can never advance by
+        // `ts` alone, so the reader must grow its fetch window and dedup by hash to
+        // finish. Distinct messages keep the 15 rows individually identifiable.
+        const dataset: Record<string, unknown>[] = [];
+        for (let index = 0; index < 15; index += 1) {
+            dataset.push(rowMsg(100, `d${String(index)}`));
+        }
+
+        const reader = makePagingReader(dataset);
+
+        const collected = await drain(reader, { limit: 10 });
+
+        expect(collected).toHaveLength(15);
+        expect(new Set(collected.map((row) => row.message)).size).toBe(15);
     });
 });

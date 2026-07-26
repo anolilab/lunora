@@ -1312,6 +1312,10 @@ interface ObservabilitySink {
     flush?: (context?: ObservabilitySinkContext) => void;
     fuseCloudflareTraces?: boolean;
     instrumentDatabase?: "off" | "spans" | "summary";
+    metricHistory?: boolean | {
+        maxSeries?: number;
+        retentionBuckets?: number;
+    };
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
     onMetric?: (event: MetricEvent, context?: ObservabilitySinkContext) => void;
     onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
@@ -1371,6 +1375,7 @@ type PipelineLogColumnMap = Partial<Record<PipelineLogField, string>>;
 
 ```ts
 interface PipelineLogCursor {
+    seen?: string[];
     ts: number;
 }
 ```
@@ -2320,7 +2325,7 @@ const emitLogEvent: (sink: ObservabilitySink | undefined, event: LogEvent, conte
 ### `emitRpcEvent` (const)
 
 ```ts
-const emitRpcEvent: (sink: ObservabilitySink | undefined, event: ObservabilityEvent, context?: ObservabilitySinkContext, sampling?: TraceSamplingConfig) => void;
+const emitRpcEvent: (sink: ObservabilitySink | undefined, event: ObservabilityEvent, context?: ObservabilitySinkContext, sampling?: TraceSamplingConfig, decision?: TraceSamplingDecision) => void;
 ```
 
 ### `enforceOrigin` (const)

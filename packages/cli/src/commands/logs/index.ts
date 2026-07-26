@@ -39,7 +39,12 @@ const logsCommand: Command = {
         { description: "durable: shard-key filter", name: "shard-key", type: String },
         { description: "durable: user-id filter", name: "user-id", type: String },
         { description: "durable: max rows (clamped to 1–10000; default 500)", name: "limit", type: String },
-        { description: "durable: resume after a prior page — the ts from its nextCursor", name: "cursor", type: String },
+        {
+            description:
+                "durable: resume after a prior page — the opaque cursor token printed by the previous page (bare epoch-millis also accepted for back-compat)",
+            name: "cursor",
+            type: String,
+        },
         { description: "durable: emit one JSON object per line instead of a table", name: "ndjson", type: Boolean },
     ],
 };

@@ -17,7 +17,7 @@
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
-import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
+import { buildTraceparent, LUNORA_ATTR, otlpRandomHex } from "../../../shared/otlp";
 import type { SpanEvent, SpanEventPoint, SpanHandle, SpanLink, SpanOptions } from "../../../shared/span-event";
 import { toErrorType } from "./trace-context";
 
@@ -254,21 +254,24 @@ export const applyCloudflareSpanAttributes = (
         return;
     }
 
-    span.setAttribute("lunora.function_path", meta.functionPath);
-    span.setAttribute("lunora.ok", meta.ok);
-    span.setAttribute("lunora.duration_ms", meta.durationMs);
+    span.setAttribute(LUNORA_ATTR.functionPath, meta.functionPath);
+    span.setAttribute(LUNORA_ATTR.ok, meta.ok);
+    span.setAttribute(LUNORA_ATTR.durationMs, meta.durationMs);
 
     if (meta.shardKey !== undefined) {
-        span.setAttribute("lunora.shard_key", meta.shardKey);
+        span.setAttribute(LUNORA_ATTR.shardKey, meta.shardKey);
     }
 
     if (meta.userId !== undefined) {
-        span.setAttribute("lunora.user_id", meta.userId);
+        span.setAttribute(LUNORA_ATTR.userId, meta.userId);
     }
 
     if (meta.error !== undefined) {
-        span.setAttribute("lunora.error.type", meta.error.type);
-        span.setAttribute("lunora.error.message", meta.error.message);
+        // Wire change: these were `lunora.error.type` / `lunora.error.message`;
+        // they now converge on the OTel-standard `error.type` / `error.message`
+        // so a collector query matches the worker exporter's span too.
+        span.setAttribute(LUNORA_ATTR.errorType, meta.error.type);
+        span.setAttribute(LUNORA_ATTR.errorMessage, meta.error.message);
     }
 
     for (const [key, value] of Object.entries(meta.attributes)) {

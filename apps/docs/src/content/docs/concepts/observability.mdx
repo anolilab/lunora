@@ -528,6 +528,18 @@ That keeps the sink model identical to logs and spans, at the cost of one export
 per call — so in a hot loop, sum locally and record once at the end rather than
 calling per iteration.
 
+:::caution[Durable per-minute history is opt-in]
+The Durable Object can also keep a **per-minute rollup** of every measurement in a
+reserved per-shard SQLite table, so the Studio can chart a 24h local trend without
+an external collector. It is **off by default** because it is not free: with it on,
+each `ctx.metrics.*` call becomes a **durable SQLite write** on the request path —
+a billed, rate-limited storage op that competes with your app's own data for the
+shard's write budget. Turn it on with `metricHistory: true` on the sink you pass to
+`createShardDO` (or an object — `{ maxSeries, retentionBuckets }` — to tune the
+caps). The live, cross-instance path is `onMetric` → your collector, and is
+unaffected either way.
+:::
+
 Metrics have no local buffer and no Studio panel: their value is in the aggregate
 over time, which an in-memory ring on a hibernating instance can't represent.
 `consoleSink` prints them in dev; for anything real, point `otlpSink` at a
