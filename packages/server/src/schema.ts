@@ -34,10 +34,10 @@ import type {
 } from "./types";
 
 /**
- * Most `filterFields` one `.searchIndex()` may declare. Mirrors Convex, and the
- * runtime constant of the same name in `@lunora/do`'s `search-text.ts` (the
- * engines own the read-side limits; `@lunora/server` has no dependency edge to
- * them, so the schema-time guard restates the number).
+ * Most `filterFields` one `.searchIndex()` may declare. Mirrors Convex. Lives
+ * here because this is where it is enforceable — the engines read the declared
+ * list, they never re-validate its length — so there is one home rather than a
+ * copy on each side of a package boundary.
  */
 const MAX_SEARCH_FILTER_FIELDS = 16;
 

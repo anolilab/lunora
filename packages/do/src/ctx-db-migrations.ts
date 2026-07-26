@@ -23,11 +23,12 @@ import { aggregateTableName } from "./aggregate-tally";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
-import { backfillSearchIndex } from "./ctx-db-backfill";
+import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import { migrateCdcLog, migrateCdcMeta } from "./ctx-db-cdc";
 import { migrateClientWatermark } from "./ctx-db-client-watermark";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
+import { migrateSearchState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
 import { rankTableName, sortColumnName } from "./rank";
@@ -82,13 +83,9 @@ const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: Table
             sql,
             dsql`CREATE VIRTUAL TABLE IF NOT EXISTS ${dsql.identifier(ftName)} USING fts5(${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)} UNINDEXED)`,
         );
-
-        if (index.staged) {
-            continue;
-        }
-
-        backfillSearchIndex(sql, tableName, index);
     }
+
+    backfillSearchIndexesForTable(sql, tableName, definition);
 };
 
 /**
@@ -203,6 +200,10 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
  */
 // eslint-disable-next-line import/prefer-default-export -- named export: import sites stay uniform (`import { runShardMigrations }`), per the repo's no-default-mixing convention
 export const runShardMigrations = (sql: SqlExec, schema: SchemaLike, options: { cdc?: boolean } = {}): void => {
+    // Before any table: the search backfill records its progress here, and it
+    // runs inside the per-table pass below.
+    migrateSearchState(sql);
+
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind === "global") {
             continue;

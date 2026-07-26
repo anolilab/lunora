@@ -82,13 +82,14 @@ import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from
 import { guardWriter } from "./rls-guard";
 import {
     buildFtsMatch,
-    clampSearchScan,
-    encodeSearchCursor,
+    createSearchBuilder,
+    finishSearchPage,
+    FTS_ID_COLUMN,
+    FTS_TEXT_COLUMN,
     ftsTableName,
-    MAX_SEARCH_FILTERS,
-    MAX_SEARCH_TERMS,
-    parseSearchCursor,
+    planSearchPage,
     resolveSearchField,
+    resolveSearchScan,
     scoreDocument,
     stringifySearchText,
     tokenizeSearch,
@@ -920,63 +921,12 @@ const createRangeBuilder = (stage: QueryStage): IndexRangeBuilderLike => {
     return builder;
 };
 
-const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilterBuilderLike => {
-    const builder: SearchFilterBuilderLike = {
-        eq: (field, value) => {
-            if (!search.definition.filterFields?.includes(field)) {
-                throw new LunoraError("INTERNAL", `field "${field}" is not a filter field of search index "${search.indexName}" on table "${tableName}"`);
-            }
-
-            if (search.filters.length >= MAX_SEARCH_FILTERS) {
-                throw new LunoraError(
-                    "BAD_REQUEST",
-                    `search index "${search.indexName}" on table "${tableName}": at most ${String(MAX_SEARCH_FILTERS)} .eq() filters are supported per search query`,
-                );
-            }
-
-            search.filters.push({ field, value });
-
-            return builder;
-        },
-        search: (field, query) => {
-            if (field !== search.definition.field) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `search index "${search.indexName}" on table "${tableName}" indexes "${search.definition.field}", not "${field}"`,
-                );
-            }
-
-            const terms = tokenizeSearch(query).length;
-
-            if (terms > MAX_SEARCH_TERMS) {
-                throw new LunoraError(
-                    "BAD_REQUEST",
-                    `search index "${search.indexName}" on table "${tableName}": at most ${String(MAX_SEARCH_TERMS)} search terms are supported (got ${String(terms)})`,
-                );
-            }
-
-            // Mutate the caller-owned stage in place (same object the query
-            // planner reads back); alias to a local so the param itself isn't
-            // reassigned.
-            const stage = search;
-
-            stage.field = field;
-            stage.query = query;
-            stage.hasQuery = true;
-
-            return builder;
-        },
-    };
-
-    return builder;
-};
-
 /**
  * Run a search via the FTS5 shadow table: MATCH the query against the indexed
  * text column, JOIN back to the document table on the stored id, narrow by any
  * `.eq()` filter fields, and order by FTS5's `rank` (bm25 — best first).
  */
-const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined, scopeCondition?: SQL): Record<string, unknown>[] => {
+const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number, scopeCondition?: SQL): Record<string, unknown>[] => {
     const tokens = tokenizeSearch(search.query);
 
     if (tokens.length === 0) {
@@ -987,7 +937,7 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
     // MATCH must target the FTS table (by name or an indexed column), never the
     // bare alias `f` — `f MATCH ?` is a "no such column: f" error in SQLite.
     // We match the indexed `__text__` column so the alias join still works.
-    const whereClauses: SQL[] = [dsql`f.${dsql.identifier("__text__")} MATCH ${buildFtsMatch(tokens)}`];
+    const whereClauses: SQL[] = [dsql`f.${dsql.identifier(FTS_TEXT_COLUMN)} MATCH ${buildFtsMatch(tokens)}`];
 
     for (const filter of search.filters) {
         whereClauses.push(dsql`${jsonPathSql(filter.field)} = ${serializeSqlValue(filter.value)}`);
@@ -1002,11 +952,11 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
     // `f.rank` is FTS5's bm25 relevance (best first); the `_creationTime DESC`
     // tiebreak matches the scan fallback so equal-rank rows order newest-first
     // on both engines.
-    let query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(ftName)} f JOIN ${dsql.identifier(tableName)} m ON m.id = f.${dsql.identifier("__id__")} WHERE ${dsql.join(whereClauses, dsql` AND `)} ORDER BY f.rank, m._creationTime DESC`;
-
-    if (typeof limit === "number") {
-        query = dsql`${query} LIMIT ${dsql.raw(String(Math.max(0, Math.floor(limit))))}`;
-    }
+    // `m.id` closes the sort: rank ties are common (equal term frequency) and
+    // `_creationTime` ties with them on bulk-imported rows, and without a unique
+    // terminal column the engine may order tied rows differently per execution —
+    // which offset pagination would surface as a duplicated or skipped row.
+    const query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(ftName)} f JOIN ${dsql.identifier(tableName)} m ON m.id = f.${dsql.identifier(FTS_ID_COLUMN)} WHERE ${dsql.join(whereClauses, dsql` AND `)} ORDER BY f.rank, m._creationTime DESC, m.id ASC LIMIT ${dsql.raw(String(limit))}`;
 
     const rows = runDrizzle(sql, query).toArray();
     const docs: Record<string, unknown>[] = [];
@@ -1029,7 +979,7 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
  * prefix-on-last-token semantics; relevance order is term-frequency, ties broken
  * by creation time (newest first).
  */
-const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined, scopeCondition?: SQL): Record<string, unknown>[] => {
+const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, limit: number, scopeCondition?: SQL): Record<string, unknown>[] => {
     const tokens = tokenizeSearch(search.query);
 
     if (tokens.length === 0) {
@@ -1053,7 +1003,7 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
     }
 
     const rows = runDrizzle(sql, query).toArray();
-    const scored: { creationTime: number; doc: Record<string, unknown>; score: number }[] = [];
+    const scored: { creationTime: number; doc: Record<string, unknown>; id: string; score: number }[] = [];
 
     for (const row of rows) {
         const record = rowToDocument(row);
@@ -1065,15 +1015,19 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
         const score = scoreDocument(stringifySearchText(resolveSearchField(record, search.field)), tokens);
 
         if (score > 0) {
-            scored.push({ creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0, doc: record, score });
+            scored.push({
+                creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0,
+                doc: record,
+                id: typeof record["_id"] === "string" ? record["_id"] : "",
+                score,
+            });
         }
     }
 
-    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime);
+    // Same total order the FTS path sorts by, id-terminated (see `searchViaFts`).
+    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
 
-    const docs = scored.map((entry) => entry.doc);
-
-    return typeof limit === "number" ? docs.slice(0, Math.max(0, Math.floor(limit))) : docs;
+    return scored.slice(0, limit).map((entry) => entry.doc);
 };
 
 /** Builder for `withGeoIndex(name, q => q.near(...) | q.within(...))`; mutates the staged geo query in place. */
@@ -1563,7 +1517,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         // limit when there is one, `MAX_SEARCH_SCAN` otherwise — including when a
         // `.filter()` runs on top, which narrows *within* that window rather than
         // widening the read.
-        const engineLimit = clampSearchScan(filtered ? undefined : limit);
+        const engineLimit = resolveSearchScan(filtered ? undefined : limit);
         const docs = isFtsAvailable(sql)
             ? searchViaFts(sql, tableName, search, engineLimit, scopeCondition)
             : searchViaScan(sql, tableName, search, engineLimit, scopeCondition);
@@ -1588,37 +1542,15 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
     };
 
     /**
-     * One page of a relevance-ordered search. The sort key is a per-query score,
-     * not a stored column, so there is nothing to keyset-seek on: a page is an
-     * offset into the deterministic (score, then `_creationTime DESC`) result
-     * window, which `MAX_SEARCH_SCAN` bounds. Reading one row past the page tells
-     * us whether another page exists.
+     * One page of a relevance-ordered search. The window is fetched one row
+     * past the page so `hasMore` is observed rather than guessed; everything
+     * else — cursor decoding, the bounded-page refusal, the cap — is the shared
+     * policy in `search-text`, so the two backends page identically.
      */
     const paginateSearchStage = (options: PaginationOptions): QueryPage => {
-        if (typeof options.endCursor === "string") {
-            throw new LunoraError(
-                "BAD_REQUEST",
-                "bounded (endCursor) pagination is not supported on search queries — relevance order has no stable range boundary",
-            );
-        }
+        const plan = planSearchPage(options);
 
-        const numberItems = Math.max(0, Math.floor(options.numItems));
-        const offset = options.cursor ? parseSearchCursor(options.cursor) : 0;
-
-        if (offset === undefined) {
-            throw new LunoraError("BAD_REQUEST", "invalid cursor");
-        }
-
-        const window = runSearchFetch(offset + numberItems + 1);
-        const page = window.slice(offset, offset + numberItems);
-        const hasMore = window.length > offset + numberItems;
-
-        return {
-            // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
-            continueCursor: hasMore ? encodeSearchCursor(offset + numberItems) : null,
-            isDone: !hasMore,
-            page,
-        };
+        return finishSearchPage(runSearchFetch(plan.offset + plan.numItems + 1), plan);
     };
 
     const buildOrderClause = (): SQL => {
@@ -3942,6 +3874,7 @@ export {
 } from "./ctx-db-global-shape-snapshot";
 export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db-idempotency";
 export { runShardMigrations } from "./ctx-db-migrations";
+export { SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { ShapeRow } from "./ctx-db-shapes";
 export { selectShapeMemberIds, selectShapeRows } from "./ctx-db-shapes";
 export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike } from "./triggers";

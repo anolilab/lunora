@@ -7,9 +7,12 @@ A `searchIndex` adds a full-text index over one string column so you can match
 documents by their words rather than by an exact key. Results come back ordered
 by **relevance**, with optional exact-match filtering on declared filter fields.
 
-Search behaves identically on every backend — sharded Durable Object tables,
+Search behaves the same on every backend — sharded Durable Object tables,
 `.global()` tables on D1, and `.global()` tables on PlanetScale behind
-Hyperdrive. Same tokenizer, same matching rules, same ordering.
+Hyperdrive. Same tokenizer, same AND/prefix rules, same ranking. The one thing
+that differs is **collation**, which belongs to the engine: MySQL folds case and
+accents by default, Postgres compares bytes, and FTS5 strips diacritics — so
+`café` and `cafe` match each other on D1 and MySQL but not on Postgres.
 
 ## Declaring a search index
 
@@ -105,19 +108,31 @@ row, so a search page has no bounded (`endCursor`) form — pass `cursor` and
 | Search terms per query (after de-duping) | 16    |
 | `.eq()` filters per query                | 8     |
 | `filterFields` per index                 | 16    |
-| Documents read per search                | 1024  |
+| Documents returned per search            | 1024  |
 
-The first three throw when exceeded. The last is a cap rather than an error: one
-search reads at most 1024 documents from the engine, which is what keeps
-`.collect()` over a large corpus bounded. A `.filter()` applied on top of a
-search narrows _within_ that window.
+All of them throw when exceeded — including asking for more than 1024 documents
+via `.take(n)` or paging past that offset, so a truncated result set is never
+mistaken for the whole one.
+
+The 1024 bounds documents **returned**, not the work the engine does: ranking is
+an aggregate over every matching token row, so a very common term is expensive
+even when you only read the top 20. Narrow with `filterFields` where you can.
+
+One more consequence worth knowing: a `.filter()` applied on top of a search —
+including the one row-level security installs — runs over that 1024-row window
+rather than widening it, so a restrictive read policy can leave fewer rows than
+you asked for.
 
 ## Backfill and `staged`
 
 Declaring a search index on a table that already holds rows indexes those rows
-too — the migration that creates the index's companion populates it from the
-existing data, so the index is useful the moment it deploys. On a very large
-table that is work you may not want inside a deploy: declare the index `staged`
+too. That work is paged: each deploy — and, on `.global()` tables, each request
+until it finishes — indexes a bounded batch and records where it stopped, so a
+large table becomes searchable progressively instead of blocking behind a
+full-table scan. Rows written while the backfill is in flight are indexed
+immediately by the write path, as usual.
+
+To keep that work out of the request path entirely, declare the index `staged`
 and run the backfill yourself.
 
 ```ts
@@ -126,7 +141,9 @@ and run the backfill yourself.
 
 A staged index is maintained on every write from the moment it is declared, but
 starts out empty — until it is backfilled it only finds documents written after
-the deploy.
+the deploy. Run `backfillSearchIndexes` (sharded tables) or
+`backfillD1SearchIndexes` (`.global()` tables) from a one-shot admin path to
+complete it; both are resumable and safe to re-run.
 
 ## How each backend indexes
 

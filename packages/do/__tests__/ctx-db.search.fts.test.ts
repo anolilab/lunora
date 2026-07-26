@@ -66,7 +66,7 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
             // scans the source table — the canned rows stand in for a table that
             // already held data when the search index was declared.
             { pattern: /^SELECT COUNT\(\*\) AS count FROM /u, rows: () => [{ count: 0 }] as unknown as Row[] },
-            { pattern: /^SELECT id, _creationTime, "__doc__" FROM "docs"$/u, rows: () => matchRows as unknown as Row[] },
+            { pattern: /^SELECT id, _creationTime, "__doc__" FROM "docs" ORDER BY id ASC/u, rows: () => matchRows as unknown as Row[] },
             { pattern: / MATCH /u, rows: () => matchRows as unknown as Row[] },
             // `lookupById` folds every table into one UNION-ALL probe tagged
             // with `AS __t__`; resolve it to the canned rows (more specific
@@ -225,7 +225,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         const matchStatement = statements.find((statement) => statement.sql.includes(" MATCH "));
 
         expect(matchStatement?.sql).toBe(
-            'SELECT m.id, m._creationTime, m."__doc__" FROM "docs__fts_by_body" f JOIN "docs" m ON m.id = f."__id__" WHERE f."__text__" MATCH ? AND json_extract(__doc__, \'$.channel\') = ? ORDER BY f.rank, m._creationTime DESC LIMIT 5',
+            'SELECT m.id, m._creationTime, m."__doc__" FROM "docs__fts_by_body" f JOIN "docs" m ON m.id = f."__id__" WHERE f."__text__" MATCH ? AND json_extract(__doc__, \'$.channel\') = ? ORDER BY f.rank, m._creationTime DESC, m.id ASC LIMIT 5',
         );
         expect(matchStatement?.params).toStrictEqual(['"hello" AND "wor"*', "x"]);
 

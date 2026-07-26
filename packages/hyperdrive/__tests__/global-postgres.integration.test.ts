@@ -1,5 +1,5 @@
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
-import { runSqlAggregateMigrations, runSqlGlobalTableMigrations, runSqlRankMigrations } from "@lunora/sql-store";
+import { backfillSqlSearchIndexes, runSqlAggregateMigrations, runSqlGlobalTableMigrations, runSqlRankMigrations } from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createHyperdriveGlobalCtxDb } from "../src/global";
@@ -274,10 +274,23 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             },
         };
 
+        // Distinct, increasing creation times: relevance ties are resolved by
+        // `_creationTime DESC` then id, and a fixed clock would collapse that
+        // tiebreak into engine-defined row order — a flaky assertion.
+        const tickingClock = (): (() => number) => {
+            let now = FIXED_CLOCK;
+
+            return () => {
+                now += 1000;
+
+                return now;
+            };
+        };
+
         const setupNotes = async (): Promise<DatabaseWriterLike> => {
             await runSqlGlobalTableMigrations(harness.exec, searchSchema, postgresDialect);
 
-            return createHyperdriveGlobalCtxDb({ clock: () => FIXED_CLOCK, engine: "postgres", exec: harness.exec, schema: searchSchema });
+            return createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: searchSchema });
         };
 
         const seedNotes = async (writer: DatabaseWriterLike): Promise<void> => {
@@ -299,9 +312,10 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 .withSearchIndex("by_body", (q) => q.search("body", "hello wor"))
                 .collect();
 
-            // n2 outranks the others on occurrence count ("hello" twice, plus
-            // "wonderful"/"world" both matching the prefix); n3 misses "hello".
-            expect(ids(results)).toEqual(["n2", "n1", "n4"]);
+            // n2 outranks on occurrence count ("hello" twice, plus
+            // "wonderful"/"world" both matching the prefix); n1 and n4 tie on
+            // score, so the newest wins. n3 misses "hello" entirely.
+            expect(ids(results)).toEqual(["n2", "n4", "n1"]);
         });
 
         it("narrows by an .eq() filter field", async () => {
@@ -352,17 +366,113 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
 
             await runSqlGlobalTableMigrations(harness.exec, plainSchema, postgresDialect);
 
-            const plainWriter = createHyperdriveGlobalCtxDb({ clock: () => FIXED_CLOCK, engine: "postgres", exec: harness.exec, schema: plainSchema });
+            const plainWriter = createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: plainSchema });
 
             await seedNotes(plainWriter);
 
-            const writer = createHyperdriveGlobalCtxDb({ clock: () => FIXED_CLOCK, engine: "postgres", exec: harness.exec, schema: searchSchema });
+            const writer = createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: searchSchema });
             const results = await writer
                 .query("notes")
                 .withSearchIndex("by_body", (q) => q.search("body", "goodbye"))
                 .collect();
 
             expect(ids(results)).toEqual(["n3"]);
+        });
+
+        it("matches a document whose only token satisfies both an exact and the prefix term", async () => {
+            expect.assertions(1);
+
+            const writer = await setupNotes();
+
+            await writer.insert("notes", { _id: "n9", body: "javascript", channel: "general", title: "nine" }, { allowExplicitId: true });
+
+            // "java" is the final (prefix) term and "javascript" the exact one;
+            // the single stored token satisfies both. A shared first-match CASE
+            // would count it once, fail the "matched every term" test, and drop
+            // the row — while FTS5 and the JS scorer both match it.
+            const results = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "javascript java"))
+                .collect();
+
+            expect(ids(results)).toEqual(["n9"]);
+        });
+
+        it("backfills a staged companion that writes have already populated", async () => {
+            expect.assertions(2);
+
+            // The realistic upgrade path: rows exist, the index is declared
+            // later as `staged` (so the migration deliberately indexes nothing),
+            // and a write lands before the host runs the backfill. Inferring
+            // "already backfilled" from the companion having rows would strand
+            // every pre-index row permanently — including from the explicit
+            // runner, which is the documented remedy.
+            const stagedSchema: SchemaLike = {
+                tables: {
+                    notes: {
+                        ...searchSchema.tables["notes"]!,
+                        searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body", staged: true }],
+                    },
+                },
+            };
+            const plainSchema: SchemaLike = {
+                tables: { notes: { ...searchSchema.tables["notes"]!, searchIndexes: [] } },
+            };
+
+            await runSqlGlobalTableMigrations(harness.exec, plainSchema, postgresDialect);
+            await seedNotes(createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: plainSchema }));
+
+            const writer = createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: stagedSchema });
+
+            // This write populates the companion for n5 alone…
+            await writer.insert("notes", { _id: "n5", body: "goodbye latecomer", channel: "general", title: "five" }, { allowExplicitId: true });
+
+            const beforeBackfill = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "goodbye"))
+                .collect();
+
+            // …and the out-of-band backfill still reaches the pre-index rows.
+            await backfillSqlSearchIndexes(harness.exec, stagedSchema, postgresDialect);
+
+            const afterBackfill = await createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: stagedSchema })
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "goodbye"))
+                .collect();
+
+            expect(ids(beforeBackfill)).toEqual(["n5"]);
+            expect([...ids(afterBackfill)].toSorted((left, right) => String(left).localeCompare(String(right)))).toEqual(["n3", "n5"]);
+        });
+
+        it("applies an in-memory filter (the shape RLS installs) to search results", async () => {
+            expect.assertions(1);
+
+            const writer = await setupNotes();
+
+            await seedNotes(writer);
+
+            const results = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "world"))
+                .filter((document) => document["title"] === "three")
+                .collect();
+
+            expect(ids(results)).toEqual(["n3"]);
+        });
+
+        it("refuses a page that reaches past the document cap, rather than reporting isDone", async () => {
+            expect.assertions(1);
+
+            const writer = await setupNotes();
+
+            await seedNotes(writer);
+
+            await expect(
+                writer
+                    .query("notes")
+                    .withSearchIndex("by_body", (q) => q.search("body", "world"))
+                    .paginate({ numItems: 1025 }),
+            ).rejects.toThrow(/reaches past the 1024-document limit/u);
         });
 
         it("pages through the relevance-ordered results", async () => {

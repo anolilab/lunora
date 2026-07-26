@@ -363,8 +363,18 @@ indexed `(token, document, occurrences)` row per distinct token, updated with
 each row write and read back in a single indexed query. On Postgres its token
 index declares `text_pattern_ops` so the prefix match of a query's final term
 stays indexed under any collation; on MySQL both columns take the InnoDB key
-prefix. Rows that predate the index are backfilled when the companion is created
-— pass `staged: true` on a large table and run the backfill out-of-band instead.
+prefix.
+
+Rows that predate the index are backfilled a bounded page per request, with
+progress recorded in `__lunora_search_state`, so a large table becomes
+searchable progressively rather than stalling the first request after a deploy.
+Pass `staged: true` to keep that work out of the request path entirely and drive
+it yourself with `backfillSqlSearchIndexes`.
+
+Two caveats specific to this backend: collation is the engine's, so Postgres
+matches bytes where MySQL folds case and accents; and ranking aggregates over
+every matching token row, so the 1024-document limit bounds what you get back,
+not what the database reads.
 
 The convenience constructors cover the common path. For custom wiring, the
 lower-level pieces are also exported:

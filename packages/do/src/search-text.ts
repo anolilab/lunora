@@ -1,15 +1,25 @@
 /**
- * Shared FTS / text-search primitives for the DO and D1 ctx-db dialects.
+ * Everything the storage backends must agree on byte-for-byte to make
+ * `.searchIndex()` behave the same everywhere.
  *
- * Both backends index `.searchIndex()` columns into a companion table — an FTS5
- * shadow where the engine ships FTS5 (Cloudflare DO SQLite, D1), a portable
- * `(token, id, occurrences)` inverted table on engines that don't (Postgres and
- * MySQL behind Hyperdrive) — and share this module's tokenizer, MATCH-expression
- * builder, text coercion, field resolution, limits, and scorer. Keeping every
- * dialect on these primitives is what guarantees the engines tokenize and rank
- * identically: a search that matches on a sharded DO matches the same rows, in
- * the same order, on D1 and on PlanetScale.
+ * Each backend indexes into a companion table — an FTS5 shadow where the engine
+ * ships FTS5 (Cloudflare DO SQLite, D1), a portable `(token, id, occurrences)`
+ * inverted table on engines that don't (Postgres and MySQL behind Hyperdrive) —
+ * but the *decisions* live here: what a token is, how a document scores, what
+ * the query surface accepts, and how a page of results is addressed. A backend
+ * that reimplements any of these is a parity bug.
+ *
+ * The one thing this module cannot make identical is **collation**. Token
+ * comparison happens inside the engine: MySQL's default `utf8mb4_0900_ai_ci`
+ * folds case and accents, Postgres under `text_pattern_ops` compares bytes, and
+ * FTS5's `unicode61` tokenizer strips diacritics. So `café` and `cafe` match
+ * each other on D1 and MySQL but not on Postgres.
  */
+
+import { LunoraError } from "@lunora/errors";
+
+import type { QueryPage } from "./query-args";
+import { fromBase64, invalidCursor, toBase64 } from "./query-args";
 
 /**
  * Name of the companion table backing a search index — the FTS5 shadow on
@@ -42,17 +52,28 @@ export const MAX_SEARCH_TERMS = 16;
 /** Most `.eq()` filters one search query may chain. Matches Convex. */
 export const MAX_SEARCH_FILTERS = 8;
 
-/** Most `filterFields` one `.searchIndex()` may declare. Matches Convex. */
-export const MAX_SEARCH_FILTER_FIELDS = 16;
-
 /**
- * Most documents one search query reads from the engine. Matches Convex's
- * 1024-document scan limit: relevance ordering means the interesting rows are
- * the first ones, and an unbounded `.collect()` over a large corpus is never
- * what the caller wants. Applies to the pre-filter fetch, so a `.filter()`
- * applied on top narrows within this window rather than widening the read.
+ * Most documents one search query returns from the engine. Matches Convex's
+ * 1024-document limit: relevance ordering means the interesting rows are the
+ * first ones, and an unbounded `.collect()` over a large corpus is never what
+ * the caller wants.
+ *
+ * This bounds rows *returned*, not rows the engine touches — ranking is a
+ * whole-index aggregate on the inverted path. It also applies to the pre-filter
+ * fetch: an in-memory `.filter()` (including the one RLS installs) narrows
+ * within this window rather than widening the read, so a read policy that
+ * excludes most matches can leave fewer than the caller asked for.
  */
 export const MAX_SEARCH_SCAN = 1024;
+
+/**
+ * Most distinct tokens one document contributes to a portable inverted index.
+ * The write path issues one statement per chunk of tokens, so an unbounded
+ * text column would turn a single row write into hundreds of sequential round
+ * trips over Hyperdrive. Tokens past the cap are not indexed; a document that
+ * large is prose, and its first thousand distinct words carry the search.
+ */
+export const MAX_INDEXED_TOKENS = 1000;
 
 /**
  * Split text into lowercased alphanumeric tokens, in order and with repeats
@@ -76,7 +97,7 @@ export const splitSearchTokens = (text: string): string[] => text.toLowerCase().
  * query as `.search("text", "cat")` under the AND semantics every path
  * implements, and a duplicate would otherwise make the inverted index's
  * "matched every distinct term" test unsatisfiable. De-duplication keeps the
- * last* occurrence of a repeat so the caller's final term stays final and
+ * last occurrence of a repeat so the caller's final term stays final and
  * still gets prefix matching.
  */
 export const tokenizeSearch = (query: string): string[] => {
@@ -205,13 +226,92 @@ export const countSearchTokens = (text: string): Map<string, number> => {
 };
 
 /**
+ * The staged `.withSearchIndex(name, q => …)` query, in the shape every backend
+ * fills in. The two engines execute it very differently — JSON-blob vs
+ * column-per-field, sync vs async — but they stage it identically, which is
+ * what lets the builder and the paging algebra below be written once.
+ */
+export interface SearchStageLike {
+    definition: { field: string; filterFields?: ReadonlyArray<string> };
+    field: string;
+    filters: { field: string; value: unknown }[];
+    hasQuery: boolean;
+    indexName: string;
+    query: string;
+}
+
+/** The `q` handed to `.withSearchIndex(name, q => …)`. */
+export interface SearchBuilderLike {
+    eq: (field: string, value: unknown) => SearchBuilderLike;
+    search: (field: string, query: string) => SearchBuilderLike;
+}
+
+/**
+ * Build the `q` for `.withSearchIndex()`, staging the match and its `.eq()`
+ * filters into `stage`. Every guard is a property of the query surface rather
+ * than of any engine — an unknown filter field, a `.search()` against the wrong
+ * column, too many terms, too many filters — so both backends share this one
+ * implementation and can never drift in what they accept or in what they say
+ * when they refuse.
+ */
+export const createSearchBuilder = (stage: SearchStageLike, tableName: string): SearchBuilderLike => {
+    const builder: SearchBuilderLike = {
+        eq: (field, value) => {
+            if (!stage.definition.filterFields?.includes(field)) {
+                throw new LunoraError("INTERNAL", `field "${field}" is not a filter field of search index "${stage.indexName}" on table "${tableName}"`);
+            }
+
+            if (stage.filters.length >= MAX_SEARCH_FILTERS) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `search index "${stage.indexName}" on table "${tableName}": at most ${String(MAX_SEARCH_FILTERS)} .eq() filters are supported per search query`,
+                );
+            }
+
+            stage.filters.push({ field, value });
+
+            return builder;
+        },
+        search: (field, query) => {
+            // Alias so the mutation reads as a write to the staged query object
+            // rather than to the parameter binding itself.
+            const staged = stage;
+
+            if (field !== staged.definition.field) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `search index "${staged.indexName}" on table "${tableName}" indexes "${staged.definition.field}", not "${field}"`,
+                );
+            }
+
+            const terms = tokenizeSearch(query).length;
+
+            if (terms > MAX_SEARCH_TERMS) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `search index "${staged.indexName}" on table "${tableName}": at most ${String(MAX_SEARCH_TERMS)} search terms are supported (got ${String(terms)})`,
+                );
+            }
+
+            staged.field = field;
+            staged.query = query;
+            staged.hasQuery = true;
+
+            return builder;
+        },
+    };
+
+    return builder;
+};
+
+/**
  * Encode a search page cursor. Relevance order can't be keyset-seeked — the
  * sort key is a score computed per query, not a stored column — so a search
- * page is addressed by its offset into the (capped, deterministic) result
- * window. Base64 keeps it opaque, matching the keyset cursors elsewhere so
- * callers never learn to parse one.
+ * page is addressed by its offset into the capped result window. Base64 keeps
+ * it opaque, matching the keyset cursors elsewhere so callers never learn to
+ * parse one.
  */
-export const encodeSearchCursor = (offset: number): string => btoa(`search:${String(offset)}`);
+export const encodeSearchCursor = (offset: number): string => toBase64(`search:${String(offset)}`);
 
 /**
  * Decode a search page cursor back to its offset. Returns `undefined` for
@@ -222,7 +322,7 @@ export const parseSearchCursor = (cursor: string): number | undefined => {
     let decoded: string;
 
     try {
-        decoded = atob(cursor);
+        decoded = fromBase64(cursor);
     } catch {
         return undefined;
     }
@@ -236,15 +336,86 @@ export const parseSearchCursor = (cursor: string): number | undefined => {
     return Number.isInteger(offset) && offset >= 0 ? offset : undefined;
 };
 
+/** Where one search page starts and how many rows it wants. */
+export interface SearchPagePlan {
+    numItems: number;
+    offset: number;
+}
+
 /**
- * Clamp a caller's row limit to {@link MAX_SEARCH_SCAN}. An absent limit
- * (`.collect()`) still reads at most the cap, so a search over a large corpus
- * can never turn into a full-table read.
+ * Validate a `.paginate()` call against a search query and resolve it to an
+ * offset window. Rejects the bounded (`endCursor`) form — relevance order has
+ * no stable range boundary to pin — and refuses to page past
+ * {@link MAX_SEARCH_SCAN} rather than quietly reporting `isDone` at the cap,
+ * which would read as "no more matches" when the truth is "no more reachable".
  */
-export const clampSearchScan = (limit: number | undefined): number => {
-    if (typeof limit !== "number" || !Number.isFinite(limit)) {
+export const planSearchPage = (options: { cursor?: null | string; endCursor?: null | string; numItems: number }): SearchPagePlan => {
+    if (typeof options.endCursor === "string") {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            "bounded (endCursor) pagination is not supported on search queries — relevance order has no stable range boundary",
+        );
+    }
+
+    const numberItems = Math.max(0, Math.floor(options.numItems));
+    const offset = options.cursor ? parseSearchCursor(options.cursor) : 0;
+
+    if (offset === undefined) {
+        throw invalidCursor();
+    }
+
+    if (offset + numberItems > MAX_SEARCH_SCAN) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `search pagination reaches past the ${String(MAX_SEARCH_SCAN)}-document limit (offset ${String(offset)} + ${String(numberItems)} requested) — narrow the query or the filters instead`,
+        );
+    }
+
+    return { numItems: numberItems, offset };
+};
+
+/**
+ * Slice a fetched window into the page the plan asked for. The caller fetches
+ * one row past the page so `hasMore` is an observation, not a guess. A
+ * zero-length page is terminal: without that, `continueCursor` would echo the
+ * incoming cursor unchanged and a client loop would never advance.
+ */
+export const finishSearchPage = (window: ReadonlyArray<Record<string, unknown>>, plan: SearchPagePlan): QueryPage => {
+    const end = plan.offset + plan.numItems;
+    const hasMore = plan.numItems > 0 && window.length > end;
+
+    return {
+        // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
+        continueCursor: hasMore ? encodeSearchCursor(end) : null,
+        isDone: !hasMore,
+        page: window.slice(plan.offset, end),
+    };
+};
+
+/**
+ * Resolve a caller's row limit against {@link MAX_SEARCH_SCAN}. An absent limit
+ * (`.collect()`) reads the cap, so a search over a large corpus can never turn
+ * into an unbounded read; an explicit limit past the cap is an error rather
+ * than a silent truncation, so a caller asking for 5000 rows learns that only
+ * 1024 are reachable instead of quietly acting on a prefix.
+ */
+export const resolveSearchScan = (limit: number | undefined): number => {
+    if (limit === undefined) {
         return MAX_SEARCH_SCAN;
     }
 
-    return Math.min(MAX_SEARCH_SCAN, Math.max(0, Math.floor(limit)));
+    if (!Number.isFinite(limit)) {
+        return MAX_SEARCH_SCAN;
+    }
+
+    const requested = Math.max(0, Math.floor(limit));
+
+    if (requested > MAX_SEARCH_SCAN) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `search returns at most ${String(MAX_SEARCH_SCAN)} documents (asked for ${String(requested)}) — narrow the query or paginate instead`,
+        );
+    }
+
+    return requested;
 };

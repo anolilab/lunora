@@ -13,7 +13,6 @@
  */
 export type { SqlCtxDbOptions, SqlCtxExec } from "./ctx-db";
 export {
-    backfillSqlSearchIndexes,
     createSqlCtxDb,
     decodeGlobalRow,
     readSqlCdcChanges,
@@ -21,8 +20,9 @@ export {
     runSqlCdcMigration,
     runSqlGlobalTableMigrations,
     runSqlRankMigrations,
-    runSqlSearchMigrations,
     trimSqlCdcChanges,
 } from "./ctx-db";
+export { backfillSqlSearchIndexes, runSqlSearchMigrations } from "./ctx-db-search";
+export { migrateSearchState, SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { SqlDialect, SqlExec, SqlRunResult } from "./dialect";
 export { decodeBigint, effectiveColumnKind, sqliteDecode, sqliteEncode, tryJsonParse } from "./value-codec";

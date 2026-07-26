@@ -69,7 +69,7 @@ const createRecordingFts = (matchRows: MatchRow[]): { exec: D1Exec; statements: 
             // pages through it; the canned rows stand in for a table that
             // already held data when the search index was declared.
             { pattern: /^SELECT name FROM sqlite_master WHERE type = 'table' AND name = \?$/u, rows: () => [{ name: "docs" }] },
-            { pattern: /^SELECT \* FROM "docs" ORDER BY "id" ASC LIMIT \d+$/u, rows: () => matchRows as unknown as Record<string, unknown>[] },
+            { pattern: /^SELECT \* FROM "docs" ORDER BY/u, rows: () => matchRows as unknown as Record<string, unknown>[] },
             { pattern: /RETURNING "id"$/u, rows: () => (matchRows.length > 0 ? [{ id: matchRows[0]?.id }] : [{ id: "d1" }]) },
             { pattern: /WHERE "id" = \? LIMIT 1$/u, rows: () => (matchRows.length > 0 ? [{ 1: 1 }] : []) },
             { pattern: /^SELECT \* FROM .* WHERE "id" = \?$/u, rows: () => matchRows as unknown as Record<string, unknown>[] },
@@ -128,7 +128,7 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
         expect(add?.params).toStrictEqual(["hello world", "d1"]);
     });
 
-    it("backfills rows that predate the search index, then marks the shadow backfilled", async () => {
+    it("backfills rows that predate the search index", async () => {
         expect.assertions(1);
 
         const { exec, statements } = createRecordingFts([
@@ -143,9 +143,6 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
         expect(inserts.map((statement) => statement.params)).toStrictEqual([
             ["hello world", "d1"],
             ["hello words", "d2"],
-            // Sentinel: an empty token can never match a query and an empty id
-            // can never join to a row, so it only records "already backfilled".
-            ["", ""],
         ]);
     });
 
@@ -176,10 +173,7 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const inserts = statements.filter((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
 
-        expect(inserts.map((statement) => statement.params)).toStrictEqual([
-            ["hello world", "d1"],
-            ["", ""],
-        ]);
+        expect(inserts.map((statement) => statement.params)).toStrictEqual([["hello world", "d1"]]);
     });
 
     it("clears the FTS row on delete (no re-insert)", async () => {
@@ -224,7 +218,7 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
         const matchStatement = statements.find((statement) => statement.sql.includes(" MATCH "));
 
         expect(matchStatement?.sql).toBe(
-            'SELECT m.* FROM "docs__fts_by_body" f JOIN "docs" m ON m."id" = f."__id__" WHERE f."__text__" MATCH ? AND m."channel" = ? ORDER BY f.rank, m."_creationTime" DESC LIMIT 5',
+            'SELECT m.* FROM "docs__fts_by_body" f JOIN "docs" m ON m."id" = f."__id__" WHERE f."__text__" MATCH ? AND m."channel" = ? ORDER BY f.rank, m."_creationTime" DESC, m."id" ASC LIMIT 5',
         );
         expect(matchStatement?.params).toStrictEqual(['"hello" AND "wor"*', "x"]);
 

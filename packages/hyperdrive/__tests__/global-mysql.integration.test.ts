@@ -329,6 +329,23 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
             },
         };
 
+        // Distinct creation times so the documented `_creationTime DESC` then
+        // id tiebreak is exercised rather than collapsing into engine row order.
+        const notesWriter = (): DatabaseWriterLike => {
+            let now = FIXED_CLOCK;
+
+            return createHyperdriveGlobalCtxDb({
+                clock: () => {
+                    now += 1000;
+
+                    return now;
+                },
+                engine: "mysql",
+                exec: harness.exec,
+                schema: searchSchema,
+            });
+        };
+
         const seedNotes = async (writer: DatabaseWriterLike): Promise<void> => {
             await writer.insert("notes", { _id: "n1", body: "hello world", channel: "general", title: "one" }, { allowExplicitId: true });
             await writer.insert("notes", { _id: "n2", body: "hello hello wonderful world", channel: "general", title: "two" }, { allowExplicitId: true });
@@ -345,7 +362,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
                 await harness.query("DROP TABLE IF EXISTS `notes`");
                 await runSqlGlobalTableMigrations(harness.exec, searchSchema, mysqlDialect);
 
-                const writer = writerFor(searchSchema);
+                const writer = notesWriter();
 
                 await seedNotes(writer);
 
@@ -355,11 +372,15 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
                     .collect();
 
                 // Both companion columns carry the dialect's VARCHAR(768) `key`
-                // type, so the (token, id) btree only fits under a key prefix.
+                // type — 3072 bytes each under utf8mb4 — so the (token, id)
+                // btree only fits InnoDB's 3072-byte key limit under a prefix.
+                // `Sub_part` is that prefix length, and asserting it is what
+                // proves the mechanism rather than merely that an index exists.
                 const indexes = await harness.query("SHOW INDEX FROM `notes__fts_by_body`");
+                const btree = indexes.filter((row) => row["Key_name"] === "notes__fts_by_body__btree");
 
-                expect(new Set(indexes.map((row) => row["Key_name"])).has("notes__fts_by_body__btree")).toBe(true);
-                expect(ids(results)).toEqual(["n2", "n1", "n4"]);
+                expect(btree.map((row) => row["Sub_part"])).toStrictEqual([191, 191]);
+                expect(ids(results)).toEqual(["n2", "n4", "n1"]);
             },
             TEST_TIMEOUT,
         );
@@ -373,7 +394,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
                 await harness.query("DROP TABLE IF EXISTS `notes`");
                 await runSqlGlobalTableMigrations(harness.exec, searchSchema, mysqlDialect);
 
-                const writer = writerFor(searchSchema);
+                const writer = notesWriter();
 
                 await seedNotes(writer);
 

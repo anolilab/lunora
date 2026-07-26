@@ -338,6 +338,36 @@ describe("ctx-db search", () => {
             ).rejects.toThrow(/bounded \(endCursor\) pagination is not supported/u);
         });
 
+        it("terminates a zero-length page instead of echoing the cursor", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            await writer.insert("docs", { body: "page", channel: "x", title: "only" });
+
+            const page = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "page"))
+                .paginate({ numItems: 0 });
+
+            // A self-referential cursor with isDone false would spin a client loop.
+            expect(page.isDone).toBe(true);
+            expect(page.continueCursor).toBeNull();
+        });
+
+        it("refuses to page past the document cap", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await expect(
+                writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "x"))
+                    .paginate({ numItems: 2000 }),
+            ).rejects.toThrow(/reaches past the 1024-document limit/u);
+        });
+
         it("rejects a cursor that is not a search cursor", async () => {
             expect.assertions(1);
 
@@ -349,6 +379,21 @@ describe("ctx-db search", () => {
                     .withSearchIndex("by_body", (q) => q.search("body", "x"))
                     .paginate({ cursor: "not-a-cursor", numItems: 5 }),
             ).rejects.toThrow(/invalid cursor/u);
+        });
+    });
+
+    describe("ctx-db search — result cap", () => {
+        it("refuses a take() past the document cap rather than silently truncating", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await expect(
+                writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "x"))
+                    .take(5000),
+            ).rejects.toThrow(/at most 1024 documents/u);
         });
     });
 

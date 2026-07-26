@@ -361,8 +361,8 @@ describe("d1 ctx-db search forced scan path", () => {
         // Term-frequency ranking, identical to the fts5 path: "high" outranks "low".
         expect(results.map((document) => document["title"])).toStrictEqual(["high", "low"]);
 
-        // The companion holds one row per (token, document) — three tokens for
-        // "alpha beta"/"alpha alpha alpha" plus the backfilled-marker sentinel.
+        // The companion holds one row per (token, document) — three for
+        // "alpha beta" / "alpha alpha alpha".
         const tokens = await harness.exec.all(`SELECT "__token__", "__id__", "__n__" FROM "docs__fts_by_body" ORDER BY "__token__", "__id__"`, []);
 
         // Re-shaped into plain objects: `node:sqlite` hands back null-prototype rows.
@@ -371,7 +371,6 @@ describe("d1 ctx-db search forced scan path", () => {
                 return { id: row["__id__"], n: row["__n__"], token: row["__token__"] };
             }),
         ).toStrictEqual([
-            { id: "", n: 0, token: "" },
             { id: "d1", n: 1, token: "alpha" },
             { id: "d2", n: 3, token: "alpha" },
             { id: "d1", n: 1, token: "beta" },
