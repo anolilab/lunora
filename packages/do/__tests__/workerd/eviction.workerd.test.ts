@@ -289,3 +289,49 @@ describe("sync engine eviction lifecycle (workerd e2e)", () => {
         socket.client.close(1000, "done");
     });
 });
+
+describe("shardDO websocket upgrade — durable socket identity", () => {
+    it("accepts through SocketHost, so the socket carries the durable id tag", async () => {
+        expect.assertions(2);
+
+        const stub = newStub("upgrade-tag");
+        const socket = await openSocket(stub);
+
+        const tags = await stub.socketTags();
+
+        // `ShardDO`'s upgrade path must accept through `SocketHost`, not call
+        // `state.acceptWebSocket` directly. The accept-time tag is what makes
+        // `SocketHandle.id` survive hibernation and what lets `handleFor` resolve
+        // a raw socket in O(1) after a wake instead of scanning the socket set.
+        // Accepting behind the host's back still works — it just silently loses
+        // both, which no other assertion here would notice.
+        expect(tags).toHaveLength(1);
+        expect(tags[0]?.some((tag) => tag.startsWith("lunora-socket:"))).toBe(true);
+
+        socket.client.close();
+    });
+
+    it("keeps the same socket id across an eviction", async () => {
+        expect.assertions(2);
+
+        const stub = newStub("upgrade-tag-durable");
+        const socket = await openSocket(stub);
+
+        const tagsBefore = await stub.socketTags();
+        const before = tagsBefore[0]?.find((tag) => tag.startsWith("lunora-socket:"));
+
+        await evictDurableObject(stub);
+
+        // The tag is durable state the runtime reattaches with the hibernated
+        // socket, so the id is the SAME object after the wake. A wake-local id
+        // minted per isolate would come back different, and every per-socket memo
+        // keyed on it would miss.
+        const tagsAfter = await stub.socketTags();
+        const after = tagsAfter[0]?.find((tag) => tag.startsWith("lunora-socket:"));
+
+        expect(before).toBeDefined();
+        expect(after).toBe(before);
+
+        socket.client.close();
+    });
+});

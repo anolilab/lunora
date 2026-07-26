@@ -219,6 +219,17 @@ class TestSyncDO extends DurableObject<Env> {
     public override webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
         return this.shard.webSocketClose(ws, code, reason, wasClean);
     }
+
+    /**
+     * Accept-time tags of every live socket, for the durable-socket-id test.
+     *
+     * Exposed here because the property under test — that `ShardDO`'s upgrade
+     * path accepts through `SocketHost` rather than calling
+     * `state.acceptWebSocket` directly — is only observable from inside the DO.
+     */
+    public socketTags(): string[][] {
+        return this.ctx.getWebSockets().map((ws) => this.ctx.getTags(ws));
+    }
 }
 
 class TestSessionDO extends DurableObject<Env> {

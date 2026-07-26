@@ -2748,38 +2748,25 @@ abstract class ShardDO {
 
         // workerd FORBIDS raw `BEGIN`/`COMMIT`/`SAVEPOINT` SQL inside a Durable
         // Object ("please use the state.storage.transaction() ... APIs instead")
-        // — issuing them throws and fails every transactional mutation. Use the
-        // platform primitive `state.storage.transaction(closure)`: it's atomic,
-        // rolls back automatically when the closure throws, and is correctly
-        // isolated from concurrent dispatch. (`transactionSync` is sync-only and
-        // can't wrap our async handler; the async `transaction` can.) The
+        // — issuing them throws and fails every transactional mutation. Both
+        // guarantees the handler needs are contract primitives:
+        // `ShardHost.runSerialized` is the single-writer gate and
+        // `ShardHost.transaction` the atomic, auto-rolling-back boundary, and
+        // `ShardRunner.runInTransaction` composes them in that order. The
         // `storage.sql` guard above still ensures the handler's SQL has a
-        // connection. Test doubles whose storage lacks `transaction` fall back to
-        // a bare call — their fakes carry no transactional semantics anyway.
-        const transactionalStorage = this.state.storage as undefined | { transaction?: <R>(closure: () => Promise<R>) => Promise<R> };
-
-        const run = async (): Promise<T> => {
+        // connection.
+        //
+        // Only the depth bookkeeping stays here: it is `ShardDO` state, and the
+        // nested-transaction error above reads it.
+        return this.runner.runInTransaction(async () => {
             this.transactionDepth = 1;
 
             try {
-                if (typeof transactionalStorage?.transaction === "function") {
-                    return await transactionalStorage.transaction(async () => handler());
-                }
-
                 return await handler();
             } finally {
                 this.transactionDepth = 0;
             }
-        };
-
-        if (typeof this.state.blockConcurrencyWhile === "function") {
-            return this.state.blockConcurrencyWhile(run);
-        }
-
-        // Test doubles may not supply `blockConcurrencyWhile`; fall through to
-        // the bare path so existing unit tests keep working. Production state
-        // always carries the gate.
-        return run();
+        });
     }
 
     /**
@@ -7776,13 +7763,17 @@ abstract class ShardDO {
         // writes collapses into one extra pass, and both defer off the response
         // path when `waitUntil` is available so the write's tail latency stays
         // flat.
-        if (typeof this.state.waitUntil === "function") {
-            this.state.waitUntil(this.drainSubscriptionRefreshes());
+        // `background` returns false when the host cannot outlive the response,
+        // in which case the drain has to be awaited inline. Built once and passed
+        // in, NOT called twice: `drainSubscriptionRefreshes()` starts the drain,
+        // so evaluating it in both arms would start a second one.
+        const drain = this.drainSubscriptionRefreshes();
 
+        if (this.runner.background(drain)) {
             return;
         }
 
-        await this.drainSubscriptionRefreshes();
+        await drain;
     }
 
     /**
@@ -8664,16 +8655,13 @@ abstract class ShardDO {
             return;
         }
 
-        const { setAlarm } = this.state.storage;
-
-        if (!setAlarm) {
-            return;
-        }
-
         this.globalPollScheduled = true;
 
         try {
-            await setAlarm.call(this.state.storage, atMs ?? Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS);
+            // `ShardHost.alarms` owns the "host cannot arm" case: it resolves
+            // silently rather than throwing, which is the same outcome the
+            // previous `if (!setAlarm) return` produced — no alarm, no crash.
+            await this.shardHost.alarms.set(atMs ?? Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS);
         } catch {
             // A failed arm clears the flag so a later seed/tick retries.
             this.globalPollScheduled = false;
@@ -9168,8 +9156,6 @@ abstract class ShardDO {
         const client = pair[0];
         const server = pair[1];
 
-        this.state.acceptWebSocket(server);
-
         // Capture the verified identity the runtime forwarded on the upgrade
         // (`resolveIdentity` wired into the WS upgrade) and mint a stable
         // per-socket id. Both are stashed on the attachment so they survive
@@ -9186,7 +9172,17 @@ abstract class ShardDO {
         // Stamp admin authorization onto the socket at upgrade so later
         // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
         // their own) can be gated without re-checking a token per message.
-        (server as HibernatableWebSocket).serializeAttachment?.({
+        //
+        // Accepted through `SocketHost`, not `state.acceptWebSocket` directly, so
+        // the socket carries the host's accept-time id tag. That tag is what makes
+        // `SocketHandle.id` durable across hibernation and what lets `handleFor`
+        // answer in O(1) after a wake instead of scanning the socket set —
+        // accepting behind the host's back would leave both to fall back.
+        //
+        // Accept and stamp are one call for the same reason they were adjacent
+        // before: the runtime only tracks attachments for sockets it has accepted,
+        // and no frame can arrive against an unstamped socket in between.
+        this.socketHost.accept(server, {
             admin,
             connectionId: crypto.randomUUID(),
             subs: {},
