@@ -21,10 +21,16 @@
  * `globalThis.crypto !== undefined`) is the form the lib's non-nullable `Crypto`
  * typing leaves intact.
  *
- * The `Date.now()` + monotonic counter mix in the fallback guarantees two ids
- * minted in the SAME millisecond still differ — required by
- * `@lunora/replica`'s `deriveInsertId`, which mints deterministic row ids per
- * diff, and by the anonymous-`clientId` uniqueness `@lunora/client` relies on.
+ * Within ONE consumer, the `Date.now()` + monotonic counter mix keeps two ids
+ * minted in the SAME millisecond apart. But note this file is INLINED per
+ * consumer, not shared at runtime: `@lunora/client` and `@lunora/replica` each
+ * bundle their own copy with an INDEPENDENT `idCounter`, so the counter cannot
+ * disambiguate ids minted by different copies in the same millisecond — one
+ * source, N inlined copies, N separate counters. Cross-copy uniqueness rests
+ * entirely on the random `entropy` field (Web Crypto CSPRNG, or `Math.random`
+ * as the last-resort fallback), which is drawn independently per id. That
+ * matters for `@lunora/replica`'s `deriveInsertId` (deterministic row ids per
+ * diff) and the anonymous-`clientId` uniqueness `@lunora/client` relies on.
  *
  * Like the sibling `shared/*` helpers, this is deliberately **not** a package:
  * consumers import it by relative path and the bundler (packem/rollup) inlines
@@ -48,7 +54,7 @@ const randomId = (): string => {
             : // eslint-disable-next-line sonarjs/pseudo-random -- non-cryptographic local-uniqueness entropy, not a security token; only reached when neither crypto.randomUUID nor crypto.getRandomValues exists
               Math.random().toString(16).slice(2, 12);
 
-    return `m_${Date.now().toString(36)}_${idCounter.toString(36)}_${entropy}`;
+    return `id_${Date.now().toString(36)}_${idCounter.toString(36)}_${entropy}`;
 };
 
 export { randomId };
