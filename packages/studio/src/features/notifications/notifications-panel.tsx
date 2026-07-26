@@ -64,6 +64,9 @@ const NotificationsPanel = (): ReactElement => {
     // One-shot admin read (no shard, no live subscription): the store is a worker
     // option, so there is no per-shard write-flush to stream. `refetch` backs the
     // manual Refresh button.
+    // NOTE (deferred): the RPC now filters + bounds server-side (default cap 1000);
+    // a cursor-paged toolbar for tables larger than the cap is a follow-up — the
+    // client-side kind/substring filter below covers the common (sub-cap) case.
     const { data, error, errorSource, isLoading, refetch } = useAdminQuery<PushSubscriptionsResult>(ADMIN_FUNCTIONS.listPushSubscriptions, {});
 
     const devices: PushSubscriptionDevice[] = data?.subscriptions ?? [];

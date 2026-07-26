@@ -1267,7 +1267,7 @@ interface NotifySubscriptionDevice {
 
 ```ts
 interface NotifySubscriptionStoreLike {
-    list: () => Promise<ReadonlyArray<NotifySubscriptionDevice & {
+    list: (filter?: NotifySubscriptionFilter) => Promise<ReadonlyArray<NotifySubscriptionDevice & {
         keys?: unknown;
         token?: unknown;
     }>>;
