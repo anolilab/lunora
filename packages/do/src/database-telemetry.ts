@@ -299,16 +299,15 @@ const instrumentDatabase = <T extends object>(database: T, deps: DatabaseTelemet
 /** A zero'd tally for one dispatch. */
 const createDatabaseTally = (): DatabaseTally => {
     return { calls: 0, durationMs: 0, errors: 0, perOperation: {}, spansEmitted: 0, spansTruncated: false };
-
-    /**
-     * Render the running tally as span attributes.
-     *
-     * Called ONCE per dispatch, from the shard's root-span recorder — not per query.
-     * Building this object on every call was pure waste on a hot path. It is a handful of keys, so the per-call cost is a small object
-     * assignment — the property that makes `"summary"` mode scale to any call count.
-     */
 };
 
+/**
+ * Render the running tally as span attributes.
+ *
+ * Called ONCE per dispatch, from the shard's root-span recorder — not per query.
+ * Building this object on every call was pure waste on a hot path. It is a handful of keys, so the per-call cost is a small object
+ * assignment — the property that makes `"summary"` mode scale to any call count.
+ */
 const formatTally = (tally: DatabaseTally): LogFields => {
     const fields: LogFields = {
         "db.calls": tally.calls,
