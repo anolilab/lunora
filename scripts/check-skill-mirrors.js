@@ -13,7 +13,7 @@
  * over a month: `git status` stays clean, nothing typechecks a symlink, and the
  * published tarball is unaffected, so no existing gate noticed.
  *
- * This guard fails on the three ways the mirrors drift:
+ * This guard fails on the four ways the mirrors drift:
  *
  * 1. A dangling link (the rename failure mode).
  * 2. A missing link — a skill was added to `packages/cli/skills/` but never
@@ -23,6 +23,11 @@
  *    source. The mirrored `lunora-setup-hyperdrive` copies were a full minor
  *    version behind, teaching the dead `action({ args, handler })` object API
  *    long after the codebase moved to the chainable `action.input(...)` builder.
+ * 4. A stale leftover — a skill deleted from the source whose mirrors survive.
+ *    The source-driven checks above can't see these, so each mirror is also
+ *    swept for links into its source area that no longer resolve to a skill.
+ *    This caught two pre-existing casualties of the same rename,
+ *    `.claude/skills/{migrate-to-vinext,vercel-react-best-practices}`.
  *
  * Run on every `pnpm install` via the root `postinstall` script.
  */
@@ -44,9 +49,23 @@ const sourceDir = join(rootDir, "packages", "cli", "skills");
  * resolves without any absolute-path rewriting.
  */
 const MIRRORS = [
-    { dir: join(rootDir, ".agents", "skills"), expectedTarget: (name) => `../../packages/cli/skills/${name}` },
-    { dir: join(rootDir, ".claude", "skills"), expectedTarget: (name) => `../../.agents/skills/${name}` },
-];
+    {
+        dir: join(rootDir, ".agents", "skills"),
+        // packages/cli/skills holds ONLY first-party skills, so any link into it
+        // whose name has no source directory is stale by definition.
+        staleWhenDangling: false,
+        targetPrefix: "../../packages/cli/skills/",
+    },
+    {
+        dir: join(rootDir, ".claude", "skills"),
+        // .agents/skills also holds ~45 third-party skills (accessibility,
+        // cloudflare, lunora-design, …) that .claude legitimately links to, so a
+        // link into it is only stale once it DANGLES — otherwise we would fail on
+        // every unrelated skill in the repo.
+        staleWhenDangling: true,
+        targetPrefix: "../../.agents/skills/",
+    },
+].map((mirror) => ({ ...mirror, expectedTarget: (name) => `${mirror.targetPrefix}${name}` }));
 
 let hasFailure = false;
 
@@ -65,8 +84,32 @@ if (skills.length === 0) {
     process.exit(1);
 }
 
-for (const { dir, expectedTarget } of MIRRORS) {
+const skillNames = new Set(skills);
+
+for (const { dir, expectedTarget, staleWhenDangling, targetPrefix } of MIRRORS) {
     const relativeDir = dir.slice(rootDir.length + 1);
+
+    // Leftovers: a skill deleted from packages/cli/skills leaves its mirror
+    // links behind, and the source-driven loop below would never look at them.
+    // Only entries pointing into THIS mirror's source area are ours to judge —
+    // see the staleWhenDangling notes on MIRRORS.
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (skillNames.has(entry.name) || !entry.isSymbolicLink()) {
+            continue;
+        }
+
+        const linkPath = join(dir, entry.name);
+
+        if (!readlinkSync(linkPath).startsWith(targetPrefix)) {
+            continue;
+        }
+
+        if (!staleWhenDangling || !existsSync(linkPath)) {
+            const source = targetPrefix.replace(/^(\.\.\/)+/, "").replace(/\/$/, "");
+
+            fail(`${relativeDir}/${entry.name} points at ${source}/${entry.name}, which no longer exists — remove the stale mirror`);
+        }
+    }
 
     for (const name of skills) {
         const linkPath = join(dir, name);
