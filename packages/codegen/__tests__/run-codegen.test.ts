@@ -276,20 +276,37 @@ export const sendMessage = defineMutator({
             });
 
             it("registers mutators into the dispatch table + LUNORA_MUTATOR_PATHS and overrides isCustomMutator", () => {
-                expect.assertions(5);
+                expect.assertions(4);
 
                 writeMutators();
 
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
                 // Mutators register into the function dispatch table (transaction-wrapped),
-                // keyed by their file-scoped path, never leaking into the api surface.
+                // keyed by their file-scoped path.
                 expect(result.generated.functions).toContain('"mutators:sendMessage"');
                 expect(result.generated.functions).toContain("export const LUNORA_MUTATOR_PATHS");
-                expect(result.generated.api).not.toContain("sendMessage");
                 // The generated DO routes the push/watermark protocol through the override.
                 expect(result.generated.shard).toContain("LUNORA_MUTATOR_PATHS");
                 expect(result.generated.shard).toContain("protected override isCustomMutator");
+            });
+
+            it("emits each mutator as a typed api.mutators.<name> reference so a client serverRef is compile-checked", () => {
+                expect.assertions(3);
+
+                writeMutators();
+
+                const result = runCodegen({ lint: false, projectRoot: workdir });
+
+                // `defineMutator({ serverRef: api.mutators.sendMessage })` in the browser
+                // bundle now binds the dispatch path at compile time (and infers its args
+                // from the server mutator's validators) instead of restating the
+                // `"mutators:sendMessage"` string nothing checks.
+                expect(result.generated.api).toContain("    mutators: {");
+                expect(result.generated.api).toContain('sendMessage: FunctionReference<"mutation",');
+                // A mutator is client-pushed, so it belongs on the public surface — not
+                // the server-only `internal` one.
+                expect(result.generated.api.split("export const api")[1]).not.toContain("sendMessage");
             });
 
             it("emits _generated/collections.ts (options factory + collection per shape) when @lunora/db is a dependency", () => {
@@ -969,7 +986,9 @@ export default crons;
 
             // The procedure builders come from `initLunora.dataModel<DataModel>().create()`
             // and are re-bound to the schema-typed contexts via the exported builder types.
-            expect(result.generated.server).toContain('import { createPolicyDsl, initLunora, v as vBase } from "@lunora/server";');
+            expect(result.generated.server).toContain(
+                'import { createPolicyDsl, defineMutator as defineMutatorBase, initLunora, v as vBase } from "@lunora/server";',
+            );
             expect(result.generated.server).toContain("const lunoraBuilders = initLunora.dataModel<DataModel>().create();");
             // The relation-aware RLS authoring DSL is bound to this schema's maps.
             expect(result.generated.server).toContain("export const definePolicy = createPolicyDsl<DataModel, Relations>();");

@@ -6,13 +6,11 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
 import type { ShapeIR, ValidatorIR } from "./ir";
+import { isServerPackageModule } from "./module-specifiers";
 import { parseObjectShape } from "./parse-validator";
 
 /** The only file shapes may be declared in — mirrors `lunora/queues.ts`. */
 const SHAPES_FILENAME = "shapes.ts";
-
-/** Both module specifiers `defineShape` may be imported from (granular + umbrella). */
-const SHAPE_MODULE_SPECIFIERS = new Set(["@lunora/server", "lunorash/server"]);
 
 /**
  * Decide whether a callee identifier refers to `defineShape` from
@@ -33,7 +31,7 @@ const isDefineShape = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (!SHAPE_MODULE_SPECIFIERS.has(declaration.getImportDeclaration().getModuleSpecifierValue())) {
+        if (!isServerPackageModule(declaration.getImportDeclaration().getModuleSpecifierValue())) {
             return false;
         }
 
@@ -62,7 +60,7 @@ const isShapeNamespaceImport = (identifier: Identifier): boolean => {
 
         const importDeclaration = declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration);
 
-        return importDeclaration !== undefined && SHAPE_MODULE_SPECIFIERS.has(importDeclaration.getModuleSpecifierValue());
+        return importDeclaration !== undefined && isServerPackageModule(importDeclaration.getModuleSpecifierValue());
     }
 
     return false;

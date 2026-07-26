@@ -282,7 +282,7 @@ class AppBuilder<Env extends object> {
             Object.assign(options, this.buildStorageAdmin(env));
         }
 
-        options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env) : undefined;
+        options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env as Record<string, unknown>) : undefined;
 
         options.logArchive = resolveLogArchiveFromEnv(env);
 

@@ -15,6 +15,7 @@ import type {
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { FunctionIR, ValidatorIR } from "./ir";
+import { isServerSurfaceModule } from "./module-specifiers";
 import { parseObjectShape } from "./parse-validator";
 import sanitizeNamespace from "./paths";
 
@@ -89,15 +90,11 @@ interface DiscoveredFunction {
 
 /**
  * Module specifiers a registration factory (`query`/`mutation`/`action`/their
- * `internal*` twins) may legitimately come from: the public `@lunora/server`
- * surface, or the generated `_generated/server` re-export. The latter is the
- * Convex idiom — user code imports `query`/`mutation`/`v` from `_generated/server`
- * so `v.id(...)` is table-name typed — and discovery must treat those imports as
- * real registrations too, not local bindings.
+ * `internal*` twins) may legitimately come from — see
+ * {@link isServerSurfaceModule} for the three accepted forms and why omitting one
+ * silently drops the function from `LUNORA_FUNCTIONS` instead of erroring.
  */
-const GENERATED_SERVER_RE = /(?:^|\/)_generated\/server(?:\.js)?$/u;
-
-const isLunoraSurfaceModule = (moduleSpecifier: string): boolean => moduleSpecifier === "@lunora/server" || GENERATED_SERVER_RE.test(moduleSpecifier);
+const isLunoraSurfaceModule = isServerSurfaceModule;
 
 /**
  * Resolve a callee identifier through its import declaration, returning the

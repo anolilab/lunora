@@ -576,12 +576,46 @@ export interface OrmWriter extends OrmReader {
 const GENERATED_IMPORT_RE = /import\("(?<spec>(?:\.\.?\/)*_generated\/[^"]+)"\)/gu;
 const GENERATED_PREFIX_RE = /^(?:\.\.?\/)*_generated\//u;
 
+/**
+ * A rendered qualifier's final segment already carries a file extension. A user
+ * file may import a generated module either way (`"./_generated/dataModel"` or
+ * `"./_generated/dataModel.js"`), and the extensionless form would be a TS2835 in
+ * the emitted `_generated/*` — those files are consumed under NodeNext, where the
+ * extension is mandatory — so it is added back when absent.
+ */
+const QUALIFIER_HAS_EXTENSION_RE = /\.[A-Za-z]\w*$/u;
+
 const relocateGeneratedImports = (returnType: string): string =>
     returnType.replaceAll(GENERATED_IMPORT_RE, (_match, spec: string) => {
         const stripped = spec.replace(GENERATED_PREFIX_RE, "./");
+        const withExtension = QUALIFIER_HAS_EXTENSION_RE.test(stripped) ? stripped : `${stripped}.js`;
 
-        return `import("${stripped}")`;
+        return `import("${withExtension}")`;
     });
+
+/**
+ * An `import("@lunora/&lt;base>")` qualifier the type checker rendered into a
+ * function's args/return type — e.g. a mutator whose `server` impl returns
+ * `ctx.db.insert(...)`'s `Id&lt;"messages">` from a file that never imports `Id`, so
+ * ts-morph fully qualifies it as `import("@lunora/values").Id&lt;"messages">`.
+ *
+ * Only the BASE packages the `lunorash` umbrella re-exports are listed. An
+ * umbrella-only app has no `@lunora/values` in its `package.json`, so the
+ * verbatim qualifier is a TS2307 in the generated file; rewriting it to
+ * `import("lunorash/values")` resolves through the dependency it actually
+ * declares. Add-ons (`@lunora/agent`, `@lunora/notify`, …) are installed
+ * separately either way and are deliberately left alone.
+ */
+const UMBRELLA_QUALIFIER_RE = /import\("@lunora\/(?<pkg>client|do|runtime|server|values)(?<subpath>\/[^"]*)?"\)/gu;
+
+/** Rewrite base-package type qualifiers in a rendered generated file to the project's import form. */
+const relocateBaseQualifiers = (rendered: string, useUmbrella: boolean): string =>
+    useUmbrella
+        ? rendered.replaceAll(
+              UMBRELLA_QUALIFIER_RE,
+              (_match, packageName: string, subpath: string | undefined) => `import("lunorash/${packageName}${subpath ?? ""}")`,
+          )
+        : rendered;
 
 /**
  * Which of `Doc`/`Id` a rendered body actually references. We import only those
@@ -607,7 +641,11 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
     }
 
     const renderNamespace = ([file, list]: [string, FunctionIR[]]): string => {
+        // Sorted by export name so a namespace that mixes discovered functions with
+        // synthetic entries (agents, custom mutators — appended after the sorted
+        // discovery output) still emits in a stable, alphabetical order.
         const members = list
+            .toSorted((a, b) => a.exportName.localeCompare(b.exportName))
             .map((definition) => {
                 // We emit `FunctionReference<Kind, ArgsObj, Return>` so the
                 // generated `api.*` references plug directly into
@@ -964,6 +1002,43 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
 };
 
 /**
+ * Synthetic `FunctionIR` entries for the project's custom mutators, so
+ * `api.mutators.&lt;name>` exists as a typed reference and a client
+ * `defineMutator({ serverRef: api.mutators.insertSibling })` binds the dispatch
+ * path at COMPILE time — a rename, a typo, or a moved file becomes a type error
+ * instead of a push that fails at runtime — while inferring its `args` from the
+ * server mutator's own validators instead of restating them.
+ *
+ * A mutator dispatches through the same `LUNORA_FUNCTIONS` table as an ordinary
+ * `mutation` (its `kind` IS `"mutation"`), and the `namespace:fn` ref matches the
+ * `LUNORA_MUTATOR_PATHS` entry the DO's `isCustomMutator` override reads, so the
+ * emitted reference is a real function reference — not a parallel shape.
+ *
+ * Mutators are client-pushed, so they land on the PUBLIC `api` surface. An
+ * app-registered function in `lunora/mutators.ts` with the same export name wins
+ * (no duplicate members), mirroring {@link syntheticAgentApiFunctions}.
+ */
+const syntheticMutatorApiFunctions = (mutators: ReadonlyArray<MutatorIR>, functions: ReadonlyArray<FunctionIR>): FunctionIR[] => {
+    if (mutators.length === 0) {
+        return [];
+    }
+
+    const taken = new Set(functions.filter((definition) => sanitizeNamespace(definition.filePath) === "mutators").map((definition) => definition.exportName));
+
+    return mutators
+        .filter((mutator) => !taken.has(mutator.exportName))
+        .map((mutator) => {
+            return {
+                args: mutator.args,
+                exportName: mutator.exportName,
+                filePath: mutator.filePath,
+                kind: "mutation" as const,
+                returnType: mutator.returnType,
+            };
+        });
+};
+
+/**
  * Render the `httpStreams.*` typed-reference block for `_generated/api.ts` —
  * one entry per `httpRoute.&lt;verb>(path).stream()` SSE route, grouped by source
  * file the way `api.*` is. Each reference carries the verb + path at runtime
@@ -1046,14 +1121,20 @@ interface EmitApiOptions {
     functions: ReadonlyArray<FunctionIR>;
     /** Typed REST routes; only `.stream()` (SSE) routes emit a `httpStreams.*` reference. */
     httpRoutes?: ReadonlyArray<HttpRouteIR>;
+    /** Custom mutators (`lunora/mutators.ts`) — emitted as `api.mutators.*` so a client `serverRef` is compile-checked. */
+    mutators?: ReadonlyArray<MutatorIR>;
     useUmbrella?: boolean;
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
 const emitApi = (options: EmitApiOptions): string => {
-    const { agents = [], functions, httpRoutes = [], useUmbrella = false, workflows = [] } = options;
+    const { agents = [], functions, httpRoutes = [], mutators = [], useUmbrella = false, workflows = [] } = options;
     const base = baseSpecifiers(useUmbrella);
-    const publicFunctions = [...functions.filter((definition) => definition.visibility !== "internal"), ...syntheticAgentApiFunctions(agents, functions)];
+    const publicFunctions = [
+        ...functions.filter((definition) => definition.visibility !== "internal"),
+        ...syntheticAgentApiFunctions(agents, functions),
+        ...syntheticMutatorApiFunctions(mutators, functions),
+    ];
     const internalFunctions = functions.filter((definition) => definition.visibility === "internal");
 
     const publicBody = renderApiBody(publicFunctions);
@@ -1077,7 +1158,8 @@ const emitApi = (options: EmitApiOptions): string => {
     // stream-free project's generated api never references the type.
     const clientImports = httpStreamsRef.block === "" ? "FunctionReference" : "FunctionReference, HttpStreamRef";
 
-    return `${GENERATED_HEADER}import { anyApi } from "${base.serverTypes}";
+    return relocateBaseQualifiers(
+        `${GENERATED_HEADER}import { anyApi } from "${base.serverTypes}";
 import type { ${clientImports} } from "${base.client}";
 ${schedulerReferences.importLine}${dataModelImportLine}
 export interface ApiTypes {${apiBlock}}
@@ -1088,7 +1170,9 @@ export const api = anyApi as unknown as ApiTypes;
 export interface InternalApiTypes {${internalBlock}}
 
 export const internal = anyApi as unknown as InternalApiTypes;
-${schedulerReferences.block}${httpStreamsRef.block}`;
+${schedulerReferences.block}${httpStreamsRef.block}`,
+        useUmbrella,
+    );
 };
 
 /**
@@ -1854,7 +1938,7 @@ export type LunoraEnv = ReturnType<typeof lunoraEnvContract.${env.exportName}>;`
         ? `\n    /** Validated, typed environment declared by \`defineEnv\` in \`lunora/env.ts\` — parsed & coercion-aware config values (\`ctx.env.STRIPE_KEY\`); a missing or invalid value throws at read time. */\n    readonly env: LunoraEnv;`
         : "";
 
-    const server = `${GENERATED_HEADER}import { createPolicyDsl, initLunora, v as vBase } from "${base.server}";
+    const server = `${GENERATED_HEADER}import { createPolicyDsl, defineMutator as defineMutatorBase, initLunora, v as vBase } from "${base.server}";
 import type {
     ActionBuilder,
     ActionCtx as ActionCtxBase,
@@ -1867,11 +1951,14 @@ import type {
     InternalQueryBuilder,
     MutationBuilder,
     MutationCtx as MutationCtxBase,
+    MutatorDefinition,
     QueryBuilder,
     QueryCtx as QueryCtxBase,
     ReadOnlyStorage,
+    RegisteredMutator,
     Storage as StorageBase,
     TableReader,
+    Validator,
 } from "${base.server}";
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
@@ -1977,6 +2064,24 @@ export const internalMutation = lunoraBuilders.internalMutation as unknown as In
 
 /** \`internalAction\` builder bound to this project's typed {@link ActionCtx} — never exposed on \`api\`. */
 export const internalAction = lunoraBuilders.internalAction as unknown as InternalActionBuilder<ActionCtx, EmptyArgs>;
+
+/**
+ * \`defineMutator\` bound to this project's typed {@link MutationCtx} — declare
+ * custom mutators (\`lunora/mutators.ts\`) with it instead of importing from
+ * \`${base.server}\`, and the authoritative \`server\` impl's \`ctx\` carries the
+ * schema-typed \`ctx.db\` (\`ctx.db.query("nodes")\` resolves \`Doc<"nodes">\`,
+ * \`ctx.db.patch(id, …)\` takes an \`Id<"nodes">\`) with no hand-written ctx type and
+ * no \`as unknown as\` cast. Runtime-identical to the package export; only the
+ * context type narrows, so discovery finds a mutator authored either way.
+ * @example
+ * export const setText = defineMutator({
+ *     args: { id: v.id("nodes"), text: v.string() },
+ *     server: async (ctx, args) => { await ctx.db.patch(args.id, { text: args.text }); },
+ * });
+ */
+export const defineMutator = defineMutatorBase as unknown as <Args extends Record<string, Validator> = Record<string, Validator>, ClientTx = unknown, R = unknown>(
+    definition: MutatorDefinition<Args, MutationCtx, ClientTx, R>,
+) => RegisteredMutator<Args, MutationCtx, ClientTx, R>;
 
 /**
  * \`definePolicy\` bound to THIS schema's {@link DataModel} + {@link Relations}.
@@ -2116,7 +2221,8 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
     const callerParameter = hasFunctions ? "context" : "_context";
     const callRegisteredHelper = hasFunctions ? `${CALL_REGISTERED_HELPER}\n\n` : "";
 
-    return `${GENERATED_HEADER}${importBlock}${agentRegistry.importLine}${sandboxRegistry.importLine}${compiledArgsImport}${shapeTypeImport}import { LunoraError } from "${base.server}";\nimport type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
+    return relocateBaseQualifiers(
+        `${GENERATED_HEADER}${importBlock}${agentRegistry.importLine}${sandboxRegistry.importLine}${compiledArgsImport}${shapeTypeImport}import { LunoraError } from "${base.server}";\nimport type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 ${dataModelImport}
 /**
  * Single registered function, narrowed to the shape \`handleRpc\` needs.
@@ -2205,7 +2311,9 @@ export interface RegisteredDataMigration {
  * shard DO's admin RPC and the CLI resolve migrations to run through this map.
  */
 export const LUNORA_MIGRATIONS: Record<string, RegisteredDataMigration> = {${migrationBody}};
-`;
+`,
+        useUmbrella,
+    );
 };
 
 /**

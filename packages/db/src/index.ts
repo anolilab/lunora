@@ -31,8 +31,17 @@ export {
 } from "./collection-options";
 export type { CollectionDef, DefineCollectionsOptions, InsertBinding, LunoraDb, WriteRejectedEvent } from "./define-collections";
 export { defineCollections } from "./define-collections";
-export type { BindMutatorsContext, BoundMutators, ClientMutatorContext, ClientMutatorDef, MutatorReference } from "./define-mutators";
-export { bindMutators, defineMutator, DIRECT_TRANSACTION_METADATA_KEY } from "./define-mutators";
+export type {
+    BindMutatorsContext,
+    BoundMutatorApi,
+    BoundMutators,
+    ClientMutatorContext,
+    ClientMutatorDef,
+    CollectionMap,
+    MutatorReference,
+    MutatorRejectedEvent,
+} from "./define-mutators";
+export { bindMutators, defineMutator, DIRECT_TRANSACTION_METADATA_KEY, initMutators } from "./define-mutators";
 export type { ExecutorOutboxSinkOptions, OutboxExecutor, OutboxMutationMetadata, Row, SyncWriter } from "./internals";
 export { createExecutorOutboxSink, createOptimisticOnlineDetector, makeDiffEmit, OUTBOX_MUTATION_FN_NAME, runOutboxMutation, toMap } from "./internals";
 

@@ -6,7 +6,6 @@ import { createTransaction } from "@tanstack/db";
 
 import type { CheckpointRegistry } from "./collection-options";
 import { getShardCheckpoints, hasCheckpointsAttached } from "./collection-options";
-import type { Row } from "./internals";
 import { runOutboxMutation } from "./internals";
 
 /**
@@ -28,10 +27,25 @@ import { runOutboxMutation } from "./internals";
  */
 export const DIRECT_TRANSACTION_METADATA_KEY = "__tanstack_db_direct";
 
+/**
+ * A map of wired collections, keyed by the name the optimistic bodies address them
+ * by.
+ *
+ * The row type is `any` on purpose. `Collection&lt;T, string>` is **invariant** in
+ * `T` (its methods both consume and produce rows), so a concrete
+ * `Collection&lt;Doc&lt;"nodes"> & Row>` is NOT assignable to `Collection&lt;Row>` — which
+ * is why the previous `Record&lt;string, Collection&lt;Row, string>>` forced an
+ * `as never` cast on every entry, and left `context.collections.&lt;name>` too
+ * untyped to be worth using. Projects recover the concrete types by binding them
+ * once through {@link initMutators}.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above: `Collection` is invariant in its row type, so a narrower bound rejects every real collection
+export type CollectionMap = Record<string, Collection<any, string>>;
+
 /** The local store a client mutator's optimistic body writes against. */
-export interface ClientMutatorContext {
+export interface ClientMutatorContext<TCollections extends CollectionMap = CollectionMap> {
     /** The wired collections, keyed by name — apply optimistic inserts/updates/deletes here. */
-    collections: Record<string, Collection<Row, string>>;
+    collections: TCollections;
 }
 
 /**
@@ -48,16 +62,22 @@ export interface MutatorReference<TArgs = unknown> {
     readonly __lunoraRef: string;
 }
 
-/** Args type carried by a {@link MutatorReference}. */
-type ArgsOfReference<R> = R extends MutatorReference<infer A> ? A : never;
+/**
+ * A generated reference with its arg type erased — the widest shape the runtime
+ * actually reads. Used on the implementation side (and by {@link mutatorPath}),
+ * where narrowing to a concrete `MutatorReference&lt;TArgs>` would make the typed
+ * overload's parameter fail the contravariant assignability check against the
+ * implementation signature.
+ */
+type AnyMutatorReference = Pick<MutatorReference, "__lunoraRef">;
 
 /** A client-side custom mutator: an optimistic body plus the path of its authoritative server impl. */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Def" mirrors `CollectionDef`; "Definition" is noise
-export interface ClientMutatorDef<TArgs> {
+export interface ClientMutatorDef<TArgs, TCollections extends CollectionMap = CollectionMap> {
     /** Brand so codegen / `bindMutators` can recognize a mutator definition. */
     __lunoraClientMutator: true;
     /** The optimistic update applied to the local collections before the server confirms. */
-    apply: (context: ClientMutatorContext, args: TArgs) => void;
+    apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
     /** The Lunora function path of the server-authoritative mutator (`defineMutator` on the server). */
     serverRef: string;
 }
@@ -65,7 +85,7 @@ export interface ClientMutatorDef<TArgs> {
 /** Resolve a mutator reference (or a raw path string) to the dispatch path. */
 const MUTATOR_REF_ERROR = "defineMutator: `serverRef` must be a generated mutator reference (api.mutators.*) or a 'namespace:fn' string";
 
-const mutatorPath = (serverRef: MutatorReference<never> | string): string => {
+const mutatorPath = (serverRef: AnyMutatorReference | string): string => {
     // The string branch is validated too: `""` would otherwise dispatch to an empty
     // function path at push time instead of failing at declaration.
     //
@@ -106,15 +126,17 @@ const mutatorPath = (serverRef: MutatorReference<never> | string): string => {
  * // restate the args yourself.
  * defineMutator<{ text: string }>({ apply, serverRef: "mutators:sendMessage" });
  * ```
+ *
+ * `context.collections` is typed by whatever map it is bound to — which for this
+ * standalone form is the widest one. Bind the concrete collections once with
+ * {@link initMutators} to get `collections.&lt;name>` typed inside `apply`.
  */
 export const defineMutator: {
     <TArgs = Record<string, unknown>>(definition: { apply: (context: ClientMutatorContext, args: TArgs) => void; serverRef: string }): ClientMutatorDef<TArgs>;
-    <R extends MutatorReference<never>>(definition: {
-        apply: (context: ClientMutatorContext, args: ArgsOfReference<R>) => void;
-        serverRef: R;
-    }): ClientMutatorDef<ArgsOfReference<R>>;
+    // eslint-disable-next-line @typescript-eslint/unified-signatures -- deliberately separate: only the reference overload INFERS `TArgs` (from the phantom). Merging them into a `string | MutatorReference<TArgs>` union leaves `TArgs` uninferable on the string branch, which then silently falls back to its default and erases the args type for every reference call site.
+    <TArgs>(definition: { apply: (context: ClientMutatorContext, args: TArgs) => void; serverRef: MutatorReference<TArgs> }): ClientMutatorDef<TArgs>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the overloads above are the checked surface; the implementation signature must accept both
-} = (definition: { apply: (context: ClientMutatorContext, args: any) => void; serverRef: MutatorReference<never> | string }): ClientMutatorDef<any> => {
+} = (definition: { apply: (context: ClientMutatorContext, args: any) => void; serverRef: AnyMutatorReference | string }): ClientMutatorDef<any> => {
     return {
         __lunoraClientMutator: true,
         apply: definition.apply,
@@ -122,17 +144,42 @@ export const defineMutator: {
     };
 };
 
+/**
+ * A mutator map whose defs are bound to `TCollections`, arg types erased — the
+ * `TCollections`-pinned counterpart of {@link AnyMutatorMap}, and `any` for the
+ * same variance reason.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- see `AnyMutatorMap`: a narrower bound rejects concrete defs (the `apply` arg is contravariant)
+type MutatorMapFor<TCollections extends CollectionMap> = Record<string, ClientMutatorDef<any, TCollections>>;
+
 // A mutator map with arg types erased to `any` — pinning the constraint to
 // `ClientMutatorDef<unknown>` rejects concrete defs (the `apply` arg is
 // contravariant), exactly as `AnyDef` does in `define-collections`.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above
-type AnyMutatorMap = Record<string, ClientMutatorDef<any>>;
+type AnyMutatorMap = Record<string, ClientMutatorDef<any, any>>;
 
-/** Args type of a mutator definition. */
-type ArgsOf<M> = M extends ClientMutatorDef<infer A> ? A : never;
+/** Args type of a mutator definition, whatever collections map it was bound to. */
+type ArgsOf<M> = M extends ClientMutatorDef<infer A, infer _C> ? A : never;
 
-/** Inputs `bindMutators` needs to run a mutator: the local store + how the overlay drops. */
-export interface BindMutatorsContext {
+/** A mutator write that was permanently rejected, passed to {@link BindMutatorsContext.onWriteRejected}. */
+export interface MutatorRejectedEvent {
+    /** The args the rejected call was made with. */
+    args: unknown;
+
+    /**
+     * The machine-readable reason when the server supplied one (e.g. `CONFLICT`,
+     * `FORBIDDEN`). Mirrors {@link import("./define-collections").WriteRejectedEvent.code}.
+     */
+    code?: string;
+    /** The error that rejected the write. */
+    error: Error;
+    /** The bound mutator's key in the map passed to `bindMutators`. */
+    mutator: string;
+    /** The `namespace:fn` path the push targeted. */
+    serverRef: string;
+}
+
+export interface BindMutatorsContext<TCollections extends CollectionMap = CollectionMap> {
     /**
      * Resolves the optimistic-overlay drop against confirmed server watermarks: a
      * mutation's overlay is held until the sync stream echoes
@@ -149,7 +196,26 @@ export interface BindMutatorsContext {
      */
     checkpoints?: CheckpointRegistry | false;
     /** The wired collections the optimistic bodies write against. */
-    collections: Record<string, Collection<Row, string>>;
+    collections: TCollections;
+
+    /**
+     * Called when a mutator's server push is permanently rejected — the aggregate
+     * failure channel for writes, symmetric with
+     * {@link import("./define-collections").DefineCollectionsOptions.onWriteRejected}
+     * on the outbox path.
+     *
+     * Supplying it also makes a **fire-and-forget** call safe: a bound handle
+     * returns a `Transaction` whose `isPersisted` promise rejects on failure, so a
+     * caller that neither awaits it nor attaches a `.catch` leaves an unhandled
+     * rejection. With this hook set, `bindMutators` consumes that rejection itself
+     * after reporting it — a caller that DOES await still sees the rejection, so
+     * per-call handling is unaffected.
+     *
+     * A throwing listener is swallowed: reporting a failure must not manufacture a
+     * second one.
+     */
+    onWriteRejected?: (event: MutatorRejectedEvent) => void;
+
     /** Optional shard key the mutator's server push is routed to. */
     shardKey?: string;
 }
@@ -190,7 +256,11 @@ export type BoundMutators<M extends AnyMutatorMap> = {
  * a permanently-rejected predecessor can't wedge the chain: the next push simply
  * reclaims the same `watermark + 1` instead of leaving a hole the DO waits on.
  */
-export const bindMutators = <M extends AnyMutatorMap>(client: LunoraClient, context: BindMutatorsContext, mutators: M): BoundMutators<M> => {
+export const bindMutators = <M extends AnyMutatorMap, TCollections extends CollectionMap = CollectionMap>(
+    client: LunoraClient,
+    context: BindMutatorsContext<TCollections>,
+    mutators: M,
+): BoundMutators<M> => {
     // Backstop bound on the reissue loop: the watermark is finite and each retry
     // strictly raises the sequence toward it, so this only trips on a pathological
     // server (or a same-clientId tab racing the watermark forever) — surfaced as a
@@ -273,6 +343,31 @@ export const bindMutators = <M extends AnyMutatorMap>(client: LunoraClient, cont
         return hasCheckpointsAttached(derived) ? derived : undefined;
     };
 
+    /**
+     * Route a rejected push to `onWriteRejected`, consuming the rejection so a
+     * fire-and-forget call is safe. No hook ⇒ no handler is attached at all: adding
+     * a silent `.catch` would swallow failures for callers who never opted in.
+     */
+    const reportRejection = (transaction: Transaction, mutatorName: string, serverRef: string, args: unknown): void => {
+        const { onWriteRejected } = context;
+
+        if (!onWriteRejected) {
+            return;
+        }
+
+        // eslint-disable-next-line no-void -- the handler IS the terminal consumer of this rejection; there is nothing left to await
+        void transaction.isPersisted.promise.catch((error: unknown) => {
+            const rejection = error instanceof Error ? error : new Error(String(error));
+
+            try {
+                onWriteRejected({ args, code: (rejection as Error & { code?: string }).code, error: rejection, mutator: mutatorName, serverRef });
+            } catch {
+                // A throwing listener must not escape this `.catch` — that would
+                // manufacture the very unhandled rejection the hook exists to consume.
+            }
+        });
+    };
+
     const bound: Record<string, (args: unknown) => Transaction> = {};
 
     for (const [name, mutator] of Object.entries(mutators)) {
@@ -317,9 +412,50 @@ export const bindMutators = <M extends AnyMutatorMap>(client: LunoraClient, cont
                 mutator.apply({ collections: context.collections }, args);
             });
 
+            reportRejection(transaction, name, mutator.serverRef, args);
+
             return transaction;
         };
     }
 
     return bound as BoundMutators<M>;
 };
+
+/** `defineMutator` + `bindMutators`, both bound to one project's collections map. */
+export interface BoundMutatorApi<TCollections extends CollectionMap> {
+    /** {@link bindMutators}, with `collections` pinned to `TCollections`. */
+    bindMutators: <M extends MutatorMapFor<TCollections>>(client: LunoraClient, context: BindMutatorsContext<TCollections>, mutators: M) => BoundMutators<M>;
+
+    /** {@link defineMutator}, with `context.collections` typed as `TCollections`. */
+    defineMutator: {
+        <TArgs = Record<string, unknown>>(definition: {
+            apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
+            serverRef: string;
+        }): ClientMutatorDef<TArgs, TCollections>;
+        // eslint-disable-next-line @typescript-eslint/unified-signatures -- see `defineMutator`: only the reference overload infers `TArgs`, so merging the two erases it
+        <TArgs>(definition: {
+            apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
+            serverRef: MutatorReference<TArgs>;
+        }): ClientMutatorDef<TArgs, TCollections>;
+    };
+}
+
+/**
+ * Bind the mutator surface to **this project's** collections map, once.
+ *
+ * `Collection` is invariant in its row type, so a shared
+ * `Record&lt;string, Collection&lt;Row, string>>` could neither accept a generated
+ * collection without an `as never` cast nor hand a usable type back to `apply` —
+ * which is why optimistic bodies tended to ignore `context.collections` and close
+ * over module-scope collection variables instead. Declaring the map once here
+ * fixes both ends: `bindMutators` takes the concrete collections cast-free, and
+ * `apply` reads `collections.&lt;name>` at its real row type.
+ *
+ * Runtime-identical to the standalone {@link defineMutator} / {@link bindMutators}
+ * (this returns those very functions); only the types narrow.
+ * @example
+ * const { bindMutators, defineMutator } = initMutators&lt;{ nodes: typeof wholeOutlineCollection }>();
+ * const setText = defineMutator({ apply: ({ collections }, args) => collections.nodes.update(args.id, setter), serverRef: api.mutators.setText });
+ */
+export const initMutators = <TCollections extends CollectionMap>(): BoundMutatorApi<TCollections> =>
+    ({ bindMutators, defineMutator }) as unknown as BoundMutatorApi<TCollections>;

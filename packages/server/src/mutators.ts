@@ -22,10 +22,58 @@
  * `lunora/mutators.ts`.
  */
 
+import { LunoraError } from "@lunora/errors";
 import type { InferValidatorMap, ValidatorMap } from "@lunora/values";
 
+import contextUserId from "./context-identity";
 import { validateArgs } from "./functions";
 import type { MutationCtx as MutationContext } from "./types";
+
+/**
+ * Enforce a mutator's `owner` scope against the trusted context, then return the
+ * args with the owner column set to the **verified** identity.
+ *
+ * Two guarantees, in order.
+ *
+ * **Authentication** — no verified identity means nothing is owned, so the write is
+ * rejected outright. Mirrors how an `owner`-scoped `defineShape` denies rather than
+ * filtering on a nullish value (which a nullable owner column matches).
+ *
+ * **Attribution** — a client-supplied owner value must equal the verified one (a
+ * mismatch is a forgery attempt, not a correctable input), and the field is then
+ * overwritten with the verified value regardless. So the impl reads `args[owner]`
+ * without trusting the client, and a mutator that declares the column
+ * `v.optional(...)` can leave it off the wire entirely.
+ */
+const applyOwnerScope = <Args extends ValidatorMap>(ownerField: string, context: unknown, parsed: InferValidatorMap<Args>): InferValidatorMap<Args> => {
+    if (ownerField.trim() === "") {
+        throw new LunoraError("INTERNAL", 'defineMutator: `owner` must name the column carrying the row owner (e.g. `owner: "userId"`)');
+    }
+
+    const userId = contextUserId(context);
+
+    if (userId === undefined) {
+        throw new LunoraError("UNAUTHORIZED", `defineMutator: an owner-scoped mutator requires a verified identity; none was resolved for this request`);
+    }
+
+    // `parsed` is the validated args object this call owns (built by `validateArgs`
+    // from the raw payload), so writing the verified owner onto it mutates nothing
+    // the caller can observe. The cast is needed because the owner column is named
+    // by a runtime string, not statically known to be a key of `Args`.
+    const withOwner = parsed as Record<string, unknown>;
+    const declared = withOwner[ownerField];
+
+    if (declared !== undefined && declared !== userId) {
+        throw new LunoraError(
+            "FORBIDDEN",
+            `defineMutator: \`${ownerField}\` does not match the verified identity — a mutator may only write rows its caller owns`,
+        );
+    }
+
+    withOwner[ownerField] = userId;
+
+    return parsed;
+};
 
 /**
  * A mutator declaration. `server` is authoritative; `client` is the optimistic
@@ -49,6 +97,25 @@ export interface MutatorDefinition<Args extends ValidatorMap = ValidatorMap, Ser
      * local preview.
      */
     readonly client?: (tx: ClientTx, args: InferValidatorMap<Args>) => Promise<void> | void;
+
+    /**
+     * Owner-scope the write: names the column carrying the row owner (e.g.
+     * `owner: "userId"`). Before `server` runs, the mutator requires a verified
+     * identity, rejects a client-supplied owner that disagrees with it, and sets
+     * the column to the verified value — so the impl reads `args[owner]` without
+     * trusting the client and never repeats the check by hand.
+     *
+     * This replaces the "every mutator opens with `assertOwner(ctx, args.userId)`"
+     * pattern, and is the write-side counterpart to an `owner`-scoped
+     * {@link import("./shapes").ShapeDefinition}. Unlike a shape it takes the column
+     * NAME rather than `true`: a shape is bound to one `table`, so the table's
+     * `.ownedBy(field)` resolves unambiguously, whereas one mutator may write
+     * several tables and has no single owning table to read it from.
+     *
+     * Declare the column `v.optional(...)` to leave it off the wire entirely; it is
+     * injected either way.
+     */
+    readonly owner?: string;
 
     /**
      * Authoritative server implementation. Runs inside the shard DO with a full
@@ -91,8 +158,9 @@ export const defineMutator = <Args extends ValidatorMap = ValidatorMap, ServerCo
 ): RegisteredMutator<Args, ServerContext, ClientTx, R> => {
     const handler = async (context: ServerContext, rawArgs: Record<string, unknown>): Promise<R> => {
         const parsed = validateArgs(definition.args ?? ({} as Args), rawArgs);
+        const args = definition.owner === undefined ? parsed : applyOwnerScope<Args>(definition.owner, context, parsed);
 
-        return definition.server(context, parsed);
+        return definition.server(context, args);
     };
 
     return { __lunoraMutator: true, ...definition, handler, kind: "mutation" };

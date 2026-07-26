@@ -6,22 +6,19 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "./diagnostics";
 import { listLunoraSourceFiles } from "./discover-functions";
 import type { AgentIR, CronJobIR, WorkflowIR } from "./ir";
+import { isCronSourceModule } from "./module-specifiers";
 import sanitizeNamespace from "./paths";
 
 /** All builder method names — the structured schedules plus the raw `.cron`. */
 const CRON_METHODS = new Set<string>([...CRON_SCHEDULE_KINDS, "cron"]);
 
 /**
- * Modules `cronJobs` may legitimately be imported from: `@lunora/scheduler`
- * (its home) or `@lunora/server` (the main API surface, which re-exports it —
- * see `packages/server/src/index.ts`). Both must be recognized, otherwise a
- * user (or registry item) importing `cronJobs` from `@lunora/server` has every
- * cron silently dropped.
- */
-const CRON_JOBS_SOURCES = new Set<string>(["@lunora/scheduler", "@lunora/server"]);
-
-/**
- * Decide whether a callee identifier refers to the framework's `cronJobs`.
+ * Decide whether a callee identifier refers to the framework's `cronJobs` —
+ * imported from `@lunora/scheduler` (its home), `@lunora/server` (which
+ * re-exports it), or `lunorash/server` (the same through the umbrella). An
+ * unrecognized specifier drops every cron silently: `_generated/crons.ts` is not
+ * emitted at all, so the schedule never fires.
+ *
  * Mirrors `isDefineMigration`: trust the import declaration when the checker has
  * a symbol (so aliasing survives), and fall back to the surface text when no
  * symbol is available (no tsconfig wired up).
@@ -38,7 +35,7 @@ const isCronJobsFactory = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (!CRON_JOBS_SOURCES.has(declaration.getImportDeclaration().getModuleSpecifierValue())) {
+        if (!isCronSourceModule(declaration.getImportDeclaration().getModuleSpecifierValue())) {
             return false;
         }
 

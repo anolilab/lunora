@@ -6,13 +6,16 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "./diagnostics";
 import { listLunoraSourceFiles } from "./discover-functions";
 import type { MigrationIR } from "./ir";
+import { isServerPackageModule } from "./module-specifiers";
 
 /**
  * Decide whether a callee identifier refers to `@lunora/server`'s
- * `defineMigration`. Mirrors `resolveCalleeKind`: trust the import declaration
- * when the type checker has one (so `import { defineMigration as dm }` still
- * resolves), and fall back to the surface text when no symbol is available
- * (no tsconfig wired up).
+ * `defineMigration` (granular or through the `lunorash/server` umbrella subpath —
+ * an unrecognized specifier silently drops the migration from
+ * `LUNORA_MIGRATIONS`, so `lunora migrate up` finds nothing). Mirrors
+ * `resolveCalleeKind`: trust the import declaration when the type checker has one
+ * (so `import { defineMigration as dm }` still resolves), and fall back to the
+ * surface text when no symbol is available (no tsconfig wired up).
  */
 /** Strips a trailing `.ts` extension from a relative source path. */
 const TS_EXTENSION_RE = /\.ts$/u;
@@ -29,7 +32,7 @@ const isDefineMigration = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (declaration.getImportDeclaration().getModuleSpecifierValue() !== "@lunora/server") {
+        if (!isServerPackageModule(declaration.getImportDeclaration().getModuleSpecifierValue())) {
             return false;
         }
 

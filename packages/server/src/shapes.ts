@@ -48,17 +48,11 @@
 import { LunoraError } from "@lunora/errors";
 import type { InferValidatorMap, ValidatorMap } from "@lunora/values";
 
+import contextUserId from "./context-identity";
 import { validateArgs } from "./functions";
 import { deny, toWhereInput } from "./rls/predicates";
 import type { WhereInput } from "./rls/types";
 import type { QueryCtx as QueryContext } from "./types";
-
-/** Read the verified user id off a trusted shape context (`undefined` when anonymous). */
-const contextUserId = (context: unknown): string | undefined => {
-    const userId = (context as { auth?: { userId?: null | string } } | null)?.auth?.userId;
-
-    return userId ?? undefined;
-};
 
 /**
  * A shape declaration. `where` receives the trusted procedure context and the
