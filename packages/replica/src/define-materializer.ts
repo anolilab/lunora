@@ -200,6 +200,14 @@ class MaterializerRuntime {
             let appliedToAny = false;
             let anyChanged = false;
 
+            // Stage which materializers advanced; commit their watermarks only
+            // AFTER the unknown-event strategy has run without throwing (below).
+            // A throwing `"fail"` strategy must leave every watermark where it
+            // was, so a catch-and-retry re-surfaces this exact event instead of
+            // silently skipping it and under-reporting `count`. Every advance is
+            // to the same `entry.seq + 1`, so only the index needs staging.
+            const advancedIndices: number[] = [];
+
             for (const [i, materializer] of this.#materializers.entries()) {
                 const watermark = this.#watermarks[i] ?? 0;
 
@@ -216,7 +224,7 @@ class MaterializerRuntime {
                     anyChanged = true;
                 }
 
-                this.#watermarks[i] = entry.seq + 1;
+                advancedIndices.push(i);
             }
 
             if (!appliedToAny) {
@@ -225,7 +233,14 @@ class MaterializerRuntime {
             }
 
             if (!anyChanged) {
+                // May throw under the `"fail"` strategy — deliberately BEFORE
+                // the watermark commit below, so a throw leaves the watermark
+                // re-surfaceable.
                 this.#handleUnknownEvent(entry);
+            }
+
+            for (const index of advancedIndices) {
+                this.#watermarks[index] = entry.seq + 1;
             }
 
             count += 1;
@@ -293,16 +308,29 @@ class MaterializerRuntime {
             const raw = await this.#snapshotStore.load(materializer.def.name);
 
             if (raw !== null && typeof raw === "object") {
-                const snapshot = raw as { appliedSeq: number; state: unknown };
+                const snapshot = raw as { appliedSeq: unknown; state: unknown };
 
-                if (snapshot.state !== undefined) {
+                // Only accept a snapshot as a watermark when it is BOTH a
+                // valid non-negative seq AND carries restorable state. A row
+                // with a watermark but no `state` (partial write / adapter
+                // drift) would otherwise advance the watermark WITHOUT
+                // restoring state — permanently skipping events 0..appliedSeq —
+                // and a non-numeric `appliedSeq` would write `NaN` into the
+                // watermark, so the `Math.min(...)` fetch position feeds
+                // `getSince(NaN)` to the DO. On any malformed snapshot, leave
+                // the watermark at its current value (0 for a fresh runtime) so
+                // the runtime replays from the start — replaying more, never
+                // less.
+                if (Number.isSafeInteger(snapshot.appliedSeq) && (snapshot.appliedSeq as number) >= 0 && snapshot.state !== undefined) {
+                    const appliedSeq = snapshot.appliedSeq as number;
+
                     materializer.setState(snapshot.state);
-                }
 
-                this.#watermarks[i] = snapshot.appliedSeq;
+                    this.#watermarks[i] = appliedSeq;
 
-                if (snapshot.appliedSeq > maxSeq) {
-                    maxSeq = snapshot.appliedSeq;
+                    if (appliedSeq > maxSeq) {
+                        maxSeq = appliedSeq;
+                    }
                 }
             }
         }

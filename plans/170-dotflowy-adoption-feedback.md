@@ -351,6 +351,33 @@ diverge: `deleteSavedQueryRow` on the client maps to `"mutators:deleteSavedQuery
 `defineMutator({ serverRef: api.mutators.insertSibling })` — with the string form kept for
 escape-hatch use.
 
+> **Follow-up (2026-07-26).** PR #187 landed the `@lunora/db` half — `defineMutator`
+> accepted a `MutatorReference` — but codegen never emitted `api.mutators.*`, so the
+> reference form had nothing to point at and dotflowy's re-port stayed on the string
+> escape hatch (reported on #310 after the post-#187 purge). Closed by:
+>
+> - `discoverMutators` now lifts each mutator's `args` validator map and its `server`
+>   impl return type, and `emitApi` renders them as `api.mutators.<name>:
+FunctionReference<"mutation", Args, Return>` — a real function reference, since a
+>   mutator already dispatches through `LUNORA_FUNCTIONS` with `kind: "mutation"`.
+> - The `@lunora/db` overload was itself unusable: `R extends MutatorReference<never>`
+>   rejects any reference carrying a concrete arg type (`{ text: string }` is not
+>   assignable to `never`), so a real generated reference fell through to the
+>   `serverRef: string` overload and failed. It now infers directly —
+>   `<TArgs>(… serverRef: MutatorReference<TArgs>)`.
+> - `_generated/server.ts` re-exports a project-bound `defineMutator` (typed
+>   `MutationCtx`), which also answers the 33 `const mctx = ctx as unknown as MutatorCtx`
+>   casts in dotflowy's `lunora/mutators.ts` — the server context was the untyped base
+>   `MutationCtx`, with no schema-typed `ctx.db`. Discovery accepts the
+>   `_generated/server` specifier so the typed authoring path registers.
+>
+> Two latent bugs surfaced while emitting the first checker-rendered mutator types, both
+> pre-existing for ordinary functions and both fixed: an extensionless
+> `import("./_generated/dataModel")` qualifier (written by a function file that follows
+> the no-`.js` convention) emitted a TS2835 into `_generated/*`, and an
+> `import("@lunora/values").Id<…>` qualifier was a TS2307 for an umbrella-only app that
+> declares no `@lunora/values`.
+
 ### 18. Client mutator boilerplate is mechanical
 
 `lunora-outline-store.ts` is 694 lines, ~600 of which are 23 near-identical blocks: repeat
@@ -419,3 +446,167 @@ leverage thing Lunora can do with this feedback.
 3. **#5, #6** — typed server client + real collection factories. Biggest boilerplate delete.
 4. **#7, #8, #16** — Playwright double, `deny()`, BYO-auth guide.
 5. The rest as capacity allows.
+
+---
+
+## Second pass (2026-07-26) — re-read of #310 after #187
+
+The port was re-done on top of the shipped #187 fixes (dotflowy PR #310, now merged) and
+one gap was reported back on the PR: `serverRef` was still a string. Re-reading the merged
+code found the cause plus three more, listed with their evidence. #17b/#17c are fixed in
+the same change as #17 above; 22–24 are open.
+
+### 17b. `_generated/server.ts` exported no `defineMutator` — FIXED
+
+`lunora/mutators.ts` opens with a **hand-written 30-line `MutatorCtx`** type and then
+repeats `const mctx = ctx as unknown as MutatorCtx;` **33 times** — once per mutator.
+Cause: `defineMutator`'s `ServerContext` defaults to `@lunora/server`'s untyped base
+`MutationCtx`, and codegen re-exported project-typed `query`/`mutation`/`action`/
+`definePolicy`/`v` from `_generated/server.ts` but **not** `defineMutator`. So the one
+authoring surface with no typed form was the one whose `ctx.db` writes need the schema
+most.
+
+**Fixed.** `_generated/server.ts` re-exports a project-bound `defineMutator`, and
+discovery accepts the `_generated/server` specifier so the typed path still registers.
+
+### 17c. The `@lunora/db` reference overload could never match — FIXED
+
+`defineMutator`'s second overload was `<R extends MutatorReference<never>>`. A generated
+reference carries a concrete arg type in its phantom, and `{ text: string }` is not
+assignable to `never` — so a real `api.mutators.*` reference failed the constraint, fell
+through to the `serverRef: string` overload, and errored. The overload shipped in #187 was
+never exercised against a typed reference (its test used a bare `{ __lunoraRef }`
+literal), which is why the hole survived review.
+
+**Fixed.** `<TArgs>(… serverRef: MutatorReference<TArgs>)` — inference straight off the
+phantom, covered by a test that asserts the inferred `args` type, not just the runtime path.
+
+### 22. Reads are owner-scoped declaratively; writes are not — FIXED
+
+`lunora/shapes.ts` is four lines per shape because #9 shipped `defineShape({ owner: true })`.
+The write side got no counterpart: every one of the 23 mutators declares a redundant
+`userId: v.string()` arg that the client must pass and the server must not trust, then
+opens with `assertOwner(mctx, args.userId)` against `ctx.auth.userId`. The shard key
+already _is_ the user, and the DO already verified the identity that resolved it.
+
+**Fix.** Give `defineMutator` the same primitive — `owner: true` (or an implicit
+owner-scope on a `.ownedBy()` table) that asserts `ctx.auth` against the shard/row owner
+before `server` runs, and lets the arg be dropped entirely. Cheaper than 23 hand-written
+guards and impossible to forget on mutator number 24.
+
+**Fixed** as `owner: "<column>"` on `MutatorDefinition`. Before `server` runs the mutator
+requires a verified identity (an anonymous caller is rejected outright — the same
+fail-closed rule an `owner`-scoped shape applies to reads, since filtering on a nullish
+value would match a nullable owner column), rejects a client-supplied owner that disagrees
+with the session as a `403`, and then sets the column to the verified value. So the impl
+reads `args[owner]` without trusting the client, and declaring the column `v.optional(...)`
+drops it from the wire entirely.
+
+It takes the column NAME rather than a shape's `true`, and that difference is deliberate: a
+shape is bound to one `table`, so the table's `.ownedBy(field)` resolves unambiguously,
+while one mutator may write several tables and has no single owning table to read it from.
+Resolving `true` would mean either threading a schema-derived `ownerField` through the
+generic `handler(ctx, args)` dispatch seam every registered function shares, or teaching
+codegen to discover `.ownedBy()` (which `TableIR` does not carry today) — real plumbing for
+one saved string literal.
+
+### 23. `bindMutators`' `collections` map is type-erased — FIXED
+
+`BindMutatorsContext.collections` is `Record<string, Collection<Row, string>>`.
+`Collection` is invariant in its row type, so a generated collection is not assignable and
+every entry needs a cast:
+
+```ts
+collections: { nodes: collection as never, tagColors: tagColors as never, … }
+```
+
+The knock-on effect is worse than the cast: because `ctx.collections.nodes` comes back
+untyped, none of the 23 `apply` bodies use the context at all — they close over the
+module-scope `collection` variable instead, so the one seam `@lunora/db` provides for the
+optimistic body is dead code in the only production port of it.
+
+**Fix.** Make `bindMutators` generic over the collections map (as `defineCollections`
+already is) and thread that map into `ClientMutatorContext`, so `collections.nodes` is the
+concrete `Collection<Doc<"nodes"> & Row>`.
+
+**Fixed.** `ClientMutatorContext`, `ClientMutatorDef`, and `BindMutatorsContext` are now
+generic over the map, and `initMutators<TCollections>()` binds `defineMutator` +
+`bindMutators` to a project's collections in one place (mirroring
+`initLunora.dataModel<DataModel>().create()`). `bindMutators` takes the concrete
+collections cast-free and `apply` reads `collections.<name>` at its real row type. The
+standalone `defineMutator` / `bindMutators` keep working against the widest map, so nothing
+existing breaks.
+
+### 24. A fire-and-forget mutator has no error hook — FIXED
+
+`BindMutatorsContext` has no `onError`/`onWriteRejected` (the outbox path does), so a
+mutator called for its side effect leaves an unhandled rejection on `isPersisted`. The app
+wraps every such call:
+
+```ts
+export function trackLunoraMutation(tx: { isPersisted: { promise: Promise<unknown> } }): void {
+    tx.isPersisted.promise.catch(notifySaveFailed);
+}
+```
+
+Eight call sites in `lunora-sync.ts` go through it, and forgetting one is a silent
+unhandled rejection rather than a visible failure.
+
+**Fix.** An `onWriteRejected(error, { mutator, args })` on `BindMutatorsContext` —
+symmetric with the outbox — that consumes the rejection so the un-awaited call is safe by
+default.
+
+**Fixed** as `onWriteRejected(event: MutatorRejectedEvent)` — `{ args, code, error, mutator,
+serverRef }`, matching the outbox hook's shape. Setting it also consumes the `isPersisted`
+rejection, so a fire-and-forget call no longer leaves an unhandled rejection; a caller that
+awaits still sees it. Deliberately opt-in: attaching a `.catch` unconditionally would
+swallow dropped writes for callers who never asked for the hook. A throwing listener is
+swallowed, so reporting a failure cannot manufacture a second one.
+
+### Not gaps, worth relaying
+
+- `applyPlanToCollections` / `applyPlanToDb` (#18's shared-planner answer) **shipped** in
+  `@lunora/db`. The port still carries its own `applyPlanToCollection` +
+  `commitPlan` twins; adopting the shipped pair deletes both and removes the client/server
+  drift risk they exist to manage.
+- The HMR teardown block at the bottom of `lunora-sync.ts` is app module state, not
+  something the framework can own — but it belongs in the local-first guide as a recipe.
+
+### 25. P0 — umbrella imports were silently dropped by discovery — FIXED
+
+Found while auditing whether anything else generates incorrectly. Every discoverer
+hard-coded its own set of accepted module specifiers, and three of them omitted the
+`lunorash/server` umbrella subpath — the form the umbrella exists to provide, and the one
+codegen itself emits into `_generated/*` when a project depends on it. Discovery skips an
+unrecognized specifier silently, so:
+
+| declared as                     | `@lunora/server` | `lunorash/server` (before)                                                               |
+| ------------------------------- | ---------------- | ---------------------------------------------------------------------------------------- |
+| `query` / `mutation` / `action` | registered       | **dropped** — absent from `api.ts` AND `LUNORA_FUNCTIONS`, so every call 404s at runtime |
+| `cronJobs()`                    | registered       | **dropped** — `_generated/crons.ts` not emitted at all; the schedule never fires         |
+| `defineMigration`               | registered       | **dropped** — `LUNORA_MIGRATIONS` empty; `lunora migrate up` finds nothing               |
+
+Codegen exits `ok` in all three cases. Reproduced end-to-end against `apps/playground`
+(a real `node_modules`, so the checker resolves the symbol and reaches the gate) by
+switching one function file, a `crons.ts`, and a `migrations.ts` to the umbrella form.
+
+Why it hid for so long: with no resolvable package the checker has no symbol, so every
+discoverer falls back to matching the identifier text and the specifier gate is never
+consulted — which is exactly the configuration the fixture tests run in. Nothing in the
+repo imported `query`/`mutation` from the umbrella either (the examples use
+`./_generated/server.js`, `apps/playground` did too), so the one form a real umbrella-only
+adopter would reach was the untested one. `discover-crons`' own comment already warned
+that a missed specifier "has every cron silently dropped" — and still missed the umbrella.
+
+**Fixed.** One shared `module-specifiers.ts` — `isServerSurfaceModule` (package + umbrella
+
+- generated re-export), `isServerPackageModule`, `isCronSourceModule` — now used by
+  functions, crons, migrations, mutators, shapes, env, and identity discovery. The
+  regression test installs a resolvable stub package into the fixture's own `node_modules`
+  so the specifier gate is genuinely exercised; it fails on all five factories if the
+  umbrella entry is removed.
+
+Add-on factories (`defineQueue`, `defineWorkflow`, `defineAgent`, `defineContainer`) stay
+scoped to `@lunora/queue` / `@lunora/workflow` / `@lunora/agent` / `@lunora/container`,
+which is correct — the umbrella ships no subpath for them. `httpRoute` and `defineSchema`
+match on identifier text with no specifier gate, so neither was affected.

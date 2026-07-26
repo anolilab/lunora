@@ -1,0 +1,170 @@
+---
+title: TypeScript
+description: Getting the most out of Lunora's end-to-end types — where types come from, what to annotate, and what to let inference do.
+---
+
+Lunora's types are not decoration. The schema is the single source of truth, and
+codegen turns it into types that flow from the database through your functions
+to the client. Most of the value comes from _not_ fighting that flow.
+
+## Where types come from
+
+There is one direction of travel:
+
+```text
+lunora/schema.ts  →  codegen  →  _generated/*  →  your functions  →  the client
+```
+
+`defineTable` columns are validators, and each validator carries the TypeScript
+type it parses to. So `v.string()` is not a runtime check that happens to be
+named after a type — it _is_ the type. Codegen reads the schema and emits:
+
+- `dataModel.ts` — `Doc<"table">` and `Id<"table">`
+- `server.ts` — `query` / `mutation` / `action` builders bound to your schema
+- `api.ts` — the `api` and `internal` reference namespaces
+
+Because those files are generated, the answer to "how do I type this?" is almost
+always "import it from `_generated`", not "write an interface".
+
+## Do not restate what is inferred
+
+The most common mistake porting a codebase in is annotating things that already
+have types.
+
+```ts
+// Redundant — the builder already knows.
+export const list = query
+    .input({ channelId: v.id("channels") })
+    .query(async ({ ctx, args }: { ctx: QueryCtx; args: { channelId: Id<"channels"> } }): Promise<Doc<"messages">[]> => {
+        // …
+    });
+
+// Idiomatic.
+export const list = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args: { channelId } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .collect();
+});
+```
+
+The second version infers the argument types from `.input(...)`, the row type
+from the schema, and the return type from the body — and it stays correct when
+the schema changes, which the first does not.
+
+Annotate at the edges, where a type is a contract rather than a consequence:
+helper functions, module boundaries, and anything the client depends on.
+
+## Reach for `Doc` and `Id`
+
+When you do need to name a type — a helper, a component prop, a shared utility —
+use the generated ones rather than hand-written interfaces:
+
+```ts
+import type { Doc, Id } from "@/lunora/_generated/dataModel";
+
+const format = (message: Doc<"messages">): string => `${message.userId}: ${message.text}`;
+
+const isAuthor = (message: Doc<"messages">, userId: Id<"users">): boolean => message.userId === userId;
+```
+
+`Id<"users">` is branded, so passing a `messages` id where a `users` id belongs is
+a compile error rather than a runtime mystery. `Doc<"messages">` includes the
+framework-managed `_id` and `_creationTime`, so you never re-declare them.
+
+## Pin the client contract with `.output()`
+
+A function's inferred return type is whatever the body happens to produce, which
+means an incidental change to the body is a breaking change to the client. When a
+function is a contract, declare its shape:
+
+```ts
+export const publicProfile = query
+    .input({ userId: v.id("users") })
+    .output(v.object({ name: v.string(), avatarUrl: v.optional(v.string()) }))
+    .query(async ({ ctx, args: { userId } }) => {
+        const user = await ctx.db.get(userId);
+
+        return { name: user!.name, avatarUrl: user!.avatarUrl };
+    });
+```
+
+`.output(...)` does two jobs at once: it validates at runtime, so a mistake cannot
+leak an unintended field to a client, and it fixes the type the client sees. This
+matters most on anything public — see [Masking](/docs/concepts/masking) for
+column-level redaction.
+
+## Optional versus null in types
+
+`v.optional(v.string())` produces `string | undefined` — the field may be absent.
+`v.union(v.string(), v.null())` produces `string | null` — the field is present
+and explicitly empty. Choose deliberately; the write path enforces the difference
+(setting a field to `undefined` in a `patch` is an error, not a no-op). See
+[Data types](/docs/concepts/data-types).
+
+## Bringing your own validators
+
+If your codebase already standardises on Zod, Valibot, or ArkType, `v.from(...)`
+adapts any [Standard Schema](https://standardschema.dev) validator for **function
+arguments**:
+
+```ts
+import { z } from "zod";
+
+export const search = query.input({ filters: v.from(z.object({ tags: z.array(z.string()) })) }).query(async ({ args }) => {
+    // args.filters is typed from the Zod schema
+});
+```
+
+It is deliberately not allowed as a table column — the schema is what codegen,
+the Studio, and the advisors read, so table types stay in `v.*`. Validation is
+also synchronous, so a validator returning a Promise throws.
+
+## Project configuration
+
+Scaffolded projects compile with `moduleResolution: "bundler"` and `strict: true`:
+
+```json title="tsconfig.json"
+{
+    "compilerOptions": {
+        "target": "ES2024",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "strict": true,
+        "isolatedModules": true,
+        "noEmit": true,
+        "types": ["@cloudflare/workers-types"]
+    },
+    "include": ["src/**/*", "lunora/**/*"]
+}
+```
+
+`@cloudflare/workers-types` is what makes the platform globals — `fetch`,
+`WebSocket`, the binding types — resolve. `strict` is not optional in practice:
+most of what the generated types buy you is nullability information, and
+`strictNullChecks` is what makes it load-bearing.
+
+Alias the generated directory (`@/lunora/_generated/*`) so imports stay short and
+moving a file does not rewrite a path.
+
+## Keeping types honest in CI
+
+Generated files are deterministic — commit them, and let CI prove they match the
+schema:
+
+```bash
+lunora verify     # wrangler validation + codegen dry-run + tsc --noEmit
+lunora prepare    # the same pre-deploy pipeline, without the network
+```
+
+`verify` writes nothing and exits non-zero on any error — including breaking
+schema drift — so it gates a merge. Without a gate like it, a stale `_generated/`
+deploys against old types and the type system silently stops describing reality.
+
+## See also
+
+- [Generated code](/docs/concepts/generated-code)
+- [Validation](/docs/concepts/validation)
+- [Data types](/docs/concepts/data-types)
+- [Document IDs](/docs/concepts/document-ids)
+- [Best practices](/docs/concepts/best-practices)

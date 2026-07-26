@@ -1,3 +1,38 @@
+## @lunora/auth [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/%40lunora%2Fauth%401.0.0-alpha.44...%40lunora%2Fauth%401.0.0-alpha.45) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.39
+
+## @lunora/auth [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/%40lunora%2Fauth%401.0.0-alpha.43...%40lunora%2Fauth%401.0.0-alpha.44) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.38
+
+## @lunora/auth [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/%40lunora%2Fauth%401.0.0-alpha.42...%40lunora%2Fauth%401.0.0-alpha.43) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.37
+
+## @lunora/auth [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/%40lunora%2Fauth%401.0.0-alpha.41...%40lunora%2Fauth%401.0.0-alpha.42) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.36
+
+## @lunora/auth [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/%40lunora%2Fauth%401.0.0-alpha.40...%40lunora%2Fauth%401.0.0-alpha.41) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.35
+
 ## @lunora/auth [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/%40lunora%2Fauth%401.0.0-alpha.39...%40lunora%2Fauth%401.0.0-alpha.40) (2026-07-25)
 
 

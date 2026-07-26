@@ -31,7 +31,6 @@
  *
  * // Your event-sourced state machine
  * const source = new EventSource(initialState, reducer);
- * let cachedState = source.state;
  *
  * const sync = new EventsSync({
  *   // Transport: fetch events since last known seq
@@ -42,13 +41,10 @@
  *     source.apply(events.map(e => ({ type: e.type, payload: e.payload })));
  *   },
  *
- *   // Convert updated state to table diffs
- *   getTableDiffs: () => {
- *     const next = source.state;
- *     const diffs = myDiffFn(cachedState, next);
- *     cachedState = next;
- *     return diffs;
- *   },
+ *   // Recompute a FULL diff from the current mirror-vs-source state.
+ *   // MUST be idempotent: no cursor side-effect — calling it twice without
+ *   // new events returns the same diffs, so a failed batch can be retried.
+ *   getTableDiffs: () => diffMirrorAgainst(source.state),
  *
  *   mirror: myLocalMirror,
  *   pollInterval: 3000,
@@ -97,8 +93,17 @@ export interface EventsSyncOptions {
      * Produce {@link TableDiff | TableDiffs} from the current derived state.
      *
      * Called after every batch of events has been applied. The consumer
-     * compares the state _before_ and _after_ the batch and returns the
-     * diffs needed to bring the LocalMirror up to date.
+     * **recomputes a full diff from the current mirror-vs-source state** and
+     * returns the diffs needed to bring the LocalMirror up to date.
+     *
+     * **MUST be idempotent** — it must NOT advance a one-shot cursor as a side
+     * effect. A batch that fails partway (a `mirror.applyDiff` throws) is
+     * retried on the next poll from the same watermark; if this call consumed a
+     * cursor on the first attempt it would return `[]` on the retry and the
+     * un-mirrored diffs would be lost forever. Recompute-from-current-state has
+     * no such hazard: calling it again with no new events returns the same
+     * diffs, and calling it after a partial mirror write returns exactly the
+     * diffs still missing from the mirror.
      *
      * Return an empty array when there are no changes to push to the mirror.
      */
@@ -239,18 +244,36 @@ export class EventsSync {
     }
 
     /**
-     * One poll cycle: fetch → (apply → diff → mirror) per event.
+     * One poll cycle: fetch the whole batch since the watermark, then drive it
+     * through the pipeline as ONE atom — `applyEvents` → `getTableDiffs` →
+     * mirror fan-out → advance the watermark.
      *
-     * Each event is driven through the FULL pipeline — `applyEvents`,
-     * `getTableDiffs`, and `mirror.applyDiff` — atomically before the
-     * watermark advances past it (REPLICA-08). Advancing the watermark any
-     * earlier (e.g. right after `applyEvents`) would let a later throw from
-     * `getTableDiffs`/`mirror.applyDiff` skip mirror delivery for that event
-     * PERMANENTLY, since the next poll would never re-fetch it. Keeping the
-     * watermark pinned to the last event whose entire pipeline succeeded
-     * means the next poll re-fetches exactly the unapplied remainder — never
-     * re-applying a fully-succeeded event, never silently dropping one that
-     * partially failed.
+     * ## Whole batch as one atom
+     *
+     * A returning-from-offline client with a large backlog drives the WHOLE
+     * fetched batch through the pipeline once: a single `applyEvents(events)`,
+     * a single `getTableDiffs()`, and a single mirror fan-out. A 500-event
+     * catch-up therefore computes ONE aggregate diff and issues ONE mirror
+     * round, not 500 of each. The watermark advances past the last event **only
+     * after** every diff has been mirrored — it is the LAST statement in the
+     * try, reached only on full success.
+     *
+     * ## Atomicity on failure — retry the whole batch from a clean state
+     *
+     * If any stage throws (`applyEvents`, `getTableDiffs`, or a
+     * `mirror.applyDiff` partway through the fan-out), control falls to the
+     * catch: the error is surfaced via `onError` and the watermark is left
+     * exactly where it was. The next poll therefore re-fetches the SAME batch
+     * from the same watermark and re-derives the still-missing diffs.
+     *
+     * This is safe — and lossless — precisely because `getTableDiffs` is
+     * required to be idempotent (recompute-from-current-mirror-state, no
+     * one-shot cursor; see its contract). A partial mirror write on the failed
+     * attempt leaves the mirror ahead for the diffs that landed; the retry's
+     * `getTableDiffs` returns exactly the diffs still missing, and
+     * `mirror.applyDiff` is itself idempotent (deterministic `deriveInsertId`).
+     * No un-mirrored diff suffix is ever stranded, and the watermark never
+     * advances past a diff the mirror never received.
      */
     async #pollOnce(): Promise<number> {
         try {
@@ -260,34 +283,26 @@ export class EventsSync {
                 return 0;
             }
 
-            let appliedCount = 0;
+            // ── Whole batch as ONE atom ───────────────────────────────────
+            // Any throw below skips the watermark advance and lands in the
+            // catch: the watermark stays put and the next poll re-fetches and
+            // (via the idempotent getTableDiffs) re-derives the missing diffs.
+            this.#options.applyEvents(events);
 
-            try {
-                for (const event of events) {
-                    this.#options.applyEvents([event]);
+            const diffs = this.#options.getTableDiffs();
 
-                    const diffs = this.#options.getTableDiffs();
-
-                    for (const diff of diffs) {
-                        this.#options.mirror.applyDiff(diff);
-                    }
-
-                    // Only advance the watermark once state, diff generation,
-                    // AND mirror persistence have all succeeded for this
-                    // event — a throw at any stage above leaves the
-                    // watermark where it was, so the next poll retries this
-                    // event (and only this event) instead of permanently
-                    // skipping it.
-                    this.#watermark = event.seq + 1;
-                    appliedCount += 1;
-                }
-            } catch (error) {
-                const onError = this.#options.onError ?? console.error;
-
-                onError(error);
+            for (const diff of diffs) {
+                this.#options.mirror.applyDiff(diff);
             }
 
-            return appliedCount;
+            // Every stage succeeded for the whole batch — advance past the last
+            // event in one step. This is the last statement, so it is reached
+            // only when every diff above has been mirrored.
+            const lastEvent = events[events.length - 1] as EventLogEntry;
+
+            this.#watermark = lastEvent.seq + 1;
+
+            return events.length;
         } catch (error: unknown) {
             const onError = this.#options.onError ?? console.error;
 

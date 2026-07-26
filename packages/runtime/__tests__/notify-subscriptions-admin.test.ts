@@ -112,6 +112,27 @@ describe("createWorker — __lunora_admin__:listPushSubscriptions", () => {
         expect(body.subscriptions[0]).toMatchObject({ id: "fcm:1", kind: "fcm" });
     });
 
+    it("clamps a fractional limit (0 < limit < 1) to the default cap instead of collapsing to an unbounded read", async () => {
+        expect.assertions(1);
+
+        let capturedLimit: unknown;
+        const store = {
+            list: async (filter?: { limit?: number }): Promise<ReadonlyArray<Record<string, unknown>>> => {
+                capturedLimit = filter?.limit;
+
+                return [webPushDevice];
+            },
+        } as unknown as NotifySubscriptionStoreLike;
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, notifySubscriptionStore: store, shardDO: noopNamespace });
+
+        await worker.fetch(listRequest({ args: { limit: 0.5 }, token: ADMIN_TOKEN }), {}, fakeContext);
+
+        // 0.5 truncates to 0; the guard must fall back to the 1000 cap, NOT pass 0 —
+        // the d1-store reads a non-positive limit as "no LIMIT" (a full-table read).
+        expect(capturedLimit).toBe(1000);
+    });
+
     it("is default-closed: a non-admin request is FORBIDDEN (403) and reads no devices", async () => {
         expect.assertions(3);
 

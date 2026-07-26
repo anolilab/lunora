@@ -228,4 +228,152 @@ describe("shardDO trace sampling", () => {
             database.close();
         }
     });
+
+    it("flushes a sampled-out trace's held error span even after the ring evicted it (eviction race closed)", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            let markRecorded!: () => void;
+            const slowRecorded = new Promise<void>((resolve) => {
+                markRecorded = resolve;
+            });
+            let releaseSlow!: () => void;
+            const slowGate = new Promise<void>((resolve) => {
+                releaseSlow = resolve;
+            });
+
+            shard.plan = async (trace, functionPath) => {
+                if (functionPath === "slow:out") {
+                    // Sampled out + errors: the span is held on the per-trace entry.
+                    await trace("slow-error", () => {
+                        throw new Error("boom");
+                    }).catch(() => undefined);
+                    markRecorded();
+                    // Park so this dispatch's `finally` (which flushes the held error
+                    // span) runs AFTER the flood below has evicted it from the ring.
+                    await slowGate;
+
+                    return;
+                }
+
+                // Flood a DIFFERENT (sampled-in) trace with more spans than the span
+                // ring can hold, so the slow trace's held error span is evicted FROM
+                // THE RING while its dispatch is parked. The held spans now live on the
+                // per-trace entry, not the ring, so the flush must still find it — the
+                // ring-copy implementation would silently drop it here.
+                for (let index = 0; index < 550; index += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- ordering is the point: fill the ring sequentially so the oldest (slow-error) is evicted.
+                    await trace(`filler-${index.toString()}`, () => undefined);
+                }
+            };
+
+            const slow = shard.fetch(request("slow:out", { keepErrors: true, sampled: false, traceId: TRACE_ID }));
+
+            await slowRecorded;
+
+            // Sampled-in flood on its own trace: streams live AND fills the ring past
+            // capacity, evicting the slow trace's held error span from the ring.
+            await shard.fetch(request("flood:in", { sampled: true, traceId: TRACE_ID_B }));
+
+            releaseSlow();
+            await slow;
+
+            expect(shard.exportedSpans.filter((span) => span.traceId === TRACE_ID).map((span) => span.name)).toContain("slow-error");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("does not export a span that ends after its sampled-out dispatch tore down (late-span verdict snapshot)", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            let markStarted!: () => void;
+            const started = new Promise<void>((resolve) => {
+                markStarted = resolve;
+            });
+            let releaseLate!: () => void;
+            const lateGate = new Promise<void>((resolve) => {
+                releaseLate = resolve;
+            });
+            let latePromise!: Promise<void>;
+
+            shard.plan = async (trace) => {
+                // Detached: the body parks on the gate, so the dispatch returns — and
+                // its `finally` deletes the traceSampling entry — while the span is
+                // still open. This is the streaming-AI-SDK / detached-hook shape.
+                latePromise = trace("late", async () => {
+                    markStarted();
+                    await lateGate;
+                });
+                await started;
+            };
+
+            await shard.fetch(request("a:b", { keepErrors: true, sampled: false }));
+
+            // Dispatch settled, entry gone; the span has not recorded yet.
+            expect(shard.exportedSpans).toHaveLength(0);
+
+            releaseLate();
+            await latePromise;
+
+            // The late span records now, with NO live traceSampling entry. The verdict
+            // snapshotted when it opened (sampled out) is honoured — it is dropped, not
+            // exported. Before the fix a missing entry fell through to an unconditional
+            // export, leaking an orphan child of a sampled-out trace.
+            expect(shard.exportedSpans).toHaveLength(0);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("still exports a span that ends after a sampled-in dispatch tore down", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            let markStarted!: () => void;
+            const started = new Promise<void>((resolve) => {
+                markStarted = resolve;
+            });
+            let releaseLate!: () => void;
+            const lateGate = new Promise<void>((resolve) => {
+                releaseLate = resolve;
+            });
+            let latePromise!: Promise<void>;
+
+            shard.plan = async (trace) => {
+                latePromise = trace("late", async () => {
+                    markStarted();
+                    await lateGate;
+                });
+                await started;
+            };
+
+            await shard.fetch(request("a:b", { sampled: true }));
+
+            // Parked span hasn't recorded yet.
+            expect(shard.exportedSpans).toHaveLength(0);
+
+            releaseLate();
+            await latePromise;
+
+            // No live entry now, but the open-time snapshot (sampled in) keeps it — a
+            // kept trace's late span still exports.
+            expect(shard.exportedSpans.map((span) => span.name)).toContain("late");
+        } finally {
+            database.close();
+        }
+    });
 });

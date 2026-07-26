@@ -15,7 +15,7 @@
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
 import type { MetricEvent } from "../../../shared/metric-event";
-import type { TraceSamplingConfig } from "../../../shared/sampling";
+import type { TraceSamplingConfig, TraceSamplingDecision } from "../../../shared/sampling";
 import { resolveTraceSampling, shouldExportTrace } from "../../../shared/sampling";
 import type { SpanEvent } from "../../../shared/span-event";
 
@@ -180,6 +180,31 @@ export interface ObservabilitySink {
      */
     instrumentDatabase?: "off" | "spans" | "summary";
 
+    /**
+     * **Opt-in, default `false`.** Durable per-minute rollups of every
+     * `ctx.metrics.*` measurement, kept in a reserved per-shard SQLite table so the
+     * Studio can chart a 24h local trend without an external collector.
+     *
+     * Off by default because it is **not free**: each `ctx.metrics.count/gauge/record`
+     * becomes a durable SQLite write (a billed, rate-limited storage op that competes
+     * with your app's own data for the shard's write budget), on the request path. The
+     * live cross-instance path is `onMetric` → your collector; this is only the local
+     * trend convenience, so enable it deliberately.
+     *
+     * `true` uses the built-in caps (≈24h retention, 1000 distinct series). Pass an
+     * object to tune them: `maxSeries` bounds the distinct series tracked (a
+     * high-cardinality attribute otherwise mints a series per value), `retentionBuckets`
+     * the minute-buckets kept per series before older ones are trimmed.
+     *
+     * Pass this on the SAME sink object you give `createShardDO` — the DO reads it
+     * when recording a measurement.
+     */
+    // keep in sync with MetricHistoryOptions (`@lunora/do`'s `metric-history.ts`).
+    // Inlined rather than imported so this public runtime type stays free of a
+    // (type) dependency on `@lunora/do`'s internal module — the object is the same
+    // `{ maxSeries?, retentionBuckets? }` the DO consumes.
+    metricHistory?: boolean | { maxSeries?: number; retentionBuckets?: number };
+
     /** Invoked once per `ctx.log.*` call from a function handler. */
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
 
@@ -219,23 +244,39 @@ export interface ObservabilitySink {
  * sink-originating throw bubble up past this point. `context.waitUntil`, when
  * supplied, lets a network sink keep its send alive past the response.
  *
- * `sampling` applies the trace-sampling verdict to this dispatch's SERVER span:
- * the event is dropped unless the trace was head-sampled or (with errors
- * force-kept) this dispatch errored — the tail bias. A dispatch with no
- * `traceId` (a fan-out aggregation, which mints none) is always kept, and an
- * absent `sampling` keeps everything, so both are backward-compatible.
+ * The verdict applied to this dispatch's SERVER span comes from `decision` when
+ * the caller settled one — pass the dispatch's already-settled decision so the
+ * export gate can never disagree with the propagated `traceparent` (a trace kept
+ * or dropped as a whole, per PR #191). Its `isTraced` must carry the propagated
+ * sampled bit (`trace.sampled`), not the raw head verdict, so a trusted upstream
+ * that sampled the trace out keeps its SERVER span out here too. The event is
+ * dropped unless the trace was sampled or (with errors force-kept) this dispatch
+ * errored — the tail bias.
+ *
+ * `sampling` is the legacy fallback for callers with no settled decision: it
+ * re-derives the verdict from `event.traceId`. A dispatch with no `traceId` (a
+ * fan-out aggregation, which mints none) is always kept, and both an absent
+ * `decision` and an absent `sampling` keep everything, so all are
+ * backward-compatible.
  */
 export const emitRpcEvent = (
     sink: ObservabilitySink | undefined,
     event: ObservabilityEvent,
     context?: ObservabilitySinkContext,
     sampling?: TraceSamplingConfig,
+    decision?: TraceSamplingDecision,
 ): void => {
     if (!sink?.onRpc) {
         return;
     }
 
-    if (sampling !== undefined && event.traceId !== undefined && !shouldExportTrace(resolveTraceSampling(sampling, event.traceId), !event.ok)) {
+    if (decision !== undefined) {
+        // Settled-verdict path: honor the decision the dispatch already made
+        // (including a trusted upstream's sampled-out `00`), never re-derive it.
+        if (!shouldExportTrace(decision, !event.ok)) {
+            return;
+        }
+    } else if (sampling !== undefined && event.traceId !== undefined && !shouldExportTrace(resolveTraceSampling(sampling, event.traceId), !event.ok)) {
         return;
     }
 

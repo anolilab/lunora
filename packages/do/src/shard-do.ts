@@ -44,7 +44,7 @@ import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
-import { parseTraceparent } from "../../../shared/otlp";
+import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -138,6 +138,7 @@ import { LogBuffer } from "./log-buffer";
 import type { RecordMailInput } from "./mail-catcher";
 import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 import { MetricBuffer } from "./metric-buffer";
+import type { MetricHistoryOptions } from "./metric-history";
 import { readMetricHistory, recordMetricHistory } from "./metric-history";
 import { armRestore, readBookmark } from "./pitr";
 import type { QueryStatEntry } from "./query-metrics";
@@ -234,6 +235,17 @@ interface TelemetrySink {
      * emits nothing extra. Mirror of `@lunora/runtime`'s `ObservabilitySink`.
      */
     instrumentDatabase?: DatabaseInstrumentation;
+
+    /**
+     * **Opt-in, default off.** Durable per-minute `ctx.metrics.*` rollups written to
+     * the reserved per-shard SQLite table (the Studio's local trend chart). Off by
+     * default because every measurement then costs a durable SQLite write on the
+     * request path — the live cross-instance path is `onMetric`, this is only the
+     * local convenience. An object tunes the caps (`maxSeries` / `retentionBuckets`);
+     * `true` uses the built-in defaults. Mirror of `@lunora/runtime`'s
+     * `ObservabilitySink`.
+     */
+    metricHistory?: boolean | MetricHistoryOptions;
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
@@ -1325,6 +1337,16 @@ const dispatchSpanKey = (anchor: TraceAnchor): string => `${anchor.traceId}:${an
 const MAX_TRACKED_DISPATCH_SPANS = 256;
 
 /**
+ * Bound on the per-trace held-span array a sampled-out dispatch accumulates for
+ * the tail-bias flush (see {@link ShardDO.recordSpan}). Matches the span ring's
+ * capacity — a trace holding more spans than the whole ring could retain is
+ * already pathological, and the array is dropped wholesale when the dispatch
+ * `finally` deletes the `traceSampling` entry, so this is a backstop against a
+ * runaway single trace, not a working set.
+ */
+const MAX_HELD_SPANS_PER_TRACE = 500;
+
+/**
  * `event.name` of the per-dispatch wide event. Namespaced so it never collides
  * with an application's own `ctx.log.event(...)` names, and stable because
  * dashboards and alerts will filter on it.
@@ -1990,12 +2012,17 @@ abstract class ShardDO {
      * before — when false, `ctx.trace` INTERNAL spans are held out of the live export
      * and re-decided in the dispatch `finally` as a tail bias), `keepErrors` (the
      * runtime's `x-lunora-sample-errors` / `alwaysSampleErrors` toggle — a sampled-out
-     * trace that errored is still exported whole unless off), and `sink` (captured
+     * trace that errored is still exported whole unless off), `sink` (captured
      * when a sampled-out span is first held, so the `finally` can flush the trace's
-     * held spans). Registered at dispatch entry by the dispatch's own `traceId`, read
-     * by `span.traceId`, and deleted in the `finally`.
+     * held spans), and `held` (the sampled-out spans themselves, buffered ON THIS
+     * ENTRY rather than read back from the shared span ring — the ring is bounded and
+     * a concurrent trace could evict this trace's error spans before the flush, which
+     * would silently defeat `alwaysSampleErrors`; bounded by
+     * {@link MAX_HELD_SPANS_PER_TRACE}). Registered at dispatch entry by the
+     * dispatch's own `traceId`, read by `span.traceId`, and deleted in the `finally`
+     * (which drops `held` with it, so no spans leak past the dispatch).
      */
-    private traceSampling = new Map<string, { keepErrors: boolean; sampled: boolean; sink?: TelemetrySink }>();
+    private traceSampling = new Map<string, { held?: SpanEvent[]; keepErrors: boolean; sampled: boolean; sink?: TelemetrySink }>();
 
     /**
      * The per-dispatch **wide event** — everything a handler attached through
@@ -4387,12 +4414,18 @@ abstract class ShardDO {
      * resolved sink sets `fuseCloudflareTraces` (see {@link resolveCloudflareTracing}).
      */
     protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer {
+        // Resolve the anchor once so its `sampled` verdict is snapshotted for every
+        // span this tracer records — carried to `recordSpan` rather than re-looked-up
+        // from `traceSampling` at span-close time, so a span that ends AFTER the
+        // dispatch tore its entry down still honours the trace's sampling decision.
+        const resolvedAnchor = anchor ?? resolveTraceAnchor(undefined);
+
         return createTracer({
-            anchor: anchor ?? resolveTraceAnchor(undefined),
+            anchor: resolvedAnchor,
             fuseCloudflareSpans: sink?.fuseCloudflareTraces === true,
             functionPath,
             record: (span) => {
-                this.recordSpan(span, sink);
+                this.recordSpan(span, sink, resolvedAnchor.sampled);
             },
             resolveCloudflareTracing,
             shardKey: this.runner.shardKey,
@@ -4440,7 +4473,7 @@ abstract class ShardDO {
             functionPath,
             mode,
             record: (recorded) => {
-                this.recordSpan(recorded, sink);
+                this.recordSpan(recorded, sink, anchor.sampled);
             },
             shardKey: this.runner.shardKey,
             // Parked on the dispatch entry rather than written through `ctx.span`:
@@ -4478,7 +4511,7 @@ abstract class ShardDO {
                 functionPath,
                 ...(typeof sink.traceFetch === "object" && sink.traceFetch.propagate !== undefined ? { propagate: sink.traceFetch.propagate } : {}),
                 record: (span) => {
-                    this.recordSpan(span, sink);
+                    this.recordSpan(span, sink, anchor.sampled);
                 },
                 shardKey: this.runner.shardKey,
                 userId: () => this.getCurrentUserId(),
@@ -4603,16 +4636,30 @@ abstract class ShardDO {
             this.metricSeries.push(stamped);
         });
 
-        // Durable per-minute rollups. Use the RAW storage handle, NOT `this.sql`:
-        // the getter instruments statements into the Query Insights leaderboard
-        // during a dispatch, and these housekeeping writes would be misattributed
-        // to the user function that recorded the metric (matching recordFunctionMetric
-        // et al., which all write through the raw handle for the same reason).
-        const rawSql = this.shardHost.sql as unknown as SqlExec;
+        // Durable per-minute rollups — OPT-IN (default off). Every measurement
+        // otherwise pays a billed, rate-limited SQLite write on the request path,
+        // competing with app data for the shard's write budget; the payoff is only
+        // the Studio's 24h local trend chart. The live cross-instance path is
+        // `sink.onMetric` below. Gated BEFORE touching `rawSql` so a disabled sink
+        // allocates nothing and runs no SQL.
+        const metricHistory = sink?.metricHistory;
 
-        bestEffort(() => {
-            recordMetricHistory(rawSql, stamped, exemplarTraceId);
-        });
+        if (metricHistory !== undefined && metricHistory !== false) {
+            // Use the RAW storage handle, NOT `this.sql`: the getter instruments
+            // statements into the Query Insights leaderboard during a dispatch, and
+            // these housekeeping writes would be misattributed to the user function
+            // that recorded the metric (matching recordFunctionMetric et al., which
+            // all write through the raw handle for the same reason).
+            const rawSql = this.shardHost.sql as unknown as SqlExec;
+            // Pass the tune object straight through: `recordMetricHistory` already
+            // coalesces every field with `?? DEFAULT`, so stripping `undefined`
+            // keys here bought nothing. `true` (no tuning) becomes `{}`.
+            const historyOptions: MetricHistoryOptions = typeof metricHistory === "object" ? metricHistory : {};
+
+            bestEffort(() => {
+                recordMetricHistory(rawSql, stamped, exemplarTraceId, historyOptions);
+            });
+        }
 
         // Optional export sink (the durable, cross-instance path).
         if (sink?.onMetric) {
@@ -5453,9 +5500,9 @@ abstract class ShardDO {
                     // The always-present skeleton, under OTel-ish names so the
                     // record is useful even from a handler that attached nothing
                     // but a couple of business fields.
-                    "lunora.duration_ms": durationMs,
-                    "lunora.function_path": functionPath,
-                    "lunora.ok": failure === undefined,
+                    [LUNORA_ATTR.durationMs]: durationMs,
+                    [LUNORA_ATTR.functionPath]: functionPath,
+                    [LUNORA_ATTR.ok]: failure === undefined,
                 },
                 wide.sink,
                 WIDE_EVENT_NAME,
@@ -5482,7 +5529,7 @@ abstract class ShardDO {
      * trace (a subscription re-run mints its own anchor), stream immediately.
      */
     // eslint-disable-next-line @typescript-eslint/member-ordering -- kept in the span-recording cluster (next to recordDispatchRootSpan) for cohesion rather than hoisted above every private member
-    protected recordSpan(span: SpanEvent, sink?: TelemetrySink): void {
+    protected recordSpan(span: SpanEvent, sink?: TelemetrySink, sampledSnapshot?: boolean): void {
         try {
             this.spans.push(span);
         } catch {
@@ -5493,15 +5540,49 @@ abstract class ShardDO {
             return;
         }
 
-        // Look the verdict up by the SPAN's own `traceId` (not the shared
+        // Look the live verdict up by the SPAN's own `traceId` (not the shared
         // `currentRequestTrace`, which a sibling dispatch may have overwritten by now).
         const sampling = this.traceSampling.get(span.traceId);
 
-        if (sampling && !sampling.sampled) {
-            // Sampled out: hold this span back and remember the sink so the
-            // `finally` can flush the trace's held spans if it turns out to error.
-            sampling.sink = sink;
+        if (sampling !== undefined) {
+            if (!sampling.sampled) {
+                // Sampled out, dispatch still in flight: hold this span back and
+                // remember the sink so the `finally` can flush the trace's held
+                // spans if it turns out to error. Held ON THIS PER-TRACE ENTRY —
+                // NOT re-read from the shared span ring at flush time, where a
+                // concurrent trace could have evicted these error spans first.
+                sampling.sink = sink;
 
+                // The synthetic dispatch root never goes to `onSpan`, so it is not
+                // held either — flushSampledOutTrace only ever emits `ctx.trace` spans.
+                if (span.dispatch !== true) {
+                    const held = sampling.held ?? (sampling.held = []);
+
+                    held.push(span);
+
+                    if (held.length > MAX_HELD_SPANS_PER_TRACE) {
+                        held.shift();
+                    }
+                }
+
+                return;
+            }
+
+            this.emitSpan(span, sink);
+
+            return;
+        }
+
+        // No LIVE `traceSampling` entry. Either a span from a self-anchored trace
+        // (an alarm or subscription re-run mints its own anchor and never registers
+        // one — those must export) or a LATE span whose dispatch already tore its
+        // entry down in the `finally` (a streaming AI-SDK span, a detached hook).
+        // Decide from the verdict snapshotted onto the span when it OPENED (the
+        // `createTracedFetch`/`anchor.sampled` pattern) rather than the deleted
+        // entry: a sampled-OUT late span is dropped (previously it fell through and
+        // exported unconditionally, leaking an orphan child of a sampled-out trace),
+        // a sampled-in one still exports.
+        if (sampledSnapshot === false) {
             return;
         }
 
@@ -5533,8 +5614,11 @@ abstract class ShardDO {
      * streamed live, so this returns early for it; a sampled-out trace exports its
      * held `ctx.trace` spans only when `alwaysSampleErrors` is set AND the trace
      * errored (the dispatch threw, or a held span settled `ok: false`) — the tail
-     * bias — and otherwise drops them. Held spans are read back from the local ring
-     * (excluding the synthetic dispatch root, which never goes to `onSpan`).
+     * bias — and otherwise drops them. Held spans are drained from the per-trace
+     * `held` array `recordSpan` accumulated (the synthetic dispatch root is never
+     * held, since it never goes to `onSpan`) — NOT re-read from the shared span
+     * ring, whose bound a concurrent trace could have used to evict these very
+     * error spans before this flush ran.
      */
     private flushSampledOutTrace(trace: { traceId: string }, dispatchFailed: boolean): void {
         // Read THIS trace's own verdict + held sink (keyed by traceId), so an
@@ -5545,13 +5629,14 @@ abstract class ShardDO {
             return;
         }
 
-        const { sink } = sampling;
+        const { held, sink } = sampling;
 
-        if (!sink?.onSpan) {
+        // Allocation-free short-circuit for the common sampled-out dispatch: no
+        // sink, or nothing was held (a handler that never touched `ctx.trace`).
+        if (!sink?.onSpan || held === undefined || held.length === 0) {
             return;
         }
 
-        const held = this.spans.entries().filter((span) => span.traceId === trace.traceId && span.dispatch !== true);
         const traceHasError = dispatchFailed || held.some((span) => !span.ok);
 
         if (!traceHasError) {

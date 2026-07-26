@@ -1307,6 +1307,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `OptimisticMessage` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `OptimisticUpdate` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1360,6 +1364,14 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `QueuedMutation` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `RETIRE_AFTER_DURABLE_SEQ_ADVANCE` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ReconcileDurableMessage` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1611,6 +1623,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `maxSeq` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `preloadQuery` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1620,6 +1636,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `queryCacheKey` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `reconcileOptimistic` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 

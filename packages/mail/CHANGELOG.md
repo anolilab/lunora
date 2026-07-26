@@ -1,3 +1,13 @@
+## @lunora/mail [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/%40lunora%2Fmail%401.0.0-alpha.23...%40lunora%2Fmail%401.0.0-alpha.24) (2026-07-26)
+
+## @lunora/mail [1.0.0-alpha.23](https://github.com/anolilab/lunora/compare/%40lunora%2Fmail%401.0.0-alpha.22...%40lunora%2Fmail%401.0.0-alpha.23) (2026-07-26)
+
+## @lunora/mail [1.0.0-alpha.22](https://github.com/anolilab/lunora/compare/%40lunora%2Fmail%401.0.0-alpha.21...%40lunora%2Fmail%401.0.0-alpha.22) (2026-07-26)
+
+## @lunora/mail [1.0.0-alpha.21](https://github.com/anolilab/lunora/compare/%40lunora%2Fmail%401.0.0-alpha.20...%40lunora%2Fmail%401.0.0-alpha.21) (2026-07-26)
+
+## @lunora/mail [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/%40lunora%2Fmail%401.0.0-alpha.19...%40lunora%2Fmail%401.0.0-alpha.20) (2026-07-26)
+
 ## @lunora/mail [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/%40lunora%2Fmail%401.0.0-alpha.18...%40lunora%2Fmail%401.0.0-alpha.19) (2026-07-25)
 
 ## @lunora/mail [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/%40lunora%2Fmail%401.0.0-alpha.17...%40lunora%2Fmail%401.0.0-alpha.18) (2026-07-25)

@@ -563,7 +563,13 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
     // store is built from `env` via `lunora/notify.ts`'s `defineNotify({ store })`;
     // when no `store` is configured (the in-memory default), the gated
     // `__lunora_admin__:listPushSubscriptions` RPC returns an empty device list.
-    ...(options.hasNotify ? [`        options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env) : undefined;`] : []),
+    // The `env` cast is load-bearing: `defineApp`'s `Env` is bound to `object` (so a
+    // wrangler-generated `interface Env` is accepted), while `defineNotify`'s `store`
+    // factory takes `NotifyEnv` — an index signature an interface does not satisfy.
+    // Without it every app with a `lunora/notify.ts` emits an app.ts that fails tsc.
+    ...(options.hasNotify
+        ? [`        options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env as Record<string, unknown>) : undefined;`]
+        : []),
     // The studio's Logs → Archive feed is wired zero-config: when the operator sets
     // `LUNORA_LOG_ARCHIVE_TABLE` (the R2 Data Catalog table `pipelineLogSink` writes
     // to), the durable archive becomes readable; unset ⇒ `undefined` ⇒ the feed

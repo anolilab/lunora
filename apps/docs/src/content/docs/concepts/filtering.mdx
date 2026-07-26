@@ -1,0 +1,104 @@
+---
+title: Filtering
+description: .filter() is a JavaScript predicate applied after rows are loaded — when to use it, and when to reach for an index instead.
+---
+
+`.filter()` narrows a query with an ordinary JavaScript predicate:
+
+```ts
+import { query, v } from "@/lunora/_generated/server";
+
+export const flagged = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args: { channelId } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .filter((message) => message.flagged === true)
+        .collect();
+});
+```
+
+The predicate receives the fully typed document, so anything you can express in
+TypeScript works — regular expressions, arithmetic, checks across several fields
+at once.
+
+<Callout type="info">
+    If you are coming from Convex, this is a real difference: Convex's `.filter()` takes a builder (`q.eq("field", value)`), Lunora's takes a plain predicate
+    function. See [Migrating from Convex](/docs/migrating/from-convex).
+</Callout>
+
+## Where the work happens
+
+This is the part to internalise: **`.filter()` runs after rows are loaded.**
+Every row the query would otherwise return is read out of SQLite and handed to
+your predicate. Rows the predicate rejects were still read.
+
+`.withIndex()` is the opposite. It seeks a range in a B-tree, so rows outside
+the range are never touched.
+
+```ts
+// Reads every message in the table, then discards most of them.
+ctx.db
+    .query("messages")
+    .filter((m) => m.channelId === channelId)
+    .collect();
+
+// Seeks straight to the channel's messages.
+ctx.db
+    .query("messages")
+    .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+    .collect();
+```
+
+Both return the same rows. Only the second one stays fast as the table grows.
+
+## Choosing between them
+
+Use **`.withIndex()`** for the selective part of the query — the condition that
+eliminates most of the table. That is almost always an equality on a foreign key,
+a tenant, a channel, a user, plus optionally a range on a time column.
+
+Use **`.filter()`** for the rest: cheap, low-selectivity conditions applied to
+the handful of rows the index already narrowed to. A boolean flag, a status
+check, a predicate too complex for an index to express.
+
+The rule of thumb: _index first, filter second, and let the index do the
+eliminating._
+
+## When a bare filter is fine
+
+Scanning is not always wrong. A table that is bounded and small by construction —
+a settings table, a list of plan tiers, an enum-like lookup table — costs
+nothing to scan, and adding an index buys nothing. The problem is not scanning;
+it is scanning a table that grows without bound.
+
+Ask whether the table has a ceiling. If it does not, the read needs an index.
+
+## How the advisors catch this
+
+The [advisors](/docs/concepts/advisors) flag the failure mode statically and at
+runtime:
+
+- **`filter_without_index`** (warn) — a `query(...).filter(...)` with no
+  `.withIndex()` first, so it loads every row and filters in memory.
+- **`unindexed_foreign_key`** (info) — a foreign-key column with no index leading
+  with it.
+- **`index_utilization`** (runtime) — a table full-scanned many times with no
+  index, and the converse, an index with zero recorded reads.
+
+`lunora insights` surfaces the same thing from the latency side: a query that
+scans shows up as a latency outlier long before it shows up as an outage.
+
+## Composing
+
+`.filter()` chains with everything else — `.withIndex()`, `.order()`, and every
+terminal (`.collect()`, `.first()`, `.take(n)`, `.unique()`, `.paginate()`).
+Applying `.take(n)` after a filter still reads whatever the index range
+produced, because the predicate has to run before the limit can be counted.
+
+## See also
+
+- [Indexes](/docs/concepts/indexes)
+- [Queries & mutations](/docs/concepts/queries-mutations)
+- [Pagination](/docs/concepts/pagination)
+- [Advisors](/docs/concepts/advisors)
+- [Search](/docs/concepts/search)

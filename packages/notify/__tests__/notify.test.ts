@@ -2,9 +2,11 @@ import type { Notification, Receipt } from "@visulima/notification";
 import { describe, expect, it, vi } from "vitest";
 
 import { createNotify } from "../src/notify";
+import { routingPushProvider } from "../src/providers";
+import { d1SubscriptionStore } from "../src/subscriptions/d1-store";
 import { memorySubscriptionStore } from "../src/subscriptions/memory-store";
 import type { NotifyDefinition, SubscriptionStore } from "../src/types";
-import { mockChatProvider, mockEngine, mockPushProvider } from "./helpers";
+import { fakeD1, mockChatProvider, mockEngine, mockPushProvider, mockThrowingPushProvider } from "./helpers";
 
 const baseDefinition = (store: SubscriptionStore, chat = false): NotifyDefinition => {
     return {
@@ -38,6 +40,37 @@ describe("ctx.push lifecycle", () => {
         expect(stored.kind).toBe("web-push");
         await expect(push.list()).resolves.toHaveLength(1);
         await expect(push.list({ userId: "u1" })).resolves.toHaveLength(1);
+    });
+
+    it("list strips the delivery secrets (keys / token)", async () => {
+        expect.hasAssertions();
+
+        const { push, store } = setup();
+
+        await push.register({ subscription: okSub, userId: "u1" });
+        await push.register({ kind: "fcm", token: "device-token-xyz", userId: "u2" });
+
+        for (const surface of [await push.list()]) {
+            expect(surface).toHaveLength(2);
+
+            for (const device of surface) {
+                // The register() call stored keys/token; the facade must never surface them.
+                expect(device).not.toHaveProperty("keys");
+                expect(device).not.toHaveProperty("token");
+            }
+
+            // The non-secret fields the admin page renders survive the projection.
+            expect(surface.find((device) => device.kind === "web-push")).toMatchObject({ endpoint: okSub.endpoint, userId: "u1" });
+            expect(surface.find((device) => device.kind === "fcm")).toMatchObject({ kind: "fcm", userId: "u2" });
+        }
+
+        // The projection is a facade concern: the raw store row still carries the
+        // secrets (only the internal SubscriptionStore, which handlers don't hold,
+        // can read them — the broadcast path uses it directly).
+        const raw = await store.list();
+
+        expect(raw.find((row) => row.kind === "web-push")?.keys).toStrictEqual({ auth: "a", p256dh: "p" });
+        expect(raw.find((row) => row.kind === "fcm")?.token).toBe("device-token-xyz");
     });
 
     it("send to a registered subscription marks it ok", async () => {
@@ -104,6 +137,73 @@ describe("ctx.push.broadcast", () => {
 
         expect(result.total).toBe(1);
         expect(sends).toHaveLength(1);
+    });
+});
+
+describe("ctx.push.broadcast fault-tolerance", () => {
+    const webPushSub = (suffix: string) => {
+        return { endpoint: `https://push.example/${suffix}`, keys: { auth: "a", p256dh: "p" } };
+    };
+
+    it("a throwing recipient does not abort the fan-out — others still deliver", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const throwing = mockThrowingPushProvider();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: throwing.provider }), silent: true });
+
+        await push.register({ subscription: webPushSub("ok") });
+        await push.register({ subscription: webPushSub("throw") });
+        await push.register({ subscription: webPushSub("ok2") });
+
+        const result = await push.broadcast({ body: "b", title: "t" });
+
+        // The one throwing send is a single `failed` outcome; the fan-out completes.
+        expect(result.total).toBe(3);
+        expect(result.sent).toBe(2);
+        expect(result.failed).toBe(1);
+        expect(result.pruned).toBe(0);
+        expect(result.outcomes.filter((outcome) => outcome.status === "failed")).toHaveLength(1);
+    });
+
+    it("degrades a recipient whose channel is not configured to failed — others succeed", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        // Only the web-push channel is wired; an FCM target hits the router's throw.
+        const engine = mockEngine({ push: routingPushProvider({ webPush: mockPushProvider().provider }) });
+        const { push } = createNotify(baseDefinition(store), {}, { engine, silent: true });
+
+        await push.register({ subscription: webPushSub("ok") });
+        await push.register({ kind: "fcm", token: "device-token-xyz" });
+
+        const result = await push.broadcast({ body: "b" });
+
+        expect(result.total).toBe(2);
+        expect(result.sent).toBe(1);
+        expect(result.failed).toBe(1);
+
+        const failed = result.outcomes.find((outcome) => outcome.status === "failed");
+
+        expect(failed?.error).toContain("`fcm` channel is configured");
+    });
+
+    it("a failing store write during broadcast does not abort the fan-out", async () => {
+        expect.hasAssertions();
+
+        // The delivery succeeds but the follow-up `markStatus` UPDATE throws — a
+        // transient store error must not reject the fan-out or the accepted send.
+        const store = d1SubscriptionStore(fakeD1({ failOn: "UPDATE" }));
+        const provider = mockPushProvider();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: provider.provider }), silent: true });
+
+        await push.register({ subscription: webPushSub("ok") });
+
+        const result = await push.broadcast({ body: "b" });
+
+        expect(result.total).toBe(1);
+        expect(result.sent).toBe(1);
+        expect(result.failed).toBe(0);
     });
 });
 
@@ -341,5 +441,56 @@ describe("delivery observability (ctx.log + ctx.metrics)", () => {
 
         // No observability handles → sends still succeed, nothing throws.
         await expect(facade.send(stored.id, { body: "hi" })).resolves.toMatchObject({ successful: true });
+    });
+});
+
+describe("web Push SSRF-posture warning (unset allowedPushOrigins)", () => {
+    const registerFacade = (definitionOverrides: Partial<NotifyDefinition> = {}) => {
+        const store = memorySubscriptionStore();
+        const push = mockPushProvider();
+        const engine = mockEngine({ push: push.provider });
+        // Fresh definition/env identity so the per-isolate one-shot guard starts clean;
+        // NOT `silent`, so the warning is allowed to fire.
+        const { push: facade } = createNotify({ ...baseDefinition(store), ...definitionOverrides }, {}, { engine });
+
+        return facade;
+    };
+
+    it("warns exactly once per isolate when a web-push subscription registers without allowedPushOrigins", async () => {
+        expect.hasAssertions();
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            const facade = registerFacade();
+
+            await facade.register({ subscription: okSub, userId: "u1" });
+            await facade.register({ subscription: goneSub, userId: "u2" });
+
+            const originWarnings = warn.mock.calls.filter(([message]) => typeof message === "string" && message.includes("allowedPushOrigins"));
+
+            expect(originWarnings).toHaveLength(1);
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it("does not warn for an FCM registration (no client-controlled endpoint) or when allowedPushOrigins is set", async () => {
+        expect.hasAssertions();
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            // FCM tokens carry no endpoint — the origin allowlist doesn't apply.
+            await registerFacade().register({ kind: "fcm", token: "device-token-1", userId: "u1" });
+            // A configured allowlist is the closed posture — no nudge.
+            await registerFacade({ allowedPushOrigins: ["https://push.example"] }).register({ subscription: okSub, userId: "u2" });
+
+            const originWarnings = warn.mock.calls.filter(([message]) => typeof message === "string" && message.includes("allowedPushOrigins"));
+
+            expect(originWarnings).toHaveLength(0);
+        } finally {
+            warn.mockRestore();
+        }
     });
 });

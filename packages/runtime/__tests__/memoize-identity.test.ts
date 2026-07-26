@@ -203,6 +203,40 @@ describe("memoizeIdentity", () => {
         }
     });
 
+    it("keys on a custom cacheKey, so principals sharing Cookie/Authorization are cached separately", async () => {
+        expect.assertions(3);
+
+        // A resolver that authenticates off `X-API-Key`, NOT the cookie. Two requests
+        // carry an identical cookie (so the default credential key would collide them
+        // onto one entry and serve the first principal's identity to the second) but
+        // different API keys → different principals.
+        const resolver = vi.fn<(request: Request) => Promise<{ userId: string }>>(async (request: Request) => {
+            return { userId: request.headers.get("x-api-key") ?? "" };
+        });
+        const memoized = memoizeIdentity(resolver, {
+            cacheKey: (request) => request.headers.get("x-api-key") ?? undefined,
+        });
+
+        const withApiKey = (apiKey: string): Request =>
+            new Request("https://app.example/_lunora/rpc", {
+                headers: { cookie: "session=shared", "x-api-key": apiKey },
+                method: "POST",
+            });
+
+        const first = await memoized(withApiKey("key-alice"), {});
+        const second = await memoized(withApiKey("key-bob"), {});
+
+        // Distinguished by the custom key despite the identical cookie: two
+        // verifications, each principal getting its own identity.
+        expect(resolver).toHaveBeenCalledTimes(2);
+        expect([first?.userId, second?.userId]).toStrictEqual(["key-alice", "key-bob"]);
+
+        // …and the same API key still shares a cache entry (one more verification total).
+        await memoized(withApiKey("key-alice"), {});
+
+        expect(resolver).toHaveBeenCalledTimes(2);
+    });
+
     it("still collapses duplicate calls within one request", async () => {
         expect.assertions(1);
 

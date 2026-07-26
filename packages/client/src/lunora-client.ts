@@ -1999,9 +1999,17 @@ class LunoraClient {
 
             /**
              * Stable id for this import run. Each chunk is sent under
-             * `${importId}:${chunkIndex}` as its mutation id, so a retry or a resumed
-             * import is deduped server-side instead of inserting the chunk twice.
-             * Omit only for a throwaway import where double-insertion is acceptable.
+             * `${importId}:${chunkIndex}` as its mutation id, so re-running an import
+             * that uses the SAME `chunkSize` re-sends each chunk under its prior key
+             * and the server dedupes it instead of inserting twice.
+             *
+             * CAVEAT — the key is POSITIONAL, not content-based: it pins on the chunk
+             * INDEX, not on the rows inside it. Resume or retry with a DIFFERENT
+             * `chunkSize` (or a changed row ordering) and index N now covers different
+             * rows than the first run's index N; the server sees a duplicate key and
+             * SILENTLY DROPS those rows. Keep `chunkSize` (and the row order) identical
+             * across resumes of the same `importId`. Omit `importId` only for a
+             * throwaway import where double-insertion is acceptable.
              */
             importId?: string;
 

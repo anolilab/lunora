@@ -20,6 +20,25 @@ const readEnv = (env: Record<string, unknown>, key: string): string | undefined 
 };
 
 /**
+ * Which surface resolved the gateway. The two paths handle the auth token
+ * differently: a bring-your-own AI SDK provider sends it as the
+ * `cf-aig-authorization` header (`ResolvedAiGateway.headers`), but the Workers AI
+ * **binding** routes through the gateway using the account's own credentials and
+ * its native `gateway` option (Cloudflare `GatewayOptions`) has **no** field to
+ * carry an authorization token — so a token set for the binding path cannot be
+ * delivered and is warned about instead of silently dropped.
+ * @experimental
+ */
+export type AiGatewayConsumer = "byo-provider" | "workers-ai-binding";
+
+/**
+ * One-shot guard: the Workers-AI-binding auth-token warning fires at most once
+ * per isolate, so a hot dispatch path routing every call through the gateway
+ * doesn't flood the log with the same line.
+ */
+let warnedWorkersAiBindingToken = false;
+
+/**
  * Project {@link AiGatewayMetadata} to a plain string-map of only its defined,
  * non-empty fields, or `undefined` when nothing is set. This is the shared source
  * of truth behind both gateway-correlation forms: the `cf-aig-metadata` HTTP
@@ -109,7 +128,21 @@ export const AI_GATEWAY_ACCOUNT_ID_ENV = "LUNORA_AI_GATEWAY_ACCOUNT_ID";
 /** Env var naming the AI Gateway id (the gateway's slug). */
 export const AI_GATEWAY_ID_ENV = "LUNORA_AI_GATEWAY_ID";
 
-/** Env var carrying the gateway's authentication token (only for authenticated gateways). */
+/**
+ * Env var carrying the gateway's authentication token (only for authenticated
+ * gateways).
+ *
+ * **Workers AI binding limitation.** This token is delivered only on the
+ * bring-your-own AI SDK provider path, as the `cf-aig-authorization` header (see
+ * {@link ResolvedAiGateway.headers}). The Workers AI **binding** (`ctx.ai` over
+ * `env.AI`) routes through the gateway with the account's own credentials and its
+ * native `gateway` option (Cloudflare's `GatewayOptions`: `id` / `cacheKey` /
+ * `metadata` / …) has no authorization field — so an *authenticated* gateway that
+ * requires a token cannot be reached on the binding path. Set this only for a BYO
+ * provider; for Workers AI, leave the gateway unauthenticated (or front it with a
+ * BYO provider). {@link resolveAiGateway} warns once per isolate if the token is
+ * set on the binding path.
+ */
 export const AI_GATEWAY_TOKEN_ENV = "LUNORA_AI_GATEWAY_TOKEN";
 
 /**
@@ -121,9 +154,20 @@ export const AI_GATEWAY_TOKEN_ENV = "LUNORA_AI_GATEWAY_TOKEN";
  *
  * Pass optional {@link AiGatewayMetadata} to fold a `cf-aig-metadata` correlation
  * header into `headers` — only its defined fields are sent.
+ *
+ * `consumer` names the surface resolving the gateway (default `"byo-provider"`).
+ * When it is `"workers-ai-binding"` and an {@link AI_GATEWAY_TOKEN_ENV} token is
+ * configured, this warns once per isolate: the binding path cannot carry the
+ * token (see {@link AI_GATEWAY_TOKEN_ENV}), so it would otherwise be dropped with
+ * no diagnostic and every `ctx.ai.model(...)` call would fail against an
+ * authenticated gateway while the token var reads as "configured".
  * @experimental
  */
-export const resolveAiGateway = (env: Record<string, unknown>, metadata?: AiGatewayMetadata): ResolvedAiGateway | undefined => {
+export const resolveAiGateway = (
+    env: Record<string, unknown>,
+    metadata?: AiGatewayMetadata,
+    consumer: AiGatewayConsumer = "byo-provider",
+): ResolvedAiGateway | undefined => {
     const accountId = readEnv(env, AI_GATEWAY_ACCOUNT_ID_ENV);
     const gatewayId = readEnv(env, AI_GATEWAY_ID_ENV);
 
@@ -136,6 +180,14 @@ export const resolveAiGateway = (env: Record<string, unknown>, metadata?: AiGate
 
     if (token !== undefined) {
         headers["cf-aig-authorization"] = `Bearer ${token}`;
+
+        if (consumer === "workers-ai-binding" && !warnedWorkersAiBindingToken) {
+            warnedWorkersAiBindingToken = true;
+            // eslint-disable-next-line no-console
+            console.warn(
+                `[lunora:ai] ${AI_GATEWAY_TOKEN_ENV} is set, but the Workers AI binding cannot send a gateway auth token — Cloudflare's native gateway option has no authorization field. The token is ignored on this path; use a bring-your-own AI SDK provider (which sends cf-aig-authorization), or make the AI Gateway unauthenticated for Workers AI.`,
+            );
+        }
     }
 
     const metadataHeader = encodeMetadata(metadata);

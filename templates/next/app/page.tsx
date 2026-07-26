@@ -20,10 +20,16 @@ const channelId = "channel:demo" as const;
  * Two-worker split: the Lunora realtime plane lives in a SEPARATE worker
  * (`wrangler.lunora.jsonc`). The RSC loader reaches `/_lunora/rpc` via
  * NEXT_PUBLIC_LUNORA_URL; the localhost fallback matches `wrangler dev`'s
- * default port during local dev.
+ * default port during local dev, and is development-only so a production
+ * deployment with the variable unset fails loudly instead of silently
+ * resolving to a machine-local address.
  */
 export default async function HomePage() {
-    const lunoraUrl = process.env.NEXT_PUBLIC_LUNORA_URL ?? "http://localhost:8787";
+    const lunoraUrl = process.env.NEXT_PUBLIC_LUNORA_URL ?? (process.env.NODE_ENV === "development" ? "http://localhost:8787" : undefined);
+
+    if (!lunoraUrl) {
+        throw new Error("NEXT_PUBLIC_LUNORA_URL must be set — it is inlined at build time.");
+    }
 
     // Forward the browser's Cookie header so the server-side load runs as the
     // signed-in user (cross-origin call, but the session token travels along).

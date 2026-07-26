@@ -24,7 +24,7 @@ import discoverCrons from "./discover-crons";
 import { discoverEnv } from "./discover-env";
 import discoverExportSinks from "./discover-export-sinks";
 import discoverFailOpenGuards from "./discover-fail-open-guards";
-import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
+import { buildStudioFeatures, discoverFeatureUsage, hasPaymentStoreTables } from "./discover-feature-usage";
 import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
 import { discoverFlagKeys } from "./discover-flags";
 import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
@@ -582,8 +582,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         dependencies,
         // Payments gates on the store tables the panel reads being declared, not on a
         // bare `@lunora/payment` dependency (which may be present only to reuse the
-        // package's pure webhook helpers) — see the payment-tables signal set below.
-        hasPaymentTables: schema.tables.some((table) => table.name === "subscriptions") && schema.tables.some((table) => table.name === "events"),
+        // package's pure webhook helpers). Matched by the tables' *signature columns*
+        // (not their generic names), so an unrelated `subscriptions`/`events` table
+        // does not spuriously show the page — see `hasPaymentStoreTables`.
+        hasPaymentTables: hasPaymentStoreTables(schema.tables),
         queueCount: queues.length,
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
         storageRuleCount: storageRulesMetadata.rules.length,
@@ -603,7 +605,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const emitStartedAt = timingEnabled ? performance.now() : 0;
 
     const dataModelContent = emitDataModel(schema, useUmbrella);
-    const apiContent = emitApi({ agents, functions, httpRoutes, useUmbrella, workflows });
+    const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
     const serverContent = emitServer({
         agents,
         containers,

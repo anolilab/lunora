@@ -436,8 +436,10 @@ interface MigrationIR {
 
 ```ts
 interface MutatorIR {
+    args: Record<string, ValidatorIR>;
     exportName: string;
     filePath: string;
+    returnType: string;
 }
 ```
 

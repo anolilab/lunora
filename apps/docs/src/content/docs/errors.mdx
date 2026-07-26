@@ -1,0 +1,184 @@
+---
+title: Errors & warnings reference
+description: Every well-known Lunora error code — its HTTP status, what it means, and what to do about it.
+---
+
+Every error Lunora throws carries a machine-readable `code`. The code keys into
+a central catalog that supplies the transport status, a human title, and — for
+the codes where it helps — an actionable hint. The same catalog drives the CLI
+renderer, the Vite error overlay, the Studio, and the client SDK, so an error
+reads the same wherever you meet it.
+
+```ts
+import { isLunoraError } from "@lunora/errors";
+
+if (isLunoraError(error)) {
+    error.code; //   "CONFLICT"
+    error.status; // 409
+    error.hint; //   actionable Markdown, when the catalog has one
+}
+```
+
+`isLunoraError` matches structurally — a string `code` plus a numeric `status` —
+so it also recognises errors rebuilt from the wire, where `instanceof` cannot be
+trusted.
+
+## Request errors
+
+| Code                | Status | Meaning                                       |
+| ------------------- | ------ | --------------------------------------------- |
+| `BAD_REQUEST`       | 400    | The request was malformed                     |
+| `VALIDATION_ERROR`  | 400    | Arguments or a return value failed validation |
+| `UNAUTHORIZED`      | 401    | No usable identity on the request             |
+| `FORBIDDEN`         | 403    | Authenticated, but not allowed                |
+| `NOT_FOUND`         | 404    | The addressed resource does not exist         |
+| `UNPROCESSABLE`     | 422    | Well-formed, but semantically rejected        |
+| `TOO_MANY_REQUESTS` | 429    | Rate limited — check `Retry-After`            |
+| `NOT_IMPLEMENTED`   | 501    | The operation exists but is not implemented   |
+
+Client helpers exist for the ones you branch on most:
+`isUnauthorizedError`, `isForbiddenError`, `isRateLimitedError` (plus
+`getRetryAfterMs`), and `isConflictError`, all from `@lunora/client`.
+
+## Data errors
+
+| Code                        | Status | Meaning                                                |
+| --------------------------- | ------ | ------------------------------------------------------ |
+| `CONFLICT`                  | 409    | A concurrent write changed the row mid-mutation        |
+| `NOT_UNIQUE`                | 400    | `.unique()` matched more than one document             |
+| `UNKNOWN_TABLE`             | 404    | No such table in the schema                            |
+| `GLOBAL_TABLE_NOT_EDITABLE` | 400    | A `.global()` table cannot be edited through this path |
+| `MIGRATION_NOT_FOUND`       | 404    | No data migration with that id                         |
+
+### `CONFLICT`
+
+Another write changed the row while your mutation was running. Re-read the row
+and retry with the fresh value.
+
+Because Lunora serializes a DO's mutations, a _persistent_ conflict usually means
+the handler conflicts **with itself** — a trigger or cascade touching the same
+row. Split that work rather than adding a retry loop. See
+[OCC & atomicity](/docs/concepts/occ).
+
+A unique-index breach on the write path also surfaces as `CONFLICT`, with the
+message `unique constraint violation on <table>`. That one is different: either
+upsert (or `patch` the existing row) instead of inserting, or pick a value that
+is not taken.
+
+### `NOT_UNIQUE`
+
+`.unique()` expects the query to identify at most one row. If several matches
+are legitimate, use `.first()` or `.collect()` instead; otherwise tighten the
+query so it can only match one row.
+
+## Authorization and privacy errors
+
+| Code                             | Status | Meaning                                               |
+| -------------------------------- | ------ | ----------------------------------------------------- |
+| `RLS_REQUIRED`                   | 403    | The table is secure-by-default and no policy resolved |
+| `COUNT_RLS_UNSUPPORTED`          | 422    | `count()` is unsupported under an RLS policy          |
+| `MASK_UNSUPPORTED`               | 422    | Aggregation over a masked column is unsupported       |
+| `RELATION_PREDICATE_UNSUPPORTED` | 422    | A relation predicate is unsupported in a write policy |
+
+### `RLS_REQUIRED`
+
+The table has no `.public()` marker and no [RLS](/docs/concepts/rls) policy
+resolved for this caller, so the read fails closed. Add a read policy with
+`.rls(...)`, or mark the table `.public()` if it is genuinely world-readable.
+
+## Dispatch errors
+
+| Code                 | Status | Meaning                             |
+| -------------------- | ------ | ----------------------------------- |
+| `FUNCTION_NOT_FOUND` | 404    | No function at that path            |
+| `METHOD_NOT_ALLOWED` | 405    | Wrong HTTP method for this endpoint |
+| `PAYLOAD_TOO_LARGE`  | 413    | The request body exceeded the limit |
+
+## Infrastructure errors
+
+| Code                       | Status | Meaning                                          |
+| -------------------------- | ------ | ------------------------------------------------ |
+| `SHARD_ERROR`              | 503    | The owning shard returned an error               |
+| `SHARD_UNAVAILABLE`        | 503    | The owning shard could not be reached            |
+| `OFFLINE_IDENTITY_CHANGED` | 409    | The identity changed while offline writes queued |
+| `ANALYTICS_SQL_ERROR`      | 502    | Analytics Engine SQL API failure                 |
+| `R2_SQL_ERROR`             | 502    | R2 SQL API failure                               |
+| `WORKFLOWS_REST_ERROR`     | 502    | Cloudflare Workflows REST API failure            |
+
+The three `*_ERROR` codes carry Cloudflare's own error text — trusted
+infrastructure rather than user input — so the upstream message is echoed rather
+than redacted, and the actual upstream HTTP status is passed through.
+
+## Auth and email errors
+
+| Code                   | Status | Meaning                                                   |
+| ---------------------- | ------ | --------------------------------------------------------- |
+| `EMAIL_DOMAIN_BLOCKED` | 400    | The address's domain is disposable or on your deny-list   |
+| `EMAIL_UNDELIVERABLE`  | 400    | The domain publishes no MX records, so mail cannot arrive |
+| `AUTH_HEADERS_MISSING` | 500    | Auth is not wired up correctly (redacted on the wire)     |
+
+Tune the domain policy with `blockDisposable` / `allowDomains` / `denyDomains`
+on `emailGate(...)` in `@lunora/auth/email-guard`. MX verification is opt-in
+(`mx: true`) and needs DNS, so leave it off on an edge path where DNS is not
+available.
+
+## Internal errors
+
+These are **redacted on the wire**: their messages may carry SQL fragments, file
+paths, or internal identifiers, so the transport emits a generic message and logs
+the real one server-side.
+
+| Code                    | Status | Meaning                                            |
+| ----------------------- | ------ | -------------------------------------------------- |
+| `INTERNAL`              | 500    | Free-form internal failure                         |
+| `INTERNAL_SERVER_ERROR` | 500    | Alias of `INTERNAL`                                |
+| `RPC_FAILED`            | 500    | A non-mappable throw crossed the RPC boundary      |
+| `RUN_DEPTH_EXCEEDED`    | 500    | Too many nested function invocations               |
+| `ENV_INVALID`           | 500    | Environment validation failed — names failing keys |
+
+Throwing a `LunoraError` with any **non**-internal code is your vouch that its
+message is safe to show a client. `invariant(...)` and `unreachable(...)` throw
+`INTERNAL`, so "should never happen" assertions are redacted automatically.
+
+## Build-time errors
+
+These never cross the RPC wire.
+
+| Code                    | Meaning                           |
+| ----------------------- | --------------------------------- |
+| `CODEGEN_DIAGNOSTIC`    | Codegen rejected your source      |
+| `SCHEMA_SNAPSHOT_PARSE` | The migration snapshot is corrupt |
+
+Codegen errors are thrown as plain messages rather than codes, so Lunora matches
+them by message text and attaches a solution. The ones with dedicated guidance:
+
+| Situation                                           | What to do                                                                                               |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **No Lunora schema found**                          | Create `lunora/schema.ts` with a `defineSchema` default export, or run `lunora init`                     |
+| **`defineSchema()` needs an inline object literal** | Pass the object literal directly — codegen reads it statically and cannot follow a variable or spread    |
+| **Table name is reserved**                          | The name collides with a built-in `ctx.db` member; rename the table                                      |
+| **Duplicate table name**                            | Two tables resolve to the same name, usually a base table and a `.extend(...)` both defining it          |
+| **Invalid `.jurisdiction(...)` value**              | Only the string literals `"eu"`, `"us"`, or `"fedramp"` are accepted                                     |
+| **`unique` must be a literal**                      | Write `{ unique: true }`, not a computed value                                                           |
+| **Binding not exported by your worker entry**       | Add the generated re-export (e.g. `export * from "./lunora/_generated/containers"`) to your worker entry |
+
+## Throwing your own
+
+`LunoraError` takes a code and a message, and fills in status, title, and hint
+from the catalog:
+
+```ts
+import { LunoraError } from "@lunora/errors";
+
+throw new LunoraError("NOT_FOUND", `no message with id ${id}`);
+```
+
+Explicit options override the catalog defaults. For errors you expect the client
+to branch on, see [Error handling](/docs/concepts/error-handling).
+
+## See also
+
+- [Error handling](/docs/concepts/error-handling)
+- [OCC & atomicity](/docs/concepts/occ)
+- [Debugging](/docs/concepts/debugging)
+- [@lunora/errors](/docs/packages/errors)

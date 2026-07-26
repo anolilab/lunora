@@ -1,3 +1,48 @@
+## @lunora/config [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/%40lunora%2Fconfig%401.0.0-alpha.88...%40lunora%2Fconfig%401.0.0-alpha.89) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.63
+* **@lunora/seed:** upgraded to 1.0.0-alpha.38
+* **@lunora/studio:** upgraded to 1.0.0-alpha.67
+
+## @lunora/config [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/%40lunora%2Fconfig%401.0.0-alpha.87...%40lunora%2Fconfig%401.0.0-alpha.88) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.62
+* **@lunora/seed:** upgraded to 1.0.0-alpha.37
+* **@lunora/studio:** upgraded to 1.0.0-alpha.66
+
+## @lunora/config [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/%40lunora%2Fconfig%401.0.0-alpha.86...%40lunora%2Fconfig%401.0.0-alpha.87) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.61
+* **@lunora/seed:** upgraded to 1.0.0-alpha.36
+* **@lunora/studio:** upgraded to 1.0.0-alpha.65
+
+## @lunora/config [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/%40lunora%2Fconfig%401.0.0-alpha.85...%40lunora%2Fconfig%401.0.0-alpha.86) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.60
+* **@lunora/seed:** upgraded to 1.0.0-alpha.35
+* **@lunora/studio:** upgraded to 1.0.0-alpha.64
+
+## @lunora/config [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/%40lunora%2Fconfig%401.0.0-alpha.84...%40lunora%2Fconfig%401.0.0-alpha.85) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.59
+* **@lunora/seed:** upgraded to 1.0.0-alpha.34
+* **@lunora/studio:** upgraded to 1.0.0-alpha.63
+
 ## @lunora/config [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/%40lunora%2Fconfig%401.0.0-alpha.83...%40lunora%2Fconfig%401.0.0-alpha.84) (2026-07-25)
 
 

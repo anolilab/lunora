@@ -1,4 +1,7 @@
-import { defineMutator, v } from "lunorash/server";
+// `defineMutator` comes from `./_generated/server` (not `lunorash/server`) so the
+// authoritative `server` impl's `ctx` is this project's typed `MutationCtx` —
+// `ctx.db.insert("messages", …)` checks the columns against the schema.
+import { defineMutator, v } from "./_generated/server";
 
 /**
  * Custom mutator — the client runs `client` optimistically against its local

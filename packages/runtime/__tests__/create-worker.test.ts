@@ -1026,7 +1026,12 @@ describe("createWorker — x402 paid procedures", () => {
     });
 
     /** Structural shape of the injected `x402Charge` gate (the type is internal to create-worker). */
-    type ChargeGateStub = (request: Request, spec: { functionPath: string; price: number | string }, dispatch: () => Promise<Response>) => Promise<Response>;
+    type ChargeGateStub = (
+        request: Request,
+        spec: { functionPath: string; price: number | string },
+        dispatch: () => Promise<Response>,
+        deps?: { waitUntil?: (promise: Promise<unknown>) => void },
+    ) => Promise<Response>;
 
     /** A registry with one paid `.x402({ price })`-tagged query. */
     const paidFunctions = { "reports:latest": { kind: "query", x402: { price: "$0.05" } } } as const;
@@ -1081,6 +1086,36 @@ describe("createWorker — x402 paid procedures", () => {
 
         expect(res.status).toBe(200);
         // Paid: the gate ran `dispatch`, forwarding to the shard exactly once.
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("threads ctx.waitUntil into the charge gate so the settlement receipt survives past the response", async () => {
+        expect.assertions(4);
+
+        // A paid gate that just dispatches — we only care about the `deps` (4th arg) it receives.
+        const x402Charge = vi.fn<ChargeGateStub>((_request, _spec, dispatch) => dispatch());
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+
+        // A spy `waitUntil` on the execution context: the gate's forwarded `waitUntil`
+        // must be bound to *this*, not a bare no-op — a wrong binding silently drops the receipt.
+        const waitUntil = vi.fn<(promise: Promise<unknown>) => void>();
+        const ctx: ExecutionContextLike = { passThroughOnException: () => undefined, waitUntil };
+
+        const res = await worker.fetch(paidRpc("reports:latest"), {}, ctx);
+
+        expect(res.status).toBe(200);
+
+        const deps = x402Charge.mock.calls[0]![3];
+
+        expect(deps?.waitUntil).toBeTypeOf("function");
+
+        // Invoking the forwarded `waitUntil` must reach the context's `waitUntil` with the same promise.
+        const receipt = Promise.resolve();
+
+        deps!.waitUntil!(receipt);
+
+        expect(waitUntil).toHaveBeenCalledWith(receipt);
         expect(shard.calls).toHaveLength(1);
     });
 

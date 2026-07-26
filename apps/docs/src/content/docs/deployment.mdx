@@ -141,8 +141,9 @@ This runs:
 3. a Docker preflight when Dockerfile-backed containers are declared
 4. `wrangler deploy` against the resolved Worker (building/pushing container images)
 
-CI should run `lunora codegen --check` first so a stale `_generated/` is a
-build failure, not a deploy that silently uses old types.
+CI should run `lunora verify` (or `lunora prepare`) first so codegen drift and a
+stale `_generated/` are a build failure, not a deploy that silently uses old
+types.
 
 ## Streaming logs
 

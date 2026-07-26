@@ -371,10 +371,24 @@ export interface EnvIR {
  * browser bundle separately — only the path crosses to the server side.
  */
 export interface MutatorIR {
+    /**
+     * The mutator's `args` validator map, parsed exactly as a procedure's is, so
+     * the emitted `api.mutators.&lt;name>` reference carries the arg type a client
+     * `defineMutator` infers instead of restating. `{}` for a parameterless
+     * mutator (or one whose `args` isn't an inline object literal).
+     */
+    args: Record<string, ValidatorIR>;
     /** Export binding name — the mutator's registry key and import member. */
     exportName: string;
     /** Path relative to `&lt;projectRoot>/lunora/` without extension — always `"mutators"`. */
     filePath: string;
+
+    /**
+     * Serialized TS source for the authoritative `server` impl's return type,
+     * `Promise&lt;T>` unwrapped. `"unknown"` when ts-morph can't resolve it — same
+     * contract as {@link FunctionIR.returnType}.
+     */
+    returnType: string;
 }
 
 /**

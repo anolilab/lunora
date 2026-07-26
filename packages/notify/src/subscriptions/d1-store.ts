@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import type { StoredSubscription, SubscriptionFilter, SubscriptionKind, SubscriptionStatus, SubscriptionStore } from "../types";
+import { legacyIdFor } from "./normalize";
 
 /**
  * The minimal structural slice of Cloudflare's `D1Database` this store uses. A
@@ -87,6 +88,15 @@ const IDENTIFIER_PATTERN = /^[A-Za-z_]\w*$/u;
  * backing table is created lazily on first use (`CREATE TABLE IF NOT EXISTS`), so
  * no migration step is required for the subscription table itself.
  *
+ * ID SCHEME / LAZY MIGRATION: `id` (the `PRIMARY KEY`, upserted via `ON
+ * CONFLICT(id) DO UPDATE`) is a version-prefixed digest of the endpoint/token —
+ * currently `wp2_`/`fcm2_` (64-bit FNV-1a; see `normalize.ts`). No table migration
+ * runs when the id scheme is revised: a returning device re-registers under its new
+ * id and upserts a fresh row, while its old-prefix row (`wp_`/`fcm_`) ages out via
+ * the normal gone-pruning on the next failed send. So a table can transiently hold
+ * both an old- and new-prefix row for one device — expected, self-healing, and the
+ * reason a prefix must NEVER be reused for a different scheme.
+ *
  * ```ts
  * export default defineNotify({
  *     webPush: (env) => webPushFromEnv(env),
@@ -105,6 +115,10 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
 
     const ensureSchema = (): Promise<void> => {
         if (schemaReady === undefined) {
+            // Create the table, then the `user_id` / `kind` indexes that back the
+            // two filters `list`/`broadcast` push down (D1 runs one statement per
+            // `prepare`, so they are chained). Without them a `broadcast({ userId })`
+            // or the Studio device list full-scans the table.
             schemaReady = database
                 .prepare(
                     `CREATE TABLE IF NOT EXISTS ${table} (` +
@@ -112,6 +126,8 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
                         "user_id TEXT, metadata TEXT, created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, last_status TEXT, last_error TEXT)",
                 )
                 .run()
+                .then(() => database.prepare(`CREATE INDEX IF NOT EXISTS ${table}_user_id_idx ON ${table} (user_id)`).run())
+                .then(() => database.prepare(`CREATE INDEX IF NOT EXISTS ${table}_kind_idx ON ${table} (kind)`).run())
                 .then(() => undefined);
 
             schemaReady.catch(() => {
@@ -122,15 +138,28 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
         return schemaReady;
     };
 
+    const get = async (id: string): Promise<StoredSubscription | undefined> => {
+        await ensureSchema();
+
+        const row = await database.prepare(`SELECT * FROM ${table} WHERE id = ?1`).bind(id).first<Row>();
+
+        return row === null ? undefined : rowToSubscription(row);
+    };
+
     const put = async (subscription: StoredSubscription): Promise<StoredSubscription> => {
         await ensureSchema();
 
-        // Preserve the original createdAt on re-register (upsert keeps the first-seen time).
+        // On re-register (a routine service-worker refresh) the upsert PRESERVES the
+        // first-seen `created_at` AND the delivery status/error: `last_status` /
+        // `last_error` are deliberately OMITTED from the `DO UPDATE SET` list so a
+        // fresh registration (which carries no status) can't wipe the last known
+        // delivery outcome — `markStatus` stays their only writer. They are still in
+        // the INSERT column list so a brand-new row seeds them.
         await database
             .prepare(
                 `INSERT INTO ${table} (id, kind, endpoint, p256dh, auth, token, user_id, metadata, created_at, last_seen_at, last_status, last_error) ` +
                     "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) " +
-                    "ON CONFLICT(id) DO UPDATE SET kind = ?2, endpoint = ?3, p256dh = ?4, auth = ?5, token = ?6, user_id = ?7, metadata = ?8, last_seen_at = ?10, last_status = ?11, last_error = ?12",
+                    "ON CONFLICT(id) DO UPDATE SET kind = ?2, endpoint = ?3, p256dh = ?4, auth = ?5, token = ?6, user_id = ?7, metadata = ?8, last_seen_at = ?10",
             )
             .bind(
                 subscription.id,
@@ -148,15 +177,26 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
             )
             .run();
 
-        return subscription;
-    };
+        // Evict the SAME device's legacy-prefix row (pre-`wp2_`/`fcm2_` 32-bit id).
+        // Its PK differs from the canonical id, so the upsert above never touched it;
+        // leaving it would make `broadcast` (no id filter) deliver to this device
+        // twice forever. Idempotent — a no-op when the legacy row was never present.
+        // The `!== subscription.id` guard keeps a (rare) put of a legacy-id row from
+        // deleting the very row it just wrote.
+        const legacyId = legacyIdFor(subscription);
 
-    const get = async (id: string): Promise<StoredSubscription | undefined> => {
-        await ensureSchema();
+        if (legacyId !== undefined && legacyId !== subscription.id) {
+            await database.prepare(`DELETE FROM ${table} WHERE id = ?1`).bind(legacyId).run();
+        }
 
-        const row = await database.prepare(`SELECT * FROM ${table} WHERE id = ?1`).bind(id).first<Row>();
+        // Return the ACTUAL stored row (not the incoming `subscription`, whose
+        // `createdAt` is `Date.now()` and disagrees with the preserved value on a
+        // re-register) so the caller sees the truthful record — matching the memory
+        // store. A read-back rather than `RETURNING *` keeps the fake D1 slice simple
+        // and works on any D1-like binding.
+        const stored = await get(subscription.id);
 
-        return row === null ? undefined : rowToSubscription(row);
+        return stored ?? subscription;
     };
 
     const remove = async (id: string): Promise<void> => {
@@ -177,17 +217,27 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
         }
 
         if (filter?.userId !== undefined) {
-            bindings.push(filter.userId);
-            clauses.push(filter.userId === null ? "user_id IS NULL" : `user_id = ?${bindings.length.toString()}`);
-
             if (filter.userId === null) {
-                bindings.pop();
+                clauses.push("user_id IS NULL");
+            } else {
+                bindings.push(filter.userId);
+                clauses.push(`user_id = ?${bindings.length.toString()}`);
             }
         }
 
         const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
+
+        let limit = "";
+
+        if (filter?.limit !== undefined && filter.limit > 0) {
+            // Bind a truncated, non-negative integer so a huge audience never
+            // materializes wholesale in the isolate.
+            bindings.push(Math.trunc(filter.limit));
+            limit = ` LIMIT ?${bindings.length.toString()}`;
+        }
+
         const { results } = await database
-            .prepare(`SELECT * FROM ${table}${where}`)
+            .prepare(`SELECT * FROM ${table}${where}${limit}`)
             .bind(...bindings)
             .all<Row>();
 

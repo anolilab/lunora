@@ -34,7 +34,12 @@ const resolveGatewayOption = (
         return undefined;
     }
 
-    const resolved = resolveAiGateway(env, metadata);
+    // `"workers-ai-binding"`: this env-derived option feeds the Workers AI binding
+    // (`createWorkersAI({ binding, gateway })` / `ai.run`), whose native `gateway`
+    // option has no authorization field — so `resolved.headers` (incl. any
+    // `cf-aig-authorization`) is discarded here, and `resolveAiGateway` warns once
+    // when an auth token was configured. See `AI_GATEWAY_TOKEN_ENV`.
+    const resolved = resolveAiGateway(env, metadata, "workers-ai-binding");
 
     if (resolved === undefined) {
         return undefined;
