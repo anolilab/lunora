@@ -126,10 +126,23 @@ export const InstrumentsTable = ({ onOpenTrace, shardKey }: InstrumentsTableProp
 
     const series = seriesOf(data);
 
-    // Silent when there's nothing to show: an uninstrumented app shouldn't see an
-    // empty table or an error row bolted onto its shard-health overview. The RPC's
-    // failure is already surfaced by the sibling getMetrics read on the same page.
-    if (error !== null || series.length === 0) {
+    // On an RPC failure (a stale admin token, a permission error) render a one-line
+    // muted notice rather than vanishing — a hidden section is indistinguishable
+    // from "no custom metrics", so the user has no idea the read failed.
+    if (error !== null) {
+        return (
+            <section className="flex flex-col gap-2" data-testid="mt-instruments">
+                <h3 className="text-sm font-semibold text-foreground">{t("Instruments")}</h3>
+                <span className="text-xs text-muted-foreground" data-testid="mt-instruments-error" role="status">
+                    {t("Instruments unavailable: {error}", { error })}
+                </span>
+            </section>
+        );
+    }
+
+    // Silent when there's genuinely nothing to show: an uninstrumented app shouldn't
+    // see an empty table bolted onto its shard-health overview.
+    if (series.length === 0) {
         return null;
     }
 

@@ -130,6 +130,7 @@ const MESSAGE_IDS = [
     "db size",
     // Observability — ctx.metrics instruments (Metrics page)
     "Instruments",
+    "Instruments unavailable: {error}",
     "Counter",
     "Gauge",
     "Histogram",

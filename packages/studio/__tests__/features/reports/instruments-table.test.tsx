@@ -170,6 +170,33 @@ describe("instrumentsTable", () => {
         });
     });
 
+    it("surfaces an RPC error as a muted notice instead of vanishing", async () => {
+        expect.assertions(2);
+
+        // A stale admin token / permission failure must not be indistinguishable
+        // from "no custom metrics" — the section renders a one-line notice, not null.
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetricSeries) {
+                    throw new Error("admin token expired");
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getMetricHistory) {
+                    return { series: [] };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderTable(mock));
+
+        const notice = await screen.findByTestId("mt-instruments-error");
+
+        expect(notice).toBeDefined();
+        expect(notice.textContent).toContain("admin token expired");
+    });
+
     it("draws a trend sparkline for a series that has ≥2 durable history buckets", async () => {
         expect.assertions(1);
 
