@@ -341,6 +341,65 @@ describe(MaterializerRuntime, () => {
         expect(counts.state).toBe(0);
     });
 
+    it("ignores a malformed snapshot with a watermark but no state — replays from 0 rather than skipping events", async () => {
+        const store = new InMemorySnapshotStore();
+
+        // A partial write / adapter drift: `appliedSeq` is present but `state`
+        // is missing. Advancing the watermark here would permanently skip
+        // events 0..appliedSeq without ever restoring their state.
+        await store.save("counts", { appliedSeq: 5, state: undefined });
+
+        const counts = defineMaterializer({
+            name: "counts",
+            initial: () => 0,
+            handle: (s, e) => (e.type === "inc" ? s + 1 : s),
+        });
+
+        const runtime = new MaterializerRuntime([counts], { snapshotStore: store });
+
+        const recoveredSeq = await runtime.recoverFromSnapshots();
+
+        expect(recoveredSeq).toBe(0);
+        expect(runtime.appliedSeq).toBe(0);
+
+        // The runtime replays from the very start — no event is skipped.
+        const applied = runtime.applyEntries([
+            { seq: 0, type: "inc", payload: null, timestamp: 1 },
+            { seq: 1, type: "inc", payload: null, timestamp: 2 },
+        ]);
+
+        expect(applied).toBe(2);
+        expect(counts.state).toBe(2);
+    });
+
+    it("ignores a NaN / negative appliedSeq — never writes NaN into the watermark", async () => {
+        const store = new InMemorySnapshotStore();
+
+        const counts = defineMaterializer({
+            name: "counts",
+            initial: () => 0,
+            handle: (s, e) => (e.type === "inc" ? s + 1 : s),
+        });
+
+        // A non-numeric `appliedSeq` would otherwise make `Math.min(...)` (the
+        // fetch position) `NaN`, feeding `getSince(NaN)` to the DO; a negative
+        // seq is equally nonsensical. Both must be rejected, leaving the
+        // watermark at 0.
+        for (const bad of [Number.NaN, -3, "5" as unknown as number]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential store rewrites are intentional
+            await store.save("counts", { appliedSeq: bad, state: 5 });
+
+            const runtime = new MaterializerRuntime([counts], { snapshotStore: store });
+
+            // eslint-disable-next-line no-await-in-loop -- sequential recovery is intentional
+            const recoveredSeq = await runtime.recoverFromSnapshots();
+
+            expect(recoveredSeq).toBe(0);
+            expect(runtime.appliedSeq).toBe(0);
+            expect(Number.isNaN(runtime.appliedSeq)).toBe(false);
+        }
+    });
+
     it("persistSnapshots saves current state", async () => {
         const store = new InMemorySnapshotStore();
         const counts = defineMaterializer({
