@@ -1,3 +1,5 @@
+import { randomId } from "../../../shared/uuid";
+
 /**
  * Row-level change kind within a TableDiff.
  *
@@ -50,7 +52,12 @@ const createTableDiff = (table: string, changes: ReadonlyArray<RowChange>, times
         table,
         changes,
         timestamp: timestamp ?? Date.now(),
-        id: id ?? crypto.randomUUID(),
+        // Guarded generator (`shared/uuid.ts`): a bare `crypto.randomUUID()`
+        // throws on non-secure origins like a `http://192.168.x.x` LAN
+        // dev/preview server — the common local-first testing setup — because
+        // `crypto.randomUUID` is undefined there. The id only needs per-process
+        // uniqueness for `deriveInsertId`.
+        id: id ?? randomId(),
     };
 };
 

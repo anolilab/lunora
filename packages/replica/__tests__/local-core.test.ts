@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { applyDiff, applyDiffs, applyDiffToSnapshot, classifyChanges, createTableDiff, diffSize, EventLog, isDiffEmpty, mergeDiffs } from "../src/index";
 import type { InputEvent } from "../src/seq";
@@ -18,6 +18,28 @@ describe(createTableDiff, () => {
         const diff = createTableDiff("users", [], 42);
 
         expect(diff.timestamp).toBe(42);
+    });
+
+    it("mints a stable id without throwing when crypto.randomUUID is unavailable (non-secure origin)", () => {
+        const realCrypto = globalThis.crypto;
+
+        try {
+            // Simulate a non-secure origin (e.g. http://192.168.x.x LAN dev):
+            // `crypto.randomUUID` is undefined there, so a bare call throws.
+            // `getRandomValues` remains available as the fallback entropy.
+            vi.stubGlobal("crypto", { getRandomValues: realCrypto.getRandomValues.bind(realCrypto) });
+
+            const a = createTableDiff("users", [{ type: "insert", data: { name: "alice" } }]);
+            const b = createTableDiff("users", [{ type: "insert", data: { name: "bob" } }]);
+
+            expect(typeof a.id).toBe("string");
+            expect(a.id).not.toBe("");
+            // Distinct diffs get distinct ids even when minted in the same
+            // millisecond — required by `deriveInsertId`.
+            expect(a.id).not.toBe(b.id);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });
 
