@@ -71,6 +71,14 @@ export type RegisterInput =
 export interface SubscriptionFilter {
     /** Restrict to a delivery kind. */
     kind?: SubscriptionKind;
+    /**
+     * Cap the number of rows returned (a `LIMIT`). Applied server-side by the
+     * store, so a large audience never materializes wholesale in the isolate.
+     * A non-positive/absent value means "no cap"; a fractional value is truncated.
+     * `broadcast` deliberately leaves this unset (it must reach every matched
+     * device); admin/list reads set it to bound the page.
+     */
+    limit?: number;
     /** Restrict to a single owning user. */
     userId?: string | null;
 }

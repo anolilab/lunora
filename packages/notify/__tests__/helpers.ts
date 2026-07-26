@@ -85,19 +85,29 @@ const fakeD1 = (): D1Like => {
         const self: D1PreparedLike = {
             all: async <T = Record<string, unknown>>() => {
                 let results = [...rows.values()];
+                // Consume bindings in the same order the store appends them:
+                // [kind?, userId?, limit?]. A cursor keeps the filters correct even
+                // when a trailing `LIMIT ?` binding is present.
+                let cursor = 0;
 
                 if (sql.includes("kind = ?")) {
-                    const kind = bound[0];
+                    const kind = bound[cursor];
 
+                    cursor += 1;
                     results = results.filter((row) => row.kind === kind);
                 }
 
                 if (sql.includes("user_id IS NULL")) {
                     results = results.filter((row) => row.user_id === null);
                 } else if (sql.includes("user_id = ?")) {
-                    const userId = bound.at(-1);
+                    const userId = bound[cursor];
 
+                    cursor += 1;
                     results = results.filter((row) => row.user_id === userId);
+                }
+
+                if (sql.includes("LIMIT ?")) {
+                    results = results.slice(0, bound[cursor] as number);
                 }
 
                 return { results: results as T[] };

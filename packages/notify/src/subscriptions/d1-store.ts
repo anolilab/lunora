@@ -114,6 +114,10 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
 
     const ensureSchema = (): Promise<void> => {
         if (schemaReady === undefined) {
+            // Create the table, then the `user_id` / `kind` indexes that back the
+            // two filters `list`/`broadcast` push down (D1 runs one statement per
+            // `prepare`, so they are chained). Without them a `broadcast({ userId })`
+            // or the Studio device list full-scans the table.
             schemaReady = database
                 .prepare(
                     `CREATE TABLE IF NOT EXISTS ${table} (` +
@@ -121,6 +125,8 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
                         "user_id TEXT, metadata TEXT, created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, last_status TEXT, last_error TEXT)",
                 )
                 .run()
+                .then(() => database.prepare(`CREATE INDEX IF NOT EXISTS ${table}_user_id_idx ON ${table} (user_id)`).run())
+                .then(() => database.prepare(`CREATE INDEX IF NOT EXISTS ${table}_kind_idx ON ${table} (kind)`).run())
                 .then(() => undefined);
 
             schemaReady.catch(() => {
@@ -186,17 +192,27 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
         }
 
         if (filter?.userId !== undefined) {
-            bindings.push(filter.userId);
-            clauses.push(filter.userId === null ? "user_id IS NULL" : `user_id = ?${bindings.length.toString()}`);
-
             if (filter.userId === null) {
-                bindings.pop();
+                clauses.push("user_id IS NULL");
+            } else {
+                bindings.push(filter.userId);
+                clauses.push(`user_id = ?${bindings.length.toString()}`);
             }
         }
 
         const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
+
+        let limit = "";
+
+        if (filter?.limit !== undefined && filter.limit > 0) {
+            // Bind a truncated, non-negative integer so a huge audience never
+            // materializes wholesale in the isolate.
+            bindings.push(Math.trunc(filter.limit));
+            limit = ` LIMIT ?${bindings.length.toString()}`;
+        }
+
         const { results } = await database
-            .prepare(`SELECT * FROM ${table}${where}`)
+            .prepare(`SELECT * FROM ${table}${where}${limit}`)
             .bind(...bindings)
             .all<Row>();
 

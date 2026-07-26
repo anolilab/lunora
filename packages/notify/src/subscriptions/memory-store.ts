@@ -41,7 +41,11 @@ const memorySubscriptionStore = (): SubscriptionStore => {
                 }
             }
 
-            return Promise.resolve(result);
+            // Honor `limit` for parity with the D1 store's `LIMIT` (a non-positive
+            // value means "no cap").
+            const capped = filter?.limit !== undefined && filter.limit > 0 ? result.slice(0, Math.trunc(filter.limit)) : result;
+
+            return Promise.resolve(capped);
         },
         markStatus: (id: string, status: SubscriptionStatus, error?: string): Promise<void> => {
             const existing = map.get(id);

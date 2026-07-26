@@ -551,14 +551,32 @@ interface NotifySubscriptionDevice {
  */
 interface NotifySubscriptionStoreLike {
     /**
-     * List every stored subscription. Declared with NO parameter so a concrete
-     * `@lunora/notify` `SubscriptionStore` — whose `list(filter?)` narrows `kind`
-     * to the `"web-push" | "fcm"` union — assigns cleanly under
-     * `strictFunctionTypes` (an extra optional parameter on the source is fine).
-     * The RPC handler applies the `{ kind, userId }` filter in-memory, so no typed
-     * filter needs to cross this dependency-free structural boundary.
+     * List stored subscriptions, optionally narrowed by `filter`. The parameter
+     * type EXACTLY MIRRORS `@lunora/notify`'s `SubscriptionFilter` (the runtime
+     * carries no `@lunora/notify` dependency, so it is re-declared structurally):
+     * an identical shape keeps a concrete `SubscriptionStore` assignable here under
+     * `strictFunctionTypes` (contravariant parameter), while letting the RPC push
+     * `{ kind, userId, limit }` DOWN to the store so a large device table is
+     * filtered + bounded server-side (indexed in the D1 store) instead of
+     * list-all-then-filter-in-memory. `filter` is optional, so an existing caller
+     * that lists everything is unaffected.
      */
-    list: () => Promise<ReadonlyArray<NotifySubscriptionDevice & { keys?: unknown; token?: unknown }>>;
+    list: (filter?: NotifySubscriptionFilter) => Promise<ReadonlyArray<NotifySubscriptionDevice & { keys?: unknown; token?: unknown }>>;
+}
+
+/**
+ * Structural mirror of `@lunora/notify`'s `SubscriptionFilter` — kept byte-for-byte
+ * compatible (same optional fields, same `kind` union) so threading it through
+ * {@link NotifySubscriptionStoreLike} does NOT change that cross-package contract's
+ * assignability. See the note on {@link NotifySubscriptionStoreLike.list}.
+ */
+interface NotifySubscriptionFilter {
+    /** Restrict to a delivery kind. */
+    kind?: "fcm" | "web-push";
+    /** Cap the number of rows returned (a server-side `LIMIT`). */
+    limit?: number;
+    /** Restrict to a single owning user. */
+    userId?: null | string;
 }
 
 interface WorkerOptions {
@@ -2563,8 +2581,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     /**
      * Serve the gated `__lunora_admin__:listPushSubscriptions` admin RPC — the
      * Studio Notifications page's read of registered `@lunora/notify` devices.
-     * Default-closed (non-admin bearer → 403 FORBIDDEN); a `{ kind?, userId? }`
-     * filter narrows the read. Reads through `options.notifySubscriptionStore`
+     * Default-closed (non-admin bearer → 403 FORBIDDEN); a `{ kind?, userId?,
+     * limit? }` filter is pushed DOWN to the store (indexed + bounded server-side,
+     * default cap 1000). Reads through `options.notifySubscriptionStore`
      * (bound by codegen from `defineNotify({ store })`); when absent — no notify
      * store configured — returns an empty device list rather than erroring. Every
      * device is projected to strip the Web Push `keys` and FCM `token` delivery
@@ -2581,17 +2600,22 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const rawKind = args?.["kind"];
         const rawUserId = args?.["userId"];
-        const kindFilter = typeof rawKind === "string" && rawKind !== "" ? rawKind : undefined;
+        const rawLimit = args?.["limit"];
+        // Narrow `kind` to the store's union so the typed filter crosses the
+        // structural boundary; a stray value simply means "no kind filter".
+        const kindFilter = rawKind === "fcm" || rawKind === "web-push" ? rawKind : undefined;
         const userIdFilter = typeof rawUserId === "string" && rawUserId !== "" ? rawUserId : undefined;
+        // Default a bound so the admin page never ships an unbounded table; a client
+        // may request a smaller page but not an unbounded one.
+        const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), 1000) : 1000;
 
-        const stored = await store.list();
+        // Push `{ kind, userId, limit }` DOWN to the store — filtered + bounded
+        // server-side (indexed in the D1 store), not list-all-then-filter-in-memory.
+        const stored = await store.list({ kind: kindFilter, limit, userId: userIdFilter });
 
         const subscriptions: NotifySubscriptionDevice[] = stored
-            // Apply the `{ kind, userId }` filter in-memory (the store surface is
-            // filter-free) …
-            .filter((device) => (kindFilter === undefined || device.kind === kindFilter) && (userIdFilter === undefined || device.userId === userIdFilter))
-            // … then strip delivery secrets (`keys`, `token`) — the browser only
-            // needs the endpoint / kind / owner / timestamps + last-send status.
+            // Strip delivery secrets (`keys`, `token`) — the browser only needs the
+            // endpoint / kind / owner / timestamps + last-send status.
             .map(({ keys: _keys, token: _token, ...device }) => device);
 
         return Response.json({ subscriptions }, { headers: { "content-type": "application/json" }, status: 200 });
