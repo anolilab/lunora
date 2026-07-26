@@ -1,4 +1,6 @@
-import type { LunoraPush, PushContent, SubscriptionFilter } from "./types";
+import { LunoraError } from "@lunora/errors";
+
+import type { BroadcastResult, LunoraPush, PushContent, SubscriptionFilter } from "./types";
 
 /**
  * A broadcast job body — the JSON-serialisable payload enqueued for off-request
@@ -41,5 +43,25 @@ export const enqueuePushBroadcast = (queue: QueueProducerLike, job: Omit<PushBro
  * Run an enqueued broadcast job on the consumer side, delivering through the push
  * facade (which reuses the engine's retry + circuit-breaker middleware and prunes
  * gone subscriptions).
+ *
+ * RETRY SEMANTICS: a broadcast where NOTHING was delivered to a non-empty audience
+ * (`sent === 0 && total > 0`) is treated as a transient batch failure and RE-THROWN
+ * so the queue does NOT ack it — the consumer's normal retry/backoff (and, on
+ * exhaustion, dead-letter) applies. A PARTIAL success (`sent > 0`) resolves
+ * normally and is acked: retrying it would re-send to the already-delivered
+ * recipients (broadcast is not idempotent across re-runs), so partial batches are
+ * intentionally NOT retried. An empty audience (`total === 0`) also resolves — there
+ * is nothing to retry.
  */
-export const runPushBroadcastJob = (push: LunoraPush, job: PushBroadcastJob): Promise<unknown> => push.broadcast(job.payload, job.filter);
+export const runPushBroadcastJob = async (push: LunoraPush, job: PushBroadcastJob): Promise<BroadcastResult> => {
+    const result = await push.broadcast(job.payload, job.filter);
+
+    if (result.sent === 0 && result.total > 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/notify: push broadcast delivered to none of ${result.total.toString()} subscription(s) (${result.failed.toString()} failed, ${result.pruned.toString()} pruned) — throwing so the queue retries`,
+        );
+    }
+
+    return result;
+};

@@ -271,19 +271,38 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         subscription: StoredSubscription,
         payload: PushContent,
         countInline: boolean,
-    ): Promise<{ receipt: Receipt; status: NotifyDeliveryStatus }> => {
-        const receipt = await engine.sendToChannel("push", { ...payload, to: targetOf(subscription) });
-        const error = receiptError(receipt);
+    ): Promise<{ error?: string; receipt?: Receipt; status: NotifyDeliveryStatus }> => {
+        let receipt: Receipt | undefined;
+        let error: string | undefined;
         // The observability status vocabulary (accepted/failed/gone). The store's
         // own `SubscriptionStatus` (ok/failed) is set below and left unchanged.
-        const status = pushDeliveryStatus(receipt, error);
+        let status: NotifyDeliveryStatus;
 
-        if (status === "accepted") {
-            await subscriptionStore.markStatus(subscription.id, "ok");
-        } else if (status === "gone") {
-            await subscriptionStore.delete(subscription.id);
-        } else {
-            await subscriptionStore.markStatus(subscription.id, "failed", error);
+        try {
+            receipt = await engine.sendToChannel("push", { ...payload, to: targetOf(subscription) });
+            error = receiptError(receipt);
+            status = pushDeliveryStatus(receipt, error);
+        } catch (caught) {
+            // A THROW from the send path — a transient provider/store error, or the
+            // push router's raw throw for a target whose channel (`webPush`/`fcm`)
+            // isn't configured — must degrade THIS recipient to `failed`, never
+            // reject the whole fan-out. `broadcast` relies on `deliver` being total.
+            status = "failed";
+            error = caught instanceof Error ? caught.message : String(caught);
+        }
+
+        try {
+            if (status === "accepted") {
+                await subscriptionStore.markStatus(subscription.id, "ok");
+            } else if (status === "gone") {
+                await subscriptionStore.delete(subscription.id);
+            } else {
+                await subscriptionStore.markStatus(subscription.id, "failed", error);
+            }
+        } catch {
+            // The store lifecycle write is best-effort: a failing markStatus/delete
+            // (e.g. a transient D1 error) must not abort the fan-out. The send
+            // outcome above still stands; the status just went unrecorded.
         }
 
         if (status === "failed") {
@@ -295,7 +314,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             countSend("push", subscription.kind, status);
         }
 
-        return { receipt, status };
+        return { error, receipt, status };
     };
 
     const push: LunoraPush = {
@@ -309,9 +328,12 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             }
 
             const rows = await mapWithConcurrency(subscriptions, concurrency, async (subscription) => {
-                const { receipt, status } = await deliver(subscription, payload, false);
+                // `deliver` is total (it never rejects — a throwing recipient
+                // becomes a `failed` outcome inside it), so the bounded `Promise.all`
+                // pool in `mapWithConcurrency` can never be rejected by one bad send.
+                const { error, status } = await deliver(subscription, payload, false);
 
-                return { kind: subscription.kind, receipt, status, subscription };
+                return { error, kind: subscription.kind, status, subscription };
             });
 
             // Fold the per-recipient statuses into one metric count per (kind,
@@ -335,12 +357,10 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
                 countSend("push", kind, status, count);
             }
 
-            const outcomes: BroadcastOutcome[] = rows.map(({ receipt, status, subscription }) => {
+            const outcomes: BroadcastOutcome[] = rows.map(({ error, status, subscription }) => {
                 if (status === "accepted") {
                     return { id: subscription.id, status: "ok" };
                 }
-
-                const error = receiptError(receipt);
 
                 return status === "gone" ? { error, id: subscription.id, status: "expired" } : { error, id: subscription.id, status: "failed" };
             });
@@ -358,7 +378,14 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         register: (input: RegisterInput): Promise<StoredSubscription> =>
             subscriptionStore.put(normalizeRegisterInput(input, undefined, { allowedPushOrigins: definition.allowedPushOrigins })),
         send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => {
-            const { receipt } = await deliver(await resolveSubscription(target), payload, true);
+            const { error, receipt } = await deliver(await resolveSubscription(target), payload, true);
+
+            if (receipt === undefined) {
+                // A targeted single send is not a fan-out: when the provider throws
+                // (no receipt at all) the caller must see the failure, so re-surface
+                // it. `deliver` already logged/counted the `failed` status.
+                throw new LunoraError("INTERNAL", `@lunora/notify: push send failed: ${error ?? "unknown error"}`);
+            }
 
             return receipt;
         },
