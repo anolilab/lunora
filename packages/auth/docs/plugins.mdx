@@ -39,7 +39,7 @@ import {
     mcp,
     multiSession,
     oAuthProxy,
-    oidcProvider,
+    oauthProvider,
     oneTimeToken,
     organization,
     passkey,
@@ -47,7 +47,7 @@ import {
     siwe,
     twoFactor,
     username,
-    withMcpAuth,
+    requireMcpAuth,
 } from "@lunora/auth/plugins";
 ```
 
@@ -80,16 +80,16 @@ behaviour and the full option reference are better-auth's, linked per row.
 
 ### Tokens and machine clients
 
-| Export                | What it adds                                                                                              | Reference                                                                                          |
-| --------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `bearer`              | Accept the session token as an `Authorization: Bearer` header instead of a cookie (native / CLI clients). | [better-auth: bearer](https://www.better-auth.com/docs/plugins/bearer)                             |
-| `jwt`                 | Issue verifiable JWTs with a JWKS endpoint for services that expect a token.                              | [better-auth: JWT](https://www.better-auth.com/docs/plugins/jwt)                                   |
-| `oidcProvider`        | Turn your app into an OpenID Connect identity provider other apps log in with.                            | [better-auth: OIDC provider](https://www.better-auth.com/docs/plugins/oidc-provider)               |
-| `genericOAuth`        | Add any OAuth2 / OIDC provider beyond the built-in social ones.                                           | [better-auth: generic OAuth](https://www.better-auth.com/docs/plugins/generic-oauth)               |
-| `oAuthProxy`          | Route OAuth callbacks through one stable URL (useful for preview / branch deploys).                       | [better-auth: OAuth proxy](https://www.better-auth.com/docs/plugins/oauth-proxy)                   |
-| `oneTimeToken`        | Issue and verify single-use tokens (short-lived hand-off links).                                          | [better-auth: one-time token](https://www.better-auth.com/docs/plugins/one-time-token)             |
-| `deviceAuthorization` | OAuth 2.0 device grant for CLIs, TVs, and other input-constrained clients.                                | [better-auth: device authorization](https://www.better-auth.com/docs/plugins/device-authorization) |
-| `mcp` / `withMcpAuth` | OAuth-protect a Model Context Protocol server. Pairs with [`@lunora/mcp`](/docs/packages/mcp).            | [better-auth: MCP](https://www.better-auth.com/docs/plugins/mcp)                                   |
+| Export                                  | What it adds                                                                                                                                                  | Reference                                                                                          |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `bearer`                                | Accept the session token as an `Authorization: Bearer` header instead of a cookie (native / CLI clients).                                                     | [better-auth: bearer](https://www.better-auth.com/docs/plugins/bearer)                             |
+| `jwt`                                   | Issue verifiable JWTs with a JWKS endpoint for services that expect a token.                                                                                  | [better-auth: JWT](https://www.better-auth.com/docs/plugins/jwt)                                   |
+| `oauthProvider`                         | Turn your app into an OAuth/OpenID Connect provider other apps sign in with. Replaces `oidcProvider`, removed in better-auth 1.7.                             | [better-auth: OAuth provider](https://www.better-auth.com/docs/plugins/oauth-provider)             |
+| `genericOAuth`                          | Add any OAuth2 / OIDC provider beyond the built-in social ones.                                                                                               | [better-auth: generic OAuth](https://www.better-auth.com/docs/plugins/generic-oauth)               |
+| `oAuthProxy`                            | Route OAuth callbacks through one stable URL (useful for preview / branch deploys).                                                                           | [better-auth: OAuth proxy](https://www.better-auth.com/docs/plugins/oauth-proxy)                   |
+| `oneTimeToken`                          | Issue and verify single-use tokens (short-lived hand-off links).                                                                                              | [better-auth: one-time token](https://www.better-auth.com/docs/plugins/one-time-token)             |
+| `deviceAuthorization`                   | OAuth 2.0 device grant for CLIs, TVs, and other input-constrained clients.                                                                                    | [better-auth: device authorization](https://www.better-auth.com/docs/plugins/device-authorization) |
+| `mcp` / `requireMcpAuth` / `mcpHandler` | OAuth-protect a Model Context Protocol server. Pairs with [`@lunora/mcp`](/docs/packages/mcp). `withMcpAuth` was renamed `requireMcpAuth` in better-auth 1.7. | [better-auth: MCP](https://www.better-auth.com/docs/plugins/mcp)                                   |
 
 ### Abuse protection
 
@@ -99,7 +99,7 @@ behaviour and the full option reference are better-auth's, linked per row.
 | `haveIBeenPwned` | Reject passwords found in the Have I Been Pwned breach corpus (k-anonymity check).                                                | [better-auth: HIBP](https://www.better-auth.com/docs/plugins/have-i-been-pwned) |
 
 <Callout type="info">
-`captcha`, `mcp`, and `withMcpAuth` have no dedicated `better-auth/plugins/<name>`
+`captcha` has no dedicated `better-auth/plugins/<name>`
 subpath. They ship via the `better-auth/plugins` barrel, and `@lunora/auth/plugins`
 re-exports them from there.
 </Callout>

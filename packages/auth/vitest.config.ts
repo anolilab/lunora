@@ -1,6 +1,8 @@
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
+import { DEFAULT_COVERAGE_THRESHOLDS } from "../../tools/get-vitest-config";
+
 // Mirror of the shared `tools/get-vitest-config` coverage block. The workers pool
 // relies on `defineConfig` (not the shared helper, which would break the
 // `@cloudflare/vitest-pool-workers` projects), so coverage is wired inline here.
@@ -35,9 +37,25 @@ const coverage = {
  */
 const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";
 
+// Mirrors `tools/get-vitest-config`: CI runs coverage-instrumented and contended, so
+// the 5s default times out spuriously; the seed keeps order-dependence from hiding.
+const CI_TIMEOUTS = {
+    hookTimeout: process.env["CI"] ? 30_000 : 10_000,
+    testTimeout: process.env["CI"] ? 30_000 : 10_000,
+};
+
 const nodeProject = {
     extends: true,
-    test: { environment: "node", include: ["src/**/*.test.ts", "__tests__/*.test.ts"], name: "node" },
+    test: {
+        ...CI_TIMEOUTS,
+        environment: "node",
+        // `__tests__/**` rather than `__tests__/*`, minus the workerd project's own
+        // directory — a nested suite under the single-level glob would silently not run.
+        exclude: ["__tests__/workerd/**"],
+        include: ["src/**/*.test.ts", "__tests__/**/*.test.ts"],
+        name: "node",
+        sequence: { seed: 1 },
+    },
 };
 
 export default defineConfig({
@@ -54,7 +72,7 @@ export default defineConfig({
                               wrangler: { configPath: "./__tests__/workerd/wrangler.jsonc" },
                           }),
                       ],
-                      test: { include: ["__tests__/workerd/**/*.test.ts"], name: "workerd" },
+                      test: { ...CI_TIMEOUTS, include: ["__tests__/workerd/**/*.test.ts"], name: "workerd" },
                   },
               ]
             : [nodeProject],

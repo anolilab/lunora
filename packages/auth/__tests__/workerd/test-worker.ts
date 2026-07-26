@@ -19,7 +19,9 @@ const testWorker = {
         // run — module-scope side effects in the samlify tree would already have
         // thrown by the time this worker booted.
         if (url.pathname === "/plugins") {
-            const built = [sso(), scim()];
+            // 1.7 requires connections up front; the values are irrelevant here — the
+            // point is that the factories run inside workerd at all.
+            const built = [sso(), scim({ connections: [{ credentials: [{ id: "primary", token: "unused", type: "bearer" }], id: "probe" }] })];
 
             return Response.json({ ids: built.map((plugin) => plugin.id) });
         }

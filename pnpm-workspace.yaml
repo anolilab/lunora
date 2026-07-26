@@ -462,7 +462,15 @@ catalogs:
     # against a freshly built `@lunora/react-native` dist, so when touching these
     # versions re-run `pnpm --filter "@lunora/react-native..." run build` first, then
     # typecheck `examples/expo`.
+    # Direct dependency since 1.7: `createLocalAccountIssuer` (needed to link a local
+    # password account) lives in `@better-auth/core/db`, not the `better-auth` barrel.
+    "@better-auth/core": 1.7.0-rc.2
     "@better-auth/expo": 1.7.0-rc.2
+    # `mcp` / `withMcpAuth` and `oidcProvider` left better-auth's core barrel in 1.7
+    # (the latter was already `@deprecated` in 1.6 in favour of the oauth-provider
+    # package). They live in these two packages now, on the same prerelease.
+    "@better-auth/mcp": 1.7.0-rc.2
+    "@better-auth/oauth-provider": 1.7.0-rc.2
     "@better-auth/passkey": 1.7.0-rc.2
     "@better-auth/scim": 1.7.0-rc.2
     "@better-auth/sso": 1.7.0-rc.2

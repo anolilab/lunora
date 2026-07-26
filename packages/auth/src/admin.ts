@@ -1,3 +1,4 @@
+import { createLocalAccountIssuer } from "@better-auth/core/db";
 import { LunoraError } from "@lunora/errors";
 import { getAuthTables } from "better-auth/db";
 
@@ -925,19 +926,29 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 // `data` carries app-defined `additionalFields`. It is spread last and so
                 // can override `role` (matching the better-auth admin plugin's `createUser`);
                 // this is acceptable because the whole plane is admin-token gated.
-                const user = await context_.internalAdapter.createUser({
-                    email: normalizedEmail,
-                    name,
-                    role: role === undefined ? undefined : serializeRole(role),
-                    ...data,
-                } as Parameters<typeof context_.internalAdapter.createUser>[0]);
+                const user = await context_.internalAdapter.createUser(
+                    {
+                        email: normalizedEmail,
+                        name,
+                        role: role === undefined ? undefined : serializeRole(role),
+                        ...data,
+                    } as Parameters<typeof context_.internalAdapter.createUser>[0],
+                    // better-auth 1.7 takes the caller's provenance as a second argument
+                    // (it reaches database hooks); this whole plane is admin-token gated,
+                    // so it reports itself the same way better-auth's own admin plugin does.
+                    { method: "admin" },
+                );
 
                 if (password !== undefined && password !== "") {
                     const hashed = await context_.password.hash(password);
 
                     await context_.internalAdapter.linkAccount({
-                        accountId: user.id,
+                        // 1.7 renamed `accountId` to `providerAccountId` and made `issuer`
+                        // required; for a local password account the issuer is derived
+                        // from the provider id rather than being a remote IdP.
+                        issuer: createLocalAccountIssuer("credential"),
                         password: hashed,
+                        providerAccountId: user.id,
                         providerId: "credential",
                         userId: user.id,
                     });

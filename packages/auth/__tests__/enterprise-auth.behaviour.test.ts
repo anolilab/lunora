@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAuth } from "../src/create-auth";
 import { handleAuthRequest } from "../src/handler";
-import { scim, sso } from "../src/plugins";
+import { scim } from "../src/plugins";
+import { sso } from "../src/plugins-enterprise";
 import authTables from "../src/schema";
+import signInAndCookie from "./_helpers/auth-session";
 
 /**
  * Round-trip behaviour for the enterprise-auth plugins Lunora re-exports —
@@ -14,10 +16,10 @@ import authTables from "../src/schema";
  * IdP at the fetch boundary (see `stubIdentityProvider`), because provider
  * registration really does call out to the issuer's discovery endpoint.
  *
- * Deliberately covered here, because each is a claim plan 166 rests on:
+ * Deliberately covered here, because each is a property the feature rests on:
  *
  * - `authTables` auto-derives the plugins' D1 tables, so an app gets the schema
- * from the plugin list alone.
+ * from the plugin list alone, and stores no SCIM credential at rest.
  * - An OIDC provider registers and is then resolvable **by email domain**, which
  * is the whole point of enterprise SSO over plain OAuth.
  * - SCIM's non-GET/POST verbs survive Lunora's request routing. An IdP pushes
@@ -25,25 +27,30 @@ import authTables from "../src/schema";
  * them, provisioning would fail in a way no OIDC test would notice.
  *
  * NOT covered: a real IdP handshake (Okta/Entra token exchange) and SAML assertion
- * verification. Both need an external tenant, and SAML on workerd is still an open
- * question — see the note on the `sso` re-export in `src/plugins.ts`.
+ * verification. Both need an external tenant, and the SAML CPU cost on workerd is
+ * still an open question — see the package docs.
  */
 
 const SECRET = "x".repeat(32);
 
 const STRONG_PASSWORD = "correct horse battery staple";
 
-const seedMemoryDatabase = (): Record<string, unknown[]> => {
+/**
+ * An empty in-memory database with exactly the tables `plugins` need, derived from
+ * `authTables` rather than hand-listed.
+ *
+ * Hand-listing rots: the memory adapter throws "Model X not found" for anything it
+ * wasn't seeded with, and 1.7's SCIM plugin alone contributes seven tables whose names
+ * changed from 1.6. Deriving them means the seed follows the plugin set automatically.
+ */
+const seedMemoryDatabase = (plugins: unknown[] = []): Record<string, unknown[]> => {
+    const tables = Object.keys(authTables({ plugins, secret: SECRET } as Parameters<typeof authTables>[0]));
+
     return {
-        account: [],
-        // better-auth's rate limiter stores counters through the same adapter, and
-        // the SCIM routes hit it — an unseeded model throws "Model rateLimit not found".
+        ...Object.fromEntries(tables.map((table) => [table, []])),
+        // better-auth's rate limiter stores counters through the same adapter but is not
+        // part of `authTables`, so it has to be added by hand.
         rateLimit: [],
-        scimProvider: [],
-        session: [],
-        ssoProvider: [],
-        user: [],
-        verification: [],
     };
 };
 
@@ -53,6 +60,21 @@ const seedMemoryDatabase = (): Record<string, unknown[]> => {
  * ("Untrusted OIDC discovery URL"), which is an SSRF guard, not a nuisance.
  */
 const TRUSTED_IDP_ORIGIN = "https://idp.example.com";
+
+/** The bearer token the IdP presents. In a real app this comes from `ctx.secrets`, never a literal. */
+const SCIM_TOKEN = "scim-test-token";
+
+/**
+ * A SCIM connection, declared in config the way better-auth 1.7 requires.
+ *
+ * The credential is stated here rather than minted at runtime, which is precisely how
+ * GHSA-j8v8-g9cx-5qf4 was fixed: 1.6 exposed a session-authenticated
+ * `/scim/generate-token` endpoint and stored the result in plaintext in the database,
+ * so any signed-in user could mint a token for someone else's connection.
+ */
+const scimOptions = {
+    connections: [{ credentials: [{ id: "primary", token: SCIM_TOKEN, type: "bearer" as const }], id: "okta-acme" }],
+};
 
 const DISCOVERY_URL = `${TRUSTED_IDP_ORIGIN}/.well-known/openid-configuration`;
 
@@ -108,55 +130,68 @@ const stubIdentityProvider = () =>
         throw new Error(`unexpected outbound fetch in test: ${url}`);
     });
 
-/** Sign in and pull the `cookie` header so later endpoint calls run "as that user". */
-const signInAndCookie = async (auth: any, email: string, password: string): Promise<Headers> => {
-    const response = await auth.api.signInEmail({ body: { email, password }, returnHeaders: true });
-    const setCookie = response.headers.get("set-cookie");
-
-    if (!setCookie) {
-        throw new Error("sign-in did not return a set-cookie header");
-    }
-
-    const headers = new Headers();
-
-    headers.set("cookie", setCookie);
-
-    return headers;
-};
-
 describe("authTables with the enterprise plugins", () => {
-    it("derives the sso + scim tables from the plugin list alone", () => {
-        expect.assertions(2);
+    const tablesWithPlugins = (): Record<string, { shape: Record<string, { kind?: string }> }> =>
+        authTables({ plugins: [sso(), scim(scimOptions)], secret: SECRET });
 
-        const tables = authTables({ plugins: [sso(), scim()], secret: SECRET });
+    it("derives the sso + scim tables from the plugin list alone", () => {
+        expect.assertions(3);
+
+        const tables = Object.keys(tablesWithPlugins());
 
         // An app declaring these plugins gets the storage for free — no hand-written
         // table definitions, which is what makes the plugins drop-in.
-        expect(Object.keys(tables)).toContain("ssoProvider");
-        expect(Object.keys(tables)).toContain("scimProvider");
+        expect(tables).toContain("ssoProvider");
+        expect(tables).toContain("scimUser");
+        expect(tables).toContain("scimConnectionBinding");
     });
 
-    it("carries the columns the SSO domain lookup and SCIM token auth depend on", () => {
-        expect.assertions(3);
+    it("carries the columns the SSO domain lookup depends on", () => {
+        expect.assertions(2);
 
-        const tables = authTables({ plugins: [sso(), scim()], secret: SECRET });
+        const tables = tablesWithPlugins();
 
-        // `domain` is what maps a work email to a provider; without it the
-        // enterprise flow degrades to picking a provider by hand.
+        // `domain` is what maps a work email to a provider; without it the enterprise
+        // flow degrades to picking a provider by hand.
         expect(Object.keys(tables["ssoProvider"]?.shape ?? {})).toEqual(expect.arrayContaining(["domain", "issuer", "providerId"]));
-        // `scimToken` is the shared secret an IdP presents on every request.
-        expect(Object.keys(tables["scimProvider"]?.shape ?? {})).toEqual(expect.arrayContaining(["providerId", "scimToken"]));
         // The provider row points at a user, so it must be typed as an id, not a string.
         expect(tables["ssoProvider"]?.shape["userId"]?.kind).toBe("id");
+    });
+
+    it("stores no SCIM credential in the database", () => {
+        expect.assertions(1);
+
+        // Scoped to the SCIM tables: `session.token` and `account.accessToken` are
+        // core better-auth columns and none of this test's business.
+        const scimColumns = Object.entries(tablesWithPlugins())
+            .filter(([table]) => table.startsWith("scim"))
+            .flatMap(([, table]) => Object.keys(table.shape));
+
+        // The heart of GHSA-j8v8-g9cx-5qf4 was a bearer token minted at runtime and kept
+        // in plaintext in the `scimProvider` table. 1.7 declares credentials in config
+        // instead, so no SCIM table should hold one — if a token column reappears here,
+        // the at-rest exposure is back and this fails.
+        expect(scimColumns.filter((column) => /token|secret|credential/iu.test(column))).toEqual([]);
+    });
+
+    it("supports Groups as well as Users", () => {
+        expect.assertions(2);
+
+        const tables = Object.keys(tablesWithPlugins());
+
+        // 1.6 was Users-only, which is why plan 166 scoped group→role sync as custom
+        // work. 1.7 ships it, so that phase is upstream's now.
+        expect(tables).toContain("scimGroup");
+        expect(tables).toContain("scimGroupMember");
     });
 
     it("adds nothing when the plugins are absent (no schema cost for apps that don't opt in)", () => {
         expect.assertions(2);
 
-        const tables = authTables({ secret: SECRET });
+        const tables = Object.keys(authTables({ secret: SECRET }));
 
-        expect(Object.keys(tables)).not.toContain("ssoProvider");
-        expect(Object.keys(tables)).not.toContain("scimProvider");
+        expect(tables).not.toContain("ssoProvider");
+        expect(tables).not.toContain("scimUser");
     });
 });
 
@@ -170,7 +205,7 @@ describe("sso plugin behaviour (OIDC mode)", () => {
     beforeEach(async () => {
         stubIdentityProvider();
 
-        memoryDatabase = seedMemoryDatabase();
+        memoryDatabase = seedMemoryDatabase([sso()]);
         auth = createAuth({
             baseURL: "http://localhost",
             database: memoryAdapter(memoryDatabase),
@@ -235,39 +270,59 @@ describe("scim plugin request routing", () => {
     beforeEach(() => {
         auth = createAuth({
             baseURL: "http://localhost",
-            database: memoryAdapter(seedMemoryDatabase()),
+            database: memoryAdapter(seedMemoryDatabase([scim(scimOptions)])),
             emailAndPassword: { enabled: true },
-            plugins: [scim()],
+            plugins: [scim(scimOptions)],
             secret: SECRET,
         });
     });
 
-    it("mounts the SCIM 2.0 Users endpoint under the auth base path", async () => {
+    it("rejects an unauthenticated request with SCIM's own error schema", async () => {
         expect.assertions(2);
 
         const response = await handleAuthRequest(auth, new Request("http://localhost/api/auth/scim/v2/Users", { method: "GET" }));
 
-        // Unauthenticated (no SCIM bearer token), which is the point: a *routed*
-        // rejection rather than `undefined`, which is what "no such route" looks like.
-        expect(response).toBeDefined();
-        expect(response?.status).not.toBe(404);
+        // 401 in SCIM's error format proves the request reached the plugin's auth check.
+        // `not.toBe(404)` would have been satisfied by any failure, including better-auth
+        // rejecting the body before SCIM ever saw it.
+        expect(response?.status).toBe(401);
+        await expect(response?.json()).resolves.toMatchObject({ schemas: ["urn:ietf:params:scim:api:messages:2.0:Error"] });
     });
 
-    it.each(["PUT", "PATCH", "DELETE"])("routes %s through to better-auth (an IdP needs it for provisioning)", async (method) => {
-        expect.assertions(3);
+    // Valid SCIM bodies per verb. An invalid one dies in better-auth's generic body
+    // validation with a 400 and never reaches SCIM — which is how the first version of
+    // this test passed while proving nothing about the SCIM handlers.
+    it.each([
+        ["PUT", { schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"], userName: "victim@acme.test" }],
+        ["PATCH", { Operations: [{ op: "replace", path: "active", value: false }], schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"] }],
+        ["DELETE", undefined],
+    ])("routes %s through to SCIM's auth check (an IdP needs it for provisioning)", async (method, body) => {
+        expect.assertions(1);
 
         const response = await handleAuthRequest(
             auth,
             new Request("http://localhost/api/auth/scim/v2/Users/some-user-id", {
-                ...(method === "DELETE" ? {} : { body: JSON.stringify({ active: false }), headers: { "content-type": "application/json" } }),
+                ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
                 method,
             }),
         );
 
-        // `handleAuthRequest` is method-agnostic by design; this pins that, because a
-        // method filter added upstream would break deactivation silently.
-        expect(response).toBeDefined();
-        expect(response?.status).not.toBe(404);
-        expect(response?.status).not.toBe(405);
+        // 401 (not 400, not 404, not 405): the verb was routed, the body was accepted,
+        // and SCIM's own credential check is what turned it away. A method filter added
+        // anywhere in the dispatch chain would break deactivation, and this catches it.
+        expect(response?.status).toBe(401);
+    });
+
+    it("accepts the configured bearer credential", async () => {
+        expect.assertions(1);
+
+        const response = await handleAuthRequest(
+            auth,
+            new Request("http://localhost/api/auth/scim/v2/Users", { headers: { authorization: `Bearer ${SCIM_TOKEN}` }, method: "GET" }),
+        );
+
+        // The counterpart to the 401s above: with the config-declared token the same
+        // route answers, so those rejections are about credentials and not about routing.
+        expect(response?.status).toBe(200);
     });
 });

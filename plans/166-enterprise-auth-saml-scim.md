@@ -11,6 +11,95 @@
   `@lunora/auth`, closing the enterprise-auth gap vs Supabase / Firebase Identity
   Platform / WorkOS-style offerings.
 
+## Progress (2026-07-27, branch `feat/166-sso-scim`)
+
+**Phase 1a shipped, and it pulled a dependency migration with it.** Two plan premises
+turned out to be wrong; both are corrected below.
+
+### Premise 1 — the OIDC/SAML risk split does not exist at the module level
+
+`@better-auth/sso` **statically** imports `samlify` (which `require`s `fs`, `crypto`,
+`zlib`) and `node:crypto`'s `X509Certificate`, so configuring only the OIDC mode still
+loads the whole SAML tree. The Phase-0 load question therefore gated _both_ halves.
+
+It is answered **GO**: a gated workerd suite
+(`packages/auth/__tests__/workerd/enterprise-auth.workerd.test.ts`) boots a worker that
+imports and constructs both plugins in the real runtime. `auth` is now in the
+`LUNORA_WORKERD_TESTS=1` matrices in `.github/workflows/{test,nightly}.yml`, so it
+actually runs — it was written before that and would otherwise have been inert.
+
+### Premise 2 — SCIM could not ship on the pinned 1.6.23
+
+`@better-auth/scim` < 1.7.0-beta.4 carries **GHSA-j8v8-g9cx-5qf4** (HIGH,
+CWE-639/862), and the reproduced chain was: any signed-in user lists every SCIM
+connection, mints a token for one, reads the directory, and rewrites a victim's
+`userName` to an address they control → account takeover via email-keyed recovery. Every
+1.6.x is in the vulnerable range, so the exact pin at 1.6.23 could not hold.
+
+The stack therefore moved to **1.7.0-rc.2** (`pnpm audit`: zero better-auth advisories).
+That migration was larger than "a dep bump":
+
+- **The expo bridge.** `examples/expo` had hard-coded `"@better-auth/expo": "1.6.23"`
+  instead of `catalog:auth` — now on the catalog. The generics break the old pin
+  described is real and still present at rc.2, so `packages/react-native` re-types the
+  plugin as `ExpoClientPlugin`. Note for whoever touches it: the base must stay
+  upstream's own return type with only `getActions` replaced; rebuilding on
+  `BetterAuthClientPlugin` (or intersecting with it) collapses better-auth's client-API
+  inference to `never`.
+- **Removed public surface**, re-homed on the curated barrel: `oidcProvider` →
+  `oauthProvider` (`@better-auth/oauth-provider`), `mcp`/`withMcpAuth` → `mcp` /
+  `requireMcpAuth` / `mcpHandler` (`@better-auth/mcp`), `genericOAuthClient` and
+  `oidcClient` dropped, `oidcClient` replaced by `oauthProviderClient`,
+  `@better-auth/scim/client` gone entirely. `@better-auth/core` is now a direct
+  dependency (`createLocalAccountIssuer`), and `src/admin.ts` moved to the 2-argument
+  `createUser` plus `providerAccountId`/`issuer` on `linkAccount`.
+- **1.7.0 is not GA** (`latest` on npm is still 1.6.25). The catalog block says so and
+  should be revisited on release.
+
+### Phase 2 is obsolete — upstream ships it
+
+1.7's SCIM plugin is a rewrite, not a patch: connections (and their bearer credentials)
+are declared in **config**, which is _how_ the advisory was fixed — no runtime mint
+endpoint, and no token at rest. It also serves `/Groups`, `/Schemas`,
+`/ServiceProviderConfig` and `/ResourceTypes`. So "SCIM is Users-only, group→role sync
+is custom work" no longer holds, and Phase 2 needs no Lunora work.
+
+### Also shipped
+
+- `sso` moved off the general barrel to **`@lunora/auth/plugins/enterprise`** (+
+  `/enterprise/client`) as an **optional peer**, so the ~1.1 MB samlify tree stops
+  landing in every `@lunora/auth` install. `scim` stays in the general barrel (cheap).
+- Behaviour tests over: schema derivation, **no SCIM credential column anywhere**,
+  Groups support, OIDC provider registration, **domain→provider resolution**,
+  unknown-domain refusal, and SCIM `PUT`/`PATCH`/`DELETE` reaching SCIM's own auth check
+  (asserting 401 in SCIM's error schema — an earlier version asserted `not 404` and so
+  passed on a 400 that never reached the plugin).
+- Docs rewritten for the 1.7 model, including the permissive `sso` defaults
+  (`domainVerification` off; `/sso/register` session-only; suffix domain matching), the
+  outbound discovery call, and `trustedOrigins` as an SSRF gate.
+- Restored the coverage floor + CI timeouts this package lost when its vitest config
+  moved off the shared helper, and corrected a docs claim that auth routes are covered
+  by the runtime's 1 MiB body cap (they are not — `dispatchAuth` bypasses it).
+
+### Still open
+
+- **SAML ACS execution.** Loading is proven; the pure-JS RSA verify path is unmeasured
+  against a Worker CPU budget. Docs name OIDC/OAuth2 as the supported mode and point at
+  better-auth#10343 / PR #10347.
+- **Real-IdP exit criterion.** No Okta/Entra tenant; the IdP is stubbed at the fetch
+  boundary, so token exchange and userinfo mapping are unproven against a real provider.
+  A cheap way to close most of this without a tenant: better-auth's own
+  `@better-auth/oauth-provider` can act as an in-process IdP, bridged to the `sso`
+  consumer by routing its outbound `fetch` into the provider's handler.
+- **`lunoraAuthAdapter` compat.** Behaviour tests run on `memoryAdapter`; the no-join
+  CRUD adapter was not driven against these endpoints.
+- **Revisit the prerelease pins when 1.7.0 goes GA.**
+
+- **Baseline**: `70331e9b` (2026-07-21)
+- **Goal**: make enterprise SSO and SCIM directory provisioning first-class in
+  `@lunora/auth`, closing the enterprise-auth gap vs Supabase / Firebase Identity
+  Platform / WorkOS-style offerings.
+
 ## Progress (2026-07-26, branch `feat/166-sso-scim`)
 
 **A plan premise was wrong and is corrected here.** The plan split risk as "OIDC

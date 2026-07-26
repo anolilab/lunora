@@ -48,6 +48,14 @@
             "types": "./dist/plugins-client.d.ts",
             "import": "./dist/plugins-client.mjs"
         },
+        "./plugins/enterprise": {
+            "types": "./dist/plugins-enterprise.d.ts",
+            "import": "./dist/plugins-enterprise.mjs"
+        },
+        "./plugins/enterprise/client": {
+            "types": "./dist/plugins-enterprise-client.d.ts",
+            "import": "./dist/plugins-enterprise-client.mjs"
+        },
         "./middleware": {
             "types": "./dist/middleware.d.ts",
             "import": "./dist/middleware.mjs"
@@ -104,9 +112,11 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@better-auth/core": "catalog:auth",
+        "@better-auth/mcp": "catalog:auth",
+        "@better-auth/oauth-provider": "catalog:auth",
         "@better-auth/passkey": "catalog:auth",
         "@better-auth/scim": "catalog:auth",
-        "@better-auth/sso": "catalog:auth",
         "@lunora/errors": "1.0.0-alpha.8",
         "@lunora/server": "1.0.0-alpha.40",
         "@lunora/values": "1.0.0-alpha.11",
@@ -117,6 +127,7 @@
         "better-auth": "catalog:auth"
     },
     "devDependencies": {
+        "@better-auth/sso": "catalog:auth",
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
@@ -130,5 +141,13 @@
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
+    },
+    "peerDependencies": {
+        "@better-auth/sso": ">=1.7.0-rc.2"
+    },
+    "peerDependenciesMeta": {
+        "@better-auth/sso": {
+            "optional": true
+        }
     }
 }
