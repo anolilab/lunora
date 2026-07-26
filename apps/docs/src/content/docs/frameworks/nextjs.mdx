@@ -135,8 +135,17 @@ import { LunoraClient } from "lunorash/client";
 import type { ReactNode } from "react";
 import { useState } from "react";
 
+// Fall back to the wrangler dev port in development only. In production an
+// unset value must fail loudly — a localhost fallback would silently point
+// every visitor's browser at their own machine.
+const url = process.env.NEXT_PUBLIC_LUNORA_URL ?? (process.env.NODE_ENV === "development" ? "http://localhost:8787" : undefined);
+
+if (!url) {
+    throw new Error("NEXT_PUBLIC_LUNORA_URL must be set — it is inlined at build time.");
+}
+
 export function Providers({ children }: { children: ReactNode }) {
-    const [client] = useState(() => new LunoraClient({ url: process.env.NEXT_PUBLIC_LUNORA_URL ?? "http://localhost:8787" }));
+    const [client] = useState(() => new LunoraClient({ url }));
 
     return <LunoraProvider client={client}>{children}</LunoraProvider>;
 }
