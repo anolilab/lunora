@@ -239,18 +239,35 @@ export class EventsSync {
     }
 
     /**
-     * One poll cycle: fetch → (apply → diff → mirror) per event.
+     * One poll cycle: fetch → fast-path whole-batch apply, with a per-event
+     * fallback that preserves the atomicity property.
      *
-     * Each event is driven through the FULL pipeline — `applyEvents`,
-     * `getTableDiffs`, and `mirror.applyDiff` — atomically before the
-     * watermark advances past it (REPLICA-08). Advancing the watermark any
-     * earlier (e.g. right after `applyEvents`) would let a later throw from
-     * `getTableDiffs`/`mirror.applyDiff` skip mirror delivery for that event
-     * PERMANENTLY, since the next poll would never re-fetch it. Keeping the
-     * watermark pinned to the last event whose entire pipeline succeeded
-     * means the next poll re-fetches exactly the unapplied remainder — never
-     * re-applying a fully-succeeded event, never silently dropping one that
-     * partially failed.
+     * ## Fast path (common case — one diff)
+     *
+     * A returning-from-offline client with a large backlog drives the WHOLE
+     * fetched batch through the pipeline once: a single `applyEvents(events)`,
+     * a single `getTableDiffs()`, and a single mirror fan-out. A 500-event
+     * catch-up therefore computes ONE aggregate diff and issues ONE mirror
+     * round, not 500 of each. The watermark advances past the last event only
+     * once that whole-batch pipeline has fully succeeded.
+     *
+     * ## Fallback (on any throw — exact-remainder retry)
+     *
+     * If any stage throws, the watermark is still untouched (the fast path
+     * advances it only on full success), so we fall back to the per-event loop
+     * from the SAME watermark. Each event is driven through the full pipeline —
+     * `applyEvents`, `getTableDiffs`, `mirror.applyDiff` — and the watermark
+     * advances only after ALL THREE have succeeded for that event (REPLICA-08).
+     * A mid-batch failure therefore pins the watermark to the last
+     * fully-succeeded event; the next poll re-fetches exactly the unapplied
+     * remainder — never advancing past an event whose mirror delivery never
+     * completed, never silently dropping one that partially failed.
+     *
+     * Re-driving events the fast path already touched is safe: `mirror.applyDiff`
+     * is idempotent (deterministic `deriveInsertId`), and the consumer's
+     * `applyEvents`/`getTableDiffs` must already tolerate re-application of a
+     * not-yet-committed event — the per-event loop re-applies the failing event
+     * on every retry too.
      */
     async #pollOnce(): Promise<number> {
         try {
@@ -260,6 +277,31 @@ export class EventsSync {
                 return 0;
             }
 
+            // ── Fast path: whole batch as ONE atom ────────────────────────
+            try {
+                this.#options.applyEvents(events);
+
+                const diffs = this.#options.getTableDiffs();
+
+                for (const diff of diffs) {
+                    this.#options.mirror.applyDiff(diff);
+                }
+
+                // Every stage succeeded for the whole batch — advance past the
+                // last event in one step.
+                const lastEvent = events[events.length - 1] as EventLogEntry;
+
+                this.#watermark = lastEvent.seq + 1;
+
+                return events.length;
+            } catch {
+                // Swallow and hand off to the per-event fallback below. The
+                // watermark is unchanged, so the fallback re-derives from the
+                // last committed position and narrows the failure to the exact
+                // offending event; it reports the real error if it persists.
+            }
+
+            // ── Fallback: per-event, exact-remainder retry ────────────────
             let appliedCount = 0;
 
             try {
@@ -274,10 +316,9 @@ export class EventsSync {
 
                     // Only advance the watermark once state, diff generation,
                     // AND mirror persistence have all succeeded for this
-                    // event — a throw at any stage above leaves the
-                    // watermark where it was, so the next poll retries this
-                    // event (and only this event) instead of permanently
-                    // skipping it.
+                    // event — a throw at any stage above leaves the watermark
+                    // where it was, so the next poll retries this event (and
+                    // only this event) instead of permanently skipping it.
                     this.#watermark = event.seq + 1;
                     appliedCount += 1;
                 }
