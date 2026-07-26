@@ -255,6 +255,33 @@ const OTLP_SPAN_KIND: Record<OtlpSpanKind, number> = {
 };
 
 /**
+ * Reserved Lunora attribute keys, defined once so the DO (`@lunora/do`) and
+ * worker (`@lunora/runtime`) exporters cannot drift apart — a collector query on
+ * one of these keys must match EVERY source that emits it. Before this record,
+ * the two exporters re-typed the same keys as string literals and had already
+ * diverged (`lunora.error.type` on one side, `error.type` on the other).
+ *
+ * The dispatch dimensions with no OTel equivalent — `functionPath`, `ok`,
+ * `shardKey`, `userId`, `durationMs` — stay under the `lunora.*` namespace. The
+ * error pair converges on OTel semantic-convention keys instead: `error.type`
+ * (stable) and `error.message` — both are span-*level* attributes, so the
+ * `exception.*` keys stay reserved for the exception span-*event* the runtime
+ * emits separately.
+ *
+ * Every emit path MUST reference these constants; a literal `"lunora.…"`
+ * attribute string in an emitter is a drift bug.
+ */
+const LUNORA_ATTR = Object.freeze({
+    durationMs: "lunora.duration_ms",
+    errorMessage: "error.message",
+    errorType: "error.type",
+    functionPath: "lunora.function_path",
+    ok: "lunora.ok",
+    shardKey: "lunora.shard_key",
+    userId: "lunora.user_id",
+} as const);
+
+/**
  * Build the OTLP `Resource.attributes` list for a signal envelope. `service.name`
  * is the default and `extra` is merged over it, so a caller-supplied
  * `service.name` in `extra` wins. Kept as a separate helper so `wrapResource*`
@@ -324,6 +351,7 @@ const wrapResourceMetrics = (
 export type { OtlpAnyValue, OtlpAttribute, OtlpAttributeValue, OtlpLevel, OtlpResourceAttributes, OtlpSpanKind };
 export {
     buildTraceparent,
+    LUNORA_ATTR,
     OTLP_SPAN_KIND,
     encodeAttribute,
     encodeAttributes,

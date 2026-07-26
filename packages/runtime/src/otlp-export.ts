@@ -16,13 +16,13 @@
  */
 import { coerceFieldValue } from "../../../shared/log-fields";
 import type { OtlpAttribute } from "../../../shared/otlp";
-import { encodeAttribute, encodeAttributes, OTLP_SEVERITY, OTLP_SPAN_KIND, otlpRandomHex, otlpUnixNano } from "../../../shared/otlp";
+import { encodeAttribute, encodeAttributes, LUNORA_ATTR, OTLP_SEVERITY, OTLP_SPAN_KIND, otlpRandomHex, otlpUnixNano } from "../../../shared/otlp";
 import type { KeepAlive } from "../../../shared/otlp-batch";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySinkContext, SpanEvent } from "./observability";
 
 /** Build the OTLP trace-export body for one RPC dispatch event. */
 const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
-    const attributes = [encodeAttribute("lunora.function_path", event.functionPath), encodeAttribute("lunora.ok", event.ok)];
+    const attributes = [encodeAttribute(LUNORA_ATTR.functionPath, event.functionPath), encodeAttribute(LUNORA_ATTR.ok, event.ok)];
 
     // HTTP server semantic conventions: the RPC endpoint is an HTTP handler from
     // the collector's point of view, so expose method/route/status even though
@@ -55,7 +55,7 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
     }
 
     if (event.shardKey !== undefined) {
-        attributes.push(encodeAttribute("lunora.shard_key", event.shardKey));
+        attributes.push(encodeAttribute(LUNORA_ATTR.shardKey, event.shardKey));
     }
 
     // HTTP response status code is present on every RPC span. Successful
@@ -66,7 +66,7 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
     if (event.error) {
         // `error.type` is the OTel semantic-convention key; keep the numeric
         // HTTP-ish status under the lunora namespace.
-        attributes.push(encodeAttribute("error.type", event.error.code), encodeAttribute("lunora.error_status", event.error.status));
+        attributes.push(encodeAttribute(LUNORA_ATTR.errorType, event.error.code), encodeAttribute("lunora.error_status", event.error.status));
     }
 
     if (event.fanOut) {
@@ -129,19 +129,19 @@ const encodeSignalAttributes = (
     reserved: { errorType?: string; functionPath: string; shardKey?: string; userId?: string },
     caller: Record<string, unknown> | undefined,
 ): OtlpAttribute[] => {
-    const byKey = new Map<string, OtlpAttribute>([["lunora.function_path", encodeAttribute("lunora.function_path", reserved.functionPath)]]);
+    const byKey = new Map<string, OtlpAttribute>([[LUNORA_ATTR.functionPath, encodeAttribute(LUNORA_ATTR.functionPath, reserved.functionPath)]]);
 
     if (reserved.shardKey !== undefined) {
-        byKey.set("lunora.shard_key", encodeAttribute("lunora.shard_key", reserved.shardKey));
+        byKey.set(LUNORA_ATTR.shardKey, encodeAttribute(LUNORA_ATTR.shardKey, reserved.shardKey));
     }
 
     if (reserved.userId !== undefined) {
-        byKey.set("lunora.user_id", encodeAttribute("lunora.user_id", reserved.userId));
+        byKey.set(LUNORA_ATTR.userId, encodeAttribute(LUNORA_ATTR.userId, reserved.userId));
     }
 
     if (reserved.errorType !== undefined) {
         // `error.type` is the OTel semantic-convention key.
-        byKey.set("error.type", encodeAttribute("error.type", reserved.errorType));
+        byKey.set(LUNORA_ATTR.errorType, encodeAttribute(LUNORA_ATTR.errorType, reserved.errorType));
     }
 
     // Caller values arrive pre-normalized to JSON-safe primitives;

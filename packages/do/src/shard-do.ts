@@ -11,7 +11,7 @@ import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
-import { parseTraceparent } from "../../../shared/otlp";
+import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -5438,9 +5438,9 @@ abstract class ShardDO {
                     // The always-present skeleton, under OTel-ish names so the
                     // record is useful even from a handler that attached nothing
                     // but a couple of business fields.
-                    "lunora.duration_ms": durationMs,
-                    "lunora.function_path": functionPath,
-                    "lunora.ok": failure === undefined,
+                    [LUNORA_ATTR.durationMs]: durationMs,
+                    [LUNORA_ATTR.functionPath]: functionPath,
+                    [LUNORA_ATTR.ok]: failure === undefined,
                 },
                 wide.sink,
                 WIDE_EVENT_NAME,
