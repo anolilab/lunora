@@ -2606,14 +2606,28 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const kindFilter = rawKind === "fcm" || rawKind === "web-push" ? rawKind : undefined;
         const userIdFilter = typeof rawUserId === "string" && rawUserId !== "" ? rawUserId : undefined;
         // Default a bound so the admin page never ships an unbounded table; a client
-        // may request a smaller page but not an unbounded one.
-        const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), 1000) : 1000;
+        // may request a smaller page but not an unbounded one. TRUNCATE FIRST, then
+        // test `> 0`: a fractional request in (0, 1) truncates to 0, which the store
+        // reads as "no LIMIT" (unbounded) — so a truncated-to-nothing limit must fall
+        // back to the default cap, never collapse to 0 and leak the full table.
+        const truncatedLimit = typeof rawLimit === "number" && Number.isFinite(rawLimit) ? Math.trunc(rawLimit) : 0;
+        const limit = truncatedLimit > 0 ? Math.min(truncatedLimit, 1000) : 1000;
 
         // Push `{ kind, userId, limit }` DOWN to the store — filtered + bounded
         // server-side (indexed in the D1 store), not list-all-then-filter-in-memory.
         const stored = await store.list({ kind: kindFilter, limit, userId: userIdFilter });
 
         const subscriptions: NotifySubscriptionDevice[] = stored
+            // Defense-in-depth: `{ kind, userId }` are pushed DOWN to `store.list`
+            // above for the indexed perf win, but a store that ignores the filter (a
+            // non-filtering `SubscriptionStore` implementation, or a test double) would
+            // otherwise return everything. Re-apply the same predicate in memory so the
+            // RPC is correct regardless of the store — `null` and absent `userId` both
+            // read as anonymous, matching the store's `userId IS NULL` semantics.
+            .filter(
+                (device) =>
+                    (kindFilter === undefined || device.kind === kindFilter) && (userIdFilter === undefined || (device.userId ?? null) === userIdFilter),
+            )
             // Strip delivery secrets (`keys`, `token`) — the browser only needs the
             // endpoint / kind / owner / timestamps + last-send status.
             .map(({ keys: _keys, token: _token, ...device }) => device);
