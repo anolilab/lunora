@@ -1982,6 +1982,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -2419,6 +2422,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@lunora/sql-store':
         specifier: workspace:*
         version: link:../sql-store
@@ -3120,6 +3126,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
@@ -3687,6 +3696,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@visulima/storage':
         specifier: catalog:storage
         version: 1.0.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(@nuxt/kit@4.5.0(magic-string@1.1.0)(magicast@0.5.3)(oxc-parser@0.141.0)(rolldown@1.1.5))(@opentelemetry/api@1.9.1)(ai@7.0.37(zod@4.4.3))(aws4fetch@1.0.20)(hono@4.12.30)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(sharp@0.35.1)(supports-color@10.2.2)

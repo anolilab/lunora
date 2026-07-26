@@ -1,0 +1,61 @@
+---
+title: "@lunora/platform"
+description: The host contracts every Lunora target implements — ShardHost, SocketHost, ShardDirectory, ShardKvStore, SchedulerHost — plus the capability matrix codegen reads.
+---
+
+`@lunora/platform` is types and a capability matrix, nothing else. It has no
+runtime dependencies and near-zero runtime code: it exists so a second target
+implements a **contract** rather than forking the engine.
+
+Hosts live in `@lunora/platform-<target>` — never as subpaths here, because each
+host carries its own provider dependencies and this package must stay
+installable anywhere.
+
+```ts
+import type { ShardHost, SocketHost, PlatformCapabilities } from "@lunora/platform";
+```
+
+## The contracts
+
+| Contract         | What it owns                                                                                         |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| `ShardHost`      | One shard's execution slot: `runSerialized`, `transaction`, `sql`, `alarms`, `waitUntil`, `shardKey` |
+| `SocketHost`     | Hibernatable sockets: `accept`, `getSockets(tag?)`, `handleFor`, optional retagging                  |
+| `ShardDirectory` | Name → stub resolution, with optional jurisdiction pinning                                           |
+| `ShardKvStore`   | Ordered key-value with prefix scan — what `ShardHost` deliberately omits                             |
+| `SchedulerHost`  | `runAfter`/`runAt`, at-least-once, optional config-time `cron`                                       |
+
+Each is documented at its definition. Two contract notes are worth repeating
+here because they are behavioural, not type-level, and a host that ignores them
+compiles fine and fails in production:
+
+- **Attachment state must survive host recycling.** Hibernation on Cloudflare, a
+  process restart elsewhere. Everything a socket needs after a wake lives in its
+  attachment.
+- **`getSockets(tag)` must return _exactly_ the tagged sockets.** A superset fans
+  updates out to subscriptions that never asked for them, which across tenants is
+  a data leak — so a host without native tagging filters in userland.
+
+## Capabilities
+
+`PlatformCapabilities` rates each feature `"native" | "emulated" | "unsupported"`.
+Codegen intersects it with the app's feature probe and omits `ctx.*` surfaces the
+target cannot serve, with a `platform_unsupported_feature` diagnostic. `emulated`
+emits as-is.
+
+```ts
+import { CLOUDFLARE_CAPABILITIES } from "@lunora/platform";
+```
+
+## Conformance
+
+A host is only correct if it passes `@lunora/platform-conformance`, which is the
+executable form of these contracts. See its docs for what the suite asserts and
+what it does not yet cover.
+
+## Adding to the matrix
+
+Any new `ctx.*` or binding feature states its mapping per target — or its
+explicit non-support — in the same change that adds it. That rule lives in
+[AGENTS.md](https://github.com/anolilab/lunora/blob/alpha/AGENTS.md); the matrix
+is only honest if it is updated by the person who knows the answer.

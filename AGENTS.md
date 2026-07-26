@@ -171,6 +171,29 @@ When stripping extensions in bulk, use an AST-aware codemod (e.g. ts-morph, alre
 
 When a third-party API insists on a default export (e.g. `@visulima/cerebro`'s lazy `loader: () => import("./handler")`), do **not** add a `default` alongside named exports. Adapt at the call site instead — `loader: () => import("./handler").then((m) => ({ default: m.execute }))`.
 
+### Platform parity — state the mapping when you add a feature
+
+Every new `ctx.*` surface or binding states its mapping **per target**, or its
+explicit non-support, in the same change that adds it:
+
+- Add the feature to `PlatformCapabilities` in `@lunora/platform` and rate it
+  `"native" | "emulated" | "unsupported"` for each target in the matrix
+  (`CLOUDFLARE_CAPABILITIES`, and any sibling target that exists).
+- If it is host-backed, say which contract carries it — or add one. A feature
+  that reaches past `ShardHost`/`SocketHost`/`ShardDirectory`/`ShardKvStore`/
+  `SchedulerHost` into a provider API is a porting blocker, and the time to
+  notice is while writing it.
+- If a target cannot serve it, `"unsupported"` is a fine answer. Codegen omits
+  the surface and emits a `platform_unsupported_feature` diagnostic; silence is
+  what causes the second host to discover the gap at runtime.
+
+This is a process control, not paperwork. The matrix is what codegen trusts to
+decide whether an app can target a host, and it is only honest if it is updated
+by the person who already knows the answer. Two contracts have shipped wrong in
+exactly the way this prevents — `ShardSqlExec` promised a field nothing read and
+omitted three the engine used, and the canonical binding `*Like` types drifted
+from the real ones because nothing consumed them.
+
 ### Dependency Catalog
 
 Shared dependency versions live in pnpm catalogs in `pnpm-workspace.yaml`. Packages reference them as `catalog:test`, `catalog:lint`, `catalog:dev`, `catalog:tsc`, `catalog:types`, etc. **Never** hard-code a version that already lives in a catalog.

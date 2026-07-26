@@ -1,0 +1,48 @@
+---
+title: "@lunora/platform-conformance"
+description: The behavioural TCK every Lunora platform host must pass — a parameterized Vitest suite plus an in-memory reference host.
+---
+
+`@lunora/platform-conformance` is the executable form of the `@lunora/platform`
+contracts. A host that type-checks against them is not yet a working host; this
+is what decides.
+
+```ts
+import { defineHostContractSuite, createReferenceHost } from "@lunora/platform-conformance";
+
+defineHostContractSuite("my-host", createMyHost, { describe, expect, it });
+```
+
+It runs against **both** the in-memory reference host and the Cloudflare adapters
+in real workerd. `it` is injectable precisely so the Cloudflare run can wrap every
+body in `runInDurableObject`.
+
+## Host variance is declared, not skipped
+
+Hosts legitimately differ in what a test can drive. That variance is expressed as
+presence-based optional hooks on `ConformanceHost` — `createSocket`,
+`simulateRecycle`/`restoreSocket`, `awaitAlarmFired`, `scheduler` — rather than
+skipped blocks, so a gap shows up in the suite output instead of vanishing from
+it.
+
+## What it covers
+
+Host primitives: mutation serialization, transaction rollback and
+read-your-writes, all three SQL cursor read shapes, alarm set/get/delete, socket
+accept/send/close, attachment round-trip **across a recycle**, exact tagged
+fan-out, raw→handle resolution, backpressure reporting, deterministic shard
+placement, scheduler schedule/cancel, and KV read-back/idempotent-delete/prefix
+scan.
+
+## What it does not cover yet
+
+The engine-level guarantees in plan 114 §3 — OCC snapshot-CAS → 409 with no
+server retry, reactive poke ordering (`pokeStart`/`pokePart`/`pokeEnd` framing and
+per-socket cursor resume), RLS identity under a live subscription, and scheduler
+at-least-once + dead-letter.
+
+This is a deliberate deferral, not an oversight, and it is circular with the
+engine extraction: those behaviours are implemented by code that still lives in
+`@lunora/do`, so there is no host-neutral seam to assert them against. They move
+into this suite as that extraction completes. Until then a passing host means
+"the primitives are right", not "the engine will behave".

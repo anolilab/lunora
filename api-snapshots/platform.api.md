@@ -9,6 +9,16 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/platform`
 
+### `AnalyticsEngineDataPoint` (interface)
+
+```ts
+interface AnalyticsEngineDataPoint {
+    blobs?: (ArrayBuffer | null | string)[];
+    doubles?: number[];
+    indexes?: (ArrayBuffer | string)[];
+}
+```
+
 ### `AnalyticsEngineDataPointLike` (interface)
 
 ```ts
@@ -23,7 +33,7 @@ interface AnalyticsEngineDataPointLike {
 
 ```ts
 interface AnalyticsEngineDatasetLike {
-    writeDataPoint: (event: AnalyticsEngineDataPointLike) => void;
+    writeDataPoint: (event: AnalyticsEngineDataPoint) => void;
 }
 ```
 
@@ -52,10 +62,9 @@ type CapabilityLevel = "native" | "emulated" | "unsupported";
 
 ```ts
 interface D1DatabaseLike {
-    batch: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
-    exec?: (query: string) => Promise<unknown>;
-    prepare: (query: string) => D1PreparedStatementLike;
-    withSession?: (bookmark?: string) => D1SessionLike;
+    batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
+    prepare: (sql: string) => D1PreparedStatementLike;
+    withSession: (bookmark?: string) => D1SessionLike;
 }
 ```
 
@@ -82,9 +91,9 @@ interface D1PreparedStatementLike {
 
 ```ts
 interface D1SessionLike {
-    batch: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
-    getBookmark?: () => string | null;
-    prepare: (query: string) => D1PreparedStatementLike;
+    batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
+    getBookmark: () => string | null;
+    prepare: (sql: string) => D1PreparedStatementLike;
 }
 ```
 
@@ -119,14 +128,8 @@ interface ExecutionContextLike {
 ```ts
 interface KVNamespaceLike {
     delete: (key: string) => Promise<void>;
-    get: (key: string, options?: {
-        cacheTtl?: number;
-        type?: "text" | "json" | "arrayBuffer" | "stream";
-    }) => Promise<unknown>;
-    getWithMetadata?: (key: string, options?: {
-        cacheTtl?: number;
-        type?: "text" | "json" | "arrayBuffer" | "stream";
-    }) => Promise<{
+    get: (key: string, options?: KvGetOptions | KvValueType) => Promise<unknown>;
+    getWithMetadata: (key: string, options?: KvGetOptions | KvValueType) => Promise<{
         metadata: unknown;
         value: unknown;
     }>;
@@ -134,21 +137,65 @@ interface KVNamespaceLike {
         cursor?: string;
         limit?: number;
         prefix?: string;
-    }) => Promise<{
-        cursor?: string;
-        keys: {
-            expiration?: number;
-            metadata?: unknown;
-            name: string;
-        }[];
-        list_complete: boolean;
-    }>;
-    put: (key: string, value: string | ArrayBuffer | ArrayBufferView | ReadableStream, options?: {
-        expiration?: number;
-        expirationTtl?: number;
-        metadata?: unknown;
-    }) => Promise<void>;
+    }) => Promise<KvNamespaceListResult>;
+    put: (key: string, value: KvValue, options?: KvNamespacePutOptions) => Promise<void>;
 }
+```
+
+### `KvGetOptions` (interface)
+
+```ts
+interface KvGetOptions {
+    cacheTtl?: number;
+    type?: KvValueType;
+}
+```
+
+### `KvListKey` (interface)
+
+```ts
+interface KvListKey<Metadata = unknown> {
+    expiration?: number;
+    metadata?: Metadata;
+    name: string;
+}
+```
+
+### `KvNamespaceListResult` (type)
+
+```ts
+type KvNamespaceListResult<Metadata = unknown> = {
+    cacheStatus?: string | null;
+    cursor: string;
+    keys: KvListKey<Metadata>[];
+    list_complete: false;
+} | {
+    cacheStatus?: string | null;
+    keys: KvListKey<Metadata>[];
+    list_complete: true;
+};
+```
+
+### `KvNamespacePutOptions` (interface)
+
+```ts
+interface KvNamespacePutOptions {
+    expiration?: number;
+    expirationTtl?: number;
+    metadata?: unknown;
+}
+```
+
+### `KvValue` (type)
+
+```ts
+type KvValue = ReadableStream | ArrayBuffer | ArrayBufferView | string;
+```
+
+### `KvValueType` (type)
+
+```ts
+type KvValueType = "text" | "json" | "arrayBuffer" | "stream";
 ```
 
 ### `MessageBatchLike` (interface)
@@ -156,11 +203,32 @@ interface KVNamespaceLike {
 ```ts
 interface MessageBatchLike<Body = unknown> {
     ackAll: () => void;
-    readonly messages: ReadonlyArray<QueueMessageLike<Body>>;
+    readonly messages: ReadonlyArray<MessageLike<Body>>;
     readonly queue: string;
-    retryAll: (options?: {
-        delaySeconds?: number;
-    }) => void;
+    retryAll: (options?: QueueRetryOptions) => void;
+}
+```
+
+### `MessageLike` (interface)
+
+```ts
+interface MessageLike<Body = unknown> {
+    ack: () => void;
+    readonly attempts: number;
+    readonly body: Body;
+    readonly id: string;
+    retry: (options?: QueueRetryOptions) => void;
+    readonly timestamp: Date;
+}
+```
+
+### `MessageSendRequestLike` (interface)
+
+```ts
+interface MessageSendRequestLike<Body = unknown> {
+    body: Body;
+    contentType?: QueueContentType;
+    delaySeconds?: number;
 }
 ```
 
@@ -205,9 +273,15 @@ interface PlatformCapabilities {
 
 ```ts
 interface QueueBindingLike<Body = unknown> {
-    send: (body: Body, options?: QueueSendOptionsLike) => Promise<void>;
-    sendBatch: (messages: Iterable<QueueSendRequestLike<Body>>, options?: QueueSendOptionsLike) => Promise<void>;
+    send: (message: Body, options?: QueueSendOptions) => Promise<unknown>;
+    sendBatch: (messages: Iterable<MessageSendRequestLike<Body>>, options?: QueueSendBatchOptions) => Promise<unknown>;
 }
+```
+
+### `QueueContentType` (type)
+
+```ts
+type QueueContentType = "bytes" | "json" | "text" | "v8";
 ```
 
 ### `QueueMessageLike` (interface)
@@ -222,6 +296,31 @@ interface QueueMessageLike<Body = unknown> {
         delaySeconds?: number;
     }) => void;
     readonly timestamp: Date;
+}
+```
+
+### `QueueRetryOptions` (interface)
+
+```ts
+interface QueueRetryOptions {
+    delaySeconds?: number;
+}
+```
+
+### `QueueSendBatchOptions` (interface)
+
+```ts
+interface QueueSendBatchOptions {
+    delaySeconds?: number;
+}
+```
+
+### `QueueSendOptions` (interface)
+
+```ts
+interface QueueSendOptions {
+    contentType?: QueueContentType;
+    delaySeconds?: number;
 }
 ```
 
@@ -246,31 +345,46 @@ interface QueueSendRequestLike<Body = unknown> {
 
 ```ts
 interface R2BucketLike {
-    delete: (keys: string | string[]) => Promise<void>;
-    get: (key: string, options?: {
-        range?: {
-            length?: number;
-            offset?: number;
-        } | {
-            suffix?: number;
+    createMultipartUpload?: (key: string, options?: {
+        customMetadata?: Record<string, string>;
+        httpMetadata?: {
+            contentType?: string;
         };
+    }) => Promise<R2MultipartUploadLike>;
+    delete: (key: string) => Promise<void>;
+    get: (key: string, options?: {
+        range?: R2RangeLike;
     }) => Promise<R2ObjectBodyLike | null>;
     head?: (key: string) => Promise<R2ObjectLike | null>;
     list: (options?: {
         cursor?: string;
+        delimiter?: string;
         limit?: number;
         prefix?: string;
     }) => Promise<{
         cursor?: string;
         objects: R2ObjectLike[];
-        truncated: boolean;
+        truncated?: boolean;
     }>;
-    put: (key: string, value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob, options?: {
+    put: (key: string, body: ReadableStream | ArrayBuffer | Blob | string | null, options?: {
         customMetadata?: Record<string, string>;
         httpMetadata?: {
             contentType?: string;
         };
     }) => Promise<R2ObjectLike>;
+    resumeMultipartUpload?: (key: string, uploadId: string) => R2MultipartUploadLike;
+}
+```
+
+### `R2MultipartUploadLike` (interface)
+
+```ts
+interface R2MultipartUploadLike {
+    abort: () => Promise<void>;
+    complete: (uploadedParts: R2UploadedPartLike[]) => Promise<R2ObjectLike>;
+    readonly key: string;
+    readonly uploadId: string;
+    uploadPart: (partNumber: number, value: ArrayBuffer | ArrayBufferView | Blob | ReadableStream | string) => Promise<R2UploadedPartLike>;
 }
 ```
 
@@ -279,8 +393,7 @@ interface R2BucketLike {
 ```ts
 interface R2ObjectBodyLike extends R2ObjectLike {
     arrayBuffer: () => Promise<ArrayBuffer>;
-    body: ReadableStream;
-    json: <T = unknown>() => Promise<T>;
+    body: ReadableStream | null;
     text: () => Promise<string>;
 }
 ```
@@ -289,14 +402,43 @@ interface R2ObjectBodyLike extends R2ObjectLike {
 
 ```ts
 interface R2ObjectLike {
+    checksums?: {
+        sha256?: ArrayBuffer;
+    };
     customMetadata?: Record<string, string>;
     etag: string;
+    httpEtag?: string;
     httpMetadata?: {
         contentType?: string;
     };
     key: string;
+    sha256?: string;
+    sha256Base64?: string;
     size: number;
-    uploaded: Date;
+    uploaded?: Date;
+}
+```
+
+### `R2RangeLike` (type)
+
+```ts
+type R2RangeLike = {
+    length: number;
+    offset?: number;
+} | {
+    length?: number;
+    offset: number;
+} | {
+    suffix: number;
+};
+```
+
+### `R2UploadedPartLike` (interface)
+
+```ts
+interface R2UploadedPartLike {
+    etag: string;
+    partNumber: number;
 }
 ```
 
@@ -479,6 +621,12 @@ interface VectorMatchLike {
 }
 ```
 
+### `VectorMetric` (type)
+
+```ts
+type VectorMetric = "cosine" | "euclidean" | "dot-product";
+```
+
 ### `VectorRecordLike` (interface)
 
 ```ts
@@ -489,30 +637,88 @@ interface VectorRecordLike {
 }
 ```
 
+### `VectorizeDeleteMutation` (interface)
+
+```ts
+interface VectorizeDeleteMutation {
+    count?: number;
+    mutationId: string;
+}
+```
+
+### `VectorizeIndexDetails` (interface)
+
+```ts
+interface VectorizeIndexDetails {
+    dimensions: number;
+    processedUpToDatetime?: string;
+    processedUpToMutation?: string;
+    vectorsCount: number;
+}
+```
+
 ### `VectorizeIndexLike` (interface)
 
 ```ts
 interface VectorizeIndexLike {
-    deleteByIds?: (ids: string[]) => Promise<{
-        count: number;
-    }>;
-    describe?: () => Promise<{
-        dimensions: number;
-        vectorsCount?: number;
-    }>;
-    getByIds?: (ids: string[]) => Promise<VectorRecordLike[]>;
-    query: (vector: number[], options?: {
-        filter?: Record<string, unknown>;
-        namespace?: string;
-        returnMetadata?: boolean | "all" | "indexed" | "none";
-        topK?: number;
-    }) => Promise<{
-        matches: VectorMatchLike[];
-    }>;
-    upsert: (vectors: VectorRecordLike[]) => Promise<{
-        count: number;
-        ids?: string[];
-    }>;
+    deleteByIds: (ids: ReadonlyArray<string>) => Promise<VectorizeDeleteMutation>;
+    describe?: () => Promise<VectorizeIndexDetails>;
+    getByIds: (ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorizeVector>>;
+    insert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
+    query: (vector: ReadonlyArray<number>, options?: VectorizeQueryOptions) => Promise<VectorizeMatches>;
+    upsert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
+}
+```
+
+### `VectorizeMatch` (interface)
+
+```ts
+interface VectorizeMatch {
+    id: string;
+    metadata?: Record<string, unknown>;
+    namespace?: string;
+    score: number;
+    values?: ReadonlyArray<number>;
+}
+```
+
+### `VectorizeMatches` (interface)
+
+```ts
+interface VectorizeMatches {
+    count: number;
+    matches: ReadonlyArray<VectorizeMatch>;
+}
+```
+
+### `VectorizeQueryOptions` (interface)
+
+```ts
+interface VectorizeQueryOptions {
+    filter?: Record<string, unknown>;
+    namespace?: string;
+    returnMetadata?: "none" | "indexed" | "all";
+    returnValues?: boolean;
+    topK?: number;
+}
+```
+
+### `VectorizeUpsertMutation` (interface)
+
+```ts
+interface VectorizeUpsertMutation {
+    mutationId: string;
+}
+```
+
+### `VectorizeVector` (interface)
+
+```ts
+interface VectorizeVector {
+    id: string;
+    metadata?: Record<string, unknown>;
+    namespace?: string;
+    values: ReadonlyArray<number>;
 }
 ```
 

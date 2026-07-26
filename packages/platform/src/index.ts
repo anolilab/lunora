@@ -30,24 +30,51 @@
 export type { ExecutionContextLike } from "../../../shared/execution-context";
 export { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 
-// Canonical binding projections
+// Canonical binding projections. These are the SHIPPING shapes, promoted from
+// the packages that use them — not idealized restatements. A projection with no
+// consumer drifts from reality (see `ShardSqlExec`), so each one is re-exported
+// by its owning package rather than duplicated there.
 export type {
+    AnalyticsEngineDataPoint,
     AnalyticsEngineDataPointLike,
     AnalyticsEngineDatasetLike,
     D1DatabaseLike,
     D1PreparedStatementLike,
     D1SessionLike,
+    KvGetOptions,
+    KvListKey,
     KVNamespaceLike,
+    KvNamespaceListResult,
+    KvNamespacePutOptions,
+    KvValue,
+    KvValueType,
     MessageBatchLike,
+    MessageLike,
+    MessageSendRequestLike,
     QueueBindingLike,
+    QueueContentType,
     QueueMessageLike,
+    QueueRetryOptions,
+    QueueSendBatchOptions,
+    QueueSendOptions,
     QueueSendOptionsLike,
     QueueSendRequestLike,
     R2BucketLike,
+    R2MultipartUploadLike,
     R2ObjectBodyLike,
     R2ObjectLike,
+    R2RangeLike,
+    R2UploadedPartLike,
+    VectorizeDeleteMutation,
+    VectorizeIndexDetails,
     VectorizeIndexLike,
+    VectorizeMatch,
+    VectorizeMatches,
+    VectorizeQueryOptions,
+    VectorizeUpsertMutation,
+    VectorizeVector,
     VectorMatchLike,
+    VectorMetric,
     VectorRecordLike,
 } from "./bindings";
 

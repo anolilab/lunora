@@ -2,7 +2,7 @@
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
         "moduleResolution": "bundler",
-        "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types", "node"]
+        "types": ["@cloudflare/vitest-pool-workers/types", "node"]
         // Intentionally no `outDir`/`rootDir` (unlike sibling packages): `lint:types`
         // is `tsc --noEmit` and the real build is packem (driven by package.json
         // exports), so neither is load-bearing here. A set `rootDir` would raise

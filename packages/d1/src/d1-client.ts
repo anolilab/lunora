@@ -1,38 +1,11 @@
 /* eslint-disable max-classes-per-file -- D1Session and D1Client are both public exports (re-exported by src/index.ts) and are intentionally co-located: the client mints sessions, so splitting them across files would break the cohesive Sessions-API surface consumers import together. */
 import type { D1Database } from "@cloudflare/workers-types";
+import type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike } from "@lunora/platform";
 import type { BatchItem, BatchResponse } from "drizzle-orm/batch";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { drizzle as drizzleD1 } from "drizzle-orm/d1";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
-
-/**
- * Minimal structural projection of `D1Database` to keep the adapter
- * compatible with the real workers-types value as well as unit-test doubles.
- */
-interface D1DatabaseLike {
-    batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
-    prepare: (sql: string) => D1PreparedStatementLike;
-    withSession: (bookmark?: string) => D1SessionLike;
-}
-
-interface D1SessionLike {
-    batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
-    getBookmark: () => string | null;
-    prepare: (sql: string) => D1PreparedStatementLike;
-}
-
-interface D1PreparedStatementLike {
-    // T lets callers type result rows (e.g. `.all<{ id: string }>()`); it flows
-    // from the call site into the return, so it is intentionally caller-supplied.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-    all: <T = unknown>() => Promise<{ results: T[]; success: boolean }>;
-    bind: (...values: unknown[]) => D1PreparedStatementLike;
-    first: <T = unknown>(column?: string) => Promise<T | null>;
-    raw: <T = unknown>() => Promise<T[][]>;
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-    run: <T = unknown>() => Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }>;
-}
 
 /**
  * D1 client wrapping the workers `env.DB` binding. The recommended path is
@@ -236,4 +209,6 @@ class D1Client {
 }
 
 export { D1Client, D1Session };
-export type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike };
+
+
+export {type D1DatabaseLike, type D1PreparedStatementLike,type D1SessionLike} from "@lunora/platform";

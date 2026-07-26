@@ -1,78 +1,4 @@
-/**
- * The value types Workers KV can store / return. Mirrors Cloudflare's
- * `KVNamespace` `get`/`put` body unions; declared here so the package stays
- * runtime-agnostic and the `*Like` interfaces don't pull in
- * `@cloudflare/workers-types` at runtime.
- */
-export type KvValue = ReadableStream | ArrayBuffer | ArrayBufferView | string;
-
-/** How a raw KV read should decode the stored value. Mirrors KV's `type` option. */
-export type KvValueType = "text" | "json" | "arrayBuffer" | "stream";
-
-/**
- * Per-read options forwarded to the binding. `cacheTtl` is KV's edge-cache TTL
- * (seconds, min 60); `type` selects the decode mode for {@link Kv.getRaw}.
- */
-export interface KvGetOptions {
-    /** KV edge-cache TTL in seconds (minimum 60). Forwarded verbatim. */
-    cacheTtl?: number;
-    /** Decode mode for a raw read. {@link Kv.get} always uses `"json"`. */
-    type?: KvValueType;
-}
-
-/**
- * Minimal projection of Cloudflare's `KVNamespace`. Declared structurally so
- * unit tests can pass a plain `Map`-backed double; the real binding satisfies
- * the same shape. Mirrors `R2BucketLike` in `@lunora/storage`.
- */
-export interface KVNamespaceLike {
-    /** Delete a key. No-op if the key is absent. */
-    delete: (key: string) => Promise<void>;
-
-    /**
-     * Read a value. The real binding overloads on `options.type`; declared here
-     * as the broad union so a structural double need only return the value (or
-     * `null` when absent).
-     */
-    get: (key: string, options?: KvGetOptions | KvValueType) => Promise<unknown>;
-
-    /**
-     * Read a value together with its associated metadata. Returns
-     * `{ value: null, metadata: null }` when the key is absent.
-     */
-    getWithMetadata: (key: string, options?: KvGetOptions | KvValueType) => Promise<{ metadata: unknown; value: unknown }>;
-
-    /** List keys, optionally filtered by `prefix` and paginated via `cursor`. */
-    list: (options?: { cursor?: string; limit?: number; prefix?: string }) => Promise<KvNamespaceListResult>;
-
-    /** Write a value, optionally with TTL/expiration and metadata. */
-    put: (key: string, value: KvValue, options?: KvNamespacePutOptions) => Promise<void>;
-}
-
-/** The raw put options the KV binding accepts (mirrors `KVNamespacePutOptions`). */
-export interface KvNamespacePutOptions {
-    /** Absolute expiration as a Unix timestamp (seconds). Mutually exclusive with `expirationTtl`. */
-    expiration?: number;
-    /** Relative expiration in seconds from now (minimum 60). Mutually exclusive with `expiration`. */
-    expirationTtl?: number;
-    /** Arbitrary JSON metadata stored alongside the value, returned by `getWithMetadata`/`list`. */
-    metadata?: unknown;
-}
-
-/** One key entry as returned by the KV binding's `list`. */
-export interface KvListKey<Metadata = unknown> {
-    /** Absolute expiration (Unix seconds), when the key has one. */
-    expiration?: number;
-    /** The key's metadata, when set at write time. */
-    metadata?: Metadata;
-    /** The key name. */
-    name: string;
-}
-
-/** The raw `list` result shape returned by the KV binding. */
-export type KvNamespaceListResult<Metadata = unknown> =
-    | { cacheStatus?: string | null; cursor: string; keys: KvListKey<Metadata>[]; list_complete: false }
-    | { cacheStatus?: string | null; keys: KvListKey<Metadata>[]; list_complete: true };
+import type { KvGetOptions, KvListKey, KVNamespaceLike } from "@lunora/platform";
 
 /** Construction options for the `createKv` factory. */
 export interface LunoraKvOptions {
@@ -171,3 +97,13 @@ export interface Kv {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- public `put<T>` generic kept for caller ergonomics/symmetry with `get<T>`
     put: <T = unknown>(key: string, value: T, options?: KvPutOptions) => Promise<void>;
 }
+
+export {
+    type KvGetOptions,
+    type KvListKey,
+    type KVNamespaceLike,
+    type KvNamespaceListResult,
+    type KvNamespacePutOptions,
+    type KvValue,
+    type KvValueType,
+} from "@lunora/platform";

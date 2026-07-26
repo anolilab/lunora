@@ -75,95 +75,23 @@ interface PresignedUrlParams {
 
 ### `R2BucketLike` (interface)
 
-```ts
-interface R2BucketLike {
-    createMultipartUpload?: (key: string, options?: {
-        customMetadata?: Record<string, string>;
-        httpMetadata?: {
-            contentType?: string;
-        };
-    }) => Promise<R2MultipartUploadLike>;
-    delete: (key: string) => Promise<void>;
-    get: (key: string, options?: {
-        range?: R2RangeLike;
-    }) => Promise<R2ObjectBodyLike | null>;
-    head?: (key: string) => Promise<R2ObjectLike | null>;
-    list: (options?: {
-        cursor?: string;
-        delimiter?: string;
-        limit?: number;
-        prefix?: string;
-    }) => Promise<{
-        cursor?: string;
-        objects: R2ObjectLike[];
-        truncated?: boolean;
-    }>;
-    put: (key: string, body: ReadableStream | ArrayBuffer | Blob | string | null, options?: {
-        customMetadata?: Record<string, string>;
-        httpMetadata?: {
-            contentType?: string;
-        };
-    }) => Promise<R2ObjectLike>;
-    resumeMultipartUpload?: (key: string, uploadId: string) => R2MultipartUploadLike;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `R2MultipartUploadLike` (interface)
 
-```ts
-interface R2MultipartUploadLike {
-    abort: () => Promise<void>;
-    complete: (uploadedParts: R2UploadedPartLike[]) => Promise<R2ObjectLike>;
-    readonly key: string;
-    readonly uploadId: string;
-    uploadPart: (partNumber: number, value: ArrayBuffer | ArrayBufferView | Blob | ReadableStream | string) => Promise<R2UploadedPartLike>;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `R2ObjectBodyLike` (interface)
 
-```ts
-interface R2ObjectBodyLike extends R2ObjectLike {
-    arrayBuffer: () => Promise<ArrayBuffer>;
-    body: ReadableStream | null;
-    text: () => Promise<string>;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `R2ObjectLike` (interface)
 
-```ts
-interface R2ObjectLike {
-    checksums?: {
-        sha256?: ArrayBuffer;
-    };
-    customMetadata?: Record<string, string>;
-    etag: string;
-    httpEtag?: string;
-    httpMetadata?: {
-        contentType?: string;
-    };
-    key: string;
-    sha256?: string;
-    sha256Base64?: string;
-    size: number;
-    uploaded?: Date;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `R2RangeLike` (type)
 
-```ts
-type R2RangeLike = {
-    length: number;
-    offset?: number;
-} | {
-    length?: number;
-    offset: number;
-} | {
-    suffix: number;
-};
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `R2S3Credentials` (interface)
 
@@ -179,12 +107,7 @@ interface R2S3Credentials {
 
 ### `R2UploadedPartLike` (interface)
 
-```ts
-interface R2UploadedPartLike {
-    etag: string;
-    partNumber: number;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `SignedUrlOptions` (interface)
 

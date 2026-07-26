@@ -66,6 +66,7 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.8",
+        "@lunora/platform": "workspace:*",
         "@visulima/storage": "catalog:storage",
         "aws4fetch": "catalog:storage"
     },

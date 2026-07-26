@@ -49,46 +49,19 @@ interface LunoraQueuesOptions {
 
 ### `MessageBatchLike` (interface)
 
-```ts
-interface MessageBatchLike<Body = unknown> {
-    ackAll: () => void;
-    readonly messages: ReadonlyArray<MessageLike<Body>>;
-    readonly queue: string;
-    retryAll: (options?: QueueRetryOptions) => void;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `MessageLike` (interface)
 
-```ts
-interface MessageLike<Body = unknown> {
-    ack: () => void;
-    readonly attempts: number;
-    readonly body: Body;
-    readonly id: string;
-    retry: (options?: QueueRetryOptions) => void;
-    readonly timestamp: Date;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `MessageSendRequestLike` (interface)
 
-```ts
-interface MessageSendRequestLike<Body = unknown> {
-    body: Body;
-    contentType?: QueueContentType;
-    delaySeconds?: number;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `QueueBindingLike` (interface)
 
-```ts
-interface QueueBindingLike<Body = unknown> {
-    send: (message: Body, options?: QueueSendOptions) => Promise<unknown>;
-    sendBatch: (messages: Iterable<MessageSendRequestLike<Body>>, options?: QueueSendBatchOptions) => Promise<unknown>;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `QueueBindingSpec` (interface)
 
@@ -145,9 +118,7 @@ interface QueueConsumerTuning {
 
 ### `QueueContentType` (type)
 
-```ts
-type QueueContentType = "bytes" | "json" | "text" | "v8";
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `QueueDefinition` (interface)
 
@@ -207,11 +178,7 @@ interface QueueRegistryEntry {
 
 ### `QueueRetryOptions` (interface)
 
-```ts
-interface QueueRetryOptions {
-    delaySeconds?: number;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `QueueRunContext` (interface)
 
@@ -231,20 +198,11 @@ type DispatchRunFunction = <F extends FunctionReference>(function_: F, args?: Ar
 
 ### `QueueSendBatchOptions` (interface)
 
-```ts
-interface QueueSendBatchOptions {
-    delaySeconds?: number;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `QueueSendOptions` (interface)
 
-```ts
-interface QueueSendOptions {
-    contentType?: QueueContentType;
-    delaySeconds?: number;
-}
-```
+Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `Queues` (interface)
 
