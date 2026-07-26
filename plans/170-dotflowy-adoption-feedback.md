@@ -446,3 +446,97 @@ leverage thing Lunora can do with this feedback.
 3. **#5, #6** — typed server client + real collection factories. Biggest boilerplate delete.
 4. **#7, #8, #16** — Playwright double, `deny()`, BYO-auth guide.
 5. The rest as capacity allows.
+
+---
+
+## Second pass (2026-07-26) — re-read of #310 after #187
+
+The port was re-done on top of the shipped #187 fixes (dotflowy PR #310, now merged) and
+one gap was reported back on the PR: `serverRef` was still a string. Re-reading the merged
+code found the cause plus three more, listed with their evidence. #17b/#17c are fixed in
+the same change as #17 above; 22–24 are open.
+
+### 17b. `_generated/server.ts` exported no `defineMutator` — FIXED
+
+`lunora/mutators.ts` opens with a **hand-written 30-line `MutatorCtx`** type and then
+repeats `const mctx = ctx as unknown as MutatorCtx;` **33 times** — once per mutator.
+Cause: `defineMutator`'s `ServerContext` defaults to `@lunora/server`'s untyped base
+`MutationCtx`, and codegen re-exported project-typed `query`/`mutation`/`action`/
+`definePolicy`/`v` from `_generated/server.ts` but **not** `defineMutator`. So the one
+authoring surface with no typed form was the one whose `ctx.db` writes need the schema
+most.
+
+**Fixed.** `_generated/server.ts` re-exports a project-bound `defineMutator`, and
+discovery accepts the `_generated/server` specifier so the typed path still registers.
+
+### 17c. The `@lunora/db` reference overload could never match — FIXED
+
+`defineMutator`'s second overload was `<R extends MutatorReference<never>>`. A generated
+reference carries a concrete arg type in its phantom, and `{ text: string }` is not
+assignable to `never` — so a real `api.mutators.*` reference failed the constraint, fell
+through to the `serverRef: string` overload, and errored. The overload shipped in #187 was
+never exercised against a typed reference (its test used a bare `{ __lunoraRef }`
+literal), which is why the hole survived review.
+
+**Fixed.** `<TArgs>(… serverRef: MutatorReference<TArgs>)` — inference straight off the
+phantom, covered by a test that asserts the inferred `args` type, not just the runtime path.
+
+### 22. Reads are owner-scoped declaratively; writes are not
+
+`lunora/shapes.ts` is four lines per shape because #9 shipped `defineShape({ owner: true })`.
+The write side got no counterpart: every one of the 23 mutators declares a redundant
+`userId: v.string()` arg that the client must pass and the server must not trust, then
+opens with `assertOwner(mctx, args.userId)` against `ctx.auth.userId`. The shard key
+already _is_ the user, and the DO already verified the identity that resolved it.
+
+**Fix.** Give `defineMutator` the same primitive — `owner: true` (or an implicit
+owner-scope on a `.ownedBy()` table) that asserts `ctx.auth` against the shard/row owner
+before `server` runs, and lets the arg be dropped entirely. Cheaper than 23 hand-written
+guards and impossible to forget on mutator number 24.
+
+### 23. `bindMutators`' `collections` map is type-erased
+
+`BindMutatorsContext.collections` is `Record<string, Collection<Row, string>>`.
+`Collection` is invariant in its row type, so a generated collection is not assignable and
+every entry needs a cast:
+
+```ts
+collections: { nodes: collection as never, tagColors: tagColors as never, … }
+```
+
+The knock-on effect is worse than the cast: because `ctx.collections.nodes` comes back
+untyped, none of the 23 `apply` bodies use the context at all — they close over the
+module-scope `collection` variable instead, so the one seam `@lunora/db` provides for the
+optimistic body is dead code in the only production port of it.
+
+**Fix.** Make `bindMutators` generic over the collections map (as `defineCollections`
+already is) and thread that map into `ClientMutatorContext`, so `collections.nodes` is the
+concrete `Collection<Doc<"nodes"> & Row>`.
+
+### 24. A fire-and-forget mutator has no error hook
+
+`BindMutatorsContext` has no `onError`/`onWriteRejected` (the outbox path does), so a
+mutator called for its side effect leaves an unhandled rejection on `isPersisted`. The app
+wraps every such call:
+
+```ts
+export function trackLunoraMutation(tx: { isPersisted: { promise: Promise<unknown> } }): void {
+    tx.isPersisted.promise.catch(notifySaveFailed);
+}
+```
+
+Eight call sites in `lunora-sync.ts` go through it, and forgetting one is a silent
+unhandled rejection rather than a visible failure.
+
+**Fix.** An `onWriteRejected(error, { mutator, args })` on `BindMutatorsContext` —
+symmetric with the outbox — that consumes the rejection so the un-awaited call is safe by
+default.
+
+### Not gaps, worth relaying
+
+- `applyPlanToCollections` / `applyPlanToDb` (#18's shared-planner answer) **shipped** in
+  `@lunora/db`. The port still carries its own `applyPlanToCollection` +
+  `commitPlan` twins; adopting the shipped pair deletes both and removes the client/server
+  drift risk they exist to manage.
+- The HMR teardown block at the bottom of `lunora-sync.ts` is app module state, not
+  something the framework can own — but it belongs in the local-first guide as a recipe.
