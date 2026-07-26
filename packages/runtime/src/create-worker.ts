@@ -1270,6 +1270,17 @@ const buildSinkContext = (environment: unknown, request: Request, waitUntil?: (p
 };
 
 /**
+ * Normalize a `waitUntil`-bearing source — an `ExecutionContext` (RPC), or an
+ * SSR host's `{ waitUntil }` (REST) — into the `{ waitUntil? }` deps shape the
+ * x402 gate expects. Both gate sites forward through this one helper so they
+ * pass an identically-shaped `deps`. Forwarding through the source (rather than
+ * extracting the method) preserves its receiver, and a source without a
+ * `waitUntil` yields `{}` so the gate falls back to fire-and-forget.
+ */
+const forwardWaitUntil = (source?: { waitUntil?: (promise: Promise<unknown>) => void }): { waitUntil?: (promise: Promise<unknown>) => void } =>
+    source?.waitUntil ? { waitUntil: (promise): void => source.waitUntil?.(promise) } : {};
+
+/**
  * Project a dispatch's trace context onto the `ObservabilityEvent` fields that
  * carry it. One helper so the success and failure emits at every dispatch site
  * cannot drift on which of the four they set — the previous hand-copied spreads
@@ -3487,9 +3498,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // presence was already asserted above when `x402Tag` is set, so the
             // `x402Charge` re-check here is only for the type system.
             if (x402Tag && options.x402Charge) {
-                return options.x402Charge(request, { functionPath: envelope.functionPath, price: x402Tag.price }, dispatch, {
-                    waitUntil: context && ((promise) => context.waitUntil?.(promise)),
-                });
+                return options.x402Charge(request, { functionPath: envelope.functionPath, price: x402Tag.price }, dispatch, forwardWaitUntil(context));
             }
 
             return dispatch();
@@ -4145,7 +4154,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const x402Tag = resolveX402Charge(envelope, options);
 
         if (x402Tag && options.x402Charge) {
-            return options.x402Charge(request, { functionPath, price: x402Tag.price }, dispatch, { waitUntil });
+            return options.x402Charge(request, { functionPath, price: x402Tag.price }, dispatch, forwardWaitUntil({ waitUntil }));
         }
 
         return dispatch();
