@@ -324,7 +324,7 @@ const otlpSend = async (url: string, body: unknown, headers: Record<string, stri
         // non-ASCII text (common in `error.message`) can exceed the threshold in
         // bytes while its code-unit count stays under, so a byte-length check is
         // what actually decides whether the wire body is worth gzipping.
-        const byteLength = new TextEncoder().encode(json).byteLength;
+        const { byteLength } = new TextEncoder().encode(json);
         const sent = (
             byteLength < OTLP_GZIP_THRESHOLD
                 ? fetch(url, { body: json, headers, method: "POST" })

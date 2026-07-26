@@ -143,20 +143,13 @@ describe("sampling verdict coherence — the propagated bit and the export gate 
     // Replay the dispatch call site exactly: settle the verdict once via
     // `beginDispatchTrace`, then gate the SERVER-span export on that same settled
     // verdict (`trace.sampled`, NOT `decision.isTraced`).
-    const exportsServerSpan = (
-        trace: { sampled: boolean; traceId: string },
-        decision: { keepErrors: boolean },
-        ok: boolean,
-    ): boolean => {
+    const exportsServerSpan = (trace: { sampled: boolean; traceId: string }, decision: { keepErrors: boolean }, ok: boolean): boolean => {
         const seen: ObservabilityEvent[] = [];
 
-        emitRpcEvent(
-            sinkInto(seen),
-            { durationMs: 5, functionPath: "a:b", ok, traceId: trace.traceId },
-            undefined,
-            undefined,
-            { isTraced: trace.sampled, keepErrors: decision.keepErrors },
-        );
+        emitRpcEvent(sinkInto(seen), { durationMs: 5, functionPath: "a:b", ok, traceId: trace.traceId }, undefined, undefined, {
+            isTraced: trace.sampled,
+            keepErrors: decision.keepErrors,
+        });
 
         return seen.length === 1;
     };

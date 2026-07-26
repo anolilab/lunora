@@ -1326,7 +1326,12 @@ describe("observability-sinks", () => {
             const sink = otlpSink({ detectResources: true, endpoint: "https://collector.example" });
 
             const contextFor = (): ObservabilitySinkContext => {
-                return { resourceAttributes: () => ({ "host.name": "worker-1" }), waitUntil: () => undefined };
+                return {
+                    resourceAttributes: () => {
+                        return { "host.name": "worker-1" };
+                    },
+                    waitUntil: () => undefined,
+                };
             };
 
             sink.onRpc!(okEvent, contextFor());
