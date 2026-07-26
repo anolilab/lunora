@@ -41,7 +41,7 @@ import { param } from "./drizzle";
 import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
 import type { RankIndexDefinitionLike } from "./rank";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
-import { FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, resolveSearchField, stringifySearchText } from "./search-text";
+import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName } from "./search-text";
 import type { MutationDelta } from "./types";
 
 /**
@@ -576,7 +576,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
             if (document) {
                 runDrizzle(
                     sql,
-                    dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${stringifySearchText(resolveSearchField(document, index.field))}, ${id})`,
+                    dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(document, index)}, ${id})`,
                 );
             }
         }

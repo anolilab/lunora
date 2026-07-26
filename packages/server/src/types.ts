@@ -129,11 +129,26 @@ interface IndexDefinition {
     unique?: boolean;
 }
 
+/** A language whose search analysis (accent folding + stopwords) the runtime knows. */
+type SearchLanguage = "de" | "en" | "es" | "fr" | "it" | "nl" | "none" | "pt";
+
 interface SearchIndexDefinition {
     /** Indexed text column; a dot-separated path (`"properties.name"`) reads a nested field. */
     field: string;
     /** Columns `.eq()` may narrow by inside the search builder. At most 16. */
     filterFields?: ReadonlyArray<string>;
+
+    /**
+     * Text analysis for this index. Accent folding is always applied — it is
+     * what makes `café` and `cafe` the same token on every backend, which they
+     * otherwise are not. Naming a language additionally drops that language's
+     * stopwords from both documents and queries.
+     *
+     * Analysis is baked into the stored index, so changing this rebuilds it:
+     * the runtime records which profile a companion was built with and
+     * re-indexes when it no longer matches.
+     */
+    language?: SearchLanguage;
     name: string;
 
     /**
@@ -2099,6 +2114,7 @@ export type {
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,
+    SearchLanguage,
     Secrets,
     SecretsStoreSecretLike,
     ShardMode,

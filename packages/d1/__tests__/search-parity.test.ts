@@ -64,6 +64,9 @@ const CORPUS: Document[] = [
     { body: "hello, world! hello?", channel: "general", id: "h" },
     { body: "worldwide hello", channel: "general", id: "i" },
     { body: "", channel: "general", id: "j" },
+    { body: "café society", channel: "general", id: "k" },
+    { body: "cafe society", channel: "general", id: "l" },
+    { body: "Ünïcödé stress", channel: "general", id: "m" },
 ];
 
 let doHarness: DatabaseSync;
@@ -156,6 +159,9 @@ describe("search parity — sharded DO vs .global()", () => {
         { name: "empty query", term: "" },
         { name: "whitespace-only query", term: "   " },
         { name: "punctuation-only query", term: "!!!" },
+        { name: "accented query against unaccented text", term: "café" },
+        { name: "unaccented query against accented text", term: "cafe" },
+        { name: "mixed diacritics", term: "unicode" },
     ];
 
     it.each(cases)("agrees on $name", async (searchCase) => {
@@ -173,6 +179,26 @@ describe("search parity — sharded DO vs .global()", () => {
             .collect();
 
         expect(idsOf(globalResults)).toStrictEqual(idsOf(shardResults));
+    });
+
+    it("folds accents identically on both backends", async () => {
+        expect.assertions(2);
+
+        const { global, shard } = await seedBoth();
+
+        // Both spellings must find both documents — the case that used to
+        // depend on which engine's collation happened to be underneath.
+        const shardResults = await shard
+            .query("docs")
+            .withSearchIndex("by_body", (q) => q.search("body", "café"))
+            .collect();
+        const globalResults = await global
+            .query("docs")
+            .withSearchIndex("by_body", (q) => q.search("body", "cafe"))
+            .collect();
+
+        expect(idsOf(shardResults).toSorted((left, right) => String(left).localeCompare(String(right)))).toStrictEqual(["k", "l"]);
+        expect(idsOf(globalResults).toSorted((left, right) => String(left).localeCompare(String(right)))).toStrictEqual(["k", "l"]);
     });
 
     it("agrees when an .eq() filter narrows the match", async () => {

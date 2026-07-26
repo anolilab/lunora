@@ -209,8 +209,11 @@ export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefi
 export { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 export type { LogEventInput } from "./request-log";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
+export type { SearchAnalyzer, SearchLanguage } from "./search-analyzer";
+export { createSearchAnalyzer, defaultSearchAnalyzer, SEARCH_LANGUAGES } from "./search-analyzer";
 export type { SearchBuilderLike, SearchPagePlan, SearchStageLike } from "./search-text";
 export {
+    analyzedSearchText,
     buildFtsMatch,
     countSearchTokens,
     createSearchBuilder,

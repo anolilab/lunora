@@ -43,7 +43,7 @@ interface RuntimeTableBuilder {
     // yet convert — see the drop-warning in `runtimeTableToIR`.
     rankIndexes?: ReadonlyArray<unknown>;
     relationMap?: Record<string, unknown>;
-    searchIndexes?: ReadonlyArray<{ field: string; filterFields?: ReadonlyArray<string>; name: string; staged?: boolean }>;
+    searchIndexes?: ReadonlyArray<{ field: string; filterFields?: ReadonlyArray<string>; language?: string; name: string; staged?: boolean }>;
     shape?: Record<string, RuntimeValidator>;
     shardMode?: { backend?: string; field?: string; kind: string };
     vectorIndexes?: ReadonlyArray<unknown>;
@@ -228,6 +228,7 @@ const runtimeTableToIR = (builder: RuntimeTableBuilder, bareName: string): Table
             return {
                 field: index.field,
                 ...(index.filterFields ? { filterFields: index.filterFields } : {}),
+                ...(index.language === undefined ? {} : { language: index.language }),
                 ...(index.staged === undefined ? {} : { staged: index.staged }),
                 name: index.name,
             };

@@ -36,6 +36,7 @@ const tableOf = (searchIndexes: SchemaLike["tables"][string]["searchIndexes"]): 
 const plainSchema = tableOf([]);
 const searchSchema = tableOf([{ field: "body", filterFields: ["channel"], name: "by_body" }]);
 const stagedSchema = tableOf([{ field: "body", filterFields: ["channel"], name: "by_body", staged: true }]);
+const englishSchema = tableOf([{ field: "body", filterFields: ["channel"], language: "en", name: "by_body" }]);
 
 /**
  * Force the portable inverted companion by failing the fts5 probe, whether or
@@ -173,6 +174,59 @@ describe("d1 ctx-db search backfill", () => {
         // Bounded, so one huge text column can't fan a single row write out into
         // hundreds of sequential statements.
         expect(Number(rows[0]?.["c"])).toBe(1000);
+    });
+
+    it("rebuilds the companion when the analysis profile changes", async () => {
+        expect.assertions(3);
+
+        const plain = writerFor(plainSchema);
+
+        await plain.insert("docs", { _id: "d1", body: "the quick fox", channel: "x" }, { allowExplicitId: true });
+        await backfillD1SearchIndexes(exec, searchSchema);
+
+        const folded = await harness.exec.all(`SELECT "__token__" FROM "docs__fts_by_body" ORDER BY "__token__"`, []);
+
+        // Declaring a language changes what a token *is*, so rows indexed under
+        // the old profile would half-match forever. The recorded profile catches
+        // it and the companion is rebuilt.
+        await backfillD1SearchIndexes(exec, englishSchema);
+
+        const analyzed = await harness.exec.all(`SELECT "__token__" FROM "docs__fts_by_body" ORDER BY "__token__"`, []);
+
+        expect(folded.map((row) => row["__token__"])).toStrictEqual(["fox", "quick", "the"]);
+        expect(analyzed.map((row) => row["__token__"])).toStrictEqual(["fox", "quick"]);
+
+        // And the stale "the" is gone rather than orphaned in the companion.
+        const stale = await writerFor(englishSchema)
+            .query("docs")
+            .withSearchIndex("by_body", (q) => q.search("body", "quick"))
+            .collect();
+
+        expect(stale.map((document) => document["_id"])).toStrictEqual(["d1"]);
+    });
+
+    it("drops stopwords from an English index but keeps them without a language", async () => {
+        expect.assertions(2);
+
+        const plain = writerFor(plainSchema);
+
+        await plain.insert("docs", { _id: "d1", body: "the who", channel: "x" }, { allowExplicitId: true });
+
+        await backfillD1SearchIndexes(exec, englishSchema);
+
+        const stopwordOnly = await writerFor(englishSchema)
+            .query("docs")
+            .withSearchIndex("by_body", (q) => q.search("body", "the"))
+            .collect();
+        const contentWord = await writerFor(englishSchema)
+            .query("docs")
+            .withSearchIndex("by_body", (q) => q.search("body", "who"))
+            .collect();
+
+        // "the" analyzes to no terms at all, which is no match rather than
+        // every match; "who" is not on the list and still finds the row.
+        expect(stopwordOnly).toStrictEqual([]);
+        expect(contentWord.map((document) => document["_id"])).toStrictEqual(["d1"]);
     });
 
     it("keeps a document's rows correct when it is rewritten during a staged rollout", async () => {

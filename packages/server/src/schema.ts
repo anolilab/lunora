@@ -18,6 +18,7 @@ import type {
     RelationDefinition,
     Schema,
     SearchIndexDefinition,
+    SearchLanguage,
     ShardMode,
     TableDefinition,
     TableVectorIndex,
@@ -40,6 +41,15 @@ import type {
  * copy on each side of a package boundary.
  */
 const MAX_SEARCH_FILTER_FIELDS = 16;
+
+/**
+ * Languages `.searchIndex({ language })` accepts. Restated here rather than
+ * imported because `@lunora/server` has no dependency edge to the engines that
+ * own the analyzers — and a typo'd language silently falling back to
+ * folding-only is exactly the kind of quiet wrong answer a schema-time check
+ * should catch instead.
+ */
+const SEARCH_LANGUAGES: ReadonlySet<string> = new Set<string>(["de", "en", "es", "fr", "it", "nl", "none", "pt"]);
 
 /** Options for `.vectorize(field, opts)` (DSL Shape A). */
 interface VectorizeOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
@@ -171,11 +181,15 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * `.withSearchIndex(name, q => q.search(field, term))`. `field` may be a
      * dot-separated path into a nested object (`"properties.name"`).
      * `filterFields` (at most 16) lists the columns `.eq()` may narrow by inside
-     * the search. `staged: true` skips the migration-time backfill on a large
-     * existing table — the index is then maintained on write only, and a host
-     * populates it out-of-band (`backfillSearchIndexes`).
+     * the search. `language` selects the text analysis (accent folding always,
+     * plus that language's stopwords). `staged: true` skips the migration-time
+     * backfill on a large existing table — the index is then maintained on
+     * write only, and a host populates it out-of-band (`backfillSearchIndexes`).
      */
-    searchIndex: (name: string, options: { field: string; filterFields?: ReadonlyArray<string>; staged?: boolean }) => TableBuilder<Shape>;
+    searchIndex: (
+        name: string,
+        options: { field: string; filterFields?: ReadonlyArray<string>; language?: SearchLanguage; staged?: boolean },
+    ) => TableBuilder<Shape>;
     /** Route storage by the named field — one DO per distinct value. */
     shardBy: (field: keyof Shape & string) => TableBuilder<Shape>;
 
@@ -419,7 +433,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
                 );
             }
 
-            searchIndexes.push({ field: options.field, filterFields: options.filterFields, name, staged: options.staged });
+            if (options.language !== undefined && !SEARCH_LANGUAGES.has(options.language)) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `searchIndex "${name}": unknown language "${options.language}" (supported: ${[...SEARCH_LANGUAGES].toSorted((left, right) => left.localeCompare(right)).join(", ")})`,
+                );
+            }
+
+            searchIndexes.push({ field: options.field, filterFields: options.filterFields, language: options.language, name, staged: options.staged });
 
             return builder;
         },

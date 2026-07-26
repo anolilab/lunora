@@ -60,6 +60,8 @@ export interface SearchIndexIR {
     field: string;
     /** Optional filter fields surfaced alongside the FTS column. */
     filterFields?: ReadonlyArray<string>;
+    /** Text-analysis profile (accent folding + that language's stopwords). */
+    language?: string;
     name: string;
     /** Skip the migration-time backfill of the search companion (large tables index out-of-band). */
     staged?: boolean;

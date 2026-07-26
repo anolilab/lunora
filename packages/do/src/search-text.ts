@@ -20,6 +20,8 @@ import { LunoraError } from "@lunora/errors";
 
 import type { QueryPage } from "./query-args";
 import { fromBase64, invalidCursor, toBase64 } from "./query-args";
+import type { SearchAnalyzer } from "./search-analyzer";
+import { createSearchAnalyzer, defaultSearchAnalyzer } from "./search-analyzer";
 
 /**
  * Name of the companion table backing a search index — the FTS5 shadow on
@@ -76,17 +78,16 @@ export const MAX_SEARCH_SCAN = 1024;
 export const MAX_INDEXED_TOKENS = 1000;
 
 /**
- * Split text into lowercased alphanumeric tokens, in order and with repeats
- * intact. The Unicode `\p{L}\p{N}` class guarantees tokens carry no SQL/FTS
- * metacharacters, so they need no escaping beyond the literal-phrase quoting
- * {@link buildFtsMatch} adds — and no `LIKE` escaping in the inverted index's
- * prefix predicate.
+ * The document side of tokenization: folded, alphanumeric tokens in order, with
+ * repeats intact (occurrence counts are the relevance score). The `\p{L}\p{N}`
+ * token shape guarantees no SQL/FTS metacharacters survive, so tokens need no
+ * escaping beyond the literal-phrase quoting {@link buildFtsMatch} adds — and no
+ * `LIKE` escaping in the inverted index's prefix predicate.
  *
- * This is the *document* side of the tokenizer: occurrence counts drive
- * relevance, so repeats must survive. Query strings go through
- * {@link tokenizeSearch}, which folds them.
+ * Analysis (folding, stopwords) belongs to the index's `language`; see
+ * {@link SearchAnalyzer}.
  */
-export const splitSearchTokens = (text: string): string[] => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+export const splitSearchTokens = (text: string, analyzer: SearchAnalyzer = defaultSearchAnalyzer): string[] => analyzer.document(text);
 
 /**
  * Split a search string into lowercased alphanumeric tokens. The Unicode
@@ -95,27 +96,10 @@ export const splitSearchTokens = (text: string): string[] => text.toLowerCase().
  *
  * Repeated terms collapse to one — `.search("text", "cat cat")` is the same
  * query as `.search("text", "cat")` under the AND semantics every path
- * implements, and a duplicate would otherwise make the inverted index's
- * "matched every distinct term" test unsatisfiable. De-duplication keeps the
- * last occurrence of a repeat so the caller's final term stays final and
- * still gets prefix matching.
+ * implements. De-duplication keeps the last occurrence so the caller's final
+ * term stays final and still gets prefix matching.
  */
-export const tokenizeSearch = (query: string): string[] => {
-    const raw = splitSearchTokens(query);
-    const seen = new Set<string>();
-    const tokens: string[] = [];
-
-    for (let index = raw.length - 1; index >= 0; index -= 1) {
-        const token = raw[index] as string;
-
-        if (!seen.has(token)) {
-            seen.add(token);
-            tokens.unshift(token);
-        }
-    }
-
-    return tokens;
-};
+export const tokenizeSearch = (query: string, analyzer: SearchAnalyzer = defaultSearchAnalyzer): string[] => analyzer.query(query);
 
 /**
  * Read the value a search index covers out of a document. `field` is a
@@ -178,9 +162,9 @@ export const stringifySearchText = (value: unknown): string => {
  * of occurrences, giving a coarse term-frequency relevance order — the ranking
  * the inverted index reproduces in SQL as `SUM(occurrences)`.
  */
-export const scoreDocument = (text: string, tokens: ReadonlyArray<string>): number => {
+export const scoreDocument = (text: string, tokens: ReadonlyArray<string>, analyzer: SearchAnalyzer = defaultSearchAnalyzer): number => {
     // The document side keeps repeats: occurrences are the score.
-    const documentTokens = splitSearchTokens(text);
+    const documentTokens = splitSearchTokens(text, analyzer);
 
     if (documentTokens.length === 0) {
         return 0;
@@ -209,16 +193,31 @@ export const scoreDocument = (text: string, tokens: ReadonlyArray<string>): numb
 };
 
 /**
+ * The text an FTS5 shadow row stores: the document's analyzed token stream,
+ * space-joined.
+ *
+ * Storing analyzed tokens rather than the raw field is what puts the FTS5 path
+ * under the same analysis as every other path. FTS5 tokenizes `__text__`
+ * itself, with its own rules — feed it raw text and an index declaring
+ * `language: "en"` would still match stopwords there, and `café` would fold on
+ * one backend but not another. Feeding it tokens we already folded (and
+ * stopword-filtered) leaves it nothing to disagree about: they contain no
+ * punctuation or case for its tokenizer to act on.
+ */
+export const analyzedSearchText = (document: Record<string, unknown>, index: { field: string; language?: string }): string =>
+    splitSearchTokens(stringifySearchText(resolveSearchField(document, index.field)), createSearchAnalyzer(index.language)).join(" ");
+
+/**
  * Tally a document's indexed text into the `(token, occurrences)` rows the
  * portable inverted index stores — one row per distinct token, the count being
  * exactly what {@link scoreDocument} would add for that token. Empty text
  * yields an empty map (nothing to index, and nothing to delete beyond the
  * unconditional by-id purge the write path already issues).
  */
-export const countSearchTokens = (text: string): Map<string, number> => {
+export const countSearchTokens = (text: string, analyzer: SearchAnalyzer = defaultSearchAnalyzer): Map<string, number> => {
     const counts = new Map<string, number>();
 
-    for (const token of splitSearchTokens(text)) {
+    for (const token of splitSearchTokens(text, analyzer)) {
         counts.set(token, (counts.get(token) ?? 0) + 1);
     }
 
@@ -232,7 +231,7 @@ export const countSearchTokens = (text: string): Map<string, number> => {
  * what lets the builder and the paging algebra below be written once.
  */
 export interface SearchStageLike {
-    definition: { field: string; filterFields?: ReadonlyArray<string> };
+    definition: { field: string; filterFields?: ReadonlyArray<string>; language?: string };
     field: string;
     filters: { field: string; value: unknown }[];
     hasQuery: boolean;
@@ -254,7 +253,7 @@ export interface SearchBuilderLike {
  * implementation and can never drift in what they accept or in what they say
  * when they refuse.
  */
-export const createSearchBuilder = (stage: SearchStageLike, tableName: string): SearchBuilderLike => {
+export const createSearchBuilder = (stage: SearchStageLike, tableName: string, analyzer: SearchAnalyzer = defaultSearchAnalyzer): SearchBuilderLike => {
     const builder: SearchBuilderLike = {
         eq: (field, value) => {
             if (!stage.definition.filterFields?.includes(field)) {
@@ -284,7 +283,7 @@ export const createSearchBuilder = (stage: SearchStageLike, tableName: string): 
                 );
             }
 
-            const terms = tokenizeSearch(query).length;
+            const terms = tokenizeSearch(query, analyzer).length;
 
             if (terms > MAX_SEARCH_TERMS) {
                 throw new LunoraError(

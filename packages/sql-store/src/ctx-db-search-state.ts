@@ -22,12 +22,21 @@ import { queryAll, queryRun } from "./sql-exec";
 /** Reserved table holding one backfill-progress row per search companion. */
 const SEARCH_STATE_TABLE = "__lunora_search_state";
 
-/** How far a companion's backfill has progressed. */
+/** How far a companion's backfill has progressed, and under which analysis. */
 interface SearchBackfillState {
     /** Last `id` indexed, or `undefined` when no page has run yet. */
     cursor: string | undefined;
     /** True once a page came back short — the table is fully indexed. */
     done: boolean;
+
+    /**
+     * The analyzer profile the stored rows were built with. When it no longer
+     * matches the index's current profile — a changed `language`, a new
+     * analyzer version — the companion holds tokens analyzed by rules the query
+     * side no longer uses, so it is discarded and rebuilt rather than left to
+     * half-match forever.
+     */
+    profile: string | undefined;
 }
 
 /** Create the progress table. Idempotent; runs alongside the companion DDL. */
@@ -37,7 +46,7 @@ const migrateSearchState = async (exec: SqlCtxExec, dialect: SqlDialect): Promis
     await queryRun(
         exec,
         dialect,
-        sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(SEARCH_STATE_TABLE)} (${sql.identifier("companion")} ${sql.raw(key)} PRIMARY KEY, ${sql.identifier("cursor")} ${sql.raw(key)}, ${sql.identifier("done")} ${sql.raw(integer)} NOT NULL DEFAULT 0)`,
+        sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(SEARCH_STATE_TABLE)} (${sql.identifier("companion")} ${sql.raw(key)} PRIMARY KEY, ${sql.identifier("cursor")} ${sql.raw(key)}, ${sql.identifier("done")} ${sql.raw(integer)} NOT NULL DEFAULT 0, ${sql.identifier("profile")} ${sql.raw(key)})`,
     );
 };
 
@@ -46,20 +55,24 @@ const readSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, co
     const rows = await queryAll(
         exec,
         dialect,
-        sql`SELECT ${sql.identifier("cursor")}, ${sql.identifier("done")} FROM ${sql.identifier(SEARCH_STATE_TABLE)} WHERE ${sql.identifier("companion")} = ${companion}`,
+        sql`SELECT ${sql.identifier("cursor")}, ${sql.identifier("done")}, ${sql.identifier("profile")} FROM ${sql.identifier(SEARCH_STATE_TABLE)} WHERE ${sql.identifier("companion")} = ${companion}`,
     );
 
     const row = rows[0];
 
     if (!row) {
-        return { cursor: undefined, done: false };
+        return { cursor: undefined, done: false, profile: undefined };
     }
 
-    const { cursor } = row;
+    const { cursor, profile } = row;
 
     // `done` arrives as 1/0 on SQLite and MySQL, and as a number or boolean
     // depending on the Postgres driver — normalize rather than trusting one.
-    return { cursor: typeof cursor === "string" ? cursor : undefined, done: row["done"] === 1 || row["done"] === true || row["done"] === "1" };
+    return {
+        cursor: typeof cursor === "string" ? cursor : undefined,
+        done: row["done"] === 1 || row["done"] === true || row["done"] === "1",
+        profile: typeof profile === "string" ? profile : undefined,
+    };
 };
 
 /**
@@ -74,13 +87,14 @@ const writeSearchBackfillState = async (
     companion: string,
     cursor: string | undefined,
     done: boolean,
+    profile: string,
 ): Promise<void> => {
     await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(SEARCH_STATE_TABLE)} WHERE ${sql.identifier("companion")} = ${companion}`);
     await queryRun(
         exec,
         dialect,
         // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
-        sql`INSERT INTO ${sql.identifier(SEARCH_STATE_TABLE)} (${sql.identifier("companion")}, ${sql.identifier("cursor")}, ${sql.identifier("done")}) VALUES (${companion}, ${cursor ?? null}, ${done ? 1 : 0})`,
+        sql`INSERT INTO ${sql.identifier(SEARCH_STATE_TABLE)} (${sql.identifier("companion")}, ${sql.identifier("cursor")}, ${sql.identifier("done")}, ${sql.identifier("profile")}) VALUES (${companion}, ${cursor ?? null}, ${done ? 1 : 0}, ${profile})`,
     );
 };
 

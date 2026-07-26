@@ -80,6 +80,7 @@ import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPred
 import type { RelationDefinitionLike } from "./relations";
 import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
+import { createSearchAnalyzer } from "./search-analyzer";
 import {
     buildFtsMatch,
     createSearchBuilder,
@@ -194,6 +195,8 @@ interface SearchIndexDefinitionLike {
     /** Indexed text column; a dot-separated path reads a nested field. */
     readonly field: string;
     readonly filterFields?: ReadonlyArray<string>;
+    /** Analysis profile (folding + stopwords) — see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly language?: string;
     readonly name: string;
     /** Skip the migration-time backfill of the search companion — see `@lunora/server`'s `SearchIndexDefinition`. */
     readonly staged?: boolean;
@@ -927,7 +930,7 @@ const createRangeBuilder = (stage: QueryStage): IndexRangeBuilderLike => {
  * `.eq()` filter fields, and order by FTS5's `rank` (bm25 — best first).
  */
 const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number, scopeCondition?: SQL): Record<string, unknown>[] => {
-    const tokens = tokenizeSearch(search.query);
+    const tokens = tokenizeSearch(search.query, createSearchAnalyzer(search.definition.language));
 
     if (tokens.length === 0) {
         return [];
@@ -980,7 +983,8 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
  * by creation time (newest first).
  */
 const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, limit: number, scopeCondition?: SQL): Record<string, unknown>[] => {
-    const tokens = tokenizeSearch(search.query);
+    const analyzer = createSearchAnalyzer(search.definition.language);
+    const tokens = tokenizeSearch(search.query, analyzer);
 
     if (tokens.length === 0) {
         return [];
@@ -1012,7 +1016,7 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
             continue;
         }
 
-        const score = scoreDocument(stringifySearchText(resolveSearchField(record, search.field)), tokens);
+        const score = scoreDocument(stringifySearchText(resolveSearchField(record, search.field)), tokens, analyzer);
 
         if (score > 0) {
             scored.push({
@@ -1682,7 +1686,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
             };
 
             stage.search = searchStage;
-            search(createSearchBuilder(searchStage, tableName));
+            search(createSearchBuilder(searchStage, tableName, createSearchAnalyzer(definition.language)));
 
             if (!searchStage.hasQuery) {
                 throw new LunoraError("INTERNAL", `search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);

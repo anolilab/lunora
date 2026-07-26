@@ -25,8 +25,10 @@
 
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/do";
 import {
+    analyzedSearchText,
     buildFtsMatch,
     countSearchTokens,
+    createSearchAnalyzer,
     FTS_COUNT_COLUMN,
     FTS_ID_COLUMN,
     FTS_TEXT_COLUMN,
@@ -90,7 +92,7 @@ const searchViaFts = async (
     search: SearchStage,
     limit: number,
 ): Promise<Record<string, unknown>[]> => {
-    const tokens = tokenizeSearch(search.query);
+    const tokens = tokenizeSearch(search.query, createSearchAnalyzer(search.definition.language));
 
     if (tokens.length === 0) {
         return [];
@@ -151,7 +153,7 @@ const searchViaInverted = async (
     search: SearchStage,
     limit: number,
 ): Promise<Record<string, unknown>[]> => {
-    const tokens = tokenizeSearch(search.query);
+    const tokens = tokenizeSearch(search.query, createSearchAnalyzer(search.definition.language));
 
     if (tokens.length === 0) {
         return [];
@@ -211,7 +213,7 @@ const runSqlSearch = async (
  * sequential statements.
  */
 const searchRowsForDocument = (document: Record<string, unknown>, index: SearchIndexDefinitionLike): [string, number][] =>
-    [...countSearchTokens(stringifySearchText(resolveSearchField(document, index.field)))].slice(0, MAX_INDEXED_TOKENS);
+    [...countSearchTokens(stringifySearchText(resolveSearchField(document, index.field)), createSearchAnalyzer(index.language))].slice(0, MAX_INDEXED_TOKENS);
 
 /**
  * One column of the search companion's btree, rendered for the engine.
@@ -291,7 +293,7 @@ const indexDocument = async (
     ftsAvailable: boolean,
 ): Promise<void> => {
     if (ftsAvailable) {
-        await writeShadowRow(exec, dialect, ftName, id, stringifySearchText(resolveSearchField(document, index.field)));
+        await writeShadowRow(exec, dialect, ftName, id, analyzedSearchText(document, index));
 
         return;
     }
@@ -327,9 +329,16 @@ const backfillSearchIndexPage = async (
     ftsAvailable: boolean,
 ): Promise<boolean> => {
     const ftName = ftsTableName(tableName, index.name);
+    const { profile } = createSearchAnalyzer(index.language);
     const state = await readSearchBackfillState(exec, dialect, ftName);
 
-    if (state.done) {
+    if (state.profile !== undefined && state.profile !== profile) {
+        // The stored tokens were analyzed by rules the query side no longer
+        // uses (a changed `language`, a new analyzer version). Half-matching
+        // forever is the worst outcome, so discard and walk the table again.
+        await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(ftName)}`);
+        await writeSearchBackfillState(exec, dialect, ftName, undefined, false, profile);
+    } else if (state.done) {
         return true;
     }
 
@@ -340,13 +349,15 @@ const backfillSearchIndexPage = async (
     const sourceRows = await queryAll(exec, dialect, dialect.tableExists(tableName));
 
     if (sourceRows.length === 0) {
-        await writeSearchBackfillState(exec, dialect, ftName, undefined, true);
+        await writeSearchBackfillState(exec, dialect, ftName, undefined, true, profile);
 
         return true;
     }
 
+    const resuming = state.profile === undefined || state.profile === profile;
+
     let indexed = 0;
-    let lastId = state.cursor;
+    let lastId = resuming ? state.cursor : undefined;
 
     await forEachRowPaged(
         exec,
@@ -365,12 +376,12 @@ const backfillSearchIndexPage = async (
 
             await indexDocument(exec, dialect, ftName, id, document, index, ftsAvailable);
         },
-        { after: state.cursor, limit: SEARCH_BACKFILL_BATCH_ROWS },
+        { after: lastId, limit: SEARCH_BACKFILL_BATCH_ROWS },
     );
 
     const done = indexed < SEARCH_BACKFILL_BATCH_ROWS;
 
-    await writeSearchBackfillState(exec, dialect, ftName, lastId, done);
+    await writeSearchBackfillState(exec, dialect, ftName, lastId, done, profile);
 
     return done;
 };

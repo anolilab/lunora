@@ -32,45 +32,48 @@ interface SearchBackfillState {
     cursor: string | undefined;
     /** True once a page came back short — the table is fully indexed. */
     done: boolean;
+
+    /**
+     * The analyzer profile the stored rows were built with. A mismatch means
+     * the shadow holds text analyzed by rules the query side no longer uses —
+     * a changed `language`, a new analyzer version — so it is discarded and
+     * rebuilt rather than left to half-match forever.
+     */
+    profile: string | undefined;
 }
 
 /** Create the progress table. Idempotent; called from `runShardMigrations`. */
 const migrateSearchState = (sql: SqlExec): void => {
     runDrizzle(
         sql,
-        dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")} TEXT PRIMARY KEY, ${dsql.identifier("cursor")} TEXT, ${dsql.identifier("done")} INTEGER NOT NULL DEFAULT 0)`,
+        dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")} TEXT PRIMARY KEY, ${dsql.identifier("cursor")} TEXT, ${dsql.identifier("done")} INTEGER NOT NULL DEFAULT 0, ${dsql.identifier("profile")} TEXT)`,
     );
 };
 
 /** Read a companion's progress. An unknown companion has done nothing yet. */
 const readSearchBackfillState = (sql: SqlExec, companion: string): SearchBackfillState => {
-    const rows = runDrizzle<{ cursor: null | string; done: number }>(
+    const rows = runDrizzle<{ cursor: null | string; done: number; profile: null | string }>(
         sql,
-        dsql`SELECT ${dsql.identifier("cursor")}, ${dsql.identifier("done")} FROM ${dsql.identifier(SEARCH_STATE_TABLE)} WHERE ${dsql.identifier("companion")} = ${companion}`,
+        dsql`SELECT ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")} FROM ${dsql.identifier(SEARCH_STATE_TABLE)} WHERE ${dsql.identifier("companion")} = ${companion}`,
     ).toArray();
 
     const row = rows[0];
 
     if (!row) {
-        return { cursor: undefined, done: false };
+        return { cursor: undefined, done: false, profile: undefined };
     }
 
-    return { cursor: row.cursor ?? undefined, done: row.done === 1 };
+    return { cursor: row.cursor ?? undefined, done: row.done === 1, profile: row.profile ?? undefined };
 };
 
-/**
- * Record a page's outcome. `cursor` is left where it was when the page indexed
- * nothing (an empty tail), so a resumed run doesn't rewind. Written as an
- * upsert so concurrent cold starts converge on the furthest progress rather
- * than one clobbering the other with a stale cursor.
- */
-const writeSearchBackfillState = (sql: SqlExec, companion: string, cursor: string | undefined, done: boolean): void => {
+/** Record a page's outcome: how far it got, whether the table is done, and under which analysis. */
+const writeSearchBackfillState = (sql: SqlExec, companion: string, cursor: string | undefined, done: boolean, profile: string): void => {
     // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
     const cursorValue = cursor ?? null;
 
     runDrizzle(
         sql,
-        dsql`INSERT INTO ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")}, ${dsql.identifier("cursor")}, ${dsql.identifier("done")}) VALUES (${companion}, ${cursorValue}, ${done ? 1 : 0}) ON CONFLICT (${dsql.identifier("companion")}) DO UPDATE SET ${dsql.identifier("cursor")} = MAX(COALESCE(excluded.${dsql.identifier("cursor")}, ''), COALESCE(${dsql.identifier(SEARCH_STATE_TABLE)}.${dsql.identifier("cursor")}, '')), ${dsql.identifier("done")} = MAX(excluded.${dsql.identifier("done")}, ${dsql.identifier(SEARCH_STATE_TABLE)}.${dsql.identifier("done")})`,
+        dsql`INSERT INTO ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")}, ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")}) VALUES (${companion}, ${cursorValue}, ${done ? 1 : 0}, ${profile}) ON CONFLICT (${dsql.identifier("companion")}) DO UPDATE SET ${dsql.identifier("cursor")} = excluded.${dsql.identifier("cursor")}, ${dsql.identifier("done")} = excluded.${dsql.identifier("done")}, ${dsql.identifier("profile")} = excluded.${dsql.identifier("profile")}`,
     );
 };
 

@@ -30,7 +30,8 @@ import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocumen
 import { param } from "./drizzle";
 import type { RankIndexDefinitionLike } from "./rank";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
-import { FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, resolveSearchField, stringifySearchText } from "./search-text";
+import { createSearchAnalyzer } from "./search-analyzer";
+import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName } from "./search-text";
 
 /**
  * Backfill one aggregate counter table by scanning the source rows once and
@@ -168,17 +169,24 @@ const SEARCH_BACKFILL_BATCH_ROWS = 500;
  */
 const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): boolean => {
     const ftName = ftsTableName(tableName, index.name);
+    const { profile } = createSearchAnalyzer(index.language);
     const state = readSearchBackfillState(sql, ftName);
+    const resuming = state.profile === undefined || state.profile === profile;
 
-    if (state.done) {
+    if (!resuming) {
+        // Stored text was analyzed by rules the query side no longer uses (a
+        // changed `language`, a new analyzer version) — discard and re-walk.
+        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)}`);
+    } else if (state.done) {
         return true;
     }
 
+    const cursor = resuming ? state.cursor : undefined;
     const rows = runDrizzle(
         sql,
-        state.cursor === undefined
+        cursor === undefined
             ? dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} ORDER BY id ASC LIMIT ${dsql.raw(String(SEARCH_BACKFILL_BATCH_ROWS))}`
-            : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id > ${state.cursor} ORDER BY id ASC LIMIT ${dsql.raw(String(SEARCH_BACKFILL_BATCH_ROWS))}`,
+            : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id > ${cursor} ORDER BY id ASC LIMIT ${dsql.raw(String(SEARCH_BACKFILL_BATCH_ROWS))}`,
     ).toArray();
 
     let lastId: string | undefined;
@@ -212,13 +220,13 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
         runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
         runDrizzle(
             sql,
-            dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${stringifySearchText(resolveSearchField(record, index.field))}, ${id})`,
+            dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(record, index)}, ${id})`,
         );
     }
 
     const done = rows.length < SEARCH_BACKFILL_BATCH_ROWS;
 
-    writeSearchBackfillState(sql, ftName, lastId, done);
+    writeSearchBackfillState(sql, ftName, lastId, done, profile);
 
     return done;
 };
