@@ -38,6 +38,35 @@ const mockPushProvider = (): { provider: Provider<unknown, PushPayload>; sends: 
     return { provider, sends };
 };
 
+/**
+ * A mock push `Provider` that THROWS synchronously for any target containing
+ * `throw` (and succeeds otherwise) — the transient-provider-error path a broadcast
+ * must tolerate without aborting the whole fan-out. Records every attempted send.
+ */
+const mockThrowingPushProvider = (): { provider: Provider<unknown, PushPayload>; sends: PushPayload[] } => {
+    const sends: PushPayload[] = [];
+
+    const provider: Provider<unknown, PushPayload> = {
+        channel: "push",
+        id: "mock-throwing-push",
+        initialize: () => undefined,
+        isAvailable: () => true,
+        send: (payload) => {
+            sends.push(payload);
+
+            const target = Array.isArray(payload.to) ? payload.to.join(",") : payload.to;
+
+            if (target.includes("throw")) {
+                throw new Error("boom: push provider threw");
+            }
+
+            return { data: { messageId: `mock-${sends.length.toString()}`, sent: true, timestamp: new Date() }, success: true };
+        },
+    };
+
+    return { provider, sends };
+};
+
 /** A mock chat provider that always succeeds, for multi-channel/chat tests. */
 const mockChatProvider = (): Provider => {
     return {
@@ -76,14 +105,26 @@ interface FakeRow {
  * an in-memory row map — enough to exercise the store's row&lt;->object mapping,
  * upsert-preserves-createdAt, and filtered listing.
  */
-const fakeD1 = (): D1Like => {
+/** Options for {@link fakeD1}. `failOn` injects a store error on the matching SQL verb. */
+interface FakeD1Options {
+    failOn?: "DELETE" | "INSERT" | "SELECT" | "UPDATE";
+}
+
+const fakeD1 = (options: FakeD1Options = {}): D1Like => {
     const rows = new Map<string, FakeRow>();
+    // A statement whose leading verb matches `failOn` rejects — the transient
+    // store-error path (e.g. a failing `markStatus` UPDATE) the facade must tolerate.
+    const shouldFail = (sql: string): boolean => options.failOn !== undefined && sql.trimStart().toUpperCase().startsWith(options.failOn);
 
     const prepared = (sql: string): D1PreparedLike => {
         let bound: unknown[] = [];
 
         const self: D1PreparedLike = {
             all: async <T = Record<string, unknown>>() => {
+                if (shouldFail(sql)) {
+                    throw new Error(`fakeD1: injected failure on ${options.failOn ?? ""}`);
+                }
+
                 let results = [...rows.values()];
                 // Consume bindings in the same order the store appends them:
                 // [kind?, userId?, limit?]. A cursor keeps the filters correct even
@@ -118,11 +159,19 @@ const fakeD1 = (): D1Like => {
                 return self;
             },
             first: async <T = Record<string, unknown>>() => {
+                if (shouldFail(sql)) {
+                    throw new Error(`fakeD1: injected failure on ${options.failOn ?? ""}`);
+                }
+
                 const row = rows.get(bound[0] as string);
 
                 return (row ?? null) as T | null;
             },
             run: async () => {
+                if (shouldFail(sql)) {
+                    throw new Error(`fakeD1: injected failure on ${options.failOn ?? ""}`);
+                }
+
                 if (sql.startsWith("CREATE TABLE")) {
                     return undefined;
                 }
@@ -182,4 +231,4 @@ const fakeD1 = (): D1Like => {
     return { prepare: prepared };
 };
 
-export { fakeD1, mockChatProvider, mockEngine, mockPushProvider };
+export { fakeD1, mockChatProvider, mockEngine, mockPushProvider, mockThrowingPushProvider };

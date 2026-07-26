@@ -2,9 +2,11 @@ import type { Notification, Receipt } from "@visulima/notification";
 import { describe, expect, it, vi } from "vitest";
 
 import { createNotify } from "../src/notify";
+import { routingPushProvider } from "../src/providers";
+import { d1SubscriptionStore } from "../src/subscriptions/d1-store";
 import { memorySubscriptionStore } from "../src/subscriptions/memory-store";
 import type { NotifyDefinition, SubscriptionStore } from "../src/types";
-import { mockChatProvider, mockEngine, mockPushProvider } from "./helpers";
+import { fakeD1, mockChatProvider, mockEngine, mockPushProvider, mockThrowingPushProvider } from "./helpers";
 
 const baseDefinition = (store: SubscriptionStore, chat = false): NotifyDefinition => {
     return {
@@ -135,6 +137,73 @@ describe("ctx.push.broadcast", () => {
 
         expect(result.total).toBe(1);
         expect(sends).toHaveLength(1);
+    });
+});
+
+describe("ctx.push.broadcast fault-tolerance", () => {
+    const webPushSub = (suffix: string) => {
+        return { endpoint: `https://push.example/${suffix}`, keys: { auth: "a", p256dh: "p" } };
+    };
+
+    it("a throwing recipient does not abort the fan-out — others still deliver", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        const throwing = mockThrowingPushProvider();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: throwing.provider }), silent: true });
+
+        await push.register({ subscription: webPushSub("ok") });
+        await push.register({ subscription: webPushSub("throw") });
+        await push.register({ subscription: webPushSub("ok2") });
+
+        const result = await push.broadcast({ body: "b", title: "t" });
+
+        // The one throwing send is a single `failed` outcome; the fan-out completes.
+        expect(result.total).toBe(3);
+        expect(result.sent).toBe(2);
+        expect(result.failed).toBe(1);
+        expect(result.pruned).toBe(0);
+        expect(result.outcomes.filter((outcome) => outcome.status === "failed")).toHaveLength(1);
+    });
+
+    it("degrades a recipient whose channel is not configured to failed — others succeed", async () => {
+        expect.hasAssertions();
+
+        const store = memorySubscriptionStore();
+        // Only the web-push channel is wired; an FCM target hits the router's throw.
+        const engine = mockEngine({ push: routingPushProvider({ webPush: mockPushProvider().provider }) });
+        const { push } = createNotify(baseDefinition(store), {}, { engine, silent: true });
+
+        await push.register({ subscription: webPushSub("ok") });
+        await push.register({ kind: "fcm", token: "device-token-xyz" });
+
+        const result = await push.broadcast({ body: "b" });
+
+        expect(result.total).toBe(2);
+        expect(result.sent).toBe(1);
+        expect(result.failed).toBe(1);
+
+        const failed = result.outcomes.find((outcome) => outcome.status === "failed");
+
+        expect(failed?.error).toContain("`fcm` channel is configured");
+    });
+
+    it("a failing store write during broadcast does not abort the fan-out", async () => {
+        expect.hasAssertions();
+
+        // The delivery succeeds but the follow-up `markStatus` UPDATE throws — a
+        // transient store error must not reject the fan-out or the accepted send.
+        const store = d1SubscriptionStore(fakeD1({ failOn: "UPDATE" }));
+        const provider = mockPushProvider();
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: provider.provider }), silent: true });
+
+        await push.register({ subscription: webPushSub("ok") });
+
+        const result = await push.broadcast({ body: "b" });
+
+        expect(result.total).toBe(1);
+        expect(result.sent).toBe(1);
+        expect(result.failed).toBe(0);
     });
 });
 

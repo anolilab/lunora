@@ -182,7 +182,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
     // path below owns durability).
     runtime.store ??= definition.store?.(env);
 
-    let store: SubscriptionStore | undefined = runtime.store;
+    let { store } = runtime;
 
     if (store === undefined) {
         // Reuse ONE in-memory store per isolate so registrations survive across
@@ -282,13 +282,13 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             receipt = await engine.sendToChannel("push", { ...payload, to: targetOf(subscription) });
             error = receiptError(receipt);
             status = pushDeliveryStatus(receipt, error);
-        } catch (caught) {
+        } catch (error_) {
             // A THROW from the send path — a transient provider/store error, or the
             // push router's raw throw for a target whose channel (`webPush`/`fcm`)
             // isn't configured — must degrade THIS recipient to `failed`, never
             // reject the whole fan-out. `broadcast` relies on `deliver` being total.
             status = "failed";
-            error = caught instanceof Error ? caught.message : String(caught);
+            error = error_ instanceof Error ? error_.message : String(error_);
         }
 
         try {

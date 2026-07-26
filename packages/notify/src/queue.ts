@@ -45,12 +45,12 @@ export const enqueuePushBroadcast = (queue: QueueProducerLike, job: Omit<PushBro
  * gone subscriptions).
  *
  * RETRY SEMANTICS: a broadcast where NOTHING was delivered to a non-empty audience
- * (`sent === 0 && total > 0`) is treated as a transient batch failure and RE-THROWN
- * so the queue does NOT ack it — the consumer's normal retry/backoff (and, on
- * exhaustion, dead-letter) applies. A PARTIAL success (`sent > 0`) resolves
- * normally and is acked: retrying it would re-send to the already-delivered
+ * (zero `sent` against a positive `total`) is treated as a transient batch failure
+ * and RE-THROWN so the queue does NOT ack it — the consumer's normal retry/backoff
+ * (and, on exhaustion, dead-letter) applies. A PARTIAL success (`sent` above zero)
+ * resolves normally and is acked: retrying it would re-send to the already-delivered
  * recipients (broadcast is not idempotent across re-runs), so partial batches are
- * intentionally NOT retried. An empty audience (`total === 0`) also resolves — there
+ * intentionally NOT retried. An empty audience (zero `total`) also resolves — there
  * is nothing to retry.
  */
 export const runPushBroadcastJob = async (push: LunoraPush, job: PushBroadcastJob): Promise<BroadcastResult> => {

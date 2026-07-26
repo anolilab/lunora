@@ -234,4 +234,44 @@ describe("d1SubscriptionStore", () => {
 
         expect(() => d1SubscriptionStore(fakeD1(), { tableName: "subs; DROP TABLE x" })).toThrow(/bare SQL identifier/u);
     });
+
+    it("read-back honors a limit filter (LIMIT is applied server-side)", async () => {
+        expect.hasAssertions();
+
+        const store = d1SubscriptionStore(fakeD1());
+
+        for (let index = 0; index < 5; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            await store.put(
+                normalizeRegisterInput({ subscription: { endpoint: `https://push.example/${index.toString()}`, keys: { auth: "a", p256dh: "p" } } }),
+            );
+        }
+
+        await expect(store.list()).resolves.toHaveLength(5);
+        await expect(store.list({ limit: 2 })).resolves.toHaveLength(2);
+    });
+});
+
+describe("re-register status parity (memory + D1)", () => {
+    const stores: ReadonlyArray<readonly [string, () => ReturnType<typeof memorySubscriptionStore>]> = [
+        ["memory", () => memorySubscriptionStore()],
+        ["d1", () => d1SubscriptionStore(fakeD1())],
+    ];
+
+    it.each(stores)("preserves lastStatus/lastError and the original createdAt on re-register (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+        const first = await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "u1" }, 100));
+
+        // A prior delivery recorded a status; a routine re-register (no status) must
+        // NOT wipe it, and the returned row must carry the truthful first-seen time.
+        await store.markStatus(first.id, "failed", "boom");
+
+        const again = await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "u1" }, 200));
+
+        expect(again.createdAt).toBe(100);
+        expect(again.lastStatus).toBe("failed");
+        expect(again.lastError).toBe("boom");
+    });
 });
