@@ -1,3 +1,5 @@
+## @lunora/server [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/%40lunora%2Fserver%401.0.0-alpha.39...%40lunora%2Fserver%401.0.0-alpha.40) (2026-07-26)
+
 ## @lunora/server [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/%40lunora%2Fserver%401.0.0-alpha.38...%40lunora%2Fserver%401.0.0-alpha.39) (2026-07-26)
 
 ## @lunora/server [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/%40lunora%2Fserver%401.0.0-alpha.37...%40lunora%2Fserver%401.0.0-alpha.38) (2026-07-26)
