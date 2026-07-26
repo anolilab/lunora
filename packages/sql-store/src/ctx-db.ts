@@ -2175,7 +2175,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // `restore()` re-adds the rank entry through the patch path.
                 await syncAggregates(tableName, existing, merged);
                 await syncRanks(tableName, id, existing, undefined);
-                await syncSearch(tableName, id, merged);
+                await syncSearch(tableName, id, merged, existing);
                 await recordCdc(tableName, id, "update", merged);
 
                 // `delete()` was called → fire the DELETE triggers (the flag flip
@@ -2646,7 +2646,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             await syncAggregates(tableName, existing, merged);
             await syncRanks(tableName, id, existing, merged);
-            await syncSearch(tableName, id, merged);
+            await syncSearch(tableName, id, merged, existing);
             await recordCdc(tableName, id, "update", merged);
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
@@ -3103,7 +3103,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             await syncAggregates(tableName, previous, replaced);
             await syncRanks(tableName, id, previous, replaced);
-            await syncSearch(tableName, id, replaced);
+            await syncSearch(tableName, id, replaced, previous);
             await recordCdc(tableName, id, "update", replaced);
 
             if (hasMatchingTrigger(tableName, "after", "update")) {

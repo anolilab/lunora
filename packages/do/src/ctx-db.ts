@@ -2610,7 +2610,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // Vectorize query can't be scoped — so a soft delete REMOVES the row
                 // from them (passing `undefined`/`op: "delete"`), exactly like a
                 // physical delete. `restore()` re-adds both via the patch path.
-                syncSearch(tableName, id, merged);
+                syncSearch(tableName, id, merged, existing);
                 // Like rank, the geo companion has no read-time marker filter, so a
                 // soft delete removes the row from it (restore re-adds via patch).
                 syncGeo(tableName, id, undefined);
@@ -3378,7 +3378,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${JSON.stringify(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
             );
 
-            syncSearch(tableName, id, merged);
+            syncSearch(tableName, id, merged, existing);
             syncGeo(tableName, id, merged);
             syncAggregates(tableName, existing, merged);
             syncRanks(tableName, id, existing, merged);
@@ -3780,7 +3780,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 dsql`UPDATE ${dsql.identifier(tableName)} SET _creationTime = ${creationTime}, ${dsql.identifier(DOC_COLUMN)} = ${JSON.stringify(replaced)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
             );
 
-            syncSearch(tableName, id, replaced);
+            syncSearch(tableName, id, replaced, previous);
             syncGeo(tableName, id, replaced);
             syncAggregates(tableName, previous, replaced);
             syncRanks(tableName, id, previous, replaced);

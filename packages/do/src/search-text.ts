@@ -193,6 +193,24 @@ export const scoreDocument = (text: string, tokens: ReadonlyArray<string>, analy
 };
 
 /**
+ * Whether a write leaves an index's text untouched, so its companion rows can
+ * be left alone.
+ *
+ * Most writes touch a column the index doesn't cover — a status flip, a counter,
+ * an `$onUpdateFn` timestamp — and re-tokenizing the document for those is pure
+ * waste: on the inverted layout it is a DELETE plus one INSERT per 50 tokens,
+ * every time, over a Hyperdrive connection. Analysis is deterministic, so an
+ * unchanged source value guarantees unchanged tokens; a re-created object
+ * compares unequal and simply re-indexes, which is the safe direction to be
+ * wrong in.
+ */
+export const searchTextUnchanged = (
+    previous: Record<string, unknown> | undefined,
+    next: Record<string, unknown> | undefined,
+    index: { field: string },
+): boolean => previous !== undefined && next !== undefined && resolveSearchField(previous, index.field) === resolveSearchField(next, index.field);
+
+/**
  * The text an FTS5 shadow row stores: the document's analyzed token stream,
  * space-joined.
  *

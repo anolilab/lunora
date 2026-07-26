@@ -233,6 +233,7 @@ export {
     resolveSearchField,
     resolveSearchScan,
     scoreDocument,
+    searchTextUnchanged,
     splitSearchTokens,
     stringifySearchText,
     tokenizeSearch,

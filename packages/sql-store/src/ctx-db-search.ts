@@ -36,6 +36,7 @@ import {
     ftsTableName,
     MAX_INDEXED_TOKENS,
     resolveSearchField,
+    searchTextUnchanged,
     stringifySearchText,
     tokenizeSearch,
 } from "@lunora/do";
@@ -502,16 +503,17 @@ const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, di
 /**
  * Build the write-path hook that keeps a table's search companions in step with
  * a row write. A no-op when the table declares no search indexes;
- * `document === undefined` (a row removal) deletes only.
+ * `document === undefined` (a row removal) deletes only, and a write that left
+ * the indexed text alone skips the companion entirely.
  */
 const createSearchSync = (deps: {
     dialect: SqlDialect;
     exec: SqlCtxExec;
     schema: SchemaLike;
-}): ((tableName: string, id: string, document: Record<string, unknown> | undefined) => Promise<void>) => {
+}): ((tableName: string, id: string, document: Record<string, unknown> | undefined, previous?: Record<string, unknown>) => Promise<void>) => {
     const { dialect, exec, schema } = deps;
 
-    return async (tableName, id, document) => {
+    return async (tableName, id, document, previous) => {
         const indexes = schema.tables[tableName]?.searchIndexes;
 
         if (!indexes || indexes.length === 0) {
@@ -521,6 +523,13 @@ const createSearchSync = (deps: {
         const ftsAvailable = await isFtsAvailable(exec);
 
         for (const index of indexes) {
+            // Fast path: this write didn't touch the indexed text, so the
+            // companion rows are already correct — no DELETE, no re-tokenizing,
+            // no INSERT round trips (mirrors the rank companion's skip).
+            if (searchTextUnchanged(previous, document, index)) {
+                continue;
+            }
+
             const ftName = ftsTableName(tableName, index.name);
 
             if (document) {
