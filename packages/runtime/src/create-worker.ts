@@ -2624,10 +2624,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // otherwise return everything. Re-apply the same predicate in memory so the
             // RPC is correct regardless of the store — `null` and absent `userId` both
             // read as anonymous, matching the store's `userId IS NULL` semantics.
-            .filter(
-                (device) =>
-                    (kindFilter === undefined || device.kind === kindFilter) && (userIdFilter === undefined || (device.userId ?? null) === userIdFilter),
-            )
+            .filter((device) => {
+                if (kindFilter !== undefined && device.kind !== kindFilter) {
+                    return false;
+                }
+
+                // `null` and absent `userId` both read as anonymous, matching the
+                // store's `userId IS NULL` semantics (and `userIdFilter`, which is
+                // `null | string`) — a legitimate null site.
+                // eslint-disable-next-line unicorn/no-null -- comparison mirrors the store's `userId IS NULL`
+                return userIdFilter === undefined || (device.userId ?? null) === userIdFilter;
+            })
             // Strip delivery secrets (`keys`, `token`) — the browser only needs the
             // endpoint / kind / owner / timestamps + last-send status.
             .map(({ keys: _keys, token: _token, ...device }) => device);
