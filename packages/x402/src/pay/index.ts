@@ -28,12 +28,13 @@ export type { Caip2, X402Network } from "../networks";
 export { isEvmNetwork, isSvmNetwork, toCaip2 } from "../networks";
 export type { PayFetch, X402PayDeps } from "./fetch";
 export { createPayFetch } from "./fetch";
-export type { SpendPolicy, SpendState } from "./policy";
+export type { AllowedAsset, SpendPolicy, SpendState } from "./policy";
 export {
     assertBoundedPolicy,
     buildPaymentGuard,
     buildSpendPolicy,
     createSpendState,
+    DEFAULT_ALLOWED_ASSETS,
     DEFAULT_STABLECOIN_DECIMALS,
     releaseSpendOnFailure,
     usdToAtomic,

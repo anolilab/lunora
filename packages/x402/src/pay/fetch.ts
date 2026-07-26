@@ -4,10 +4,11 @@
  * signing an `X-PAYMENT` and retrying — all under the wallet's spend policy.
  *
  * Wiring order matters and is deliberately fail-closed. First
- * {@link assertBoundedPolicy} refuses an unbounded policy before a signer is ever
- * resolved or held. Then {@link registerWallet} resolves the agent signer and
+ * {@link assertBoundedPolicy} refuses an unbounded policy, and the enforcement hooks
+ * are built (they reject a policy whose caps can't be priced) — all before a signer
+ * is ever resolved or held. Then {@link registerWallet} resolves the agent signer and
  * registers the scheme. Then `registerPolicy(buildSpendPolicy(...))` narrows the
- * offered requirements to the payable ones (per-call cap + allowlists). Finally
+ * offered requirements to the payable ones (asset gate + per-call cap + allowlists). Finally
  * `onBeforePaymentCreation` enforces the stateful per-run cap and confirmation
  * gate, reserving the amount atomically as soon as it passes (the reservation
  * itself is the record — there is no separate after-hook), and
@@ -46,15 +47,22 @@ export interface X402PayDeps extends WalletDeps {
 export const createPayFetch = async (config: X402PayConfig, deps: X402PayDeps): Promise<PayFetch> => {
     assertBoundedPolicy(config.policy);
 
+    // Build the enforcement hooks *before* the signer is resolved. Both throw on a
+    // policy they can't enforce (an unknown asset, an unusable decimals config), and a
+    // policy that can't be enforced must fail before a private key is read or held —
+    // the same reason `assertBoundedPolicy` runs first.
+    const state = createSpendState();
+    const spendPolicy = buildSpendPolicy(config.policy);
+    const paymentGuard = buildPaymentGuard(config.policy, state);
+    const spendRelease = releaseSpendOnFailure(state);
+
     const client = new X402Client();
 
     await registerWallet(client, config, deps);
 
-    const state = createSpendState();
-
-    client.registerPolicy(buildSpendPolicy(config.policy));
-    client.onBeforePaymentCreation(buildPaymentGuard(config.policy, state));
-    client.onPaymentCreationFailure(releaseSpendOnFailure(state));
+    client.registerPolicy(spendPolicy);
+    client.onBeforePaymentCreation(paymentGuard);
+    client.onPaymentCreationFailure(spendRelease);
 
     return wrapFetchWithPayment(deps.fetch ?? globalThis.fetch, client);
 };

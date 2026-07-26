@@ -766,7 +766,7 @@ parameterization.
 | ---- | --------------------------------------------------------------------------- | ----------------------------- | ------------ | --------------- | ----- | ------ | ------- | ------ |
 | 138  | Close mask() oracle on where-batch-writes + `baseWhere` reads               | SERVER-01/02                  | security     | server          | P1    | S      | LOW     | TODO   |
 | 139  | Fail RAG lexical store closed on all non-empty filters                      | AI-01                         | security     | ai              | P1    | S      | LOW     | TODO   |
-| 140  | Harden x402 spend policy (asset, per-run race, unbounded allowlist)         | X402-01/02/03                 | security     | x402            | P1    | S–M    | MED     | TODO   |
+| 140  | Harden x402 spend policy (asset, per-run race, unbounded allowlist)         | X402-01/02/03                 | security     | x402            | P1    | S–M    | MED     | DONE   |
 | 141  | Bind agent tool-approval to thread+call; close id-less concurrency bypass   | AGENT-01/02                   | security     | agent           | P1    | S      | LOW     | TODO   |
 | 142  | Reconcile `triggers.crons` on deploy/prepare (crons never fire in prod)     | CLI-01                        | bug          | cli             | P1    | M      | MED     | TODO   |
 | 143  | External-source ingest correctness (Date/bigint brick + edges)              | DO-01…05                      | bug          | do              | P1/P3 | M      | LOW–MED | TODO   |
@@ -855,7 +855,7 @@ commit on `alpha`, stripped of the stray local `chore(release)` version-bump sta
 | ---- | ---------- | ------------------------------------ | --------------------------------------------------------------------------------------------- |
 | 138  | ✅ DONE    | `138-mask-oracle`                    | server 419/419                                                                                |
 | 139  | ✅ DONE    | `139-rag-lexical-rls`                | ai 90/90                                                                                      |
-| 140  | 🔶 PARTIAL | `140-x402-spend-policy`              | x402 80/80 — X402-02/03 done; **X402-01 STOP** (premise wrong, plan revised)                  |
+| 140  | ✅ DONE    | `140-x402-spend-policy`              | x402 97/97 — X402-01/02/03 all done (X402-01 via the revised per-asset-decimals approach)     |
 | 141  | ✅ DONE    | `141-agent-approval-concurrency`     | agent 269/269                                                                                 |
 | 142  | ✅ DONE    | `142-cron-reconcile`                 | config 443 / cli 671 / vite 178                                                               |
 | 143  | ✅ DONE    | `143-external-source`                | do 1102/1102                                                                                  |
@@ -884,8 +884,11 @@ commit on `alpha`, stripped of the stray local `chore(release)` version-bump sta
 - All 24 branches are independent single-commit deltas on `alpha`; merge in any order.
   Same-package branches will textually conflict (e.g. agent: 141/147/161; ai: 139/157;
   x402: 140/145; replica: 146/159; client: 158/162 + 149/150) — sequence those.
-- **140 X402-01** and **160** are the only unfinished items. 140's asset-check needs the
-  revised (per-asset-decimals) approach now in the plan.
+- **160** is the only unfinished item. 140's X402-01 asset check landed via the revised
+  per-asset-decimals approach: `SpendPolicy.allowedAssets` (each entry carrying its own
+  `decimals`, defaulting to a hand-mirrored canonical-USDC table), the policy-wide
+  `decimals` field refused outright, and the per-run ledger locked to one decimal
+  precision per run.
 - **146** needs a small ESLint cleanup on its source (non-null assertions, JSDoc, complexity).
 
 ## Wave 14 — competitive parity (baseline `70331e9b`, 2026-07-21)
