@@ -209,6 +209,25 @@ const fallbackIds = new WeakMap<WebSocket, string>();
 
 let fallbackCounter = 0;
 
+/**
+ * Whether `ws` carries the accept-time id tag — i.e. whether this host accepted
+ * it. Guarded because `getTags` rejects a socket the runtime does not know.
+ */
+const hasIdTag = (state: DurableObjectState, ws: WebSocket): boolean => {
+    const { getTags } = state as { getTags?: (ws: WebSocket) => string[] };
+
+    if (typeof getTags !== "function") {
+        return false;
+    }
+
+    try {
+        return getTags.call(state, ws).some((tag) => tag.startsWith(ID_TAG_PREFIX));
+    } catch {
+        // An unaccepted socket: not ours.
+        return false;
+    }
+};
+
 const readSocketId = (state: DurableObjectState, ws: WebSocket): string => {
     const { getTags } = state as { getTags?: (ws: WebSocket) => string[] };
 
@@ -365,13 +384,41 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
         },
         handleFor: (socket) => {
             const ws = socket as WebSocket;
+            const cached = liveHandles.get(ws);
+
+            if (cached !== undefined) {
+                return cached;
+            }
 
             // A socket the runtime hands to `webSocketMessage`/`webSocketClose`
-            // may predate this wake, so there may be no cached handle: rebuild
-            // it from the durable id tag. `readSocketId` only falls back to a
-            // wake-local id when the runtime has no tags at all (test doubles),
-            // and an unaccepted socket has none either way.
-            return liveHandles.get(ws) ?? (state.getWebSockets().includes(ws) ? getHandle(ws) : undefined);
+            // may predate this wake, so there may be no cached handle: rebuild it
+            // from the durable id tag. The guard matters — `readSocketId` mints a
+            // wake-local id for ANY socket, so without it an unaccepted socket
+            // would be handed a handle it should never have.
+            //
+            // Asked in O(1). This was `state.getWebSockets().includes(ws)`, which
+            // materializes the whole socket array and scans it linearly on every
+            // miss — and `webSocketMessage` misses once per socket per wake, so a
+            // shard with many subscribers paid O(N) to answer a question about one
+            // socket. An accepted socket carries the durable id tag, which is the
+            // same fact read directly.
+            if (hasIdTag(state, ws)) {
+                return getHandle(ws);
+            }
+
+            // Doubles that never implement `getTags` still went through `accept`
+            // here, which records a fallback id.
+            if (fallbackIds.has(ws)) {
+                return getHandle(ws);
+            }
+
+            // Last resort, and the only path that scans. A test double can seed
+            // `getWebSockets()` directly without ever calling `accept`, so a
+            // socket can be genuinely live yet carry neither a tag nor a fallback
+            // id; refusing it here would hand back the raw socket and split the
+            // per-socket memo identity. Unreachable on a real runtime, where
+            // every live socket was accepted and matched above.
+            return state.getWebSockets().includes(ws) ? getHandle(ws) : undefined;
         },
     };
 };

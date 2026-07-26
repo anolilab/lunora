@@ -130,6 +130,42 @@ describe("createSocketHost getSockets memo", () => {
         expect(after.map((handle) => handle.id)).not.toStrictEqual(beforeIds);
     });
 
+    it("resolves a socket accepted before this wake without scanning the socket set", () => {
+        expect.assertions(3);
+
+        const live: FakeSocket[] = [];
+        const base = stateWith(live);
+        let scans = 0;
+        const state = {
+            ...base,
+            getWebSockets: (tag?: string) => {
+                scans += 1;
+
+                return base.getWebSockets(tag);
+            },
+        };
+
+        const accepted = new FakeSocket();
+
+        // Accept through one host, then resolve through a FRESH one. That is the
+        // hibernation wake: a new isolate, empty handle cache, and a socket the
+        // runtime hands straight to `webSocketMessage`. Resolving it through the
+        // cache is the easy path; this is the one that used to scan.
+        createSocketHost(state as never).accept(accepted);
+
+        const afterWake = createSocketHost(state as never);
+
+        scans = 0;
+
+        expect(afterWake.handleFor(accepted)).toBeDefined();
+        // Answering a question about ONE socket must not materialize and walk the
+        // whole socket array — `webSocketMessage` asks it once per socket per wake.
+        expect(scans).toBe(0);
+
+        // A socket this host never accepted is still refused.
+        expect(afterWake.handleFor(new FakeSocket())).toBeUndefined();
+    });
+
     it("memoizes each tag independently", () => {
         expect.assertions(3);
 
