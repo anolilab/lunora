@@ -2839,6 +2839,44 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
     });
 
+    describe("vector index names", () => {
+        const vectorSchema: SchemaIR = {
+            tables: [
+                {
+                    indexes: [],
+                    name: "docs",
+                    rankIndexes: [],
+                    relations: [],
+                    searchIndexes: [],
+                    shape: { body: { kind: "string" } },
+                    shardMode: "root",
+                    vectorIndexes: [],
+                },
+            ],
+            vectorIndexes: [{ dimensions: 768, field: "body", metric: "cosine", name: "docs-body", on: "docs" }],
+        };
+
+        it("narrows ctx.vectors to the declared index names", () => {
+            expect.assertions(3);
+
+            const output = emitServer({ schema: vectorSchema });
+
+            // A typo'd index name should be a compile error, not a runtime
+            // "unknown index" throw from the binding facade.
+            expect(output).toContain("readonly vectors: VectorSearch<VectorIndexName>;");
+            expect(output).toContain("readonly vectors: VectorSearchReader<VectorIndexName>;");
+            expect(output).toContain('import type { VectorIndexName } from "./dataModel.js";');
+        });
+
+        it("leaves ctx.vectors alone when the schema declares no vector index", () => {
+            expect.assertions(1);
+
+            const output = emitServer({ schema: { tables: [], vectorIndexes: [] } });
+
+            expect(output).not.toContain("VectorSearch<VectorIndexName>");
+        });
+    });
+
     describe("search indexes on `.global()` tables", () => {
         const globalSearchSchema: SchemaIR = {
             tables: [

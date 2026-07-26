@@ -1784,6 +1784,20 @@ export type Env = CloudflareBindings;`;
     const imagesActionField = serverCapabilityField("images", hasImages);
     const pipelinesActionField = serverCapabilityField("pipelines", hasPipelines);
     const r2sqlActionField = serverCapabilityField("r2sql", hasR2sql);
+    // `ctx.vectors` — narrowed to the schema's declared vector indexes, so a
+    // typo'd index name is a compile error rather than a runtime "unknown
+    // index" throw from the binding facade. The base surface stays `string`
+    // for schema-agnostic consumers.
+    // Same source the `VectorIndexName` union is emitted from, so the narrowed
+    // ctx field and the union it references appear together or not at all.
+    const hasVectorIndexes = (schema?.vectorIndexes.length ?? 0) > 0;
+    const vectorsOmit = hasVectorIndexes ? ` | "vectors"` : "";
+    const vectorsWriterContextField = hasVectorIndexes ? `\n    readonly vectors: VectorSearch<VectorIndexName>;` : "";
+    const vectorsReaderContextField = hasVectorIndexes ? `\n    readonly vectors: VectorSearchReader<VectorIndexName>;` : "";
+    // The narrowed surface needs the base generics and the emitted union in scope.
+    const vectorsTypeImport = hasVectorIndexes
+        ? `import type { VectorSearch, VectorSearchReader } from "${base.server}";\nimport type { VectorIndexName } from "./dataModel.js";\n`
+        : "";
     // `ctx.access` — the verified Cloudflare Access identity, a synchronous facade
     // over the already-resolved claims. Rides EVERY ctx (a deterministic read of
     // the per-request identity, like `ctx.auth`; no I/O — verification happened
@@ -1957,7 +1971,7 @@ import type {
 } from "${base.server}";
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
-${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
+${vectorsTypeImport}${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
@@ -2015,22 +2029,22 @@ type AsIdTable<T extends string> = T extends TableName ? T : string extends T ? 
  */
 type TypedAsId = <T extends string>(tableName: AsIdTable<T>, id: string) => IdOfTable<T & TableName>;
 
-export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${authOmit}${envOmit}> {
+export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${vectorsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseReader, "asId" | "query" | "get"> & DatabaseReaderFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${vectorsReaderContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${authContextField}
 }
 
-export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
+export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
-export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
+export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 /**

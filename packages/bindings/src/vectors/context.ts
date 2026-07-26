@@ -1,3 +1,4 @@
+import { resolveDocumentPath } from "../../../../shared/document-path";
 import { concurrentMap, UPSERT_EMBED_CONCURRENCY } from "./concurrent";
 import type { LunoraVectors } from "./types";
 
@@ -272,7 +273,7 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
         // per-field source to clear; its `select` defines the value, so it
         // always upserts.
         const inlineWithValue = inlineIndexes.map((index) => {
-            return { index, value: row[index.field] };
+            return { index, value: resolveDocumentPath(row, index.field) };
         });
         const inlineToUpsert = inlineWithValue.filter((entry) => entry.value !== undefined && entry.value !== null);
         const inlineToClear = inlineWithValue.filter((entry) => entry.value === undefined || entry.value === null);

@@ -18,6 +18,7 @@
 
 import { LunoraError } from "@lunora/errors";
 
+import { resolveDocumentPath } from "../../../shared/document-path";
 import type { QueryPage } from "./query-args";
 import { fromBase64, invalidCursor, toBase64 } from "./query-args";
 import type { SearchAnalyzer } from "./search-analyzer";
@@ -108,23 +109,7 @@ export const tokenizeSearch = (query: string, analyzer: SearchAnalyzer = default
  * segment yields `undefined`, which {@link stringifySearchText} coerces to the
  * empty string (an unindexable document, not an error).
  */
-export const resolveSearchField = (document: Record<string, unknown>, field: string): unknown => {
-    if (!field.includes(".")) {
-        return document[field];
-    }
-
-    let current: unknown = document;
-
-    for (const segment of field.split(".")) {
-        if (current === null || typeof current !== "object" || Array.isArray(current)) {
-            return undefined;
-        }
-
-        current = (current as Record<string, unknown>)[segment];
-    }
-
-    return current;
-};
+export const resolveSearchField = (document: Record<string, unknown>, field: string): unknown => resolveDocumentPath(document, field);
 
 /**
  * Render tokens as an FTS5 MATCH expression: each token is a quoted literal
