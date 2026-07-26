@@ -133,13 +133,18 @@ const fakeD1 = (): D1Like => {
 
                     rows.set(id as string, {
                         auth: auth as string | null,
+                        // Upsert preserves created_at on re-register (the real store's
+                        // DO UPDATE omits it) …
                         created_at: (existing?.created_at ?? createdAt) as number,
                         endpoint: endpoint as string | null,
                         id: id as string,
                         kind: kind as string,
-                        last_error: lastError as string | null,
+                        // … and preserves last_status/last_error on re-register too
+                        // (the DO UPDATE now omits them so markStatus stays their only
+                        // writer); a brand-new row seeds them from the bindings.
+                        last_error: (existing === undefined ? lastError : existing.last_error) as string | null,
                         last_seen_at: lastSeenAt as number,
-                        last_status: lastStatus as string | null,
+                        last_status: (existing === undefined ? lastStatus : existing.last_status) as string | null,
                         metadata: metadata as string | null,
                         p256dh: p256dh as string | null,
                         token: token as string | null,

@@ -137,15 +137,28 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
         return schemaReady;
     };
 
+    const get = async (id: string): Promise<StoredSubscription | undefined> => {
+        await ensureSchema();
+
+        const row = await database.prepare(`SELECT * FROM ${table} WHERE id = ?1`).bind(id).first<Row>();
+
+        return row === null ? undefined : rowToSubscription(row);
+    };
+
     const put = async (subscription: StoredSubscription): Promise<StoredSubscription> => {
         await ensureSchema();
 
-        // Preserve the original createdAt on re-register (upsert keeps the first-seen time).
+        // On re-register (a routine service-worker refresh) the upsert PRESERVES the
+        // first-seen `created_at` AND the delivery status/error: `last_status` /
+        // `last_error` are deliberately OMITTED from the `DO UPDATE SET` list so a
+        // fresh registration (which carries no status) can't wipe the last known
+        // delivery outcome — `markStatus` stays their only writer. They are still in
+        // the INSERT column list so a brand-new row seeds them.
         await database
             .prepare(
                 `INSERT INTO ${table} (id, kind, endpoint, p256dh, auth, token, user_id, metadata, created_at, last_seen_at, last_status, last_error) ` +
                     "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) " +
-                    "ON CONFLICT(id) DO UPDATE SET kind = ?2, endpoint = ?3, p256dh = ?4, auth = ?5, token = ?6, user_id = ?7, metadata = ?8, last_seen_at = ?10, last_status = ?11, last_error = ?12",
+                    "ON CONFLICT(id) DO UPDATE SET kind = ?2, endpoint = ?3, p256dh = ?4, auth = ?5, token = ?6, user_id = ?7, metadata = ?8, last_seen_at = ?10",
             )
             .bind(
                 subscription.id,
@@ -163,15 +176,14 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
             )
             .run();
 
-        return subscription;
-    };
+        // Return the ACTUAL stored row (not the incoming `subscription`, whose
+        // `createdAt` is `Date.now()` and disagrees with the preserved value on a
+        // re-register) so the caller sees the truthful record — matching the memory
+        // store. A read-back rather than `RETURNING *` keeps the fake D1 slice simple
+        // and works on any D1-like binding.
+        const stored = await get(subscription.id);
 
-    const get = async (id: string): Promise<StoredSubscription | undefined> => {
-        await ensureSchema();
-
-        const row = await database.prepare(`SELECT * FROM ${table} WHERE id = ?1`).bind(id).first<Row>();
-
-        return row === null ? undefined : rowToSubscription(row);
+        return stored ?? subscription;
     };
 
     const remove = async (id: string): Promise<void> => {
