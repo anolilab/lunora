@@ -191,13 +191,10 @@ export interface LunoraPush {
      * List stored subscriptions (optionally filtered), with the delivery
      * **secrets** stripped — the Web Push `keys` (RFC 8291 `auth`/`p256dh`) and the
      * FCM `token`. Those, plus the endpoint, are enough to deliver arbitrary push to
-     * a device, so they never cross the app-facing facade. `list` and
-     * {@link LunoraPush.listDevices} return the same projected shape; the raw rows
-     * are reachable only through the internal `SubscriptionStore`.
+     * a device, so they never cross the app-facing facade; the raw rows are
+     * reachable only through the internal `SubscriptionStore`.
      */
     list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
-    /** Alias of {@link LunoraPush.list} — list stored devices with delivery secrets stripped. */
-    listDevices: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
     /** Register (upsert) a device subscription and return the stored record. */
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     /** Send a push to a single stored subscription (by id or record); `to` is derived from it. */
@@ -245,10 +242,13 @@ export interface NotifyConfig {
      * close DNS rebinding for a facade that accepts client-controlled endpoints.
      *
      * When unset, the default posture applies: an endpoint must be `https:` with a
-     * non-private / non-loopback / non-link-local host. Set this to the push
-     * services your app actually uses (e.g. `["https://fcm.googleapis.com",
+     * host a STRING classifier does not flag as private / loopback / link-local.
+     * That classifier does NOT resolve DNS, so a public hostname resolving to a
+     * private/internal IP (e.g. `https://127.0.0.1.nip.io/…`) is NOT blocked by it
+     * — `register()` also emits a one-shot dev warning in this case. Set this to the
+     * push services your app actually uses (e.g. `["https://fcm.googleapis.com",
      * "https://updates.push.services.mozilla.com"]` — exact origins only, no
-     * wildcards) to hard-pin the boundary.
+     * wildcards) to hard-pin the boundary and close DNS rebinding.
      */
     allowedPushOrigins?: string[];
 

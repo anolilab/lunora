@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import type { StoredSubscription, SubscriptionFilter, SubscriptionKind, SubscriptionStatus, SubscriptionStore } from "../types";
+import { legacyIdFor } from "./normalize";
 
 /**
  * The minimal structural slice of Cloudflare's `D1Database` this store uses. A
@@ -175,6 +176,18 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
                 subscription.lastError ?? null,
             )
             .run();
+
+        // Evict the SAME device's legacy-prefix row (pre-`wp2_`/`fcm2_` 32-bit id).
+        // Its PK differs from the canonical id, so the upsert above never touched it;
+        // leaving it would make `broadcast` (no id filter) deliver to this device
+        // twice forever. Idempotent — a no-op when the legacy row was never present.
+        // The `!== subscription.id` guard keeps a (rare) put of a legacy-id row from
+        // deleting the very row it just wrote.
+        const legacyId = legacyIdFor(subscription);
+
+        if (legacyId !== undefined && legacyId !== subscription.id) {
+            await database.prepare(`DELETE FROM ${table} WHERE id = ?1`).bind(legacyId).run();
+        }
 
         // Return the ACTUAL stored row (not the incoming `subscription`, whose
         // `createdAt` is `Date.now()` and disagrees with the preserved value on a

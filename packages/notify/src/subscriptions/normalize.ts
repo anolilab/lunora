@@ -79,6 +79,48 @@ const webPushId = (endpoint: string): string => `wp2_${fnv1a64Hex(endpoint)}`;
 /** Stable store id for an FCM device token. See {@link webPushId} for the `_2` version-prefix contract. */
 const fcmId = (token: string): string => `fcm2_${fnv1a64Hex(token)}`;
 
+/**
+ * The PREVIOUS 32-bit FNV-1a digest (8 hex) — the pre-`_2` id scheme. Kept ONLY so
+ * a canonical `put` can evict the stale legacy-prefix row for the same identity (see
+ * {@link legacyIdFor}). Must reproduce the old algorithm byte-for-byte (offset basis
+ * `0x811c9dc5`, prime `0x01000193`, `codePointAt` iteration, unsigned 8-hex output),
+ * or it would delete the wrong (or no) row and the duplicate-broadcast bug survives.
+ */
+const fnv1a32Hex = (input: string): string => {
+    let hash = 0x81_1c_9d_c5;
+
+    for (let index = 0; index < input.length; index += 1) {
+        // eslint-disable-next-line no-bitwise -- FNV-1a mixing requires XOR
+        hash ^= input.codePointAt(index) ?? 0;
+        hash = Math.imul(hash, 0x01_00_01_93);
+    }
+
+    // eslint-disable-next-line no-bitwise -- coerce to an unsigned 32-bit int
+    return (hash >>> 0).toString(16).padStart(8, "0");
+};
+
+/** The legacy (32-bit) store id a web-push endpoint had under the pre-`wp2_` scheme. */
+const legacyWebPushId = (endpoint: string): string => `wp_${fnv1a32Hex(endpoint)}`;
+
+/** The legacy (32-bit) store id an FCM token had under the pre-`fcm2_` scheme. */
+const legacyFcmId = (token: string): string => `fcm_${fnv1a32Hex(token)}`;
+
+/**
+ * The legacy-prefix (`wp_`/`fcm_`) store id for the SAME device identity a canonical
+ * {@link StoredSubscription} targets, or `undefined` when it can't be derived (no
+ * endpoint/token). A canonical `put` DELETES this id so a device that migrated from
+ * the 32-bit scheme to the 64-bit `wp2_`/`fcm2_` scheme is not left as two rows: the
+ * legacy row has a different PK, so the upsert's `ON CONFLICT(id)` never touches it,
+ * and `broadcast` (which filters by no id) would otherwise deliver to it twice forever.
+ */
+const legacyIdFor = (subscription: StoredSubscription): string | undefined => {
+    if (subscription.kind === "fcm") {
+        return subscription.token === undefined ? undefined : legacyFcmId(subscription.token);
+    }
+
+    return subscription.endpoint === undefined ? undefined : legacyWebPushId(subscription.endpoint);
+};
+
 const parseSubscription = (subscription: unknown): LooseSubscription => {
     if (typeof subscription !== "string") {
         return subscription ?? {};
@@ -99,8 +141,14 @@ interface NormalizeOptions {
     /**
      * Exact origins (`https://host[:port]`) a web-push endpoint may register from.
      * When set (non-empty), the endpoint's origin must be one of these — the
-     * strongest anti-SSRF posture. When unset, the default posture applies:
-     * `https:` scheme + a non-private/non-loopback host.
+     * strongest anti-SSRF posture, and the ONLY way to close DNS rebinding for a
+     * facade that accepts client-controlled endpoints.
+     *
+     * When unset, the default posture applies: `https:` scheme + a host the
+     * {@link assertPushEndpoint} STRING classifier does not flag as
+     * private/loopback. That classifier does NOT resolve DNS, so a public hostname
+     * resolving to a private/internal IP (e.g. `https://127.0.0.1.nip.io/…`) is NOT
+     * blocked by it — set this allowlist to close that gap.
      */
     allowedPushOrigins?: string[];
 }
@@ -118,6 +166,13 @@ interface NormalizeOptions {
  * `isPrivateHost` classifier). When `allowedPushOrigins` is configured, the
  * endpoint's origin must instead match one of those exactly — a hard allowlist
  * that also closes DNS rebinding.
+ *
+ * LIMIT OF THE DEFAULT POSTURE: `isPrivateHost` is a STRING classifier — it
+ * inspects the host AS-WRITTEN and does NOT resolve DNS. So a PUBLIC hostname
+ * that resolves (via attacker-controlled DNS) to a private/internal IP — e.g.
+ * `https://127.0.0.1.nip.io/…` or `https://169-254-169-254.sslip.io/…` — is NOT
+ * blocked here. Only a configured `allowedPushOrigins` allowlist closes that
+ * (classic DNS-rebinding) gap; the classifier cannot.
  */
 const assertPushEndpoint = (endpoint: string, allowedPushOrigins?: string[]): void => {
     let url: URL;
@@ -249,4 +304,4 @@ const isGoneError = (message: string | undefined): boolean => {
     return WEB_PUSH_GONE_PATTERN.test(message) || FCM_GONE_PATTERN.test(message) || GONE_TEXT_FALLBACK.test(message);
 };
 
-export { fcmId, isGoneError, normalizeRegisterInput, targetOf, webPushId };
+export { fcmId, isGoneError, legacyFcmId, legacyIdFor, legacyWebPushId, normalizeRegisterInput, targetOf, webPushId };

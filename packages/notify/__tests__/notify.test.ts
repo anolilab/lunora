@@ -42,7 +42,7 @@ describe("ctx.push lifecycle", () => {
         await expect(push.list({ userId: "u1" })).resolves.toHaveLength(1);
     });
 
-    it("list / listDevices strip the delivery secrets (keys / token)", async () => {
+    it("list strips the delivery secrets (keys / token)", async () => {
         expect.hasAssertions();
 
         const { push, store } = setup();
@@ -50,7 +50,7 @@ describe("ctx.push lifecycle", () => {
         await push.register({ subscription: okSub, userId: "u1" });
         await push.register({ kind: "fcm", token: "device-token-xyz", userId: "u2" });
 
-        for (const surface of [await push.list(), await push.listDevices()]) {
+        for (const surface of [await push.list()]) {
             expect(surface).toHaveLength(2);
 
             for (const device of surface) {
@@ -441,5 +441,56 @@ describe("delivery observability (ctx.log + ctx.metrics)", () => {
 
         // No observability handles → sends still succeed, nothing throws.
         await expect(facade.send(stored.id, { body: "hi" })).resolves.toMatchObject({ successful: true });
+    });
+});
+
+describe("web Push SSRF-posture warning (unset allowedPushOrigins)", () => {
+    const registerFacade = (definitionOverrides: Partial<NotifyDefinition> = {}) => {
+        const store = memorySubscriptionStore();
+        const push = mockPushProvider();
+        const engine = mockEngine({ push: push.provider });
+        // Fresh definition/env identity so the per-isolate one-shot guard starts clean;
+        // NOT `silent`, so the warning is allowed to fire.
+        const { push: facade } = createNotify({ ...baseDefinition(store), ...definitionOverrides }, {}, { engine });
+
+        return facade;
+    };
+
+    it("warns exactly once per isolate when a web-push subscription registers without allowedPushOrigins", async () => {
+        expect.hasAssertions();
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            const facade = registerFacade();
+
+            await facade.register({ subscription: okSub, userId: "u1" });
+            await facade.register({ subscription: goneSub, userId: "u2" });
+
+            const originWarnings = warn.mock.calls.filter(([message]) => typeof message === "string" && message.includes("allowedPushOrigins"));
+
+            expect(originWarnings).toHaveLength(1);
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it("does not warn for an FCM registration (no client-controlled endpoint) or when allowedPushOrigins is set", async () => {
+        expect.hasAssertions();
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            // FCM tokens carry no endpoint — the origin allowlist doesn't apply.
+            await registerFacade().register({ kind: "fcm", token: "device-token-1", userId: "u1" });
+            // A configured allowlist is the closed posture — no nudge.
+            await registerFacade({ allowedPushOrigins: ["https://push.example"] }).register({ subscription: okSub, userId: "u2" });
+
+            const originWarnings = warn.mock.calls.filter(([message]) => typeof message === "string" && message.includes("allowedPushOrigins"));
+
+            expect(originWarnings).toHaveLength(0);
+        } finally {
+            warn.mockRestore();
+        }
     });
 });

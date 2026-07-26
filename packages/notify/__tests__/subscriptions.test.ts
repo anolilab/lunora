@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { d1SubscriptionStore } from "../src/subscriptions/d1-store";
 import { memorySubscriptionStore } from "../src/subscriptions/memory-store";
-import { fcmId, isGoneError, normalizeRegisterInput, targetOf, webPushId } from "../src/subscriptions/normalize";
+import { fcmId, isGoneError, legacyFcmId, legacyWebPushId, normalizeRegisterInput, targetOf, webPushId } from "../src/subscriptions/normalize";
 import { fakeD1 } from "./helpers";
 
 const webPushSub = { endpoint: "https://push.example/abc", keys: { auth: "AUTHKEY", p256dh: "P256KEY" } };
@@ -89,6 +89,10 @@ describe("web-push endpoint SSRF validation", () => {
             "https://169.254.169.254/x",
             "https://[::1]/x",
             "https://redis.internal/x",
+            // 6to4 (`2002::/16`) embedding 127.0.0.1, and Teredo (`2001:0000::/32`) —
+            // both tunnel an embedded IPv4 and must be blocked.
+            "https://[2002:7f00:1::]/x",
+            "https://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/x",
         ]) {
             expect(() => normalizeRegisterInput(withEndpoint(host)), host).toThrow(/private\/internal address/u);
         }
@@ -249,6 +253,54 @@ describe("d1SubscriptionStore", () => {
 
         await expect(store.list()).resolves.toHaveLength(5);
         await expect(store.list({ limit: 2 })).resolves.toHaveLength(2);
+    });
+});
+
+describe("legacy-id migration eviction (memory + D1)", () => {
+    const stores: ReadonlyArray<readonly [string, () => ReturnType<typeof memorySubscriptionStore>]> = [
+        ["memory", () => memorySubscriptionStore()],
+        ["d1", () => d1SubscriptionStore(fakeD1())],
+    ];
+
+    it.each(stores)("a canonical web-push put removes the pre-existing legacy `wp_` row for the same identity (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+        const { endpoint } = webPushSub;
+
+        // Seed the legacy 32-bit `wp_` row as an older client would have left it — a
+        // different PK from the new `wp2_` id, so `ON CONFLICT(id)` never touches it.
+        const legacyId = legacyWebPushId(endpoint);
+
+        await store.put({ createdAt: 1, endpoint, id: legacyId, keys: webPushSub.keys, kind: "web-push", lastSeenAt: 1, userId: "u1" });
+
+        await expect(store.get(legacyId)).resolves.toBeDefined();
+
+        // Re-register the SAME endpoint under the new 64-bit `wp2_` id.
+        const current = await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "u1" }, 2));
+
+        expect(current.id).toBe(webPushId(endpoint));
+        expect(current.id).not.toBe(legacyId);
+        // The legacy row is evicted → only ONE row survives, so a `broadcast` (no id
+        // filter, lists all) delivers to this device exactly once, not twice.
+        await expect(store.get(legacyId)).resolves.toBeUndefined();
+        await expect(store.list()).resolves.toHaveLength(1);
+    });
+
+    it.each(stores)("also evicts the legacy `fcm_` row for a re-registered token (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+        const token = "device-token-legacy";
+        const legacyId = legacyFcmId(token);
+
+        await store.put({ createdAt: 1, id: legacyId, kind: "fcm", lastSeenAt: 1, token, userId: "u2" });
+
+        const current = await store.put(normalizeRegisterInput({ kind: "fcm", token, userId: "u2" }, 2));
+
+        expect(current.id).toBe(fcmId(token));
+        await expect(store.get(legacyId)).resolves.toBeUndefined();
+        await expect(store.list()).resolves.toHaveLength(1);
     });
 });
 

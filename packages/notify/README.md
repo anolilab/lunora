@@ -120,8 +120,8 @@ client-supplied data, so the facade enforces two boundaries:
     });
     ```
 
-- **No secrets on the app facade.** `ctx.push.list()` / `ctx.push.listDevices()`
-  return the registered devices with the delivery **secrets stripped** — the Web
+- **No secrets on the app facade.** `ctx.push.list()`
+  returns the registered devices with the delivery **secrets stripped** — the Web
   Push `keys` (`auth`/`p256dh`) and the FCM `token`, which together with the
   endpoint are enough to deliver arbitrary push to a device. The raw rows are
   reachable only through the internal `SubscriptionStore` (which handlers never

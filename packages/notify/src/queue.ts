@@ -44,22 +44,25 @@ export const enqueuePushBroadcast = (queue: QueueProducerLike, job: Omit<PushBro
  * facade (which reuses the engine's retry + circuit-breaker middleware and prunes
  * gone subscriptions).
  *
- * RETRY SEMANTICS: a broadcast where NOTHING was delivered to a non-empty audience
- * (zero `sent` against a positive `total`) is treated as a transient batch failure
- * and RE-THROWN so the queue does NOT ack it — the consumer's normal retry/backoff
- * (and, on exhaustion, dead-letter) applies. A PARTIAL success (`sent` above zero)
- * resolves normally and is acked: retrying it would re-send to the already-delivered
- * recipients (broadcast is not idempotent across re-runs), so partial batches are
- * intentionally NOT retried. An empty audience (zero `total`) also resolves — there
- * is nothing to retry.
+ * RETRY SEMANTICS: retry is gated on `failed` — the count of TRANSIENT delivery
+ * errors (a provider 5xx / network fault worth another attempt). When at least one
+ * recipient `failed`, the job is RE-THROWN so the queue does NOT ack it and its
+ * normal retry/backoff (and, on exhaustion, dead-letter) applies. A broadcast with
+ * zero `failed` resolves and is acked — this includes the all-`pruned` case (every
+ * device had unsubscribed: `sent:0`, `failed:0`, `pruned:N`), which is a SUCCESSFUL
+ * prune, not a failure, so throwing on it would spuriously retry and pressure the
+ * DLQ; and the empty audience (zero `total`), which has nothing to retry. Note a
+ * retry re-runs the WHOLE broadcast, re-sending to the already-delivered recipients
+ * (broadcast is not idempotent) — the accepted cost of getting the transiently
+ * failed ones redelivered.
  */
 export const runPushBroadcastJob = async (push: LunoraPush, job: PushBroadcastJob): Promise<BroadcastResult> => {
     const result = await push.broadcast(job.payload, job.filter);
 
-    if (result.sent === 0 && result.total > 0) {
+    if (result.failed > 0) {
         throw new LunoraError(
             "INTERNAL",
-            `@lunora/notify: push broadcast delivered to none of ${result.total.toString()} subscription(s) (${result.failed.toString()} failed, ${result.pruned.toString()} pruned) — throwing so the queue retries`,
+            `@lunora/notify: push broadcast had ${result.failed.toString()} transient failure(s) of ${result.total.toString()} subscription(s) (${result.sent.toString()} sent, ${result.pruned.toString()} pruned) — throwing so the queue retries`,
         );
     }
 

@@ -87,6 +87,7 @@ interface NotifyRuntime {
     engine?: Notification;
     fallbackStore?: SubscriptionStore;
     store?: SubscriptionStore;
+    warnedNoPushOriginAllowlist: boolean;
     warnedNoStore: boolean;
 }
 
@@ -109,7 +110,7 @@ const runtimeFor = (definition: NotifyDefinition, env: NotifyEnv): NotifyRuntime
     let runtime = byEnv.get(env);
 
     if (runtime === undefined) {
-        runtime = { warnedNoStore: false };
+        runtime = { warnedNoPushOriginAllowlist: false, warnedNoStore: false };
         byEnv.set(env, runtime);
     }
 
@@ -232,15 +233,38 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
     };
 
     /**
-     * List stored subscriptions with the delivery SECRETS stripped — the Web Push
-     * `keys` (RFC 8291 `auth`/`p256dh`) and the FCM `token`. Backs both `ctx.push.list`
-     * and `ctx.push.listDevices`: those, with the endpoint, are enough to deliver
-     * arbitrary push to a device, so they never cross the app-facing facade. Uses
-     * the same `{ keys, token, ...device }` projection as the gated Studio admin RPC
-     * (`create-worker.ts`). The raw rows stay reachable only through the internal
-     * `SubscriptionStore` (which `broadcast` uses directly).
+     * Warn ONCE per isolate when a Web Push subscription is registered without an
+     * `allowedPushOrigins` allowlist. The default posture validates the endpoint
+     * host with a STRING classifier (`assertPushEndpoint` → shared `isPrivateHost`)
+     * that does NOT resolve DNS, so a public hostname that resolves to a
+     * private/internal IP (e.g. `https://127.0.0.1.nip.io/…`) slips past it — only
+     * an exact-origin `allowedPushOrigins` allowlist closes that DNS-rebinding gap.
+     * Guarded on the per-isolate runtime, mirroring the no-store fallback warning.
      */
-    const listDevices = async (filter?: SubscriptionFilter): Promise<PushSubscriptionDevice[]> => {
+    const warnNoPushOriginAllowlist = (): void => {
+        const hasAllowlist = definition.allowedPushOrigins !== undefined && definition.allowedPushOrigins.length > 0;
+
+        if (options.silent || hasAllowlist || runtime.warnedNoPushOriginAllowlist) {
+            return;
+        }
+
+        runtime.warnedNoPushOriginAllowlist = true;
+        // eslint-disable-next-line no-console -- one-time SSRF-posture warning, mirrors the no-store fallback warning
+        console.warn(
+            "@lunora/notify: Web Push registered without `allowedPushOrigins` — the endpoint host is validated by a string classifier that does NOT resolve DNS, so a public hostname resolving to a private/internal IP (e.g. `https://127.0.0.1.nip.io/…`) is NOT blocked. Set `allowedPushOrigins` to the exact push-service origins to close DNS rebinding.",
+        );
+    };
+
+    /**
+     * List stored subscriptions with the delivery SECRETS stripped — the Web Push
+     * `keys` (RFC 8291 `auth`/`p256dh`) and the FCM `token`. Backs `ctx.push.list`:
+     * those, with the endpoint, are enough to deliver arbitrary push to a device, so
+     * they never cross the app-facing facade. Uses the same `{ keys, token, ...device }`
+     * projection as the gated Studio admin RPC (`create-worker.ts`). The raw rows stay
+     * reachable only through the internal `SubscriptionStore` (which `broadcast` uses
+     * directly).
+     */
+    const listProjected = async (filter?: SubscriptionFilter): Promise<PushSubscriptionDevice[]> => {
         const rows = await subscriptionStore.list(filter);
 
         return rows.map(({ keys: _keys, token: _token, ...device }) => device);
@@ -373,10 +397,17 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
                 total: outcomes.length,
             };
         },
-        list: (filter?: SubscriptionFilter): Promise<PushSubscriptionDevice[]> => listDevices(filter),
-        listDevices: (filter?: SubscriptionFilter): Promise<PushSubscriptionDevice[]> => listDevices(filter),
-        register: (input: RegisterInput): Promise<StoredSubscription> =>
-            subscriptionStore.put(normalizeRegisterInput(input, undefined, { allowedPushOrigins: definition.allowedPushOrigins })),
+        list: (filter?: SubscriptionFilter): Promise<PushSubscriptionDevice[]> => listProjected(filter),
+        register: (input: RegisterInput): Promise<StoredSubscription> => {
+            // A web-push registration accepts a client-controlled endpoint — the SSRF
+            // surface. Nudge (once) to the exact-origin allowlist when unset. FCM
+            // tokens carry no endpoint, so the origin allowlist doesn't apply to them.
+            if (!("token" in input)) {
+                warnNoPushOriginAllowlist();
+            }
+
+            return subscriptionStore.put(normalizeRegisterInput(input, undefined, { allowedPushOrigins: definition.allowedPushOrigins }));
+        },
         send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => {
             const { error, receipt } = await deliver(await resolveSubscription(target), payload, true);
 

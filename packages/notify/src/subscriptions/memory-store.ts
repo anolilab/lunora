@@ -1,4 +1,5 @@
 import type { StoredSubscription, SubscriptionFilter, SubscriptionStatus, SubscriptionStore } from "../types";
+import { legacyIdFor } from "./normalize";
 
 const matches = (subscription: StoredSubscription, filter?: SubscriptionFilter): boolean => {
     if (filter === undefined) {
@@ -57,6 +58,17 @@ const memorySubscriptionStore = (): SubscriptionStore => {
             return Promise.resolve();
         },
         put: (subscription: StoredSubscription): Promise<StoredSubscription> => {
+            // Evict the SAME device's legacy-prefix row (pre-`wp2_`/`fcm2_` 32-bit id)
+            // so a device that migrated id schemes isn't held as two rows — otherwise
+            // `broadcast` (no id filter) delivers to it twice. Idempotent for parity
+            // with the D1 store's legacy delete; the `!== subscription.id` guard keeps
+            // a put of a legacy-id row from deleting the very row it just wrote.
+            const legacyId = legacyIdFor(subscription);
+
+            if (legacyId !== undefined && legacyId !== subscription.id) {
+                map.delete(legacyId);
+            }
+
             const existing = map.get(subscription.id);
             // Preserve the original createdAt on re-register (upsert keeps first-seen time).
             const merged: StoredSubscription = existing === undefined ? subscription : { ...existing, ...subscription, createdAt: existing.createdAt };
