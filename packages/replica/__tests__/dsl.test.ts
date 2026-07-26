@@ -440,12 +440,10 @@ describe(MaterializerRuntime, () => {
         // seq is equally nonsensical. Both must be rejected, leaving the
         // watermark at 0.
         for (const bad of [Number.NaN, -3, "5" as unknown as number]) {
-            // eslint-disable-next-line no-await-in-loop -- sequential store rewrites are intentional
             await store.save("counts", { appliedSeq: bad, state: 5 });
 
             const runtime = new MaterializerRuntime([counts], { snapshotStore: store });
 
-            // eslint-disable-next-line no-await-in-loop -- sequential recovery is intentional
             const recoveredSeq = await runtime.recoverFromSnapshots();
 
             expect(recoveredSeq).toBe(0);

@@ -1,5 +1,4 @@
 import { randomId } from "../../../shared/uuid";
-
 import isStaleVersion from "./persisted-version";
 import type { OfflineQueueOptions, PersistedMutation, PersistenceAdapter, PersistenceErrorContext, PersistenceOperation } from "./types";
 
@@ -82,7 +81,7 @@ interface OfflineQueueDeps {
  * started in the same millisecond. Re-exported under the historical `nextId`
  * name for existing importers.
  */
-const nextId = randomId;
+const nextId: () => string = randomId;
 
 /**
  * Report a swallowed persistence rejection: hand it to the caller's handler if
