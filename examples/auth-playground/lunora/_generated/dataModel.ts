@@ -35,6 +35,23 @@ export type {
 
 export type TableName = "documents";
 
+/**
+ * The tables **this app declared** — every {@link TableName} except those an add-on
+ * contributed through `defineSchema(...).extend(...)`.
+ *
+ * An add-on's tables are real tables and stay in `TableName` (they are queryable,
+ * they appear in `DataModel`), but an app enumerating "my tables" should not have to
+ * know they exist: an account-deletion sweep, an export, a migration allowlist, or a
+ * helper generic over a table union is about the app's own data, and every add-on
+ * added or removed would otherwise silently change the correct answer.
+ *
+ * ```ts
+ * // Doesn't need to mention `ratelimit_buckets`, and won't drift when an add-on lands.
+ * const EXPORTED: readonly AppTableName[] = ["nodes", "tagColors"];
+ * ```
+ */
+export type AppTableName = "documents";
+
 export type Id<TName extends string> = string & { readonly __table: TName };
 
 export interface Doc_documents {
