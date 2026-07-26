@@ -140,6 +140,46 @@ describe(agentChat, () => {
         handle.teardown();
     });
 
+    it("retires the optimistic row under a saturated windowed limit, where the durable user-row count stays flat", async () => {
+        const fake = createFakeClient();
+        const handle = agentChat(fake.client, { api: buildApi(), limit: 50, send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+        // A bounded window (limit 50) saturated by 25 completed turns — a user row
+        // and an assistant row each, seqs 0..49, so 25 durable user rows.
+        const seededWindow: Record<string, unknown>[] = [];
+
+        for (let turn = 0; turn < 25; turn += 1) {
+            seededWindow.push(
+                { content: `q-${String(turn)}`, role: "user", seq: turn * 2 },
+                { content: `a-${String(turn)}`, role: "assistant", seq: turn * 2 + 1 },
+            );
+        }
+
+        fake.push(MESSAGES_REF, seededWindow);
+
+        // Send a new turn — its optimistic row renders atop the saturated window.
+        await handle.send("new turn");
+
+        expect(get(handle.messages).at(-1)).toStrictEqual({ content: "new turn", optimistic: true, role: "user", seq: 50 });
+
+        // The turn lands (user seq 50 + assistant seq 51) and the window slides to
+        // keep its last 50 rows, evicting the oldest turn (seqs 0, 1). The durable
+        // USER-row count is unchanged (still 25), so the positional reconcile can
+        // never see the acknowledging row — only the seq-advance fallback retires it.
+        const slidWindow = [...seededWindow.slice(2), { content: "new turn", role: "user", seq: 50 }, { content: "answer", role: "assistant", seq: 51 }];
+
+        fake.push(MESSAGES_REF, slidWindow);
+
+        const reconciled = get(handle.messages);
+
+        // No ghost: "new turn" appears exactly once, as the durable row, never
+        // flagged optimistic — and the merged list is just the 50-row window.
+        expect(reconciled.filter((message) => message.content === "new turn")).toStrictEqual([{ content: "new turn", role: "user", seq: 50 }]);
+        expect(reconciled).toHaveLength(50);
+
+        handle.teardown();
+    });
+
     it("routes approve / reject / cancel with the in-flight instanceId", async () => {
         const fake = createFakeClient();
         const handle = agentChat(fake.client, {
