@@ -341,6 +341,60 @@ describe(MaterializerRuntime, () => {
         expect(counts.state).toBe(0);
     });
 
+    it("'fail' strategy on an unknown event leaves the watermark re-surfaceable — a catch-and-retry does not skip it", () => {
+        const counts = defineMaterializer({
+            name: "counts",
+            initial: () => 0,
+            handle: (s, e) => (e.type === "inc" ? s + 1 : s),
+        });
+
+        const runtime = new MaterializerRuntime([counts], { unknownEventHandling: "fail" });
+
+        // seq 0 is handled; seq 1 is unknown → the "fail" strategy throws.
+        expect(() =>
+            runtime.applyEntries([
+                { seq: 0, type: "inc", payload: null, timestamp: 1 },
+                { seq: 1, type: "mystery", payload: null, timestamp: 2 },
+            ]),
+        ).toThrow(/unhandled event type "mystery"/);
+
+        // The watermark must sit at 1 — the throwing entry (seq 1) must NOT
+        // have advanced it, or the retry below would skip seq 1 entirely.
+        expect(runtime.appliedSeq).toBe(1);
+        expect(counts.state).toBe(1);
+
+        // Retry: register a handler for the previously-unknown event. seq 0 is
+        // already past the watermark (skipped); seq 1 re-surfaces and applies.
+        let handled = 0;
+
+        const runtime2 = new MaterializerRuntime(
+            [
+                defineMaterializer({
+                    name: "counts",
+                    initial: () => 0,
+                    handle: (s, e) => {
+                        if (e.type === "mystery") {
+                            handled += 1;
+
+                            return s + 1;
+                        }
+
+                        return e.type === "inc" ? s + 1 : s;
+                    },
+                }),
+            ],
+            { unknownEventHandling: "fail" },
+        );
+
+        const applied = runtime2.applyEntries([
+            { seq: 0, type: "inc", payload: null, timestamp: 1 },
+            { seq: 1, type: "mystery", payload: null, timestamp: 2 },
+        ]);
+
+        expect(applied).toBe(2);
+        expect(handled).toBe(1);
+    });
+
     it("ignores a malformed snapshot with a watermark but no state — replays from 0 rather than skipping events", async () => {
         const store = new InMemorySnapshotStore();
 
