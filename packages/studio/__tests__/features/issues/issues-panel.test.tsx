@@ -170,6 +170,64 @@ describe("issuesPanel", () => {
         });
     });
 
+    it("tracks busy state per row so overlapping triage writes do not cross-clear", async () => {
+        expect.assertions(4);
+
+        const HASH_A = "deadbeefcafe0001";
+        const HASH_B = "deadbeefcafe0002";
+
+        // Each triage write hangs until we release it by hash — so two writes can be
+        // in flight at once and we can complete one while the other is still pending.
+        const releasers = new Map<string, () => void>();
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getIssues) {
+                    return { issues: [ISSUE({ hash: HASH_A, title: "Alpha" }), ISSUE({ hash: HASH_B, title: "Beta" })] };
+                }
+
+                const { hash } = args as { hash: string };
+
+                return new Promise<{ state: Record<string, never> }>((resolve) => {
+                    releasers.set(hash, () => {
+                        resolve({ state: {} });
+                    });
+                });
+            },
+        });
+
+        render(renderPanel(mock));
+
+        const resolveDisabled = (hash: string): boolean => screen.getByTestId(`issues-resolve-${hash}`).hasAttribute("disabled");
+
+        // Kick off both triage writes; both rows go busy independently.
+        fireEvent.click(await screen.findByTestId(`issues-resolve-${HASH_A}`));
+        fireEvent.click(screen.getByTestId(`issues-resolve-${HASH_B}`));
+
+        // Wait (without an `expect`, so retries don't inflate the assertion count) for
+        // row A to register as busy, then assert both rows are busy.
+        await waitFor(() => {
+            if (!resolveDisabled(HASH_A)) {
+                throw new Error("row A not busy yet");
+            }
+        });
+
+        expect(resolveDisabled(HASH_A)).toBe(true);
+        expect(resolveDisabled(HASH_B)).toBe(true);
+
+        // Complete only row A's write. Row A re-enables; row B must stay busy — the
+        // first completion must not clear the second's busy flag.
+        releasers.get(HASH_A)?.();
+
+        await waitFor(() => {
+            if (resolveDisabled(HASH_A)) {
+                throw new Error("row A still busy");
+            }
+        });
+
+        expect(resolveDisabled(HASH_A)).toBe(false);
+        expect(resolveDisabled(HASH_B)).toBe(true);
+    });
+
     it("renders the empty state when the shard has no grouped errors", async () => {
         expect.assertions(1);
 
