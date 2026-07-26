@@ -1073,6 +1073,7 @@ interface MutationCtx {
 interface MutatorDefinition<Args extends ValidatorMap = ValidatorMap, ServerContext = MutationCtx, ClientTx = unknown, R = unknown> {
     readonly args?: Args;
     readonly client?: (tx: ClientTx, args: InferValidatorMap<Args>) => Promise<void> | void;
+    readonly owner?: string;
     readonly server: (context: ServerContext, args: InferValidatorMap<Args>) => Promise<R> | R;
 }
 ```

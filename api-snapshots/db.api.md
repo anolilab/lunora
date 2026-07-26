@@ -12,10 +12,29 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ### `BindMutatorsContext` (interface)
 
 ```ts
-interface BindMutatorsContext {
+interface BindMutatorsContext<TCollections extends CollectionMap = CollectionMap> {
     checkpoints?: CheckpointRegistry | false;
-    collections: Record<string, Collection<Row, string>>;
+    collections: TCollections;
+    onWriteRejected?: (event: MutatorRejectedEvent) => void;
     shardKey?: string;
+}
+```
+
+### `BoundMutatorApi` (interface)
+
+```ts
+interface BoundMutatorApi<TCollections extends CollectionMap> {
+    bindMutators: <M extends MutatorMapFor<TCollections>>(client: LunoraClient, context: BindMutatorsContext<TCollections>, mutators: M) => BoundMutators<M>;
+    defineMutator: {
+        <TArgs = Record<string, unknown>>(definition: {
+            apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
+            serverRef: string;
+        }): ClientMutatorDef<TArgs, TCollections>;
+        <TArgs>(definition: {
+            apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
+            serverRef: MutatorReference<TArgs>;
+        }): ClientMutatorDef<TArgs, TCollections>;
+    };
 }
 ```
 
@@ -97,17 +116,17 @@ interface CheckpointWatermark {
 ### `ClientMutatorContext` (interface)
 
 ```ts
-interface ClientMutatorContext {
-    collections: Record<string, Collection<Row, string>>;
+interface ClientMutatorContext<TCollections extends CollectionMap = CollectionMap> {
+    collections: TCollections;
 }
 ```
 
 ### `ClientMutatorDef` (interface)
 
 ```ts
-interface ClientMutatorDef<TArgs> {
+interface ClientMutatorDef<TArgs, TCollections extends CollectionMap = CollectionMap> {
     __lunoraClientMutator: true;
-    apply: (context: ClientMutatorContext, args: TArgs) => void;
+    apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
     serverRef: string;
 }
 ```
@@ -124,6 +143,12 @@ interface CollectionDef<TList extends FunctionReference, TInput = never> {
     scopeBy?: string;
     shardKey?: string;
 }
+```
+
+### `CollectionMap` (type)
+
+```ts
+type CollectionMap = Record<string, Collection<any, string>>;
 ```
 
 ### `DIRECT_TRANSACTION_METADATA_KEY` (const)
@@ -223,6 +248,18 @@ interface MutatorReference<TArgs = unknown> {
         returns: unknown;
     };
     readonly __lunoraRef: string;
+}
+```
+
+### `MutatorRejectedEvent` (interface)
+
+```ts
+interface MutatorRejectedEvent {
+    args: unknown;
+    code?: string;
+    error: Error;
+    mutator: string;
+    serverRef: string;
 }
 ```
 
@@ -358,7 +395,7 @@ const applyPlanToDb: (db: PlanWriter, plan: ChangePlan) => Promise<void>;
 ### `bindMutators` (const)
 
 ```ts
-const bindMutators: <M extends AnyMutatorMap>(client: LunoraClient, context: BindMutatorsContext, mutators: M) => BoundMutators<M>;
+const bindMutators: <M extends AnyMutatorMap, TCollections extends CollectionMap = CollectionMap>(client: LunoraClient, context: BindMutatorsContext<TCollections>, mutators: M) => BoundMutators<M>;
 ```
 
 ### `createCheckpointRegistry` (const)
@@ -404,6 +441,12 @@ const defineMutator: {
 
 ```ts
 const getShardCheckpoints: (client: LunoraClient, shardKey?: string, options?: CheckpointRegistryOptions) => CheckpointRegistry;
+```
+
+### `initMutators` (const)
+
+```ts
+const initMutators: <TCollections extends CollectionMap>() => BoundMutatorApi<TCollections>;
 ```
 
 ### `lunoraCollectionOptions` (const)
@@ -556,10 +599,29 @@ const lunoraCollectionOptions: <TRow extends Row>(options: LunoraCollectionConfi
 ### `BindMutatorsContext` (interface)
 
 ```ts
-interface BindMutatorsContext {
+interface BindMutatorsContext<TCollections extends CollectionMap = CollectionMap> {
     checkpoints?: CheckpointRegistry | false;
-    collections: Record<string, Collection<Row, string>>;
+    collections: TCollections;
+    onWriteRejected?: (event: MutatorRejectedEvent) => void;
     shardKey?: string;
+}
+```
+
+### `BoundMutatorApi` (interface)
+
+```ts
+interface BoundMutatorApi<TCollections extends CollectionMap> {
+    bindMutators: <M extends MutatorMapFor<TCollections>>(client: LunoraClient, context: BindMutatorsContext<TCollections>, mutators: M) => BoundMutators<M>;
+    defineMutator: {
+        <TArgs = Record<string, unknown>>(definition: {
+            apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
+            serverRef: string;
+        }): ClientMutatorDef<TArgs, TCollections>;
+        <TArgs>(definition: {
+            apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
+            serverRef: MutatorReference<TArgs>;
+        }): ClientMutatorDef<TArgs, TCollections>;
+    };
 }
 ```
 
@@ -574,17 +636,35 @@ type BoundMutators<M extends AnyMutatorMap> = {
 ### `ClientMutatorContext` (interface)
 
 ```ts
-interface ClientMutatorContext {
-    collections: Record<string, Collection<Row, string>>;
+interface ClientMutatorContext<TCollections extends CollectionMap = CollectionMap> {
+    collections: TCollections;
 }
 ```
 
 ### `ClientMutatorDef` (interface)
 
 ```ts
-interface ClientMutatorDef<TArgs> {
+interface ClientMutatorDef<TArgs, TCollections extends CollectionMap = CollectionMap> {
     __lunoraClientMutator: true;
-    apply: (context: ClientMutatorContext, args: TArgs) => void;
+    apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
+    serverRef: string;
+}
+```
+
+### `CollectionMap` (type)
+
+```ts
+type CollectionMap = Record<string, Collection<any, string>>;
+```
+
+### `MutatorRejectedEvent` (interface)
+
+```ts
+interface MutatorRejectedEvent {
+    args: unknown;
+    code?: string;
+    error: Error;
+    mutator: string;
     serverRef: string;
 }
 ```
@@ -592,7 +672,7 @@ interface ClientMutatorDef<TArgs> {
 ### `bindMutators` (const)
 
 ```ts
-const bindMutators: <M extends AnyMutatorMap>(client: LunoraClient, context: BindMutatorsContext, mutators: M) => BoundMutators<M>;
+const bindMutators: <M extends AnyMutatorMap, TCollections extends CollectionMap = CollectionMap>(client: LunoraClient, context: BindMutatorsContext<TCollections>, mutators: M) => BoundMutators<M>;
 ```
 
 ### `defineMutator` (const)
@@ -608,4 +688,10 @@ const defineMutator: {
         serverRef: MutatorReference<TArgs>;
     }): ClientMutatorDef<TArgs>;
 };
+```
+
+### `initMutators` (const)
+
+```ts
+const initMutators: <TCollections extends CollectionMap>() => BoundMutatorApi<TCollections>;
 ```

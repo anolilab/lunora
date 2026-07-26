@@ -326,6 +326,41 @@ from `lunoraCollectionOptions` so the overlay is held until the server echoes th
 matching watermark (no flicker); omit it to drop the overlay as soon as the write
 is accepted.
 
+#### Typing the collections map
+
+`Collection` is invariant in its row type, so the shared map type can't accept a
+generated collection without a cast — and hands `apply` a row type too wide to be
+useful. Bind your map once with `initMutators` and both ends are typed:
+
+```ts
+import { initMutators } from "@lunora/db/mutators";
+
+const { bindMutators, defineMutator } = initMutators<{
+    messages: typeof channelMessagesCollection;
+}>();
+
+const sendMessage = defineMutator({
+    apply: ({ collections }, args) => {
+        // `collections.messages` is `Collection<Doc<"messages"> & Row>` here.
+        collections.messages.insert({ _id: crypto.randomUUID(), ...args });
+    },
+    serverRef: api.mutators.sendMessage,
+});
+```
+
+#### Handling rejected writes
+
+`onWriteRejected` is the aggregate failure channel, symmetric with the outbox hook
+of the same name. It also makes a fire-and-forget call safe: a bound handle returns
+a transaction whose `isPersisted` rejects when the server refuses the write, so a
+call you neither await nor `.catch` leaves an unhandled rejection. With the hook
+set, `bindMutators` reports the failure and consumes it; a caller that does await
+still observes it.
+
+```ts
+bindMutators(client, { collections, onWriteRejected: ({ error, mutator }) => notify(mutator, error) }, mutators);
+```
+
 ### Framework hooks
 
 The framework adapters wrap a bound handle in a small `{ mutate, pending, error,

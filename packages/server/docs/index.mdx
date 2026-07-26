@@ -163,6 +163,14 @@ Codegen emits each mutator as a typed `api.mutators.<name>` reference, so the
 browser-side twin binds to it (`serverRef: api.mutators.sendMessage`) and infers
 its args from these validators.
 
+Add `owner: "<column>"` to owner-scope the write: the mutator then requires a
+verified identity, rejects a client-supplied owner that disagrees with it, and sets
+the column to the verified value before `server` runs — so the impl never repeats
+an ownership check by hand. It takes the column name rather than a shape's `true`
+because a mutator may write several tables, so there is no single `.ownedBy(field)`
+to read it from. See
+[Owner-scoped writes](/docs/concepts/local-first#owner-scoped-writes).
+
 The `server` impl is the linearization point; its writes append to the op-log
 and poke back to subscribers. The DO is serialized, so there is **no
 server-side OCC-retry loop**. The client-side optimistic twin and the watermark

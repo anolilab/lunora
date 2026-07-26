@@ -481,7 +481,7 @@ literal), which is why the hole survived review.
 **Fixed.** `<TArgs>(… serverRef: MutatorReference<TArgs>)` — inference straight off the
 phantom, covered by a test that asserts the inferred `args` type, not just the runtime path.
 
-### 22. Reads are owner-scoped declaratively; writes are not
+### 22. Reads are owner-scoped declaratively; writes are not — FIXED
 
 `lunora/shapes.ts` is four lines per shape because #9 shipped `defineShape({ owner: true })`.
 The write side got no counterpart: every one of the 23 mutators declares a redundant
@@ -494,7 +494,23 @@ owner-scope on a `.ownedBy()` table) that asserts `ctx.auth` against the shard/r
 before `server` runs, and lets the arg be dropped entirely. Cheaper than 23 hand-written
 guards and impossible to forget on mutator number 24.
 
-### 23. `bindMutators`' `collections` map is type-erased
+**Fixed** as `owner: "<column>"` on `MutatorDefinition`. Before `server` runs the mutator
+requires a verified identity (an anonymous caller is rejected outright — the same
+fail-closed rule an `owner`-scoped shape applies to reads, since filtering on a nullish
+value would match a nullable owner column), rejects a client-supplied owner that disagrees
+with the session as a `403`, and then sets the column to the verified value. So the impl
+reads `args[owner]` without trusting the client, and declaring the column `v.optional(...)`
+drops it from the wire entirely.
+
+It takes the column NAME rather than a shape's `true`, and that difference is deliberate: a
+shape is bound to one `table`, so the table's `.ownedBy(field)` resolves unambiguously,
+while one mutator may write several tables and has no single owning table to read it from.
+Resolving `true` would mean either threading a schema-derived `ownerField` through the
+generic `handler(ctx, args)` dispatch seam every registered function shares, or teaching
+codegen to discover `.ownedBy()` (which `TableIR` does not carry today) — real plumbing for
+one saved string literal.
+
+### 23. `bindMutators`' `collections` map is type-erased — FIXED
 
 `BindMutatorsContext.collections` is `Record<string, Collection<Row, string>>`.
 `Collection` is invariant in its row type, so a generated collection is not assignable and
@@ -513,7 +529,15 @@ optimistic body is dead code in the only production port of it.
 already is) and thread that map into `ClientMutatorContext`, so `collections.nodes` is the
 concrete `Collection<Doc<"nodes"> & Row>`.
 
-### 24. A fire-and-forget mutator has no error hook
+**Fixed.** `ClientMutatorContext`, `ClientMutatorDef`, and `BindMutatorsContext` are now
+generic over the map, and `initMutators<TCollections>()` binds `defineMutator` +
+`bindMutators` to a project's collections in one place (mirroring
+`initLunora.dataModel<DataModel>().create()`). `bindMutators` takes the concrete
+collections cast-free and `apply` reads `collections.<name>` at its real row type. The
+standalone `defineMutator` / `bindMutators` keep working against the widest map, so nothing
+existing breaks.
+
+### 24. A fire-and-forget mutator has no error hook — FIXED
 
 `BindMutatorsContext` has no `onError`/`onWriteRejected` (the outbox path does), so a
 mutator called for its side effect leaves an unhandled rejection on `isPersisted`. The app
@@ -531,6 +555,13 @@ unhandled rejection rather than a visible failure.
 **Fix.** An `onWriteRejected(error, { mutator, args })` on `BindMutatorsContext` —
 symmetric with the outbox — that consumes the rejection so the un-awaited call is safe by
 default.
+
+**Fixed** as `onWriteRejected(event: MutatorRejectedEvent)` — `{ args, code, error, mutator,
+serverRef }`, matching the outbox hook's shape. Setting it also consumes the `isPersisted`
+rejection, so a fire-and-forget call no longer leaves an unhandled rejection; a caller that
+awaits still sees it. Deliberately opt-in: attaching a `.catch` unconditionally would
+swallow dropped writes for callers who never asked for the hook. A throwing listener is
+swallowed, so reporting a failure cannot manufacture a second one.
 
 ### Not gaps, worth relaying
 
