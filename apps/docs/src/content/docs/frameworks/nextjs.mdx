@@ -124,14 +124,47 @@ the same entry.
 
 ## Providing the client
 
-`app/providers.tsx` supplies the browser `LunoraClient` so the hooks can resolve
-it:
+The hooks resolve their client from `LunoraProvider`, so a client boundary has to
+own a browser `LunoraClient` and provide it to the tree:
 
 ```tsx title="app/providers.tsx"
 "use client";
 
 import { LunoraProvider } from "@lunora/react";
+import { LunoraClient } from "lunorash/client";
+import type { ReactNode } from "react";
+import { useState } from "react";
+
+export function Providers({ children }: { children: ReactNode }) {
+    const [client] = useState(() => new LunoraClient({ url: process.env.NEXT_PUBLIC_LUNORA_URL ?? "http://localhost:8787" }));
+
+    return <LunoraProvider client={client}>{children}</LunoraProvider>;
+}
 ```
+
+Then wrap the app in it:
+
+```tsx title="app/layout.tsx"
+import { Providers } from "./providers";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+    return (
+        <html lang="en">
+            <body>
+                <Providers>{children}</Providers>
+            </body>
+        </html>
+    );
+}
+```
+
+Creating the client inside `useState` keeps one instance per browser session
+rather than a new one per render. `LunoraProvider` also installs a TanStack
+`QueryClient` tuned for Lunora's push-driven model, which is what
+`usePreloadedQuery` seeds. The socket opens lazily on the first subscription, so
+constructing the client here keeps it strictly browser-side — exactly what the
+RSC handoff wants: the server fetches over HTTP, the live feed attaches after
+hydration.
 
 ## Developing
 

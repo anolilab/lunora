@@ -14,9 +14,15 @@ The Worker routes a mutation to the owning shard, which runs the handler inside
 racing you, so there is no read-set validation and no OCC retry loop for
 ordinary shard-local writes.
 
-The practical consequence: **a mutation is a transaction.** Read, decide, write —
-the values you read cannot change underneath you mid-handler, and either every
-write commits or none does.
+The practical consequence: **a mutation that does not yield is a transaction.**
+Read, decide, write — the values you read cannot change underneath you, and
+either every write commits or none does.
+
+The qualifier is load-bearing. The guarantee holds for the handler's own writes;
+it does not survive an `await` that hands control to another mutation, which is
+what a before-update trigger or an `onDelete` cascade does. Those cases are
+covered in [Where conflicts still happen](#where-conflicts-still-happen) below —
+and the OCC guard means they fail loudly rather than silently clobbering.
 
 ```ts
 import { mutation, v } from "@/lunora/_generated/server";
@@ -37,7 +43,10 @@ export const transfer = mutation
 ```
 
 No read-modify-write dance, no version column, no retry wrapper. The check-then-act
-above is safe because nothing else writes while it runs.
+above is safe because `accounts` declares no before-update trigger and no
+cascade, so the handler never yields between the balance check and the two
+writes. Add a trigger to that table and the same code acquires a window in which
+a concurrent mutation can commit — which is the next section.
 
 ## Where conflicts still happen
 
