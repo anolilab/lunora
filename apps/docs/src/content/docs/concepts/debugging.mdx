@@ -1,0 +1,157 @@
+---
+title: Debugging
+description: The tools to reach for when something is broken — doctor, the error overlay, ctx.log, the Studio, insights, and live logs.
+---
+
+Lunora gives you several places to look when something misbehaves. Working
+outward from the cheapest, roughly in the order you should try them.
+
+## Start with `lunora doctor`
+
+Most "it doesn't work at all" failures are configuration, not code. `doctor` is a
+read-only preflight that checks the things that silently break a project:
+
+```bash
+lunora doctor
+```
+
+It reports pass / warn / fail for the `SHARD` Durable Object binding, D1
+`database_id` values left at the scaffold placeholder, a placeholder
+`send_email` destination, unfilled secrets in `.dev.vars`, whether
+`LUNORA_ADMIN_TOKEN` is set, container classes declared but not exported by your
+worker entry, and `@lunora/*` packages that have drifted apart in version or mix
+release channels.
+
+It exits non-zero on any hard failure, so it also works as a CI gate.
+
+## Catch it before it runs
+
+Two commands fail loudly at build time rather than in production:
+
+```bash
+lunora verify    # codegen dry-run + tsc --noEmit; writes nothing
+lunora analyze   # wrangler dry-deploy: bundle size, heaviest modules, _generated state
+```
+
+`verify` catches codegen drift and type errors. `analyze` is how you find out a
+dependency doubled your bundle — see [Runtime & bundling](/docs/concepts/runtime).
+
+## The error overlay
+
+Under the Vite plugin, runtime and codegen failures render in the browser rather
+than only in the terminal. Lunora registers solution finders on top of the
+overlay, so framework-specific failures come with an actionable fix rather than a
+stack trace: a missing or non-literal `defineSchema(...)`, a reserved or
+duplicate table name, an invalid `.jurisdiction(...)`, a non-literal `unique`
+flag, a container or workflow class missing from your worker entry, and runtime
+unique-constraint and conflict errors.
+
+Every code Lunora throws is documented in the
+[errors reference](/docs/errors) — start there when you have a code and no idea
+what it means.
+
+## Structured logging with `ctx.log`
+
+`console.log` works, but `ctx.log` is attributed to the function it was called
+from, so its output is filterable in the Studio and in log streams:
+
+```ts
+import { mutation, v } from "@/lunora/_generated/server";
+
+export const send = mutation.input({ text: v.string() }).mutation(async ({ ctx, args: { text } }) => {
+    ctx.log.info("sending message", { length: text.length });
+});
+```
+
+Prefer structured fields over interpolated strings — they stay queryable once
+the log leaves your terminal. For spans and traces around sub-operations, see
+[Observability](/docs/concepts/observability).
+
+## The Studio
+
+`lunora dev` runs the Studio alongside the worker (or open it any time with
+`lunora view`). It is the fastest way to answer "what is actually in the
+database" and "what did that function do":
+
+- **Data** — browse and edit rows, so you can confirm a mutation wrote what you
+  expected.
+- **Functions** — the discovered function list, with the arguments each takes.
+- **Logs** — recent invocations with their arguments, results, and errors.
+- **Issues** — errors grouped by fingerprint, so ten thousand instances of one
+  bug read as one row.
+- **Advisors** — schema and query lints, including the unindexed reads that turn
+  into slowness later.
+
+See the [Studio guide](/docs/packages/studio) for the full tour.
+
+## Find the slow or failing function
+
+`lunora insights` ranks the live worker's functions three ways — write-conflict
+hot-spots, error hot-spots, and latency outliers:
+
+```bash
+lunora insights
+lunora insights --json     # pipe into CI or a script
+```
+
+Error hot-spots include the most recent error message, which is usually enough to
+identify the bug without reproducing it. Write-conflict hot-spots point at
+[OCC contention](/docs/concepts/occ).
+
+## Watch production
+
+`lunora logs` streams live logs from a deployed worker:
+
+```bash
+lunora logs
+lunora logs --status error
+lunora logs --search "checkout" --env staging
+lunora logs --format json | jq .
+```
+
+Filter by status to see only failures, and by search text to follow one code
+path. For durable, queryable history rather than a live tail, wire a log sink —
+see [Observability integrations](/docs/concepts/integrations).
+
+## Debugging authentication
+
+Auth failures are their own category because the identity is resolved before your
+function runs. Work through it in this order:
+
+1. **Is an identity present at all?** Log `ctx.auth.userId` at the top of the
+   function. `undefined` means the token never resolved — the problem is in the
+   client or the auth wiring, not your handler.
+2. **Is the token reaching the worker?** Check the request carries the bearer
+   token. `AUTH_HEADERS_MISSING` means auth is not wired up correctly.
+3. **Is it an authorization failure instead?** `FORBIDDEN` means the identity
+   resolved and was rejected. `RLS_REQUIRED` means the table is secure by default
+   and no policy resolved for this caller — see [RLS](/docs/concepts/rls).
+4. **Does it work with auth off?** Temporarily calling the function through an
+   internal path isolates whether the bug is in the policy or the query.
+
+## Reset and start clean
+
+When local state has drifted into a shape you no longer trust:
+
+```bash
+lunora reset          # clear local Miniflare state
+lunora reset --all    # also drop .lunora-cache
+lunora seed           # repopulate with deterministic fake data
+```
+
+`lunora seed --seed 7` always produces the same rows, so a bug reproduced on a
+seed is reproducible for everyone else too.
+
+## Reproduce it in a test
+
+Once you can see the bug, pin it. The `lunoraTest` in-memory harness runs
+functions without a worker, so a failing case becomes a fast regression test —
+see [Testing](/docs/concepts/testing).
+
+## See also
+
+- [Errors & warnings reference](/docs/errors)
+- [Observability](/docs/concepts/observability)
+- [Testing](/docs/concepts/testing)
+- [Advisors](/docs/concepts/advisors)
+- [@lunora/cli](/docs/packages/cli)

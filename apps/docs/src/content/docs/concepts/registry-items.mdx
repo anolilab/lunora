@@ -1,0 +1,166 @@
+---
+title: Authoring registry items
+description: Package a reusable capability — schema, functions, bindings and env vars — as a registry item others install with one command.
+---
+
+A **registry item** is a reusable slice of a Lunora app: some files, the npm
+dependencies they need, the `wrangler.jsonc` bindings they require, and the
+environment variables to prompt for. `lunora registry add <name>` applies all of
+that to a project in one step. Lunora's own `auth`, `mail`, and `storage`
+features ship this way.
+
+Reach for a registry item when the thing you want to share is **project code** —
+a schema extension, functions, wiring. When it is a library with no project
+footprint, publish an npm package instead.
+
+## Using items
+
+```bash
+lunora registry list             # what is available
+lunora registry view auth        # inspect an item before applying it
+lunora registry add auth         # apply it
+lunora registry add auth --dry-run   # print the plan, write nothing
+lunora registry add auth --diff      # preview file-level changes
+```
+
+`lunora add auth` and `lunora add email` are friendlier front doors over the
+same machinery.
+
+## The manifest
+
+An item is a directory containing a `registry.json` plus the files it scaffolds:
+
+```json title="registry/ratelimit/registry.json"
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "ratelimit",
+    "title": "Rate limiting",
+    "description": "Token-bucket rate limiting wired into your procedures.",
+    "requires": [],
+    "deps": { "@lunora/ratelimit": "workspace:*" },
+    "envVars": [
+        {
+            "name": "RATELIMIT_SALT",
+            "description": "Salt for hashing rate-limit keys.",
+            "secret": true
+        }
+    ],
+    "files": [{ "from": "index.ts", "to": "lunora/ratelimit/index.ts", "merge": "create-or-skip" }]
+}
+```
+
+### Fields
+
+| Field                      | Purpose                                                                |
+| -------------------------- | ---------------------------------------------------------------------- |
+| `name`                     | The install name. Letters, digits, `-`, `_` only                       |
+| `title` / `description`    | A short label and a longer explanation                                 |
+| `docs`                     | Post-install guidance, printed after the item is applied               |
+| `files`                    | **Required.** The files to scaffold                                    |
+| `deps` / `devDependencies` | npm packages added to the project's `package.json`                     |
+| `requires`                 | Other items this one needs — resolved transitively, dependencies first |
+| `bindings`                 | `wrangler.jsonc` additions, as a key path plus a value                 |
+| `envVars`                  | Variables scaffolded into `.dev.vars`                                  |
+| `entrypointReexports`      | Re-exports to inject into the worker entry                             |
+
+### Files and merge strategies
+
+Each file names a source inside the item directory, a destination relative to the
+project root, and how to apply it:
+
+| Strategy           | Behaviour                                                 |
+| ------------------ | --------------------------------------------------------- |
+| `create-or-skip`   | Write the whole file; leave it alone if it already exists |
+| `schema-extension` | AST-merge into the project's `lunora/schema.ts`           |
+
+`create-or-skip` never overwrites, so re-adding an item cannot clobber a user's
+edits. Use `schema-extension` when your item contributes tables — it splices an
+`.extend(...)` into the existing schema rather than replacing it.
+
+### Environment variables
+
+Non-secret variables are written into `.dev.vars` with their `value`. Secrets get
+a placeholder and a reminder to set the real value in production; a variable with
+no `value` defaults to `secret: true`.
+
+```json
+{
+    "name": "BETTER_AUTH_URL",
+    "description": "Public base URL of your app, used for callbacks and cookies.",
+    "value": "http://localhost:8787",
+    "secret": false
+}
+```
+
+### Bindings
+
+`bindings` entries are structural edits to `wrangler.jsonc` — a key path and the
+value to set there:
+
+```json
+{
+    "bindings": [
+        {
+            "path": ["d1_databases"],
+            "value": [{ "binding": "DB", "database_name": "replace-me-db", "database_id": "<replace-with-d1-create-id>" }]
+        }
+    ]
+}
+```
+
+Use obvious placeholders for values only the user can supply. `lunora doctor`
+specifically checks for D1 ids and email destinations left at their placeholder,
+so a half-configured item surfaces rather than failing mysteriously at deploy.
+
+### Worker-entry re-exports
+
+If your item ships a Durable Object, container, or workflow class, wrangler
+requires it to be exported from the worker entry. Declare that and the CLI
+injects it:
+
+```json
+{
+    "entrypointReexports": [{ "module": "_generated/workflows", "comment": "Lunora workflows" }]
+}
+```
+
+## Validation
+
+Manifests are validated on parse, and the rules are security rules rather than
+style rules: `from` and `to` paths cannot traverse outside the project,
+environment-variable names must be valid keys, values cannot contain newlines
+(which would inject extra lines into `.dev.vars`), and `name` must be a single
+safe identifier segment — it becomes a path segment and, for schema extensions,
+an import specifier.
+
+A manifest that violates any of these is rejected rather than partially applied.
+
+## Building the catalog
+
+`lunora registry build` regenerates the local catalog `index.json` that `list`
+and `view` read:
+
+```bash
+lunora registry build
+lunora registry build --check    # verify the index is current — a CI gate
+```
+
+Run `--check` in CI so an item added without rebuilding the index fails the
+build.
+
+## Distributing
+
+Items resolve from the published registry by default. Two overrides:
+
+- `--from <dir>` — a local registry root, expecting per-item subdirectories each
+  with a `registry.json`. This is how you test an item before publishing.
+- `--source <ref>` — another remote source. Values outside `gh:`, `github:`, and
+  `https://` need `--allow-unsafe-source`, because applying an item writes code
+  into the user's project.
+
+## See also
+
+- [@lunora/cli](/docs/packages/cli)
+- [Schema](/docs/concepts/schema)
+- [Environment variables](/docs/concepts/environment-variables)
+- [Package directory](/docs/packages)

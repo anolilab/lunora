@@ -1,0 +1,179 @@
+---
+title: Next.js
+description: Run Lunora alongside Next.js on Cloudflare with the two-worker split — RSC loaders that hydrate into live subscriptions.
+---
+
+Next.js is supported through a **two-worker split**: Next.js deploys to
+Cloudflare via the OpenNext adapter and owns page rendering, while a standalone
+Lunora worker owns `/_lunora/*` and the Durable Objects. A React Server
+Component resolves data during the server render, and the client hydrates that
+result into a live subscription — so your RSC load is live.
+
+```bash
+lunora init my-app -t next
+```
+
+## Why two workers
+
+OpenNext (`@opennextjs/cloudflare`) emits its own worker entry
+(`.open-next/worker.js`) and owns it. There is no supported hook to compose extra
+routes or Durable Object classes into that output, so `/_lunora/*` cannot ride
+inside the Next worker.
+
+| Worker          | Config                  | Owns                                    |
+| --------------- | ----------------------- | --------------------------------------- |
+| Next.js SSR     | `wrangler.jsonc`        | Pages, RSC renders, route handlers      |
+| Lunora realtime | `wrangler.lunora.jsonc` | `/_lunora/*` RPC + WebSocket, `ShardDO` |
+
+The Lunora worker is identical in shape to the `standalone` template — a
+`lunora/server.ts` entry that exports `ShardDO`:
+
+```jsonc title="wrangler.lunora.jsonc"
+{
+    "name": "my-app-lunora",
+    "main": "lunora/server.ts",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+}
+```
+
+## Wiring them together
+
+`NEXT_PUBLIC_LUNORA_URL` points the Next app at the Lunora worker. It must be
+set **at build time** — Next inlines `NEXT_PUBLIC_*` into the client bundle — and
+it configures both halves: the RSC loader reaches `/_lunora/rpc` at that URL, and
+the browser client opens its WebSocket there.
+
+## Client and server entry points
+
+Every hook in `@lunora/react` owns a live WebSocket and calls
+`useState`/`useEffect`, so the hooks are **client-only** and each module declares
+`"use client"`. Server-side loading lives in a separate, server-safe entry:
+
+| Import                 | Use from                          |
+| ---------------------- | --------------------------------- |
+| `@lunora/react`        | Client Components                 |
+| `@lunora/react/server` | Server Components, route handlers |
+
+`@lunora/react/server` opens no socket and touches no browser globals.
+
+## Loading data in a Server Component
+
+The recommended flow is `preloadQuery` → `usePreloadedQuery`. The server runs the
+query and returns a serializable token; the token crosses the RSC boundary as a
+plain object, so there is no second network call on the client.
+
+```tsx title="app/page.tsx (Server Component)"
+import { createServerClient, preloadQuery } from "@lunora/react/server";
+import { cookies } from "next/headers";
+
+import { api } from "@/lunora/_generated/api";
+import { MessageFeed } from "@/components/message-feed";
+
+export default async function Page() {
+    const client = createServerClient({
+        url: process.env.NEXT_PUBLIC_LUNORA_URL!,
+        token: (await cookies()).get("session")?.value,
+    });
+
+    const preloaded = await preloadQuery(client, api.messages.list, {});
+
+    return <MessageFeed preloaded={preloaded} />;
+}
+```
+
+```tsx title="components/message-feed.tsx (Client Component)"
+"use client";
+
+import type { Preloaded } from "@lunora/react";
+import { usePreloadedQuery } from "@lunora/react";
+
+import type { Doc } from "@/lunora/_generated/dataModel";
+
+export function MessageFeed({ preloaded }: { preloaded: Preloaded<Doc<"messages">[]> }) {
+    // Seeds TanStack Query's cache synchronously — no loading flash — then
+    // attaches a live subscription that updates on every server delta.
+    const messages = usePreloadedQuery(preloaded);
+
+    return (
+        <ul>
+            {messages?.map((message) => (
+                <li key={message._id}>{message.text}</li>
+            ))}
+        </ul>
+    );
+}
+```
+
+Forwarding the request cookie is what makes the server load run **as the
+signed-in user**, so [RLS](/docs/concepts/rls) applies on the server render the
+same way it does on the client.
+
+### The prefetch alternative
+
+If you would rather hydrate the whole TanStack cache than pass an explicit token,
+`prefetchQuery` plus `dehydrate` and `HydrationBoundary` does that — see
+[@lunora/react](/docs/packages/react#server-components-nextjs-app-router).
+
+For a one-shot read with no cache seeding and no subscription — a route handler,
+a metadata function — use `fetchQuery`, `fetchMutation`, or `fetchAction` from
+the same entry.
+
+## Providing the client
+
+`app/providers.tsx` supplies the browser `LunoraClient` so the hooks can resolve
+it:
+
+```tsx title="app/providers.tsx"
+"use client";
+
+import { LunoraProvider } from "@lunora/react";
+```
+
+## Developing
+
+Two processes, because there are two workers:
+
+```bash
+# Terminal 1 — the Lunora worker (RPC + WebSocket + ShardDO)
+pnpm dev:lunora        # wrangler dev --config wrangler.lunora.jsonc
+
+# Terminal 2 — Next.js
+NEXT_PUBLIC_LUNORA_URL=http://localhost:8787 pnpm dev
+```
+
+`pnpm dev` runs `lunora codegen` and then `next dev`. The default in the
+scaffolded code already matches wrangler's default port 8787, so with defaults
+you can start both as-is.
+
+<Callout type="info">
+    The Vite plugin's single-process dev server does not apply here — Next.js owns its own dev server, so codegen runs as a build step rather than in watch
+    mode. Re-run `lunora codegen` after changing your schema or functions.
+</Callout>
+
+## Deploying
+
+Order matters: the Lunora worker's URL has to exist before the Next build, which
+inlines it.
+
+```bash
+# 1. Deploy the Lunora worker and note its URL
+pnpm deploy:lunora
+#    → https://my-app-lunora.workers.dev
+
+# 2. Build and deploy the Next.js worker with that URL
+NEXT_PUBLIC_LUNORA_URL=https://my-app-lunora.workers.dev pnpm deploy:next
+```
+
+`pnpm deploy` runs both in that order. Preview the Cloudflare build locally with
+`pnpm preview` (`opennextjs-cloudflare build && opennextjs-cloudflare preview`).
+
+## See also
+
+- [React](/docs/frameworks/react)
+- [Reactive loaders](/docs/frameworks/reactive-loaders)
+- [@lunora/react](/docs/packages/react)
+- [Deployment](/docs/deployment)
