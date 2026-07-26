@@ -48,8 +48,14 @@ export interface MutatorReference<TArgs = unknown> {
     readonly __lunoraRef: string;
 }
 
-/** Args type carried by a {@link MutatorReference}. */
-type ArgsOfReference<R> = R extends MutatorReference<infer A> ? A : never;
+/**
+ * A generated reference with its arg type erased — the widest shape the runtime
+ * actually reads. Used on the implementation side (and by {@link mutatorPath}),
+ * where narrowing to a concrete `MutatorReference&lt;TArgs>` would make the typed
+ * overload's parameter fail the contravariant assignability check against the
+ * implementation signature.
+ */
+type AnyMutatorReference = Pick<MutatorReference, "__lunoraRef">;
 
 /** A client-side custom mutator: an optimistic body plus the path of its authoritative server impl. */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Def" mirrors `CollectionDef`; "Definition" is noise
@@ -65,7 +71,7 @@ export interface ClientMutatorDef<TArgs> {
 /** Resolve a mutator reference (or a raw path string) to the dispatch path. */
 const MUTATOR_REF_ERROR = "defineMutator: `serverRef` must be a generated mutator reference (api.mutators.*) or a 'namespace:fn' string";
 
-const mutatorPath = (serverRef: MutatorReference<never> | string): string => {
+const mutatorPath = (serverRef: AnyMutatorReference | string): string => {
     // The string branch is validated too: `""` would otherwise dispatch to an empty
     // function path at push time instead of failing at declaration.
     //
@@ -109,12 +115,10 @@ const mutatorPath = (serverRef: MutatorReference<never> | string): string => {
  */
 export const defineMutator: {
     <TArgs = Record<string, unknown>>(definition: { apply: (context: ClientMutatorContext, args: TArgs) => void; serverRef: string }): ClientMutatorDef<TArgs>;
-    <R extends MutatorReference<never>>(definition: {
-        apply: (context: ClientMutatorContext, args: ArgsOfReference<R>) => void;
-        serverRef: R;
-    }): ClientMutatorDef<ArgsOfReference<R>>;
+    // eslint-disable-next-line @typescript-eslint/unified-signatures -- deliberately separate: only the reference overload INFERS `TArgs` (from the phantom). Merging them into a `string | MutatorReference<TArgs>` union leaves `TArgs` uninferable on the string branch, which then silently falls back to its default and erases the args type for every reference call site.
+    <TArgs>(definition: { apply: (context: ClientMutatorContext, args: TArgs) => void; serverRef: MutatorReference<TArgs> }): ClientMutatorDef<TArgs>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the overloads above are the checked surface; the implementation signature must accept both
-} = (definition: { apply: (context: ClientMutatorContext, args: any) => void; serverRef: MutatorReference<never> | string }): ClientMutatorDef<any> => {
+} = (definition: { apply: (context: ClientMutatorContext, args: any) => void; serverRef: AnyMutatorReference | string }): ClientMutatorDef<any> => {
     return {
         __lunoraClientMutator: true,
         apply: definition.apply,

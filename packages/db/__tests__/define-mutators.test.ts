@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 // Capture every `createTransaction` config and run `mutate` synchronously, so the
 // test can drive the optimistic body + inspect the `mutationFn` without standing
@@ -32,6 +32,9 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 // eslint-disable-next-line import/first -- must follow the vi.mock above
 import { dirname, join } from "node:path";
+
+// eslint-disable-next-line import/first -- must follow the vi.mock above
+import type { FunctionReference } from "@lunora/client";
 
 // eslint-disable-next-line import/first -- must follow the vi.mock above
 import { createCheckpointRegistry, getShardCheckpoints } from "../src/collection-options";
@@ -271,6 +274,43 @@ describe(bindMutators, () => {
 
         expect(callMutator).toHaveBeenCalledWith("mutators:sendMessage", {}, { clientSeq: 1, shardKey: undefined });
         expect(configs[0]?.metadata).toStrictEqual({ [DIRECT_TRANSACTION_METADATA_KEY]: true, serverRef: "mutators:sendMessage" });
+    });
+
+    it("infers the client body's args from a typed api.mutators reference", async () => {
+        configs.length = 0;
+
+        const callMutator = vi.fn<
+            (path: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<{ applied: boolean; result: unknown }>
+        >(async () => {
+            return { applied: true, result: "ok" };
+        });
+        const client = { callMutator, confirmedMutationWatermark: () => 0 } as never;
+        const { collection } = mockCollection();
+
+        // Exactly what `@lunora/codegen` emits for a `defineMutator` in
+        // `lunora/mutators.ts`: `api.mutators.sendMessage` typed as a
+        // `FunctionReference<"mutation", Args, Return>`. The phantom is type-only, so
+        // the runtime value is still just `__lunoraRef`.
+        const api = { mutators: { sendMessage: { __lunoraRef: "mutators:sendMessage" } } } as unknown as {
+            mutators: { sendMessage: FunctionReference<"mutation", { channelId: string; text: string }, { id: string }> };
+        };
+
+        const send = defineMutator({
+            apply: (_context, args) => {
+                // Inferred from the server mutator's validators — NOT restated here.
+                expectTypeOf(args).toEqualTypeOf<{ channelId: string; text: string }>();
+            },
+            serverRef: api.mutators.sendMessage,
+        });
+
+        const bound = bindMutators(client, { checkpoints: false, collections: { messages: collection } }, { send });
+
+        expectTypeOf(bound.send).parameters.toEqualTypeOf<[{ channelId: string; text: string }]>();
+
+        bound.send({ channelId: "c1", text: "hi" });
+        await configs[0]?.mutationFn();
+
+        expect(callMutator).toHaveBeenCalledWith("mutators:sendMessage", { channelId: "c1", text: "hi" }, { clientSeq: 1, shardKey: undefined });
     });
 
     it("rejects a serverRef that is neither a reference nor a path", () => {

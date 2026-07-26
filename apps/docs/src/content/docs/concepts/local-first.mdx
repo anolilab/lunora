@@ -85,7 +85,10 @@ against the local collections) with a `server` implementation (authoritative,
 runs inside the shard DO):
 
 ```ts title="lunora/mutators.ts"
-import { defineMutator, v } from "lunorash/server";
+// Import `defineMutator` from `./_generated/server` (not `lunorash/server`) so the
+// `server` impl's `ctx` is your project's typed `MutationCtx` — schema-checked
+// `ctx.db` with no hand-written context type.
+import { defineMutator, v } from "./_generated/server";
 
 export const sendMessage = defineMutator({
     args: { channelId: v.id("channels"), text: v.string() },
@@ -168,6 +171,29 @@ On the client these surfaces are wired through [`@lunora/db`](/docs/packages/db)
 and `bindMutators` runs the optimistic transaction + the watermarked server push.
 Framework adapters add a thin `useMutator(handle)` hook over the bound handle —
 reads stay on the existing `useLiveQuery`, no new query hook needed.
+
+Each server mutator is generated as a typed reference on `api.mutators.<name>`,
+so the client body **binds to it** rather than naming it in a string:
+
+```ts title="src/outline-store.ts"
+import { bindMutators, defineMutator } from "@lunora/db/mutators";
+
+import { api } from "../lunora/_generated/api";
+
+const sendMessage = defineMutator({
+    // `args` is inferred from the server mutator's own validators —
+    // `{ channelId: Id<"channels">; text: string }`, not restated here.
+    apply: ({ collections }, args) => {
+        collections.messages.insert({ id: crypto.randomUUID(), ...args });
+    },
+    serverRef: api.mutators.sendMessage,
+});
+```
+
+A rename, a typo, or a moved mutator is now a **type error** instead of a push
+that fails at runtime. The string form (`serverRef: "mutators:sendMessage"`) still
+works as an escape hatch, but nothing checks it and you must restate the arg type
+yourself.
 
 ## Cross-shard joins — the one limit
 

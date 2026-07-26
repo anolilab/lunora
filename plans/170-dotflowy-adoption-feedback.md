@@ -351,6 +351,33 @@ diverge: `deleteSavedQueryRow` on the client maps to `"mutators:deleteSavedQuery
 `defineMutator({ serverRef: api.mutators.insertSibling })` — with the string form kept for
 escape-hatch use.
 
+> **Follow-up (2026-07-26).** PR #187 landed the `@lunora/db` half — `defineMutator`
+> accepted a `MutatorReference` — but codegen never emitted `api.mutators.*`, so the
+> reference form had nothing to point at and dotflowy's re-port stayed on the string
+> escape hatch (reported on #310 after the post-#187 purge). Closed by:
+>
+> - `discoverMutators` now lifts each mutator's `args` validator map and its `server`
+>   impl return type, and `emitApi` renders them as `api.mutators.<name>:
+FunctionReference<"mutation", Args, Return>` — a real function reference, since a
+>   mutator already dispatches through `LUNORA_FUNCTIONS` with `kind: "mutation"`.
+> - The `@lunora/db` overload was itself unusable: `R extends MutatorReference<never>`
+>   rejects any reference carrying a concrete arg type (`{ text: string }` is not
+>   assignable to `never`), so a real generated reference fell through to the
+>   `serverRef: string` overload and failed. It now infers directly —
+>   `<TArgs>(… serverRef: MutatorReference<TArgs>)`.
+> - `_generated/server.ts` re-exports a project-bound `defineMutator` (typed
+>   `MutationCtx`), which also answers the 33 `const mctx = ctx as unknown as MutatorCtx`
+>   casts in dotflowy's `lunora/mutators.ts` — the server context was the untyped base
+>   `MutationCtx`, with no schema-typed `ctx.db`. Discovery accepts the
+>   `_generated/server` specifier so the typed authoring path registers.
+>
+> Two latent bugs surfaced while emitting the first checker-rendered mutator types, both
+> pre-existing for ordinary functions and both fixed: an extensionless
+> `import("./_generated/dataModel")` qualifier (written by a function file that follows
+> the no-`.js` convention) emitted a TS2835 into `_generated/*`, and an
+> `import("@lunora/values").Id<…>` qualifier was a TS2307 for an umbrella-only app that
+> declares no `@lunora/values`.
+
 ### 18. Client mutator boilerplate is mechanical
 
 `lunora-outline-store.ts` is 694 lines, ~600 of which are 23 near-identical blocks: repeat

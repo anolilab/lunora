@@ -596,7 +596,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const emitStartedAt = timingEnabled ? performance.now() : 0;
 
     const dataModelContent = emitDataModel(schema, useUmbrella);
-    const apiContent = emitApi({ agents, functions, httpRoutes, useUmbrella, workflows });
+    const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
     const serverContent = emitServer({
         agents,
         containers,

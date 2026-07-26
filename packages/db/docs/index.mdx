@@ -290,15 +290,21 @@ For optimistic writes that run a local body first and a server-authoritative
 impl second (rather than the `insert`-binding outbox), use the
 [custom-mutator](/docs/concepts/local-first#custom-mutators--optimistic-server-authoritative)
 runtime on the `@lunora/db/mutators` subpath. Declare the optimistic body with
-`defineMutator` (its `serverRef` names the server `defineMutator` it pushes to),
-then bind the set to your client + collections:
+`defineMutator` (its `serverRef` points at the server `defineMutator` it pushes
+to — pass the generated `api.mutators.<name>` reference so a rename or typo is a
+type error, not a runtime failure), then bind the set to your client +
+collections:
 
 ```ts
 import { bindMutators, defineMutator } from "@lunora/db/mutators";
 
+import { api } from "../lunora/_generated/api";
+
 const mutators = {
-    sendMessage: defineMutator<{ channelId: string; text: string }>({
-        serverRef: "messages:sendMessage", // the server-side defineMutator
+    sendMessage: defineMutator({
+        serverRef: api.mutators.sendMessage, // generated reference → checked at compile time
+        // `args` is inferred from the server mutator's validators, so the shape is
+        // declared once (server-side) instead of restated here.
         apply: ({ collections }, { channelId, text }) => {
             collections.messages.insert({ _id: crypto.randomUUID(), channelId, text });
         },

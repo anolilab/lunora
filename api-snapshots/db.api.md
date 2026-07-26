@@ -393,10 +393,10 @@ const defineMutator: {
         apply: (context: ClientMutatorContext, args: TArgs) => void;
         serverRef: string;
     }): ClientMutatorDef<TArgs>;
-    <R extends MutatorReference<never>>(definition: {
-        apply: (context: ClientMutatorContext, args: ArgsOfReference<R>) => void;
-        serverRef: R;
-    }): ClientMutatorDef<ArgsOfReference<R>>;
+    <TArgs>(definition: {
+        apply: (context: ClientMutatorContext, args: TArgs) => void;
+        serverRef: MutatorReference<TArgs>;
+    }): ClientMutatorDef<TArgs>;
 };
 ```
 
@@ -603,9 +603,9 @@ const defineMutator: {
         apply: (context: ClientMutatorContext, args: TArgs) => void;
         serverRef: string;
     }): ClientMutatorDef<TArgs>;
-    <R extends MutatorReference<never>>(definition: {
-        apply: (context: ClientMutatorContext, args: ArgsOfReference<R>) => void;
-        serverRef: R;
-    }): ClientMutatorDef<ArgsOfReference<R>>;
+    <TArgs>(definition: {
+        apply: (context: ClientMutatorContext, args: TArgs) => void;
+        serverRef: MutatorReference<TArgs>;
+    }): ClientMutatorDef<TArgs>;
 };
 ```
