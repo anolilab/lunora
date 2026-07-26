@@ -116,7 +116,7 @@ interface LunoraNotify {
 ```ts
 interface LunoraPush {
     broadcast: (payload: PushContent, filter?: SubscriptionFilter) => Promise<BroadcastResult>;
-    list: (filter?: SubscriptionFilter) => Promise<StoredSubscription[]>;
+    list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;
     unregister: (id: string) => Promise<void>;
@@ -131,6 +131,7 @@ Re-exported from `@visulima/notification` — signature tracked at its source.
 
 ```ts
 interface NotifyConfig {
+    allowedPushOrigins?: string[];
     chat?: (env: NotifyEnv) => unknown;
     fcm?: FcmConfig | FcmConfigFactory;
     inApp?: (env: NotifyEnv) => unknown;
@@ -289,6 +290,7 @@ interface StoredSubscription {
 ```ts
 interface SubscriptionFilter {
     kind?: SubscriptionKind;
+    limit?: number;
     userId?: string | null;
 }
 ```
@@ -407,7 +409,7 @@ const memorySubscriptionStore: () => SubscriptionStore;
 ### `normalizeRegisterInput` (const)
 
 ```ts
-const normalizeRegisterInput: (input: RegisterInput, now?: number) => StoredSubscription;
+const normalizeRegisterInput: (input: RegisterInput, now?: number, options?: NormalizeOptions) => StoredSubscription;
 ```
 
 ### `routingPushProvider` (const)
@@ -419,7 +421,7 @@ const routingPushProvider: (options: RoutingPushOptions) => Provider<unknown, Pu
 ### `runPushBroadcastJob` (const)
 
 ```ts
-const runPushBroadcastJob: (push: LunoraPush, job: PushBroadcastJob) => Promise<unknown>;
+const runPushBroadcastJob: (push: LunoraPush, job: PushBroadcastJob) => Promise<BroadcastResult>;
 ```
 
 ### `targetOf` (const)
