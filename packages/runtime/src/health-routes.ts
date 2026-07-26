@@ -212,6 +212,38 @@ const buildRegistry = (probes: ReadonlyArray<HealthProbe>): { criticalNames: Set
  * when any CRITICAL check is down (drives the `503`), `degraded` when only
  * non-critical checks are down, else `healthy`.
  */
+
+/**
+ * Public-posture name redaction: reduce a check name to its probe KIND — the part
+ * before the first `:`. Auto-detected probes are `kind:key`, so this yields `d1`,
+ * `r2`, … A custom probe name lacking a `:` (e.g. an operator-supplied
+ * `acme-prod-billing`) has no safe kind prefix, so it collapses to a generic
+ * `probe` label rather than leaking the raw name to an unauthenticated caller.
+ * `kindCounts` is read and mutated so a repeated kind surfaces disambiguated
+ * (`d1#2`) instead of colliding.
+ */
+const redactCheckName = (name: string, kindCounts: Map<string, number>): string => {
+    const kind = name.includes(":") ? name.slice(0, name.indexOf(":")) : "probe";
+    const seen = (kindCounts.get(kind) ?? 0) + 1;
+
+    kindCounts.set(kind, seen);
+
+    return seen === 1 ? kind : `${kind}#${String(seen)}`;
+};
+
+/** Roll the per-check up/down tally into the body's overall status: any critical down → `unhealthy` (drives the 503), any non-critical down → `degraded`, else `healthy`. */
+const overallStatus = (anyCriticalDown: boolean, anyDown: boolean): HealthBody["status"] => {
+    if (anyCriticalDown) {
+        return "unhealthy";
+    }
+
+    if (anyDown) {
+        return "degraded";
+    }
+
+    return "healthy";
+};
+
 const buildBody = (
     report: Record<string, { health: { healthy: boolean; message?: string } }>,
     criticalNames: Set<string>,
@@ -231,23 +263,11 @@ const buildBody = (
         const critical = criticalNames.has(name);
         const up = entry.health.healthy;
 
-        if (!up) {
-            anyDown = true;
+        anyDown = anyDown || !up;
+        anyCriticalDown = anyCriticalDown || (!up && critical);
 
-            if (critical) {
-                anyCriticalDown = true;
-            }
-        }
-
-        let reportedName = name;
-
-        if (posture !== "admin") {
-            const kind = name.includes(":") ? name.slice(0, name.indexOf(":")) : name;
-            const seen = (kindCounts.get(kind) ?? 0) + 1;
-
-            kindCounts.set(kind, seen);
-            reportedName = seen === 1 ? kind : `${kind}#${String(seen)}`;
-        }
+        // Admin keeps the full `kind:key` name; the public posture redacts it.
+        const reportedName = posture === "admin" ? name : redactCheckName(name, kindCounts);
 
         checks.push({
             critical,
@@ -260,17 +280,9 @@ const buildBody = (
     // Stable ordering so a contract/snapshot never flakes on registry iteration order.
     checks.sort((a, b) => a.name.localeCompare(b.name));
 
-    let status: HealthBody["status"] = "healthy";
-
-    if (anyCriticalDown) {
-        status = "unhealthy";
-    } else if (anyDown) {
-        status = "degraded";
-    }
-
     return {
         anyCriticalDown,
-        body: { appName, appVersion, checks, status, timestamp: new Date().toISOString() },
+        body: { appName, appVersion, checks, status: overallStatus(anyCriticalDown, anyDown), timestamp: new Date().toISOString() },
     };
 };
 
@@ -281,13 +293,28 @@ const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Requ
     // Cache the computed report so a frequent poller (and, more importantly, an
     // unauthenticated flood) does not re-run the live probes — a real Durable
     // Object subrequest plus one `SELECT 1` per detected D1 binding — on every
-    // request. The default is `5000` ms for the unauthenticated `public` posture
-    // (the amplification vector) and `0` (no cache) for the bearer-gated `admin`
-    // posture, where the operator wants a fresh read and cannot be flooded. Keyed
-    // by probe kind because the aggregate and readiness endpoints, though served
-    // under the same posture, produce different bodies. This closure is built
-    // once per worker, so the cache persists across requests in the isolate.
-    const effectiveCacheTtlMs = cacheTtlMs ?? (auth === "public" ? 5000 : 0);
+    // request. Keyed by probe kind because the aggregate and readiness endpoints,
+    // though served under the same posture, produce different bodies. This closure
+    // is built once per worker, so the cache persists across requests in the isolate.
+    //
+    // The DEFAULT TTL differs by probe kind. The aggregate probe defaults to
+    // `5000` ms in the unauthenticated `public` posture (the amplification vector)
+    // and `0` in the bearer-gated `admin` posture. The readiness gate defaults to
+    // `0` (uncached) in BOTH postures: a load-balancer / k8s readiness poll must
+    // observe a dependency going down on the very next poll, not up to 5s later.
+    // An operator can still opt the readiness gate into caching by setting
+    // `cacheTtlMs` explicitly, which overrides the default for both endpoints.
+    const cacheTtlFor = (probeKind: "aggregate" | "readiness"): number => {
+        if (cacheTtlMs !== undefined) {
+            return cacheTtlMs;
+        }
+
+        if (probeKind === "readiness") {
+            return 0;
+        }
+
+        return auth === "public" ? 5000 : 0;
+    };
     const cache: Partial<Record<"aggregate" | "readiness", { body: HealthBody; down: boolean; expiresAt: number }>> = {};
 
     const gate = (request: Request): void => {
@@ -304,6 +331,8 @@ const buildHealthRoutes = (deps: HealthRouteDeps): Record<string, (request: Requ
         }
 
         gate(request);
+
+        const effectiveCacheTtlMs = cacheTtlFor(probeKind);
 
         if (effectiveCacheTtlMs > 0) {
             const hit = cache[probeKind];

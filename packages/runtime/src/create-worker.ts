@@ -2810,7 +2810,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const namespace = (shardDO as ShardNamespaceLike | undefined) ?? (env as { SHARD?: ShardNamespaceLike } | undefined)?.SHARD;
 
         if (namespace !== undefined) {
-            probes.push(durableObjectProbe("durable-object", namespace, defaultShard));
+            // `durable-object:default` follows the same `kind:key` shape as the
+            // binding probes (`d1:…`, `r2:…`) so the public posture reduces it to
+            // the safe kind `durable-object` via the shared colon rule — the `key`
+            // is the fixed literal `default`, never the operator's `defaultShard`.
+            probes.push(durableObjectProbe("durable-object:default", namespace, defaultShard));
         }
 
         if (options.health?.disableBindingProbes !== true) {
@@ -3292,7 +3296,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
                 },
                 sinkContext,
-                sampling,
+                // No `sampling` fallback: `emitRpcEvent` ignores it whenever a
+                // settled `decision` is passed, so passing it here would only
+                // mislead a reader into thinking both are live.
+                undefined,
                 // The verdict `beginDispatchTrace` already settled — `trace.sampled`
                 // is the propagated bit (honoring a trusted upstream's sampled-out
                 // `00`), NOT `decision.isTraced`, so the export gate can never
@@ -3315,7 +3322,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     ...buildErrorEvent(functionPath, Date.now() - rpcStartedAt, error, { shardKey }),
                 },
                 sinkContext,
-                sampling,
+                // See the success path above: `sampling` is dead once a settled
+                // `decision` is passed, so it is omitted here too.
+                undefined,
                 { isTraced: trace.sampled, keepErrors: decision.keepErrors },
             );
             throw error;

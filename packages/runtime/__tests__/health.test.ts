@@ -66,6 +66,24 @@ const downD1 = (): unknown => {
 
 const get = (path: string): Request => new Request(`https://app.example${path}`, { method: "GET" });
 
+/** A probe that counts how many times it ran, proving whether the live probes re-ran between requests. `kind: "both"` (default) so it runs on both endpoints. */
+const makeCountingProbe = (): { probe: HealthProbe; runs: () => number } => {
+    let runs = 0;
+
+    return {
+        probe: {
+            check: () => {
+                runs += 1;
+
+                return { healthy: true };
+            },
+            critical: false,
+            name: "counter",
+        },
+        runs: () => runs,
+    };
+};
+
 describe("createWorker — health / readiness endpoints", () => {
     it("returns 200 + healthy when the DO is reachable and D1 resolves", async () => {
         expect.assertions(4);
@@ -192,24 +210,6 @@ describe("createWorker — health / readiness endpoints", () => {
     it("caches the public report across requests within the TTL, and re-runs when disabled", async () => {
         expect.assertions(2);
 
-        // A counting probe proves whether the live probes re-ran between requests.
-        const makeCountingProbe = (): { probe: HealthProbe; runs: () => number } => {
-            let runs = 0;
-
-            return {
-                probe: {
-                    check: () => {
-                        runs += 1;
-
-                        return { healthy: true };
-                    },
-                    critical: false,
-                    name: "counter",
-                },
-                runs: () => runs,
-            };
-        };
-
         const cached = makeCountingProbe();
         const cachedWorker = createWorker({ health: { cacheTtlMs: 60_000, probes: [cached.probe] }, shardDO: reachableNamespace });
 
@@ -261,5 +261,87 @@ describe("createWorker — health / readiness endpoints", () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it("does not cache the readiness gate by default while the aggregate probe caches (public)", async () => {
+        expect.assertions(2);
+
+        // No `cacheTtlMs` → the aggregate probe defaults to a 5s public cache…
+        const aggregate = makeCountingProbe();
+        const aggregateWorker = createWorker({ health: { probes: [aggregate.probe] }, shardDO: reachableNamespace });
+
+        await aggregateWorker.fetch(get("/_lunora/health"), {}, fakeContext);
+        await aggregateWorker.fetch(get("/_lunora/health"), {}, fakeContext);
+
+        expect(aggregate.runs()).toBe(1);
+
+        // …but the readiness gate must NOT inherit that default cache: a k8s / LB
+        // readiness poll must re-run the probes on every call so it sees a
+        // dependency go down immediately, not up to 5s later.
+        const readiness = makeCountingProbe();
+        const readinessWorker = createWorker({ health: { probes: [readiness.probe] }, shardDO: reachableNamespace });
+
+        await readinessWorker.fetch(get("/_lunora/health/ready"), {}, fakeContext);
+        await readinessWorker.fetch(get("/_lunora/health/ready"), {}, fakeContext);
+
+        expect(readiness.runs()).toBe(2);
+    });
+
+    it("caches the readiness gate when the operator sets cacheTtlMs explicitly", async () => {
+        expect.assertions(1);
+
+        let runs = 0;
+        const probe: HealthProbe = {
+            check: () => {
+                runs += 1;
+
+                return { healthy: true };
+            },
+            critical: false,
+            name: "counter",
+        };
+        const worker = createWorker({ health: { cacheTtlMs: 60_000, probes: [probe] }, shardDO: reachableNamespace });
+
+        await worker.fetch(get("/_lunora/health/ready"), {}, fakeContext);
+        await worker.fetch(get("/_lunora/health/ready"), {}, fakeContext);
+
+        // An explicit TTL overrides the readiness default and re-enables caching.
+        expect(runs).toBe(1);
+    });
+
+    it("redacts a colon-less custom probe name in the public posture but keeps it under admin", async () => {
+        expect.assertions(3);
+
+        const customProbe: HealthProbe = {
+            check: () => {
+                return { healthy: true };
+            },
+            critical: false,
+            // An operator-supplied name with no `kind:` prefix — must not reach an
+            // unauthenticated caller verbatim.
+            name: "acme-prod-billing",
+        };
+
+        const publicWorker = createWorker({ health: { probes: [customProbe] }, shardDO: reachableNamespace });
+        const publicResponse = await publicWorker.fetch(get("/_lunora/health"), {}, fakeContext);
+        const publicRaw = await publicResponse.text();
+
+        expect(publicRaw).not.toContain("acme-prod-billing");
+
+        const publicBody: HealthBody = JSON.parse(publicRaw);
+
+        // Redacted to the generic `probe` label instead of leaking the raw name.
+        expect(publicBody.checks.some((check) => check.name === "probe")).toBe(true);
+
+        const adminWorker = createWorker({ adminToken: "tok", health: { auth: "admin", probes: [customProbe] }, shardDO: reachableNamespace });
+        const adminResponse = await adminWorker.fetch(
+            new Request("https://app.example/_lunora/health", { headers: { authorization: "Bearer tok" }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+        const adminRaw = await adminResponse.text();
+
+        // Admin posture keeps the full operator-supplied name.
+        expect(adminRaw).toContain("acme-prod-billing");
     });
 });
