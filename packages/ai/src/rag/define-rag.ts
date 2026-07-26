@@ -654,11 +654,16 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 const rawImportance = fullMetadata?.[IMPORTANCE_KEY];
                 const importance = typeof rawImportance === "number" && rawImportance >= 0 && rawImportance <= 1 ? rawImportance : chunk.importance;
 
-                // `chunk.score` was computed against `chunk.importance` (always
-                // 1 here — text-store `query()` never sees `__ragImportance`);
-                // rescale it to the recovered importance so weighting actually
-                // takes effect.
-                const score = (chunk.score / chunk.importance) * importance;
+                // `chunk.score` was computed as `match.score * chunk.importance`
+                // (usually 1 in text-store mode — `query()` returns only indexed
+                // metadata, so `__ragImportance` is absent — but 0 is a valid,
+                // validated importance and IS returned when it was indexed).
+                // Rescale to the recovered importance so weighting takes effect.
+                // Guard the divide: `chunk.importance === 0` makes `chunk.score`
+                // 0 too, so `0 / 0` would yield `NaN` and corrupt the whole
+                // retrieval ordering, not just this chunk — treat it as base 0.
+                const base = chunk.importance === 0 ? 0 : chunk.score / chunk.importance;
+                const score = base * importance;
 
                 return [{ ...chunk, importance, metadata: userMetadataOf(fullMetadata) ?? chunk.metadata, score, text }];
             });
