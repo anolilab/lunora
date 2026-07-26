@@ -320,8 +320,13 @@ const gzipEncode = async (text: string): Promise<ArrayBuffer> => {
 const otlpSend = async (url: string, body: unknown, headers: Record<string, string>, keepAlive?: KeepAlive): Promise<void> => {
     try {
         const json = JSON.stringify(body);
+        // Measure the UTF-8 byte length, not `json.length` (UTF-16 code units):
+        // non-ASCII text (common in `error.message`) can exceed the threshold in
+        // bytes while its code-unit count stays under, so a byte-length check is
+        // what actually decides whether the wire body is worth gzipping.
+        const byteLength = new TextEncoder().encode(json).byteLength;
         const sent = (
-            json.length < OTLP_GZIP_THRESHOLD
+            byteLength < OTLP_GZIP_THRESHOLD
                 ? fetch(url, { body: json, headers, method: "POST" })
                 : gzipEncode(json).then((gz) => fetch(url, { body: gz, headers: { ...headers, "content-encoding": "gzip" }, method: "POST" }))
         ).then(
