@@ -540,3 +540,42 @@ default.
   drift risk they exist to manage.
 - The HMR teardown block at the bottom of `lunora-sync.ts` is app module state, not
   something the framework can own — but it belongs in the local-first guide as a recipe.
+
+### 25. P0 — umbrella imports were silently dropped by discovery — FIXED
+
+Found while auditing whether anything else generates incorrectly. Every discoverer
+hard-coded its own set of accepted module specifiers, and three of them omitted the
+`lunorash/server` umbrella subpath — the form the umbrella exists to provide, and the one
+codegen itself emits into `_generated/*` when a project depends on it. Discovery skips an
+unrecognized specifier silently, so:
+
+| declared as                     | `@lunora/server` | `lunorash/server` (before)                                                               |
+| ------------------------------- | ---------------- | ---------------------------------------------------------------------------------------- |
+| `query` / `mutation` / `action` | registered       | **dropped** — absent from `api.ts` AND `LUNORA_FUNCTIONS`, so every call 404s at runtime |
+| `cronJobs()`                    | registered       | **dropped** — `_generated/crons.ts` not emitted at all; the schedule never fires         |
+| `defineMigration`               | registered       | **dropped** — `LUNORA_MIGRATIONS` empty; `lunora migrate up` finds nothing               |
+
+Codegen exits `ok` in all three cases. Reproduced end-to-end against `apps/playground`
+(a real `node_modules`, so the checker resolves the symbol and reaches the gate) by
+switching one function file, a `crons.ts`, and a `migrations.ts` to the umbrella form.
+
+Why it hid for so long: with no resolvable package the checker has no symbol, so every
+discoverer falls back to matching the identifier text and the specifier gate is never
+consulted — which is exactly the configuration the fixture tests run in. Nothing in the
+repo imported `query`/`mutation` from the umbrella either (the examples use
+`./_generated/server.js`, `apps/playground` did too), so the one form a real umbrella-only
+adopter would reach was the untested one. `discover-crons`' own comment already warned
+that a missed specifier "has every cron silently dropped" — and still missed the umbrella.
+
+**Fixed.** One shared `module-specifiers.ts` — `isServerSurfaceModule` (package + umbrella
+
+- generated re-export), `isServerPackageModule`, `isCronSourceModule` — now used by
+  functions, crons, migrations, mutators, shapes, env, and identity discovery. The
+  regression test installs a resolvable stub package into the fixture's own `node_modules`
+  so the specifier gate is genuinely exercised; it fails on all five factories if the
+  umbrella entry is removed.
+
+Add-on factories (`defineQueue`, `defineWorkflow`, `defineAgent`, `defineContainer`) stay
+scoped to `@lunora/queue` / `@lunora/workflow` / `@lunora/agent` / `@lunora/container`,
+which is correct — the umbrella ships no subpath for them. `httpRoute` and `defineSchema`
+match on identifier text with no specifier gate, so neither was affected.

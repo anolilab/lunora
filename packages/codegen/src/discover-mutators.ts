@@ -7,26 +7,18 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "./diagnostics";
 import { unwrapHandlerReturn } from "./discover-functions";
 import type { MutatorIR, ValidatorIR } from "./ir";
+import { isServerSurfaceModule } from "./module-specifiers";
 import { parseObjectShape } from "./parse-validator";
 
 /** The only file custom mutators may be declared in — mirrors `lunora/queues.ts`. */
 const MUTATORS_FILENAME = "mutators.ts";
 
-/** Both package module specifiers `defineMutator` may be imported from (granular + umbrella). */
-const MUTATOR_MODULE_SPECIFIERS = new Set(["@lunora/server", "lunorash/server"]);
-
 /**
- * The generated `_generated/server` re-export — the form that binds `ctx` to this
- * project's typed `MutationCtx`, and therefore the one mutators SHOULD be authored
- * with (`emitServer` emits a project-bound `defineMutator` for exactly that).
- * Mirrors `discover-functions`' `GENERATED_SERVER_RE`: relative depth varies, and
- * the `.js` extension is present under NodeNext.
+ * True for any module specifier `defineMutator` may come from. Includes the
+ * generated `_generated/server` re-export, which binds `ctx` to this project's
+ * typed `MutationCtx` and is therefore the form mutators SHOULD be authored with.
  */
-const GENERATED_SERVER_RE = /(?:^|\/)_generated\/server(?:\.js)?$/u;
-
-/** True for any module specifier `defineMutator` may legitimately come from. */
-const isMutatorSurfaceModule = (moduleSpecifier: string): boolean =>
-    MUTATOR_MODULE_SPECIFIERS.has(moduleSpecifier) || GENERATED_SERVER_RE.test(moduleSpecifier);
+const isMutatorSurfaceModule = isServerSurfaceModule;
 
 /**
  * Decide whether a callee identifier refers to `defineMutator` from

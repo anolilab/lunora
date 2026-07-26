@@ -6,12 +6,10 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
 import type { IdentityIR } from "./ir";
+import { isServerPackageModule } from "./module-specifiers";
 
 /** The only file a `defineIdentity` contract may be declared in — mirrors `lunora/shapes.ts`. */
 const IDENTITY_FILENAME = "identity.ts";
-
-/** Both module specifiers `defineIdentity` may be imported from (granular + umbrella). */
-const IDENTITY_MODULE_SPECIFIERS = new Set(["@lunora/server", "lunorash/server"]);
 
 /**
  * Decide whether a callee identifier refers to `defineIdentity` from
@@ -32,7 +30,7 @@ const isDefineIdentity = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (!IDENTITY_MODULE_SPECIFIERS.has(declaration.getImportDeclaration().getModuleSpecifierValue())) {
+        if (!isServerPackageModule(declaration.getImportDeclaration().getModuleSpecifierValue())) {
             return false;
         }
 
@@ -61,7 +59,7 @@ const isIdentityNamespaceImport = (identifier: Identifier): boolean => {
 
         const importDeclaration = declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration);
 
-        return importDeclaration !== undefined && IDENTITY_MODULE_SPECIFIERS.has(importDeclaration.getModuleSpecifierValue());
+        return importDeclaration !== undefined && isServerPackageModule(importDeclaration.getModuleSpecifierValue());
     }
 
     return false;
