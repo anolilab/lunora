@@ -159,8 +159,8 @@ describe("buildPaymentGuard", () => {
     it("does not under-count when a throwing gate is followed by onPaymentCreationFailure for the same amount", async () => {
         // @x402/core (v2) runs before-hooks *outside* the try/catch that fires
         // onPaymentCreationFailure, so a guard throw provably never triggers the
-        // failure hook — but the local release token + SpendState's clamp keep the
-        // ledger correct even if a future rail did call both for one reservation.
+        // failure hook — but SpendState's release clamp keeps the ledger correct
+        // even if a future rail did call both for one reservation.
         const state = createSpendState();
         const guard = buildPaymentGuard(
             {
