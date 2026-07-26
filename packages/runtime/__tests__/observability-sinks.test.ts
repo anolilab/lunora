@@ -2,7 +2,7 @@ import { gunzipSync } from "node:zlib";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { LogEvent, LogLevel, MetricEvent, ObservabilityEvent, SpanEvent } from "../src/observability";
+import type { LogEvent, LogLevel, MetricEvent, ObservabilityEvent, ObservabilitySinkContext, SpanEvent } from "../src/observability";
 import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks";
 import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, sentrySink, webhookSink } from "../src/observability-sinks";
 import { createResourceAttributeResolver } from "../src/resource-detect";
@@ -1310,6 +1310,42 @@ describe("observability-sinks", () => {
             const { resourceAttributes } = spanFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
 
             expect(attrValue(resourceAttributes, "cloud.region")).toStrictEqual({ stringValue: "overridden-region" });
+        });
+
+        it("collapses byte-identical resource bags from different requests into one export call", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            // Batched (default) with detection on: `resourceAttributesFor` memoizes
+            // its merged bag per request context, so two requests in one flush window
+            // produce two DISTINCT object instances with identical content. Keyed by
+            // object identity that was two envelopes / two `fetch` calls; keyed by a
+            // stable serialization it is one call carrying both spans.
+            const sink = otlpSink({ detectResources: true, endpoint: "https://collector.example" });
+
+            const contextFor = (): ObservabilitySinkContext => {
+                return { resourceAttributes: () => ({ "host.name": "worker-1" }), waitUntil: () => undefined };
+            };
+
+            sink.onRpc!(okEvent, contextFor());
+            sink.onRpc!({ ...okEvent, functionPath: "messages:send" }, contextFor());
+
+            const pending: Promise<unknown>[] = [];
+
+            sink.flush!({
+                waitUntil: (promise) => {
+                    pending.push(promise);
+                },
+            });
+            await Promise.all(pending);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            const spans = await spansFrom((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]);
+
+            expect(spans).toHaveLength(2);
         });
 
         it("registers the send with ctx.waitUntil when a request context is provided", () => {

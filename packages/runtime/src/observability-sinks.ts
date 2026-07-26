@@ -27,6 +27,7 @@ import type { OtlpResourceAttributes } from "../../../shared/otlp";
 import { mergeHeaders, wrapResourceLogs, wrapResourceMetrics, wrapResourceSpans } from "../../../shared/otlp";
 import { createSignalBatcher } from "../../../shared/otlp-batch";
 import { mergeResourceAttributes } from "../../../shared/otlp-resource";
+import { stableStringify } from "../../../shared/stable-key";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
 import { otlpLogBody, otlpMetricBody, otlpPost, otlpSend, otlpSpanBody, otlpTraceBody } from "./otlp-export";
 
@@ -947,7 +948,13 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
      */
     const exportBatch = async (signals: BufferedSignal[]): Promise<void> => {
         const kept = applyTailSampler(signals, tailSampler, reportTailSamplerFailure);
-        const groups = new Map<OtlpResourceAttributes, { logs: unknown[]; metrics: unknown[]; spans: unknown[] }>();
+        // Key on a STABLE serialization of the resource bag, not object identity.
+        // `resourceAttributesFor` memoizes per request, so two requests in one
+        // flush window with byte-identical resource bags previously produced two
+        // distinct map keys → two envelopes → two `fetch` calls, the exact
+        // subrequest multiplication the batcher exists to prevent. The map value
+        // keeps one representative resource object for the envelope wrapper.
+        const groups = new Map<string, { logs: unknown[]; metrics: unknown[]; resource: OtlpResourceAttributes; spans: unknown[] }>();
 
         for (const signal of kept) {
             const encoded = encodeSignal(signal, postProcessor);
@@ -956,11 +963,12 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
                 continue;
             }
 
-            let group = groups.get(signal.resource);
+            const key = stableStringify(signal.resource);
+            let group = groups.get(key);
 
             if (group === undefined) {
-                group = { logs: [], metrics: [], spans: [] };
-                groups.set(signal.resource, group);
+                group = { logs: [], metrics: [], resource: signal.resource, spans: [] };
+                groups.set(key, group);
             }
 
             group[encoded.bucket].push(encoded.encoded);
@@ -968,7 +976,9 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
 
         const sends: Promise<void>[] = [];
 
-        for (const [resource, group] of groups) {
+        for (const [, group] of groups) {
+            const { resource } = group;
+
             if (group.spans.length > 0) {
                 sends.push(otlpSend(tracesUrl, wrapResourceSpans(group.spans, "@lunora/runtime", serviceName, resource), mergedHeaders));
             }
