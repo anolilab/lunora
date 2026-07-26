@@ -1,0 +1,162 @@
+---
+title: Environments & releases
+description: Running staging next to production, shipping a preview per pull request, and rolling traffic back when something goes wrong.
+---
+
+A Lunora deployment is a Cloudflare Worker, so environments are Wrangler
+environments and releases are Worker versions. This page covers how the two fit
+together — running more than one deployment, previewing a change before it takes
+traffic, and getting back to the last good version.
+
+## Multiple environments
+
+Declare each environment in `wrangler.jsonc`, then target it with `--env`:
+
+```bash
+lunora deploy                    # the default (top-level) environment
+lunora deploy --env staging
+lunora deploy --env production
+```
+
+`--env` is understood by every command that talks to a deployed worker —
+`deploy`, `logs`, `deployments`, `env push`, `containers`.
+
+Each environment gets its **own bindings and its own secrets**. Cloudflare
+secrets are per-environment and **non-inheritable**, so a secret set on the
+default environment is not visible to `staging`:
+
+```bash
+lunora env push --env staging       # push .dev.vars to one environment
+lunora env diff --prod              # compare local keys against the deployed set
+```
+
+`env diff` compares secret **names**, not values — Cloudflare never returns a
+secret's value. `lunora env doctor` validates `.dev.vars` against the bindings
+your config declares, which catches the "deployed to staging, forgot the new
+secret" failure before the deploy rather than after.
+
+<Callout type="warn">
+    Give each environment its own D1 database and R2 buckets. Sharing a database between staging and production means a staging migration is a production
+    migration.
+</Callout>
+
+## Linking a checkout to a deployment
+
+`lunora link` records the deployed worker's name and public URL in a gitignored
+`.lunora/project.json`, so commands stop needing `--url`:
+
+```bash
+lunora link --url https://my-app.acme.workers.dev
+lunora link --url https://my-app-staging.acme.workers.dev --env staging
+```
+
+A first successful deploy writes the link automatically. Note the guardrail: the
+bulk and destructive commands — `export`, `import`, `migrate`, `backup`, `seed`,
+`insights` — only use the link under `--prod`, so a production link never
+silently becomes the target of an unguarded write. The link stores public
+identifiers only, never secrets.
+
+## Preview deployments
+
+`--preview` uploads a new Worker **version** and prints a preview URL without
+sending it any production traffic:
+
+```bash
+lunora deploy --preview
+```
+
+Because nothing goes live, the post-deploy steps are skipped — no migrations run,
+no baseline is re-blessed, and the project link is not rewritten. This is what
+the scaffolded CI pipelines use for every pull request:
+
+```bash
+lunora init my-app --ci github    # or --ci gitlab
+```
+
+That scaffolds a production deploy on the default branch plus a
+`lunora deploy --preview` on every pull or merge request. Set
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets.
+
+### Validating without publishing
+
+Two lighter gates run the same pipeline and stop short of publishing:
+
+```bash
+lunora prepare      # codegen + wrangler validation — no network, for CI
+lunora deploy --dry-run   # the full pipeline including the bundle, publishes nothing
+lunora verify       # codegen dry-run + tsc --noEmit
+```
+
+## Moving traffic between versions
+
+`lunora deployments` wraps `wrangler versions` and `wrangler rollback`:
+
+```bash
+lunora deployments list                       # the 10 most recent
+lunora deployments inspect <version-id>       # what a version contains
+lunora deployments rollback --yes             # back to the previous version
+lunora deployments promote <version-id> --yes # send 100% of traffic to a version
+```
+
+`rollback` and `promote` change live traffic, so both require `--yes`.
+
+<Callout type="warn">
+    Rolling back code does **not** roll back data. A release that ran a migration needs the data considered separately — see
+    [Migrations](/docs/concepts/migrations) for the widen-migrate-narrow pattern that keeps a rollback safe, and [Backups](/docs/concepts/backups) for
+    point-in-time recovery when it was not.
+</Callout>
+
+## Build once, deploy many
+
+To guarantee the artifact you tested is the artifact you ship, split the build
+from the deploy:
+
+```bash
+lunora build                 # full pre-deploy pipeline, bundle written to disk
+lunora deploy --prebuilt     # ship it, skipping codegen and the drift gate
+```
+
+## Custom domains
+
+A deployment is reachable at its `*.workers.dev` URL out of the box. To serve it
+from your own domain, attach a route or a custom domain in `wrangler.jsonc` the
+same way you would for any Worker — Cloudflare's
+[custom domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
+documentation covers the DNS side.
+
+Two Lunora-specific things to remember when you do:
+
+- **Clients connect to the worker's origin.** Anything holding the URL —
+  `NEXT_PUBLIC_LUNORA_URL`, a mobile build, a `createServerClient` call — has to
+  be updated, and framework build-time variables are inlined, so they need a
+  rebuild rather than a restart.
+- **Re-run `lunora link`** with the new URL so the CLI targets the right host.
+
+## Trying a deploy without an account
+
+`--temporary` ships to a temporary Cloudflare account: the Worker is live for
+about 60 minutes, after which you either claim it or it is deleted.
+
+```bash
+lunora deploy --temporary
+```
+
+Wrangler errors if you are already authenticated, so drop the flag once you have
+signed in.
+
+## Who changed what
+
+Each shard keeps a bounded, append-only audit log of the admin operations that
+mutate state — writing a row through the Studio, running a migration, importing a
+shard, applying CDC, and running a function as another identity. Each entry
+records the acting user, and the log keeps the most recent 1 000 entries so it
+cannot grow without bound. Read it from the Studio's **Audit** page under
+Observability.
+
+## See also
+
+- [Deployment](/docs/deployment)
+- [Production checklist](/docs/production-checklist)
+- [Migrations](/docs/concepts/migrations)
+- [Backups, export & import](/docs/concepts/backups)
+- [Environment variables](/docs/concepts/environment-variables)

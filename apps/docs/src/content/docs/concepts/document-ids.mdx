@@ -1,0 +1,110 @@
+---
+title: Document IDs
+description: Every row carries an _id and a _creationTime — how they are minted, how v.id types a reference, and what an id does and does not guarantee.
+---
+
+Every document Lunora stores carries two framework-managed fields you never
+write yourself:
+
+| Field           | Type     | Meaning                                        |
+| --------------- | -------- | ---------------------------------------------- |
+| `_id`           | `string` | The row's primary key, unique within its table |
+| `_creationTime` | `number` | When the row was inserted, in epoch ms         |
+
+They are added on `insert` and preserved by `patch` and `replace`, so a row's
+identity and birth time never change once written.
+
+## How ids are minted
+
+An id defaults to `crypto.randomUUID()` — an opaque, unguessable string. Two
+properties follow from that, and both matter:
+
+- **Ids carry no table tag.** Unlike some systems, a Lunora id does not encode
+  which table it belongs to. The table lives in the _type_ (`Id<"users">`), not
+  in the string.
+- **Ids are not ordered.** A random UUID says nothing about insertion order. To
+  sort by age, order by `_creationTime` — which is exactly what `.order()` does
+  when no index is staged.
+
+## Typing a reference with `v.id`
+
+`v.id("table")` declares a column that holds another row's `_id`. At runtime it
+parses like a string; in the type system it resolves to `Id<"table">`, so
+assigning a `Id<"users">` where a `Id<"messages">` is expected is a compile
+error.
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export default defineSchema({
+    users: defineTable({
+        email: v.string(),
+    }),
+
+    messages: defineTable({
+        authorId: v.id("users"),
+        text: v.string(),
+    }).index("by_author", ["authorId"]),
+});
+```
+
+The same validator types function arguments, so an id arriving from a client is
+checked at the boundary:
+
+```ts
+import { query, v } from "@/lunora/_generated/server";
+
+export const byAuthor = query.input({ authorId: v.id("users") }).query(async ({ ctx, args: { authorId } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_author", (q) => q.eq("authorId", authorId))
+        .collect();
+});
+```
+
+<Callout type="warn">
+    `v.id("users")` checks that the value is a **string**, not that a row with that id exists. It is a type-level reference, not a foreign-key existence check.
+    Declare a [foreign key constraint](/docs/concepts/constraints) when you need the database to enforce that the target row is really there.
+</Callout>
+
+## Reading and following ids
+
+`ctx.db.get(id)` resolves a single row, returning `null` when it is absent. The
+id is all it needs — the branded `Id<"table">` type already carries the table, so
+following a reference is just another `get`:
+
+```ts
+const message = await ctx.db.get(messageId);
+const author = message ? await ctx.db.get(message.authorId) : null;
+```
+
+The same holds for the write side: `patch`, `replace`, and `delete` take an id
+and no table name. Only `insert` names a table, because there is no id yet.
+
+For loading many related rows at once, and for declaring the relationship so the
+studio and the advisors understand it, see [Relations](/docs/concepts/relations).
+
+## Validating an id that came from outside
+
+An id that arrives as a bare string — from a URL segment, a webhook payload, a
+CLI argument — has not been through `v.id`. Because ids carry no table tag, the
+strongest check the format admits is structural: a non-empty string with no
+whitespace and no NUL byte. That is what the runtime applies; it never touches
+the database, so a structurally valid id may still name a row that does not
+exist. Confirm existence with a `get` when it matters.
+
+## Ids in exports and imports
+
+`_id` and `_creationTime` travel with the document in an
+[NDJSON export](/docs/concepts/backups), which is what makes a restore preserve
+identity: references between tables still resolve after a round trip. Import a
+referenced table before the table that points at it.
+
+## See also
+
+- [Schema](/docs/concepts/schema)
+- [Data types](/docs/concepts/data-types)
+- [Relations](/docs/concepts/relations)
+- [Constraints](/docs/concepts/constraints)
+- [Generated code](/docs/concepts/generated-code)
