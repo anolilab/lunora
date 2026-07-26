@@ -150,6 +150,22 @@ const isPrivateIpv6 = (host: string): boolean => {
         return true;
     }
 
+    // 6to4 (`2002::/16`) embeds a 32-bit IPv4 in the two groups after the prefix
+    // (`2002:7f00:1::` carries `127.0.0.1`). A 6to4 relay forwards to that embedded
+    // IPv4, so an embedded private/link-local address reaches an internal host —
+    // block the whole prefix, mirroring the NAT64 posture above.
+    if (ip.startsWith("2002:")) {
+        return true;
+    }
+
+    // Teredo (`2001:0000::/32`) tunnels IPv4 and embeds a client + server IPv4. The
+    // WHATWG parser leaves the single all-zero second group uncompressed (a lone
+    // zero group is not collapsed to `::`), so the prefix normalises to `2001:0:`.
+    // Block it for the same embedded-IPv4 reason.
+    if (ip.startsWith("2001:0:")) {
+        return true;
+    }
+
     return (
         ip === "::" || // unspecified
         ip === "::1" || // loopback
@@ -193,4 +209,4 @@ const isPrivateHost = (hostname: string): boolean => {
     return v4 === undefined ? isPrivateHostname(host) : isPrivateIpv4(v4);
 };
 
-export { isPrivateHost, normalizeHost };
+export { isPrivateHost, isPrivateIpv4, isPrivateIpv6, normalizeHost, parseIpv4 };
