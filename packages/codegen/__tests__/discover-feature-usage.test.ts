@@ -6,7 +6,8 @@ import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { FeatureUsage } from "../src/discover-feature-usage";
-import { buildStudioFeatures, discoverFeatureUsage } from "../src/discover-feature-usage";
+import { buildStudioFeatures, discoverFeatureUsage, hasPaymentStoreTables } from "../src/discover-feature-usage";
+import type { TableIR } from "../src/ir";
 
 let workdir: string;
 
@@ -351,6 +352,42 @@ describe("discover-feature-usage", () => {
             expect(buildStudioFeatures(ALL_OFF, NO_SIGNALS).flags).toBe(false);
             expect(buildStudioFeatures({ ...ALL_OFF, flags: true }, NO_SIGNALS).flags).toBe(true);
             expect(buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/flags"]) }).flags).toBe(true);
+        });
+    });
+
+    describe("hasPaymentStoreTables", () => {
+        // A minimal TableIR carrying only what the shape probe reads (its `name` and
+        // the column keys of its `shape`); the rest of the IR is irrelevant here.
+        const table = (name: string, columns: ReadonlyArray<string>): TableIR =>
+            ({ name, shape: Object.fromEntries(columns.map((column) => [column, {}])) }) as unknown as TableIR;
+
+        // The `@lunora/payment` store's canonical `subscriptions` / `events` columns
+        // (mirrored by any real payment app — so this is the back-compat path too).
+        const paymentSubscriptions = table("subscriptions", ["providerSubscriptionId", "state", "priceId", "referenceId"]);
+        const paymentEvents = table("events", ["providerEventId", "processedAt", "type", "provider"]);
+
+        it("detects the payment store by its signature columns", () => {
+            expect.assertions(1);
+
+            expect(hasPaymentStoreTables([paymentSubscriptions, paymentEvents])).toBe(true);
+        });
+
+        it("does not fire on generically-named tables that lack the payment columns", () => {
+            expect.assertions(1);
+
+            // A newsletter `subscriptions` table and a domain `events` table — same names,
+            // wrong shape — must not spuriously show the Payments page.
+            const newsletter = table("subscriptions", ["email", "topic", "confirmedAt"]);
+            const domainEvents = table("events", ["title", "startsAt", "venue"]);
+
+            expect(hasPaymentStoreTables([newsletter, domainEvents])).toBe(false);
+        });
+
+        it("requires both store tables to be present", () => {
+            expect.assertions(2);
+
+            expect(hasPaymentStoreTables([paymentSubscriptions])).toBe(false);
+            expect(hasPaymentStoreTables([paymentEvents])).toBe(false);
         });
     });
 });
