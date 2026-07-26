@@ -2,8 +2,8 @@
 name: lunora-realtime
 description: Wires Lunora's live data into a client. Use for `LunoraClient`/`LunoraProvider`,
     reactive `useQuery`/`useSubscription`, `useMutation` with optimistic updates,
-    pagination, connection status, the React/Vue/Solid/Svelte adapters, and the
-    `@lunora/db` TanStack binding.
+    pagination, connection status, the React/Vue/Solid/Svelte/Angular/React Native
+    adapters, and the `@lunora/db` TanStack binding.
 ---
 
 # Lunora Realtime
@@ -15,7 +15,8 @@ automatic rollback.
 
 ## When to Use
 
-- Wiring a frontend to a Lunora backend (React, Vue, Solid, Svelte).
+- Wiring a frontend to a Lunora backend (React, Vue, Solid, Svelte, Angular,
+  React Native/Expo, or an Astro/Nuxt meta-framework).
 - Adding optimistic updates, pagination, or presence to the UI.
 - Choosing between live hooks and the `@lunora/db` collection layer.
 
@@ -42,6 +43,19 @@ const client = new LunoraClient({ url });
 Vue / Solid / Svelte have matching providers in `@lunora/vue`, `@lunora/solid`,
 `@lunora/svelte`; the hook names and semantics below mirror across them.
 
+Two adapters differ in shape:
+
+- **`@lunora/angular`** is signal-based rather than hook-based: register with
+  `provideLunora(...)`, read the client via `injectLunoraClient()`, and use
+  `liveQuery(...)` / `mutate(...)` / `connectionStatus(...)` in place of the
+  hooks below.
+- **`@lunora/react-native`** re-exports all of `@lunora/react` and adds
+  `createLunoraClient` (plus `@lunora/react-native/auth` for the better-auth
+  Expo bridge) — build the client with that instead of `new LunoraClient`.
+
+For SSR meta-frameworks, `@lunora/astro` and `@lunora/nuxt` compose Lunora into
+the server (Nitro for Nuxt) and ship reactive-loader server helpers.
+
 ## Live Queries
 
 `useQuery(reference, args)` opens a subscription and returns the value, or
@@ -67,33 +81,32 @@ const todos = useQuery(api.todos.list, {}) as Doc<"todos">[] | undefined;
 
 ## Authorization & Live Queries
 
-Subscriptions re-run the query handler **server-side under anonymous
-identity**. The one-shot `fetch` RPC behind the initial load carries the
-caller's identity, but the live WebSocket channel (the subscription seed and
-every write-driven refresh) does not — it evaluates as anonymous.
+**Live queries are identity-aware.** At the WebSocket upgrade the runtime
+stamps the caller's verified identity onto the socket (from the server-minted
+`x-lunora-userid` / `x-lunora-identity` headers, which a client cannot forge).
+Every subscription re-run, shape resolution, and poke-driven refresh executes
+under that socket's own identity, passed by value so a concurrent RPC can't
+clobber it.
 
-This matters for any query that authorizes or filters on the authenticated
-user:
+Practically, this means:
 
-- A query guarded by `.use(rls(...))` or one that reads `ctx.auth.userId`
-  directly returns the user's rows on the **initial** HTTP fetch, but its
-  **live** updates evaluate anonymously and may resolve to an empty/denied
-  set.
-- This **fails closed** — the live channel shows _less_ data, never another
-  user's data, so there is no leak. But it is a correctness caveat: the
-  initial render and the live updates can disagree.
+- `.use(rls(...))` and `ctx.auth.userId` work the same in a subscribed query as
+  in a one-shot read. Shape subscriptions AND-merge the shape predicate with
+  the table's RLS read base-where, so the membership query the poke protocol
+  runs is RLS-correct by construction — never the client's word for it.
+- An **anonymous** socket carries no identity, so an RLS/`ctx.auth` query fails
+  closed (empty/denied) rather than leaking another user's rows.
+- **Token expiry is enforced on the socket.** When the resolved credential
+  carries an expiry, the DO sends a `TOKEN_EXPIRED` error frame and closes with
+  code `4001` at the next send at or after that instant. `LunoraClient`
+  reconnects automatically and re-resolves a fresh identity — but surface it in
+  the UI if a re-login is required.
 
-The supported pattern today is to scope per-user data **outside** of
-`ctx.auth` inside a subscribed query:
-
-- Partition the data by shard with `.shardBy(userId)` (or tenant/room), so the
-  subscription is already scoped to the right state, or
-- Pass the identifier as an **explicit query arg**
-  (`useQuery(api.todos.list, { userId })`) and filter on the arg rather than on
-  `ctx.auth`.
-
-Reserve `rls()` / `ctx.auth`-based filtering for non-subscribed reads (one-shot
-actions/queries) where identity is always present.
+You can still scope data structurally when it fits the domain — `.shardBy(userId)`
+(or tenant/room) partitions state so a subscription is narrow by construction,
+and explicit query args keep subscriptions cheap (see the args-scoping note
+above). Prefer those for _performance_; use `rls()` / `ctx.auth` for
+_authorization_. They compose.
 
 ## Mutations + Optimistic Updates
 
