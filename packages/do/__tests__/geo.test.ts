@@ -13,6 +13,39 @@ import {
 /** Every char a geohash may contain (base-32, Niemeyer alphabet — no a/i/l/o). */
 const BASE32_ONLY = /^[0-9b-hjkmnp-z]+$/u;
 
+const DEG_TO_RAD = Math.PI / 180;
+const METERS_PER_DEG_LAT = 111_320;
+
+/**
+ * In-radius grid points that {@link coveringGeohashes} fails to cover — i.e. false
+ * negatives. Sweeps a deterministic `(2·steps+1)²` lat/lng grid out to 1.4× the
+ * radius around `center` (both inside and outside the circle) and returns every
+ * point within `radius` whose geohash (at the covering precision) is absent from
+ * the covering set. An empty result means the covering set is complete.
+ */
+const uncoveredPointsWithin = (center: { lat: number; lng: number }, radiusMeters: number, steps: number): { lat: number; lng: number }[] => {
+    const cover = coveringGeohashes(center, radiusMeters);
+    const precision = cover[0]?.length ?? 1;
+    const coverSet = new Set(cover);
+    const cosLat = Math.max(Math.cos(center.lat * DEG_TO_RAD), 0.01);
+    const latHalfSpanDeg = (radiusMeters * 1.4) / METERS_PER_DEG_LAT;
+    const lngHalfSpanDeg = (radiusMeters * 1.4) / (METERS_PER_DEG_LAT * cosLat);
+    const uncovered: { lat: number; lng: number }[] = [];
+
+    for (let i = -steps; i <= steps; i += 1) {
+        for (let j = -steps; j <= steps; j += 1) {
+            const point = { lat: center.lat + (latHalfSpanDeg * i) / steps, lng: center.lng + (lngHalfSpanDeg * j) / steps };
+            const inRadius = haversineMeters(center, point) <= radiusMeters;
+
+            if (inRadius && !coverSet.has(encodeGeohash(point, precision))) {
+                uncovered.push(point);
+            }
+        }
+    }
+
+    return uncovered;
+};
+
 /** Pure geohash / distance helpers backing `.geoIndex()`. */
 describe("geo helpers", () => {
     describe("encodeGeohash", () => {
@@ -125,12 +158,47 @@ describe("geo helpers", () => {
             expect(tight[0]?.length ?? 0).toBeGreaterThan(wide[0]?.length ?? 0);
         });
 
-        it("dedups collapsed neighbours near a pole", () => {
-            expect.assertions(1);
+        it("returns a valid deduped covering set near a pole", () => {
+            expect.assertions(2);
 
-            // Near the pole the east/west neighbours collapse onto shared cells,
-            // so the covering set is strictly smaller than the 9 mid-latitude cells.
-            expect(coveringGeohashes({ lat: 89.999, lng: 0 }, 100).length).toBeLessThan(9);
+            // Precision selection is now latitude-aware: near the pole the query radius
+            // is inflated by 1/cos(lat) (clamped), so a much coarser precision is chosen
+            // than the old width-only logic picked. The covering set is still a valid,
+            // deduplicated 3×3-or-collapsed neighbourhood (≤ 9 cells, never empty) — the
+            // exact cell count is no longer pinned because it depends on the (now coarser)
+            // latitude-adjusted precision.
+            const prefixes = coveringGeohashes({ lat: 89.999, lng: 0 }, 100);
+
+            expect(prefixes.length).toBeGreaterThan(0);
+            expect(prefixes.length).toBeLessThanOrEqual(9);
+        });
+
+        it("covers every point within the radius across latitudes and precision-gap radii", () => {
+            // Completeness property: the 3×3 covering set is the ONLY candidate filter
+            // before the exact Haversine refine, so every point within `radius` of the
+            // center must hash (at the covering precision) into the covering set — else
+            // it is a silent false negative. Deterministic fixed grid (no Math.random):
+            // centers incl. high latitude, radii landing inside each precision gap where
+            // width-only covering under-reached ((610,1200] and (19.1,38.2] especially),
+            // and a dense lat/lng grid of candidate points around each center.
+            expect.hasAssertions();
+
+            const GRID_STEPS = 14; // points per axis, each side of center
+            const centers = [
+                { lat: 0, lng: 0 }, // equator
+                { lat: 40.758, lng: -73.9855 }, // mid-latitude (NYC)
+                { lat: 60, lng: 10 }, // high latitude
+                { lat: 70, lng: -100 }, // higher latitude — strong longitude convergence
+            ];
+            // Radii chosen at and inside the precision-gap intervals where the old
+            // width-only covering silently dropped candidates.
+            const radii = [30, 38, 50, 100, 200, 611, 700, 1000, 1200, 5000, 10_000, 39_000];
+
+            for (const center of centers) {
+                for (const radius of radii) {
+                    expect(uncoveredPointsWithin(center, radius, GRID_STEPS)).toStrictEqual([]);
+                }
+            }
         });
     });
 

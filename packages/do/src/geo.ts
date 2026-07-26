@@ -4,9 +4,10 @@
  * Points are indexed by **geohash** — a base-32 Z-order encoding of a
  * latitude/longitude pair where a shared string prefix implies spatial
  * proximity. A proximity query becomes a set of geohash-prefix range scans (the
- * center cell plus its eight neighbours, at a precision whose cell is at least
- * the query radius, so the 3×3 neighbourhood is guaranteed to cover the circle)
- * followed by an exact Haversine refine on the candidate rows. This module is
+ * center cell plus its eight neighbours, at a precision whose cell — in its
+ * shorter dimension and after adjusting east-west width for latitude — is at
+ * least the query radius, so the 3×3 neighbourhood is guaranteed to cover the
+ * circle) followed by an exact Haversine refine on the candidate rows. This module is
  * deliberately dependency-free so it can be unit-tested in isolation and inlined
  * by the bundler.
  */
@@ -23,12 +24,33 @@ export const GEO_DEFAULT_PRECISION = 9;
 const EARTH_RADIUS_METERS = 6_371_008.8;
 
 /**
- * Approximate geohash cell WIDTH in metres by prefix length (index 1..12), at
- * the equator. Used to pick a precision whose cell is at least the query radius
- * so the center-plus-neighbours neighbourhood covers the whole circle. Index 0
- * is a placeholder (a zero-length geohash is the whole globe).
+ * Approximate geohash cell WIDTH (east-west extent) in metres by prefix length
+ * (index 1..12), at the equator. Index 0 is a placeholder (a zero-length geohash
+ * is the whole globe). Cells are square at odd lengths and twice as wide as they
+ * are tall at even lengths (each geohash char adds 3 lng + 2 lat bits, alternating
+ * with a leading lng bit), so this is *not* the covering basis on its own — see
+ * {@link CELL_MIN_DIMENSION_METERS}.
  */
 const CELL_WIDTH_METERS = [Number.POSITIVE_INFINITY, 5_009_400, 1_252_300, 156_500, 39_100, 4900, 1200, 152.9, 38.2, 4.77, 1.19, 0.149, 0.037];
+
+/**
+ * The smaller of a cell's two dimensions in metres by prefix length, at the
+ * equator. Even prefix lengths yield cells whose height (north-south) is half
+ * their width, so the covering guarantee — the 3×3 neighbourhood reaches at least
+ * one full cell in every direction — must be driven by `min(width, height)`, not
+ * width alone. Derived from {@link CELL_WIDTH_METERS}: at even lengths the cell is
+ * half as tall as wide; at odd lengths it is (approximately) square.
+ */
+const CELL_MIN_DIMENSION_METERS = CELL_WIDTH_METERS.map((width, length) => (length % 2 === 0 ? width / 2 : width));
+
+/**
+ * Latitude cosine floor used when inflating the query radius for longitude
+ * convergence. A cell's east-west metre width scales by `cos(lat)`, so we require
+ * `min-dimension ≥ radius / cos(lat)`; this clamp keeps near-pole queries widening
+ * (a coarser precision) rather than dividing by zero. `cos⁻¹(0.01) ≈ 89.43°` is the
+ * latitude beyond which the longitudinal adjustment saturates.
+ */
+const MIN_LATITUDE_COSINE = 0.01;
 
 /** A latitude/longitude point (WGS84 decimal degrees). */
 export interface GeoPoint {
@@ -109,12 +131,21 @@ export const haversineMeters = (a: GeoPoint, b: GeoPoint): number => {
     return 2 * EARTH_RADIUS_METERS * Math.asin(Math.min(1, Math.sqrt(h)));
 };
 
-/** The largest geohash precision whose cell width is still at least `radiusMeters`. */
-const precisionForRadius = (radiusMeters: number): number => {
-    for (let length = CELL_WIDTH_METERS.length - 1; length >= 1; length -= 1) {
-        const width = CELL_WIDTH_METERS[length];
+/**
+ * The largest geohash precision whose cell — in its shorter dimension, with the
+ * east-west width discounted by `cos(lat)` — is still at least `radiusMeters`.
+ * Longitude convergence is handled by inflating the required radius by
+ * `1 / cos(lat)` (clamped near the poles) before the min-dimension lookup, which
+ * only ever picks a coarser precision, i.e. widens the candidate set.
+ */
+const precisionForRadius = (radiusMeters: number, lat: number): number => {
+    const cosLat = Math.max(Math.cos((lat * Math.PI) / 180), MIN_LATITUDE_COSINE);
+    const requiredMeters = radiusMeters / cosLat;
 
-        if (width !== undefined && width >= radiusMeters) {
+    for (let length = CELL_MIN_DIMENSION_METERS.length - 1; length >= 1; length -= 1) {
+        const dimension = CELL_MIN_DIMENSION_METERS[length];
+
+        if (dimension !== undefined && dimension >= requiredMeters) {
             return length;
         }
     }
@@ -123,11 +154,17 @@ const precisionForRadius = (radiusMeters: number): number => {
 };
 
 // Adjacency tables for geohash neighbour computation (Niemeyer's algorithm).
+// Each entry is [even-length row, odd-length row]. The odd-length east/west rows
+// are DELIBERATELY the even-length north/south rows (a real geohash-js property:
+// axes swap between even and odd lengths) — do NOT "re-align" them to match the
+// even east/west rows. They were previously (incorrectly) duplicated from the even
+// east/west rows, which made `adjacent(..., "east"|"west")` move north/south at odd
+// lengths and silently dropped E/W proximity candidates (fixed).
 const NEIGHBOURS = {
-    east: ["bc01fg45238967deuvhjyznpkmstqrwx", "bc01fg45238967deuvhjyznpkmstqrwx"],
+    east: ["bc01fg45238967deuvhjyznpkmstqrwx", "p0r21436x8zb9dcf5h7kjnmqesgutwvy"],
     north: ["p0r21436x8zb9dcf5h7kjnmqesgutwvy", "bc01fg45238967deuvhjyznpkmstqrwx"],
     south: ["14365h7k9dcfesgujnmqp0r2twvyx8zb", "238967debc01fg45kmstqrwxuvhjyznp"],
-    west: ["238967debc01fg45kmstqrwxuvhjyznp", "238967debc01fg45kmstqrwxuvhjyznp"],
+    west: ["238967debc01fg45kmstqrwxuvhjyznp", "14365h7k9dcfesgujnmqp0r2twvyx8zb"],
 } as const;
 const BORDERS = {
     east: ["bcfguvyz", "prxz"],
@@ -153,12 +190,14 @@ const adjacent = (hash: string, direction: Direction): string => {
 };
 
 /**
- * The center cell plus its eight neighbours at a precision chosen so each cell is
- * at least `radiusMeters` wide — the geohash prefixes to range-scan for a
- * proximity query. Deduplicated (near a pole neighbours can collapse).
+ * The center cell plus its eight neighbours at a precision chosen so each cell —
+ * in its shorter dimension, latitude-adjusted for longitude convergence — is at
+ * least `radiusMeters`, so the 3×3 neighbourhood covers the whole circle. These
+ * are the geohash prefixes to range-scan for a proximity query. Deduplicated
+ * (near a pole neighbours can collapse).
  */
 export const coveringGeohashes = (center: GeoPoint, radiusMeters: number): string[] => {
-    const precision = precisionForRadius(Math.max(radiusMeters, 1));
+    const precision = precisionForRadius(Math.max(radiusMeters, 1), center.lat);
     const origin = encodeGeohash(center, precision);
     const north = adjacent(origin, "north");
     const south = adjacent(origin, "south");
