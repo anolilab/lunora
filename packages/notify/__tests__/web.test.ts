@@ -111,3 +111,81 @@ describe("subscribeToPush — VAPID key rotation", () => {
         expect(result).toMatchObject({ endpoint: "https://push.example/fresh" });
     });
 });
+
+/**
+ * The base64url decode helper is private, exercised here through
+ * `subscribeToPush`'s key-match reuse path: a subscription minted with key bytes
+ * `K` is reused only when `decode(encode(K))` byte-equals `K`, so reuse (no
+ * re-subscribe) proves the base64url decode round-tripped for that key. We span
+ * every achievable padding length and force the `-`/`_` → `+`/`/` substitution.
+ */
+describe("subscribeToPush — base64url key decoding (padding lengths + substitution)", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    /**
+     * Build `byteLength` bytes that begin with `0xFB, 0xF0` — the pair whose
+     * base64 encoding is `+/…`, i.e. `-_…` in base64url — so every crafted key
+     * contains BOTH base64url-only characters and the substitution branch runs.
+     */
+    const keyBytes = (byteLength: number): Uint8Array => {
+        const bytes = new Uint8Array(byteLength);
+
+        bytes[0] = 0xfb;
+        bytes[1] = 0xf0;
+
+        for (let index = 2; index < byteLength; index += 1) {
+            bytes[index] = (index * 37) % 256;
+        }
+
+        return bytes;
+    };
+
+    /**
+     * Assert that a subscription minted with `bytes` is reused (the decode of its
+     * base64url encoding byte-equals the original) — after asserting the encoding
+     * has the expected `length % 4` residue and carries the `-`/`_` substitution.
+     */
+    const expectReuseForKey = async (bytes: Uint8Array, lengthMod4: number): Promise<void> => {
+        const encoded = toBase64Url(bytes);
+
+        expect(encoded.length % 4).toBe(lengthMod4);
+        expect(encoded).toMatch(/[-_]/u);
+
+        const existing = fakeSubscription(new Uint8Array(bytes).buffer, "existing");
+        const { subscribeCalls } = installBrowser(existing);
+
+        const result = await subscribeToPush({ vapidPublicKey: encoded });
+
+        // Reused: the round-trip decode matched, so no new subscription was minted.
+        expect(subscribeCalls).toHaveLength(0);
+        expect(existing.unsubscribed()).toBe(false);
+        expect(result).toMatchObject({ endpoint: "https://push.example/existing" });
+    };
+
+    // base64url strips `=` padding, so the stripped length is only ever
+    // `len % 4 ∈ {0, 2, 3}` (padding of 0, 2, 1 chars respectively); `len % 4 === 1`
+    // is unreachable for valid base64. One key per achievable residue:
+
+    it("decodes a key with no stripped padding (byteLength % 3 === 0 → len % 4 === 0)", async () => {
+        expect.hasAssertions();
+
+        // 15 bytes → base64url length 20 (len % 4 === 0, zero padding added on decode).
+        await expectReuseForKey(keyBytes(15), 0);
+    });
+
+    it("decodes a key needing two padding chars (byteLength % 3 === 1 → len % 4 === 2)", async () => {
+        expect.hasAssertions();
+
+        // 16 bytes → base64url length 22 (len % 4 === 2, two `=` added on decode).
+        await expectReuseForKey(keyBytes(16), 2);
+    });
+
+    it("decodes a key needing one padding char (byteLength % 3 === 2 → len % 4 === 3)", async () => {
+        expect.hasAssertions();
+
+        // 17 bytes → base64url length 23 (len % 4 === 3, one `=` added on decode).
+        await expectReuseForKey(keyBytes(17), 3);
+    });
+});
