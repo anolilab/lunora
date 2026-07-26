@@ -180,6 +180,27 @@ export interface ObservabilitySink {
      */
     instrumentDatabase?: "off" | "spans" | "summary";
 
+    /**
+     * **Opt-in, default `false`.** Durable per-minute rollups of every
+     * `ctx.metrics.*` measurement, kept in a reserved per-shard SQLite table so the
+     * Studio can chart a 24h local trend without an external collector.
+     *
+     * Off by default because it is **not free**: each `ctx.metrics.count/gauge/record`
+     * becomes a durable SQLite write (a billed, rate-limited storage op that competes
+     * with your app's own data for the shard's write budget), on the request path. The
+     * live cross-instance path is `onMetric` → your collector; this is only the local
+     * trend convenience, so enable it deliberately.
+     *
+     * `true` uses the built-in caps (≈24h retention, 1000 distinct series). Pass an
+     * object to tune them: `maxSeries` bounds the distinct series tracked (a
+     * high-cardinality attribute otherwise mints a series per value), `retentionBuckets`
+     * the minute-buckets kept per series before older ones are trimmed.
+     *
+     * Pass this on the SAME sink object you give `createShardDO` — the DO reads it
+     * when recording a measurement.
+     */
+    metricHistory?: boolean | { maxSeries?: number; retentionBuckets?: number };
+
     /** Invoked once per `ctx.log.*` call from a function handler. */
     onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
 

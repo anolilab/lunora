@@ -221,6 +221,17 @@ interface TelemetrySink {
      * emits nothing extra. Mirror of `@lunora/runtime`'s `ObservabilitySink`.
      */
     instrumentDatabase?: DatabaseInstrumentation;
+
+    /**
+     * **Opt-in, default off.** Durable per-minute `ctx.metrics.*` rollups written to
+     * the reserved per-shard SQLite table (the Studio's local trend chart). Off by
+     * default because every measurement then costs a durable SQLite write on the
+     * request path — the live cross-instance path is `onMetric`, this is only the
+     * local convenience. An object tunes the caps (`maxSeries` / `retentionBuckets`);
+     * `true` uses the built-in defaults. Mirror of `@lunora/runtime`'s
+     * `ObservabilitySink`.
+     */
+    metricHistory?: boolean | { maxSeries?: number; retentionBuckets?: number };
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
@@ -4870,16 +4881,33 @@ abstract class ShardDO {
             this.metricSeries.push(stamped);
         });
 
-        // Durable per-minute rollups. Use the RAW storage handle, NOT `this.sql`:
-        // the getter instruments statements into the Query Insights leaderboard
-        // during a dispatch, and these housekeeping writes would be misattributed
-        // to the user function that recorded the metric (matching recordFunctionMetric
-        // et al., which all write through the raw handle for the same reason).
-        const rawSql = this.state.storage.sql as unknown as SqlExec;
+        // Durable per-minute rollups — OPT-IN (default off). Every measurement
+        // otherwise pays a billed, rate-limited SQLite write on the request path,
+        // competing with app data for the shard's write budget; the payoff is only
+        // the Studio's 24h local trend chart. The live cross-instance path is
+        // `sink.onMetric` below. Gated BEFORE touching `rawSql` so a disabled sink
+        // allocates nothing and runs no SQL.
+        const metricHistory = sink?.metricHistory;
 
-        bestEffort(() => {
-            recordMetricHistory(rawSql, stamped, exemplarTraceId);
-        });
+        if (metricHistory !== undefined && metricHistory !== false) {
+            // Use the RAW storage handle, NOT `this.sql`: the getter instruments
+            // statements into the Query Insights leaderboard during a dispatch, and
+            // these housekeeping writes would be misattributed to the user function
+            // that recorded the metric (matching recordFunctionMetric et al., which
+            // all write through the raw handle for the same reason).
+            const rawSql = this.state.storage.sql as unknown as SqlExec;
+            const historyOptions =
+                typeof metricHistory === "object"
+                    ? {
+                          ...(metricHistory.maxSeries === undefined ? {} : { maxSeries: metricHistory.maxSeries }),
+                          ...(metricHistory.retentionBuckets === undefined ? {} : { retentionBuckets: metricHistory.retentionBuckets }),
+                      }
+                    : {};
+
+            bestEffort(() => {
+                recordMetricHistory(rawSql, stamped, exemplarTraceId, historyOptions);
+            });
+        }
 
         // Optional export sink (the durable, cross-instance path).
         if (sink?.onMetric) {
