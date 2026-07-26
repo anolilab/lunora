@@ -58,17 +58,17 @@ The `<Studio>` shell takes a few host-controlled switches worth knowing:
 The icon rail has **nine domains**, top to bottom, with Settings pinned to the
 bottom. Each owns a set of pages:
 
-| Domain            | Pages                                                                             |
-| ----------------- | --------------------------------------------------------------------------------- |
-| **Overview**      | Home · Dashboards                                                                 |
-| **Database**      | Data · SQL editor · Schema · Migrations · Vectors · Time Travel · Export / Import |
-| **Functions**     | Functions · API · Workflows · Queues · Containers                                 |
-| **Auth**          | Users · Organizations · Sessions · Configuration                                  |
-| **Storage**       | Files · Access Rules · KV                                                         |
-| **Observability** | Logs · Audit · Realtime · Fan-out · Metrics · Analytics · Health                  |
-| **Advisors**      | Security · RLS Policies · Permissions · Performance                               |
-| **Operations**    | Scheduled · Mail · Log drains · Payments · Flags                                  |
-| **Settings**      | Settings                                                                          |
+| Domain            | Pages                                                                                                               |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Overview**      | Home · Dashboards                                                                                                   |
+| **Database**      | Data · SQL editor · Schema · Migrations · Vectors · Time Travel · Export / Import                                   |
+| **Functions**     | Functions · API · Workflows · Queues · Containers                                                                   |
+| **Auth**          | Users · Organizations · Sessions · Configuration                                                                    |
+| **Storage**       | Files · Access Rules · KV                                                                                           |
+| **Observability** | Issues · Logs · Traces · Audit · Realtime · Fan-out · Containers · Metrics · Analytics · Health · Deployment health |
+| **Advisors**      | Security · RLS Policies · Permissions · Performance                                                                 |
+| **Operations**    | Scheduled · Mail · Log drains · Payments · Flags                                                                    |
+| **Settings**      | Settings                                                                                                            |
 
 Most shard-scoped pages share a **shard-key input** — Durable Objects aren't
 enumerable server-side, so you target a shard by key. The data and SQL pages
@@ -158,17 +158,26 @@ each page shows only when its better-auth plugin is enabled.
 Operational streams and per-shard signal — the live pulse of a running
 deployment.
 
+- **Issues** — _Grouped error triage — Worker throws and container crashes folded
+  by fingerprint_ ([`@lunora/fingerprint`](/docs/packages/fingerprint)), so many
+  instances of one bug read as a single row.
 - **Logs** — _A live stream of recent function logs_ (the shard's log ring
   buffer).
+- **Traces** — _Recent `ctx.trace` waterfalls for this shard_ — the drill-down
+  from a log line (see [observability](/docs/concepts/observability)).
 - **Audit** — _A durable log of admin state-changing operations._
 - **Realtime** — _Active WebSocket subscriptions on this shard._
 - **Fan-out** — _Realtime fan-out cost and per-topic subscriber counts for this
   shard._
+- **Containers** — _Live Cloudflare Containers — current lifecycle state per
+  container from the log stream_ ([`@lunora/container`](/docs/packages/container)).
 - **Metrics** — _Per-shard health and aggregate metrics_ — request/error counts,
   uptime, DB size, reactive-cache hit rate.
 - **Analytics** — _Usage and latency from Analytics Engine_ — request volume,
   p50/p95, and hot shards.
 - **Health** — _At-a-glance connection, error, and shard signals._
+- **Deployment health** — _Live liveness, readiness, and per-binding health_ from
+  the deployment's `/_lunora/health` endpoint.
 
 ## Advisors
 

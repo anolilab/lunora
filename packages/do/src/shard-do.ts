@@ -6,12 +6,13 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
+import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
-import { parseTraceparent } from "../../../shared/otlp";
-import type { SpanEvent } from "../../../shared/span-event";
+import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
+import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
@@ -20,8 +21,8 @@ import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import { buildBatchEntryRequest } from "./batch";
-import type { CloudflareTracingLike, ContextMetrics, ContextTracer, TraceAnchor } from "./context-telemetry";
-import { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
+import type { CloudflareTracingLike, ContextFetch, ContextMetrics, ContextTracer, SpanCollection, SpanCollector, TraceAnchor } from "./context-telemetry";
+import { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "./context-telemetry";
 import type { CdcChange, SqlExec } from "./ctx-db";
 import {
     advanceClientWatermark,
@@ -46,6 +47,8 @@ import {
 import type { ShapeRow } from "./ctx-db-shapes";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
+import type { DatabaseInstrumentation, DatabaseTally } from "./database-telemetry";
+import { createDatabaseTally, formatTally, instrumentDatabase } from "./database-telemetry";
 import type { DependencyTracker } from "./dependency-tracker";
 import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
 import type { FunctionMetricBucket, FunctionMetricIndexHit, IndexHit } from "./function-metrics";
@@ -103,6 +106,7 @@ import { LogBuffer } from "./log-buffer";
 import type { RecordMailInput } from "./mail-catcher";
 import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 import { MetricBuffer } from "./metric-buffer";
+import type { MetricHistoryOptions } from "./metric-history";
 import { readMetricHistory, recordMetricHistory } from "./metric-history";
 import { armRestore, readBookmark } from "./pitr";
 import type { QueryStatEntry } from "./query-metrics";
@@ -187,6 +191,16 @@ const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes
  */
 interface TelemetrySink {
     /**
+     * Ship anything the sink has buffered, now. Called at the end of every
+     * dispatch (and of an alarm / socket message), so a batching sink — which
+     * exports one request per invocation instead of one per event — is never left
+     * holding telemetry a quiet shard would sit on indefinitely. Optional: a
+     * non-buffering sink simply omits it. Mirror of `@lunora/runtime`'s
+     * `ObservabilitySink.flush`.
+     */
+    flush?: (context?: LogSinkContext) => void;
+
+    /**
      * **Opt-in, EXPERIMENTAL, default off.** When `true`, each `ctx.trace` span is
      * ALSO emitted as a Cloudflare **custom span** (`tracing.enterSpan` from
      * `cloudflare:workers`, GA 2026-06-16) so it nests inside CF's native trace
@@ -200,9 +214,36 @@ interface TelemetrySink {
      * `fuseCloudflareTraces`; see {@link createTracer} for the double-export caveat.
      */
     fuseCloudflareTraces?: boolean;
+
+    /**
+     * Detail level for automatic `ctx.db` instrumentation. Default `"summary"` —
+     * aggregate counters folded onto the dispatch's root span when one is recorded,
+     * so cost does not grow with call count and an uninstrumented handler still
+     * emits nothing extra. Mirror of `@lunora/runtime`'s `ObservabilitySink`.
+     */
+    instrumentDatabase?: DatabaseInstrumentation;
+
+    /**
+     * **Opt-in, default off.** Durable per-minute `ctx.metrics.*` rollups written to
+     * the reserved per-shard SQLite table (the Studio's local trend chart). Off by
+     * default because every measurement then costs a durable SQLite write on the
+     * request path — the live cross-instance path is `onMetric`, this is only the
+     * local convenience. An object tunes the caps (`maxSeries` / `retentionBuckets`);
+     * `true` uses the built-in defaults. Mirror of `@lunora/runtime`'s
+     * `ObservabilitySink`.
+     */
+    metricHistory?: boolean | MetricHistoryOptions;
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
+
+    /**
+     * Whether `ctx.fetch` is instrumented — a CLIENT span per outbound call plus
+     * W3C `traceparent` propagation to the callee. Default on; set `false` to get
+     * the bare platform `fetch`, or an object to control which destinations
+     * receive trace context. Mirror of `@lunora/runtime`'s `ObservabilitySink`.
+     */
+    traceFetch?: boolean | { propagate?: ((url: URL) => boolean) | boolean };
 }
 
 /**
@@ -257,6 +298,21 @@ const resolveCloudflareTracing = async (): Promise<CloudflareTracingLike | undef
 interface ContextLogger {
     debug: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
+
+    /**
+     * Emit a **structured event** — OTel's Events API — rather than a log line.
+     *
+     * The difference is what carries the meaning. A log line's payload is its
+     * message: prose, written for a human, free to be reworded next week. An
+     * event's payload is its `fields` under a stable `name`, written for a query.
+     * Only the second can answer "how many checkouts failed, by plan, this hour"
+     * without a substring search over English.
+     *
+     * On the wire this sets OTel's `LogRecord.eventName` (plus the `event.name`
+     * attribute for collectors predating that field), so any OTLP backend
+     * recognises it without Lunora-specific configuration.
+     */
+    event: (name: string, fields?: LogFields) => void;
     fatal: (...args: unknown[]) => void;
     info: (...args: unknown[]) => void;
     log: (...args: unknown[]) => void;
@@ -1244,6 +1300,47 @@ const parseRecordQueueMessageArgs = (args: Record<string, unknown>): RecordQueue
 const MAX_QUEUE_SEND_BATCH = 100;
 
 /**
+ * Key for {@link ShardDO.dispatchSpans}: the anchor's full span identity, not its
+ * trace id.
+ *
+ * `resolveTraceAnchor` takes `traceId` from the inbound `traceparent`, so two
+ * concurrent RPCs forwarded under the SAME client trace share it while carrying
+ * different `rootSpanId`s (the runtime mints a fresh span id per dispatch). Keyed
+ * by `traceId` alone their wide events would merge into one collector, and
+ * whichever dispatch finished first would delete the entry and drop the other's.
+ *
+ * `traceSampling` keying by `traceId` is correct because a sampling verdict IS
+ * per-trace; a wide event is per-dispatch, which is the distinction this encodes.
+ */
+const dispatchSpanKey = (anchor: TraceAnchor): string => `${anchor.traceId}:${anchor.rootSpanId}`;
+
+/**
+ * FIFO bound on {@link ShardDO.dispatchSpans}. A dispatch deletes its own entry
+ * in the `finally`, so this only matters for ctxs built outside one (an alarm, a
+ * subscription re-run) which mint an anchor and never reach that boundary. Sized
+ * well above any realistic interleave depth — it is a leak backstop, not a
+ * working set.
+ */
+const MAX_TRACKED_DISPATCH_SPANS = 256;
+
+/**
+ * Bound on the per-trace held-span array a sampled-out dispatch accumulates for
+ * the tail-bias flush (see {@link ShardDO.recordSpan}). Matches the span ring's
+ * capacity — a trace holding more spans than the whole ring could retain is
+ * already pathological, and the array is dropped wholesale when the dispatch
+ * `finally` deletes the `traceSampling` entry, so this is a backstop against a
+ * runaway single trace, not a working set.
+ */
+const MAX_HELD_SPANS_PER_TRACE = 500;
+
+/**
+ * `event.name` of the per-dispatch wide event. Namespaced so it never collides
+ * with an application's own `ctx.log.event(...)` names, and stable because
+ * dashboards and alerts will filter on it.
+ */
+const WIDE_EVENT_NAME = "lunora.dispatch";
+
+/**
  * Validate the `__lunora_admin__:sendQueueMessage` payload (also the replay path's
  * resolved target). Requires a non-empty `exportName`; `delaySeconds` must be a
  * non-negative number when present; `batch` (when an array) switches the op to a
@@ -1880,12 +1977,47 @@ abstract class ShardDO {
      * before — when false, `ctx.trace` INTERNAL spans are held out of the live export
      * and re-decided in the dispatch `finally` as a tail bias), `keepErrors` (the
      * runtime's `x-lunora-sample-errors` / `alwaysSampleErrors` toggle — a sampled-out
-     * trace that errored is still exported whole unless off), and `sink` (captured
+     * trace that errored is still exported whole unless off), `sink` (captured
      * when a sampled-out span is first held, so the `finally` can flush the trace's
-     * held spans). Registered at dispatch entry by the dispatch's own `traceId`, read
-     * by `span.traceId`, and deleted in the `finally`.
+     * held spans), and `held` (the sampled-out spans themselves, buffered ON THIS
+     * ENTRY rather than read back from the shared span ring — the ring is bounded and
+     * a concurrent trace could evict this trace's error spans before the flush, which
+     * would silently defeat `alwaysSampleErrors`; bounded by
+     * {@link MAX_HELD_SPANS_PER_TRACE}). Registered at dispatch entry by the
+     * dispatch's own `traceId`, read by `span.traceId`, and deleted in the `finally`
+     * (which drops `held` with it, so no spans leak past the dispatch).
      */
-    private traceSampling = new Map<string, { keepErrors: boolean; sampled: boolean; sink?: TelemetrySink }>();
+    private traceSampling = new Map<string, { held?: SpanEvent[]; keepErrors: boolean; sampled: boolean; sink?: TelemetrySink }>();
+
+    /**
+     * The per-dispatch **wide event** — everything a handler attached through
+     * `ctx.span` — keyed by `traceId` for exactly the reason `traceSampling`
+     * is: a DO interleaves dispatches across `await` points, and a flat field
+     * would let a sibling dispatch's attributes land on this one's span.
+     *
+     * A wide event is the answer to "monitor everything without drowning in
+     * logs": rather than a dozen `ctx.log.info` lines whose only readers are
+     * humans grepping, a handler accumulates its facts onto the ONE span the
+     * dispatch already emits, and the collector gets a single richly-attributed
+     * record it can group and aggregate. Cost is flat — one span per request,
+     * however much you attach.
+     *
+     * Keyed by {@link dispatchSpanKey} (trace id AND root span id) rather than
+     * `traceId` alone — see there for the concurrent-dispatch collision that
+     * distinction prevents.
+     *
+     * Bounded by {@link MAX_TRACKED_DISPATCH_SPANS}: the dispatch `finally`
+     * deletes its own entry, but a ctx built outside a dispatch (an alarm, a
+     * subscription re-run) mints its own anchor and has no such boundary, so the
+     * map is FIFO-capped rather than trusted to drain.
+     */
+    private dispatchSpans = new Map<string, { collector?: SpanCollector; dbTally?: DatabaseTally; sink?: TelemetrySink }>();
+
+    /**
+     * The most recent telemetry sink seen while building a ctx — the flush handle
+     * for paths that have no ctx of their own (see `flushTelemetry`).
+     */
+    private lastTelemetrySink: TelemetrySink | undefined;
 
     /**
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
@@ -2501,9 +2633,28 @@ abstract class ShardDO {
             return this.errorToResponse(error);
         } finally {
             // Guard hoisted to the call site so the common case — a handler that
-            // never called `ctx.trace` — is visibly a no-op here.
-            if (this.spans.hasTrace(dispatchTrace.traceId)) {
+            // touched neither `ctx.trace` nor `ctx.span` — is visibly a no-op here.
+            // A wide event alone is reason enough to record the root span: it is
+            // the span the attributes live on, so skipping it would silently
+            // discard everything the handler attached.
+            const dispatchSpan = this.dispatchSpans.get(dispatchSpanKey(dispatchTrace));
+
+            if (this.spans.hasTrace(dispatchTrace.traceId) || dispatchSpan?.collector !== undefined) {
                 this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace);
+            }
+
+            this.dispatchSpans.delete(dispatchSpanKey(dispatchTrace));
+
+            // Invocation boundary for the shard, mirroring the worker's: a batching
+            // sink is told to ship what this dispatch produced. Without it the DO's
+            // spans and logs would sit in a buffer until the next dispatch happened
+            // to fill it — arbitrarily late, or never on a quiet shard.
+            if (dispatchSpan?.sink?.flush) {
+                try {
+                    dispatchSpan.sink.flush({ waitUntil: this.state.waitUntil?.bind(this.state) });
+                } catch {
+                    // Best-effort — a telemetry flush must never fail a served request.
+                }
             }
             // Export boundary for a sampled-out trace: now that the dispatch has
             // settled we know whether it errored, so flush its held `ctx.trace`
@@ -2536,245 +2687,22 @@ abstract class ShardDO {
      * Hibernation API: invoked by the runtime when a message arrives on a
      * hibernated socket. Subclasses can override this to intercept; the
      * default decodes a {@link SubscriptionEnvelope} and updates the registry.
+     *
+     * Deliberately NOT wrapped in {@link withTriggerTrace}, unlike `alarm`. Frame
+     * rate here is unbounded — a whisper fan-out or presence stream drives many
+     * per second — and minting a trace anchor per frame costs two `crypto`
+     * draws plus hex encoding, which measurably regressed the fan-out benchmark
+     * (~30% on `broadcastWhisper` to 128 members). The trade is also worse than it
+     * looks: a frame's work is a subscription re-evaluation whose data flow is
+     * already attributable to the RPC that wrote the data, so the root span buys
+     * little. An alarm is the opposite — low frequency, and genuinely
+     * un-attributable background work — which is why that one keeps the wrapper.
+     *
+     * `ctx.trace`/`ctx.span` inside a frame still record; they just anchor to the
+     * ctx's own trace rather than a per-frame root.
      */
-    // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
     public async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-        // Token-expiry: a socket whose credential lapsed is dropped before its
-        // frame is processed, so the client reconnects and re-resolves identity.
-        // This is the inbound-activity check; the load-bearing one is in
-        // `refreshSubscriptions`, which drops an expired socket BEFORE pushing it
-        // the user's live data (a passive subscriber sends no frames — its
-        // keepalive pings auto-respond and never reach here — so inbound checks
-        // alone would never fire for the common case).
-        if (this.isSocketExpired(ws)) {
-            this.dropExpiredSocket(ws);
-
-            return;
-        }
-
-        const text = typeof message === "string" ? message : new TextDecoder().decode(message);
-        let envelope: SubscriptionEnvelope;
-
-        try {
-            envelope = JSON.parse(text) as SubscriptionEnvelope;
-        } catch {
-            ws.send(JSON.stringify({ message: "invalid envelope", type: "error" }));
-
-            return;
-        }
-
-        if (envelope.type === "connect") {
-            // One-shot control frame the client sends right after the socket
-            // opens: record its connection `context` on the attachment (so it
-            // survives hibernation and can be replayed at close) and fire the
-            // `onConnect` lifecycle hooks under the socket's verified identity.
-            const attachment = this.readAttachment(ws);
-
-            // Idempotent: a socket announces `connect` exactly once. A re-sent
-            // (or duplicate) frame must not re-fire `onConnect`, or it would
-            // out-number the single `onDisconnect` at close.
-            if (attachment.connected === true) {
-                return;
-            }
-
-            if (envelope.context !== undefined) {
-                attachment.context = envelope.context;
-            }
-
-            // Record the client's stable id so shape pokes to this socket can
-            // echo its `__client_watermark` as `lastMutationId` (overlay-drop).
-            if (envelope.clientId !== undefined) {
-                attachment.clientId = envelope.clientId;
-            }
-
-            attachment.connected = true;
-
-            try {
-                (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
-            } catch {
-                // Over-large context can't be persisted; the hook still runs
-                // with the supplied context this turn, but it won't survive
-                // to disconnect. Never throw out of webSocketMessage.
-            }
-
-            await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
-
-            return;
-        }
-
-        if (envelope.type === "subscribe" && envelope.query) {
-            const { functionPath } = envelope.query;
-            const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
-
-            // Admin introspection subscriptions read shard internals (raw rows,
-            // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
-            // as the HTTP admin RPCs — recorded on the socket at upgrade. A
-            // socket that only cleared the user-subscription gate must never be
-            // able to read admin data by naming a reserved functionPath.
-            if (isAdmin && this.readAttachment(ws).admin !== true) {
-                ws.send(JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
-
-                return;
-            }
-
-            // Decode the wire-encoded subscription args ONCE, at the entry point —
-            // BEFORE the attachment store and the seed — so every downstream
-            // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
-            // eval) sees REAL values (`bigint`/`Date`/bytes), and the
-            // structured-clone attachment carries them through hibernation.
-            // `decodeWire` is identity for pure-JSON args (legacy frames included).
-            let query: SubscriptionQuery;
-
-            try {
-                query =
-                    envelope.query.args === undefined
-                        ? envelope.query
-                        : { ...envelope.query, args: decodeWire(envelope.query.args) as Record<string, unknown> };
-            } catch {
-                // A malformed tagged payload (over-long bigint, over-deep nesting)
-                // must not throw out of `webSocketMessage` — surface a structured
-                // error frame instead, mirroring the persist-failure path.
-                try {
-                    ws.send(
-                        JSON.stringify({
-                            code: "BAD_SUBSCRIPTION_ARGS",
-                            error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
-                            id: envelope.id,
-                            type: "error",
-                        }),
-                    );
-                } catch {
-                    // Socket may already be closed; never throw out of webSocketMessage.
-                }
-
-                return;
-            }
-
-            const status = this.subscribe(ws, envelope.id, query);
-
-            if (status !== "ok") {
-                const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
-                const errorMessage =
-                    status === "too_many"
-                        ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
-                        : "failed to persist subscription attachment";
-
-                try {
-                    ws.send(JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
-                } catch {
-                    // Socket may already be closed; nothing else we can do —
-                    // never let the webSocketMessage handler throw.
-                }
-
-                return;
-            }
-
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
-
-            // Seed the subscriber with the query's current result so the first
-            // value arrives over the same channel as later updates. When the
-            // subclass doesn't support re-execution (base default), this is a
-            // no-op and the subscriber relies on its initial HTTP query.
-            if (functionPath) {
-                await this.seedSubscription(ws, envelope.id, query, functionPath, isAdmin);
-            }
-
-            return;
-        }
-
-        if (envelope.type === "shape_subscribe" && envelope.shape) {
-            // Decode-at-entry, mirroring the `subscribe` branch above: the stored
-            // descriptor and every `resolveShape` see real values.
-            let shapeArgs: Record<string, unknown> | undefined;
-
-            try {
-                shapeArgs = envelope.shape.args === undefined ? undefined : (decodeWire(envelope.shape.args) as Record<string, unknown>);
-            } catch {
-                this.sendShapeSubscribeError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
-
-                return;
-            }
-
-            await this.handleShapeSubscribe(ws, envelope.id, {
-                args: shapeArgs,
-                name: envelope.shape.name,
-                sinceEpoch: envelope.sinceEpoch,
-                sinceSeq: envelope.sinceCheckpoint,
-            });
-
-            return;
-        }
-
-        if (envelope.type === "shape_unsubscribe") {
-            this.shapeUnsubscribe(ws, envelope.id);
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
-
-            return;
-        }
-
-        if (envelope.type === "stream" && envelope.query?.functionPath) {
-            // Streams are public-only: there is no admin-streaming surface, so
-            // anything matching the admin prefix is rejected up front rather
-            // than allowed to slip through executeStream().
-            if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-                ws.send(JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
-
-                return;
-            }
-
-            // Fire-and-forget: handleStream owns its own error reporting (it
-            // sends `type:"error"` frames to the socket). The trailing no-op
-            // catch only guards the rare pre-try throw path (e.g. ws.send on a
-            // socket the runtime already tore down) so a dead socket can't
-            // surface as an unhandled rejection.
-            // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
-            // before handing them to the stream handler — mirrors the `/rpc` path.
-            this.handleStream(ws, envelope.id, envelope.query.functionPath, decodeWire(envelope.query.args ?? {}) as Record<string, unknown>).catch(() => {
-                /* socket already gone; nothing to report */
-            });
-
-            return;
-        }
-
-        if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
-            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
-                const join = envelope.type === "whisper_subscribe";
-
-                this.setWhisperMembership(ws, envelope.topic, join);
-
-                // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
-                // announces itself so the owner forwards whisper frames to it.
-                if (join) {
-                    await this.relay?.announce();
-                }
-            }
-
-            return;
-        }
-
-        if (envelope.type === "whisper") {
-            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
-                await this.broadcastWhisper(ws, envelope.topic, envelope.data);
-            }
-
-            return;
-        }
-
-        if (envelope.type === "unsubscribe") {
-            // Stream cancel: abort the in-flight iterator (if any) before
-            // touching the subscription registry. unsubscribe() on a non-sub
-            // id is a no-op, so this stays safe even when id namespaces overlap.
-            const cancellers = this.streamCancellers.get(ws);
-            const controller = cancellers?.get(envelope.id);
-
-            if (controller) {
-                controller.abort();
-                cancellers?.delete(envelope.id);
-            }
-
-            this.unsubscribe(ws, envelope.id);
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
-        }
+        return this.handleWebSocketMessage(ws, message);
     }
 
     /**
@@ -2854,62 +2782,7 @@ abstract class ShardDO {
      * this stays dormant there.
      */
     public async alarm(): Promise<void> {
-        this.globalPollScheduled = false;
-
-        let globalShapesRemaining: number;
-
-        try {
-            globalShapesRemaining = await this.pollGlobalShapes();
-        } catch (error) {
-            // `pollGlobalShapes` already contains per-socket/per-shape failures;
-            // this guards a catastrophic failure (e.g. `getWebSockets` throwing)
-            // so the poll heartbeat re-arms and retries next tick instead of
-            // dying permanently and silently dropping every global subscriber.
-            this.recordShapeError("shape:poll", error);
-            globalShapesRemaining = 1;
-        }
-
-        // External-source (`.source(...)`) ingest shares this alarm (plan 077). The
-        // base hook returns `undefined` (dormant); the codegen subclass overrides
-        // it to materialize each sourced table and report the earliest NEXT-DUE
-        // timestamp across every non-manual source. A contained failure re-arms
-        // at the fixed floor (a conservative retry) rather than stranding the
-        // ingest loop or spinning immediately.
-        let nextSourceDueAt: number | undefined;
-
-        try {
-            nextSourceDueAt = await this.pollExternalSources();
-        } catch (error) {
-            this.recordShapeError("source:poll", error);
-            nextSourceDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
-        }
-
-        // Declarative TTL expiry (`.ttl(...)`) shares this alarm too. The base hook
-        // returns `undefined` (no TTL tables); the codegen subclass overrides
-        // `ttlSweeps()` from the schema so the sweep pages + removes expired rows and
-        // reports its next-due. A contained failure re-arms at the fixed floor.
-        let nextTtlDueAt: number | undefined;
-
-        try {
-            nextTtlDueAt = await this.pollTtlSweeps();
-        } catch (error) {
-            this.recordShapeError("ttl:sweep", error);
-            nextTtlDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
-        }
-
-        // Drain the tables the ingest poll just wrote: a sourced table is local, so
-        // its `defineShape` subscribers are poked through the standard
-        // changed-table → `pokeShapeSubscribers` path (the same one a mutation
-        // uses), NOT the global-shape poke path. Without this, materialized rows land
-        // in SQLite but live subscribers never see the incremental update. A no-op
-        // when nothing was queued (non-sourced DOs, or a steady-state tick).
-        await this.flushChangedTables();
-
-        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, nextTtlDueAt, Date.now());
-
-        if (nextAlarmAt !== undefined) {
-            await this.scheduleGlobalPoll(nextAlarmAt);
-        }
+        return this.withTriggerTrace("alarm", async () => this.handleAlarmBody());
     }
 
     /** Subclasses implement function dispatch. */
@@ -4691,6 +4564,8 @@ abstract class ShardDO {
         message: string,
         fields: Record<string, unknown> | undefined,
         sink?: TelemetrySink,
+        eventName?: string,
+        anchor?: TraceAnchor,
     ): void {
         // Correlate the line to its dispatch span. Read from the resolved anchor
         // rather than re-parsing the inbound `traceparent`, so a dispatch that
@@ -4698,13 +4573,18 @@ abstract class ShardDO {
         // server-initiated call) still correlates: re-parsing would yield
         // `undefined` there and silently split a handler's logs from its spans,
         // which is exactly what the docs promise doesn't happen.
-        const trace = this.currentRequestTrace;
+        //
+        // An explicit `anchor` pins the trace for a caller that runs AFTER the
+        // handler's awaits — the dispatch `finally` emitting the wide event —
+        // where the shared field may already belong to an interleaved dispatch.
+        const trace = anchor ?? this.currentRequestTrace;
 
         // One canonical event built once, fed to all three destinations. Only the
         // console event drops raw `args` (see emitLogEvent); the buffer and sink
         // get the full payload. Structured `fields` DO ride every destination.
         const event: LogEventInput = {
             args,
+            ...(eventName === undefined ? {} : { eventName }),
             fields,
             functionPath,
             level,
@@ -4758,6 +4638,13 @@ abstract class ShardDO {
             error: (...args: unknown[]) => {
                 emit("error", args);
             },
+            event: (name: string, fields?: LogFields) => {
+                // The event NAME is the record's message, so a plain-text log
+                // viewer still shows something meaningful; the structured payload
+                // is `fields`, and `eventName` is what makes a collector treat the
+                // record as a queryable event rather than prose.
+                this.recordUserLog(functionPath, "info", [name], name, boundFields ? { ...boundFields, ...fields } : fields, sink, name);
+            },
             fatal: (...args: unknown[]) => {
                 emit("fatal", args);
             },
@@ -4794,17 +4681,175 @@ abstract class ShardDO {
      * resolved sink sets `fuseCloudflareTraces` (see {@link resolveCloudflareTracing}).
      */
     protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer {
+        // Resolve the anchor once so its `sampled` verdict is snapshotted for every
+        // span this tracer records — carried to `recordSpan` rather than re-looked-up
+        // from `traceSampling` at span-close time, so a span that ends AFTER the
+        // dispatch tore its entry down still honours the trace's sampling decision.
+        const resolvedAnchor = anchor ?? resolveTraceAnchor(undefined);
+
         return createTracer({
-            anchor: anchor ?? resolveTraceAnchor(undefined),
+            anchor: resolvedAnchor,
             fuseCloudflareSpans: sink?.fuseCloudflareTraces === true,
             functionPath,
             record: (span) => {
-                this.recordSpan(span, sink);
+                this.recordSpan(span, sink, resolvedAnchor.sampled);
             },
             resolveCloudflareTracing,
             shardKey: this.state.id?.name,
             userId: () => this.getCurrentUserId(),
         });
+    }
+
+    /**
+     * The trace anchor a ctx's `trace` and `span` both hang off.
+     *
+     * Resolved once per `buildCtx` and shared, so `ctx.trace` spans and the
+     * `ctx.span` wide event land in the SAME trace. Previously each consumer
+     * minted its own fallback when there was no current trace, which was fine
+     * while `ctx.trace` was the only consumer and silently splits the two now
+     * that there are two.
+     *
+     * `identityScoped` marks a deferred/interleaved caller (a subscription seed
+     * or refresh): those must NOT inherit the shared per-request trace, which a
+     * concurrent RPC may have re-set, so they mint their own self-contained one.
+     */
+    protected resolveDispatchAnchor(identityScoped: boolean): TraceAnchor {
+        return (identityScoped ? undefined : this.getCurrentTrace()) ?? resolveTraceAnchor(undefined);
+    }
+
+    /**
+     * Wrap `ctx.db` in automatic instrumentation — see {@link instrumentDatabase}
+     * for why the default is aggregate counters rather than a span per call.
+     *
+     * A no-op (returning the database untouched) with no sink configured or with
+     * `instrumentDatabase: "off"`, so a deployment that collects nothing pays
+     * nothing.
+     */
+    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
+        const mode = sink === undefined ? "off" : (sink.instrumentDatabase ?? "summary");
+
+        if (mode === "off") {
+            // Bail before touching `dispatchSpans`: with nothing collecting, the
+            // tally allocation and its map insert would be per-dispatch waste on
+            // the hot path (it showed up as a benchmark regression).
+            return database;
+        }
+
+        return instrumentDatabase(database, {
+            anchor,
+            functionPath,
+            mode,
+            record: (recorded) => {
+                this.recordSpan(recorded, sink, anchor.sampled);
+            },
+            shardKey: this.state.id?.name,
+            // Parked on the dispatch entry rather than written through `ctx.span`:
+            // the counters enrich a root span that is being recorded anyway, but
+            // must never be the reason one gets recorded. Read once in
+            // `recordDispatchRootSpan`, so a query pays only integer increments.
+            tally: this.dispatchTally(anchor),
+            userId: () => this.getCurrentUserId(),
+        });
+    }
+
+    /**
+     * Build `ctx.fetch` — the platform `fetch`, instrumented.
+     *
+     * Every outbound call becomes a CLIENT span and carries a `traceparent` to
+     * the callee, so time spent waiting on someone else's service stops being an
+     * unexplained gap in the waterfall and the callee's spans join this trace
+     * instead of starting an unrelated one.
+     *
+     * Falls back to the bare global `fetch` when no sink is configured or the
+     * sink opted out via `traceFetch: false` — there is no point paying for spans
+     * nobody collects, and an app calling a third party it would rather not send
+     * trace ids to needs a way to say so.
+     */
+    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): ContextFetch {
+        const base: ContextFetch = (input, init) => globalThis.fetch(input, init);
+
+        if (sink === undefined || sink.traceFetch === false) {
+            return base;
+        }
+
+        return createTracedFetch(
+            {
+                anchor,
+                functionPath,
+                ...(typeof sink.traceFetch === "object" && sink.traceFetch.propagate !== undefined ? { propagate: sink.traceFetch.propagate } : {}),
+                record: (span) => {
+                    this.recordSpan(span, sink, anchor.sampled);
+                },
+                shardKey: this.state.id?.name,
+                userId: () => this.getCurrentUserId(),
+            },
+            base,
+        );
+    }
+
+    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle {
+        /**
+         * Lazy on purpose. `buildCtx` builds `ctx.span` for every dispatch, but
+         * most handlers never touch it — allocating a collector and a Map entry
+         * per request for them would put pure waste on the hot path, and would
+         * make `dispatchSpans.has(...)` useless as the "did this dispatch record a
+         * wide event?" signal the root-span gate depends on.
+         *
+         * The sink is captured here (rather than looked up at flush time) because
+         * the dispatch `finally` that emits the wide event has no ctx and so no
+         * way back to `config.observability`.
+         */
+        // The sink IS registered eagerly, unlike the collector. It is one small
+        // object per dispatch, and it is what the dispatch `finally` uses to flush
+        // a batching sink at the invocation boundary — a handler that never
+        // touched `ctx.span` still needs its buffered logs and spans shipped.
+        this.lastTelemetrySink = sink ?? this.lastTelemetrySink;
+
+        // The sink is registered EAGERLY only when there is one — it is what the
+        // dispatch `finally` needs to flush a batching sink, and that lookup has no
+        // other route back to `config.observability`. With no sink there is nothing
+        // to remember, so the map is left alone entirely: a dispatch that collects
+        // nothing should pay nothing (this was a measured hot-path cost).
+        if (sink !== undefined) {
+            evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
+            this.dispatchSpans.set(dispatchSpanKey(anchor), this.dispatchSpans.get(dispatchSpanKey(anchor)) ?? { sink });
+        }
+
+        const collector = (): SpanCollector => {
+            evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
+
+            const key = dispatchSpanKey(anchor);
+            const entry = this.dispatchSpans.get(key) ?? { sink };
+
+            entry.collector ??= createSpanCollector({ spanId: anchor.rootSpanId, traceId: anchor.traceId });
+            this.dispatchSpans.set(key, entry);
+
+            return entry.collector;
+        };
+
+        return {
+            addEvent: (name, attributes) => {
+                collector().handle.addEvent(name, attributes);
+            },
+            // Answerable without materializing a collector — the ids come from the
+            // anchor, not from anything the handler recorded. Reading the dispatch's
+            // trace id must not itself count as "this dispatch produced a wide event".
+            spanContext: () => {
+                return { spanId: anchor.rootSpanId, traceId: anchor.traceId };
+            },
+            addLink: (link) => {
+                collector().handle.addLink(link);
+            },
+            recordException: (error) => {
+                collector().handle.recordException(error);
+            },
+            setAttribute: (key, value) => {
+                collector().handle.setAttribute(key, value);
+            },
+            setAttributes: (fields) => {
+                collector().handle.setAttributes(fields);
+            },
+        };
     }
 
     /**
@@ -4858,20 +4903,447 @@ abstract class ShardDO {
             this.metricSeries.push(stamped);
         });
 
-        // Durable per-minute rollups. Use the RAW storage handle, NOT `this.sql`:
-        // the getter instruments statements into the Query Insights leaderboard
-        // during a dispatch, and these housekeeping writes would be misattributed
-        // to the user function that recorded the metric (matching recordFunctionMetric
-        // et al., which all write through the raw handle for the same reason).
-        const rawSql = this.state.storage.sql as unknown as SqlExec;
+        // Durable per-minute rollups — OPT-IN (default off). Every measurement
+        // otherwise pays a billed, rate-limited SQLite write on the request path,
+        // competing with app data for the shard's write budget; the payoff is only
+        // the Studio's 24h local trend chart. The live cross-instance path is
+        // `sink.onMetric` below. Gated BEFORE touching `rawSql` so a disabled sink
+        // allocates nothing and runs no SQL.
+        const metricHistory = sink?.metricHistory;
 
-        bestEffort(() => {
-            recordMetricHistory(rawSql, stamped, exemplarTraceId);
-        });
+        if (metricHistory !== undefined && metricHistory !== false) {
+            // Use the RAW storage handle, NOT `this.sql`: the getter instruments
+            // statements into the Query Insights leaderboard during a dispatch, and
+            // these housekeeping writes would be misattributed to the user function
+            // that recorded the metric (matching recordFunctionMetric et al., which
+            // all write through the raw handle for the same reason).
+            const rawSql = this.state.storage.sql as unknown as SqlExec;
+            // Pass the tune object straight through: `recordMetricHistory` already
+            // coalesces every field with `?? DEFAULT`, so stripping `undefined`
+            // keys here bought nothing. `true` (no tuning) becomes `{}`.
+            const historyOptions: MetricHistoryOptions = typeof metricHistory === "object" ? metricHistory : {};
+
+            bestEffort(() => {
+                recordMetricHistory(rawSql, stamped, exemplarTraceId, historyOptions);
+            });
+        }
 
         // Optional export sink (the durable, cross-instance path).
         if (sink?.onMetric) {
             bestEffort(() => sink.onMetric?.(stamped, { waitUntil: this.state.waitUntil?.bind(this.state) }));
+        }
+    }
+
+    /** The decode + route body of {@link webSocketMessage}, split out so the trace wrapper stays a one-liner. */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
+    protected async handleWebSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+        // Token-expiry: a socket whose credential lapsed is dropped before its
+        // frame is processed, so the client reconnects and re-resolves identity.
+        // This is the inbound-activity check; the load-bearing one is in
+        // `refreshSubscriptions`, which drops an expired socket BEFORE pushing it
+        // the user's live data (a passive subscriber sends no frames — its
+        // keepalive pings auto-respond and never reach here — so inbound checks
+        // alone would never fire for the common case).
+        if (this.isSocketExpired(ws)) {
+            this.dropExpiredSocket(ws);
+
+            return;
+        }
+
+        const text = typeof message === "string" ? message : new TextDecoder().decode(message);
+        let envelope: SubscriptionEnvelope;
+
+        try {
+            envelope = JSON.parse(text) as SubscriptionEnvelope;
+        } catch {
+            ws.send(JSON.stringify({ message: "invalid envelope", type: "error" }));
+
+            return;
+        }
+
+        if (envelope.type === "connect") {
+            // One-shot control frame the client sends right after the socket
+            // opens: record its connection `context` on the attachment (so it
+            // survives hibernation and can be replayed at close) and fire the
+            // `onConnect` lifecycle hooks under the socket's verified identity.
+            const attachment = this.readAttachment(ws);
+
+            // Idempotent: a socket announces `connect` exactly once. A re-sent
+            // (or duplicate) frame must not re-fire `onConnect`, or it would
+            // out-number the single `onDisconnect` at close.
+            if (attachment.connected === true) {
+                return;
+            }
+
+            if (envelope.context !== undefined) {
+                attachment.context = envelope.context;
+            }
+
+            // Record the client's stable id so shape pokes to this socket can
+            // echo its `__client_watermark` as `lastMutationId` (overlay-drop).
+            if (envelope.clientId !== undefined) {
+                attachment.clientId = envelope.clientId;
+            }
+
+            attachment.connected = true;
+
+            try {
+                (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            } catch {
+                // Over-large context can't be persisted; the hook still runs
+                // with the supplied context this turn, but it won't survive
+                // to disconnect. Never throw out of webSocketMessage.
+            }
+
+            await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
+
+            return;
+        }
+
+        if (envelope.type === "subscribe" && envelope.query) {
+            const { functionPath } = envelope.query;
+            const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
+
+            // Admin introspection subscriptions read shard internals (raw rows,
+            // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
+            // as the HTTP admin RPCs — recorded on the socket at upgrade. A
+            // socket that only cleared the user-subscription gate must never be
+            // able to read admin data by naming a reserved functionPath.
+            if (isAdmin && this.readAttachment(ws).admin !== true) {
+                ws.send(JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
+
+                return;
+            }
+
+            // Decode the wire-encoded subscription args ONCE, at the entry point —
+            // BEFORE the attachment store and the seed — so every downstream
+            // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
+            // eval) sees REAL values (`bigint`/`Date`/bytes), and the
+            // structured-clone attachment carries them through hibernation.
+            // `decodeWire` is identity for pure-JSON args (legacy frames included).
+            let query: SubscriptionQuery;
+
+            try {
+                query =
+                    envelope.query.args === undefined
+                        ? envelope.query
+                        : { ...envelope.query, args: decodeWire(envelope.query.args) as Record<string, unknown> };
+            } catch {
+                // A malformed tagged payload (over-long bigint, over-deep nesting)
+                // must not throw out of `webSocketMessage` — surface a structured
+                // error frame instead, mirroring the persist-failure path.
+                try {
+                    ws.send(
+                        JSON.stringify({
+                            code: "BAD_SUBSCRIPTION_ARGS",
+                            error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
+                            id: envelope.id,
+                            type: "error",
+                        }),
+                    );
+                } catch {
+                    // Socket may already be closed; never throw out of webSocketMessage.
+                }
+
+                return;
+            }
+
+            const status = this.subscribe(ws, envelope.id, query);
+
+            if (status !== "ok") {
+                const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
+                const errorMessage =
+                    status === "too_many"
+                        ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
+                        : "failed to persist subscription attachment";
+
+                try {
+                    ws.send(JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
+                } catch {
+                    // Socket may already be closed; nothing else we can do —
+                    // never let the webSocketMessage handler throw.
+                }
+
+                return;
+            }
+
+            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
+
+            // Seed the subscriber with the query's current result so the first
+            // value arrives over the same channel as later updates. When the
+            // subclass doesn't support re-execution (base default), this is a
+            // no-op and the subscriber relies on its initial HTTP query.
+            if (functionPath) {
+                await this.seedSubscription(ws, envelope.id, query, functionPath, isAdmin);
+            }
+
+            return;
+        }
+
+        if (envelope.type === "shape_subscribe" && envelope.shape) {
+            // Decode-at-entry, mirroring the `subscribe` branch above: the stored
+            // descriptor and every `resolveShape` see real values.
+            let shapeArgs: Record<string, unknown> | undefined;
+
+            try {
+                shapeArgs = envelope.shape.args === undefined ? undefined : (decodeWire(envelope.shape.args) as Record<string, unknown>);
+            } catch {
+                this.sendShapeSubscribeError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
+
+                return;
+            }
+
+            await this.handleShapeSubscribe(ws, envelope.id, {
+                args: shapeArgs,
+                name: envelope.shape.name,
+                sinceEpoch: envelope.sinceEpoch,
+                sinceSeq: envelope.sinceCheckpoint,
+            });
+
+            return;
+        }
+
+        if (envelope.type === "shape_unsubscribe") {
+            this.shapeUnsubscribe(ws, envelope.id);
+            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
+
+            return;
+        }
+
+        if (envelope.type === "stream" && envelope.query?.functionPath) {
+            // Streams are public-only: there is no admin-streaming surface, so
+            // anything matching the admin prefix is rejected up front rather
+            // than allowed to slip through executeStream().
+            if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+                ws.send(JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
+
+                return;
+            }
+
+            // Fire-and-forget: handleStream owns its own error reporting (it
+            // sends `type:"error"` frames to the socket). The trailing no-op
+            // catch only guards the rare pre-try throw path (e.g. ws.send on a
+            // socket the runtime already tore down) so a dead socket can't
+            // surface as an unhandled rejection.
+            // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
+            // before handing them to the stream handler — mirrors the `/rpc` path.
+            this.handleStream(ws, envelope.id, envelope.query.functionPath, decodeWire(envelope.query.args ?? {}) as Record<string, unknown>).catch(() => {
+                /* socket already gone; nothing to report */
+            });
+
+            return;
+        }
+
+        if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
+            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
+                const join = envelope.type === "whisper_subscribe";
+
+                this.setWhisperMembership(ws, envelope.topic, join);
+
+                // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
+                // announces itself so the owner forwards whisper frames to it.
+                if (join) {
+                    await this.relay?.announce();
+                }
+            }
+
+            return;
+        }
+
+        if (envelope.type === "whisper") {
+            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
+                await this.broadcastWhisper(ws, envelope.topic, envelope.data);
+            }
+
+            return;
+        }
+
+        if (envelope.type === "unsubscribe") {
+            // Stream cancel: abort the in-flight iterator (if any) before
+            // touching the subscription registry. unsubscribe() on a non-sub
+            // id is a no-op, so this stays safe even when id namespaces overlap.
+            const cancellers = this.streamCancellers.get(ws);
+            const controller = cancellers?.get(envelope.id);
+
+            if (controller) {
+                controller.abort();
+                cancellers?.delete(envelope.id);
+            }
+
+            this.unsubscribe(ws, envelope.id);
+            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
+        }
+    }
+
+    /**
+     * The alarm's actual work, split out so {@link alarm} is a one-line trace
+     * wrapper. An alarm drives `.global()` shape refreshes and external-source
+     * ingest with no client waiting on a response, which is exactly where a
+     * silent failure hides longest — so it gets a root span like any dispatch.
+     */
+    private async handleAlarmBody(): Promise<void> {
+        this.globalPollScheduled = false;
+
+        let globalShapesRemaining: number;
+
+        try {
+            globalShapesRemaining = await this.pollGlobalShapes();
+        } catch (error) {
+            // `pollGlobalShapes` already contains per-socket/per-shape failures;
+            // this guards a catastrophic failure (e.g. `getWebSockets` throwing)
+            // so the poll heartbeat re-arms and retries next tick instead of
+            // dying permanently and silently dropping every global subscriber.
+            this.recordShapeError("shape:poll", error);
+            globalShapesRemaining = 1;
+        }
+
+        // External-source (`.source(...)`) ingest shares this alarm (plan 077). The
+        // base hook returns `undefined` (dormant); the codegen subclass overrides
+        // it to materialize each sourced table and report the earliest NEXT-DUE
+        // timestamp across every non-manual source. A contained failure re-arms
+        // at the fixed floor (a conservative retry) rather than stranding the
+        // ingest loop or spinning immediately.
+        let nextSourceDueAt: number | undefined;
+
+        try {
+            nextSourceDueAt = await this.pollExternalSources();
+        } catch (error) {
+            this.recordShapeError("source:poll", error);
+            nextSourceDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
+        }
+
+        // Declarative TTL expiry (`.ttl(...)`) shares this alarm too. The base hook
+        // returns `undefined` (no TTL tables); the codegen subclass overrides
+        // `ttlSweeps()` from the schema so the sweep pages + removes expired rows and
+        // reports its next-due. A contained failure re-arms at the fixed floor.
+        let nextTtlDueAt: number | undefined;
+
+        try {
+            nextTtlDueAt = await this.pollTtlSweeps();
+        } catch (error) {
+            this.recordShapeError("ttl:sweep", error);
+            nextTtlDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
+        }
+
+        // Drain the tables the ingest poll just wrote: a sourced table is local, so
+        // its `defineShape` subscribers are poked through the standard
+        // changed-table → `pokeShapeSubscribers` path (the same one a mutation
+        // uses), NOT the global-shape poke path. Without this, materialized rows land
+        // in SQLite but live subscribers never see the incremental update. A no-op
+        // when nothing was queued (non-sourced DOs, or a steady-state tick).
+        await this.flushChangedTables();
+
+        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, nextTtlDueAt, Date.now());
+
+        if (nextAlarmAt !== undefined) {
+            await this.scheduleGlobalPoll(nextAlarmAt);
+        }
+    }
+
+    /**
+     * Build `ctx.span` — the handle onto the **dispatch's own span**, and with it
+     * the wide-event surface.
+     *
+     * `ctx.trace(...)` creates a *new* child span for a sub-operation; this
+     * attaches to the one that already exists for the request. That is the
+     * distinction between "time this thing" and "record a fact about this
+     * request", and conflating them is why instrumentation usually degrades into
+     * log spam: with nowhere to put a fact, people reach for `ctx.log.info`.
+     *
+     * Attributes accumulate across the whole dispatch and are folded into the
+     * root span in `recordDispatchRootSpan` — the OTel-native form of a
+     * wide event, needing no non-standard "canonical log line" convention on the
+     * collector side.
+     *
+     * Keyed by `dispatchSpanKey` — trace id AND root span id — so two concurrent
+     * dispatches forwarded under the same client trace accumulate separately.
+     */
+
+    /**
+     * The dispatch entry's db tally, created on first use. Shares the entry with
+     * `ctx.span`'s collector but is deliberately a separate slot — see
+     * `instrumentDb`.
+     */
+    private dispatchTally(anchor: TraceAnchor): DatabaseTally {
+        evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
+
+        const key = dispatchSpanKey(anchor);
+        const entry = this.dispatchSpans.get(key) ?? {};
+
+        entry.dbTally ??= createDatabaseTally();
+        this.dispatchSpans.set(key, entry);
+
+        return entry.dbTally;
+    }
+
+    /**
+     * Give a NON-`fetch` Durable Object trigger — an alarm, an inbound socket
+     * frame — the same telemetry an RPC dispatch gets: its own trace anchor, a
+     * dispatch root span, and a flush of the batching sink when it finishes.
+     *
+     * These paths were previously invisible. An alarm can drive `.global()` shape
+     * refreshes and external-source ingest, and a socket frame can run a whole
+     * subscription re-evaluation, but neither produced a root span — so any
+     * `ctx.trace` span they created hung off a freshly-minted anchor with nothing
+     * above it, and a collector showed orphans with no bar explaining what caused
+     * them. Alarms are also precisely where a silent failure hides longest,
+     * because no client is waiting on a response to notice.
+     *
+     * The anchor is published on `currentRequestTrace` ONLY when nothing else has
+     * claimed it, and restored afterwards, so a concurrently-interleaved RPC
+     * dispatch (which captured its own anchor in a local at entry) keeps its
+     * attribution. Worst case under interleaving is a mis-attributed inner span —
+     * the same trade the surrounding code already makes with this field — never a
+     * corrupted or lost one.
+     */
+    private async withTriggerTrace<T>(name: string, run: () => Promise<T>): Promise<T> {
+        const anchor = resolveTraceAnchor(undefined);
+        const startedAt = Date.now();
+        const claimed = this.currentRequestTrace === undefined;
+
+        if (claimed) {
+            this.currentRequestTrace = anchor;
+        }
+
+        let failure: { thrown: unknown } | undefined;
+
+        try {
+            return await run();
+        } catch (error) {
+            failure = { thrown: error };
+
+            throw error;
+        } finally {
+            if (claimed && this.currentRequestTrace === anchor) {
+                this.currentRequestTrace = undefined;
+            }
+
+            // Only when the trigger actually produced telemetry — an idle alarm
+            // that did nothing should not mint a bar in the studio waterfall and
+            // evict a real trace from the bounded ring.
+            if (this.spans.hasTrace(anchor.traceId) || this.dispatchSpans.get(dispatchSpanKey(anchor))?.collector !== undefined) {
+                this.recordDispatchRootSpan(name, startedAt, failure, anchor);
+            }
+
+            this.dispatchSpans.delete(dispatchSpanKey(anchor));
+            this.flushTelemetry();
+        }
+    }
+
+    /**
+     * Ask the last-seen telemetry sink to ship what it has buffered.
+     *
+     * Used by the trigger paths ({@link withTriggerTrace}), which have no `ctx`
+     * and therefore no direct handle on `config.observability`. The sink is a
+     * per-worker singleton in every real configuration, so remembering the most
+     * recent one is exact in practice and harmless otherwise: a flush is
+     * idempotent and a sink with an empty buffer is a no-op.
+     */
+    private flushTelemetry(): void {
+        try {
+            this.lastTelemetrySink?.flush?.({ waitUntil: this.state.waitUntil?.bind(this.state) });
+        } catch {
+            // Best-effort — a telemetry flush must never fail the trigger.
         }
     }
 
@@ -4885,13 +5357,29 @@ abstract class ShardDO {
      * `anchor` carries the dispatch's trace ids, captured at entry rather than
      * read from `this` here — this runs after the handler's awaits, where the
      * shared field may already belong to an interleaved dispatch.
+     *
+     * When the handler attached a **wide event** through `ctx.span`, this also
+     * exports it — see {@link exportWideEvent} for why it goes out as an OTel
+     * Event record rather than on the span itself.
      */
     private recordDispatchRootSpan(functionPath: string, startedAt: number, failure: { thrown: unknown } | undefined, anchor: TraceAnchor): void {
+        const wide = this.dispatchSpans.get(dispatchSpanKey(anchor));
+        const durationMs = Date.now() - startedAt;
+        // Auto-instrumentation counters ride whatever root span is being recorded;
+        // they never cause one (see `instrumentDb`).
+        const databaseAttributes = wide?.dbTally === undefined || wide.dbTally.calls === 0 ? undefined : formatTally(wide.dbTally);
+        const collected =
+            wide?.collector === undefined
+                ? undefined
+                : { ...wide.collector.collected, attributes: { ...databaseAttributes, ...wide.collector.collected.attributes } };
+
         try {
             this.spans.push(
                 dispatchRootSpan({
                     anchor,
-                    durationMs: Date.now() - startedAt,
+                    // The wide event, if the handler attached one through `ctx.span`.
+                    ...(collected === undefined ? {} : { collected }),
+                    durationMs,
                     failure,
                     functionPath,
                     shardKey: this.state.id?.name,
@@ -4901,6 +5389,63 @@ abstract class ShardDO {
             );
         } catch {
             // Best-effort — span capture must never fail a served request.
+        }
+
+        if (wide?.collector !== undefined) {
+            this.exportWideEvent(functionPath, durationMs, failure, anchor, { collected: collected ?? wide.collector.collected, sink: wide.sink });
+        }
+    }
+
+    /**
+     * Export a dispatch's wide event as a standard OTel **Event** log record
+     * (`lunora.dispatch`), correlated to the dispatch's trace and span.
+     *
+     * **Why a log record rather than the span's attributes.** The local dispatch
+     * root span shares its `spanId` with the SERVER span `@lunora/runtime` emits
+     * for the same dispatch — they are the same logical span, seen from the two
+     * sides of the shard hop. Exporting our copy too would put two partial spans
+     * with identical `trace_id`/`span_id` on the wire, which collectors resolve
+     * inconsistently (merge, last-write, or duplicate). An Event record carrying
+     * `traceId`/`spanId` is unambiguous, is the OTel-sanctioned shape for exactly
+     * this ("a named, structured occurrence"), and every OTLP backend can group
+     * and aggregate it with no Lunora-specific configuration.
+     *
+     * The span still carries the attributes LOCALLY, which is what the Studio
+     * waterfall renders — so the wide event is visible in both places, exported
+     * exactly once.
+     */
+    private exportWideEvent(
+        functionPath: string,
+        durationMs: number,
+        failure: { thrown: unknown } | undefined,
+        anchor: TraceAnchor,
+        wide: { collected: SpanCollection; sink?: TelemetrySink },
+    ): void {
+        try {
+            const { attributes } = wide.collected;
+
+            this.recordUserLog(
+                functionPath,
+                // An errored dispatch's wide event is an error record, so severity
+                // routing/alerting works on it without inspecting attributes.
+                failure === undefined ? "info" : "error",
+                [WIDE_EVENT_NAME],
+                WIDE_EVENT_NAME,
+                {
+                    ...attributes,
+                    // The always-present skeleton, under OTel-ish names so the
+                    // record is useful even from a handler that attached nothing
+                    // but a couple of business fields.
+                    [LUNORA_ATTR.durationMs]: durationMs,
+                    [LUNORA_ATTR.functionPath]: functionPath,
+                    [LUNORA_ATTR.ok]: failure === undefined,
+                },
+                wide.sink,
+                WIDE_EVENT_NAME,
+                anchor,
+            );
+        } catch {
+            // Best-effort — see recordUserLog.
         }
     }
 
@@ -4920,7 +5465,7 @@ abstract class ShardDO {
      * trace (a subscription re-run mints its own anchor), stream immediately.
      */
     // eslint-disable-next-line @typescript-eslint/member-ordering -- kept in the span-recording cluster (next to recordDispatchRootSpan) for cohesion rather than hoisted above every private member
-    protected recordSpan(span: SpanEvent, sink?: TelemetrySink): void {
+    protected recordSpan(span: SpanEvent, sink?: TelemetrySink, sampledSnapshot?: boolean): void {
         try {
             this.spans.push(span);
         } catch {
@@ -4931,15 +5476,49 @@ abstract class ShardDO {
             return;
         }
 
-        // Look the verdict up by the SPAN's own `traceId` (not the shared
+        // Look the live verdict up by the SPAN's own `traceId` (not the shared
         // `currentRequestTrace`, which a sibling dispatch may have overwritten by now).
         const sampling = this.traceSampling.get(span.traceId);
 
-        if (sampling && !sampling.sampled) {
-            // Sampled out: hold this span back and remember the sink so the
-            // `finally` can flush the trace's held spans if it turns out to error.
-            sampling.sink = sink;
+        if (sampling !== undefined) {
+            if (!sampling.sampled) {
+                // Sampled out, dispatch still in flight: hold this span back and
+                // remember the sink so the `finally` can flush the trace's held
+                // spans if it turns out to error. Held ON THIS PER-TRACE ENTRY —
+                // NOT re-read from the shared span ring at flush time, where a
+                // concurrent trace could have evicted these error spans first.
+                sampling.sink = sink;
 
+                // The synthetic dispatch root never goes to `onSpan`, so it is not
+                // held either — flushSampledOutTrace only ever emits `ctx.trace` spans.
+                if (span.dispatch !== true) {
+                    const held = sampling.held ?? (sampling.held = []);
+
+                    held.push(span);
+
+                    if (held.length > MAX_HELD_SPANS_PER_TRACE) {
+                        held.shift();
+                    }
+                }
+
+                return;
+            }
+
+            this.emitSpan(span, sink);
+
+            return;
+        }
+
+        // No LIVE `traceSampling` entry. Either a span from a self-anchored trace
+        // (an alarm or subscription re-run mints its own anchor and never registers
+        // one — those must export) or a LATE span whose dispatch already tore its
+        // entry down in the `finally` (a streaming AI-SDK span, a detached hook).
+        // Decide from the verdict snapshotted onto the span when it OPENED (the
+        // `createTracedFetch`/`anchor.sampled` pattern) rather than the deleted
+        // entry: a sampled-OUT late span is dropped (previously it fell through and
+        // exported unconditionally, leaking an orphan child of a sampled-out trace),
+        // a sampled-in one still exports.
+        if (sampledSnapshot === false) {
             return;
         }
 
@@ -4971,8 +5550,11 @@ abstract class ShardDO {
      * streamed live, so this returns early for it; a sampled-out trace exports its
      * held `ctx.trace` spans only when `alwaysSampleErrors` is set AND the trace
      * errored (the dispatch threw, or a held span settled `ok: false`) — the tail
-     * bias — and otherwise drops them. Held spans are read back from the local ring
-     * (excluding the synthetic dispatch root, which never goes to `onSpan`).
+     * bias — and otherwise drops them. Held spans are drained from the per-trace
+     * `held` array `recordSpan` accumulated (the synthetic dispatch root is never
+     * held, since it never goes to `onSpan`) — NOT re-read from the shared span
+     * ring, whose bound a concurrent trace could have used to evict these very
+     * error spans before this flush ran.
      */
     private flushSampledOutTrace(trace: { traceId: string }, dispatchFailed: boolean): void {
         // Read THIS trace's own verdict + held sink (keyed by traceId), so an
@@ -4983,13 +5565,14 @@ abstract class ShardDO {
             return;
         }
 
-        const { sink } = sampling;
+        const { held, sink } = sampling;
 
-        if (!sink?.onSpan) {
+        // Allocation-free short-circuit for the common sampled-out dispatch: no
+        // sink, or nothing was held (a handler that never touched `ctx.trace`).
+        if (!sink?.onSpan || held === undefined || held.length === 0) {
             return;
         }
 
-        const held = this.spans.entries().filter((span) => span.traceId === trace.traceId && span.dispatch !== true);
         const traceHasError = dispatchFailed || held.some((span) => !span.ok);
 
         if (!traceHasError) {

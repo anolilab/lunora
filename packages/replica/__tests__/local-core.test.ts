@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { applyDiff, applyDiffs, applyDiffToSnapshot, classifyChanges, createTableDiff, diffSize, EventLog, isDiffEmpty, mergeDiffs } from "../src/index";
 import type { InputEvent } from "../src/seq";
@@ -18,6 +18,28 @@ describe(createTableDiff, () => {
         const diff = createTableDiff("users", [], 42);
 
         expect(diff.timestamp).toBe(42);
+    });
+
+    it("mints a stable id without throwing when crypto.randomUUID is unavailable (non-secure origin)", () => {
+        const realCrypto = globalThis.crypto;
+
+        try {
+            // Simulate a non-secure origin (e.g. http://192.168.x.x LAN dev):
+            // `crypto.randomUUID` is undefined there, so a bare call throws.
+            // `getRandomValues` remains available as the fallback entropy.
+            vi.stubGlobal("crypto", { getRandomValues: realCrypto.getRandomValues.bind(realCrypto) });
+
+            const a = createTableDiff("users", [{ type: "insert", data: { name: "alice" } }]);
+            const b = createTableDiff("users", [{ type: "insert", data: { name: "bob" } }]);
+
+            expect(a.id).toBeTypeOf("string");
+            expect(a.id).not.toBe("");
+            // Distinct diffs get distinct ids even when minted in the same
+            // millisecond — required by `deriveInsertId`.
+            expect(a.id).not.toBe(b.id);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });
 
@@ -85,6 +107,38 @@ describe(mergeDiffs, () => {
 
     it("returns null for empty input", () => {
         expect(mergeDiffs([])).toBeNull();
+    });
+
+    it("produces a constant-size, non-compounding merge id regardless of child count", () => {
+        const many = Array.from({ length: 1000 }, (_, index) => createTableDiff("t", [{ type: "insert", data: { id: String(index) } }], index));
+
+        const merged = mergeDiffs(many);
+
+        expect(merged).not.toBeNull();
+        // `merge:` + a fixed-width 16-hex digest — bounded no matter how many
+        // children were merged (not O(N) in the child count).
+        expect(merged!.id).toMatch(/^merge:[\da-f]{16}$/);
+
+        // Merging an already-merged diff must NOT compound the prefix
+        // (`merge:merge:…`) or grow the id.
+        const remerged = mergeDiffs([merged!, createTableDiff("t", [{ type: "insert", data: { id: "x" } }], 2000)]);
+
+        expect(remerged!.id).toMatch(/^merge:[\da-f]{16}$/);
+        expect((remerged!.id ?? "").match(/merge:/g) ?? []).toHaveLength(1);
+    });
+
+    it("mints the SAME merged id for the SAME child sequence, a different id otherwise", () => {
+        const a = createTableDiff("t", [{ type: "insert", data: { id: "1" } }], 10, "diff-a");
+        const b = createTableDiff("t", [{ type: "insert", data: { id: "2" } }], 20, "diff-b");
+        const c = createTableDiff("t", [{ type: "insert", data: { id: "3" } }], 30, "diff-c");
+
+        // Same ordered children → identical deterministic id.
+        expect(mergeDiffs([a, b])!.id).toBe(mergeDiffs([a, b])!.id);
+
+        // A different child sequence → a different id.
+        expect(mergeDiffs([a, b])!.id).not.toBe(mergeDiffs([a, c])!.id);
+        // Order matters.
+        expect(mergeDiffs([a, b])!.id).not.toBe(mergeDiffs([b, a])!.id);
     });
 });
 

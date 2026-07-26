@@ -1,3 +1,6 @@
+import { randomId } from "../../../shared/uuid";
+import { fnv1a64Hex } from "./apply-diff";
+
 /**
  * Row-level change kind within a TableDiff.
  *
@@ -50,7 +53,12 @@ const createTableDiff = (table: string, changes: ReadonlyArray<RowChange>, times
         table,
         changes,
         timestamp: timestamp ?? Date.now(),
-        id: id ?? crypto.randomUUID(),
+        // Guarded generator (`shared/uuid.ts`): a bare `crypto.randomUUID()`
+        // throws on non-secure origins like a `http://192.168.x.x` LAN
+        // dev/preview server — the common local-first testing setup — because
+        // `crypto.randomUUID` is undefined there. The id only needs per-process
+        // uniqueness for `deriveInsertId`.
+        id: id ?? randomId(),
     };
 };
 
@@ -109,7 +117,14 @@ const mergeDiffs = (diffs: ReadonlyArray<TableDiff>): TableDiff | null => {
     // fallback `deriveInsertId` uses) — replaying the SAME sequence of diffs
     // must mint the SAME merged id so id-less inserts stay stable across
     // retries, while a different child sequence yields a different id.
-    const mergedId = `merge:${diffs.map((d) => d.id ?? String(d.timestamp)).join("|")}`;
+    //
+    // The joined child identities are hashed to a constant-size 16-hex digest
+    // rather than embedded verbatim: a verbatim join is O(N) in the child count
+    // AND, because each id-less insert re-hashes the diff id char-by-char in
+    // `deriveInsertId`, O(N×M) overall — compounding multiplicatively when
+    // merging already-merged diffs (`merge:merge:…`). The hash keeps the same
+    // determinism (same child sequence → same digest) at a fixed width.
+    const mergedId = `merge:${fnv1a64Hex(diffs.map((d) => d.id ?? String(d.timestamp)).join("|"))}`;
 
     return createTableDiff(
         first.table,

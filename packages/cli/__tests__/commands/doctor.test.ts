@@ -155,4 +155,78 @@ describe("runDoctor", () => {
 
         expect(result.findings.some((finding) => finding.level === "pass" && /container "transcoder" is exported/u.test(finding.message))).toBe(true);
     });
+
+    /**
+     * Nothing in an app's manifest tells the adopter which combination of the
+     * independently-versioned `@lunora/*` packages is coherent, so a partial
+     * `pnpm update` produces a set that looks fine and behaves like a framework bug.
+     */
+    describe("version skew", () => {
+        const seedManifest = (dependencies: Record<string, string>): void => {
+            seed(workdir, CLEAN_WRANGLER);
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies, name: "demo" }), "utf8");
+        };
+
+        const versionFinding = (findings: ReadonlyArray<{ level: string; message: string }>) => findings.find((finding) => /Lunora p/u.test(finding.message));
+
+        it("warns when Lunora packages span different versions", async () => {
+            expect.assertions(3);
+
+            seedManifest({ "@lunora/db": "1.0.0-alpha.27", "@lunora/react": "1.1.0-alpha.4", lunorash: "1.0.0-alpha.98" });
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = versionFinding(result.findings);
+
+            expect(finding?.level).toBe("warn");
+            expect(finding?.message).toContain("@lunora/react@1.1.0-alpha.4");
+            // A warning, never a failure: the doctor doesn't know the real
+            // compatibility matrix and must not block a deliberate mix.
+            expect(result.code).toBe(0);
+        });
+
+        it("warns when packages mix release channels", async () => {
+            expect.assertions(2);
+
+            seedManifest({ "@lunora/db": "1.0.0", "@lunora/react": "1.0.0-alpha.31" });
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = versionFinding(result.findings);
+
+            expect(finding?.level).toBe("warn");
+            expect(finding?.message).toContain("mix release channels");
+        });
+
+        it("reports same-channel counter drift as info, since independent versioning makes it normal", async () => {
+            expect.assertions(2);
+
+            seedManifest({ "@lunora/db": "1.0.0-alpha.27", "@lunora/react": "1.0.0-alpha.31", lunorash: "1.0.0-alpha.98" });
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = versionFinding(result.findings);
+
+            expect(finding?.level).toBe("info");
+            expect(finding?.message).toContain("27–98");
+        });
+
+        it("ignores non-Lunora dependencies and unpinnable specs", async () => {
+            expect.assertions(1);
+
+            seedManifest({ "@lunora/db": "workspace:*", "@lunora/react": "1.0.0-alpha.31", react: "^19.0.0" });
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            // Only one pinnable Lunora spec remains, so there is nothing to compare.
+            expect(versionFinding(result.findings)).toBeUndefined();
+        });
+
+        it("skips silently when there is no package.json", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(versionFinding(result.findings)).toBeUndefined();
+        });
+    });
 });

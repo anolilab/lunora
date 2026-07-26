@@ -31,7 +31,12 @@ pnpm run lint:prettier            # Prettier check (add :fix to autofix)
 pnpm run lint:types               # TypeScript type check
 pnpm run lint:affected:eslint     # Only changed
 pnpm run lint:affected:types      # Only changed
+pnpm run lint:package-json        # package.json key order (add :fix to autofix)
 ```
+
+> **`package.json` key-order gotcha.** Key order is enforced by its own CI job ("Lint (package.json sort)") and by **nothing else** — ESLint, Prettier, `lint:types`, `api:check`, and `dist:check` are all blind to it. So a hand-added block in the wrong position (classically `peerDependencies` placed above `devDependencies` instead of below) goes green locally and red in CI. Canonical order is whatever `vis sort-package-json` emits; run `pnpm run lint:package-json` (= `vis sort-package-json --check`) after editing any manifest.
+>
+> Note `vis sort-package-json --help` currently crashes ([visulima#741](https://github.com/visulima/visulima/issues/741)) whenever a command's help text contains a literal `{`, so its flags aren't discoverable that way. `--check`, `--sort-scripts`, `--indent`, `--ignore <glob>`, `--sort-order`, `--unsorted <section>`, and `--line-ending` all exist.
 
 > **Stale-`dist` gotcha.** `dist/` is gitignored and built on demand. A raw `pnpm --filter … run test` / `lint:types` does **not** rebuild workspace dependencies, so if an upstream `@lunora/*` package's source changed you may hit stale-`dist` errors (`X is not a function`, "missing export"). Build first — `pnpm run build:packages` once, or `pnpm --filter "@lunora/<pkg>..." run build` (the trailing `...` includes dependencies) — or use `pnpm run test:affected` / `pnpm run lint:affected:types`, which build dependencies for you.
 
@@ -100,11 +105,12 @@ Concise roles below — read the package's `src/` and `docs/` for detail. Flags:
 | `@lunora/auth`              | Auth on **better-auth**, D1-backed; email/password + OAuth, session policies; curated plugins via `@lunora/auth/plugins`.                                                                      |
 | `@lunora/cloudflare-access` | Cloudflare Access (Zero Trust) identity → `ctx.auth` / RLS via a `resolveIdentity` adapter.                                                                                                    |
 | `@lunora/mail`              | Resend adapter, TSX templates, queue-backed sends.                                                                                                                                             |
+| `@lunora/notify`            | Multi-channel notifications: `ctx.notify`/`ctx.push` over `@visulima/notification`; Web Push + FCM, subscription stores + queue fan-out; `/web` browser subpath.                               |
 | `@lunora/storage`           | R2 typed buckets, signed URLs.                                                                                                                                                                 |
 | `@lunora/scheduler`         | `runAfter` / `runAt` + Cron Triggers via `SchedulerDO`.                                                                                                                                        |
 | `@lunora/container`         | Cloudflare Containers: `defineContainer` → container DO classes + typed `ctx.containers`; `@lunora/container/do` + `/bridge` subpaths.                                                         |
 | `@lunora/agent`             | Durable AI agents (add-on): `defineAgent` compiles a replay-safe tool-loop onto Cloudflare Workflows — tools (MCP/function/agent/sandbox), memory, HITL approvals, token streaming, telemetry. |
-| `@lunora/ai`                | Workers AI on Vercel AI SDK v6 → `ctx.ai`; `@lunora/ai/rag` ships `defineRag` (chunk→embed→Vectorize + retrieve).                                                                              |
+| `@lunora/ai`                | Workers AI on Vercel AI SDK v7 → `ctx.ai`; `@lunora/ai/rag` ships `defineRag` (chunk→embed→Vectorize + retrieve).                                                                              |
 | `@lunora/flags`             | OpenFeature feature flags: `defineFlags` → `ctx.flags`; `useFlag`/`useFlags` client hooks; read-only Studio page.                                                                              |
 | `@lunora/advisor`           | Schema & query lints (splinter-style) feeding the Studio Advisors pages (~81 static rules + runtime lints).                                                                                    |
 | `@lunora/config`            | **Internal.** Shared CLI+Vite config/scaffolding: `wrangler.jsonc` validator, `.dev.vars` grammar/scaffolder, prompt helper.                                                                   |
@@ -188,12 +194,15 @@ Adding a query/mutation/action/table/cron to `lunora/`, or a fresh `@lunora/<nam
 vis generate lunora-query --name=listMessages              # → lunora/listMessages.ts
 vis generate lunora-mutation --name=sendMessage
 vis generate lunora-action --name=syncWithStripe
+vis generate lunora-http-route --name=stripeWebhook        # → lunora/stripeWebhook.ts (HTTP route)
 vis generate lunora-table --name=invoices                  # AST-merges into lunora/schema.ts
 vis generate lunora-cron --name='clear presence'           # AST-appends to lunora/crons.ts
 vis generate lunora-container --name=transcoder            # → lunora/containers.ts + Dockerfile, wires worker entry
 vis generate lunora-workflow --name=orderPipeline          # appends to lunora/workflows.ts, wires worker entry
 vis generate lunora-queue --name=emailQueue                # producer + queue() consumer
 vis generate lunora-step --name=chargeOrder                # reusable defineStep, run via ctx.runStep
+vis generate lunora-agent --name=support                   # defineAgent, appends to lunora/agents.ts (@lunora/agent)
+vis generate lunora-flags                                  # → lunora/flags.ts singleton (@lunora/flags); refuses if it exists
 vis generate lunora-collections                            # → lunora/collections.ts (@lunora/db)
 vis generate lunora-package --name=foo --description='…'   # → packages/foo/
 vis generate --list                                         # list all generators

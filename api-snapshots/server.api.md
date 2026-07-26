@@ -51,6 +51,7 @@ interface ActionCtx {
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: Storage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
@@ -174,6 +175,7 @@ interface DataModelInit<DataModel> {
 
 ```ts
 interface DatabaseReader {
+    asId: <T extends string>(tableName: T, id: string) => Id<T>;
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
     normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
     query: (tableName: string) => TableReader;
@@ -186,6 +188,12 @@ interface DatabaseReader {
 ```ts
 interface DatabaseWriter extends DatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
+    deleteAll: (tableName: string, options?: {
+        chunkSize?: number;
+        hard?: boolean;
+    }) => Promise<{
+        deleted: number;
+    }>;
     deleteMany: <T extends string>(ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{
         deleted: number;
     }>;
@@ -218,6 +226,14 @@ interface DatabaseWriter extends DatabaseReader {
         patched: number;
     }>;
     replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
+    wipeShard: (options?: {
+        chunkSize?: number;
+        exclude?: ReadonlyArray<string>;
+        tables?: ReadonlyArray<string>;
+    }) => Promise<{
+        deleted: number;
+        tables: Record<string, number>;
+    }>;
 }
 ```
 
@@ -860,6 +876,7 @@ interface LunoraLogMethod {
 interface LunoraLogger {
     readonly debug: LunoraLogMethod;
     readonly error: LunoraLogMethod;
+    readonly event: (name: string, fields?: LogFields) => void;
     readonly fatal: LunoraLogMethod;
     readonly info: LunoraLogMethod;
     readonly log: LunoraLogMethod;
@@ -888,7 +905,13 @@ type LunoraRouteHandler = (c: Context<LunoraHttpEnv>) => Promise<Response>;
 ### `LunoraTracer` (type)
 
 ```ts
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions) => Promise<T>;
+```
+
+### `LunoraWideEvent` (type)
+
+```ts
+type LunoraWideEvent = SpanHandle;
 ```
 
 ### `ManyRelation` (interface)
@@ -1036,6 +1059,7 @@ interface MutationCtx {
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
@@ -1049,6 +1073,7 @@ interface MutationCtx {
 interface MutatorDefinition<Args extends ValidatorMap = ValidatorMap, ServerContext = MutationCtx, ClientTx = unknown, R = unknown> {
     readonly args?: Args;
     readonly client?: (tx: ClientTx, args: InferValidatorMap<Args>) => Promise<void> | void;
+    readonly owner?: string;
     readonly server: (context: ServerContext, args: InferValidatorMap<Args>) => Promise<R> | R;
 }
 ```
@@ -1285,6 +1310,7 @@ interface QueryCtx {
     readonly now: number;
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearchReader;
@@ -1404,7 +1430,9 @@ type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "que
 ```ts
 interface RegisteredShape<Args extends ValidatorMap = ValidatorMap, Context = QueryCtx> extends ShapeDefinition<Args, Context> {
     readonly __lunoraShape: true;
-    readonly compileWhere: (context: unknown, rawArgs: Record<string, unknown>) => WhereInput;
+    readonly compileWhere: (context: unknown, rawArgs: Record<string, unknown>, options?: {
+        ownerField?: string;
+    }) => WhereInput;
 }
 ```
 
@@ -1560,8 +1588,9 @@ interface SearchIndexDefinition {
 interface ShapeDefinition<Args extends ValidatorMap = ValidatorMap, Context = QueryCtx> {
     readonly args?: Args;
     readonly columns?: ReadonlyArray<string>;
+    readonly owner?: string | true;
     readonly table: string;
-    readonly where: (context: Context, args: InferValidatorMap<Args>) => WhereInput;
+    readonly where?: (context: Context, args: InferValidatorMap<Args>) => WhereInput | boolean;
 }
 ```
 
@@ -1598,8 +1627,41 @@ type ShardMode = {
 
 ```ts
 interface SpanHandle {
+    addEvent: (name: string, attributes?: LogFields) => void;
+    addLink: (link: SpanLink) => void;
+    recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;
+    spanContext: () => {
+        spanId: string;
+        traceId: string;
+    };
+}
+```
+
+### `SpanKind` (type)
+
+```ts
+type SpanKind = "client" | "consumer" | "internal" | "producer" | "server";
+```
+
+### `SpanLink` (interface)
+
+```ts
+interface SpanLink {
+    attributes?: LogFields;
+    spanId: string;
+    traceId: string;
+}
+```
+
+### `SpanOptions` (interface)
+
+```ts
+interface SpanOptions {
+    attributes?: LogFields;
+    kind?: SpanKind;
+    links?: SpanLink[];
 }
 ```
 
@@ -1729,6 +1791,7 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     index: (name: string, fields: ReadonlyArray<string>, options?: {
         unique?: boolean;
     }) => TableBuilder<Shape>;
+    ownedBy: (field: keyof Shape & string) => TableBuilder<Shape>;
     public: () => TableBuilder<Shape>;
     rankIndex: (name: string, options: InlineRankIndexOptions<Shape>) => TableBuilder<Shape>;
     relations: (build: (r: RelationBuilder) => Record<string, RelationDefinition>) => TableBuilder<Shape>;
@@ -1759,6 +1822,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     indexes: ReadonlyArray<IndexDefinition>;
     isExternallyManaged?: boolean;
     isPublic?: boolean;
+    ownerField?: string;
     rankIndexes: ReadonlyArray<RankIndexDefinition>;
     relationMap: Record<string, RelationDefinition>;
     searchIndexes: ReadonlyArray<SearchIndexDefinition>;
@@ -2265,6 +2329,12 @@ interface Workflows {
 }
 ```
 
+### `allowAll` (const)
+
+```ts
+const allowAll: () => WhereInput;
+```
+
 ### `anyApi` (const)
 
 ```ts
@@ -2450,6 +2520,12 @@ const defineTable: <Shape extends Record<string, Validator>>(inputShape: Shape) 
 const defineVectorIndex: (options: VectorIndexOptions) => VectorIndexDefinition;
 ```
 
+### `deny` (const)
+
+```ts
+const deny: () => WhereInput;
+```
+
 ### `httpAction` (const)
 
 ```ts
@@ -2480,6 +2556,12 @@ const initLunora: {
 
 ```ts
 const installPlugins: <T extends Record<string, TableDefinition>, const Plugins extends ReadonlyArray<Plugin<any, any, any>>>(base: Schema<T>, plugins: Plugins) => Schema<InstalledTables<T, Plugins>>;
+```
+
+### `isDeny` (const)
+
+```ts
+const isDeny: (where: WhereInput) => boolean;
 ```
 
 ### `isSafeHeaderValue` (const)
@@ -2550,6 +2632,12 @@ const serveStorageObject: (context: ContextWithStorage, key: string, request: Re
 
 ```ts
 const storageRules: <Context extends StorageContextIn = StorageContextIn>(rules: ReadonlyArray<StorageRule<Context>>, options?: StorageRulesOptions) => Middleware<Context, Context>;
+```
+
+### `toWhereInput` (const)
+
+```ts
+const toWhereInput: (decision: WhereInput | boolean | undefined) => WhereInput;
 ```
 
 ### `v` (const)
@@ -3812,6 +3900,31 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+## `@lunora/server/otel`
+
+### `LunoraTraceContext` (interface)
+
+```ts
+interface LunoraTraceContext {
+    readonly span: SpanHandle;
+    readonly trace: LunoraTracer;
+}
+```
+
+### `OtelTracerOptions` (interface)
+
+```ts
+interface OtelTracerOptions {
+    namePrefix?: string;
+}
+```
+
+### `createOtelTracer` (const)
+
+```ts
+const createOtelTracer: (context: LunoraTraceContext, options?: OtelTracerOptions) => Tracer;
+```
+
 ## `@lunora/server/rls/testing`
 
 ### `BoundPolicyAssertion` (interface)
@@ -3876,6 +3989,7 @@ interface ActionCtx {
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: Storage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
@@ -3938,6 +4052,7 @@ interface CachePurge {
 
 ```ts
 interface DatabaseReader {
+    asId: <T extends string>(tableName: T, id: string) => Id<T>;
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
     normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
     query: (tableName: string) => TableReader;
@@ -3950,6 +4065,12 @@ interface DatabaseReader {
 ```ts
 interface DatabaseWriter extends DatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
+    deleteAll: (tableName: string, options?: {
+        chunkSize?: number;
+        hard?: boolean;
+    }) => Promise<{
+        deleted: number;
+    }>;
     deleteMany: <T extends string>(ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{
         deleted: number;
     }>;
@@ -3982,6 +4103,14 @@ interface DatabaseWriter extends DatabaseReader {
         patched: number;
     }>;
     replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
+    wipeShard: (options?: {
+        chunkSize?: number;
+        exclude?: ReadonlyArray<string>;
+        tables?: ReadonlyArray<string>;
+    }) => Promise<{
+        deleted: number;
+        tables: Record<string, number>;
+    }>;
 }
 ```
 
@@ -4161,6 +4290,7 @@ interface LunoraLogMethod {
 interface LunoraLogger {
     readonly debug: LunoraLogMethod;
     readonly error: LunoraLogMethod;
+    readonly event: (name: string, fields?: LogFields) => void;
     readonly fatal: LunoraLogMethod;
     readonly info: LunoraLogMethod;
     readonly log: LunoraLogMethod;
@@ -4183,7 +4313,13 @@ interface LunoraMetrics {
 ### `LunoraTracer` (type)
 
 ```ts
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions) => Promise<T>;
+```
+
+### `LunoraWideEvent` (type)
+
+```ts
+type LunoraWideEvent = SpanHandle;
 ```
 
 ### `MutationCtx` (interface)
@@ -4201,6 +4337,7 @@ interface MutationCtx {
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
@@ -4248,6 +4385,7 @@ interface QueryCtx {
     readonly now: number;
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly secrets: Secrets;
+    readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     readonly trace: LunoraTracer;
     readonly vectors: VectorSearchReader;
@@ -4458,8 +4596,41 @@ type ShardMode = {
 
 ```ts
 interface SpanHandle {
+    addEvent: (name: string, attributes?: LogFields) => void;
+    addLink: (link: SpanLink) => void;
+    recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;
+    spanContext: () => {
+        spanId: string;
+        traceId: string;
+    };
+}
+```
+
+### `SpanKind` (type)
+
+```ts
+type SpanKind = "client" | "consumer" | "internal" | "producer" | "server";
+```
+
+### `SpanLink` (interface)
+
+```ts
+interface SpanLink {
+    attributes?: LogFields;
+    spanId: string;
+    traceId: string;
+}
+```
+
+### `SpanOptions` (interface)
+
+```ts
+interface SpanOptions {
+    attributes?: LogFields;
+    kind?: SpanKind;
+    links?: SpanLink[];
 }
 ```
 
@@ -4537,6 +4708,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     indexes: ReadonlyArray<IndexDefinition>;
     isExternallyManaged?: boolean;
     isPublic?: boolean;
+    ownerField?: string;
     rankIndexes: ReadonlyArray<RankIndexDefinition>;
     relationMap: Record<string, RelationDefinition>;
     searchIndexes: ReadonlyArray<SearchIndexDefinition>;

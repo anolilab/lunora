@@ -563,7 +563,13 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
     // store is built from `env` via `lunora/notify.ts`'s `defineNotify({ store })`;
     // when no `store` is configured (the in-memory default), the gated
     // `__lunora_admin__:listPushSubscriptions` RPC returns an empty device list.
-    ...(options.hasNotify ? [`        options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env) : undefined;`] : []),
+    // The `env` cast is load-bearing: `defineApp`'s `Env` is bound to `object` (so a
+    // wrangler-generated `interface Env` is accepted), while `defineNotify`'s `store`
+    // factory takes `NotifyEnv` — an index signature an interface does not satisfy.
+    // Without it every app with a `lunora/notify.ts` emits an app.ts that fails tsc.
+    ...(options.hasNotify
+        ? [`        options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env as Record<string, unknown>) : undefined;`]
+        : []),
     // The studio's Logs → Archive feed is wired zero-config: when the operator sets
     // `LUNORA_LOG_ARCHIVE_TABLE` (the R2 Data Catalog table `pipelineLogSink` writes
     // to), the durable archive becomes readable; unset ⇒ `undefined` ⇒ the feed
@@ -900,7 +906,7 @@ interface ComposedApp extends LunoraWorker {
  * worker-side \`createWorker\` options — constructing the worker lazily on the
  * first request so per-isolate singletons are built once.
  */
-class AppBuilder<Env extends Record<string, unknown>> {
+class AppBuilder<Env extends object> {
 ${buildFieldLines(options).join("\n")}
 
     private emailHandler?: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
@@ -976,8 +982,17 @@ ${workerOptionLines.join("\n\n")}${workerOptionLines.length > 0 ? "\n\n" : ""}  
     }
 }
 ${buildGlobalHelpers(options.hasGlobal)}
-/** Start composing the app. Chain the capability methods, then \`.build()\`. */
-const defineApp = <Env extends Record<string, unknown>>(): AppBuilder<Env> => new AppBuilder<Env>();
+/**
+ * Start composing the app. Chain the capability methods, then \`.build()\`.
+ *
+ * \`Env\` is constrained to \`object\`, not \`Record<string, unknown>\`: an \`interface Env\`
+ * — which is what wrangler's generated \`worker-configuration.d.ts\` gives you, and
+ * what any app with its own bindings declares — is NOT assignable to an index
+ * signature, so the stricter bound forced every real app to write
+ * \`type AppEnv = Env & Record<string, unknown>\`. The builder only ever reads \`env\`
+ * through the selectors you pass it, so the looser bound costs nothing.
+ */
+const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
 export { AppBuilder, defineApp };
 export type { ${buildExportedTypes(options)} };

@@ -7,6 +7,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioFeatures from "../../hooks/use-studio-features";
 import { useT } from "../../i18n/i18n-context";
 import type { TableInfo, TablePage } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -19,8 +20,9 @@ interface PaymentsPanelProps {
 
 type Row = Record<string, unknown>;
 
-// The `@lunora/payment` store table this panel reads — used as the presence probe.
-const SUBSCRIPTIONS_TABLE = "subscriptions";
+// The `@lunora/payment` store tables this panel reads — used as the runtime
+// read-safety guard (a `readTablePage` on a missing table errors).
+const PAYMENT_STORE_TABLES = ["subscriptions", "events"] as const;
 
 /** Stable empty args for the no-argument `listTables` presence probe (avoids a fresh object each render). */
 const NO_ARGS: Record<string, unknown> = {};
@@ -80,16 +82,24 @@ const badgeVariant = (state: string): "default" | "destructive" | "outline" => {
 const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
     const t = useT();
 
+    // The codegen `payments` signal — the same real signal (payment store tables
+    // declared, matched by shape) the nav gates on. Defaults `true` until the
+    // `studioFeatures` RPC resolves (or for a worker predating it), so it never
+    // hides a working page.
+    const features = useStudioFeatures();
+
     // Presence probe: the payment store tables only exist when the app hand-declares
     // them in its schema (codegen can't resolve `@lunora/payment`'s cross-package table
     // spread), so a bare `readTablePage` on a missing table errors. Nav gating already
     // hides this page for an app that never declares them, but a worker predating the
-    // `studioFeatures` RPC falls back to "show everything" — so gate the reads here too,
-    // and render a helpful empty state instead of an "unknown table" alert.
+    // `studioFeatures` RPC falls back to "show everything" — so gate the reads on the
+    // codegen flag AND confirm the tables are actually present, rendering a helpful
+    // empty state instead of an "unknown table" alert.
     const { data: tables } = useAdminQuery<TableInfo[]>(ADMIN_FUNCTIONS.listTables, NO_ARGS, { live: true });
 
     const loadedTables = tables !== undefined;
-    const hasPaymentTables = Array.isArray(tables) && tables.some((table) => table.name === SUBSCRIPTIONS_TABLE);
+    const tablesPresent = Array.isArray(tables) && PAYMENT_STORE_TABLES.every((name) => tables.some((table) => table.name === name));
+    const hasPaymentTables = features.payments && tablesPresent;
 
     // Payment tables are ordinary app tables, read through the generic
     // `readTablePage` RPC (no payment-specific endpoint). The structural query

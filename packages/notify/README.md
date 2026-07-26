@@ -98,6 +98,35 @@ for (const message of batch.messages) await runPushBroadcastJob(ctx.push, messag
 
 `SubscriptionStore` implementations: `memorySubscriptionStore()` (non-durable default, tests/dev) and `d1SubscriptionStore(db)` (durable, edge-safe, lazy table creation). Lifecycle: register (upsert), list/filter (by kind or user), status marking, and automatic prune of gone subscriptions on send/broadcast.
 
+## Security
+
+`ctx.push.register(...)` and the browser `subscribeToPush` helper both accept
+client-supplied data, so the facade enforces two boundaries:
+
+- **Endpoint validation (anti-SSRF).** Every later `send`/`broadcast` POSTs to a
+  subscription's stored Web Push `endpoint`, so a hostile `endpoint` would turn the
+  worker into an SSRF / amplification primitive. `register()` validates the endpoint
+  **at storage time** (the durable boundary): it must be an absolute `https:` URL
+  with a non-private / non-loopback / non-link-local / non-CGNAT host. To hard-pin
+  the boundary to the push services you actually use, set `allowedPushOrigins` on
+  `defineNotify` — when present, an endpoint's origin must match one of the listed
+  origins **exactly** (no wildcards), which also closes DNS rebinding:
+
+    ```ts
+    export default defineNotify({
+        webPush: (env) => webPushFromEnv(env),
+        allowedPushOrigins: ["https://fcm.googleapis.com", "https://updates.push.services.mozilla.com"],
+        store: (env) => d1SubscriptionStore(env.DB),
+    });
+    ```
+
+- **No secrets on the app facade.** `ctx.push.list()`
+  returns the registered devices with the delivery **secrets stripped** — the Web
+  Push `keys` (`auth`/`p256dh`) and the FCM `token`, which together with the
+  endpoint are enough to deliver arbitrary push to a device. The raw rows are
+  reachable only through the internal `SubscriptionStore` (which handlers never
+  hold); the broadcast path uses the store directly.
+
 ## Delivery observability
 
 Every send is counted onto `ctx.metrics` and failures onto `ctx.log` for you — codegen threads the request's logger/metrics into `ctx.notify` (`createNotify(notifyConfig, env, { log, metrics })`), so there is nothing to wire. Two low-cardinality metric series feed the durable metric history + trend charts:

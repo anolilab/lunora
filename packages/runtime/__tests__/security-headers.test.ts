@@ -331,6 +331,20 @@ describe("enforceOrigin", () => {
         expect(ok).toBeUndefined();
     });
 
+    it("names the received and expected origin plus the knob in the 403 body", async () => {
+        expect.assertions(4);
+
+        const blocked = enforceOrigin(httpsRequest({ method: "POST", headers: { cookie: "session=1", origin: "https://evil.example.com" } }), resolved);
+        const body = (await blocked?.json()) as { error: { expectedOrigin: string; message: string; receivedOrigin: string } };
+
+        // "cross-origin request rejected" alone sends the reader hunting. The body has
+        // to say which origin arrived, which one the worker serves, and the fix.
+        expect(body.error.receivedOrigin).toBe("https://evil.example.com");
+        expect(body.error.expectedOrigin).toBe("https://api.example.com");
+        expect(body.error.message).toContain("security.csrf.trustedOrigins");
+        expect(body.error.message).toContain("dev proxy");
+    });
+
     it("exempts safe methods, bearer/no-cookie requests, and disabled csrf", () => {
         expect.hasAssertions();
 
@@ -369,5 +383,64 @@ describe("enforceOrigin", () => {
         const ok = enforceOrigin(httpsRequest({ method: "POST", headers: { cookie: "session=1", origin: "https://partner.example.com" } }), explicit);
 
         expect(ok).toBeUndefined();
+    });
+});
+
+/**
+ * The dev-proxy shape: the browser loads the app from the dev server (`:3000`),
+ * which proxies to wrangler (`:8787`). With `changeOrigin` the two ports differ, so
+ * a strict same-origin rule rejects the cookie-bearing WS upgrade and the app hangs
+ * on its loading state with no diagnosis.
+ */
+/* eslint-disable sonarjs/no-clear-text-protocols -- plain-http loopback URLs ARE the subject under test; the exemption only applies to them */
+describe("enforceOrigin — loopback dev exemption", () => {
+    const localRequest = (headers: Record<string, string>): Request => new Request("http://localhost:8787/_lunora/rpc", { headers, method: "POST" });
+
+    it("trusts a loopback origin when the worker itself serves on loopback", () => {
+        expect.assertions(3);
+
+        const resolved = resolveSecurity(undefined);
+
+        expect(enforceOrigin(localRequest({ cookie: "s=1", origin: "http://localhost:3000" }), resolved)).toBeUndefined();
+        expect(enforceOrigin(localRequest({ cookie: "s=1", origin: "http://127.0.0.1:5173" }), resolved)).toBeUndefined();
+        expect(enforceOrigin(localRequest({ cookie: "s=1", origin: "http://[::1]:3210" }), resolved)).toBeUndefined();
+    });
+
+    it("does NOT loosen a deployed worker — the exemption needs a loopback self origin", () => {
+        expect.assertions(1);
+
+        const resolved = resolveSecurity(undefined);
+        const blocked = enforceOrigin(httpsRequest({ method: "POST", headers: { cookie: "s=1", origin: "http://localhost:3000" } }), resolved);
+
+        expect(blocked?.status).toBe(403);
+    });
+
+    it("rejects a non-loopback origin even when the worker is local", () => {
+        expect.assertions(1);
+
+        const resolved = resolveSecurity(undefined);
+        const blocked = enforceOrigin(localRequest({ cookie: "s=1", origin: "https://evil.example.com" }), resolved);
+
+        expect(blocked?.status).toBe(403);
+    });
+
+    it("rejects a public *.localhost hostname that only looks local", () => {
+        expect.assertions(1);
+
+        // `evil.localhost` can be pointed at by public DNS — only the three canonical
+        // loopback spellings count.
+        const resolved = resolveSecurity(undefined);
+        const blocked = enforceOrigin(localRequest({ cookie: "s=1", origin: "http://evil.localhost" }), resolved);
+
+        expect(blocked?.status).toBe(403);
+    });
+
+    it("honors allowLoopback: false for a hardened local setup", () => {
+        expect.assertions(1);
+
+        const resolved = resolveSecurity({ csrf: { allowLoopback: false } });
+        const blocked = enforceOrigin(localRequest({ cookie: "s=1", origin: "http://localhost:3000" }), resolved);
+
+        expect(blocked?.status).toBe(403);
     });
 });

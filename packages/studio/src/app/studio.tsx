@@ -110,6 +110,7 @@ const LogsPanel = lazy(() =>
 const MailPanel = lazyNamed(() => import("../features/logs/mail-panel"), "MailPanel");
 const SchedulePanel = lazyNamed(() => import("../features/logs/schedule-panel"), "SchedulePanel");
 const SubscriptionsPanel = lazy(() => import("../features/logs/subscriptions-panel"));
+const SyncClientPanel = lazy(() => import("../features/logs/sync-client-panel"));
 const KvBrowser = lazyNamed(() => import("../features/kv/kv-browser"), "KvBrowser");
 const NotificationsPanel = lazyNamed(() => import("../features/notifications/notifications-panel"), "NotificationsPanel");
 const PaymentsPanel = lazyNamed(() => import("../features/payments/payments-panel"), "PaymentsPanel");
@@ -1149,7 +1150,14 @@ const buildRouter = ({
         mail: <MailPanel />,
         payments: <PaymentsPanel />,
         queues: <QueuesPanel />,
-        realtime: <SubscriptionsPanel initialShardKey={initialShardKey} />,
+        realtime: (
+            <div className="flex flex-col gap-8">
+                {/* Server's view of the live connections… */}
+                <SubscriptionsPanel initialShardKey={initialShardKey} />
+                {/* …paired with the client's own belief, so a disagreement is visible. */}
+                <SyncClientPanel />
+            </div>
+        ),
         rls: <RlsPanel />,
         schedule: <SchedulePanel loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />,
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} schemaEditable={schemaEditable} />,

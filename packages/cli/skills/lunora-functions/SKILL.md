@@ -150,9 +150,44 @@ Declare the index and constrain with `.withIndex`.
 
 ## Other `ctx` capabilities
 
-`ctx.auth` (the resolved session: `ctx.auth.userId`), `ctx.scheduler`
-(`runAfter` / `runAt` for deferred work), `ctx.storage` (R2), `ctx.vectors`
-(Vectorize), and — when their packages are wired — `ctx.ai` and `ctx.containers`.
+Always available:
+
+- `ctx.auth` — the resolved session (`ctx.auth.userId`).
+- `ctx.scheduler` — `runAfter` / `runAt` for deferred work.
+- `ctx.secrets` — Cloudflare Secrets Store.
+- `ctx.span` / `ctx.trace` — the current span and a scoped tracing helper for
+  wide events.
+
+Added by their package when wired. **A dependency in `package.json` is not
+enough** — codegen scans the `lunora/` source set and flips a capability on only
+when a file there imports the `@lunora/*` package or reads its `ctx.*` helper.
+So write the call first, then run `lunora codegen` to surface the typed context:
+
+| `ctx.*`                                                                                   | Package                       |
+| ----------------------------------------------------------------------------------------- | ----------------------------- |
+| `ctx.storage`                                                                             | `@lunora/storage` (R2)        |
+| `ctx.ai`                                                                                  | `@lunora/ai` (Workers AI)     |
+| `ctx.flags`                                                                               | `@lunora/flags` (OpenFeature) |
+| `ctx.queues.<name>`                                                                       | `@lunora/queue`               |
+| `ctx.workflows` / `ctx.runStep`                                                           | `@lunora/workflow`            |
+| `ctx.containers`                                                                          | `@lunora/container`           |
+| `ctx.browser` (action-only)                                                               | `@lunora/browser`             |
+| `ctx.sql` (action-only)                                                                   | `@lunora/hyperdrive`          |
+| `ctx.kv` / `ctx.images` / `ctx.analytics` / `ctx.pipelines` / `ctx.vectors` / `ctx.r2sql` | `@lunora/bindings` subpaths   |
+
+Two exceptions to the usage scan, and one extra requirement:
+
+- **`ctx.flags` gates on a declaration file**, not on usage — codegen wires it
+  only when `lunora/flags.ts` exists (`vis generate lunora-flags` creates it).
+  `ctx.notify` / `ctx.push` work the same way via `lunora/notify.ts`.
+- **`ctx.sql` also needs the real resource.** Codegen types the field, but the
+  connection needs a `HYPERDRIVE` binding (`wrangler hyperdrive create`) and an
+  explicit `createHyperdrive(ctx.env.HYPERDRIVE)` + driver adapter in the
+  action — see `lunora-setup-hyperdrive`. Bindings codegen can provision on its
+  own (e.g. `BROWSER` for `ctx.browser`) need no manual wrangler step.
+
+`ctx.browser` and `ctx.sql` are **action-only** by design — they are
+non-deterministic and would break query reactivity and mutation replay.
 
 ## HTTP endpoints
 

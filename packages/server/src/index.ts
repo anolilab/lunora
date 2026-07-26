@@ -67,7 +67,20 @@ export type {
     TypedDefinePolicyInput,
     WhereInput,
 } from "./rls/index";
-export { buildRlsReadRegistry, composeShapeReadWhere, createPolicyDsl, definePermission, definePolicies, definePolicy, defineRole, rls } from "./rls/index";
+export {
+    allowAll,
+    buildRlsReadRegistry,
+    composeShapeReadWhere,
+    createPolicyDsl,
+    definePermission,
+    definePolicies,
+    definePolicy,
+    defineRole,
+    deny,
+    isDeny,
+    rls,
+    toWhereInput,
+} from "./rls/index";
 export type {
     AggregateIndexOptions,
     ExtendableSchema,
@@ -114,6 +127,7 @@ export type {
     LunoraLogMethod,
     LunoraMetrics,
     LunoraTracer,
+    LunoraWideEvent,
     MutationCtx,
     OnDeleteAction,
     PaginationOptions,
@@ -137,6 +151,9 @@ export type {
     SearchIndexDefinition,
     ShardMode,
     SpanHandle,
+    SpanKind,
+    SpanLink,
+    SpanOptions,
     Storage,
     StorageMetadata,
     SystemDatabaseReader,

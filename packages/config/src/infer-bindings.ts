@@ -529,21 +529,54 @@ interface ClassExportable {
     className: string;
 }
 
+/** Escape a runtime string for safe literal interpolation into a `RegExp` source. */
+const escapeRegExp = (value: string): string => value.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`);
+
 /**
- * Matches a *type-only* export of `className` — `export type Foo` or the
- * inline `export { type Foo }` form. Generalizes {@link TYPE_ONLY_EXPORT_PATTERNS}
- * (built for the fixed DO class set) to an arbitrary generated class name:
- * `es-module-lexer` still lists the name as an export in both cases even
- * though it compiles away, so `detectClassExports` must reject it before
- * flagging `exported: true` — otherwise a binding could reference a class
- * wrangler can't find at deploy.
+ * PRIMARY (lexer-based, per-entry) type-only-export detector. Whether a lexer
+ * export entry is the inline `export { type Foo }` (or `export { type Foo as Bar }`)
+ * form — the one type-only export shape `es-module-lexer` still lists (it already
+ * omits the `export type Foo` declaration and the separate `export type { Foo }`
+ * form from its export list). The `type` qualifier sits immediately before the
+ * entry's LOCAL name, so we test the source right before `entry.ls` (falling back
+ * to `entry.s` when there is no `as` rename). Deciding this PER ENTRY is what keeps
+ * a real value export from being suppressed by an unrelated type-only export
+ * elsewhere in the entry file.
+ *
+ * The imprecise whole-file counterpart used only when the lexer can't parse the
+ * file is {@link isTypeOnlyExportRegexFallback}.
  */
-const isTypeOnlyClassExport = (code: string, className: string): boolean =>
-    // `export type Foo` / `export type { … Foo … }` / `export { type Foo }` — all
-    // three type-only forms list the name via the lexer but compile away.
-    new RegExp(String.raw`\bexport\s+type\s+${className}\b`).test(code) ||
-    new RegExp(String.raw`\bexport\s+type\s*\{[^}]*\b${className}\b`).test(code) ||
-    new RegExp(String.raw`\bexport\s+\{[^}]*\btype\s+${className}\b`).test(code);
+/** The inline `type` qualifier immediately before an export entry's local name (`export { type Foo }`). Module-scoped so it compiles once, not per export entry. */
+const INLINE_TYPE_QUALIFIER = /(?:^|[\s,{])type$/u;
+
+const isTypeOnlyExportEntry = (code: string, entry: { readonly ls: number; readonly s: number }): boolean => {
+    const localStart = entry.ls >= 0 ? entry.ls : entry.s;
+
+    return INLINE_TYPE_QUALIFIER.test(code.slice(0, localStart).trimEnd());
+};
+
+/**
+ * FALLBACK (whole-file regex) type-only-export detector — the imprecise
+ * counterpart to {@link isTypeOnlyExportEntry}, used ONLY when `es-module-lexer`
+ * cannot parse a mid-edit file. Matches a *type-only* export of `className` —
+ * `export type Foo`, the separate `export type { … Foo … }`, or the inline
+ * `export { type Foo }`. Generalizes {@link TYPE_ONLY_EXPORT_PATTERNS} (built for
+ * the fixed DO class set) to an arbitrary generated class name. The class name is
+ * escaped and every pattern carries the `u` flag. The primary (lexer) path decides
+ * type-only-ness per export entry instead — this blind whole-file sweep cannot tell
+ * which `export` a repeated name came from, so a value + separate type export of
+ * the same name still (conservatively) reads type-only here; acceptable for the
+ * rare unparseable-file fallback.
+ */
+const isTypeOnlyExportRegexFallback = (code: string, className: string): boolean => {
+    const name = escapeRegExp(className);
+
+    return (
+        new RegExp(String.raw`\bexport\s+type\s+${name}\b`, "u").test(code) ||
+        new RegExp(String.raw`\bexport\s+type\s*\{[^}]*\b${name}\b`, "u").test(code) ||
+        new RegExp(String.raw`\bexport\s+\{[^}]*\btype\s+${name}\b`, "u").test(code)
+    );
+};
 
 /**
  * Whether the worker entry exports each definition's generated class: a named
@@ -579,24 +612,41 @@ const detectClassExports = <Definition extends ClassExportable>(
     const code = readFileSync(entryPath, "utf8");
     const starReexport = new RegExp(String.raw`\bexport\s*\*\s*from\s*["'][^"']*_generated\/${generatedModule}(?:\.js)?["']`).test(code);
 
-    let exportedNames: Set<string>;
+    // The names exported as a runtime VALUE — the only ones safe to bind, since
+    // wrangler validates a binding's `class_name` against the worker's exports at
+    // deploy. Type-only exports (which compile away) are rejected per entry.
+    let valueExportedNames: Set<string>;
 
     try {
         const [, exports] = lexModule(code);
 
-        exportedNames = new Set(exports.map((entry) => entry.n));
+        // `es-module-lexer` already omits `export type Foo` and the separate
+        // `export type { Foo }` from its export list; the one type-only shape it
+        // still lists is the inline `export { type Foo }`, dropped here per entry.
+        // What remains are the real value exports — so a value `export class Foo {}`
+        // is NOT suppressed by an unrelated `export type { Foo }` elsewhere in the
+        // entry (the prior unanchored whole-file regex's bug).
+        // NB: coupling — `isTypeOnlyExportEntry` reads the source at `entry.ls`/`entry.s`,
+        // the byte offsets `es-module-lexer` reports for THIS `code`, so it must be
+        // passed the same `code` these `exports` were lexed from.
+        valueExportedNames = new Set(exports.filter((entry) => !isTypeOnlyExportEntry(code, entry)).map((entry) => entry.n));
     } catch {
-        exportedNames = new Set(
-            definitions.map((definition) => definition.className).filter((className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`).test(code)),
+        // Fallback for an unparseable (mid-edit) entry: a blind whole-file sweep for
+        // an `export … <className>` that is not a type-only export. Less precise than
+        // the lexer path — see the regex-fallback detector called just below.
+        valueExportedNames = new Set(
+            definitions
+                .map((definition) => definition.className)
+                .filter(
+                    (className) =>
+                        new RegExp(String.raw`\bexport\b[^\n;]*\b${escapeRegExp(className)}\b`, "u").test(code) &&
+                        !isTypeOnlyExportRegexFallback(code, className),
+                ),
         );
     }
 
     return definitions.map((definition) => {
-        // A candidate counts only when it is exported as a runtime value — an
-        // inline `export { type Foo }` (or `export type Foo`) lists the name but
-        // compiles away, and binding it would make `wrangler deploy` fail on the
-        // missing class. Mirrors the same guard as `detectExportedDurableObjects`.
-        const exported = starReexport || (exportedNames.has(definition.className) && !isTypeOnlyClassExport(code, definition.className));
+        const exported = starReexport || valueExportedNames.has(definition.className);
 
         return { ...definition, exported };
     });

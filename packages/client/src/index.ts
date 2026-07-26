@@ -1,3 +1,5 @@
+export type { OptimisticMessage, ReconcileDurableMessage } from "./agent-chat-reconcile";
+export { maxSeq, reconcileOptimistic, RETIRE_AFTER_DURABLE_SEQ_ADVANCE } from "./agent-chat-reconcile";
 export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-storage-persistence";
 export { createAsyncStoragePersistence } from "./async-storage-persistence";
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
@@ -12,7 +14,17 @@ export type { HttpStreamOptions } from "./http-stream";
 export { httpStream } from "./http-stream";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
-export type { BatchSlot, ConnectionStatus, LunoraClientError, MutationCallOptions, MutationSettledEvent, SyncWatermark } from "./lunora-client";
+export type {
+    BatchSlot,
+    ClientDebugShard,
+    ClientDebugSnapshot,
+    ClientDebugSubscription,
+    ConnectionStatus,
+    LunoraClientError,
+    MutationCallOptions,
+    MutationSettledEvent,
+    SyncWatermark,
+} from "./lunora-client";
 export { LunoraClient } from "./lunora-client";
 export type { MutationRunnerSinks } from "./mutation-runner";
 export { createMutationRunner } from "./mutation-runner";

@@ -165,6 +165,17 @@ export interface ExternalSourceIR {
 
 export interface TableIR {
     /**
+     * The `defineSchemaExtension` key that contributed this table, set when it
+     * arrived through `defineSchema(...).extend(...)`. Absent for a table the app
+     * declared itself.
+     *
+     * Drives the generated `AppTableName` union: an add-on's tables
+     * (`ratelimit_buckets`, …) are real tables and stay in `TableName`, but an app
+     * enumerating "my tables" should not have to know about them.
+     */
+    extensionKey?: string;
+
+    /**
      * `true` when the table chain carried `.externallyManaged()` — its rows are
      * written outside Lunora's discoverable insert path (adapter/migration/
      * middleware), so advisor insert-path lints skip it. Optional: hand-built
@@ -304,6 +315,12 @@ export interface MigrationIR {
  * because the runtime object (`columns`/`compileWhere`) carries the authority.
  */
 export interface ShapeIR {
+    /**
+     * The shape's `args` validator map — its partition selector. Lifted so
+     * `_generated/collections.ts` can type the selector a caller passes instead of
+     * widening it to `Record&lt;string, unknown>`. `{}` for a parameterless shape.
+     */
+    args: Record<string, ValidatorIR>;
     /** Export binding name — the shape's registry key and import member. */
     exportName: string;
     /** Path relative to `&lt;projectRoot>/lunora/` without extension — always `"shapes"`. */
@@ -354,10 +371,24 @@ export interface EnvIR {
  * browser bundle separately — only the path crosses to the server side.
  */
 export interface MutatorIR {
+    /**
+     * The mutator's `args` validator map, parsed exactly as a procedure's is, so
+     * the emitted `api.mutators.&lt;name>` reference carries the arg type a client
+     * `defineMutator` infers instead of restating. `{}` for a parameterless
+     * mutator (or one whose `args` isn't an inline object literal).
+     */
+    args: Record<string, ValidatorIR>;
     /** Export binding name — the mutator's registry key and import member. */
     exportName: string;
     /** Path relative to `&lt;projectRoot>/lunora/` without extension — always `"mutators"`. */
     filePath: string;
+
+    /**
+     * Serialized TS source for the authoritative `server` impl's return type,
+     * `Promise&lt;T>` unwrapped. `"unknown"` when ts-morph can't resolve it — same
+     * contract as {@link FunctionIR.returnType}.
+     */
+    returnType: string;
 }
 
 /**
@@ -1133,6 +1164,28 @@ export interface KvKeyAccessIR {
  * arg-derived identity write reaches here. Structurally identical to
  * `AdvisorOwnerFieldWrite`.
  */
+
+/**
+ * One branching `defineShape({ where })` / `definePolicy({ when })` predicate arm
+ * that returns an unrestricted predicate — the `unrestricted_where_branch` lint
+ * input. A denial arm must match NO rows (`deny()` / `{ OR: [] }`); `{}` matches
+ * every row, so the near-miss silently replicates the whole table.
+ */
+export interface UnrestrictedWhereBranchIR {
+    /** Export binding name of the shape / policy the predicate belongs to. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** Which unrestricted form was returned. */
+    form: "empty-object" | "undefined";
+    /** The config key carrying the predicate (`where` for a shape, `when` for a policy). */
+    key: string;
+    /** 1-based line of the offending returned expression. */
+    line: number;
+    /** The declaring call (`defineShape` / `definePolicy`). */
+    owner: string;
+}
+
 export interface OwnerFieldWriteIR {
     /** Export binding name of the procedure performing the write. */
     exportName: string;

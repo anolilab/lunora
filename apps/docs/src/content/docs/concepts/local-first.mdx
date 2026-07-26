@@ -85,7 +85,10 @@ against the local collections) with a `server` implementation (authoritative,
 runs inside the shard DO):
 
 ```ts title="lunora/mutators.ts"
-import { defineMutator, v } from "lunorash/server";
+// Import `defineMutator` from `./_generated/server` (not `lunorash/server`) so the
+// `server` impl's `ctx` is your project's typed `MutationCtx` — schema-checked
+// `ctx.db` with no hand-written context type.
+import { defineMutator, v } from "./_generated/server";
 
 export const sendMessage = defineMutator({
     args: { channelId: v.id("channels"), text: v.string() },
@@ -121,6 +124,35 @@ every push:
   the same transaction, echo `lastMutationId` on the poke.
 - `seq > watermark + 1` → **out-of-order**: reject with `409 OUT_OF_ORDER` and
   the expected sequence; the client resends from `watermark + 1`.
+
+### Owner-scoped writes
+
+A mutator that writes per-user rows should not check ownership by hand. Name the
+owner column with `owner` and the framework enforces it before `server` runs:
+
+```ts title="lunora/mutators.ts"
+export const setText = defineMutator({
+    args: { id: v.id("nodes"), text: v.string(), userId: v.optional(v.string()) },
+    owner: "userId",
+    // `args.userId` IS the verified identity here — nothing was trusted from the client.
+    server: (ctx, { id, text }) => ctx.db.patch(id, { text }),
+});
+```
+
+Three guarantees, none of them repeated per mutator:
+
+- **No identity, no write.** An anonymous caller is rejected outright rather than
+  matching a nullish owner column — the same fail-closed rule an
+  [`owner`-scoped shape](#shapes--partial-replication) applies to reads.
+- **A forged owner is rejected.** A client-supplied value that disagrees with the
+  session is a `403`, not a correctable input.
+- **The column is always the verified value.** So `args[owner]` is safe to write
+  into a row, and declaring it `v.optional(...)` lets the client leave it off the
+  wire entirely.
+
+Unlike a shape's `owner: true`, a mutator names the column: a shape is bound to
+one `table`, so its `.ownedBy(field)` is unambiguous, while one mutator may write
+several tables.
 
 ### Write only the columns you change
 
@@ -168,6 +200,60 @@ On the client these surfaces are wired through [`@lunora/db`](/docs/packages/db)
 and `bindMutators` runs the optimistic transaction + the watermarked server push.
 Framework adapters add a thin `useMutator(handle)` hook over the bound handle —
 reads stay on the existing `useLiveQuery`, no new query hook needed.
+
+Each server mutator is generated as a typed reference on `api.mutators.<name>`,
+so the client body **binds to it** rather than naming it in a string:
+
+```ts title="src/outline-store.ts"
+import { bindMutators, defineMutator } from "@lunora/db/mutators";
+
+import { api } from "../lunora/_generated/api";
+
+const sendMessage = defineMutator({
+    // `args` is inferred from the server mutator's own validators —
+    // `{ channelId: Id<"channels">; text: string }`, not restated here.
+    apply: ({ collections }, args) => {
+        collections.messages.insert({ id: crypto.randomUUID(), ...args });
+    },
+    serverRef: api.mutators.sendMessage,
+});
+```
+
+A rename, a typo, or a moved mutator is now a **type error** instead of a push
+that fails at runtime. The string form (`serverRef: "mutators:sendMessage"`) still
+works as an escape hatch, but nothing checks it and you must restate the arg type
+yourself.
+
+Bind the collections map once with `initMutators` and `collections.<name>` is typed
+inside every optimistic body — and `bindMutators` takes your collections without a
+cast:
+
+```ts title="src/outline-store.ts"
+import { initMutators } from "@lunora/db/mutators";
+
+const { bindMutators, defineMutator } = initMutators<{
+    nodes: typeof wholeOutlineCollection;
+    tagColors: typeof userTagColorsCollection;
+}>();
+```
+
+Pass `onWriteRejected` to `bindMutators` for the aggregate failure channel. A bound
+handle returns a `Transaction` whose `isPersisted` rejects when the server refuses
+the write, so a call you don't await would otherwise leave an unhandled rejection;
+with the hook set, `bindMutators` reports the failure and consumes it (a caller
+that does await still sees it):
+
+```ts
+const mutators = bindMutators(
+    client,
+    {
+        collections,
+        onWriteRejected: ({ code, error, mutator }) => toast.error(`${mutator} failed (${code ?? "unknown"}): ${error.message}`),
+        shardKey: userId,
+    },
+    { setText /* … */ },
+);
+```
 
 ## Cross-shard joins — the one limit
 

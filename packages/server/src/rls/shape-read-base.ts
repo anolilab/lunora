@@ -25,6 +25,7 @@
 import { computeReadBaseWhere, indexRolePermissions, permissionName } from "./middleware";
 import type { RlsTag } from "./policy-tag";
 import { readRlsTag } from "./policy-tag";
+import { deny } from "./predicates";
 import type { Policy, WhereInput } from "./types";
 
 /** A registered function that may carry the rls() tags hoisted from its `.use(rls(...))` chain. */
@@ -68,8 +69,8 @@ interface ShapeReadWhereRequest {
     readonly userId: null | string;
 }
 
-/** Sentinel `WhereInput` compiling to a vacuously-false predicate (deny). Mirrors the middleware. */
-const FALSE_PREDICATE: WhereInput = { OR: [] };
+/** Sentinel `WhereInput` compiling to a vacuously-false predicate (deny). See `./predicates`. */
+const FALSE_PREDICATE: WhereInput = deny();
 
 /** Normalize a registered function (or a raw tagged middleware) to the list of rls() tags it carries. */
 const readEntryTags = (entry: unknown): ReadonlyArray<RlsTag> => {

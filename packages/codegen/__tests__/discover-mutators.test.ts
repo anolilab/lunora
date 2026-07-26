@@ -41,8 +41,8 @@ describe("discover-mutators", () => {
         `);
 
         expect(discoverMutators(newProject(), workdir)).toEqual([
-            { exportName: "editMessage", filePath: "mutators" },
-            { exportName: "sendMessage", filePath: "mutators" },
+            { args: {}, exportName: "editMessage", filePath: "mutators", returnType: "void" },
+            { args: {}, exportName: "sendMessage", filePath: "mutators", returnType: "void" },
         ]);
     });
 
@@ -55,7 +55,7 @@ describe("discover-mutators", () => {
             export const sendMessage = mut({ server: async () => {} });
         `);
 
-        expect(discoverMutators(newProject(), workdir)).toEqual([{ exportName: "sendMessage", filePath: "mutators" }]);
+        expect(discoverMutators(newProject(), workdir)).toEqual([{ args: {}, exportName: "sendMessage", filePath: "mutators", returnType: "void" }]);
     });
 
     it("discovers a namespace-imported defineMutator (server.defineMutator)", () => {
@@ -67,7 +67,7 @@ describe("discover-mutators", () => {
             export const sendMessage = server.defineMutator({ server: async () => {} });
         `);
 
-        expect(discoverMutators(newProject(), workdir)).toEqual([{ exportName: "sendMessage", filePath: "mutators" }]);
+        expect(discoverMutators(newProject(), workdir)).toEqual([{ args: {}, exportName: "sendMessage", filePath: "mutators", returnType: "void" }]);
     });
 
     it("discovers a mutator exported via a separate export statement", () => {
@@ -80,7 +80,52 @@ describe("discover-mutators", () => {
             export { sendMessage };
         `);
 
-        expect(discoverMutators(newProject(), workdir)).toEqual([{ exportName: "sendMessage", filePath: "mutators" }]);
+        expect(discoverMutators(newProject(), workdir)).toEqual([{ args: {}, exportName: "sendMessage", filePath: "mutators", returnType: "void" }]);
+    });
+
+    it("discovers a defineMutator imported from the generated _generated/server re-export", () => {
+        expect.assertions(1);
+
+        // The project-typed form: `_generated/server.ts` re-exports `defineMutator`
+        // bound to this schema's `MutationCtx`, so the authoritative `server` impl
+        // gets a typed `ctx.db`. Discovery must treat it as a real declaration —
+        // otherwise the typed authoring path silently registers nothing.
+        writeMutators(`
+            import { defineMutator } from "./_generated/server";
+
+            export const sendMessage = defineMutator({ server: async () => {} });
+        `);
+
+        expect(discoverMutators(newProject(), workdir)).toEqual([{ args: {}, exportName: "sendMessage", filePath: "mutators", returnType: "void" }]);
+    });
+
+    it("lifts the args validator map and the server impl's return type", () => {
+        expect.assertions(1);
+
+        // Feeds the emitted `api.mutators.<name>` reference: the args type a client
+        // `defineMutator({ serverRef: api.mutators.send })` infers, and the return
+        // type `ctx.runMutation(api.mutators.send, …)` resolves.
+        writeMutators(`
+            import { defineMutator, v } from "@lunora/server";
+
+            export const send = defineMutator({
+                args: { channelId: v.string(), text: v.string(), pinned: v.optional(v.boolean()) },
+                server: async () => ({ ok: true }),
+            });
+        `);
+
+        expect(discoverMutators(newProject(), workdir)).toEqual([
+            {
+                args: {
+                    channelId: { kind: "string" },
+                    pinned: { inner: { kind: "boolean" }, kind: "optional" },
+                    text: { kind: "string" },
+                },
+                exportName: "send",
+                filePath: "mutators",
+                returnType: "{ ok: boolean; }",
+            },
+        ]);
     });
 
     it("ignores a namespace-imported defineMutator from a foreign module", () => {

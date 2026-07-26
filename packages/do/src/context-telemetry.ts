@@ -17,11 +17,91 @@
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
-import { otlpRandomHex } from "../../../shared/otlp";
-import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
+import { buildTraceparent, LUNORA_ATTR, otlpRandomHex } from "../../../shared/otlp";
+import type { SpanEvent, SpanEventPoint, SpanHandle, SpanLink, SpanOptions } from "../../../shared/span-event";
 import { toErrorType } from "./trace-context";
 
-export type { SpanHandle } from "../../../shared/span-event";
+/**
+ * Disambiguate `ctx.trace`'s third argument, which accepts either a plain
+ * attribute bag (`{ orderId }`) or a {@link SpanOptions} object
+ * (`{ kind: "client", attributes: { … } }`).
+ *
+ * The rule is deliberately narrow: it is options ONLY when every key is one of
+ * the three option names. So `{ kind: "client" }` is options and
+ * `{ kind: "premium", plan: "x" }` is attributes — the ambiguity is confined to
+ * a bag whose keys are *exclusively* `attributes`/`kind`/`links`, and the
+ * explicit `{ attributes: { kind: "premium" } }` form resolves even that.
+ *
+ * The alternative — a fourth positional parameter — puts the rarely-used knob
+ * in front of the commonly-used one at every call site, and a hard switch to
+ * options-only would break every existing `ctx.trace(name, fn, { orderId })`.
+ */
+const isSpanOptions = (value: LogFields | SpanOptions): value is SpanOptions => {
+    const keys = Object.keys(value);
+
+    return keys.length > 0 && keys.every((key) => key === "attributes" || key === "kind" || key === "links");
+};
+
+/**
+ * Bound cardinality of what one span body can attach. A span is not a log
+ * stream: a loop calling `addEvent` per iteration would otherwise build an
+ * unbounded array inside the request and then try to ship it, which fails the
+ * collector's own limits anyway (OTel's default span-event limit is 128). We
+ * keep the FIRST N rather than the last, because the events that explain a
+ * runaway loop are at its start.
+ */
+const MAX_SPAN_EVENTS = 128;
+const MAX_SPAN_LINKS = 128;
+
+/**
+ * Redact an outbound URL for a span attribute: scheme, host, and path, with the
+ * query string and any userinfo dropped.
+ *
+ * `url.full` is the OTel-conventional attribute, but a query string routinely
+ * carries API keys, signed-URL signatures, and session tokens — and a span is
+ * exactly the thing that gets shipped to a third-party collector and kept for
+ * months. The path alone answers "which endpoint was slow"; the secret in the
+ * query answers nothing worth that risk.
+ */
+const redactUrl = (raw: string): string => {
+    try {
+        const url = new URL(raw);
+
+        return `${url.protocol}//${url.host}${url.pathname}`;
+    } catch {
+        // Not absolute (a relative path, or a malformed string) — nothing to strip.
+        return raw;
+    }
+};
+
+/** Host of a URL, or the raw string when it will not parse. Used for low-cardinality span names. */
+const safeHost = (raw: string): string => {
+    try {
+        return new URL(raw).host;
+    } catch {
+        return raw;
+    }
+};
+
+/** Run a caller's propagation predicate, defaulting to NOT propagating if it throws or the URL won't parse. */
+const safePropagate = (predicate: (url: URL) => boolean, raw: string): boolean => {
+    try {
+        return predicate(new URL(raw));
+    } catch {
+        return false;
+    }
+};
+
+/** Normalize `ctx.trace`'s third argument into a {@link SpanOptions} (see {@link isSpanOptions}). */
+const resolveSpanOptions = (options: LogFields | SpanOptions | undefined): SpanOptions => {
+    if (options === undefined) {
+        return {};
+    }
+
+    return isSpanOptions(options) ? options : { attributes: options };
+};
+
+export type { SpanEventPoint, SpanHandle, SpanKind, SpanLink, SpanOptions } from "../../../shared/span-event";
 
 /**
  * Structural shape of the `ctx.trace` span factory (see the server
@@ -33,7 +113,11 @@ export type { SpanHandle } from "../../../shared/span-event";
  * which it can attach attributes only known *after* it resolves (post-hoc). It is
  * a trailing parameter, so a `(trace) => …` body that ignores it still conforms.
  */
-export type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields) => Promise<T>;
+export type ContextTracer = <T>(
+    name: string,
+    function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T,
+    options?: LogFields | SpanOptions,
+) => Promise<T>;
 
 /** Structural shape of the `ctx.metrics` recorder (see the server `LunoraMetrics`). */
 export interface ContextMetrics {
@@ -45,6 +129,14 @@ export interface ContextMetrics {
 /** The trace a ctx's spans hang off: the shared id, and the span they parent to. */
 export interface TraceAnchor {
     rootSpanId: string;
+
+    /**
+     * The W3C `sampled` verdict for this trace, inherited from the inbound
+     * `traceparent` when there was one. Carried on the anchor rather than
+     * re-derived per outbound call so every `ctx.fetch` of one dispatch
+     * propagates the same answer.
+     */
+    sampled?: boolean;
     traceId: string;
 }
 
@@ -162,21 +254,24 @@ export const applyCloudflareSpanAttributes = (
         return;
     }
 
-    span.setAttribute("lunora.function_path", meta.functionPath);
-    span.setAttribute("lunora.ok", meta.ok);
-    span.setAttribute("lunora.duration_ms", meta.durationMs);
+    span.setAttribute(LUNORA_ATTR.functionPath, meta.functionPath);
+    span.setAttribute(LUNORA_ATTR.ok, meta.ok);
+    span.setAttribute(LUNORA_ATTR.durationMs, meta.durationMs);
 
     if (meta.shardKey !== undefined) {
-        span.setAttribute("lunora.shard_key", meta.shardKey);
+        span.setAttribute(LUNORA_ATTR.shardKey, meta.shardKey);
     }
 
     if (meta.userId !== undefined) {
-        span.setAttribute("lunora.user_id", meta.userId);
+        span.setAttribute(LUNORA_ATTR.userId, meta.userId);
     }
 
     if (meta.error !== undefined) {
-        span.setAttribute("lunora.error.type", meta.error.type);
-        span.setAttribute("lunora.error.message", meta.error.message);
+        // Wire change: these were `lunora.error.type` / `lunora.error.message`;
+        // they now converge on the OTel-standard `error.type` / `error.message`
+        // so a collector query matches the worker exporter's span too.
+        span.setAttribute(LUNORA_ATTR.errorType, meta.error.type);
+        span.setAttribute(LUNORA_ATTR.errorMessage, meta.error.message);
     }
 
     for (const [key, value] of Object.entries(meta.attributes)) {
@@ -184,6 +279,81 @@ export const applyCloudflareSpanAttributes = (
             span.setAttribute(`lunora.attr.${key}`, value);
         }
     }
+};
+
+/** Everything a {@link SpanHandle}'s body attached, ready to merge into the recorded span. */
+export interface SpanCollection {
+    attributes: Record<string, LogFields[string]>;
+    events: SpanEventPoint[];
+    links: SpanLink[];
+}
+
+/** A {@link SpanHandle} plus read access to what it has collected so far. */
+export interface SpanCollector {
+    collected: SpanCollection;
+    handle: SpanHandle;
+}
+
+/**
+ * Build a span's post-hoc collection surface: the {@link SpanHandle} handed to a
+ * `ctx.trace` body, and the bag it writes into.
+ *
+ * Factored out because the same surface backs two things — every `ctx.trace`
+ * span, and the per-dispatch **wide event** (`ctx.span`), where the accumulated
+ * attributes become the canonical one-event-per-request summary. Sharing the
+ * implementation is what makes those two feel like the same API instead of two
+ * that happen to resemble each other.
+ */
+export const createSpanCollector = (ids: { spanId: string; traceId: string }): SpanCollector => {
+    const collected: SpanCollection = { attributes: {}, events: [], links: [] };
+
+    const handle: SpanHandle = {
+        spanContext: () => ids,
+        addEvent: (name, attributes) => {
+            if (collected.events.length >= MAX_SPAN_EVENTS) {
+                return;
+            }
+
+            const normalized = normalizeLogFields(attributes);
+
+            collected.events.push({
+                ...(normalized === undefined ? {} : { attributes: normalized }),
+                name,
+                ts: Date.now(),
+            });
+        },
+        addLink: (link) => {
+            if (collected.links.length >= MAX_SPAN_LINKS) {
+                return;
+            }
+
+            const normalized = normalizeLogFields(link.attributes);
+
+            collected.links.push({
+                ...(normalized === undefined ? {} : { attributes: normalized }),
+                spanId: link.spanId,
+                traceId: link.traceId,
+            });
+        },
+        recordException: (error) => {
+            // The OTel-conventional `exception` event. `exception.stacktrace` is
+            // included when present because a HANDLED exception has no other
+            // record — nothing re-throws it for a top-level handler to log.
+            handle.addEvent("exception", {
+                "exception.message": error instanceof Error ? error.message : String(error),
+                ...(error instanceof Error && typeof error.stack === "string" ? { "exception.stacktrace": error.stack } : {}),
+                "exception.type": toErrorType(error),
+            });
+        },
+        setAttribute: (key, value) => {
+            Object.assign(collected.attributes, normalizeLogFields({ [key]: value }));
+        },
+        setAttributes: (fields) => {
+            Object.assign(collected.attributes, normalizeLogFields(fields));
+        },
+    };
+
+    return { collected, handle };
 };
 
 /**
@@ -247,26 +417,21 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
 
     const tracerFor =
         (parentSpanId: string): ContextTracer =>
-        async <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields): Promise<T> => {
+        async <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, options?: LogFields | SpanOptions): Promise<T> => {
             const spanId = otlpRandomHex(8);
             const startTs = Date.now();
+            // Either a plain attribute bag or a full options object — see
+            // `isSpanOptions` for the (deliberately narrow) discriminator.
+            const resolved: SpanOptions = resolveSpanOptions(options);
             // Normalized once, before the body runs, so a caller mutating the
             // attributes object mid-span can't alter what gets recorded.
-            const normalized = normalizeLogFields(attributes);
+            const normalized = normalizeLogFields(resolved.attributes);
 
-            // Post-hoc attributes the body sets through its `SpanHandle` — merged
-            // over `normalized` at record time (post-hoc wins on a key clash).
-            // Each write is normalized through the same field coercer as the start
-            // attributes, so the merged bag stays JSON-safe.
-            const collected: Record<string, LogFields[string]> = {};
-            const spanHandle: SpanHandle = {
-                setAttribute: (key, value) => {
-                    Object.assign(collected, normalizeLogFields({ [key]: value }));
-                },
-                setAttributes: (fields) => {
-                    Object.assign(collected, normalizeLogFields(fields));
-                },
-            };
+            // Post-hoc attributes/events/links the body attaches through its
+            // `SpanHandle`. Attributes merge over `normalized` at record time
+            // (post-hoc wins on a key clash); each write is normalized through the
+            // same field coercer as the start attributes, so the bag stays JSON-safe.
+            const { collected, handle: spanHandle } = createSpanCollector({ spanId, traceId: anchor.traceId });
 
             // The recorded span (our `SpanBuffer`/`otlpSink`) is produced here
             // IDENTICALLY whether or not the CF bridge is active. An optional
@@ -300,7 +465,10 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     // post-hoc; post-hoc wins on a key clash. Emit `attributes`
                     // only when the merged bag is non-empty, so a span with
                     // neither doesn't ride an empty object.
-                    const merged = { ...normalized, ...collected };
+                    const merged = { ...normalized, ...collected.attributes };
+                    // Start links (known up front) then post-hoc ones, in the order
+                    // they were declared — a link list is causal history, not a set.
+                    const links = [...(resolved.links ?? []), ...collected.links];
 
                     // Guarded here, not only in the injected `record`: the span is
                     // recorded *after* the body already settled, so a telemetry
@@ -313,8 +481,13 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                         record({
                             ...(Object.keys(merged).length === 0 ? {} : { attributes: merged }),
                             durationMs,
+                            ...(collected.events.length === 0 ? {} : { events: collected.events }),
                             ...(error === undefined ? {} : { error }),
                             functionPath,
+                            // Omitted when `"internal"` so the default costs no
+                            // bytes and pre-existing recorded spans stay identical.
+                            ...(resolved.kind === undefined || resolved.kind === "internal" ? {} : { kind: resolved.kind }),
+                            ...(links.length === 0 ? {} : { links }),
                             name,
                             ok,
                             parentSpanId,
@@ -366,6 +539,124 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
         };
 
     return tracerFor(anchor.rootSpanId);
+};
+
+/** What {@link createTracedFetch} needs from the shard. */
+export interface TracedFetchDeps {
+    /** The trace the CLIENT spans belong to. */
+    anchor: TraceAnchor;
+    /** Function path the spans are attributed to. */
+    functionPath: string;
+
+    /**
+     * Whether to inject `traceparent` into the outbound request — and, with a
+     * predicate, to which destinations. Default `true`.
+     */
+    propagate?: ((url: URL) => boolean) | boolean;
+    /** Hand a finished span to the buffer + sink. */
+    record: (span: SpanEvent) => void;
+    /** Shard key for single-shard calls; absent for the unnamed root DO. */
+    shardKey: string | undefined;
+    /** Read lazily — the acting user is resolved per span. */
+    userId: () => string | undefined;
+}
+
+/** The `fetch` shape `ctx.fetch` exposes — the platform global's, narrowed to what we wrap. */
+export type ContextFetch = (input: Request | string | URL, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Build `ctx.fetch`: the platform `fetch`, wrapped so every outbound call
+ * becomes a **CLIENT span** and carries W3C trace context to the callee.
+ *
+ * Two gaps close here. First, an uninstrumented `fetch` makes the single most
+ * common source of latency — waiting on somebody else's service — invisible: a
+ * handler that spends 900ms in Stripe shows one opaque 900ms bar. Second,
+ * without an outbound `traceparent` the callee starts a brand-new trace, so the
+ * two halves of one logical request can never be stitched together, which is the
+ * entire premise of distributed tracing.
+ *
+ * The span id is minted BEFORE the request is sent, precisely so the header
+ * announces the id the span will actually be recorded under. Deriving it
+ * afterwards (or reusing the parent's) would produce a `traceparent` naming a
+ * span that never existed, and a callee parented to nothing.
+ *
+ * Kind is `client` rather than `internal` — that is what lets a collector draw
+ * the edge to the downstream service in a service map.
+ *
+ * Failures are recorded and re-thrown untouched, and a non-2xx response is
+ * recorded as an ERROR span (it is a failed call from the caller's point of
+ * view) while still being returned normally — instrumentation, never flow
+ * control.
+ */
+export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): ContextFetch => {
+    const { anchor, functionPath, propagate = true, record, shardKey, userId } = deps;
+
+    return async (input: Request | string | URL, init?: RequestInit): Promise<Response> => {
+        const spanId = otlpRandomHex(8);
+        const startTs = Date.now();
+        const request = new Request(input, init);
+        const shouldPropagate = typeof propagate === "function" ? safePropagate(propagate, request.url) : propagate;
+
+        if (shouldPropagate) {
+            // Set, not appended: a caller that already put a `traceparent` on the
+            // request meant it, but our span is the immediate parent of whatever
+            // the callee records, so ours is the correct one to send.
+            // `anchor.sampled` — NOT a hardcoded `true`. Telling the callee a trace
+            // is sampled when it was sampled out upstream makes it record spans
+            // for a trace nobody kept, and the collector holds an orphan.
+            request.headers.set("traceparent", buildTraceparent(anchor.traceId, spanId, anchor.sampled ?? true));
+        }
+
+        // No separate `ok` flag: it is exactly `error === undefined` on every path
+        // (a non-2xx response sets `error` just as a thrown failure does), and a
+        // seeded `let ok = true` was a dead write CodeQL rightly flagged.
+        let error: SpanEvent["error"];
+        let status: number | undefined;
+
+        try {
+            const response = await base(request);
+
+            status = response.status;
+
+            if (!response.ok) {
+                error = { message: `HTTP ${String(response.status)}`, type: `HTTP_${String(response.status)}` };
+            }
+
+            return response;
+        } catch (error_) {
+            error = { message: error_ instanceof Error ? error_.message : String(error_), type: toErrorType(error_) };
+
+            throw error_;
+        } finally {
+            try {
+                record({
+                    attributes: {
+                        "http.request.method": request.method,
+                        ...(status === undefined ? {} : { "http.response.status_code": status }),
+                        "url.full": redactUrl(request.url),
+                    },
+                    durationMs: Date.now() - startTs,
+                    ...(error === undefined ? {} : { error }),
+                    functionPath,
+                    kind: "client",
+                    // Low-cardinality: the method plus the host, never the full
+                    // path. A span name built from a path with ids in it makes
+                    // every request its own group in a collector, which is how a
+                    // trace backend's aggregate views get destroyed.
+                    name: `${request.method} ${safeHost(request.url)}`,
+                    ok: error === undefined,
+                    parentSpanId: anchor.rootSpanId,
+                    shardKey,
+                    spanId,
+                    startTs,
+                    traceId: anchor.traceId,
+                    userId: userId(),
+                });
+            } catch {
+                // Best-effort — see createTracer.
+            }
+        }
+    };
 };
 
 /**
@@ -430,6 +721,15 @@ export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
  */
 export const dispatchRootSpan = (input: {
     anchor: TraceAnchor;
+
+    /**
+     * What the handler attached to the dispatch through `ctx.span` — the **wide
+     * event**. These are the attributes that would otherwise have been scattered
+     * across a dozen `ctx.log` lines; carrying them on the one span that already
+     * exists per request is the OTel-native way to get a wide event without
+     * multiplying log records.
+     */
+    collected?: SpanCollection;
     durationMs: number;
     failure: { thrown: unknown } | undefined;
     functionPath: string;
@@ -437,11 +737,14 @@ export const dispatchRootSpan = (input: {
     startTs: number;
     userId: string | undefined;
 }): SpanEvent => {
-    const { anchor, durationMs, failure, functionPath, shardKey, startTs, userId } = input;
+    const { anchor, collected, durationMs, failure, functionPath, shardKey, startTs, userId } = input;
+    const attributes = collected?.attributes ?? {};
 
     return {
+        ...(Object.keys(attributes).length === 0 ? {} : { attributes }),
         dispatch: true,
         durationMs,
+        ...(collected === undefined || collected.events.length === 0 ? {} : { events: collected.events }),
         ...(failure === undefined
             ? {}
             : {
@@ -451,6 +754,7 @@ export const dispatchRootSpan = (input: {
                   },
               }),
         functionPath,
+        ...(collected === undefined || collected.links.length === 0 ? {} : { links: collected.links }),
         name: functionPath,
         ok: failure === undefined,
         // Empty: this span IS the trace's root locally. The worker's own RPC span

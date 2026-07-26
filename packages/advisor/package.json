@@ -1,6 +1,6 @@
 {
     "name": "@lunora/advisor",
-    "version": "1.0.0-alpha.33",
+    "version": "1.0.0-alpha.42",
     "description": "Schema & query lints (splinter-style advisors) for Lunora, feeding the Studio Advisors view",
     "keywords": [
         "advisor",
@@ -54,17 +54,19 @@
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
         "fallow:dead-code": "fallow dead-code",
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.7",
-        "@lunora/server": "1.0.0-alpha.30"
+        "@lunora/errors": "1.0.0-alpha.8",
+        "@lunora/server": "1.0.0-alpha.39"
     },
     "devDependencies": {
-        "@lunora/values": "1.0.0-alpha.10",
+        "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/values": "1.0.0-alpha.11",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

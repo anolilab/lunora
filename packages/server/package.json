@@ -1,6 +1,6 @@
 {
     "name": "@lunora/server",
-    "version": "1.0.0-alpha.30",
+    "version": "1.0.0-alpha.39",
     "description": "Server primitives for Lunora: defineSchema, defineTable, query, mutation, and action",
     "keywords": [
         "backend",
@@ -56,6 +56,10 @@
             "types": "./dist/rls/testing.d.ts",
             "import": "./dist/rls/testing.mjs"
         },
+        "./otel": {
+            "types": "./dist/otel.d.ts",
+            "import": "./dist/otel.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -77,14 +81,15 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.7",
-        "@lunora/scheduler": "1.0.0-alpha.11",
-        "@lunora/values": "1.0.0-alpha.10",
+        "@lunora/errors": "1.0.0-alpha.8",
+        "@lunora/scheduler": "1.0.0-alpha.12",
+        "@lunora/values": "1.0.0-alpha.11",
         "drizzle-orm": "catalog:drizzle",
         "hono": "catalog:http"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
+        "@opentelemetry/api": "catalog:otel",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
@@ -92,6 +97,14 @@
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@opentelemetry/api": "catalog:otel"
+    },
+    "peerDependenciesMeta": {
+        "@opentelemetry/api": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

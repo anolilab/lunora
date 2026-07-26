@@ -162,7 +162,7 @@ describe("createTracer cloudflare custom-spans bridge", () => {
         const writes = new Map(span.writes);
 
         expect(writes.get("lunora.ok")).toBe(false);
-        expect(writes.get("lunora.error.message")).toBe("kaboom");
+        expect(writes.get("error.message")).toBe("kaboom");
     });
 
     it("records an IDENTICAL SpanEvent (bar the per-call id/timestamps) with the bridge on", async () => {

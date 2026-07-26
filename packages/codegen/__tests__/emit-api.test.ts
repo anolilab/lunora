@@ -203,6 +203,106 @@ describe("emitApi", () => {
         expect(rendered).not.toContain('import("../_generated/dataModel.js")');
     });
 
+    it("adds the mandatory .js back to an extensionless generated qualifier", () => {
+        expect.assertions(2);
+
+        // A function file may import generated types without the extension
+        // (`from "./_generated/dataModel"`) — the repo's own convention. ts-morph
+        // prints the specifier verbatim, and an extensionless relative qualifier is
+        // a TS2835 in `_generated/api.ts`, which is consumed under NodeNext.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "list",
+                filePath: "messages",
+                kind: "query",
+                returnType: 'import("./_generated/dataModel").Doc_messages[]',
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
+        expect(rendered).not.toContain('import("./dataModel")');
+    });
+
+    it("rewrites base-package qualifiers to the umbrella subpath (and only for base packages)", () => {
+        expect.assertions(4);
+
+        // An umbrella-only app has no `@lunora/values` in its `package.json`, so a
+        // checker-rendered `import("@lunora/values").Id<…>` — common when a mutator's
+        // `server` impl returns `ctx.db.insert(...)` from a file that never imports
+        // `Id` — is a TS2307 in the generated file. Add-ons stay scoped: they are
+        // installed separately either way.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "insert",
+                filePath: "messages",
+                kind: "mutation",
+                returnType: 'import("@lunora/values").Id<"messages">',
+            },
+            {
+                args: {},
+                exportName: "notify",
+                filePath: "messages",
+                kind: "mutation",
+                returnType: 'import("@lunora/notify").Receipt',
+            },
+        ];
+
+        const umbrella = emitApi({ functions, useUmbrella: true });
+
+        expect(umbrella).toContain('import("lunorash/values").Id<"messages">');
+        expect(umbrella).toContain('import("@lunora/notify").Receipt');
+
+        const scoped = emitApi({ functions });
+
+        expect(scoped).toContain('import("@lunora/values").Id<"messages">');
+        expect(scoped).toContain('import("@lunora/notify").Receipt');
+    });
+
+    it("emits a typed api.mutators.<name> reference per custom mutator", () => {
+        expect.assertions(4);
+
+        // Finding #17 from the first third-party adoption: `serverRef` was an
+        // unchecked string because `api.mutators.*` did not exist, so 23 client
+        // mutators each restated `"mutators:insertSibling"` AND its arg type.
+        const rendered = emitApi({
+            functions: [],
+            mutators: [
+                { args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", returnType: "{ ok: boolean }" },
+                { args: {}, exportName: "clear", filePath: "mutators", returnType: "void" },
+            ],
+        });
+
+        expect(rendered).toContain("    mutators: {");
+        // Sorted by export name, regardless of discovery order.
+        expect(rendered.indexOf("clear:")).toBeLessThan(rendered.indexOf("setText:"));
+        expect(rendered).toContain('setText: FunctionReference<"mutation", { text: string }, { ok: boolean }>;');
+        expect(rendered).toContain('clear: FunctionReference<"mutation", {}, void>;');
+    });
+
+    it("lets an app-registered function in mutators.ts win over a same-named mutator", () => {
+        expect.assertions(2);
+
+        // Both would render into the `mutators` namespace; a duplicate interface
+        // member is invalid TS, so the discovered function is authoritative.
+        const rendered = emitApi({
+            functions: [{ args: {}, exportName: "setText", filePath: "mutators", kind: "query", returnType: "string" }],
+            mutators: [{ args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", returnType: "void" }],
+        });
+
+        expect(rendered).toContain('setText: FunctionReference<"query", {}, string>;');
+        expect(rendered).not.toContain('setText: FunctionReference<"mutation"');
+    });
+
+    it("emits mutator-free api output byte-identical to a mutator-unaware call", () => {
+        expect.assertions(1);
+
+        expect(emitApi({ functions: [], mutators: [] })).toBe(emitApi({ functions: [] }));
+    });
+
     it("quotes a leading-digit namespace key so the emitted interface stays valid TS", () => {
         expect.assertions(3);
 

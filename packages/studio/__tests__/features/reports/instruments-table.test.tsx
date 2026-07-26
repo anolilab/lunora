@@ -170,6 +170,65 @@ describe("instrumentsTable", () => {
         });
     });
 
+    it("surfaces an RPC error as a muted notice instead of vanishing", async () => {
+        expect.assertions(2);
+
+        // A stale admin token / permission failure must not be indistinguishable
+        // from "no custom metrics" — the section renders a one-line notice, not null.
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetricSeries) {
+                    throw new Error("admin token expired");
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getMetricHistory) {
+                    return { series: [] };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderTable(mock));
+
+        const notice = await screen.findByTestId("mt-instruments-error");
+
+        expect(notice).toBeDefined();
+        expect(notice.textContent).toContain("admin token expired");
+    });
+
+    it("renders nothing when the worker predates the getMetricSeries RPC (FUNCTION_NOT_FOUND)", async () => {
+        expect.assertions(1);
+
+        // A worker built before getMetricSeries existed answers the read with the
+        // catalog `FUNCTION_NOT_FOUND` code. That's the pre-feature case the sibling
+        // getMetricHistory swallows — the section must stay fully absent (same as an
+        // uninstrumented app), NOT surface a false "Instruments unavailable" notice.
+        const preFeatureError = Object.assign(new Error("function not registered: __lunora_admin__:getMetricSeries"), {
+            code: "FUNCTION_NOT_FOUND",
+        });
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetricSeries) {
+                    throw preFeatureError;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getMetricHistory) {
+                    return { series: [] };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderTable(mock));
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("mt-instruments")).toBeNull();
+        });
+    });
+
     it("draws a trend sparkline for a series that has ≥2 durable history buckets", async () => {
         expect.assertions(1);
 
