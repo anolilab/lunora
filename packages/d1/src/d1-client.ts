@@ -210,5 +210,4 @@ class D1Client {
 
 export { D1Client, D1Session };
 
-
-export {type D1DatabaseLike, type D1PreparedStatementLike,type D1SessionLike} from "@lunora/platform";
+export { type D1DatabaseLike, type D1PreparedStatementLike, type D1SessionLike } from "@lunora/platform";

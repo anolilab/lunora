@@ -327,6 +327,22 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
     let generation = 0;
     const mappedByTag = new Map<string, { generation: number; handles: SocketHandle[]; length: number }>();
 
+    /**
+     * Sockets this host has already determined are not its own.
+     *
+     * The last resort in `handleFor` is a linear scan of the runtime's socket
+     * array, and a NEGATIVE answer is the expensive case: it scans the whole set
+     * to conclude nothing. Without this, a socket the runtime keeps handing us
+     * that we never accepted — the `webSocketMessage` sender in a fan-out
+     * benchmark, a relay-tier peer — pays that scan on every single frame.
+     *
+     * Safe to keep forever because it can only become stale in one direction, and
+     * that direction is already covered: a socket enters through `accept`, which
+     * populates `liveHandles`, and `handleFor` checks that FIRST. So a later
+     * accept always wins over a cached negative.
+     */
+    const notOurs = new WeakSet<WebSocket>();
+
     const getHandle = (ws: WebSocket): CloudflareSocketHandle => {
         const existing = liveHandles.get(ws);
 
@@ -408,6 +424,10 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
 
             // Doubles that never implement `getTags` still went through `accept`
             // here, which records a fallback id.
+            if (notOurs.has(ws)) {
+                return undefined;
+            }
+
             if (fallbackIds.has(ws)) {
                 return getHandle(ws);
             }
@@ -418,7 +438,13 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
             // id; refusing it here would hand back the raw socket and split the
             // per-socket memo identity. Unreachable on a real runtime, where
             // every live socket was accepted and matched above.
-            return state.getWebSockets().includes(ws) ? getHandle(ws) : undefined;
+            if (state.getWebSockets().includes(ws)) {
+                return getHandle(ws);
+            }
+
+            notOurs.add(ws);
+
+            return undefined;
         },
     };
 };

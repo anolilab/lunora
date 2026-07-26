@@ -166,6 +166,52 @@ describe("createSocketHost getSockets memo", () => {
         expect(afterWake.handleFor(new FakeSocket())).toBeUndefined();
     });
 
+    it("scans at most once for a socket that is not ours", () => {
+        expect.assertions(3);
+
+        const live: FakeSocket[] = [];
+        const base = stateWith(live);
+        let scans = 0;
+        const state = {
+            ...base,
+            getWebSockets: (tag?: string) => {
+                scans += 1;
+
+                return base.getWebSockets(tag);
+            },
+        };
+        const host = createSocketHost(state as never);
+
+        host.accept(new FakeSocket());
+
+        const stranger = new FakeSocket();
+
+        scans = 0;
+
+        // The runtime can hand back a socket this host never accepted — a whisper
+        // sender in another pool, a relay peer. Concluding "not mine" costs a full
+        // scan, so repeating it per frame is the expensive direction to get wrong.
+        expect(host.handleFor(stranger)).toBeUndefined();
+        expect(host.handleFor(stranger)).toBeUndefined();
+        expect(scans).toBe(1);
+    });
+
+    it("lets a later accept win over a cached negative", () => {
+        expect.assertions(2);
+
+        const live: FakeSocket[] = [];
+        const host = createSocketHost(stateWith(live) as never);
+        const socket = new FakeSocket();
+
+        expect(host.handleFor(socket)).toBeUndefined();
+
+        // `accept` populates the handle cache, which `handleFor` consults BEFORE
+        // the negative set — so the stale "not ours" can never shadow it.
+        const handle = host.accept(socket);
+
+        expect(host.handleFor(socket)?.id).toBe(handle.id);
+    });
+
     it("memoizes each tag independently", () => {
         expect.assertions(3);
 

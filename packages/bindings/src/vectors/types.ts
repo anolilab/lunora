@@ -52,6 +52,14 @@ export interface LunoraVectors {
     upsertMany: <TInput>(indexName: string, inputs: ReadonlyArray<UpsertInput<TInput>>) => Promise<VectorizeUpsertMutation>;
 }
 
-
-
-export { type VectorizeDeleteMutation, type VectorizeIndexDetails, type VectorizeIndexLike, type VectorizeMatch, type VectorizeMatches, type VectorizeQueryOptions, type VectorizeUpsertMutation, type VectorizeVector,type VectorMetric } from "@lunora/platform";
+export {
+    type VectorizeDeleteMutation,
+    type VectorizeIndexDetails,
+    type VectorizeIndexLike,
+    type VectorizeMatch,
+    type VectorizeMatches,
+    type VectorizeQueryOptions,
+    type VectorizeUpsertMutation,
+    type VectorizeVector,
+    type VectorMetric,
+} from "@lunora/platform";
