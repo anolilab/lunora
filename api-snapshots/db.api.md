@@ -60,6 +60,7 @@ interface CheckpointRegistry {
     acknowledge: (watermark: CheckpointWatermark) => void;
     awaitCheckpoint: (cursor: number) => Promise<void>;
     awaitMutationId: (id: number) => Promise<void>;
+    dispose: () => void;
     resolve: (watermark: CheckpointWatermark) => void;
     stats: () => CheckpointRegistryStats;
 }
@@ -450,6 +451,7 @@ interface CheckpointRegistry {
     acknowledge: (watermark: CheckpointWatermark) => void;
     awaitCheckpoint: (cursor: number) => Promise<void>;
     awaitMutationId: (id: number) => Promise<void>;
+    dispose: () => void;
     resolve: (watermark: CheckpointWatermark) => void;
     stats: () => CheckpointRegistryStats;
 }
