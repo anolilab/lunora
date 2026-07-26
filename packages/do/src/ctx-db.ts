@@ -959,20 +959,37 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
     // `_creationTime` ties with them on bulk-imported rows, and without a unique
     // terminal column the engine may order tied rows differently per execution —
     // which offset pagination would surface as a duplicated or skipped row.
-    const query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(ftName)} f JOIN ${dsql.identifier(tableName)} m ON m.id = f.${dsql.identifier(FTS_ID_COLUMN)} WHERE ${dsql.join(whereClauses, dsql` AND `)} ORDER BY f.rank, m._creationTime DESC, m.id ASC LIMIT ${dsql.raw(String(limit))}`;
+    // `f.rank` (bm25) decides only which rows survive the cap when a query
+    // matches more than `limit`; the returned order comes from `scoreDocument`
+    // below. bm25 weights document length and inverse document frequency, the
+    // shared scorer counts occurrences — leaving the engine's order in place
+    // would mean the same corpus ranks differently on fts5 than on the portable
+    // inverted layout, which is the one thing every backend must agree on.
+    const query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)}, f.${dsql.identifier(FTS_TEXT_COLUMN)} FROM ${dsql.identifier(ftName)} f JOIN ${dsql.identifier(tableName)} m ON m.id = f.${dsql.identifier(FTS_ID_COLUMN)} WHERE ${dsql.join(whereClauses, dsql` AND `)} ORDER BY f.rank LIMIT ${dsql.raw(String(limit))}`;
 
-    const rows = runDrizzle(sql, query).toArray();
-    const docs: Record<string, unknown>[] = [];
+    const analyzer = createSearchAnalyzer(search.definition.language);
+    const scored: { creationTime: number; doc: Record<string, unknown>; id: string; score: number }[] = [];
 
-    for (const row of rows) {
+    for (const row of runDrizzle(sql, query)) {
         const record = rowToDocument(row);
 
-        if (record) {
-            docs.push(record);
+        if (!record) {
+            continue;
         }
+
+        const indexed = row[FTS_TEXT_COLUMN];
+
+        scored.push({
+            creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0,
+            doc: record,
+            id: typeof record["_id"] === "string" ? record["_id"] : "",
+            score: scoreDocument(typeof indexed === "string" ? indexed : "", tokens, analyzer),
+        });
     }
 
-    return docs;
+    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
+
+    return scored.map((entry) => entry.doc);
 };
 
 /**

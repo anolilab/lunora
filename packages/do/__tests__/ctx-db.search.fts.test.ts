@@ -204,7 +204,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         expect(ftsWritesAfter[0]?.params).toStrictEqual(["d1"]);
     });
 
-    it("emits a MATCH query joined to the document table, ordered by rank", async () => {
+    it("emits a MATCH query joined to the document table, then re-ranks with the shared scorer", async () => {
         expect.assertions(3);
 
         const matchRows: MatchRow[] = [
@@ -225,11 +225,12 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         const matchStatement = statements.find((statement) => statement.sql.includes(" MATCH "));
 
         expect(matchStatement?.sql).toBe(
-            'SELECT m.id, m._creationTime, m."__doc__" FROM "docs__fts_by_body" f JOIN "docs" m ON m.id = f."__id__" WHERE f."__text__" MATCH ? AND json_extract(__doc__, \'$.channel\') = ? ORDER BY f.rank, m._creationTime DESC, m.id ASC LIMIT 5',
+            'SELECT m.id, m._creationTime, m."__doc__", f."__text__" FROM "docs__fts_by_body" f JOIN "docs" m ON m.id = f."__id__" WHERE f."__text__" MATCH ? AND json_extract(__doc__, \'$.channel\') = ? ORDER BY f.rank LIMIT 5',
         );
         expect(matchStatement?.params).toStrictEqual(['"hello" AND "wor"*', "x"]);
 
-        // The reader preserves the DB's rank ordering and decodes the rows.
-        expect(results.map((document) => document["_id"])).toStrictEqual(["d1", "d2"]);
+        // Re-ranked by the shared scorer (both score equally here, so the newer
+        // row leads on the `_creationTime` tiebreak), not by fts5's bm25.
+        expect(results.map((document) => document["_id"])).toStrictEqual(["d2", "d1"]);
     });
 });

@@ -33,13 +33,18 @@ describe("search analyzer", () => {
             expect(analyzer.document(precomposed)).toStrictEqual(analyzer.document(decomposed));
         });
 
-        it("keeps non-Latin scripts intact", () => {
-            expect.assertions(2);
+        it("leaves non-Latin scripts intact, including marks that carry meaning", () => {
+            expect.assertions(4);
 
             const analyzer = createSearchAnalyzer(undefined);
 
             expect(analyzer.document("東京 タワー")).toStrictEqual(["東京", "タワー"]);
             expect(analyzer.document("Привет мир")).toStrictEqual(["привет", "мир"]);
+            // Japanese voiced sound marks are combining marks, but stripping
+            // them merges distinct words — `が`/`か`, `パ`/`ハ`.
+            expect(analyzer.document("がか パハ")).toStrictEqual(["がか", "パハ"]);
+            // Hangul syllables decompose to jamo; the recompose puts them back.
+            expect(analyzer.document("한국어")).toStrictEqual(["한국어"]);
         });
 
         it("does not fold ß, which has no combining decomposition", () => {
@@ -72,6 +77,15 @@ describe("search analyzer", () => {
 
             // Which the engines read as "no match" rather than "match everything".
             expect(createSearchAnalyzer("en").query("the and of")).toStrictEqual([]);
+        });
+
+        it("matches accented function words, which are folded like everything else", () => {
+            expect.assertions(2);
+
+            // The lists are written naturally (`für`, `même`); tokens arrive
+            // folded, so the lists have to be folded too or these never match.
+            expect(createSearchAnalyzer("de").document("für immer")).toStrictEqual(["immer"]);
+            expect(createSearchAnalyzer("fr").document("même chose")).toStrictEqual(["chose"]);
         });
 
         it("applies the declared language's list, not English's", () => {

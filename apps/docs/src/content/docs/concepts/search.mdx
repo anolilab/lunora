@@ -71,9 +71,12 @@ token _is_. The runtime records which analysis a companion was built with and
 rebuilds it when that no longer matches — no manual reindex, though a large
 table pays the backfill again.
 
-Two things folding does not do: `ß` is left alone (collapsing it to `ss` needs a
-case-folding table this deliberately doesn't carry), and non-Latin scripts pass
-through unchanged.
+Two limits worth knowing. `ß` is left alone — collapsing it to `ss` needs a
+case-folding table this deliberately doesn't carry. And folding only strips
+_Latin_ diacritics (U+0300–U+036F): text in other scripts is Unicode-normalized
+but otherwise untouched, so Japanese voiced sound marks and Korean jamo survive
+— `が` stays distinct from `か`, which stripping every combining mark would
+have merged.
 
 ## Running a search query
 

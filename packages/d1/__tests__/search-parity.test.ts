@@ -4,6 +4,7 @@ import type { DatabaseWriterLike, SchemaLike, SqlCursor, SqlExec, ValidatorLike 
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { D1Exec } from "../src/d1-ctx-db";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
 import createD1Exec from "./_helpers/node-sqlite-d1";
 
@@ -71,6 +72,7 @@ const CORPUS: Document[] = [
 
 let doHarness: DatabaseSync;
 let globalHarness: ReturnType<typeof createD1Exec>;
+let invertedHarness: ReturnType<typeof createD1Exec>;
 
 /**
  * The DO store's synchronous `SqlExec` over `node:sqlite`. The DO package keeps
@@ -101,8 +103,22 @@ const shardExec = (database: DatabaseSync): SqlExec => {
     };
 };
 
-/** Seed both backends with the identical corpus, on the identical clock. */
-const seedBoth = async (): Promise<{ global: DatabaseWriterLike; shard: DatabaseWriterLike }> => {
+/**
+ * Force the portable inverted companion by failing the fts5 probe. Without this
+ * every harness here runs on fts5 (this Node build ships it), so the comparison
+ * would be fts5-against-fts5 and would never exercise the layout Postgres and
+ * MySQL actually use.
+ */
+const withoutFts5 = (inner: D1Exec): D1Exec => {
+    return {
+        all: (sql, parameters) => inner.all(sql, parameters),
+        run: (sql, parameters) =>
+            sql.includes("__lunora_fts_probe") && sql.includes("CREATE") ? Promise.reject(new Error("fts5 unavailable (forced)")) : inner.run(sql, parameters),
+    };
+};
+
+/** Seed all three engines with the identical corpus, on the identical clock. */
+const seedBoth = async (): Promise<{ global: DatabaseWriterLike; inverted: DatabaseWriterLike; shard: DatabaseWriterLike }> => {
     const clockFrom = (): (() => number) => {
         let now = 1_700_000_000_000;
 
@@ -123,14 +139,22 @@ const seedBoth = async (): Promise<{ global: DatabaseWriterLike; shard: Database
 
     const global = createD1ContextDatabase({ clock: clockFrom(), exec: globalHarness.exec, schema: globalSchema });
 
+    invertedHarness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT)`);
+
+    const inverted = createD1ContextDatabase({ clock: clockFrom(), exec: withoutFts5(invertedHarness.exec), schema: globalSchema });
+
     for (const document of CORPUS) {
+        const row = { _id: document.id, body: document.body, channel: document.channel };
+
         // eslint-disable-next-line no-await-in-loop -- deterministic creation times require sequential inserts
-        await shard.insert("docs", { _id: document.id, body: document.body, channel: document.channel }, { allowExplicitId: true });
-        // eslint-disable-next-line no-await-in-loop -- same, on the twin
-        await global.insert("docs", { _id: document.id, body: document.body, channel: document.channel }, { allowExplicitId: true });
+        await shard.insert("docs", row, { allowExplicitId: true });
+        // eslint-disable-next-line no-await-in-loop -- same, on the fts5 global twin
+        await global.insert("docs", row, { allowExplicitId: true });
+        // eslint-disable-next-line no-await-in-loop -- and on the inverted (Postgres/MySQL) layout
+        await inverted.insert("docs", row, { allowExplicitId: true });
     }
 
-    return { global, shard };
+    return { global, inverted, shard };
 };
 
 const idsOf = (documents: Record<string, unknown>[]): unknown[] => documents.map((document) => document["_id"]);
@@ -139,11 +163,13 @@ describe("search parity — sharded DO vs .global()", () => {
     beforeEach(() => {
         doHarness = new DatabaseSync(":memory:");
         globalHarness = createD1Exec();
+        invertedHarness = createD1Exec();
     });
 
     afterEach(() => {
         doHarness.close();
         globalHarness.close();
+        invertedHarness.close();
     });
 
     const cases: { name: string; term: string }[] = [
@@ -165,20 +191,24 @@ describe("search parity — sharded DO vs .global()", () => {
     ];
 
     it.each(cases)("agrees on $name", async (searchCase) => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        const { global, shard } = await seedBoth();
+        const { global, inverted, shard } = await seedBoth();
+        const run = async (writer: DatabaseWriterLike): Promise<unknown[]> =>
+            idsOf(
+                await writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", searchCase.term))
+                    .collect(),
+            );
 
-        const shardResults = await shard
-            .query("docs")
-            .withSearchIndex("by_body", (q) => q.search("body", searchCase.term))
-            .collect();
-        const globalResults = await global
-            .query("docs")
-            .withSearchIndex("by_body", (q) => q.search("body", searchCase.term))
-            .collect();
+        const shardResults = await run(shard);
 
-        expect(idsOf(globalResults)).toStrictEqual(idsOf(shardResults));
+        expect(await run(global)).toStrictEqual(shardResults);
+        // The third engine is the one that matters most here: it ranks with a
+        // different mechanism than fts5, so a divergence shows up only when the
+        // inverted layout is in the comparison.
+        expect(await run(inverted)).toStrictEqual(shardResults);
     });
 
     it("folds accents identically on both backends", async () => {

@@ -64,7 +64,12 @@ const createIndexIfNotExists = async (
         try {
             await queryRun(exec, dialect, sql`CREATE ${unique}INDEX ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`);
         } catch (error) {
-            if ((error as { errno?: number }).errno !== 1061) {
+            // ER_DUP_KEYNAME. Drivers disagree on which field carries it —
+            // mysql2 sets `errno`, others only the symbolic `code` — so accept
+            // either rather than rethrowing a re-run of idempotent DDL.
+            const duplicate = error as { code?: unknown; errno?: unknown };
+
+            if (duplicate.errno !== 1061 && duplicate.code !== "ER_DUP_KEYNAME" && duplicate.code !== 1061) {
                 throw error;
             }
         }
@@ -103,7 +108,15 @@ const serializeColumnValue: (value: unknown) => unknown = sqliteEncode;
  */
 const ftsAvailabilityCache = new WeakMap<SqlCtxExec, Promise<boolean>>();
 
-const isFtsAvailable = (exec: SqlCtxExec): Promise<boolean> => {
+const isFtsAvailable = (exec: SqlCtxExec, dialect?: SqlDialect): Promise<boolean> => {
+    // fts5 is a SQLite module. On Postgres and MySQL the probe below is a DDL
+    // statement that is *guaranteed* to fail — a wasted round trip on every
+    // fresh connection plus an error in the database's log — so answer from the
+    // dialect and never issue it.
+    if (dialect && dialect.name !== "sqlite") {
+        return Promise.resolve(false);
+    }
+
     const cached = ftsAvailabilityCache.get(exec);
 
     if (cached !== undefined) {

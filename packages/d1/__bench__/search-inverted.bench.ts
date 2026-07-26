@@ -171,31 +171,44 @@ describe("search — write cost", () => {
     });
 });
 
+// Seeded once, outside the measured body: the previous shape timed 2000 inserts
+// plus the backfill and reported the sum as backfill throughput.
+let backfillExec: D1Exec;
+
+beforeAll(async () => {
+    const harness = createD1Exec();
+
+    harness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT, "title" TEXT)`);
+
+    backfillExec = withoutFts5(harness.exec);
+
+    const plain = createD1ContextDatabase({
+        clock: () => CLOCK,
+        exec: backfillExec,
+        schema: { tables: { docs: { ...searchSchema.tables["docs"]!, searchIndexes: [] } } },
+    });
+
+    for (let index = 0; index < 2000; index += 1) {
+        // eslint-disable-next-line no-await-in-loop -- seeding is setup, not the measured work
+        await plain.insert("docs", { _id: `d${String(index).padStart(6, "0")}`, body: bodyFor(index), channel: "c0", title: "t" }, { allowExplicitId: true });
+    }
+
+    // Once, so the companion and state tables exist; the measured body resets
+    // their contents rather than paying for the DDL each iteration.
+    await backfillD1SearchIndexes(backfillExec, searchSchema);
+});
+
 describe("search — backfill throughput", () => {
     bench(
         "backfill 2k documents into an empty companion",
         async () => {
-            const harness = createD1Exec();
-
-            harness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT, "title" TEXT)`);
-
-            const exec = withoutFts5(harness.exec);
-            const plain = createD1ContextDatabase({
-                clock: () => CLOCK,
-                exec,
-                schema: { tables: { docs: { ...searchSchema.tables["docs"]!, searchIndexes: [] } } },
-            });
-
-            for (let index = 0; index < 2000; index += 1) {
-                // eslint-disable-next-line no-await-in-loop -- seeding is setup, not the measured work
-                await plain.insert(
-                    "docs",
-                    { _id: `d${String(index).padStart(6, "0")}`, body: bodyFor(index), channel: "c0", title: "t" },
-                    { allowExplicitId: true },
-                );
-            }
-
-            await backfillD1SearchIndexes(exec, searchSchema);
+            // Each iteration re-runs the walk; the state row is reset so the
+            // work is real rather than an immediate "already done" return. The
+            // two resets are inside the measurement — they are two statements
+            // against ~28k companion rows, small beside 2000 document indexings.
+            await backfillExec.run(`DELETE FROM "__lunora_search_state"`, []);
+            await backfillExec.run(`DELETE FROM "docs__fts_by_body"`, []);
+            await backfillD1SearchIndexes(backfillExec, searchSchema);
         },
         { iterations: 3 },
     );

@@ -23,6 +23,8 @@ interface Recorded {
 
 /** A canned MATCH/by-id row in the D1 column-per-field shape (no `__doc__` blob). */
 interface MatchRow {
+    /** The analyzed token stream the fts5 shadow stores, which the reader re-scores. */
+    __text__?: string;
     _creationTime: number;
     body: string;
     channel: string;
@@ -197,12 +199,15 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
         expect(ftsWritesAfter[0]?.params).toStrictEqual(["d1"]);
     });
 
-    it("emits a MATCH query joined to the document table, ordered by rank", async () => {
+    it("emits a MATCH query joined to the document table, then re-ranks with the shared scorer", async () => {
         expect.assertions(3);
 
+        // `__text__` is the analyzed token stream the shadow stores; the reader
+        // scores against it rather than trusting fts5's bm25, so that this path
+        // ranks identically to the portable inverted layout.
         const matchRows: MatchRow[] = [
-            { _creationTime: 1, body: "hello world", channel: "x", id: "d1", title: "first" },
-            { _creationTime: 2, body: "hello words", channel: "x", id: "d2", title: "second" },
+            { __text__: "hello world", _creationTime: 1, body: "hello world", channel: "x", id: "d1", title: "first" },
+            { __text__: "hello words wordy world", _creationTime: 2, body: "hello words wordy world", channel: "x", id: "d2", title: "second" },
         ];
         const { exec, statements } = createRecordingFts(matchRows);
 
@@ -218,11 +223,13 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
         const matchStatement = statements.find((statement) => statement.sql.includes(" MATCH "));
 
         expect(matchStatement?.sql).toBe(
-            'SELECT m.* FROM "docs__fts_by_body" f JOIN "docs" m ON m."id" = f."__id__" WHERE f."__text__" MATCH ? AND m."channel" = ? ORDER BY f.rank, m."_creationTime" DESC, m."id" ASC LIMIT 5',
+            'SELECT m.*, f."__text__" FROM "docs__fts_by_body" f JOIN "docs" m ON m."id" = f."__id__" WHERE f."__text__" MATCH ? AND m."channel" = ? ORDER BY f.rank LIMIT 5',
         );
         expect(matchStatement?.params).toStrictEqual(['"hello" AND "wor"*', "x"]);
 
-        // The reader preserves the DB's rank ordering and decodes the rows.
-        expect(results.map((document) => document["_id"])).toStrictEqual(["d1", "d2"]);
+        // d2 scores higher on the shared scorer (three tokens match the "wor"
+        // prefix against d1's one), so it leads regardless of the row order the
+        // engine returned.
+        expect(results.map((document) => document["_id"])).toStrictEqual(["d2", "d1"]);
     });
 });

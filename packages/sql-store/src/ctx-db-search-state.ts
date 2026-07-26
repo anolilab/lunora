@@ -43,11 +43,25 @@ interface SearchBackfillState {
 const migrateSearchState = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<void> => {
     const { integer, key } = dialect.companionTypes;
 
+    // A state table created by an earlier build has no `profile` column, and
+    // `CREATE TABLE IF NOT EXISTS` will not add one — so every read of it would
+    // fail on the missing column. Add it separately; the failure when it is
+    // already there is the expected case, not an error.
+    const addProfileColumn = async (): Promise<void> => {
+        try {
+            await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${sql.identifier("profile")} ${sql.raw(key)}`);
+        } catch {
+            // Column already present (or the table was just created with it).
+        }
+    };
+
     await queryRun(
         exec,
         dialect,
         sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(SEARCH_STATE_TABLE)} (${sql.identifier("companion")} ${sql.raw(key)} PRIMARY KEY, ${sql.identifier("cursor")} ${sql.raw(key)}, ${sql.identifier("done")} ${sql.raw(integer)} NOT NULL DEFAULT 0, ${sql.identifier("profile")} ${sql.raw(key)})`,
     );
+
+    await addProfileColumn();
 };
 
 /** Read a companion's progress. An unknown companion has done nothing yet. */

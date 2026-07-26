@@ -36,6 +36,7 @@ import {
     ftsTableName,
     MAX_INDEXED_TOKENS,
     resolveSearchField,
+    scoreDocument,
     searchTextUnchanged,
     stringifySearchText,
     tokenizeSearch,
@@ -115,9 +116,35 @@ const searchViaFts = async (
         conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
     }
 
-    const query = sql`SELECT m.* FROM ${sql.identifier(ftName)} f JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = f.${sql.identifier(FTS_ID_COLUMN)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY f.rank, m.${sql.identifier("_creationTime")} DESC, m.${sql.identifier("id")} ASC LIMIT ${sql.raw(String(limit))}`;
+    // `f.rank` (bm25) only decides which rows survive the cap; the order comes
+    // from `scoreDocument` below, so this path ranks identically to the portable
+    // inverted layout instead of by the engine's own formula. See the DO twin.
+    const query = sql`SELECT m.*, f.${sql.identifier(FTS_TEXT_COLUMN)} FROM ${sql.identifier(ftName)} f JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = f.${sql.identifier(FTS_ID_COLUMN)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY f.rank LIMIT ${sql.raw(String(limit))}`;
 
-    return decodeRows(definition, await queryAll(exec, dialect, query));
+    const analyzer = createSearchAnalyzer(search.definition.language);
+    const rows = await queryAll(exec, dialect, query);
+    const scored: { creationTime: number; doc: Record<string, unknown>; id: string; score: number }[] = [];
+
+    for (const row of rows) {
+        const [document] = decodeRows(definition, [row]);
+
+        if (!document) {
+            continue;
+        }
+
+        const indexed = row[FTS_TEXT_COLUMN];
+
+        scored.push({
+            creationTime: typeof document["_creationTime"] === "number" ? document["_creationTime"] : 0,
+            doc: document,
+            id: typeof document["_id"] === "string" ? document["_id"] : "",
+            score: scoreDocument(typeof indexed === "string" ? indexed : "", tokens, analyzer),
+        });
+    }
+
+    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
+
+    return scored.map((entry) => entry.doc);
 };
 
 /**
@@ -203,7 +230,7 @@ const runSqlSearch = async (
     stage: SearchStage,
     limit: number,
 ): Promise<Record<string, unknown>[]> =>
-    (await isFtsAvailable(exec))
+    (await isFtsAvailable(exec, dialect))
         ? searchViaFts(exec, dialect, definition, tableName, stage, limit)
         : searchViaInverted(exec, dialect, definition, tableName, stage, limit);
 
@@ -333,7 +360,12 @@ const backfillSearchIndexPage = async (
     const { profile } = createSearchAnalyzer(index.language);
     const state = await readSearchBackfillState(exec, dialect, ftName);
 
-    if (state.profile !== undefined && state.profile !== profile) {
+    // A row with no recorded profile predates profile tracking, so what its
+    // companion holds was analyzed by unknown rules — treat it as stale rather
+    // than resuming on top of it.
+    const staleProfile = state.profile !== profile;
+
+    if (staleProfile && (state.cursor !== undefined || state.done)) {
         // The stored tokens were analyzed by rules the query side no longer
         // uses (a changed `language`, a new analyzer version). Half-matching
         // forever is the worst outcome, so discard and walk the table again.
@@ -355,9 +387,12 @@ const backfillSearchIndexPage = async (
         return true;
     }
 
-    const resuming = state.profile === undefined || state.profile === profile;
+    const resuming = !staleProfile;
 
-    let indexed = 0;
+    // Counts rows *walked*, not rows indexed: a page whose rows are missing an
+    // id (or fail to decode) would otherwise look short and be mistaken for the
+    // end of the table, permanently stranding everything after it.
+    let walked = 0;
     let lastId = resuming ? state.cursor : undefined;
 
     await forEachRowPaged(
@@ -366,6 +401,8 @@ const backfillSearchIndexPage = async (
         definition,
         tableName,
         async (document) => {
+            walked += 1;
+
             const id = document["_id"];
 
             if (typeof id !== "string") {
@@ -373,14 +410,13 @@ const backfillSearchIndexPage = async (
             }
 
             lastId = id;
-            indexed += 1;
 
             await indexDocument(exec, dialect, ftName, id, document, index, ftsAvailable);
         },
         { after: lastId, limit: SEARCH_BACKFILL_BATCH_ROWS },
     );
 
-    const done = indexed < SEARCH_BACKFILL_BATCH_ROWS;
+    const done = walked < SEARCH_BACKFILL_BATCH_ROWS;
 
     await writeSearchBackfillState(exec, dialect, ftName, lastId, done, profile);
 
@@ -406,7 +442,7 @@ const backfillSearchIndexPage = async (
 const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
     await migrateSearchState(exec, dialect);
 
-    const ftsAvailable = await isFtsAvailable(exec);
+    const ftsAvailable = await isFtsAvailable(exec, dialect);
     const { integer, key } = dialect.companionTypes;
 
     for (const [tableName, , index] of globalSearchIndexes(schema)) {
@@ -461,7 +497,7 @@ const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dial
 const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
     await ensureSearchCompanions(exec, schema, dialect);
 
-    const ftsAvailable = await isFtsAvailable(exec);
+    const ftsAvailable = await isFtsAvailable(exec, dialect);
 
     for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
         if (index.staged) {
@@ -488,7 +524,7 @@ const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, di
     // first" is not a remedy.
     await ensureSearchCompanions(exec, schema, dialect);
 
-    const ftsAvailable = await isFtsAvailable(exec);
+    const ftsAvailable = await isFtsAvailable(exec, dialect);
 
     for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
         let done = false;
@@ -520,7 +556,7 @@ const createSearchSync = (deps: {
             return;
         }
 
-        const ftsAvailable = await isFtsAvailable(exec);
+        const ftsAvailable = await isFtsAvailable(exec, dialect);
 
         for (const index of indexes) {
             // Fast path: this write didn't touch the indexed text, so the

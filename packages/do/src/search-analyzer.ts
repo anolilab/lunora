@@ -66,15 +66,48 @@ const NL_STOPWORDS =
 const PT_STOPWORDS =
     "a ao aos as até com como da das de do dos e em entre era essa esse esta este eu foi há isso já mais mas me mesmo meu na nas no nos num numa o os ou para pela pelo por qual que quem se sem seu só sua também te tem um uma você";
 
+/**
+ * Combining Diacritical Marks (U+0300–U+036F) — the accents that sit on Latin,
+ * Greek and Cyrillic letters.
+ *
+ * Deliberately narrower than `\p{M}`: that class also covers the Japanese
+ * voiced sound marks (U+3099/U+309A), so stripping every mark turns `が` into
+ * `か` and `パ` into `ハ`, silently merging distinct words. Korean jamo
+ * decompose outside this range and are likewise left alone.
+ */
+const LATIN_DIACRITICS = /[\u0300-\u036F]/gu;
+
+/**
+ * Fold text to its comparison form: decompose, drop Latin diacritics,
+ * recompose, lowercase.
+ *
+ * The trailing NFC matters — it restores the precomposed form of everything the
+ * strip left alone, so scripts that decompose (Hangul syllables, kana with
+ * voiced marks) come out exactly as they went in rather than as loose jamo.
+ *
+ * `café` folds to `cafe`. `ß` does not fold to `ss`: it has no combining
+ * decomposition and would need a case-folding table this deliberately doesn't
+ * carry.
+ */
+const foldText = (text: string): string => text.normalize("NFD").replaceAll(LATIN_DIACRITICS, "").normalize("NFC").toLowerCase();
+
+/**
+ * Stopword lists are written in their natural spelling (`für`, `même`, `até`),
+ * but they are matched against *folded* tokens — so they have to go through the
+ * same folding, or every accented function word would silently fail to match
+ * and stay in the index.
+ */
+const stopwordSet = (words: string): ReadonlySet<string> => new Set(foldText(words).split(" "));
+
 const STOPWORDS: Record<string, ReadonlySet<string>> = {
-    de: new Set(DE_STOPWORDS.split(" ")),
-    en: new Set(EN_STOPWORDS.split(" ")),
-    es: new Set(ES_STOPWORDS.split(" ")),
-    fr: new Set(FR_STOPWORDS.split(" ")),
-    it: new Set(IT_STOPWORDS.split(" ")),
-    nl: new Set(NL_STOPWORDS.split(" ")),
+    de: stopwordSet(DE_STOPWORDS),
+    en: stopwordSet(EN_STOPWORDS),
+    es: stopwordSet(ES_STOPWORDS),
+    fr: stopwordSet(FR_STOPWORDS),
+    it: stopwordSet(IT_STOPWORDS),
+    nl: stopwordSet(NL_STOPWORDS),
     none: new Set<string>(),
-    pt: new Set(PT_STOPWORDS.split(" ")),
+    pt: stopwordSet(PT_STOPWORDS),
 };
 
 /** Every language `.searchIndex({ language })` accepts. */
@@ -86,19 +119,6 @@ const SEARCH_LANGUAGES: ReadonlySet<string> = new Set(Object.keys(STOPWORDS));
  * rather than serving half-old analysis.
  */
 const ANALYZER_VERSION = 1;
-
-/**
- * Fold text to its comparison form: decompose, drop combining marks, lowercase.
- *
- * NFD + mark-stripping collapses `café` to `cafe`. It does not collapse `ß` to
- * `ss` — that has no combining decomposition and would need a case-folding
- * table this deliberately doesn't carry.
- */
-const foldText = (text: string): string =>
-    text
-        .normalize("NFD")
-        .replaceAll(/\p{M}+/gu, "")
-        .toLowerCase();
 
 /**
  * Analysis bound to one search index. `document` keeps repeats (occurrence
