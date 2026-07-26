@@ -332,6 +332,34 @@ const buildContainerImages = async (cwd: string, options: DeployCommandOptions):
 };
 
 /**
+ * Reconcile the committed `triggers.crons` with the schedules codegen discovered.
+ *
+ * `undefined` means codegen was skipped (e.g. `--prebuilt`): we have no evidence
+ * of the project's crons, so leave the committed `triggers.crons` untouched —
+ * clearing it would silently stop every production cron. A defined array
+ * (including `[]`) means codegen ran and reconciling — clearing a
+ * genuinely-removed last cron — is intended. Mirrors the
+ * `if (codegen !== undefined)` guard on the schema-drift gate.
+ */
+const syncCronTriggers = (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> | undefined): void => {
+    if (cronTriggers === undefined) {
+        return;
+    }
+
+    try {
+        const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
+
+        if (reconciled.changed) {
+            logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        }
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.warn(`cron trigger sync skipped: ${message}`);
+    }
+};
+
+/**
  * Auto-provision the bindings the project's code implies before validating, so
  * a first deploy doesn't fail on a SESSION/SCHEDULER/DB binding the user never
  * had to hand-write. Idempotent — a no-op once the config is in sync — and
@@ -370,24 +398,7 @@ const provisionBindings = async (cwd: string, logger: Logger, cronTriggers: Read
         logger.warn(`compatibility date sync skipped: ${message}`);
     }
 
-    // `undefined` means codegen was skipped (e.g. `--prebuilt`): we have no
-    // evidence of the project's crons, so leave the committed `triggers.crons`
-    // untouched. A defined array (including `[]`) means codegen ran and
-    // reconciling — clearing a genuinely-removed last cron — is intended.
-    // Mirrors the `if (codegen !== undefined)` guard on the schema-drift gate.
-    if (cronTriggers !== undefined) {
-        try {
-            const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
-
-            if (reconciled.changed) {
-                logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
-            }
-        } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : String(error);
-
-            logger.warn(`cron trigger sync skipped: ${message}`);
-        }
-    }
+    syncCronTriggers(cwd, logger, cronTriggers);
 };
 
 /**
