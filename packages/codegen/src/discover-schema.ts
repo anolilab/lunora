@@ -247,15 +247,17 @@ const parseSearchIndexCall = (args: ReadonlyArray<Node>): SearchIndexIR => {
     let filterFields: string[] | undefined;
     let language: string | undefined;
     let staged: boolean | undefined;
+    let strategy: string | undefined;
 
     if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
         field = getStringProperty(optionsExpression, "field") ?? field;
         filterFields = getStringArrayProperty(optionsExpression, "filterFields");
         language = getStringProperty(optionsExpression, "language");
         staged = getBooleanProperty(optionsExpression, "staged");
+        strategy = getStringProperty(optionsExpression, "strategy");
     }
 
-    return { field, filterFields, language, name: indexNameOf(indexName), staged };
+    return { field, filterFields, language, name: indexNameOf(indexName), staged, strategy };
 };
 
 /** Parse a `.geoIndex(name, { field, precision? })` call into a {@link GeoIndexIR}. */

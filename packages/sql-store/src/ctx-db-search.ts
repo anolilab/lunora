@@ -148,6 +148,64 @@ const searchViaFts = async (
 };
 
 /**
+ * Whether this index should use the engine's own full-text index: it asked for
+ * `strategy: "native"` and the dialect has one. Anywhere else the request is
+ * satisfied by the portable companion — a downgrade in speed, never in
+ * correctness.
+ */
+const usesNativeSearch = (index: SearchIndexDefinitionLike, dialect: SqlDialect): boolean =>
+    index.strategy === "native" && dialect.nativeTextSearch !== undefined;
+
+/** Column holding the engine-native indexed vector, in the companion table. */
+const FTS_VECTOR_COLUMN = "__vector__";
+
+/**
+ * Run a search through the engine's own full-text index.
+ *
+ * One indexed lookup with no aggregate: the GIN index answers the match and the
+ * engine ranks. That is the whole point — the portable path has to aggregate
+ * every matching token row before it can rank, which is linear in how common
+ * the query's terms are.
+ *
+ * Recall matches the portable path, because the stored vector is built from the
+ * same analyzed tokens under a config that adds no analysis of its own. Order
+ * does not: this ranks with the engine's formula, the documented cost of opting
+ * in.
+ */
+const searchViaNative = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    search: SearchStage,
+    limit: number,
+): Promise<Record<string, unknown>[]> => {
+    const native = dialect.nativeTextSearch;
+    const tokens = tokenizeSearch(search.query, createSearchAnalyzer(search.definition.language));
+
+    if (!native || tokens.length === 0) {
+        return [];
+    }
+
+    const ftName = ftsTableName(tableName, search.indexName);
+    const vectorRef = sql`f.${sql.identifier(FTS_VECTOR_COLUMN)}`;
+    const matchQuery = native.toQuery(tokens);
+    const conditions: SQL[] = [sql`${vectorRef} @@ ${matchQuery}`];
+
+    for (const filter of search.filters) {
+        conditions.push(sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
+    }
+
+    if (definition.softDeleteMode) {
+        conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
+    }
+
+    const statement = sql`SELECT m.* FROM ${sql.identifier(ftName)} f JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = f.${sql.identifier(FTS_ID_COLUMN)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY ${native.rank(vectorRef, matchQuery)} DESC, m.${sql.identifier("_creationTime")} DESC, m.${sql.identifier("id")} ASC LIMIT ${sql.raw(String(limit))}`;
+
+    return decodeRows(definition, await queryAll(exec, dialect, statement));
+};
+
+/**
  * The predicate one query term matches a companion token with: an exact
  * equality, except for the query's final term, which matches as a prefix so a
  * search behaves as-you-type. Tokens are `[\p{L}\p{N}]+` by construction, so
@@ -229,10 +287,15 @@ const runSqlSearch = async (
     tableName: string,
     stage: SearchStage,
     limit: number,
-): Promise<Record<string, unknown>[]> =>
-    (await isFtsAvailable(exec, dialect))
+): Promise<Record<string, unknown>[]> => {
+    if (usesNativeSearch(stage.definition, dialect)) {
+        return searchViaNative(exec, dialect, definition, tableName, stage, limit);
+    }
+
+    return (await isFtsAvailable(exec, dialect))
         ? searchViaFts(exec, dialect, definition, tableName, stage, limit)
         : searchViaInverted(exec, dialect, definition, tableName, stage, limit);
+};
 
 /**
  * The `(token, occurrences)` rows one document contributes to a portable
@@ -320,6 +383,22 @@ const indexDocument = async (
     index: SearchIndexDefinitionLike,
     ftsAvailable: boolean,
 ): Promise<void> => {
+    const native = usesNativeSearch(index, dialect) ? dialect.nativeTextSearch : undefined;
+
+    if (native) {
+        // The engine builds the vector, but from *our* tokens — so recall stays
+        // identical to the portable path rather than depending on whatever
+        // analysis the engine would have applied to raw text.
+        await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(ftName)} WHERE ${sql.identifier(FTS_ID_COLUMN)} = ${id}`);
+        await queryRun(
+            exec,
+            dialect,
+            sql`INSERT INTO ${sql.identifier(ftName)} (${sql.identifier(FTS_ID_COLUMN)}, ${sql.identifier(FTS_VECTOR_COLUMN)}) VALUES (${id}, ${native.toVector(sql`${analyzedSearchText(document, index)}`)})`,
+        );
+
+        return;
+    }
+
     if (ftsAvailable) {
         await writeShadowRow(exec, dialect, ftName, id, analyzedSearchText(document, index));
 
@@ -448,7 +527,25 @@ const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dial
     for (const [tableName, , index] of globalSearchIndexes(schema)) {
         const ftName = ftsTableName(tableName, index.name);
 
-        if (ftsAvailable) {
+        if (usesNativeSearch(index, dialect)) {
+            const native = dialect.nativeTextSearch as NonNullable<SqlDialect["nativeTextSearch"]>;
+
+            // One row per document — the engine's index does the matching, so
+            // there is nothing to fan a document out into.
+            // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the shared connection.
+            await queryRun(
+                exec,
+                dialect,
+                sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(ftName)} (${sql.identifier(FTS_ID_COLUMN)} ${sql.raw(key)} PRIMARY KEY, ${sql.identifier(FTS_VECTOR_COLUMN)} ${sql.raw(native.columnType)})`,
+            );
+
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
+            await queryRun(
+                exec,
+                dialect,
+                sql`CREATE INDEX IF NOT EXISTS ${sql.identifier(`${ftName}__gin`)} ON ${sql.identifier(ftName)} USING ${sql.raw(native.indexMethod)} (${sql.identifier(FTS_VECTOR_COLUMN)})`,
+            );
+        } else if (ftsAvailable) {
             // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared connection.
             await queryRun(
                 exec,

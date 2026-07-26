@@ -65,6 +65,8 @@ export interface SearchIndexIR {
     name: string;
     /** Skip the migration-time backfill of the search companion (large tables index out-of-band). */
     staged?: boolean;
+    /** `"native"` opts into the engine's own full-text index where it has one (Postgres). */
+    strategy?: string;
 }
 
 /** A `.geoIndex(name, { field, precision? })` declaration — a geohash companion over a `v.geoPoint()` column. */

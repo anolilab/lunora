@@ -19,6 +19,7 @@ import type {
     Schema,
     SearchIndexDefinition,
     SearchLanguage,
+    SearchStrategy,
     ShardMode,
     TableDefinition,
     TableVectorIndex,
@@ -183,12 +184,13 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * `filterFields` (at most 16) lists the columns `.eq()` may narrow by inside
      * the search. `language` selects the text analysis (accent folding always,
      * plus that language's stopwords). `staged: true` skips the migration-time
-     * backfill on a large existing table — the index is then maintained on
-     * write only, and a host populates it out-of-band (`backfillSearchIndexes`).
+     * backfill on a large existing table. `strategy: "native"` uses the engine's
+     * own full-text index where it has one (Postgres) — faster on large corpora,
+     * at the cost of the engine ranking rather than the shared scorer.
      */
     searchIndex: (
         name: string,
-        options: { field: string; filterFields?: ReadonlyArray<string>; language?: SearchLanguage; staged?: boolean },
+        options: { field: string; filterFields?: ReadonlyArray<string>; language?: SearchLanguage; staged?: boolean; strategy?: SearchStrategy },
     ) => TableBuilder<Shape>;
     /** Route storage by the named field — one DO per distinct value. */
     shardBy: (field: keyof Shape & string) => TableBuilder<Shape>;
@@ -440,7 +442,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
                 );
             }
 
-            searchIndexes.push({ field: options.field, filterFields: options.filterFields, language: options.language, name, staged: options.staged });
+            searchIndexes.push({
+                field: options.field,
+                filterFields: options.filterFields,
+                language: options.language,
+                name,
+                staged: options.staged,
+                strategy: options.strategy,
+            });
 
             return builder;
         },

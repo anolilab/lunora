@@ -56,6 +56,19 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
 
 const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((document_) => document_["_id"]);
 
+// Distinct, increasing creation times: relevance ties are resolved by
+// `_creationTime DESC` then id, and a fixed clock would collapse that
+// tiebreak into engine-defined row order — a flaky assertion.
+const tickingClock = (): (() => number) => {
+    let now = FIXED_CLOCK;
+
+    return () => {
+        now += 1000;
+
+        return now;
+    };
+};
+
 describe("hyperdrive global — Postgres (pglite) integration", () => {
     beforeEach(async () => {
         harness = await createPgliteHarness();
@@ -274,19 +287,6 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             },
         };
 
-        // Distinct, increasing creation times: relevance ties are resolved by
-        // `_creationTime DESC` then id, and a fixed clock would collapse that
-        // tiebreak into engine-defined row order — a flaky assertion.
-        const tickingClock = (): (() => number) => {
-            let now = FIXED_CLOCK;
-
-            return () => {
-                now += 1000;
-
-                return now;
-            };
-        };
-
         const setupNotes = async (): Promise<DatabaseWriterLike> => {
             await runSqlGlobalTableMigrations(harness.exec, searchSchema, postgresDialect);
 
@@ -501,6 +501,124 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 "n3",
                 "n4",
             ]);
+        });
+    });
+
+    describe("full-text search (native Postgres strategy)", () => {
+        const nativeSchema: SchemaLike = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body", strategy: "native" }],
+                    shape: { body: col("string"), channel: col("string"), title: col("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        };
+
+        const seedNative = async (writer: DatabaseWriterLike): Promise<void> => {
+            await writer.insert("notes", { _id: "n1", body: "hello world", channel: "general", title: "one" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n2", body: "hello hello wonderful world", channel: "general", title: "two" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n3", body: "goodbye world", channel: "general", title: "three" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n4", body: "hello world", channel: "other", title: "four" }, { allowExplicitId: true });
+        };
+
+        const nativeWriter = async (): Promise<DatabaseWriterLike> => {
+            await runSqlGlobalTableMigrations(harness.exec, nativeSchema, postgresDialect);
+
+            return createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: nativeSchema });
+        };
+
+        it("matches the same documents as the portable path", async () => {
+            expect.assertions(3);
+
+            const writer = await nativeWriter();
+
+            await seedNative(writer);
+
+            // Matching must agree with every other backend — only the ordering
+            // is the engine's. The vector is built from the same analyzed
+            // tokens, so `simple` adds no stemming or stopwords of its own.
+            const both = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello world"))
+                .collect();
+            const prefix = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello wor"))
+                .collect();
+            const missing = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "nonexistent"))
+                .collect();
+
+            expect([...ids(both)].toSorted((left, right) => String(left).localeCompare(String(right)))).toEqual(["n1", "n2", "n4"]);
+            expect([...ids(prefix)].toSorted((left, right) => String(left).localeCompare(String(right)))).toEqual(["n1", "n2", "n4"]);
+            expect(ids(missing)).toEqual([]);
+        });
+
+        it("narrows by an .eq() filter and follows updates and deletes", async () => {
+            expect.assertions(3);
+
+            const writer = await nativeWriter();
+
+            await seedNative(writer);
+
+            const scoped = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello").eq("channel", "other"))
+                .collect();
+
+            await writer.patch("n1", { body: "totally rewritten" });
+            await writer.delete("n2");
+
+            const stale = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                .collect();
+            const fresh = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "rewritten"))
+                .collect();
+
+            expect(ids(scoped)).toEqual(["n4"]);
+            expect(ids(stale)).toEqual(["n4"]);
+            expect(ids(fresh)).toEqual(["n1"]);
+        });
+
+        it("folds accents through the engine index, because we hand it folded tokens", async () => {
+            expect.assertions(1);
+
+            const writer = await nativeWriter();
+
+            await writer.insert("notes", { _id: "n9", body: "café society", channel: "general", title: "nine" }, { allowExplicitId: true });
+
+            // Postgres compares bytes; this matches only because the analyzer
+            // folded before the vector was built.
+            const results = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "cafe"))
+                .collect();
+
+            expect(ids(results)).toEqual(["n9"]);
+        });
+
+        it("indexes rows that predate the index through the same backfill", async () => {
+            expect.assertions(1);
+
+            const plainSchema: SchemaLike = {
+                tables: { notes: { ...nativeSchema.tables["notes"]!, searchIndexes: [] } },
+            };
+
+            await runSqlGlobalTableMigrations(harness.exec, plainSchema, postgresDialect);
+            await seedNative(createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: plainSchema }));
+
+            const results = await createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: nativeSchema })
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "goodbye"))
+                .collect();
+
+            expect(ids(results)).toEqual(["n3"]);
         });
     });
 });

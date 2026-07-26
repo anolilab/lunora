@@ -181,6 +181,35 @@ the deploy. Run `backfillSearchIndexes` (sharded tables) or
 `backfillD1SearchIndexes` (`.global()` tables) from a one-shot admin path to
 complete it; both are resumable and safe to re-run.
 
+## Native engine indexes
+
+The default (`strategy: "portable"`) keeps one implementation everywhere, with
+identical matching **and** ordering across backends. That costs something at
+scale: ranking aggregates every matching token row, so a common term is
+expensive however few rows you ask for.
+
+Where the engine has its own full-text index, you can opt an index into it:
+
+```ts
+.searchIndex("search_text", { field: "text", strategy: "native" })
+```
+
+Today that means Postgres behind Hyperdrive (`tsvector` + GIN). Matching is
+answered by the index rather than by an aggregate, which is the difference
+between "linear in how common your terms are" and "an indexed lookup".
+
+Two things stay the same and one changes. **Matching** is identical — the stored
+vector is built from the tokens Lunora's analyzer already produced, under a
+config that adds no stemming or stopwords of its own, so the same query finds
+the same documents. **Analysis** is identical for the same reason, accent
+folding included. **Ordering** is not: the engine ranks with its own formula, so
+a `.global()` table using `native` will not return rows in the same order as its
+sharded twin. That is the whole trade, and it is why this is opt-in.
+
+On backends without a native index — D1, sharded Durable Objects, MySQL — the
+option is ignored and the portable path serves the query. Never a wrong answer,
+just not the faster one.
+
 ## How each backend indexes
 
 You don't have to care, but it explains the operational cost:
@@ -192,6 +221,9 @@ You don't have to care, but it explains the operational cost:
   token, holding the token, the document, and how often it occurs. A search is a
   single indexed query, and ranking uses the same formula, so results match the
   other backends.
+
+An index declared `strategy: "native"` stores one `tsvector` row per document
+instead, GIN-indexed, and lets Postgres match and rank.
 
 Either way a write updates only the companion rows for the document it touched,
 and a search never scans the source table.

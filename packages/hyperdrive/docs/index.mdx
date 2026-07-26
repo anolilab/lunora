@@ -371,10 +371,11 @@ searchable progressively rather than stalling the first request after a deploy.
 Pass `staged: true` to keep that work out of the request path entirely and drive
 it yourself with `backfillSqlSearchIndexes`.
 
-Two caveats specific to this backend: collation is the engine's, so Postgres
-matches bytes where MySQL folds case and accents; and ranking aggregates over
-every matching token row, so the 1024-document limit bounds what you get back,
-not what the database reads.
+Ranking aggregates over every matching token row, so the 1024-document limit
+bounds what you get back, not what the database reads. On Postgres you can trade
+that away with `.searchIndex({ strategy: "native" })`, which stores a `tsvector`
+per document and lets a GIN index answer the match — same documents, ordered by
+the engine rather than by Lunora's scorer.
 
 The convenience constructors cover the common path. For custom wiring, the
 lower-level pieces are also exported:

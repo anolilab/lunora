@@ -103,6 +103,31 @@ export const postgresDialect: SqlDialect = {
         return code === "23505" || (error instanceof Error && PG_UNIQUE_VIOLATION_RE.test(error.message));
     },
     name: "postgres",
+
+    /**
+     * Postgres full text, opted into per index with `strategy: "native"`.
+     *
+     * The `simple` configuration is deliberate on three counts: it applies no
+     * stemming or stopword list of its own (Lunora's analyzer already did that,
+     * and a second pass would disagree with every other backend), it makes
+     * `to_tsvector`/`to_tsquery` IMMUTABLE rather than STABLE — which is what
+     * lets Hyperdrive cache the read — and it keeps the stored vector a pure
+     * function of the tokens we hand it.
+     *
+     * The final term gets `:*` so a native index prefix-matches as-you-type,
+     * matching what the portable path does with `LIKE`.
+     */
+    nativeTextSearch: {
+        columnType: "tsvector",
+        indexMethod: "GIN",
+        rank: (column, query) => sql`ts_rank_cd(${column}, ${query})`,
+        toQuery: (terms) => {
+            const expression = terms.map((term, index) => (index === terms.length - 1 ? `${term}:*` : term)).join(" & ");
+
+            return sql`to_tsquery('simple', ${expression})`;
+        },
+        toVector: (bound) => sql`to_tsvector('simple', ${bound})`,
+    },
     supportsReturning: true,
 
     // The search companion's token btree is scanned with `LIKE 'prefix%'` for a

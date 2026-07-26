@@ -129,6 +129,9 @@ interface IndexDefinition {
     unique?: boolean;
 }
 
+/** How a search index is stored and matched: portable everywhere, or the engine's own index. */
+type SearchStrategy = "native" | "portable";
+
 /** A language whose search analysis (accent folding + stopwords) the runtime knows. */
 type SearchLanguage = "de" | "en" | "es" | "fr" | "it" | "nl" | "none" | "pt";
 
@@ -160,6 +163,24 @@ interface SearchIndexDefinition {
      * `backfillSearchIndexes`.
      */
     staged?: boolean;
+
+    /**
+     * How the index is stored and matched.
+     *
+     * `"portable"` (default) keeps one implementation on every backend, with
+     * identical matching *and* ranking — the invariant the rest of the search
+     * docs rest on.
+     *
+     * `"native"` hands matching to the engine's own full-text index where it has
+     * one (Postgres `tsvector` + GIN today; ignored elsewhere). It scales far
+     * better on large corpora and common terms, because the portable path
+     * aggregates every matching token row before ranking. The trade: the engine
+     * ranks, so results are ordered by its formula rather than the shared
+     * scorer. Matching still agrees — the vector is built from the same analyzed
+     * tokens — but a `.global()` table using it will not return rows in the same
+     * order as the sharded twin.
+     */
+    strategy?: SearchStrategy;
 }
 
 /**
@@ -2115,6 +2136,7 @@ export type {
     SearchFilterBuilder,
     SearchIndexDefinition,
     SearchLanguage,
+    SearchStrategy,
     Secrets,
     SecretsStoreSecretLike,
     ShardMode,

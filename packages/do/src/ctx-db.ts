@@ -200,6 +200,8 @@ interface SearchIndexDefinitionLike {
     readonly name: string;
     /** Skip the migration-time backfill of the search companion — see `@lunora/server`'s `SearchIndexDefinition`. */
     readonly staged?: boolean;
+    /** `"native"` opts into the engine's own full-text index where it has one; see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly strategy?: string;
 }
 
 /** Mirror of `@lunora/server`'s `GeoIndexDefinition` — a geohash companion over a `v.geoPoint()` column. */
