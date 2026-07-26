@@ -1164,6 +1164,7 @@ interface LunoraWorker {
 
 ```ts
 interface MemoizeIdentityOptions {
+    cacheKey?: (request: Request) => string | undefined;
     maxEntries?: number;
     ttlMs?: number;
 }

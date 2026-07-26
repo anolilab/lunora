@@ -3620,7 +3620,6 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "DatabaseWriterLike",
     "DataMigrationLike",
     ...(hasFlags ? ["FlagsResult"] : []),
-    "LogSink",
     "MaskPoliciesResult",
     "MigrationRunResult",
     ...(hasQueues ? ["QueuesResult"] : []),
@@ -3639,6 +3638,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "StorageRulesResult",
     "StudioFeaturesResult",
     "SystemReaderStorageLike",
+    "TelemetrySink",
     ...(hasWorkflows ? ["WorkflowsResult"] : []),
     ...(hasVectors ? ["WriteHook"] : []),
 ];
@@ -4496,7 +4496,7 @@ export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
-    observability?: (env: Record<string, unknown>) => LogSink | undefined;
+    observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${x402ConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}
 }

@@ -92,8 +92,12 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-    const [busyHash, setBusyHash] = useState<null | string>(null);
-    const [actionError, setActionError] = useState<null | string>(null);
+    // Busy + error state are keyed BY ISSUE HASH, not global: two overlapping triage
+    // writes must disable only their own row's buttons, and the first to complete
+    // must not clear the second's busy flag or overwrite its error (the prior single
+    // `busyHash` / `actionError` were last-writer-wins across concurrent writes).
+    const [busyHashes, setBusyHashes] = useState<ReadonlySet<string>>(() => new Set<string>());
+    const [actionErrors, setActionErrors] = useState<ReadonlyMap<string, string>>(() => new Map<string, string>());
 
     // Debounced so typing a key settles before refetching (and re-subscribing)
     // rather than firing per keystroke — mirrors the Metrics panel.
@@ -108,23 +112,43 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
     const issues = issuesOf(data);
 
     /**
-     * Run one triage write against the shard, marking the row busy so its buttons
-     * disable until the durable write flushes and the live read re-folds. Errors
-     * surface inline rather than throwing (a triage failure must not blank the
-     * panel). No `finally` — the compiler bails on it — so the catch swallows and
-     * the trailing reset always runs.
+     * Run one triage write against the shard, marking THAT ROW busy (by hash) so
+     * only its buttons disable until the durable write flushes and the live read
+     * re-folds. Every busy/error mutation copies the prior Set/Map so a concurrent
+     * write for another hash is untouched. Errors surface inline per row rather than
+     * throwing (a triage failure must not blank the panel). No `finally` — the
+     * compiler bails on it — so the catch swallows and the trailing reset always runs.
      */
     const runTriage = async (hash: string, reference: ReturnType<typeof adminRef>, args: Record<string, unknown>): Promise<void> => {
-        setActionError(null);
-        setBusyHash(hash);
+        // Clear only THIS row's prior error, and mark only THIS row busy.
+        setActionErrors((previous) => {
+            if (!previous.has(hash)) {
+                return previous;
+            }
+
+            const next = new Map(previous);
+
+            next.delete(hash);
+
+            return next;
+        });
+        setBusyHashes((previous) => new Set(previous).add(hash));
 
         try {
             await client.query(reference, { ...args, hash }, callOptions(debouncedShard));
         } catch (error_) {
-            setActionError(errorMessage(error_));
+            const message = errorMessage(error_);
+
+            setActionErrors((previous) => new Map(previous).set(hash, message));
         }
 
-        setBusyHash(null);
+        setBusyHashes((previous) => {
+            const next = new Set(previous);
+
+            next.delete(hash);
+
+            return next;
+        });
     };
 
     const onAssignKeyDown =
@@ -175,12 +199,6 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
                 </p>
             )}
 
-            {actionError !== null && (
-                <p className="text-sm text-destructive" data-testid="issues-action-error" role="alert">
-                    {actionError}
-                </p>
-            )}
-
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="issues-shard-input" value={shardKey} />
                 <LiveError message={liveError} prefix="issues" />
@@ -226,7 +244,8 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
                             </TableHeader>
                             <TableBody>
                                 {issues.map((issue) => {
-                                    const busy = busyHash === issue.hash;
+                                    const busy = busyHashes.has(issue.hash);
+                                    const rowError = actionErrors.get(issue.hash);
 
                                     return (
                                         <TableRow data-testid={`issues-row-${issue.hash}`} key={issue.hash}>
@@ -237,6 +256,11 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
                                                 <div className="truncate font-mono text-xs text-muted-foreground" title={issue.culprit}>
                                                     {issue.culprit}
                                                 </div>
+                                                {rowError !== undefined && (
+                                                    <p className="text-xs text-destructive" data-testid={`issues-action-error-${issue.hash}`} role="alert">
+                                                        {rowError}
+                                                    </p>
+                                                )}
                                             </TableCell>
                                             <TableCell>
                                                 <Badge data-testid={`issues-status-${issue.hash}`} variant={statusVariant(issue.status)}>

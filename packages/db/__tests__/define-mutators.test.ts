@@ -59,6 +59,7 @@ const stubCheckpoints = () => {
             awaitMutationId: async (id: number) => {
                 awaited.push(id);
             },
+            dispose: () => undefined,
             resolve: () => undefined,
             stats: () => ({ fallbacks: 0, pendingCheckpointWaiters: 0, pendingMutationWaiters: 0 }),
         },
