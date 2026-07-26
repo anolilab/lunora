@@ -352,7 +352,7 @@ describe(EventsSync, () => {
 
     // REPLICA-08 ──────────────────────────────────────────────────────────
 
-    it("a mid-batch applyEvents failure advances the watermark only past the successful prefix — no double-apply on the next poll", async () => {
+    it("a mid-batch applyEvents failure does NOT advance the watermark — the next poll retries the whole batch from a clean state", async () => {
         const { mirror } = createMockMirror();
         const { fetchEventsSince } = createMockLog([
             { seq: 0, type: "ok", payload: "a", timestamp: 10 },
@@ -361,13 +361,14 @@ describe(EventsSync, () => {
             { seq: 3, type: "ok", payload: "d", timestamp: 40 },
         ]);
 
+        let failOnBoom = true;
         const appliedPayloads: unknown[] = [];
 
         const sync = new EventsSync({
             fetchEventsSince,
             applyEvents: (events) => {
                 for (const event of events) {
-                    if (event.type === "boom") {
+                    if (event.type === "boom" && failOnBoom) {
                         throw new Error("apply failed mid-batch");
                     }
 
@@ -379,30 +380,26 @@ describe(EventsSync, () => {
             onError: () => {},
         });
 
-        // First poll: the fast path applies the whole batch at once — it pushes
-        // "a", "b", then throws on seq 2 ("boom"). Because the fast path threw,
-        // the watermark is still 0, so we fall back to the per-event loop from
-        // the start: it re-drives seq 0 ("a") and seq 1 ("b"), advancing the
-        // watermark to 2, then throws again on seq 2 and stops. The prefix is
-        // therefore observed twice this cycle — the consumer's applyEvents must
-        // tolerate re-application of a not-yet-committed event (the per-event
-        // loop re-applies the failing event on every retry too). The atomicity
-        // guarantee is about the WATERMARK, verified across polls below.
+        // First poll: the whole batch is driven as ONE atom. applyEvents pushes
+        // "a", "b", then throws on seq 2 ("boom"). Because the batch threw, the
+        // watermark is NOT advanced — it stays 0 — and the poll reports 0
+        // applied. Nothing was committed; the next poll retries from scratch.
         const count1 = await sync.sync();
 
-        expect(count1).toBe(2);
-        expect(sync.watermark).toBe(2); // stopped right after the last fully-succeeded event
-        expect(appliedPayloads).toStrictEqual(["a", "b", "a", "b"]);
+        expect(count1).toBe(0);
+        expect(sync.watermark).toBe(0); // never advances past an un-committed batch
+        expect(appliedPayloads).toStrictEqual(["a", "b"]);
 
-        // Second poll re-fetches from watermark 2 — seq 0/1 must NOT be
-        // re-applied (that would be the double-apply-of-a-COMMITTED-event bug).
-        // It hits "boom" again immediately (seq 2) in both the fast path and
-        // the fallback, so nothing new applies and the watermark holds at 2.
+        // The transient failure clears; the next poll re-fetches the SAME batch
+        // from watermark 0 and now succeeds end to end. No event is skipped —
+        // the whole batch (including the earlier suffix "c"/"d") is delivered.
+        failOnBoom = false;
+
         const count2 = await sync.sync();
 
-        expect(count2).toBe(0);
-        expect(sync.watermark).toBe(2);
-        expect(appliedPayloads).toStrictEqual(["a", "b", "a", "b"]); // unchanged — no re-application of a COMMITTED event
+        expect(count2).toBe(4);
+        expect(sync.watermark).toBe(4);
+        expect(appliedPayloads).toStrictEqual(["a", "b", "a", "b", "c", "d"]);
     });
 
     it("a clean batch takes the fast path — ONE diff + ONE mirror round for the whole backlog", async () => {
@@ -439,19 +436,39 @@ describe(EventsSync, () => {
         expect(applied).toHaveLength(1);
     });
 
-    it("falls back to per-event delivery when a mirror write throws — watermark stops at the last fully-mirrored event, retry applies the remainder", async () => {
-        const events: EventLogEntry[] = Array.from({ length: 5 }, (_, index) => ({
+    it("stateful recompute getTableDiffs: a mid-batch mirror throw strands NO diffs — the watermark holds, the next poll delivers exactly the remainder", async () => {
+        // This is the coverage gap the old suite missed: a STATEFUL,
+        // recompute-from-current-state `getTableDiffs`. Under the documented
+        // idempotent contract, a mid-batch mirror failure must lose nothing —
+        // the retry re-derives only the diffs still missing from the mirror.
+        const sourceRows = new Set<string>();
+        const mirroredRows: string[] = [];
+
+        const events: EventLogEntry[] = Array.from({ length: 4 }, (_, index) => ({
             seq: index,
-            type: "ok",
-            payload: index,
+            type: "add",
+            payload: `row${index}`,
             timestamp: index * 10,
         }));
         const { fetchEventsSince } = createMockLog(events);
 
+        // The mirror throws on its 3rd applyDiff call (the first poll), then
+        // recovers once `failAt` is cleared.
+        let applyCalls = 0;
+        let failAt: number | undefined = 3;
+
         const mirror = {
             applyDiff: vi.fn((diff: TableDiff) => {
-                if (diff.table === "explode") {
+                applyCalls += 1;
+
+                if (applyCalls === failAt) {
                     throw new Error("mirror write failed");
+                }
+
+                for (const change of diff.changes) {
+                    if (change.type === "insert") {
+                        mirroredRows.push((change.data as { id: string }).id);
+                    }
                 }
             }),
             onChange: vi.fn(),
@@ -460,42 +477,43 @@ describe(EventsSync, () => {
             },
         } as unknown as LocalMirror;
 
-        // getTableDiffs is called once per fast-path attempt (whole batch) and
-        // once per fallback event. It explodes on:
-        //   call 1  → the FIRST poll's fast path (whole batch) → forces fallback
-        //   call 4  → the fallback's 3rd event (seq 2) → stops the watermark at 2
-        let diffCalls = 0;
-
         const sync = new EventsSync({
             fetchEventsSince,
-            applyEvents: () => {},
-            getTableDiffs: () => {
-                diffCalls += 1;
-
-                const explodes = diffCalls === 1 || diffCalls === 4;
-
-                return [createTableDiff(explodes ? "explode" : "ok", [{ type: "insert", data: { id: "1" } }])];
+            applyEvents: (batch) => {
+                for (const event of batch) {
+                    sourceRows.add(event.payload as string);
+                }
             },
+            // IDEMPOTENT recompute: one insert diff per source row still missing
+            // from the mirror. No cursor — recomputed fresh from current state
+            // on every call, so calling it again after a partial mirror write
+            // returns exactly the diffs that did not land.
+            getTableDiffs: () =>
+                [...sourceRows].filter((row) => !mirroredRows.includes(row)).map((row) => createTableDiff("rows", [{ type: "insert", data: { id: row } }])),
             mirror,
             onError: () => {},
         });
 
-        // First poll: fast path throws on its single batched mirror write, so we
-        // fall back to per-event delivery. seq 0 and seq 1 mirror fine
-        // (watermark → 2), then the diff for seq 2 explodes. The watermark must
-        // stop at 2 — not advance past seq 2, whose mirror delivery never
-        // completed (REPLICA-08 atomicity).
+        // First poll: applyEvents records all 4 source rows, getTableDiffs emits
+        // 4 insert diffs, and the mirror throws on the 3rd. The watermark is NOT
+        // advanced and only the first 2 rows landed in the mirror.
         const count1 = await sync.sync();
 
-        expect(count1).toBe(2);
-        expect(sync.watermark).toBe(2);
+        expect(count1).toBe(0);
+        expect(sync.watermark).toBe(0);
+        expect(mirroredRows).toStrictEqual(["row0", "row1"]);
 
-        // Retry re-fetches exactly the unapplied remainder (seq 2-4) — not a
-        // permanently-skipped event — and the fast path succeeds this time.
+        // The mirror recovers; the next poll re-fetches the SAME batch,
+        // recomputes ONLY the still-missing diffs (row2, row3) — no re-insert of
+        // row0/row1 — and delivers them. Nothing was permanently lost, and the
+        // watermark advances past the batch only once the mirror is whole.
+        failAt = undefined;
+
         const count2 = await sync.sync();
 
-        expect(count2).toBe(3);
-        expect(sync.watermark).toBe(5);
+        expect(count2).toBe(4);
+        expect(sync.watermark).toBe(4);
+        expect(mirroredRows).toStrictEqual(["row0", "row1", "row2", "row3"]);
     });
 
     it("sync() awaits an in-flight poll instead of no-op'ing for a concurrent call", async () => {
