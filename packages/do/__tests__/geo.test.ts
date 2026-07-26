@@ -15,6 +15,8 @@ const BASE32_ONLY = /^[0-9b-hjkmnp-z]+$/u;
 
 const DEG_TO_RAD = Math.PI / 180;
 const METERS_PER_DEG_LAT = 111_320;
+/** Mirrors production `MIN_LATITUDE_COSINE` in ../src/geo — keep the two in sync. */
+const MIN_LATITUDE_COSINE = 0.01;
 
 /**
  * In-radius grid points that {@link coveringGeohashes} fails to cover — i.e. false
@@ -27,7 +29,7 @@ const uncoveredPointsWithin = (center: { lat: number; lng: number }, radiusMeter
     const cover = coveringGeohashes(center, radiusMeters);
     const precision = cover[0]?.length ?? 1;
     const coverSet = new Set(cover);
-    const cosLat = Math.max(Math.cos(center.lat * DEG_TO_RAD), 0.01);
+    const cosLat = Math.max(Math.cos(center.lat * DEG_TO_RAD), MIN_LATITUDE_COSINE);
     const latHalfSpanDeg = (radiusMeters * 1.4) / METERS_PER_DEG_LAT;
     const lngHalfSpanDeg = (radiusMeters * 1.4) / (METERS_PER_DEG_LAT * cosLat);
     const uncovered: { lat: number; lng: number }[] = [];
@@ -178,9 +180,11 @@ describe("geo helpers", () => {
             // before the exact Haversine refine, so every point within `radius` of the
             // center must hash (at the covering precision) into the covering set — else
             // it is a silent false negative. Deterministic fixed grid (no Math.random):
-            // centers incl. high latitude, radii landing inside each precision gap where
-            // width-only covering under-reached ((610,1200] and (19.1,38.2] especially),
-            // and a dense lat/lng grid of candidate points around each center.
+            // centers incl. high latitude, radii landing just above each N-S cell-height
+            // (min-dimension) threshold where the old width-only covering under-reached —
+            // notably just past the ~600 m len-6 height (611/700/1000/1200) and the
+            // ~19.1 m len-8 height (30/38/50) — and a dense lat/lng grid of candidate
+            // points around each center.
             expect.hasAssertions();
 
             const GRID_STEPS = 14; // points per axis, each side of center
