@@ -1,4 +1,5 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, OptimisticMessage } from "@lunora/client";
+import { maxSeq, reconcileOptimistic } from "@lunora/client";
 import type { ComputedRef, MaybeRefOrGetter } from "vue";
 import { computed, ref, toValue } from "vue";
 
@@ -162,54 +163,12 @@ interface UseAgentChatResult {
     streamingText: ComputedRef<string>;
 }
 
-/** A local optimistic user turn awaiting server acknowledgement. */
-interface OptimisticMessage {
-    content: string;
-
-    /**
-     * Count of durable `user` rows present when this row was sent — the reconcile
-     * baseline. Only a durable user row at or after this position can retire it,
-     * so a durable row that predates the send (e.g. an identical earlier prompt
-     * already acknowledged) can never satisfy it.
-     */
-    durableUserCountAtSend: number;
-    id: number;
-}
-
 /**
  * A placeholder stream reference so `useStream` is called unconditionally even
  * when the caller supplies no token stream. Paired with `"skip"` args, it never
  * opens a stream.
  */
 const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
-
-/**
- * Drop the optimistic user turns the durable history has now caught up on: a
- * pending row is only retired by a durable `user` row at or after the count of
- * durable user rows present when it was sent (`durableUserCountAtSend`) — so a
- * durable row that predates the send (e.g. an identical earlier prompt already
- * acknowledged) can never satisfy it. One-to-one consumption (lowest eligible
- * index first) still keeps repeated identical prompts sent back-to-back from
- * collapsing onto a single durable row.
- */
-const reconcileOptimistic = (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<AgentChatMessage>): OptimisticMessage[] => {
-    const durableUserRows = durable.filter((message) => message.role === "user");
-    const consumed = new Set<number>();
-
-    return optimistic.filter((pending) => {
-        for (let index = pending.durableUserCountAtSend; index < durableUserRows.length; index += 1) {
-            const row = durableUserRows[index];
-
-            if (row !== undefined && !consumed.has(index) && row.content === pending.content) {
-                consumed.add(index);
-
-                return false;
-            }
-        }
-
-        return true;
-    });
-};
 
 /**
  * A first-class agent chat surface: live durable history + in-flight token
@@ -279,13 +238,7 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
         // Base synthetic seqs above the highest real durable seq (not just
         // `rows.length`, which can under-count when durable rows have gaps) so an
         // optimistic row's placeholder seq never collides with a real one.
-        let maxDurableSeq = -1;
-
-        for (const message of rows) {
-            if (message.seq > maxDurableSeq) {
-                maxDurableSeq = message.seq;
-            }
-        }
+        const maxDurableSeq = maxSeq(rows);
 
         return [
             ...rows,
@@ -322,11 +275,13 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
 
         nextId += 1;
 
+        // Capture the reconcile baseline: the highest durable `seq` present now, so
+        // only a matching user row that lands AFTER this send retires the row.
+        const maxDurableSeqAtSend = maxSeq(durable.value);
+
         // Prune already-acknowledged optimistic rows as we add the new one, so the
         // list stays bounded without a history-dependent watcher.
-        const durableUserCountAtSend = durable.value.filter((message) => message.role === "user").length;
-
-        optimistic.value = [...reconcileOptimistic(optimistic.value, durable.value), { content: input, durableUserCountAtSend, id }];
+        optimistic.value = [...reconcileOptimistic(optimistic.value, durable.value), { content: input, id, maxDurableSeqAtSend }];
 
         try {
             await sendMutation.mutate({ input, threadKey: toValue(threadKey), ...sendArgs, ...arguments_ });
