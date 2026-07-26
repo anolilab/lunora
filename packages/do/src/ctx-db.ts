@@ -80,7 +80,19 @@ import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPred
 import type { RelationDefinitionLike } from "./relations";
 import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
-import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
+import {
+    buildFtsMatch,
+    clampSearchScan,
+    encodeSearchCursor,
+    ftsTableName,
+    MAX_SEARCH_FILTERS,
+    MAX_SEARCH_TERMS,
+    parseSearchCursor,
+    resolveSearchField,
+    scoreDocument,
+    stringifySearchText,
+    tokenizeSearch,
+} from "./search-text";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import { ConflictError } from "./transaction";
@@ -178,9 +190,12 @@ interface IndexDefinitionLike {
 }
 
 interface SearchIndexDefinitionLike {
+    /** Indexed text column; a dot-separated path reads a nested field. */
     readonly field: string;
     readonly filterFields?: ReadonlyArray<string>;
     readonly name: string;
+    /** Skip the migration-time backfill of the search companion — see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly staged?: boolean;
 }
 
 /** Mirror of `@lunora/server`'s `GeoIndexDefinition` — a geohash companion over a `v.geoPoint()` column. */
@@ -912,6 +927,13 @@ const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilt
                 throw new LunoraError("INTERNAL", `field "${field}" is not a filter field of search index "${search.indexName}" on table "${tableName}"`);
             }
 
+            if (search.filters.length >= MAX_SEARCH_FILTERS) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `search index "${search.indexName}" on table "${tableName}": at most ${String(MAX_SEARCH_FILTERS)} .eq() filters are supported per search query`,
+                );
+            }
+
             search.filters.push({ field, value });
 
             return builder;
@@ -921,6 +943,15 @@ const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilt
                 throw new LunoraError(
                     "INTERNAL",
                     `search index "${search.indexName}" on table "${tableName}" indexes "${search.definition.field}", not "${field}"`,
+                );
+            }
+
+            const terms = tokenizeSearch(query).length;
+
+            if (terms > MAX_SEARCH_TERMS) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `search index "${search.indexName}" on table "${tableName}": at most ${String(MAX_SEARCH_TERMS)} search terms are supported (got ${String(terms)})`,
                 );
             }
 
@@ -1031,7 +1062,7 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
             continue;
         }
 
-        const score = scoreDocument(stringifySearchText(record[search.field]), tokens);
+        const score = scoreDocument(stringifySearchText(resolveSearchField(record, search.field)), tokens);
 
         if (score > 0) {
             scored.push({ creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0, doc: record, score });
@@ -1528,7 +1559,11 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         }
 
         const filtered = stage.inMemoryFilters.length > 0;
-        const engineLimit = filtered ? undefined : limit;
+        // Relevance order means the engine read is always bounded: the caller's
+        // limit when there is one, `MAX_SEARCH_SCAN` otherwise — including when a
+        // `.filter()` runs on top, which narrows *within* that window rather than
+        // widening the read.
+        const engineLimit = clampSearchScan(filtered ? undefined : limit);
         const docs = isFtsAvailable(sql)
             ? searchViaFts(sql, tableName, search, engineLimit, scopeCondition)
             : searchViaScan(sql, tableName, search, engineLimit, scopeCondition);
@@ -1550,6 +1585,40 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         }
 
         return result;
+    };
+
+    /**
+     * One page of a relevance-ordered search. The sort key is a per-query score,
+     * not a stored column, so there is nothing to keyset-seek on: a page is an
+     * offset into the deterministic (score, then `_creationTime DESC`) result
+     * window, which `MAX_SEARCH_SCAN` bounds. Reading one row past the page tells
+     * us whether another page exists.
+     */
+    const paginateSearchStage = (options: PaginationOptions): QueryPage => {
+        if (typeof options.endCursor === "string") {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                "bounded (endCursor) pagination is not supported on search queries — relevance order has no stable range boundary",
+            );
+        }
+
+        const numberItems = Math.max(0, Math.floor(options.numItems));
+        const offset = options.cursor ? parseSearchCursor(options.cursor) : 0;
+
+        if (offset === undefined) {
+            throw new LunoraError("BAD_REQUEST", "invalid cursor");
+        }
+
+        const window = runSearchFetch(offset + numberItems + 1);
+        const page = window.slice(offset, offset + numberItems);
+        const hasMore = window.length > offset + numberItems;
+
+        return {
+            // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
+            continueCursor: hasMore ? encodeSearchCursor(offset + numberItems) : null,
+            isDone: !hasMore,
+            page,
+        };
     };
 
     const buildOrderClause = (): SQL => {
@@ -1599,7 +1668,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async paginate(options) {
             if (stage.search) {
-                throw new LunoraError("INTERNAL", "pagination is not supported on search queries; use .take(n) or .collect()");
+                return paginateSearchStage(options);
             }
 
             if (stage.geo) {
@@ -3859,7 +3928,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 };
 
 export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
-export { backfillAggregateIndexes, backfillRankIndexes } from "./ctx-db-backfill";
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes } from "./ctx-db-backfill";
 export type { CdcChange } from "./ctx-db-cdc";
 export { applyCdcChanges, bumpCdcEpoch, CDC_LOG_TABLE, minCdcSeq, readCdcChanges, readCdcCursor, readCdcEpoch, trimCdcChanges } from "./ctx-db-cdc";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";

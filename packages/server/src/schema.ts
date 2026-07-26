@@ -33,6 +33,14 @@ import type {
     VectorMetric,
 } from "./types";
 
+/**
+ * Most `filterFields` one `.searchIndex()` may declare. Mirrors Convex, and the
+ * runtime constant of the same name in `@lunora/do`'s `search-text.ts` (the
+ * engines own the read-side limits; `@lunora/server` has no dependency edge to
+ * them, so the schema-time guard restates the number).
+ */
+const MAX_SEARCH_FILTER_FIELDS = 16;
+
 /** Options for `.vectorize(field, opts)` (DSL Shape A). */
 interface VectorizeOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
     dimensions: number;
@@ -157,8 +165,17 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     rankIndex: (name: string, options: InlineRankIndexOptions<Shape>) => TableBuilder<Shape>;
     /** Declare relations to other tables, loaded via `findMany({ with })`. */
     relations: (build: (r: RelationBuilder) => Record<string, RelationDefinition>) => TableBuilder<Shape>;
-    /** Add a search index over a field with optional filter fields. */
-    searchIndex: (name: string, options: { field: string; filterFields?: ReadonlyArray<string> }) => TableBuilder<Shape>;
+
+    /**
+     * Add a full-text search index over `field`, queried with
+     * `.withSearchIndex(name, q => q.search(field, term))`. `field` may be a
+     * dot-separated path into a nested object (`"properties.name"`).
+     * `filterFields` (at most 16) lists the columns `.eq()` may narrow by inside
+     * the search. `staged: true` skips the migration-time backfill on a large
+     * existing table — the index is then maintained on write only, and a host
+     * populates it out-of-band (`backfillSearchIndexes`).
+     */
+    searchIndex: (name: string, options: { field: string; filterFields?: ReadonlyArray<string>; staged?: boolean }) => TableBuilder<Shape>;
     /** Route storage by the named field — one DO per distinct value. */
     shardBy: (field: keyof Shape & string) => TableBuilder<Shape>;
 
@@ -395,7 +412,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
             return builder;
         },
         searchIndex(name, options) {
-            searchIndexes.push({ field: options.field, filterFields: options.filterFields, name });
+            if (options.filterFields && options.filterFields.length > MAX_SEARCH_FILTER_FIELDS) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `searchIndex "${name}": at most ${String(MAX_SEARCH_FILTER_FIELDS)} filterFields are supported (got ${String(options.filterFields.length)})`,
+                );
+            }
+
+            searchIndexes.push({ field: options.field, filterFields: options.filterFields, name, staged: options.staged });
 
             return builder;
         },

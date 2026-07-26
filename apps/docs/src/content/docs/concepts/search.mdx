@@ -7,6 +7,10 @@ A `searchIndex` adds a full-text index over one string column so you can match
 documents by their words rather than by an exact key. Results come back ordered
 by **relevance**, with optional exact-match filtering on declared filter fields.
 
+Search behaves identically on every backend — sharded Durable Object tables,
+`.global()` tables on D1, and `.global()` tables on PlanetScale behind
+Hyperdrive. Same tokenizer, same matching rules, same ordering.
+
 ## Declaring a search index
 
 Add `.searchIndex(name, { field, filterFields })` to a table. `field` is the
@@ -31,6 +35,10 @@ export default defineSchema({
 });
 ```
 
+`field` may be a dot-separated path into a nested object —
+`.searchIndex("search_name", { field: "properties.name" })` indexes the `name`
+inside a `v.object()` column.
+
 ## Running a search query
 
 Use `.withSearchIndex(name, q => …)`. The builder's `.search(field, query)` runs
@@ -48,6 +56,16 @@ export const searchMessages = query.input({ channelId: v.id("channels"), term: v
 });
 ```
 
+## Matching rules
+
+The query string splits into lowercased alphanumeric terms. A document matches
+when it contains **every** term, and the **final** term matches as a prefix — so
+`"hello wor"` finds "hello world", which is what makes as-you-type search work.
+Repeated terms collapse: `"cat cat"` is the same query as `"cat"`.
+
+Matches are ordered by relevance (how often the terms occur in the indexed
+field), newest first among equally relevant documents.
+
 ## Filter fields
 
 Every column you want to filter by inside a search must be declared in
@@ -55,19 +73,75 @@ Every column you want to filter by inside a search must be declared in
 builder. They narrow the candidate set by an exact match before relevance
 scoring, so a per-channel or per-tenant search stays scoped.
 
-## Relevance ordering and `.take(n)`
+## Relevance ordering, `.take(n)` and pagination
 
 A search query returns rows **ordered by relevance** to the search term, best
-match first. You cannot re-`.order()` it, and `.paginate()` is not supported on
-a search query. Bound the result set with `.take(n)` instead:
+match first, so you cannot re-`.order()` it. Bound the result set with
+`.take(n)`:
 
 ```ts
 .withSearchIndex("search_text", (q) => q.search("text", term))
 .take(20);
 ```
 
-`.collect()` and `.first()` also work; reach for `.take(n)` to cap how many
-top-ranked hits you return.
+`.collect()`, `.first()` and `.unique()` also work. `.paginate({ numItems })`
+walks the ranked results page by page:
+
+```ts
+const page = await ctx.db
+    .query("messages")
+    .withSearchIndex("search_text", (q) => q.search("text", term))
+    .paginate({ cursor, numItems: 20 });
+```
+
+A search cursor addresses an offset into the ranked result set rather than a
+row, so a search page has no bounded (`endCursor`) form — pass `cursor` and
+`numItems` only.
+
+## Limits
+
+| Limit                                    | Value |
+| ---------------------------------------- | ----- |
+| Search terms per query (after de-duping) | 16    |
+| `.eq()` filters per query                | 8     |
+| `filterFields` per index                 | 16    |
+| Documents read per search                | 1024  |
+
+The first three throw when exceeded. The last is a cap rather than an error: one
+search reads at most 1024 documents from the engine, which is what keeps
+`.collect()` over a large corpus bounded. A `.filter()` applied on top of a
+search narrows _within_ that window.
+
+## Backfill and `staged`
+
+Declaring a search index on a table that already holds rows indexes those rows
+too — the migration that creates the index's companion populates it from the
+existing data, so the index is useful the moment it deploys. On a very large
+table that is work you may not want inside a deploy: declare the index `staged`
+and run the backfill yourself.
+
+```ts
+.searchIndex("search_text", { field: "text", staged: true })
+```
+
+A staged index is maintained on every write from the moment it is declared, but
+starts out empty — until it is backfilled it only finds documents written after
+the deploy.
+
+## How each backend indexes
+
+You don't have to care, but it explains the operational cost:
+
+- **Sharded DO tables and `.global()` on D1** use an FTS5 shadow table, kept in
+  step with every row write.
+- **`.global()` on PlanetScale via Hyperdrive** (Postgres and MySQL, neither of
+  which has FTS5) uses a portable inverted table: one indexed row per distinct
+  token, holding the token, the document, and how often it occurs. A search is a
+  single indexed query, and ranking uses the same formula, so results match the
+  other backends.
+
+Either way a write updates only the companion rows for the document it touched,
+and a search never scans the source table.
 
 ## See also
 

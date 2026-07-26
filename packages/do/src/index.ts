@@ -207,7 +207,27 @@ export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefi
 export { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 export type { LogEventInput } from "./request-log";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
-export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
+export {
+    buildFtsMatch,
+    clampSearchScan,
+    countSearchTokens,
+    encodeSearchCursor,
+    FTS_COUNT_COLUMN,
+    FTS_ID_COLUMN,
+    FTS_TEXT_COLUMN,
+    FTS_TOKEN_COLUMN,
+    ftsTableName,
+    MAX_SEARCH_FILTER_FIELDS,
+    MAX_SEARCH_FILTERS,
+    MAX_SEARCH_SCAN,
+    MAX_SEARCH_TERMS,
+    parseSearchCursor,
+    resolveSearchField,
+    scoreDocument,
+    splitSearchTokens,
+    stringifySearchText,
+    tokenizeSearch,
+} from "./search-text";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
 export type { SessionRecord } from "./session-do";

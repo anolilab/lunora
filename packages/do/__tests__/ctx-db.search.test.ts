@@ -249,7 +249,83 @@ describe("ctx-db search", () => {
             expect(() => writer.query("docs").withSearchIndex("by_body", (q) => q)).toThrow(/requires a \.search/u);
         });
 
-        it("throws when paginate() is called on a search query", async () => {
+        it("throws past the search-term cap", () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+            const term = Array.from({ length: 17 }, (_, index) => `t${String(index)}`).join(" ");
+
+            expect(() => writer.query("docs").withSearchIndex("by_body", (q) => q.search("body", term))).toThrow(/at most 16 search terms/u);
+        });
+
+        it("counts repeated terms once against the search-term cap", () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+            const term = Array.from({ length: 40 }).fill("same").join(" ");
+
+            expect(() => writer.query("docs").withSearchIndex("by_body", (q) => q.search("body", term))).not.toThrow();
+        });
+
+        it("throws past the .eq() filter cap", () => {
+            expect.assertions(1);
+
+            const filterSchema: SchemaLike = {
+                tables: {
+                    docs: {
+                        ...searchSchema.tables["docs"]!,
+                        searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body" }],
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, filterSchema);
+
+            const writer = createShardContextDatabase({ schema: filterSchema, sql: harness.sql });
+
+            expect(() =>
+                writer.query("docs").withSearchIndex("by_body", (q) => {
+                    let builder = q.search("body", "x");
+
+                    for (let index = 0; index < 9; index += 1) {
+                        builder = builder.eq("channel", "x");
+                    }
+
+                    return builder;
+                }),
+            ).toThrow(/at most 8 \.eq\(\) filters/u);
+        });
+    });
+
+    describe("ctx-db search — pagination", () => {
+        it("walks the relevance-ordered result set page by page", async () => {
+            expect.assertions(4);
+
+            const writer = setupWriter();
+
+            // Descending occurrence counts give a deterministic relevance order.
+            await writer.insert("docs", { body: "page page page", channel: "x", title: "first" });
+            await writer.insert("docs", { body: "page page", channel: "x", title: "second" });
+            await writer.insert("docs", { body: "page", channel: "x", title: "third" });
+
+            const firstPage = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "page"))
+                .paginate({ numItems: 2 });
+
+            expect(firstPage.page.map((document) => document["title"])).toStrictEqual(["first", "second"]);
+            expect(firstPage.isDone).toBe(false);
+
+            const secondPage = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "page"))
+                .paginate({ cursor: firstPage.continueCursor, numItems: 2 });
+
+            expect(secondPage.page.map((document) => document["title"])).toStrictEqual(["third"]);
+            expect(secondPage.isDone).toBe(true);
+        });
+
+        it("rejects a bounded (endCursor) search page", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -258,8 +334,53 @@ describe("ctx-db search", () => {
                 writer
                     .query("docs")
                     .withSearchIndex("by_body", (q) => q.search("body", "x"))
-                    .paginate({ numItems: 5 }),
-            ).rejects.toThrow(/pagination is not supported/u);
+                    .paginate({ endCursor: "whatever", numItems: 5 }),
+            ).rejects.toThrow(/bounded \(endCursor\) pagination is not supported/u);
+        });
+
+        it("rejects a cursor that is not a search cursor", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await expect(
+                writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "x"))
+                    .paginate({ cursor: "not-a-cursor", numItems: 5 }),
+            ).rejects.toThrow(/invalid cursor/u);
+        });
+    });
+
+    describe("ctx-db search — nested fields", () => {
+        it("indexes a dot-separated path into a nested object", async () => {
+            expect.assertions(1);
+
+            const nestedSchema: SchemaLike = {
+                tables: {
+                    docs: {
+                        indexes: [],
+                        searchIndexes: [{ field: "properties.name", name: "by_name" }],
+                        shape: {
+                            properties: { kind: "object" },
+                        },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, nestedSchema);
+
+            const writer = createShardContextDatabase({ schema: nestedSchema, sql: harness.sql });
+
+            await writer.insert("docs", { properties: { name: "hello nested world" } });
+            await writer.insert("docs", { properties: { name: "unrelated" } });
+
+            const results = await writer
+                .query("docs")
+                .withSearchIndex("by_name", (q) => q.search("properties.name", "nested"))
+                .collect();
+
+            expect(results.map((document) => (document["properties"] as { name: string }).name)).toStrictEqual(["hello nested world"]);
         });
     });
 });

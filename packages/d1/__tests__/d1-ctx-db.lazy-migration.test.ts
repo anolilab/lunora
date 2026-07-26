@@ -331,7 +331,7 @@ describe("d1 ctx-db search forced scan path", () => {
         harness.close();
     });
 
-    it("uses the LIKE-scan fallback when fts5 is unavailable", async () => {
+    it("uses the portable inverted index when fts5 is unavailable", async () => {
         expect.assertions(2);
 
         const exec = withoutFts5(harness.exec);
@@ -345,9 +345,9 @@ describe("d1 ctx-db search forced scan path", () => {
             return `d${String(counter)}`;
         };
 
-        // ensureMigrated() runs runD1SearchMigrations, which short-circuits when
-        // fts5 is unavailable — so no fts table is created, and the writes/reads
-        // must transparently use the live-table scan.
+        // ensureMigrated() runs runD1SearchMigrations, which materializes the
+        // portable `(token, id, occurrences)` companion on an engine without
+        // fts5 — the shape Postgres and MySQL behind Hyperdrive use.
         const writer = createD1ContextDatabase({ exec, idGenerator, schema: searchSchema });
 
         await writer.insert("docs", { body: "alpha beta", channel: "x", title: "low" });
@@ -358,12 +358,23 @@ describe("d1 ctx-db search forced scan path", () => {
             .withSearchIndex("by_body", (q) => q.search("body", "alpha"))
             .collect();
 
-        // Term-frequency ranking from the scan scorer: "high" outranks "low".
+        // Term-frequency ranking, identical to the fts5 path: "high" outranks "low".
         expect(results.map((document) => document["title"])).toStrictEqual(["high", "low"]);
 
-        // No fts shadow table was created (proves the scan path, not fts).
-        const ftsTables = await harness.exec.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, ["docs__fts_by_body"]);
+        // The companion holds one row per (token, document) — three tokens for
+        // "alpha beta"/"alpha alpha alpha" plus the backfilled-marker sentinel.
+        const tokens = await harness.exec.all(`SELECT "__token__", "__id__", "__n__" FROM "docs__fts_by_body" ORDER BY "__token__", "__id__"`, []);
 
-        expect(ftsTables).toHaveLength(0);
+        // Re-shaped into plain objects: `node:sqlite` hands back null-prototype rows.
+        expect(
+            tokens.map((row) => {
+                return { id: row["__id__"], n: row["__n__"], token: row["__token__"] };
+            }),
+        ).toStrictEqual([
+            { id: "", n: 0, token: "" },
+            { id: "d1", n: 1, token: "alpha" },
+            { id: "d2", n: 3, token: "alpha" },
+            { id: "d1", n: 1, token: "beta" },
+        ]);
     });
 });

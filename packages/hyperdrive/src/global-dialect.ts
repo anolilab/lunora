@@ -105,6 +105,12 @@ export const postgresDialect: SqlDialect = {
     name: "postgres",
     supportsReturning: true,
 
+    // The search companion's token btree is scanned with `LIKE 'prefix%'` for a
+    // query's final term. A default `text_ops` btree built under a linguistic
+    // collation (e.g. `en_US.UTF-8`) can't answer that, so the token index
+    // declares the pattern operator class and the scan stays indexed.
+    textPatternOperatorClass: "text_pattern_ops",
+
     // Restrict to schemas on the effective search_path (excluding the implicit
     // pg_catalog with `false`) so an unqualified name resolves exactly as CREATE
     // TABLE / SELECT would. Without this filter the probe sees same-named tables in

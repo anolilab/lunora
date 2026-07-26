@@ -23,6 +23,7 @@ import { aggregateTableName } from "./aggregate-tally";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
+import { backfillSearchIndex } from "./ctx-db-backfill";
 import { migrateCdcLog, migrateCdcMeta } from "./ctx-db-cdc";
 import { migrateClientWatermark } from "./ctx-db-client-watermark";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
@@ -30,7 +31,7 @@ import { migrateIdempotency } from "./ctx-db-idempotency";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
 import { rankTableName, sortColumnName } from "./rank";
-import { ftsTableName } from "./search-text";
+import { FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName } from "./search-text";
 
 /** Create the secondary + `.unique()` expression indexes declared on a table. */
 const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
@@ -62,6 +63,12 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
  * only on engines that ship FTS5 (Cloudflare DOs do; the `node:sqlite` test
  * runner doesn't, where `.search()` transparently falls back to a scan).
  * `__text__` holds the indexed field; `__id__` (UNINDEXED) joins back to the row.
+ *
+ * A freshly created shadow is then backfilled from the rows already in the
+ * table, so declaring a search index on a table that already holds data makes
+ * that data searchable — without it the index would only ever see rows written
+ * after* the deploy. `staged: true` opts out for large tables; a host populates
+ * those out-of-band with `backfillSearchIndexes`.
  */
 const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
     if (!definition.searchIndexes || definition.searchIndexes.length === 0 || !isFtsAvailable(sql)) {
@@ -73,8 +80,14 @@ const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: Table
 
         runDrizzle(
             sql,
-            dsql`CREATE VIRTUAL TABLE IF NOT EXISTS ${dsql.identifier(ftName)} USING fts5(${dsql.identifier("__text__")}, ${dsql.identifier("__id__")} UNINDEXED)`,
+            dsql`CREATE VIRTUAL TABLE IF NOT EXISTS ${dsql.identifier(ftName)} USING fts5(${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)} UNINDEXED)`,
         );
+
+        if (index.staged) {
+            continue;
+        }
+
+        backfillSearchIndex(sql, tableName, index);
     }
 };
 

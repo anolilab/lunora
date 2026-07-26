@@ -261,4 +261,136 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             expect(ids(page.page)).toEqual(["t5", "t1", "t2", "t3"]);
         });
     });
+
+    describe("full-text search (portable inverted index)", () => {
+        const searchSchema: SchemaLike = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body" }],
+                    shape: { body: col("string"), channel: col("string"), title: col("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        };
+
+        const setupNotes = async (): Promise<DatabaseWriterLike> => {
+            await runSqlGlobalTableMigrations(harness.exec, searchSchema, postgresDialect);
+
+            return createHyperdriveGlobalCtxDb({ clock: () => FIXED_CLOCK, engine: "postgres", exec: harness.exec, schema: searchSchema });
+        };
+
+        const seedNotes = async (writer: DatabaseWriterLike): Promise<void> => {
+            await writer.insert("notes", { _id: "n1", body: "hello world", channel: "general", title: "one" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n2", body: "hello hello wonderful world", channel: "general", title: "two" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n3", body: "goodbye world", channel: "general", title: "three" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n4", body: "hello world", channel: "other", title: "four" }, { allowExplicitId: true });
+        };
+
+        it("matches every term, prefix-matches the last, and ranks by occurrences", async () => {
+            expect.assertions(1);
+
+            const writer = await setupNotes();
+
+            await seedNotes(writer);
+
+            const results = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello wor"))
+                .collect();
+
+            // n2 outranks the others on occurrence count ("hello" twice, plus
+            // "wonderful"/"world" both matching the prefix); n3 misses "hello".
+            expect(ids(results)).toEqual(["n2", "n1", "n4"]);
+        });
+
+        it("narrows by an .eq() filter field", async () => {
+            expect.assertions(1);
+
+            const writer = await setupNotes();
+
+            await seedNotes(writer);
+
+            const results = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello").eq("channel", "other"))
+                .collect();
+
+            expect(ids(results)).toEqual(["n4"]);
+        });
+
+        it("keeps the companion in step with updates and deletes", async () => {
+            expect.assertions(2);
+
+            const writer = await setupNotes();
+
+            await seedNotes(writer);
+            await writer.patch("n1", { body: "totally rewritten" });
+            await writer.delete("n4");
+
+            const stale = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                .collect();
+            const fresh = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "rewritten"))
+                .collect();
+
+            expect(ids(stale)).toEqual(["n2"]);
+            expect(ids(fresh)).toEqual(["n1"]);
+        });
+
+        it("indexes rows that predate the search index on first migration", async () => {
+            expect.assertions(1);
+
+            // Write the rows through a schema *without* the search index, so the
+            // companion sees them only via the migration-time backfill.
+            const plainSchema: SchemaLike = {
+                tables: { notes: { ...searchSchema.tables["notes"]!, searchIndexes: [] } },
+            };
+
+            await runSqlGlobalTableMigrations(harness.exec, plainSchema, postgresDialect);
+
+            const plainWriter = createHyperdriveGlobalCtxDb({ clock: () => FIXED_CLOCK, engine: "postgres", exec: harness.exec, schema: plainSchema });
+
+            await seedNotes(plainWriter);
+
+            const writer = createHyperdriveGlobalCtxDb({ clock: () => FIXED_CLOCK, engine: "postgres", exec: harness.exec, schema: searchSchema });
+            const results = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "goodbye"))
+                .collect();
+
+            expect(ids(results)).toEqual(["n3"]);
+        });
+
+        it("pages through the relevance-ordered results", async () => {
+            expect.assertions(3);
+
+            const writer = await setupNotes();
+
+            await seedNotes(writer);
+
+            const firstPage = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "world"))
+                .paginate({ numItems: 2 });
+
+            expect(firstPage.isDone).toBe(false);
+            expect(firstPage.page).toHaveLength(2);
+
+            const secondPage = await writer
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "world"))
+                .paginate({ cursor: firstPage.continueCursor, numItems: 2 });
+
+            expect([...ids([...firstPage.page, ...secondPage.page])].toSorted((left, right) => String(left).localeCompare(String(right)))).toEqual([
+                "n1",
+                "n2",
+                "n3",
+                "n4",
+            ]);
+        });
+    });
 });

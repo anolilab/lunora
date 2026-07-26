@@ -2,7 +2,7 @@ import type { SchemaLike, ValidatorLike } from "@lunora/do";
 import { describe, expect, it } from "vitest";
 
 import type { D1Exec } from "../src/d1-ctx-db";
-import { createD1CtxDb as createD1ContextDatabase, runD1SearchMigrations } from "../src/d1-ctx-db";
+import { backfillD1SearchIndexes, createD1CtxDb as createD1ContextDatabase, runD1SearchMigrations } from "../src/d1-ctx-db";
 
 /**
  * The FTS5 production path can't run under `node:sqlite` (no fts5 module), so
@@ -65,6 +65,11 @@ const createRecordingFts = (matchRows: MatchRow[]): { exec: D1Exec; statements: 
         // (`RETURNING "id"`) reports one changed row so the CAS passes.
         const routes: { pattern: RegExp; rows: () => Record<string, unknown>[] }[] = [
             { pattern: / MATCH /u, rows: () => matchRows as unknown as Record<string, unknown>[] },
+            // The migration-time backfill probes for the source table and then
+            // pages through it; the canned rows stand in for a table that
+            // already held data when the search index was declared.
+            { pattern: /^SELECT name FROM sqlite_master WHERE type = 'table' AND name = \?$/u, rows: () => [{ name: "docs" }] },
+            { pattern: /^SELECT \* FROM "docs" ORDER BY "id" ASC LIMIT \d+$/u, rows: () => matchRows as unknown as Record<string, unknown>[] },
             { pattern: /RETURNING "id"$/u, rows: () => (matchRows.length > 0 ? [{ id: matchRows[0]?.id }] : [{ id: "d1" }]) },
             { pattern: /WHERE "id" = \? LIMIT 1$/u, rows: () => (matchRows.length > 0 ? [{ 1: 1 }] : []) },
             { pattern: /^SELECT \* FROM .* WHERE "id" = \?$/u, rows: () => matchRows as unknown as Record<string, unknown>[] },
@@ -115,10 +120,66 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
         await writer.insert("docs", { body: "hello world", channel: "x", title: "a" });
 
         const remove = statements.find((statement) => statement.sql === 'DELETE FROM "docs__fts_by_body" WHERE "__id__" = ?');
-        const add = statements.find((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+        // The last shadow INSERT is the write sync; earlier ones belong to the
+        // migration-time backfill (here just its "backfilled" sentinel).
+        const add = statements.findLast((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
 
         expect(remove?.params).toStrictEqual(["d1"]);
         expect(add?.params).toStrictEqual(["hello world", "d1"]);
+    });
+
+    it("backfills rows that predate the search index, then marks the shadow backfilled", async () => {
+        expect.assertions(1);
+
+        const { exec, statements } = createRecordingFts([
+            { _creationTime: 1, body: "hello world", channel: "x", id: "d1", title: "first" },
+            { _creationTime: 2, body: "hello words", channel: "x", id: "d2", title: "second" },
+        ]);
+
+        await runD1SearchMigrations(exec, searchSchema);
+
+        const inserts = statements.filter((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+
+        expect(inserts.map((statement) => statement.params)).toStrictEqual([
+            ["hello world", "d1"],
+            ["hello words", "d2"],
+            // Sentinel: an empty token can never match a query and an empty id
+            // can never join to a row, so it only records "already backfilled".
+            ["", ""],
+        ]);
+    });
+
+    it("leaves a staged search index empty until the out-of-band backfill runs", async () => {
+        expect.assertions(3);
+
+        const stagedSchema: SchemaLike = {
+            tables: {
+                docs: {
+                    ...searchSchema.tables["docs"]!,
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body", staged: true }],
+                },
+            },
+        };
+        const { exec, statements } = createRecordingFts([{ _creationTime: 1, body: "hello world", channel: "x", id: "d1", title: "first" }]);
+
+        await runD1SearchMigrations(exec, stagedSchema);
+
+        expect(
+            statements.some(
+                (statement) => statement.sql === 'CREATE VIRTUAL TABLE IF NOT EXISTS "docs__fts_by_body" USING fts5("__text__", "__id__" UNINDEXED)',
+            ),
+        ).toBe(true);
+        expect(statements.some((statement) => statement.sql.startsWith('INSERT INTO "docs__fts_by_body"'))).toBe(false);
+
+        // …until the host runs the explicit backfill.
+        await backfillD1SearchIndexes(exec, stagedSchema);
+
+        const inserts = statements.filter((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+
+        expect(inserts.map((statement) => statement.params)).toStrictEqual([
+            ["hello world", "d1"],
+            ["", ""],
+        ]);
     });
 
     it("clears the FTS row on delete (no re-insert)", async () => {

@@ -316,4 +316,83 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
             TEST_TIMEOUT,
         );
     });
+
+    describe("full-text search (portable inverted index)", () => {
+        const searchSchema: SchemaLike = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body" }],
+                    shape: { body: col("string"), channel: col("string"), title: col("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        };
+
+        const seedNotes = async (writer: DatabaseWriterLike): Promise<void> => {
+            await writer.insert("notes", { _id: "n1", body: "hello world", channel: "general", title: "one" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n2", body: "hello hello wonderful world", channel: "general", title: "two" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n3", body: "goodbye world", channel: "general", title: "three" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n4", body: "hello world", channel: "other", title: "four" }, { allowExplicitId: true });
+        };
+
+        it(
+            "creates the companion within the 3072-byte key limit and ranks by occurrences",
+            async () => {
+                expect.assertions(2);
+
+                await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
+                await harness.query("DROP TABLE IF EXISTS `notes`");
+                await runSqlGlobalTableMigrations(harness.exec, searchSchema, mysqlDialect);
+
+                const writer = writerFor(searchSchema);
+
+                await seedNotes(writer);
+
+                const results = await writer
+                    .query("notes")
+                    .withSearchIndex("by_body", (q) => q.search("body", "hello wor"))
+                    .collect();
+
+                // Both companion columns carry the dialect's VARCHAR(768) `key`
+                // type, so the (token, id) btree only fits under a key prefix.
+                const indexes = await harness.query("SHOW INDEX FROM `notes__fts_by_body`");
+
+                expect(new Set(indexes.map((row) => row["Key_name"])).has("notes__fts_by_body__btree")).toBe(true);
+                expect(ids(results)).toEqual(["n2", "n1", "n4"]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "narrows by an .eq() filter field and follows updates",
+            async () => {
+                expect.assertions(2);
+
+                await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
+                await harness.query("DROP TABLE IF EXISTS `notes`");
+                await runSqlGlobalTableMigrations(harness.exec, searchSchema, mysqlDialect);
+
+                const writer = writerFor(searchSchema);
+
+                await seedNotes(writer);
+
+                const scoped = await writer
+                    .query("notes")
+                    .withSearchIndex("by_body", (q) => q.search("body", "hello").eq("channel", "other"))
+                    .collect();
+
+                await writer.patch("n2", { body: "totally rewritten" });
+
+                const fresh = await writer
+                    .query("notes")
+                    .withSearchIndex("by_body", (q) => q.search("body", "rewritten"))
+                    .collect();
+
+                expect(ids(scoped)).toEqual(["n4"]);
+                expect(ids(fresh)).toEqual(["n2"]);
+            },
+            TEST_TIMEOUT,
+        );
+    });
 });

@@ -130,9 +130,21 @@ interface IndexDefinition {
 }
 
 interface SearchIndexDefinition {
+    /** Indexed text column; a dot-separated path (`"properties.name"`) reads a nested field. */
     field: string;
+    /** Columns `.eq()` may narrow by inside the search builder. At most 16. */
     filterFields?: ReadonlyArray<string>;
     name: string;
+
+    /**
+     * Skip the migration-time backfill. By default, creating the index's
+     * companion also indexes the rows already in the table, so a search index
+     * added to a populated table works immediately. On a very large table that
+     * scan is expensive to run inside a deploy: `staged: true` maintains the
+     * index on write only and leaves the initial population to an out-of-band
+     * `backfillSearchIndexes`.
+     */
+    staged?: boolean;
 }
 
 /**

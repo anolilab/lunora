@@ -117,4 +117,14 @@ export interface SqlDialect {
      * `information_schema.tables`.
      */
     tableExists: (table: string) => SQL;
+
+    /**
+     * Optional: btree operator class appended to an indexed text column so a
+     * `LIKE 'prefix%'` scan can use the index whatever the database collation.
+     * Postgres needs `text_pattern_ops` (a default `text_ops` btree built under
+     * e.g. `en_US.UTF-8` is useless to `LIKE`); SQLite and MySQL index prefix
+     * matches off the plain index and omit this. Only the search companion's
+     * token index reads it.
+     */
+    textPatternOperatorClass?: string;
 }

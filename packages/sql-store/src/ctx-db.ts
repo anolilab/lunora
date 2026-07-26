@@ -47,36 +47,46 @@ import {
     assertValidClientId,
     buildFtsMatch,
     buildSeekWhere,
+    clampSearchScan,
     coerceAggregateNumber,
     compileWhereSql,
     ConflictError,
     CountRlsUnsupportedError,
+    countSearchTokens,
     decodeCursor,
     encodeAggregateKey,
     encodeCursor,
     encodePartitionKey,
+    encodeSearchCursor,
     fanOutScalarCounts,
     foldAggregateTally,
+    FTS_COUNT_COLUMN,
+    FTS_ID_COLUMN,
+    FTS_TEXT_COLUMN,
+    FTS_TOKEN_COLUMN,
     ftsTableName,
     hasTrigger,
     matchesRankStaticWhere,
     matchesStaticWhere,
+    MAX_SEARCH_FILTERS,
+    MAX_SEARCH_TERMS,
     mergeWhere,
     normalizeCountArgument,
     normalizeIdStructurally,
     normalizeOrderKeys,
     NotFoundError,
     NotUniqueError,
+    parseSearchCursor,
     RANK_TIEBREAK,
     rankTableName,
     readAggregateValue,
     renderSql,
     resolveRankPartition,
     resolveRelationPredicates,
+    resolveSearchField,
     resolveWith,
     runRowValidators,
     runTriggers,
-    scoreDocument,
     selectIndexForAggregate,
     selectIndexForCount,
     selectIndexForGroupBy,
@@ -282,6 +292,7 @@ interface SearchIndexDefinitionLike {
     readonly field: string;
     readonly filterFields?: ReadonlyArray<string>;
     readonly name: string;
+    readonly staged?: boolean;
 }
 
 /** SQLite storage encode for `.global()` column values — the shared `@lunora/sql-store` codec (SQLite has no boolean, so true/false → 1/0). */
@@ -644,7 +655,7 @@ const searchViaFts = async (
     definition: TableDefinitionLike,
     tableName: string,
     search: SearchStage,
-    limit: number | undefined,
+    limit: number,
 ): Promise<Record<string, unknown>[]> => {
     const tokens = tokenizeSearch(search.query);
 
@@ -671,11 +682,7 @@ const searchViaFts = async (
     // `f.rank` is FTS5's bm25 relevance (best first); the `_creationTime DESC`
     // tiebreak matches the scan fallback so equal-rank rows order newest-first
     // on both engines.
-    let query = sql`SELECT m.* FROM ${sql.identifier(ftName)} f JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = f.${sql.identifier("__id__")} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY f.rank, m.${sql.identifier("_creationTime")} DESC`;
-
-    if (typeof limit === "number") {
-        query = sql`${query} LIMIT ${sql.raw(String(Math.max(0, Math.floor(limit))))}`;
-    }
+    const query = sql`SELECT m.* FROM ${sql.identifier(ftName)} f JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = f.${sql.identifier(FTS_ID_COLUMN)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY f.rank, m.${sql.identifier("_creationTime")} DESC LIMIT ${sql.raw(String(limit))}`;
 
     const rows = await queryAll(exec, dialect, query);
 
@@ -683,19 +690,33 @@ const searchViaFts = async (
 };
 
 /**
- * Portable fallback for engines without FTS5 (the `node:sqlite` test runner):
- * pull candidate rows (narrowed by `.eq()` filters in SQL), tokenize the indexed
- * field in JS, and rank with `scoreDocument`. Matches the FTS path's AND +
- * prefix-on-last-token semantics; relevance order is term-frequency, ties broken
- * by creation time (newest first).
+ * The predicate one query term matches a companion token with: an exact
+ * equality, except for the query's final term, which matches as a prefix so a
+ * search behaves as-you-type. Tokens are `[\p{L}\p{N}]+` by construction, so
+ * the `LIKE` pattern carries no wildcard or escape character.
  */
-const searchViaScan = async (
+const searchTermPredicate = (token: string, isLast: boolean): SQL =>
+    isLast ? sql`${sql.identifier(FTS_TOKEN_COLUMN)} LIKE ${`${token}%`}` : sql`${sql.identifier(FTS_TOKEN_COLUMN)} = ${token}`;
+
+/**
+ * Run a search against the portable inverted companion — the path every engine
+ * without FTS5 takes (Postgres and MySQL behind Hyperdrive, plus the
+ * `node:sqlite` test runner).
+ *
+ * The companion holds one `(token, id, occurrences)` row per distinct token, so
+ * the whole query is one indexed read: match any query term, group by document,
+ * and keep only documents that matched *every* distinct term (the `COUNT(DISTINCT
+ * CASE …)` test) — the AND semantics `scoreDocument` implements. `SUM(occurrences)`
+ * is that scorer's term-frequency score computed in SQL, so relevance order here
+ * and on the FTS5 path agree, with the same `_creationTime DESC` tiebreak.
+ */
+const searchViaInverted = async (
     exec: SqlCtxExec,
     dialect: SqlDialect,
     definition: TableDefinitionLike,
     tableName: string,
     search: SearchStage,
-    limit: number | undefined,
+    limit: number,
 ): Promise<Record<string, unknown>[]> => {
     const tokens = tokenizeSearch(search.query);
 
@@ -703,35 +724,42 @@ const searchViaScan = async (
         return [];
     }
 
-    const conditions = search.filters.map((filter) => sql`${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
+    const ftName = ftsTableName(tableName, search.indexName);
+    const lastIndex = tokens.length - 1;
+    const anyTerm = sql.join(
+        tokens.map((token, index) => searchTermPredicate(token, index === lastIndex)),
+        sql` OR `,
+    );
+    // One CASE arm per term: a document's matched rows collapse to the set of
+    // term slots it satisfied, so `COUNT(DISTINCT …)` equalling the term count
+    // is exactly "matched every term". Terms are de-duplicated upstream, so no
+    // two arms can shadow each other.
+    const termSlots = sql.join(
+        tokens.map((token, index) => sql`WHEN ${searchTermPredicate(token, index === lastIndex)} THEN ${index}`),
+        sql` `,
+    );
+    const scored = sql`SELECT ${sql.identifier(FTS_ID_COLUMN)}, SUM(${sql.identifier(FTS_COUNT_COLUMN)}) AS ${sql.identifier("__score__")} FROM ${sql.identifier(ftName)} WHERE ${anyTerm} GROUP BY ${sql.identifier(FTS_ID_COLUMN)} HAVING COUNT(DISTINCT CASE ${termSlots} END) = ${tokens.length}`;
 
-    // Soft delete: hide soft-deleted rows from the scan fallback too.
-    if (definition.softDeleteMode) {
-        conditions.push(sql`${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
+    const conditions: SQL[] = [];
+
+    for (const filter of search.filters) {
+        conditions.push(sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
     }
 
-    let query = sql`SELECT * FROM ${sql.identifier(tableName)}`;
+    // Soft delete: hide soft-deleted rows from search.
+    if (definition.softDeleteMode) {
+        conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
+    }
+
+    let query = sql`SELECT m.* FROM (${scored}) s JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = s.${sql.identifier(FTS_ID_COLUMN)}`;
 
     if (conditions.length > 0) {
         query = sql`${query} WHERE ${sql.join(conditions, sql` AND `)}`;
     }
 
-    const rows = await queryAll(exec, dialect, query);
-    const scored: { creationTime: number; doc: Record<string, unknown>; score: number }[] = [];
+    query = sql`${query} ORDER BY s.${sql.identifier("__score__")} DESC, m.${sql.identifier("_creationTime")} DESC LIMIT ${sql.raw(String(limit))}`;
 
-    for (const record of decodeRows(definition, rows)) {
-        const score = scoreDocument(stringifySearchText(record[search.field]), tokens);
-
-        if (score > 0) {
-            scored.push({ creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0, doc: record, score });
-        }
-    }
-
-    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime);
-
-    const documents = scored.map((entry) => entry.doc);
-
-    return typeof limit === "number" ? documents.slice(0, Math.max(0, Math.floor(limit))) : documents;
+    return decodeRows(definition, await queryAll(exec, dialect, query));
 };
 
 /**
@@ -749,6 +777,13 @@ const createSearchBuilder = (
                 throw new LunoraError("INTERNAL", `field "${field}" is not a filter field of search index "${search.indexName}" on table "${tableName}"`);
             }
 
+            if (search.filters.length >= MAX_SEARCH_FILTERS) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `search index "${search.indexName}" on table "${tableName}": at most ${String(MAX_SEARCH_FILTERS)} .eq() filters are supported per search query`,
+                );
+            }
+
             search.filters.push({ field, value });
 
             return builder;
@@ -758,6 +793,15 @@ const createSearchBuilder = (
                 throw new LunoraError(
                     "INTERNAL",
                     `search index "${search.indexName}" on table "${tableName}" indexes "${search.definition.field}", not "${field}"`,
+                );
+            }
+
+            const terms = tokenizeSearch(query).length;
+
+            if (terms > MAX_SEARCH_TERMS) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `search index "${search.indexName}" on table "${tableName}": at most ${String(MAX_SEARCH_TERMS)} search terms are supported (got ${String(terms)})`,
                 );
             }
 
@@ -965,14 +1009,19 @@ const BACKFILL_BATCH_SIZE = 500;
  * Stream every row of `tableName` to `onDoc` in `id`-keyset order, decoding each
  * row into a document first. Pages by the last row's `id` (not OFFSET) so an
  * unbounded table never has to fit in a single result buffer. Rows that fail to
- * decode are skipped. Shared by the aggregate- and rank-counter backfills.
+ * decode are skipped. Shared by the aggregate-, rank-counter and search-index
+ * backfills.
+ *
+ * `onDoc` may return a promise (the search backfill writes companion rows per
+ * document); it is awaited before the next row, keeping companion writes
+ * sequential on the shared connection like every other write path here.
  */
 const forEachRowPaged = async (
     exec: SqlCtxExec,
     dialect: SqlDialect,
     definition: TableDefinitionLike,
     tableName: string,
-    onDoc: (document: Record<string, unknown>) => void,
+    onDoc: (document: Record<string, unknown>) => Promise<void> | void,
 ): Promise<void> => {
     let cursorId: string | undefined;
     let hasMore = true;
@@ -997,7 +1046,8 @@ const forEachRowPaged = async (
             const decoded = decodeRow(definition, row);
 
             if (decoded) {
-                onDoc(decoded);
+                // eslint-disable-next-line no-await-in-loop -- an async `onDoc` (the search backfill) writes companion rows on the single shared connection; sequential is the point.
+                await onDoc(decoded);
             }
         }
 
@@ -1244,39 +1294,240 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
 };
 
 /**
- * Materialize the `__fts_&lt;index>` FTS5 shadow tables for every declared
- * `.searchIndex()` on a global table. Mirrors `runSqlAggregateMigrations` — same
- * opt-in pattern so production hosts decide whether to spend the DDL. Only runs
- * on engines that ship FTS5 (D1 does; the `node:sqlite` test runner doesn't,
- * where `.search()` transparently falls back to a scan). `__text__` holds the
- * indexed field; `__id__` (UNINDEXED) joins back to the row.
- *
- * Idempotent (`CREATE VIRTUAL TABLE IF NOT EXISTS`).
+ * The `(token, id, occurrences)` rows one document contributes to a portable
+ * inverted index, plus the sentinel that records "this companion has been
+ * backfilled" — see {@link runSqlSearchMigrations}.
  */
-const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
-    // fts5 is a SQLite/D1 feature. On engines without it (`node:sqlite`,
-    // Postgres, MySQL) the probe fails and this no-ops — `.search()` then
-    // transparently falls back to a portable scan.
-    if (!(await isFtsAvailable(exec))) {
+const searchRowsForDocument = (document: Record<string, unknown>, index: SearchIndexDefinitionLike): [string, number][] => [
+    ...countSearchTokens(stringifySearchText(resolveSearchField(document, index.field))),
+];
+
+/**
+ * One column of the search companion's btree, rendered for the engine.
+ *
+ * Both columns use the dialect's `key` type, which on MySQL is `VARCHAR(768)` —
+ * two of those exceed InnoDB's 3072-byte index limit, so they take the same
+ * `(191)` key prefix the rank btree uses (a token is a single word; the prefix
+ * never truncates one in practice). Postgres needs the opposite treatment: an
+ * explicit `text_pattern_ops` class, or the prefix `LIKE` that resolves the
+ * query's final term can't use the index under a non-C collation.
+ */
+const searchIndexColumn = (dialect: SqlDialect, column: string): SQL => {
+    if (dialect.name === "mysql") {
+        return sql`${sql.identifier(column)}(191)`;
+    }
+
+    if (dialect.textPatternOperatorClass === undefined) {
+        return sql`${sql.identifier(column)}`;
+    }
+
+    return sql`${sql.identifier(column)} ${sql.raw(dialect.textPatternOperatorClass)}`;
+};
+
+/**
+ * Rows per companion `INSERT`. Keeps the bound-parameter count of one statement
+ * far under every engine's cap (3 params per row) while still turning a
+ * thousand-token document into a handful of round trips rather than a thousand.
+ */
+const SEARCH_INSERT_CHUNK_ROWS = 50;
+
+/** Write one document's inverted-index rows, chunked into multi-row INSERTs. */
+const insertInvertedRows = async (exec: SqlCtxExec, dialect: SqlDialect, ftName: string, id: string, rows: ReadonlyArray<[string, number]>): Promise<void> => {
+    const columns = sql.join(
+        [FTS_TOKEN_COLUMN, FTS_ID_COLUMN, FTS_COUNT_COLUMN].map((column) => sql.identifier(column)),
+        sql`, `,
+    );
+
+    for (let start = 0; start < rows.length; start += SEARCH_INSERT_CHUNK_ROWS) {
+        const values = sql.join(
+            rows.slice(start, start + SEARCH_INSERT_CHUNK_ROWS).map(([token, occurrences]) => sql`(${token}, ${id}, ${occurrences})`),
+            sql`, `,
+        );
+
+        // eslint-disable-next-line no-await-in-loop -- companion writes run sequentially on the single shared connection, like every other write path here.
+        await queryRun(exec, dialect, sql`INSERT INTO ${sql.identifier(ftName)} (${columns}) VALUES ${values}`);
+    }
+};
+
+/**
+ * Index every existing row of a global table into a search companion that has
+ * just been created. Without this a `.searchIndex()` added to a table that
+ * already holds data would only ever see rows written *after* the deploy.
+ *
+ * Closes with a sentinel row (empty token / empty id) that marks the companion
+ * as backfilled: `ensureMigrated` runs once per ctx-db — i.e. per request on a
+ * Hyperdrive binding — so "is it empty?" has to stay answerable in one indexed
+ * probe, and a corpus that happens to tokenize to nothing must not re-scan the
+ * table on every request. The sentinel can never match a query (tokens are
+ * non-empty by construction) and never joins to a row (no document has an empty
+ * id).
+ */
+const backfillSqlSearchIndex = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    index: SearchIndexDefinitionLike,
+    ftsAvailable: boolean,
+): Promise<void> => {
+    const ftName = ftsTableName(tableName, index.name);
+    const existing = await queryAll(exec, dialect, sql`SELECT ${sql.identifier(FTS_ID_COLUMN)} FROM ${sql.identifier(ftName)} LIMIT 1`);
+
+    if (existing.length > 0) {
         return;
     }
+
+    // The source table may not be here at all: the companion DDL runs for every
+    // table the schema declares without a shard mode, and a host that manages
+    // its own DDL may not have created this one yet. Nothing to index then — the
+    // sentinel below still records that we've been here, so this stays a
+    // one-time probe rather than a per-request one.
+    const sourceRows = await queryAll(exec, dialect, dialect.tableExists(tableName));
+    const sourceExists = sourceRows.length > 0;
+
+    if (sourceExists) {
+        await forEachRowPaged(exec, dialect, definition, tableName, async (document) => {
+            const id = document["_id"];
+
+            if (typeof id !== "string") {
+                return;
+            }
+
+            if (ftsAvailable) {
+                await queryRun(
+                    exec,
+                    dialect,
+                    sql`INSERT INTO ${sql.identifier(ftName)} (${sql.identifier(FTS_TEXT_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)}) VALUES (${stringifySearchText(resolveSearchField(document, index.field))}, ${id})`,
+                );
+
+                return;
+            }
+
+            await insertInvertedRows(exec, dialect, ftName, id, searchRowsForDocument(document, index));
+        });
+    }
+
+    await (ftsAvailable
+        ? queryRun(
+              exec,
+              dialect,
+              sql`INSERT INTO ${sql.identifier(ftName)} (${sql.identifier(FTS_TEXT_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)}) VALUES (${""}, ${""})`,
+          )
+        : insertInvertedRows(exec, dialect, ftName, "", [["", 0]]));
+};
+
+/**
+ * Materialize the `__fts_&lt;index>` companion for every declared `.searchIndex()`
+ * on a global table, in whichever shape the engine can serve:
+ *
+ * - **FTS5 shadow** where the engine ships FTS5 (D1). `__text__` holds the
+ *   indexed field, `__id__` (UNINDEXED) joins back to the row, and relevance is
+ *   the engine's bm25 `rank`.
+ * - **Portable inverted table** everywhere else (Postgres and MySQL behind
+ *   Hyperdrive, and the `node:sqlite` test runner): one `(token, id,
+ *   occurrences)` row per distinct token, btree-indexed on `(token, id)` so an
+ *   exact term is a point lookup and the query's final term is a prefix range
+ *   scan. Ranking is `SUM(occurrences)` — the SQL twin of `scoreDocument`, which
+ *   is what keeps results identical to the FTS5 path.
+ *
+ * Freshly created companions are backfilled from the rows already in the table
+ * unless the index is declared `staged: true`.
+ *
+ * Idempotent (`CREATE … IF NOT EXISTS` throughout).
+ */
+const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
+    const ftsAvailable = await isFtsAvailable(exec);
+    const { integer, key } = dialect.companionTypes;
 
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         const indexes = definition.searchIndexes;
 
-        if (!indexes || indexes.length === 0) {
+        // Skip tables that don't live here — a `.shardBy()` table's rows sit in
+        // the DOs, so a companion over them could never be populated. Schemas
+        // authored before the `.global()` flag existed don't set `shardMode` at
+        // all; those still get their companions (same allowance the id-probe
+        // candidate list makes).
+        if ((definition.shardMode !== undefined && definition.shardMode.kind !== "global") || !indexes || indexes.length === 0) {
             continue;
         }
 
         for (const index of indexes) {
             const ftName = ftsTableName(tableName, index.name);
 
-            // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared connection.
-            await queryRun(
-                exec,
-                dialect,
-                sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(ftName)} USING fts5(${sql.identifier("__text__")}, ${sql.identifier("__id__")} UNINDEXED)`,
-            );
+            if (ftsAvailable) {
+                // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared connection.
+                await queryRun(
+                    exec,
+                    dialect,
+                    sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(ftName)} USING fts5(${sql.identifier(FTS_TEXT_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)} UNINDEXED)`,
+                );
+            } else {
+                // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially; the table must exist before its indexes below.
+                await queryRun(
+                    exec,
+                    dialect,
+                    sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(ftName)} (${sql.identifier(FTS_TOKEN_COLUMN)} ${sql.raw(key)} NOT NULL, ${sql.identifier(FTS_ID_COLUMN)} ${sql.raw(key)} NOT NULL, ${sql.identifier(FTS_COUNT_COLUMN)} ${sql.raw(integer)} NOT NULL)`,
+                );
+
+                // The lookup index. Postgres needs an explicit pattern operator
+                // class or a `LIKE 'prefix%'` scan can't use a btree built under
+                // a non-C collation — the prefix term of every query depends on
+                // it. Not unique: a concurrent cold-start backfill could double
+                // a row, which the next write to that id repairs, whereas a
+                // unique violation would fail the request outright.
+                // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
+                await createIndexIfNotExists(exec, dialect, {
+                    columns: sql`${searchIndexColumn(dialect, FTS_TOKEN_COLUMN)}, ${searchIndexColumn(dialect, FTS_ID_COLUMN)}`,
+                    name: `${ftName}__btree`,
+                    table: ftName,
+                    unique: false,
+                });
+
+                // Every row write purges its old rows by id first.
+                // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
+                await createIndexIfNotExists(exec, dialect, {
+                    columns: searchIndexColumn(dialect, FTS_ID_COLUMN),
+                    name: `${ftName}__by_id`,
+                    table: ftName,
+                    unique: false,
+                });
+            }
+
+            if (index.staged) {
+                continue;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- backfills run sequentially on the shared connection.
+            await backfillSqlSearchIndex(exec, dialect, definition, tableName, index, ftsAvailable);
+        }
+    }
+};
+
+/**
+ * One-shot backfill of every declared search index on a global table, including
+ * the `staged: true` ones the migration deliberately leaves empty. The entry
+ * point a host runs out-of-band after deploying a search index over a table too
+ * large to index inside the migration pass. Idempotent: companions that already
+ * carry rows are left alone.
+ */
+const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
+    const ftsAvailable = await isFtsAvailable(exec);
+
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        const indexes = definition.searchIndexes;
+
+        // Skip tables that don't live here — a `.shardBy()` table's rows sit in
+        // the DOs, so a companion over them could never be populated. Schemas
+        // authored before the `.global()` flag existed don't set `shardMode` at
+        // all; those still get their companions (same allowance the id-probe
+        // candidate list makes).
+        if ((definition.shardMode !== undefined && definition.shardMode.kind !== "global") || !indexes || indexes.length === 0) {
+            continue;
+        }
+
+        for (const index of indexes) {
+            // eslint-disable-next-line no-await-in-loop -- backfills run sequentially on the shared connection.
+            await backfillSqlSearchIndex(exec, dialect, definition, tableName, index, ftsAvailable);
         }
     }
 };
@@ -2096,33 +2347,44 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
-     * Keep the FTS5 shadow tables in step with a row write. A no-op when the
-     * table declares no search indexes or when FTS5 is unavailable (the scan
-     * fallback reads the live table, so nothing to mirror). Delete then insert
-     * makes it idempotent across insert/update; `document === undefined` deletes
-     * only (row removal). The DO twin gates on the same availability probe.
+     * Keep the search companions in step with a row write — the FTS5 shadow
+     * where the engine has FTS5, the portable inverted table otherwise. A no-op
+     * when the table declares no search indexes. Delete then insert makes it
+     * idempotent across insert/update; `document === undefined` deletes only
+     * (row removal). The DO twin runs the same delete-then-insert shape.
      */
     const syncSearch = async (tableName: string, id: string, document: Record<string, unknown> | undefined): Promise<void> => {
         const indexes = schema.tables[tableName]?.searchIndexes;
 
-        if (!indexes || indexes.length === 0 || !(await isFtsAvailable(exec))) {
+        if (!indexes || indexes.length === 0) {
             return;
         }
+
+        const ftsAvailable = await isFtsAvailable(exec);
 
         for (const index of indexes) {
             const ftName = ftsTableName(tableName, index.name);
 
-            // eslint-disable-next-line no-await-in-loop -- FTS syncs run sequentially on the single shared D1 connection so DELETE/INSERT pairs don't interleave across indexes.
-            await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(ftName)} WHERE ${sql.identifier("__id__")} = ${id}`);
+            // eslint-disable-next-line no-await-in-loop -- search syncs run sequentially on the single shared connection so DELETE/INSERT pairs don't interleave across indexes.
+            await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(ftName)} WHERE ${sql.identifier(FTS_ID_COLUMN)} = ${id}`);
 
-            if (document) {
-                // eslint-disable-next-line no-await-in-loop -- sequential companion INSERT on the shared D1 connection (see above).
+            if (!document) {
+                continue;
+            }
+
+            if (ftsAvailable) {
+                // eslint-disable-next-line no-await-in-loop -- sequential companion INSERT on the shared connection (see above).
                 await queryRun(
                     exec,
                     dialect,
-                    sql`INSERT INTO ${sql.identifier(ftName)} (${sql.identifier("__text__")}, ${sql.identifier("__id__")}) VALUES (${stringifySearchText(document[index.field])}, ${id})`,
+                    sql`INSERT INTO ${sql.identifier(ftName)} (${sql.identifier(FTS_TEXT_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)}) VALUES (${stringifySearchText(resolveSearchField(document, index.field))}, ${id})`,
                 );
+
+                continue;
             }
+
+            // eslint-disable-next-line no-await-in-loop -- sequential companion INSERT on the shared connection (see above).
+            await insertInvertedRows(exec, dialect, ftName, id, searchRowsForDocument(document, index));
         }
     };
 
@@ -3177,13 +3439,17 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // supported, so a staged search runs and every other terminal op
             // throws the same legacy-reader error the bare `query()` used to.
             const runSearch = async (stage: SearchStage, limit: number | undefined): Promise<Record<string, unknown>[]> => {
-                // Ensure the fts5 shadow table exists before a MATCH reads it;
-                // on a no-fts5 engine the scan fallback reads the live table.
+                // Ensure the search companion exists (and is backfilled) before
+                // reading it — the fts5 shadow, or the portable inverted table.
                 await ensureMigrated();
 
+                // Relevance order makes the read inherently bounded: the caller's
+                // limit when there is one, `MAX_SEARCH_SCAN` otherwise.
+                const engineLimit = clampSearchScan(limit);
+
                 return (await isFtsAvailable(exec))
-                    ? searchViaFts(exec, dialect, definition, tableName, stage, limit)
-                    : searchViaScan(exec, dialect, definition, tableName, stage, limit);
+                    ? searchViaFts(exec, dialect, definition, tableName, stage, engineLimit)
+                    : searchViaInverted(exec, dialect, definition, tableName, stage, engineLimit);
             };
 
             const buildReader = (stage: SearchStage | undefined): TableReaderLike => {
@@ -3215,13 +3481,37 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         // the same legacy-reader error at its terminal.
                         return reader;
                     },
-                    // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike.paginate returns a Promise; search queries don't support pagination on either backend
-                    async paginate() {
-                        if (stage) {
-                            throw new LunoraError("INTERNAL", "pagination is not supported on search queries; use .take(n) or .collect()");
+                    async paginate(pageOptions) {
+                        if (!stage) {
+                            throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
                         }
 
-                        throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
+                        if (typeof pageOptions.endCursor === "string") {
+                            throw new LunoraError(
+                                "BAD_REQUEST",
+                                "bounded (endCursor) pagination is not supported on search queries — relevance order has no stable range boundary",
+                            );
+                        }
+
+                        // Relevance has no stored sort key to seek on, so a page
+                        // is an offset into the capped, deterministic result
+                        // window; one extra row tells us whether more remain.
+                        const numberItems = Math.max(0, Math.floor(pageOptions.numItems));
+                        const offset = pageOptions.cursor ? parseSearchCursor(pageOptions.cursor) : 0;
+
+                        if (offset === undefined) {
+                            throw new LunoraError("BAD_REQUEST", "invalid cursor");
+                        }
+
+                        const window = await runSearch(stage, offset + numberItems + 1);
+                        const hasMore = window.length > offset + numberItems;
+
+                        return {
+                            // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
+                            continueCursor: hasMore ? encodeSearchCursor(offset + numberItems) : null,
+                            isDone: !hasMore,
+                            page: window.slice(offset, offset + numberItems),
+                        };
                     },
                     async take(limit) {
                         if (!stage) {
@@ -3557,6 +3847,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 };
 
 export {
+    backfillSqlSearchIndexes,
     createSqlCtxDb,
     decodeGlobalRow,
     readSqlCdcChanges,

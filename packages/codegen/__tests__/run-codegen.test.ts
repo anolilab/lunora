@@ -2839,6 +2839,39 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
     });
 
+    describe("search indexes on `.global()` tables", () => {
+        const globalSearchSchema: SchemaIR = {
+            tables: [
+                {
+                    indexes: [],
+                    name: "articles",
+                    rankIndexes: [],
+                    relations: [],
+                    searchIndexes: [{ field: "body", filterFields: ["topic"], name: "by_body" }],
+                    shape: { body: { kind: "string" }, topic: { kind: "string" } },
+                    shardMode: "global",
+                    vectorIndexes: [],
+                },
+            ],
+            vectorIndexes: [],
+        };
+
+        it("emits the index name so `.withSearchIndex()` is callable on a global table", () => {
+            expect.assertions(2);
+
+            const output = emitDataModel(globalSearchSchema);
+            const block = /export interface SearchIndexNamesByTable \{(?<body>[^}]*)\}/u.exec(output)?.groups?.["body"];
+
+            // `.global()` tables run the same search surface as sharded ones —
+            // the D1 / Hyperdrive reader implements `.withSearchIndex()`, so the
+            // name union must not collapse to `never` (which would type the call
+            // as uncallable). Other unions (rank/geo/vector) still say `never`
+            // for this table, so the assertion reads the search block alone.
+            expect(block).toContain('articles: "by_body";');
+            expect(block).not.toContain("articles: never;");
+        });
+    });
+
     describe("batteries-included sandbox", () => {
         const sandboxFixtureRoot = join(here, "fixtures", "agent-sandbox");
         let sandboxWorkdir: string;

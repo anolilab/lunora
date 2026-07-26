@@ -321,12 +321,7 @@ const emitDataModel = (schema: SchemaIR, useUmbrella = false): string => {
 
     const searchIndexNamesByTable = schema.tables
         .map((table) => {
-            // `.global()` tables live in D1, whose reader doesn't back the
-            // legacy `query().withSearchIndex()` path the facade delegates to —
-            // so full-text search there isn't supported. Emit `never` (an
-            // uncallable `withSearchIndex`) rather than advertise an index name
-            // that throws at runtime.
-            const names = table.shardMode === "global" ? "" : table.searchIndexes.map((index) => JSON.stringify(index.name)).join(" | ");
+            const names = table.searchIndexes.map((index) => JSON.stringify(index.name)).join(" | ");
 
             return `    ${table.name}: ${names || "never"};`;
         })

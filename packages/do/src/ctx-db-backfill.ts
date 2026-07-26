@@ -23,12 +23,13 @@ import { aggregateTableName, encodeAggregateKey, foldAggregateTally } from "./ag
 import type { AggregateIndexDefinitionLike } from "./aggregates";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
-import type { SchemaLike, SqlExec } from "./ctx-db";
+import type { SchemaLike, SearchIndexDefinitionLike, SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
-import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, rowToDocument, serializeSqlValue } from "./do-sql";
+import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, serializeSqlValue } from "./do-sql";
 import { param } from "./drizzle";
 import type { RankIndexDefinitionLike } from "./rank";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
+import { FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, resolveSearchField, stringifySearchText } from "./search-text";
 
 /**
  * Backfill one aggregate counter table by scanning the source rows once and
@@ -143,4 +144,57 @@ const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     }
 };
 
-export { backfillAggregateIndexes, backfillRankIndexes };
+/**
+ * Index every existing row of `tableName` into one FTS5 shadow table. No-op
+ * when the shadow already carries rows, so a search index that has been live
+ * (and is trigger-maintained) is never rebuilt from scratch.
+ *
+ * `runShardMigrations` calls this right after creating a shadow, which is what
+ * makes `.searchIndex()` on a table that already holds data searchable
+ * immediately. Indexes declared `staged: true` skip that call and are populated
+ * only by {@link backfillSearchIndexes}.
+ */
+const backfillSearchIndex = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): void => {
+    const ftName = ftsTableName(tableName, index.name);
+    const existing = runDrizzle<{ count: number }>(sql, dsql`SELECT COUNT(*) AS count FROM ${dsql.identifier(ftName)}`).one();
+
+    if (existing.count > 0) {
+        return;
+    }
+
+    const rows = runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`).toArray();
+
+    for (const row of rows) {
+        const record = rowToDocument(row);
+
+        if (!record) {
+            continue;
+        }
+
+        runDrizzle(
+            sql,
+            dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${stringifySearchText(resolveSearchField(record, index.field))}, ${record["_id"] as string})`,
+        );
+    }
+};
+
+/**
+ * One-shot backfill of every declared search index, including the `staged: true`
+ * ones migrations deliberately leave empty. This is the entry point a host runs
+ * out-of-band (a one-shot RPC, a migration step) after deploying a search index
+ * over a table too large to index inside the migration pass. Idempotent: shadows
+ * that already carry rows are left alone.
+ */
+const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike): void => {
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        if (definition.shardMode?.kind === "global" || !definition.searchIndexes || !isFtsAvailable(sql)) {
+            continue;
+        }
+
+        for (const index of definition.searchIndexes) {
+            backfillSearchIndex(sql, tableName, index);
+        }
+    }
+};
+
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndex, backfillSearchIndexes };

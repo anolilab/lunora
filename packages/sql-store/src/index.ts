@@ -13,6 +13,7 @@
  */
 export type { SqlCtxDbOptions, SqlCtxExec } from "./ctx-db";
 export {
+    backfillSqlSearchIndexes,
     createSqlCtxDb,
     decodeGlobalRow,
     readSqlCdcChanges,

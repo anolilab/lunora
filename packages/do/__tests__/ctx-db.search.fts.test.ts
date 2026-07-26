@@ -61,6 +61,12 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
         // snapshot, so report one changed row.
         const routes: { pattern: RegExp; rows: () => Row[] }[] = [
             { pattern: /^SELECT changes\(\) AS changed$/u, rows: () => [{ changed: 1 }] as unknown as Row[] },
+            // The migration-time backfill probes whether the shadow already
+            // carries rows (always "no" here, so the backfill runs) and then
+            // scans the source table — the canned rows stand in for a table that
+            // already held data when the search index was declared.
+            { pattern: /^SELECT COUNT\(\*\) AS count FROM /u, rows: () => [{ count: 0 }] as unknown as Row[] },
+            { pattern: /^SELECT id, _creationTime, "__doc__" FROM "docs"$/u, rows: () => matchRows as unknown as Row[] },
             { pattern: / MATCH /u, rows: () => matchRows as unknown as Row[] },
             // `lookupById` folds every table into one UNION-ALL probe tagged
             // with `AS __t__`; resolve it to the canned rows (more specific
@@ -113,6 +119,50 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
                 (statement) => statement.sql === 'CREATE VIRTUAL TABLE IF NOT EXISTS "docs__fts_by_body" USING fts5("__text__", "__id__" UNINDEXED)',
             ),
         ).toBe(true);
+    });
+
+    it("backfills rows that predate the search index into the fresh shadow", () => {
+        expect.assertions(2);
+
+        const { sql, statements } = createRecordingFts([
+            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), _creationTime: 1, id: "d1" },
+            { __doc__: JSON.stringify({ body: "hello words", channel: "x", title: "second" }), _creationTime: 2, id: "d2" },
+        ]);
+
+        runShardMigrations(sql, searchSchema);
+
+        const inserts = statements.filter((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+
+        expect(inserts).toHaveLength(2);
+        expect(inserts.map((statement) => statement.params)).toStrictEqual([
+            ["hello world", "d1"],
+            ["hello words", "d2"],
+        ]);
+    });
+
+    it("leaves a staged search index empty for an out-of-band backfill", () => {
+        expect.assertions(2);
+
+        const stagedSchema: SchemaLike = {
+            tables: {
+                docs: {
+                    ...searchSchema.tables["docs"]!,
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body", staged: true }],
+                },
+            },
+        };
+        const { sql, statements } = createRecordingFts([
+            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), _creationTime: 1, id: "d1" },
+        ]);
+
+        runShardMigrations(sql, stagedSchema);
+
+        expect(
+            statements.some(
+                (statement) => statement.sql === 'CREATE VIRTUAL TABLE IF NOT EXISTS "docs__fts_by_body" USING fts5("__text__", "__id__" UNINDEXED)',
+            ),
+        ).toBe(true);
+        expect(statements.some((statement) => statement.sql.startsWith('INSERT INTO "docs__fts_by_body"'))).toBe(false);
     });
 
     it("syncs indexed text on insert via delete-then-insert", async () => {
