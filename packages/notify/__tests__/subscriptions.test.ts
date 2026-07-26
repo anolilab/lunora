@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { d1SubscriptionStore } from "../src/subscriptions/d1-store";
 import { memorySubscriptionStore } from "../src/subscriptions/memory-store";
-import { fcmId, isGoneError, normalizeRegisterInput, targetOf, webPushId } from "../src/subscriptions/normalize";
+import { fcmId, isGoneError, legacyFcmId, legacyWebPushId, normalizeRegisterInput, targetOf, webPushId } from "../src/subscriptions/normalize";
 import { fakeD1 } from "./helpers";
 
 const webPushSub = { endpoint: "https://push.example/abc", keys: { auth: "AUTHKEY", p256dh: "P256KEY" } };
@@ -55,6 +55,61 @@ describe("normalizeRegisterInput", () => {
     });
 });
 
+describe("web-push endpoint SSRF validation", () => {
+    const withEndpoint = (endpoint: string) => {
+        return { subscription: { endpoint, keys: { auth: "AUTHKEY", p256dh: "P256KEY" } } };
+    };
+
+    it("accepts a public https endpoint", () => {
+        expect.hasAssertions();
+
+        expect(() => normalizeRegisterInput(withEndpoint("https://fcm.googleapis.com/fcm/send/abc"))).not.toThrow();
+    });
+
+    it("rejects a non-https (http) endpoint", () => {
+        expect.hasAssertions();
+
+        expect(() => normalizeRegisterInput(withEndpoint("http://push.example/abc"))).toThrow(/must use https/u);
+    });
+
+    it("rejects a non-URL endpoint", () => {
+        expect.hasAssertions();
+
+        expect(() => normalizeRegisterInput(withEndpoint("not a url"))).toThrow(/absolute https URL/u);
+    });
+
+    it("rejects private / loopback / link-local hosts", () => {
+        expect.hasAssertions();
+
+        for (const host of [
+            "https://localhost/x",
+            "https://127.0.0.1/x",
+            "https://10.0.0.5/x",
+            "https://192.168.1.1/x",
+            "https://169.254.169.254/x",
+            "https://[::1]/x",
+            "https://redis.internal/x",
+            // 6to4 (`2002::/16`) embedding 127.0.0.1, and Teredo (`2001:0000::/32`) —
+            // both tunnel an embedded IPv4 and must be blocked.
+            "https://[2002:7f00:1::]/x",
+            "https://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/x",
+        ]) {
+            expect(() => normalizeRegisterInput(withEndpoint(host)), host).toThrow(/private\/internal address/u);
+        }
+    });
+
+    it("respects allowedPushOrigins — allows a listed origin, rejects an unlisted one", () => {
+        expect.hasAssertions();
+
+        const allowedPushOrigins = ["https://fcm.googleapis.com"];
+
+        expect(() => normalizeRegisterInput(withEndpoint("https://fcm.googleapis.com/fcm/send/abc"), undefined, { allowedPushOrigins })).not.toThrow();
+        expect(() => normalizeRegisterInput(withEndpoint("https://evil.example/abc"), undefined, { allowedPushOrigins })).toThrow(
+            /allowedPushOrigins allowlist/u,
+        );
+    });
+});
+
 describe("targetOf / ids / isGoneError", () => {
     it("produces provider targets by kind", () => {
         expect.hasAssertions();
@@ -71,6 +126,27 @@ describe("targetOf / ids / isGoneError", () => {
 
         expect(webPushId("https://a")).toBe(webPushId("https://a"));
         expect(webPushId("https://a")).not.toBe(webPushId("https://b"));
+    });
+
+    it("mints 64-bit, version-prefixed ids", () => {
+        expect.hasAssertions();
+
+        // 64-bit digest = 16 hex chars, behind the `wp2_`/`fcm2_` version prefix.
+        expect(webPushId("https://push.example/abc")).toMatch(/^wp2_[\da-f]{16}$/u);
+        expect(fcmId("device-token-1")).toMatch(/^fcm2_[\da-f]{16}$/u);
+    });
+
+    it("does not collide across a large synthetic-endpoint sample", () => {
+        expect.hasAssertions();
+
+        const sample = 50_000;
+        const ids = new Set<string>();
+
+        for (let index = 0; index < sample; index += 1) {
+            ids.add(webPushId(`https://push.example/endpoint/${index.toString()}`));
+        }
+
+        expect(ids.size).toBe(sample);
     });
 
     it("prunes on structured gone signals but never on transient errors", () => {
@@ -161,5 +237,93 @@ describe("d1SubscriptionStore", () => {
         expect.hasAssertions();
 
         expect(() => d1SubscriptionStore(fakeD1(), { tableName: "subs; DROP TABLE x" })).toThrow(/bare SQL identifier/u);
+    });
+
+    it("read-back honors a limit filter (LIMIT is applied server-side)", async () => {
+        expect.hasAssertions();
+
+        const store = d1SubscriptionStore(fakeD1());
+
+        for (let index = 0; index < 5; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential registration in a test
+            await store.put(
+                normalizeRegisterInput({ subscription: { endpoint: `https://push.example/${index.toString()}`, keys: { auth: "a", p256dh: "p" } } }),
+            );
+        }
+
+        await expect(store.list()).resolves.toHaveLength(5);
+        await expect(store.list({ limit: 2 })).resolves.toHaveLength(2);
+    });
+});
+
+describe("legacy-id migration eviction (memory + D1)", () => {
+    const stores: ReadonlyArray<readonly [string, () => ReturnType<typeof memorySubscriptionStore>]> = [
+        ["memory", () => memorySubscriptionStore()],
+        ["d1", () => d1SubscriptionStore(fakeD1())],
+    ];
+
+    it.each(stores)("a canonical web-push put removes the pre-existing legacy `wp_` row for the same identity (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+        const { endpoint } = webPushSub;
+
+        // Seed the legacy 32-bit `wp_` row as an older client would have left it — a
+        // different PK from the new `wp2_` id, so `ON CONFLICT(id)` never touches it.
+        const legacyId = legacyWebPushId(endpoint);
+
+        await store.put({ createdAt: 1, endpoint, id: legacyId, keys: webPushSub.keys, kind: "web-push", lastSeenAt: 1, userId: "u1" });
+
+        await expect(store.get(legacyId)).resolves.toBeDefined();
+
+        // Re-register the SAME endpoint under the new 64-bit `wp2_` id.
+        const current = await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "u1" }, 2));
+
+        expect(current.id).toBe(webPushId(endpoint));
+        expect(current.id).not.toBe(legacyId);
+        // The legacy row is evicted → only ONE row survives, so a `broadcast` (no id
+        // filter, lists all) delivers to this device exactly once, not twice.
+        await expect(store.get(legacyId)).resolves.toBeUndefined();
+        await expect(store.list()).resolves.toHaveLength(1);
+    });
+
+    it.each(stores)("also evicts the legacy `fcm_` row for a re-registered token (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+        const token = "device-token-legacy";
+        const legacyId = legacyFcmId(token);
+
+        await store.put({ createdAt: 1, id: legacyId, kind: "fcm", lastSeenAt: 1, token, userId: "u2" });
+
+        const current = await store.put(normalizeRegisterInput({ kind: "fcm", token, userId: "u2" }, 2));
+
+        expect(current.id).toBe(fcmId(token));
+        await expect(store.get(legacyId)).resolves.toBeUndefined();
+        await expect(store.list()).resolves.toHaveLength(1);
+    });
+});
+
+describe("re-register status parity (memory + D1)", () => {
+    const stores: ReadonlyArray<readonly [string, () => ReturnType<typeof memorySubscriptionStore>]> = [
+        ["memory", () => memorySubscriptionStore()],
+        ["d1", () => d1SubscriptionStore(fakeD1())],
+    ];
+
+    it.each(stores)("preserves lastStatus/lastError and the original createdAt on re-register (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+        const first = await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "u1" }, 100));
+
+        // A prior delivery recorded a status; a routine re-register (no status) must
+        // NOT wipe it, and the returned row must carry the truthful first-seen time.
+        await store.markStatus(first.id, "failed", "boom");
+
+        const again = await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "u1" }, 200));
+
+        expect(again.createdAt).toBe(100);
+        expect(again.lastStatus).toBe("failed");
+        expect(again.lastError).toBe("boom");
     });
 });

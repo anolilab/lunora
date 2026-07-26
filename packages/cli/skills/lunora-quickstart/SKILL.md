@@ -45,28 +45,65 @@ Set up a working Lunora project as fast as possible.
 plugin + `lunora/` already wired together).
 
 ```bash
-lunora init my-app --template vite
+lunora init my-app --vite react
 cd my-app
 pnpm install
 ```
 
-### Pick a template
+### Pick a stack: `--vite` (SPA) or `-t` (bespoke template)
 
-| Template               | Stack                                          |
-| ---------------------- | ---------------------------------------------- |
-| `vite`                 | React + Vite (the simplest full-stack starter) |
-| `standalone`           | Worker-only Lunora backend, no frontend        |
-| `astro`                | Astro integration                              |
-| `next`                 | Next.js (App Router, OpenNext on Cloudflare)   |
-| `nuxt`                 | Nuxt (Vue)                                     |
-| `sveltekit`            | SvelteKit                                      |
-| `tanstack-start-react` | TanStack Start (React)                         |
-| `tanstack-start-solid` | TanStack Start (Solid)                         |
+There are **two scaffold paths**, and they take different flags:
 
-If the user has not specified a preference, default to `vite`. Pass `--template`
-explicitly to avoid the interactive prompt. Templates are fetched remotely (via
-`giget`) from `gh:anolilab/lunora/templates/<type>`; pass `--from <dir>` to use a
-local template directory offline.
+**`--vite <framework>` — the create-vite overlay.** Fetches the official
+create-vite base and applies the Lunora layer on top. Use it for a plain SPA:
+
+| `--vite` value | Stack                                           |
+| -------------- | ----------------------------------------------- |
+| `react`        | React SPA (**the default**)                     |
+| `vue`          | Vue SPA                                         |
+| `solid`        | Solid SPA                                       |
+| `svelte`       | Svelte SPA                                      |
+| `vanilla`      | No framework (overlay-only — not in the picker) |
+
+**`-t` / `--template <type>` — a bespoke Lunora template.** Whole-project
+templates fetched remotely (via `giget`) from
+`gh:anolilab/lunora/templates/<type>`:
+
+| `-t` value             | Stack                                                      |
+| ---------------------- | ---------------------------------------------------------- |
+| `next`                 | Next.js (App Router, OpenNext on Cloudflare)               |
+| `tanstack-start-react` | TanStack Start (React) — SSR with live-loader routes       |
+| `tanstack-start-solid` | TanStack Start (Solid)                                     |
+| `react-router`         | React Router v7 (framework mode), SSR in the Lunora worker |
+| `astro`                | Astro + a standalone Lunora worker                         |
+| `analog`               | AnalogJS (Angular) — single worker, Lunora in Nitro        |
+| `nuxt`                 | Nuxt (Vue) — single worker, Lunora in Nitro                |
+| `sveltekit`            | SvelteKit + a standalone Lunora worker                     |
+| `expo`                 | React Native (Expo) — iOS/Android/web + a Lunora worker    |
+| `standalone`           | Worker-only Lunora backend, no frontend                    |
+
+> There is **no `--template vite`.** SPAs go through `--vite <framework>`; `-t`
+> is only for the bespoke templates above.
+
+With neither flag, an interactive run shows the framework picker (defaulting to
+the React overlay) and a **non-interactive run errors out** — so as an agent,
+always pass `--vite` or `-t` explicitly. If the user stated no preference,
+use `--vite react`.
+
+### Useful `init` flags
+
+```bash
+lunora init my-app --vite react --ci github     # + a GitHub Actions deploy pipeline (or --ci gitlab)
+lunora init my-app -t next --add auth,email     # scaffold capabilities non-interactively
+lunora init my-app --vite react --yes           # skip the interactive auth/email offer
+lunora init my-app --vite react --dry-run       # walk every step, write nothing
+```
+
+`--add` accepts a comma-separated list of `ai | auth | backup | browser |
+cloudflare-access | crons | email | flags | hyperdrive | payment | presence |
+queue | storage | workflow`. `--ref <branch|tag|commit>` pins the template
+source (e.g. `--ref alpha`); `--from <dir>` copies from a local templates root
+offline (expects `<type>/` subdirs).
 
 ### Generate types and push the first run
 
@@ -152,9 +189,12 @@ createRoot(document.querySelector("#root")!).render(
 );
 ```
 
-Vue, Solid, and Svelte have matching providers in `@lunora/vue`, `@lunora/solid`,
-and `@lunora/svelte`. `VITE_LUNORA_URL` is optional — it defaults to
-`location.origin`, which is correct for the single-origin dev setup.
+Every client adapter has a matching provider: `@lunora/vue`, `@lunora/solid`,
+`@lunora/svelte`, `@lunora/angular` (`provideLunora` / `injectLunoraClient`),
+and `@lunora/react-native` (`createLunoraClient`, re-exporting `@lunora/react`).
+For meta-frameworks, `@lunora/astro` and `@lunora/nuxt` mount Lunora on the
+server side. `VITE_LUNORA_URL` is optional — it defaults to `location.origin`,
+which is correct for the single-origin dev setup.
 
 ## Writing Your First Function
 
@@ -253,7 +293,8 @@ ids, `.dev.vars` secrets, and container exports.
 ## Checklist
 
 - [ ] Determined starting point: new project or existing app.
-- [ ] New project: scaffolded with `lunora init --template <t>`.
+- [ ] New project: scaffolded with `lunora init --vite <framework>` (SPA) or
+      `lunora init -t <template>` (bespoke) — never `--template vite`.
 - [ ] Existing app: ran `lunora init --here` and wired `LunoraProvider`.
 - [ ] Ran `lunora codegen`: `lunora/_generated/` exists and typecheck is clean.
 - [ ] Dev server is running — user terminal, or `lunora dev --background`

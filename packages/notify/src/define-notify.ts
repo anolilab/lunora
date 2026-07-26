@@ -36,6 +36,13 @@ const defineNotify = (config: NotifyConfig): NotifyDefinition => {
         throw new TypeError("defineNotify: `store` must be a function `(env) => SubscriptionStore` when provided");
     }
 
+    if (
+        config.allowedPushOrigins !== undefined &&
+        (!Array.isArray(config.allowedPushOrigins) || config.allowedPushOrigins.some((origin) => typeof origin !== "string"))
+    ) {
+        throw new TypeError('defineNotify: `allowedPushOrigins` must be an array of origin strings (e.g. ["https://fcm.googleapis.com"]) when provided');
+    }
+
     if (config.webPush === undefined && config.fcm === undefined) {
         throw new TypeError("defineNotify: configure at least one push channel — `webPush` and/or `fcm`");
     }

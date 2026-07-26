@@ -911,6 +911,16 @@ interface OptimisticLocalStore {
 }
 ```
 
+### `OptimisticMessage` (interface)
+
+```ts
+interface OptimisticMessage {
+    content: string;
+    id: number;
+    maxDurableSeqAtSend: number;
+}
+```
+
 ### `OptimisticUpdate` (type)
 
 ```ts
@@ -1026,6 +1036,22 @@ interface QueuedMutation<T = unknown> {
     readonly reject: (error: unknown) => void;
     readonly resolve: (value: T) => void;
     readonly shardKey?: string;
+}
+```
+
+### `RETIRE_AFTER_DURABLE_SEQ_ADVANCE` (const)
+
+```ts
+const RETIRE_AFTER_DURABLE_SEQ_ADVANCE = 2;
+```
+
+### `ReconcileDurableMessage` (interface)
+
+```ts
+interface ReconcileDurableMessage {
+    content: string;
+    role: "assistant" | "system" | "tool" | "user";
+    seq: number;
 }
 ```
 
@@ -1587,6 +1613,14 @@ const isUnauthorizedError: (error: unknown) => error is Error & {
 };
 ```
 
+### `maxSeq` (const)
+
+```ts
+const maxSeq: (messages: ReadonlyArray<{
+    seq: number;
+}>) => number;
+```
+
 ### `preloadQuery` (const)
 
 ```ts
@@ -1605,6 +1639,12 @@ const preloadedQueryResult: <T>(preloaded: Preloaded<T>) => T;
 
 ```ts
 const queryCacheKey: (functionPath: string, argsKey: string, shardKey?: string) => string;
+```
+
+### `reconcileOptimistic` (const)
+
+```ts
+const reconcileOptimistic: (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<ReconcileDurableMessage>) => OptimisticMessage[];
 ```
 
 ### `sendToSw` (const)

@@ -148,6 +148,19 @@ const flattenAttributes = (attributes: Attributes | undefined): Record<string, u
  *
  * A span that is never ended therefore never records. That matches OTel's own
  * contract (an unended span is not exported) and beats guessing an end time.
+ *
+ * **Late end and sampling.** A bridged span may `end()` AFTER its dispatch has
+ * settled — a streaming AI-SDK call, a detached handler. When it does, it records
+ * through the normal `ctx.trace` → `recordSpan` path, which now snapshots the
+ * trace's sampling verdict when the span opens and honours it at close (see
+ * `@lunora/do`'s `recordSpan`): a late child of a sampled-OUT trace is no longer
+ * exported unconditionally. The complementary lifetime bound — settling an
+ * ABANDONED span (one whose `end()` is never called) so its suspended `ctx.trace`
+ * body cannot pin this closure in a long-lived isolate — is deferred: the clean
+ * route is a dispatch-teardown hook, and the `LunoraTraceContext` surface this
+ * bridge is handed exposes none, while a timer is the very mechanism the DO
+ * profile avoids. The correctness half (no orphan export) is done; the retention
+ * half awaits a teardown hook on the ctx.
  */
 class BridgeSpan implements Span {
     private ended = false;

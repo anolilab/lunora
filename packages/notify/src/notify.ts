@@ -16,6 +16,7 @@ import type {
     NotifyLogger,
     NotifyMetrics,
     PushContent,
+    PushSubscriptionDevice,
     RegisterInput,
     StoredSubscription,
     SubscriptionFilter,
@@ -75,15 +76,18 @@ const resolveProviders = (definition: NotifyDefinition, env: NotifyEnv): Resolve
  * The per-isolate state memoized across `createNotify` calls. Codegen splices
  * `createNotify(notifyDefinition, env)` onto EVERY handler ctx, so it runs once
  * per RPC — but the engine (web-push/FCM providers + retry + circuit-breaker
- * middleware) and the dev in-memory fallback store are expensive to build and MUST
- * persist across requests (a `register()` in one request has to be visible to a
- * `broadcast()` in the next). All three fields are lazy: the engine is only built
- * when there is no `options.engine` override, the fallback store only when the
- * config supplies no real `store`.
+ * middleware), the configured subscription store, and the dev in-memory fallback
+ * store are expensive to build (or carry their own warm memos) and MUST persist
+ * across requests (a `register()` in one request has to be visible to a
+ * `broadcast()` in the next). All fields are lazy: the engine is only built when
+ * there is no `options.engine` override, `store` only when the config supplies a
+ * real `store` factory, and the fallback store only when it does not.
  */
 interface NotifyRuntime {
     engine?: Notification;
     fallbackStore?: SubscriptionStore;
+    store?: SubscriptionStore;
+    warnedNoPushOriginAllowlist: boolean;
     warnedNoStore: boolean;
 }
 
@@ -106,7 +110,7 @@ const runtimeFor = (definition: NotifyDefinition, env: NotifyEnv): NotifyRuntime
     let runtime = byEnv.get(env);
 
     if (runtime === undefined) {
-        runtime = { warnedNoStore: false };
+        runtime = { warnedNoPushOriginAllowlist: false, warnedNoStore: false };
         byEnv.set(env, runtime);
     }
 
@@ -171,7 +175,15 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         engine = options.engine;
     }
 
-    let store: SubscriptionStore | undefined = definition.store?.(env);
+    // Memoize the real store per isolate exactly like `engine`/`fallbackStore`: it
+    // is built once from `definition.store(env)` and reused across requests, so its
+    // own memos (e.g. the D1 store's `schemaReady` `CREATE TABLE` guard) stay warm
+    // instead of paying a cold schema round trip on every `ctx.push.*` call. A no-op
+    // when no `store` is configured (`?.(env)` stays `undefined` and the fallback
+    // path below owns durability).
+    runtime.store ??= definition.store?.(env);
+
+    let { store } = runtime;
 
     if (store === undefined) {
         // Reuse ONE in-memory store per isolate so registrations survive across
@@ -220,6 +232,44 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         metrics?.count("notify.skipped", 1, { channel, reason });
     };
 
+    /**
+     * Warn ONCE per isolate when a Web Push subscription is registered without an
+     * `allowedPushOrigins` allowlist. The default posture validates the endpoint
+     * host with a STRING classifier (`assertPushEndpoint` → shared `isPrivateHost`)
+     * that does NOT resolve DNS, so a public hostname that resolves to a
+     * private/internal IP (e.g. `https://127.0.0.1.nip.io/…`) slips past it — only
+     * an exact-origin `allowedPushOrigins` allowlist closes that DNS-rebinding gap.
+     * Guarded on the per-isolate runtime, mirroring the no-store fallback warning.
+     */
+    const warnNoPushOriginAllowlist = (): void => {
+        const hasAllowlist = definition.allowedPushOrigins !== undefined && definition.allowedPushOrigins.length > 0;
+
+        if (options.silent || hasAllowlist || runtime.warnedNoPushOriginAllowlist) {
+            return;
+        }
+
+        runtime.warnedNoPushOriginAllowlist = true;
+        // eslint-disable-next-line no-console -- one-time SSRF-posture warning, mirrors the no-store fallback warning
+        console.warn(
+            "@lunora/notify: Web Push registered without `allowedPushOrigins` — the endpoint host is validated by a string classifier that does NOT resolve DNS, so a public hostname resolving to a private/internal IP (e.g. `https://127.0.0.1.nip.io/…`) is NOT blocked. Set `allowedPushOrigins` to the exact push-service origins to close DNS rebinding.",
+        );
+    };
+
+    /**
+     * List stored subscriptions with the delivery SECRETS stripped — the Web Push
+     * `keys` (RFC 8291 `auth`/`p256dh`) and the FCM `token`. Backs `ctx.push.list`:
+     * those, with the endpoint, are enough to deliver arbitrary push to a device, so
+     * they never cross the app-facing facade. Uses the same `{ keys, token, ...device }`
+     * projection as the gated Studio admin RPC (`create-worker.ts`). The raw rows stay
+     * reachable only through the internal `SubscriptionStore` (which `broadcast` uses
+     * directly).
+     */
+    const listProjected = async (filter?: SubscriptionFilter): Promise<PushSubscriptionDevice[]> => {
+        const rows = await subscriptionStore.list(filter);
+
+        return rows.map(({ keys: _keys, token: _token, ...device }) => device);
+    };
+
     const resolveSubscription = async (target: StoredSubscription | string): Promise<StoredSubscription> => {
         if (typeof target !== "string") {
             return target;
@@ -245,19 +295,38 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         subscription: StoredSubscription,
         payload: PushContent,
         countInline: boolean,
-    ): Promise<{ receipt: Receipt; status: NotifyDeliveryStatus }> => {
-        const receipt = await engine.sendToChannel("push", { ...payload, to: targetOf(subscription) });
-        const error = receiptError(receipt);
+    ): Promise<{ error?: string; receipt?: Receipt; status: NotifyDeliveryStatus }> => {
+        let receipt: Receipt | undefined;
+        let error: string | undefined;
         // The observability status vocabulary (accepted/failed/gone). The store's
         // own `SubscriptionStatus` (ok/failed) is set below and left unchanged.
-        const status = pushDeliveryStatus(receipt, error);
+        let status: NotifyDeliveryStatus;
 
-        if (status === "accepted") {
-            await subscriptionStore.markStatus(subscription.id, "ok");
-        } else if (status === "gone") {
-            await subscriptionStore.delete(subscription.id);
-        } else {
-            await subscriptionStore.markStatus(subscription.id, "failed", error);
+        try {
+            receipt = await engine.sendToChannel("push", { ...payload, to: targetOf(subscription) });
+            error = receiptError(receipt);
+            status = pushDeliveryStatus(receipt, error);
+        } catch (error_) {
+            // A THROW from the send path — a transient provider/store error, or the
+            // push router's raw throw for a target whose channel (`webPush`/`fcm`)
+            // isn't configured — must degrade THIS recipient to `failed`, never
+            // reject the whole fan-out. `broadcast` relies on `deliver` being total.
+            status = "failed";
+            error = error_ instanceof Error ? error_.message : String(error_);
+        }
+
+        try {
+            if (status === "accepted") {
+                await subscriptionStore.markStatus(subscription.id, "ok");
+            } else if (status === "gone") {
+                await subscriptionStore.delete(subscription.id);
+            } else {
+                await subscriptionStore.markStatus(subscription.id, "failed", error);
+            }
+        } catch {
+            // The store lifecycle write is best-effort: a failing markStatus/delete
+            // (e.g. a transient D1 error) must not abort the fan-out. The send
+            // outcome above still stands; the status just went unrecorded.
         }
 
         if (status === "failed") {
@@ -269,7 +338,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             countSend("push", subscription.kind, status);
         }
 
-        return { receipt, status };
+        return { error, receipt, status };
     };
 
     const push: LunoraPush = {
@@ -283,9 +352,12 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             }
 
             const rows = await mapWithConcurrency(subscriptions, concurrency, async (subscription) => {
-                const { receipt, status } = await deliver(subscription, payload, false);
+                // `deliver` is total (it never rejects — a throwing recipient
+                // becomes a `failed` outcome inside it), so the bounded `Promise.all`
+                // pool in `mapWithConcurrency` can never be rejected by one bad send.
+                const { error, status } = await deliver(subscription, payload, false);
 
-                return { kind: subscription.kind, receipt, status, subscription };
+                return { error, kind: subscription.kind, status, subscription };
             });
 
             // Fold the per-recipient statuses into one metric count per (kind,
@@ -309,12 +381,10 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
                 countSend("push", kind, status, count);
             }
 
-            const outcomes: BroadcastOutcome[] = rows.map(({ receipt, status, subscription }) => {
+            const outcomes: BroadcastOutcome[] = rows.map(({ error, status, subscription }) => {
                 if (status === "accepted") {
                     return { id: subscription.id, status: "ok" };
                 }
-
-                const error = receiptError(receipt);
 
                 return status === "gone" ? { error, id: subscription.id, status: "expired" } : { error, id: subscription.id, status: "failed" };
             });
@@ -327,10 +397,26 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
                 total: outcomes.length,
             };
         },
-        list: (filter?: SubscriptionFilter): Promise<StoredSubscription[]> => subscriptionStore.list(filter),
-        register: (input: RegisterInput): Promise<StoredSubscription> => subscriptionStore.put(normalizeRegisterInput(input)),
+        list: (filter?: SubscriptionFilter): Promise<PushSubscriptionDevice[]> => listProjected(filter),
+        register: (input: RegisterInput): Promise<StoredSubscription> => {
+            // A web-push registration accepts a client-controlled endpoint — the SSRF
+            // surface. Nudge (once) to the exact-origin allowlist when unset. FCM
+            // tokens carry no endpoint, so the origin allowlist doesn't apply to them.
+            if (!("token" in input)) {
+                warnNoPushOriginAllowlist();
+            }
+
+            return subscriptionStore.put(normalizeRegisterInput(input, undefined, { allowedPushOrigins: definition.allowedPushOrigins }));
+        },
         send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => {
-            const { receipt } = await deliver(await resolveSubscription(target), payload, true);
+            const { error, receipt } = await deliver(await resolveSubscription(target), payload, true);
+
+            if (receipt === undefined) {
+                // A targeted single send is not a fan-out: when the provider throws
+                // (no receipt at all) the caller must see the failure, so re-surface
+                // it. `deliver` already logged/counted the `failed` status.
+                throw new LunoraError("INTERNAL", `@lunora/notify: push send failed: ${error ?? "unknown error"}`);
+            }
 
             return receipt;
         },

@@ -55,6 +55,28 @@ const urlBase64ToUint8Array = (base64: string): Uint8Array => {
     return output;
 };
 
+/** Byte-for-byte equality of two `Uint8Array`s (VAPID application-server keys). */
+const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((byte, index) => byte === b[index]);
+
+/**
+ * Whether an existing browser subscription was created with the CURRENT VAPID
+ * public key. After a VAPID key rotation the cached subscription still carries the
+ * OLD `applicationServerKey`, and the push service rejects every send to it with
+ * `403 VapidPkHashMismatch` forever (correctly not pruned as gone, so it sticks).
+ * Comparing the stored key to the current one lets {@link subscribeToPush} drop the
+ * stale subscription and re-subscribe. A subscription with no recorded key is
+ * treated as a mismatch (fail-safe → re-subscribe under the known-current key).
+ */
+const matchesVapidKey = (existing: PushSubscription, vapidPublicKey: string): boolean => {
+    const stored = existing.options.applicationServerKey;
+
+    if (stored === null) {
+        return false;
+    }
+
+    return bytesEqual(new Uint8Array(stored), urlBase64ToUint8Array(vapidPublicKey));
+};
+
 /** A loose view of the browser globals, so support detection reads them without type-narrowing lint. */
 const browserGlobals = globalThis as { navigator?: { serviceWorker?: unknown }; PushManager?: unknown };
 
@@ -87,9 +109,19 @@ const subscribeToPush = async (options: SubscribeToPushOptions): Promise<Seriali
         throw new Error(`@lunora/notify: notification permission was not granted (got "${permission}")`);
     }
 
+    // Reuse an existing subscription only when it was minted with the CURRENT VAPID
+    // key. After a key rotation a cached subscription carries the old
+    // `applicationServerKey` and every send to it fails with `403
+    // VapidPkHashMismatch` forever — so drop the stale one and re-subscribe.
     const existing = await registration.pushManager.getSubscription();
+
+    if (existing !== null && !matchesVapidKey(existing, options.vapidPublicKey)) {
+        await existing.unsubscribe();
+    }
+
+    const reusable = existing !== null && matchesVapidKey(existing, options.vapidPublicKey) ? existing : null;
     const subscription =
-        existing ??
+        reusable ??
         (await registration.pushManager.subscribe({
             applicationServerKey: urlBase64ToUint8Array(options.vapidPublicKey) as BufferSource,
             userVisibleOnly: true,

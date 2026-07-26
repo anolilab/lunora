@@ -105,11 +105,12 @@ Concise roles below — read the package's `src/` and `docs/` for detail. Flags:
 | `@lunora/auth`              | Auth on **better-auth**, D1-backed; email/password + OAuth, session policies; curated plugins via `@lunora/auth/plugins`.                                                                      |
 | `@lunora/cloudflare-access` | Cloudflare Access (Zero Trust) identity → `ctx.auth` / RLS via a `resolveIdentity` adapter.                                                                                                    |
 | `@lunora/mail`              | Resend adapter, TSX templates, queue-backed sends.                                                                                                                                             |
+| `@lunora/notify`            | Multi-channel notifications: `ctx.notify`/`ctx.push` over `@visulima/notification`; Web Push + FCM, subscription stores + queue fan-out; `/web` browser subpath.                               |
 | `@lunora/storage`           | R2 typed buckets, signed URLs.                                                                                                                                                                 |
 | `@lunora/scheduler`         | `runAfter` / `runAt` + Cron Triggers via `SchedulerDO`.                                                                                                                                        |
 | `@lunora/container`         | Cloudflare Containers: `defineContainer` → container DO classes + typed `ctx.containers`; `@lunora/container/do` + `/bridge` subpaths.                                                         |
 | `@lunora/agent`             | Durable AI agents (add-on): `defineAgent` compiles a replay-safe tool-loop onto Cloudflare Workflows — tools (MCP/function/agent/sandbox), memory, HITL approvals, token streaming, telemetry. |
-| `@lunora/ai`                | Workers AI on Vercel AI SDK v6 → `ctx.ai`; `@lunora/ai/rag` ships `defineRag` (chunk→embed→Vectorize + retrieve).                                                                              |
+| `@lunora/ai`                | Workers AI on Vercel AI SDK v7 → `ctx.ai`; `@lunora/ai/rag` ships `defineRag` (chunk→embed→Vectorize + retrieve).                                                                              |
 | `@lunora/flags`             | OpenFeature feature flags: `defineFlags` → `ctx.flags`; `useFlag`/`useFlags` client hooks; read-only Studio page.                                                                              |
 | `@lunora/advisor`           | Schema & query lints (splinter-style) feeding the Studio Advisors pages (~81 static rules + runtime lints).                                                                                    |
 | `@lunora/config`            | **Internal.** Shared CLI+Vite config/scaffolding: `wrangler.jsonc` validator, `.dev.vars` grammar/scaffolder, prompt helper.                                                                   |
@@ -193,12 +194,15 @@ Adding a query/mutation/action/table/cron to `lunora/`, or a fresh `@lunora/<nam
 vis generate lunora-query --name=listMessages              # → lunora/listMessages.ts
 vis generate lunora-mutation --name=sendMessage
 vis generate lunora-action --name=syncWithStripe
+vis generate lunora-http-route --name=stripeWebhook        # → lunora/stripeWebhook.ts (HTTP route)
 vis generate lunora-table --name=invoices                  # AST-merges into lunora/schema.ts
 vis generate lunora-cron --name='clear presence'           # AST-appends to lunora/crons.ts
 vis generate lunora-container --name=transcoder            # → lunora/containers.ts + Dockerfile, wires worker entry
 vis generate lunora-workflow --name=orderPipeline          # appends to lunora/workflows.ts, wires worker entry
 vis generate lunora-queue --name=emailQueue                # producer + queue() consumer
 vis generate lunora-step --name=chargeOrder                # reusable defineStep, run via ctx.runStep
+vis generate lunora-agent --name=support                   # defineAgent, appends to lunora/agents.ts (@lunora/agent)
+vis generate lunora-flags                                  # → lunora/flags.ts singleton (@lunora/flags); refuses if it exists
 vis generate lunora-collections                            # → lunora/collections.ts (@lunora/db)
 vis generate lunora-package --name=foo --description='…'   # → packages/foo/
 vis generate --list                                         # list all generators

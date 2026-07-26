@@ -259,6 +259,27 @@ export { TranscoderContainer } from "../../lunora/_generated/containers.js";
         expect(result.signals.join(" ")).toContain("not exported by the worker entry");
     });
 
+    it("still detects a value class export when a separate `export type { … }` of the same name coexists", async () => {
+        expect.assertions(1);
+
+        // A value re-export of the generated class AND a separate type-only export of
+        // the same name — the type-only line must NOT suppress the value binding, or
+        // `wrangler deploy` fails on a missing `class_name`. (Prior whole-file regex bug.)
+        write("wrangler.jsonc", WRANGLER);
+        write("lunora/containers.ts", CONTAINERS_TS);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_ONLY}
+export { TranscoderContainer } from "../../lunora/_generated/containers.js";
+export type { TranscoderContainer } from "../../lunora/_generated/containers.js";
+`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.containers[0]).toMatchObject({ exported: true });
+    });
+
     it("reports no containers for a project without lunora/containers.ts", async () => {
         expect.assertions(1);
 

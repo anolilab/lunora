@@ -13,7 +13,7 @@
  * operator has wired the Pipeline → R2 Data Catalog table (see the docs).
  */
 import { createR2Sql } from "@lunora/bindings/r2sql";
-import type { PipelineLogQuery, PipelineLogRow } from "@lunora/runtime";
+import type { PipelineLogCursor, PipelineLogQuery, PipelineLogRow } from "@lunora/runtime";
 import { createPipelineLogReader } from "@lunora/runtime";
 
 import type { Logger } from "../../util/logger";
@@ -32,7 +32,7 @@ interface DurableLogsEnvironment {
 }
 
 interface DurableLogsCommandOptions {
-    /** Resume after a previous page: the `ts` from the prior page's `nextCursor`. */
+    /** Resume after a previous page: the opaque `--cursor` token the prior page printed (a bare epoch-millis `ts` is also accepted). */
     cursor?: string;
     /** Inject env (tests); defaults to `process.env`. */
     environment?: DurableLogsEnvironment;
@@ -94,6 +94,48 @@ const parseTimestamp = (value: string | undefined, flag: string): number | undef
     }
 
     return parsed;
+};
+
+/** Serialize a keyset cursor to a compact, opaque `--cursor` token (base64url JSON) that round-trips its `seen` boundary hashes. */
+const encodeCursor = (cursor: PipelineLogCursor): string => Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+
+/**
+ * Parse a `--cursor` value back to a {@link PipelineLogCursor}. Accepts the opaque
+ * base64url token minted by {@link encodeCursor} (which carries the `seen` boundary
+ * hashes, so resuming pages neither drops nor duplicates rows) and, for
+ * convenience, a bare epoch-millis integer (a `ts`-only cursor — still lossless via
+ * the reader's inclusive resume, but without `seen` it may re-emit boundary ties).
+ */
+const parseCursor = (raw: string): PipelineLogCursor => {
+    const trimmed = raw.trim();
+
+    // Back-compat / hand-typed convenience: a bare epoch-millis is a `ts`-only cursor.
+    if (EPOCH_MILLIS_RE.test(trimmed)) {
+        return { ts: Number(trimmed) };
+    }
+
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(Buffer.from(trimmed, "base64url").toString("utf8"));
+    } catch {
+        throw new TypeError(`logs: invalid --cursor "${raw}" — expected the token printed by the previous page (or a bare epoch-millis ts)`);
+    }
+
+    if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        typeof (parsed as { ts?: unknown }).ts !== "number" ||
+        !Number.isFinite((parsed as { ts: number }).ts)
+    ) {
+        throw new TypeError(`logs: invalid --cursor "${raw}" — expected the token printed by the previous page (or a bare epoch-millis ts)`);
+    }
+
+    const { ts } = parsed as { ts: number };
+    const seenRaw = (parsed as { seen?: unknown }).seen;
+    const seen = Array.isArray(seenRaw) ? seenRaw.filter((entry): entry is string => typeof entry === "string") : undefined;
+
+    return seen !== undefined && seen.length > 0 ? { seen, ts } : { ts };
 };
 
 /** Validate a severity against the known level set, throwing an actionable error otherwise. */
@@ -164,13 +206,7 @@ const buildQuery = (options: DurableLogsCommandOptions): PipelineLogQuery => {
     }
 
     if (options.cursor !== undefined) {
-        const cursorTs = Number(options.cursor);
-
-        if (!Number.isFinite(cursorTs)) {
-            throw new TypeError(`logs: invalid --cursor "${options.cursor}" — expected the epoch-millis ts from a prior page's nextCursor`);
-        }
-
-        query.cursor = { ts: cursorTs };
+        query.cursor = parseCursor(options.cursor);
     }
 
     return query;
@@ -248,7 +284,7 @@ const runDurableLogsCommand = async (options: DurableLogsCommandOptions): Promis
     if (page.rows.length === 0) {
         options.logger.info("logs --durable: no matching log records");
     } else if (page.nextCursor !== undefined) {
-        options.logger.info(`logs --durable: more rows available — pass --cursor ${String(page.nextCursor.ts)} for the next page`);
+        options.logger.info(`logs --durable: more rows available — pass --cursor ${encodeCursor(page.nextCursor)} for the next page`);
     }
 
     return { code: 0, rows: page.rows };

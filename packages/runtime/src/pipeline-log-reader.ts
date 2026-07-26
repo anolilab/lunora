@@ -23,11 +23,16 @@
  *
  * **Pagination.** Keyset on `ts DESC`, not `OFFSET` — R2 SQL scans Iceberg data
  * files and a large `OFFSET` re-scans every skipped row, whereas a `ts`-bounded
- * `WHERE` prunes whole files. We fetch one more row than asked: the extra
- * "overflow" row, when present, both signals there is a next page and supplies
- * its cursor `ts`. The next page then asks for rows strictly older than it.
+ * `WHERE` prunes whole files. `ts` is **not unique**, so the keyset is lossless
+ * only if resume is *inclusive*: the cursor `ts` is the last returned row's `ts`,
+ * the next page fetches every row at-or-older-than it, and the
+ * {@link PipelineLogCursor} `seen` hashes drop exactly the boundary rows already
+ * emitted — no row on a tied millisecond is skipped (the old exclusive
+ * strictly-older cursor silently dropped them) or duplicated. We still over-fetch
+ * by one to detect a next page; a page dominated by a single `ts` grows that
+ * window (bounded) so pagination still advances.
  */
-import type { R2SqlClient } from "@lunora/bindings/r2sql";
+import type { R2SqlClient, SelectBuilder } from "@lunora/bindings/r2sql";
 import { desc, raw, sql } from "@lunora/bindings/r2sql";
 
 import type { ContextLogLevel } from "../../../shared/log-event";
@@ -110,6 +115,107 @@ const decodeFields = (value: StoredCell): unknown => {
 };
 
 /**
+ * A stable ~62-bit identity hash of a decoded row, rendered as two base-36 parts.
+ *
+ * The sink shape carries no guaranteed-unique column (`traceId`/`spanId` are
+ * optional and often absent), so keyset pagination over the non-unique `ts`
+ * cannot dedup boundary ties by id. Instead we hash the row's whole rendered
+ * identity — `ts` plus every canonical field — and carry those hashes on the
+ * cursor. Two rows that are byte-for-byte identical within one millisecond hash
+ * the same and are treated as interchangeable duplicates (acceptable: they are
+ * indistinguishable to a consumer anyway). The combined ~62-bit width makes an
+ * accidental collision between genuinely different rows on the same `ts`
+ * negligible.
+ */
+const hashRow = (row: PipelineLogRow): string => {
+    // A JSON tuple so no field delimiter can be forged by a value that happens to
+    // contain the separator (an absent optional serialises as `null`); `fields` is
+    // included so structured payloads distinguish otherwise-identical lines.
+    const identity = JSON.stringify([row.ts, row.level, row.functionPath, row.message, row.traceId, row.spanId, row.shardKey, row.userId, row.fields]);
+
+    // Two independent polynomial rolling hashes over large primes, combined into
+    // one token. Pure modular arithmetic (no bit ops): each accumulator stays well
+    // under 2^53 so every step is exact in a JS double. The two moduli together
+    // give ~62 bits of identity — ample for de-duping rows within a single `ts`.
+    let h1 = 0;
+    let h2 = 0;
+
+    for (const character of identity) {
+        const code = character.codePointAt(0) ?? 0;
+
+        h1 = (h1 * 31 + code) % 2_147_483_647;
+        h2 = (h2 * 131 + code) % 4_294_967_291;
+    }
+
+    return `${h1.toString(36)}.${h2.toString(36)}`;
+};
+
+/**
+ * Apply every value filter and the inclusive keyset bound to a prepared builder.
+ * Extracted so the paginated query stays readable; each value flows through the
+ * `sql` tag (escaped), column names come from operator config via `raw`.
+ */
+const applyLogFilters = (
+    builder: SelectBuilder<StoredRow>,
+    query: PipelineLogQuery,
+    columns: Record<PipelineLogField, string>,
+    cursorTs: number | undefined,
+): void => {
+    if (query.sinceTs !== undefined) {
+        builder.where(sql`${raw(columns.ts)} >= ${query.sinceTs}`);
+    }
+
+    if (query.untilTs !== undefined) {
+        builder.where(sql`${raw(columns.ts)} <= ${query.untilTs}`);
+    }
+
+    if (query.level !== undefined) {
+        // Exact severity wins over `minLevel` (documented on the type): a caller
+        // asking for one level should not also get everything above it.
+        builder.where(sql`${raw(columns.level)} = ${query.level}`);
+    } else if (query.minLevel !== undefined) {
+        // Expand the floor to the explicit set at/above it in the severity ramp; an
+        // `IN (...)` over a small closed set is clearer to the engine (and reader)
+        // than a comparison over a non-numeric column.
+        const floorIndex = LOG_LEVEL_ORDER.indexOf(query.minLevel);
+        const allowed = floorIndex === -1 ? [...LOG_LEVEL_ORDER] : LOG_LEVEL_ORDER.slice(floorIndex);
+
+        builder.where(sql`${raw(columns.level)} IN ${allowed}`);
+    }
+
+    if (query.functionPath !== undefined) {
+        builder.where(sql`${raw(columns.functionPath)} = ${query.functionPath}`);
+    }
+
+    if (query.functionPathPrefix !== undefined) {
+        // `LIKE 'prefix%'`: the trailing `%` sits inside the escaped literal so it
+        // stays the wildcard, while the prefix itself is quote-escaped and cannot
+        // break out. (A `%`/`_` within the prefix acts as a wildcard — documented.)
+        builder.where(sql`${raw(columns.functionPath)} LIKE ${`${query.functionPathPrefix}%`}`);
+    }
+
+    if (query.traceId !== undefined) {
+        builder.where(sql`${raw(columns.traceId)} = ${query.traceId}`);
+    }
+
+    if (query.shardKey !== undefined) {
+        builder.where(sql`${raw(columns.shardKey)} = ${query.shardKey}`);
+    }
+
+    if (query.userId !== undefined) {
+        builder.where(sql`${raw(columns.userId)} = ${query.userId}`);
+    }
+
+    if (cursorTs !== undefined) {
+        // Keyset resume is inclusive (`<=`, not `<`): the boundary `ts` is the last
+        // row we returned, and other rows sharing that millisecond may still be
+        // unreturned. The caller's `seen` set drops the ones we already emitted, so
+        // no row is skipped or duplicated.
+        builder.where(sql`${raw(columns.ts)} <= ${cursorTs}`);
+    }
+};
+
+/**
  * The canonical field names of one persisted log record — the keys
  * `pipelineLogSink` writes. Used as the {@link PipelineLogColumnMap} keys and the
  * {@link PipelineLogRow} shape, so the reader stays decoupled from whatever
@@ -126,15 +232,31 @@ export type PipelineLogField = keyof typeof DEFAULT_COLUMNS;
  */
 export type PipelineLogColumnMap = Partial<Record<PipelineLogField, string>>;
 
-/** An opaque keyset cursor: the `ts` of the row after the last one returned. */
+/**
+ * An opaque keyset cursor. `ts` is the epoch-millis of the **last returned** row
+ * (not an un-returned overflow row), so the next page resumes *inclusively* at
+ * that boundary and never skips a row that shares that millisecond. Because `ts`
+ * is not unique, `seen` carries the identity hashes of the already-returned rows
+ * sitting exactly on that boundary `ts`, so the next page can drop them without
+ * re-emitting them. Both fields are JSON-serialisable; consumers pass the whole
+ * object back unchanged.
+ */
 export interface PipelineLogCursor {
-    /** Epoch-millis boundary; the next page is every row strictly older than this. */
+    /**
+     * Identity hashes (see the internal `hashRow`) of the rows already returned
+     * that share the boundary `ts`. The next page fetches every row at-or-older-than
+     * the boundary and filters out any whose hash is in this set, so boundary rows
+     * are neither dropped nor duplicated. Only ever holds rows at the single
+     * boundary `ts`; omitted (or empty) when the boundary carries no already-returned ties.
+     */
+    seen?: string[];
+    /** Epoch-millis boundary; the next page is every row at or older than this. */
     ts: number;
 }
 
 /** Filters for one {@link PipelineLogReader} query. Every value is inlined safely (`lit`/`sql`). */
 export interface PipelineLogQuery {
-    /** Continue after a previous page (keyset on `ts DESC`). Combined with the other filters. */
+    /** Continue after a previous page (inclusive keyset on `ts DESC`, dedup'd by {@link PipelineLogCursor} `seen`). Combined with the other filters. */
     cursor?: PipelineLogCursor;
     /** Match only this exact function path's records. Prefer `functionPathPrefix` for a namespace sweep. */
     functionPath?: string;
@@ -246,139 +368,169 @@ export const createPipelineLogReader = (client: R2SqlClient, options: PipelineLo
     // via a crafted table/namespace either.
     const tableReference = options.namespace === undefined ? options.table : `${options.namespace}.${options.table}`;
 
+    // Decode one raw storage row into the canonical, physical-name-agnostic shape.
+    const decodeRow = (row: StoredRow): PipelineLogRow => {
+        const out: PipelineLogRow = {
+            functionPath: renderCell(row[columns.functionPath]),
+            // The stored `level` is one of the canonical severities; the reader
+            // trusts the writer's contract here rather than re-validating.
+            level: renderCell(row[columns.level]) as ContextLogLevel,
+            message: renderCell(row[columns.message]),
+            ts: toTs(row[columns.ts]),
+        };
+
+        // Optional columns: attach only when the engine returned a value, so a
+        // `PipelineLogRow` mirrors the sparse record the sink wrote.
+        const fields = row[columns.fields];
+
+        if (fields !== undefined && fields !== null) {
+            out.fields = decodeFields(fields);
+        }
+
+        const shardKey = row[columns.shardKey];
+
+        if (shardKey !== undefined && shardKey !== null) {
+            out.shardKey = renderCell(shardKey);
+        }
+
+        const userId = row[columns.userId];
+
+        if (userId !== undefined && userId !== null) {
+            out.userId = renderCell(userId);
+        }
+
+        const traceId = row[columns.traceId];
+
+        if (traceId !== undefined && traceId !== null) {
+            out.traceId = renderCell(traceId);
+        }
+
+        const spanId = row[columns.spanId];
+
+        if (spanId !== undefined && spanId !== null) {
+            out.spanId = renderCell(spanId);
+        }
+
+        return out;
+    };
+
+    // Build + run one read of `fetchLimit` rows with every filter + the inclusive
+    // cursor bound. A fresh builder each call so a grown re-fetch does not
+    // accumulate WHERE clauses.
+    const fetchRows = async (query: PipelineLogQuery, cursorTs: number | undefined, fetchLimit: number): Promise<StoredRow[]> => {
+        const builder = client
+            .from<StoredRow>(tableReference)
+            // Project only the mapped columns (never `SELECT *`) so the read is
+            // stable against unrelated columns in the Iceberg table.
+            .select(
+                raw(columns.functionPath),
+                raw(columns.level),
+                raw(columns.message),
+                raw(columns.ts),
+                raw(columns.fields),
+                raw(columns.shardKey),
+                raw(columns.userId),
+                raw(columns.traceId),
+                raw(columns.spanId),
+            );
+
+        applyLogFilters(builder, query, columns, cursorTs);
+
+        builder.orderBy(desc(raw(columns.ts))).limit(fetchLimit);
+
+        const { rows } = await builder.run();
+
+        return rows;
+    };
+
+    // One grow-attempt: fetch `fetchLimit` rows, decode them, and drop any boundary
+    // row already returned on a prior page (its hash is in `seen`). `truncated`
+    // means the store filled the whole window, so more matching rows may remain
+    // unseen — the caller cannot yet conclude "no next page".
+    const readAttempt = async (
+        query: PipelineLogQuery,
+        cursorTs: number | undefined,
+        seen: Set<string> | undefined,
+        fetchLimit: number,
+    ): Promise<{ decoded: PipelineLogRow[]; truncated: boolean }> => {
+        const rows = await fetchRows(query, cursorTs, fetchLimit);
+        const decoded: PipelineLogRow[] = [];
+
+        for (const row of rows) {
+            const decodedRow = decodeRow(row);
+            const alreadyReturned = seen !== undefined && cursorTs !== undefined && decodedRow.ts === cursorTs && seen.has(hashRow(decodedRow));
+
+            if (!alreadyReturned) {
+                decoded.push(decodedRow);
+            }
+        }
+
+        return { decoded, truncated: rows.length >= fetchLimit };
+    };
+
     return {
         query: async (query: PipelineLogQuery = {}): Promise<PipelineLogPage> => {
             const limit = clampLimit(query.limit);
-            // Over-fetch by one so the presence of an extra row both flags a next
-            // page and carries its cursor `ts`. Never exceed the engine ceiling
-            // (at limit === 10000 the +1 would trip `assertLimit`), which caps
-            // pagination at the last full page — an accepted edge.
-            const fetchLimit = Math.min(limit + 1, MAX_LIMIT);
+            const { cursor } = query;
+            const cursorTs = cursor?.ts;
+            // Boundary rows already returned on prior page(s) sharing `cursorTs` —
+            // dropped from this page so an inclusive resume never re-emits them.
+            const seen = cursor?.seen !== undefined && cursor.seen.length > 0 ? new Set(cursor.seen) : undefined;
 
-            const builder = client
-                .from<StoredRow>(tableReference)
-                // Project only the mapped columns (never `SELECT *`) so the read
-                // is stable against unrelated columns in the Iceberg table.
-                .select(
-                    raw(columns.functionPath),
-                    raw(columns.level),
-                    raw(columns.message),
-                    raw(columns.ts),
-                    raw(columns.fields),
-                    raw(columns.shardKey),
-                    raw(columns.userId),
-                    raw(columns.traceId),
-                    raw(columns.spanId),
-                );
+            // Fetch one more than asked: an extra surviving row both flags a next
+            // page and lets us skip minting a cursor at a true end-of-stream. The
+            // base over-fetch may need to grow (below) when boundary de-duplication
+            // consumes the extra budget on a page dominated by one `ts`.
+            const baseFetchLimit = Math.min(limit + 1, MAX_LIMIT);
 
-            if (query.sinceTs !== undefined) {
-                builder.where(sql`${raw(columns.ts)} >= ${query.sinceTs}`);
-            }
+            // Grow the fetch window when boundary de-duplication leaves us unable to
+            // tell whether a next page exists. Doubling, hard-capped so a page made
+            // entirely of one `ts` cannot loop forever (the engine `LIMIT` ceiling
+            // caps it regardless). Rare — only bites a page dominated by a single ms.
+            const maxAttempts = 3;
+            let decoded: PipelineLogRow[] = [];
+            let truncated = false;
 
-            if (query.untilTs !== undefined) {
-                builder.where(sql`${raw(columns.ts)} <= ${query.untilTs}`);
-            }
+            for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+                const fetchLimit = Math.min(baseFetchLimit * 2 ** attempt, MAX_LIMIT);
 
-            if (query.level !== undefined) {
-                // Exact severity wins over `minLevel` (documented on the type): a
-                // caller asking for one level should not also get everything above it.
-                builder.where(sql`${raw(columns.level)} = ${query.level}`);
-            } else if (query.minLevel !== undefined) {
-                // Expand the floor to the explicit set at/above it in the severity
-                // ramp; an `IN (...)` over a small closed set is clearer to the
-                // engine (and to a reader) than a comparison over a non-numeric column.
-                const floorIndex = LOG_LEVEL_ORDER.indexOf(query.minLevel);
-                const allowed = floorIndex === -1 ? [...LOG_LEVEL_ORDER] : LOG_LEVEL_ORDER.slice(floorIndex);
+                // eslint-disable-next-line no-await-in-loop -- each grow depends on the prior fetch's result; sequential by nature
+                const attemptResult = await readAttempt(query, cursorTs, seen, fetchLimit);
 
-                builder.where(sql`${raw(columns.level)} IN ${allowed}`);
-            }
+                decoded = attemptResult.decoded;
+                truncated = attemptResult.truncated;
 
-            if (query.functionPath !== undefined) {
-                builder.where(sql`${raw(columns.functionPath)} = ${query.functionPath}`);
-            }
-
-            if (query.functionPathPrefix !== undefined) {
-                // `LIKE 'prefix%'`: the trailing `%` sits inside the escaped
-                // literal so it stays the wildcard, while the prefix itself is
-                // quote-escaped and cannot break out. (A `%`/`_` within the prefix
-                // acts as a wildcard — documented on the option.)
-                builder.where(sql`${raw(columns.functionPath)} LIKE ${`${query.functionPathPrefix}%`}`);
-            }
-
-            if (query.traceId !== undefined) {
-                builder.where(sql`${raw(columns.traceId)} = ${query.traceId}`);
-            }
-
-            if (query.shardKey !== undefined) {
-                builder.where(sql`${raw(columns.shardKey)} = ${query.shardKey}`);
-            }
-
-            if (query.userId !== undefined) {
-                builder.where(sql`${raw(columns.userId)} = ${query.userId}`);
-            }
-
-            if (query.cursor !== undefined) {
-                // Keyset: strictly older than the cursor `ts` (the overflow row's
-                // `ts` from the previous page) so we resume just past it.
-                builder.where(sql`${raw(columns.ts)} < ${query.cursor.ts}`);
-            }
-
-            builder.orderBy(desc(raw(columns.ts))).limit(fetchLimit);
-
-            const { rows } = await builder.run();
-
-            // The (limit + 1)th row, when present, is the overflow: it proves a
-            // next page exists and its `ts` becomes that page's cursor.
-            const hasMore = rows.length > limit;
-            const pageRows = hasMore ? rows.slice(0, limit) : rows;
-            const overflow = hasMore ? rows[limit] : undefined;
-
-            const decoded: PipelineLogRow[] = pageRows.map((row) => {
-                const out: PipelineLogRow = {
-                    functionPath: renderCell(row[columns.functionPath]),
-                    // The stored `level` is one of the canonical severities; the
-                    // reader trusts the writer's contract here rather than re-validating.
-                    level: renderCell(row[columns.level]) as ContextLogLevel,
-                    message: renderCell(row[columns.message]),
-                    ts: toTs(row[columns.ts]),
-                };
-
-                // Optional columns: attach only when the engine returned a value,
-                // so a `PipelineLogRow` mirrors the sparse record the sink wrote.
-                const fields = row[columns.fields];
-
-                if (fields !== undefined && fields !== null) {
-                    out.fields = decodeFields(fields);
+                // A confirmed overflow row, or a store that returned everything it
+                // has, both settle the "is there more?" question — stop growing.
+                if (decoded.length > limit || !truncated || fetchLimit >= MAX_LIMIT) {
+                    break;
                 }
+            }
 
-                const shardKey = row[columns.shardKey];
+            const hasOverflow = decoded.length > limit;
+            const pageRows = hasOverflow ? decoded.slice(0, limit) : decoded;
 
-                if (shardKey !== undefined && shardKey !== null) {
-                    out.shardKey = renderCell(shardKey);
-                }
+            // Emit a next cursor when either a real overflow row proved more remains,
+            // or we bailed out of the grow loop still `truncated` on a non-empty page
+            // (the deferred-fix degenerate case: more than one page of a single
+            // identical `ts`). The non-empty guard keeps that fallback from looping
+            // on a page that de-duplicated down to nothing.
+            const lastRow = pageRows.at(-1);
 
-                const userId = row[columns.userId];
+            if (lastRow === undefined || !(hasOverflow || truncated)) {
+                return { rows: pageRows };
+            }
 
-                if (userId !== undefined && userId !== null) {
-                    out.userId = renderCell(userId);
-                }
+            // Cursor `ts` is the **last returned** row's `ts`. `seen` carries every
+            // returned row on that boundary `ts`, accumulated across consecutive
+            // pages that share it (a tie spanning multiple pages) so none is
+            // re-emitted; it resets whenever the boundary advances to an older `ts`.
+            const boundaryTs = lastRow.ts;
+            const boundaryHashes = pageRows.filter((row) => row.ts === boundaryTs).map((row) => hashRow(row));
+            const carried = cursorTs === boundaryTs && cursor?.seen !== undefined ? cursor.seen : [];
+            const nextSeen = [...carried, ...boundaryHashes];
 
-                const traceId = row[columns.traceId];
-
-                if (traceId !== undefined && traceId !== null) {
-                    out.traceId = renderCell(traceId);
-                }
-
-                const spanId = row[columns.spanId];
-
-                if (spanId !== undefined && spanId !== null) {
-                    out.spanId = renderCell(spanId);
-                }
-
-                return out;
-            });
-
-            return overflow === undefined ? { rows: decoded } : { nextCursor: { ts: toTs(overflow[columns.ts]) }, rows: decoded };
+            return { nextCursor: nextSeen.length > 0 ? { seen: nextSeen, ts: boundaryTs } : { ts: boundaryTs }, rows: pageRows };
         },
     };
 };

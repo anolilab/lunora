@@ -718,12 +718,14 @@ overrides:
   '@lunora/hyperdrive': workspace:*
   '@lunora/mail': workspace:*
   '@lunora/mcp': workspace:*
+  '@lunora/notify': workspace:*
   '@lunora/nuxt': workspace:*
   '@lunora/payment': workspace:*
   '@lunora/queue': workspace:*
   '@lunora/ratelimit': workspace:*
   '@lunora/react': workspace:*
   '@lunora/react-native': workspace:*
+  '@lunora/replica': workspace:*
   '@lunora/runtime': workspace:*
   '@lunora/scheduler': workspace:*
   '@lunora/seed': workspace:*
@@ -3648,8 +3650,8 @@ importers:
         specifier: workspace:*
         version: link:../mail
       '@lunora/notify':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(021928746c0228e7b88bf6cea575b5a0)
+        specifier: workspace:*
+        version: link:../notify
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -6912,10 +6914,6 @@ packages:
   '@lingui/message-utils@6.6.0':
     resolution: {integrity: sha512-XkEcuMjIUjq7KZfTe83jP6UWQvKskpae/Ve7E8M8HEJ3TujHIPLzKn/quEmot6pKRtGwYxQzktGRfs2sPcZaqg==}
     engines: {node: '>=22.19.0'}
-
-  '@lunora/notify@1.0.0-alpha.3':
-    resolution: {integrity: sha512-vAxYPI4TVoCMaNdbMIXdEmup1DSBt2heneoOcy6Ky4n+nbH4/ENu901PwYvSkGT5p8tc4PH0V+3lgXZYPXcuKQ==}
-    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -26432,23 +26430,6 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
-
-  '@lunora/notify@1.0.0-alpha.3(021928746c0228e7b88bf6cea575b5a0)':
-    dependencies:
-      '@lunora/errors': link:packages/errors
-      '@visulima/notification': 1.0.5(021928746c0228e7b88bf6cea575b5a0)
-    transitivePeerDependencies:
-      - '@aws-sdk/client-sqs'
-      - '@opentelemetry/api'
-      - '@visulima/email'
-      - '@visulima/workflow'
-      - bullmq
-      - croner
-      - handlebars
-      - intl-messageformat
-      - liquidjs
-      - pg-boss
-      - unstorage
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true

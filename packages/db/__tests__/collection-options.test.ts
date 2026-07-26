@@ -1,7 +1,7 @@
 import { createCollection } from "@tanstack/db";
 import { describe, expect, it, vi } from "vitest";
 
-import { createCheckpointRegistry, lunoraCollectionOptions } from "../src/collection-options";
+import { createCheckpointRegistry, getShardCheckpoints, lunoraCollectionOptions, releaseShardCheckpoints } from "../src/collection-options";
 
 /** A fake `FunctionReference` — the binding only forwards it to the client. */
 const ref = (name: string) => ({ __lunoraRef: name }) as never;
@@ -149,6 +149,48 @@ describe(createCheckpointRegistry, () => {
 
         // Still satisfied at 8 despite the later lower resolve.
         await expect(registry.awaitMutationId(8)).resolves.toBeUndefined();
+    });
+
+    it("dispose clears armed fallback timers so none fire afterward", () => {
+        vi.useFakeTimers();
+
+        try {
+            const onFallback = vi.fn<() => void>();
+            const registry = createCheckpointRegistry({ fallbackMs: 1000, onFallback });
+
+            // Arm a fallback: acknowledged watermarks the sync stream hasn't echoed yet.
+            registry.acknowledge({ checkpoint: 7, mutationId: 5 });
+            registry.dispose();
+
+            vi.advanceTimersByTime(5000);
+
+            // No armed timer survives the dispose — the closures can't hold an event loop open.
+            expect(onFallback).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe(releaseShardCheckpoints, () => {
+    it("clears a released client's armed fallback timers", () => {
+        vi.useFakeTimers();
+
+        try {
+            const { client } = makeClient();
+            const onFallback = vi.fn<() => void>();
+            const registry = getShardCheckpoints(client, "", { fallbackMs: 1000, onFallback });
+
+            // Arm a fallback, then tear the client's registries down (HMR dispose / sign-out).
+            registry.acknowledge({ checkpoint: 7, mutationId: 5 });
+            releaseShardCheckpoints(client);
+
+            vi.advanceTimersByTime(5000);
+
+            expect(onFallback).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });
 

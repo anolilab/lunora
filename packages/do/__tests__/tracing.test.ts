@@ -37,7 +37,9 @@ class TracingShard extends ShardDO {
     }
 
     public metricRecorder(functionPath: string): ReturnType<TracingShard["makeMetrics"]> {
-        return this.makeMetrics(functionPath);
+        // Durable metric history is opt-in (default off); enable it so the
+        // getMetricHistory admin-RPC test still exercises the persistence path.
+        return this.makeMetrics(functionPath, { metricHistory: true });
     }
 
     public tracer(functionPath: string): ReturnType<TracingShard["makeTracer"]> {

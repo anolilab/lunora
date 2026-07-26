@@ -5,6 +5,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import type { CapabilityKey } from "./capabilities";
 import { CAPABILITIES } from "./capabilities";
 import { listLunoraSourceFiles } from "./discover-functions";
+import type { TableIR } from "./ir";
 
 /**
  * Code-usage signals for every optional, package-backed feature, in a single
@@ -43,12 +44,15 @@ interface StudioFeatureSignals {
     dependencies: ReadonlySet<string>;
 
     /**
-     * The app declares the payment store's `subscriptions` **and** `events` tables — the two the
-     * Payments panel reads. Unlike every other feature, payments has no fail-open dependency arm:
-     * the panel queries these tables directly, so merely depending on `@lunora/payment` (e.g. to
-     * reuse its pure webhook-verification / idempotency-key helpers) without hand-declaring the
-     * store's tables would show a page that errors with `unknown table: subscriptions`. Gating on
-     * the tables' presence makes the page appear exactly when it can actually render.
+     * The app declares the `@lunora/payment` store's `subscriptions` **and** `events` tables — the
+     * two the Payments panel reads — identified by their *signature columns*, not merely their
+     * (generic) names (see {@link hasPaymentStoreTables}). Unlike every other feature, payments has
+     * no fail-open dependency arm: the panel queries these tables directly, so merely depending on
+     * `@lunora/payment` (e.g. to reuse its pure webhook-verification / idempotency-key helpers)
+     * without hand-declaring the store's tables would show a page that errors with `unknown table:
+     * subscriptions`. Gating on the tables' presence makes the page appear exactly when it can
+     * actually render — and gating on their *shape* keeps an unrelated newsletter `subscriptions`
+     * or domain `events` table from spuriously flipping it on.
      */
     hasPaymentTables: boolean;
     /** Number of declared queues — any `defineQueue` means the queues page is relevant. */
@@ -150,6 +154,43 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
 };
 
 /**
+ * Signature columns that identify the `@lunora/payment` store's two panel-read
+ * tables by their *shape*, not their (generic) names. An app declares these
+ * tables inline in its `lunora/schema.ts` (codegen can't resolve `@lunora/payment`'s
+ * cross-package `...paymentTables` spread), mirroring the canonical columns the
+ * store reads/writes — so any real payment store carries these columns, while an
+ * unrelated newsletter `subscriptions` table or a domain `events` table does not.
+ *
+ * `providerSubscriptionId` + `state` are the subscription store's discriminators;
+ * `providerEventId` + `processedAt` are the webhook-log's. This is the "real
+ * payment signal" the panel gates on — the old bare-name probe (`subscriptions`
+ * AND `events` present) false-positived on those generic names.
+ */
+const PAYMENT_SUBSCRIPTION_COLUMNS = ["providerSubscriptionId", "state"] as const;
+const PAYMENT_EVENTS_COLUMNS = ["providerEventId", "processedAt"] as const;
+
+const tableHasColumns = (table: TableIR, columns: ReadonlyArray<string>): boolean => columns.every((column) => column in table.shape);
+
+/**
+ * `true` when the schema declares the `@lunora/payment` store's `subscriptions`
+ * and `events` tables — matched by their {@link PAYMENT_SUBSCRIPTION_COLUMNS} /
+ * {@link PAYMENT_EVENTS_COLUMNS} signature columns rather than their names alone,
+ * so it fires on a genuine payment store (which mirrors the canonical columns —
+ * back-compatible with older schemas) and not on a coincidentally-named table.
+ */
+const hasPaymentStoreTables = (tables: ReadonlyArray<TableIR>): boolean => {
+    const subscriptions = tables.find((table) => table.name === "subscriptions");
+    const events = tables.find((table) => table.name === "events");
+
+    return (
+        subscriptions !== undefined &&
+        events !== undefined &&
+        tableHasColumns(subscriptions, PAYMENT_SUBSCRIPTION_COLUMNS) &&
+        tableHasColumns(events, PAYMENT_EVENTS_COLUMNS)
+    );
+};
+
+/**
  * Combine the code-usage flags with the schema/project signals into the final
  * per-feature visibility the studio gates its nav on. A page shows when ANY
  * signal fires — usage is OR'd with the relevant schema count and with the
@@ -162,8 +203,9 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
  * `subscriptions`/`events` tables directly, which the app must hand-declare in its
  * schema (codegen can't resolve `@lunora/payment`'s cross-package table spread), so
  * a dependency-only signal would fail *open into an error* rather than an empty
- * page. It gates on {@link StudioFeatureSignals.hasPaymentTables} — the tables'
- * actual presence — instead, so the page shows exactly when it can render.
+ * page. It gates on {@link StudioFeatureSignals.hasPaymentTables} — the store tables'
+ * actual presence, matched by their signature columns ({@link hasPaymentStoreTables})
+ * — instead, so the page shows exactly when it can render.
  */
 const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals): StudioFeaturesResult => {
     return {
@@ -182,5 +224,5 @@ const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals)
     };
 };
 
-export { buildStudioFeatures, discoverFeatureUsage };
+export { buildStudioFeatures, discoverFeatureUsage, hasPaymentStoreTables };
 export type { FeatureUsage, StudioFeatureSignals };

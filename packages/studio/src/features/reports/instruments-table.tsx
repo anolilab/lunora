@@ -10,6 +10,7 @@ import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import type { MetricHistoryPoint, MetricHistoryResult, MetricKind, MetricSeries, MetricSeriesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { errorCode } from "../../lib/internal";
 import { formatMetricValue, metricHeadline, pointValue, seriesMatchKey } from "./instrument-format";
 import { Sparkline } from "./sparkline";
 
@@ -26,6 +27,15 @@ interface InstrumentsTableProps {
 
 /** Coerce a (possibly partial or pre-feature) `getMetricSeries` payload into its `series` array. */
 const seriesOf = (result: MetricSeriesResult | undefined): MetricSeries[] => (Array.isArray(result?.series) ? result.series : []);
+
+/**
+ * The catalog code a worker predating the `getMetricSeries` RPC answers with when
+ * the studio calls it — the pre-feature case. The sibling `getMetricHistory` read
+ * swallows this wholesale (it ignores its error entirely); the live snapshot has
+ * to distinguish it from a genuine failure so it can do the same rather than
+ * scaring an up-to-date-studio-against-old-worker user with a false notice.
+ */
+const PRE_FEATURE_ERROR_CODE = "FUNCTION_NOT_FOUND";
 
 /** Index a `getMetricHistory` payload by series identity, so each live row can find its trend in O(1). */
 const historyByKey = (result: MetricHistoryResult | undefined): Map<string, MetricHistoryPoint[]> => {
@@ -118,7 +128,7 @@ const TraceExemplar = ({ name, onOpenTrace, traceId }: TraceExemplarProps): Reac
 export const InstrumentsTable = ({ onOpenTrace, shardKey }: InstrumentsTableProps): ReactElement | null => {
     const t = useT();
 
-    const { data, error } = useAdminQuery<MetricSeriesResult>(ADMIN_FUNCTIONS.getMetricSeries, {}, { live: true, shardKey });
+    const { data, error, errorSource } = useAdminQuery<MetricSeriesResult>(ADMIN_FUNCTIONS.getMetricSeries, {}, { live: true, shardKey });
     // Durable trend, read alongside the live snapshot. Its own error is ignored:
     // a pre-feature worker or an empty history simply yields no sparkline, never a
     // broken Instruments section.
@@ -126,10 +136,31 @@ export const InstrumentsTable = ({ onOpenTrace, shardKey }: InstrumentsTableProp
 
     const series = seriesOf(data);
 
-    // Silent when there's nothing to show: an uninstrumented app shouldn't see an
-    // empty table or an error row bolted onto its shard-health overview. The RPC's
-    // failure is already surfaced by the sibling getMetrics read on the same page.
-    if (error !== null || series.length === 0) {
+    // A worker predating the getMetricSeries RPC answers FUNCTION_NOT_FOUND. That's
+    // the pre-feature case the sibling getMetricHistory read swallows wholesale, so
+    // render nothing here too (fall through to the empty-state `null` below) rather
+    // than a false "unavailable" notice — an up-to-date studio pointed at an old
+    // worker is not a failure, it's the same "no instruments" the empty case shows.
+    const isPreFeature = errorCode(errorSource) === PRE_FEATURE_ERROR_CODE;
+
+    // On a GENUINE RPC failure (a stale admin token, a permission error) render a
+    // one-line muted notice rather than vanishing — a hidden section is
+    // indistinguishable from "no custom metrics", so the user has no idea the read
+    // failed. The pre-feature case above is deliberately excluded.
+    if (error !== null && !isPreFeature) {
+        return (
+            <section className="flex flex-col gap-2" data-testid="mt-instruments">
+                <h3 className="text-sm font-semibold text-foreground">{t("Instruments")}</h3>
+                <span className="text-xs text-muted-foreground" data-testid="mt-instruments-error" role="status">
+                    {t("Instruments unavailable: {error}", { error })}
+                </span>
+            </section>
+        );
+    }
+
+    // Silent when there's genuinely nothing to show: an uninstrumented app shouldn't
+    // see an empty table bolted onto its shard-health overview.
+    if (series.length === 0) {
         return null;
     }
 
