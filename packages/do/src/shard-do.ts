@@ -106,6 +106,7 @@ import { LogBuffer } from "./log-buffer";
 import type { RecordMailInput } from "./mail-catcher";
 import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 import { MetricBuffer } from "./metric-buffer";
+import type { MetricHistoryOptions } from "./metric-history";
 import { readMetricHistory, recordMetricHistory } from "./metric-history";
 import { armRestore, readBookmark } from "./pitr";
 import type { QueryStatEntry } from "./query-metrics";
@@ -231,7 +232,7 @@ interface TelemetrySink {
      * `true` uses the built-in defaults. Mirror of `@lunora/runtime`'s
      * `ObservabilitySink`.
      */
-    metricHistory?: boolean | { maxSeries?: number; retentionBuckets?: number };
+    metricHistory?: boolean | MetricHistoryOptions;
     onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
     onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
     onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
@@ -4917,13 +4918,10 @@ abstract class ShardDO {
             // that recorded the metric (matching recordFunctionMetric et al., which
             // all write through the raw handle for the same reason).
             const rawSql = this.state.storage.sql as unknown as SqlExec;
-            const historyOptions =
-                typeof metricHistory === "object"
-                    ? {
-                          ...(metricHistory.maxSeries === undefined ? {} : { maxSeries: metricHistory.maxSeries }),
-                          ...(metricHistory.retentionBuckets === undefined ? {} : { retentionBuckets: metricHistory.retentionBuckets }),
-                      }
-                    : {};
+            // Pass the tune object straight through: `recordMetricHistory` already
+            // coalesces every field with `?? DEFAULT`, so stripping `undefined`
+            // keys here bought nothing. `true` (no tuning) becomes `{}`.
+            const historyOptions: MetricHistoryOptions = typeof metricHistory === "object" ? metricHistory : {};
 
             bestEffort(() => {
                 recordMetricHistory(rawSql, stamped, exemplarTraceId, historyOptions);

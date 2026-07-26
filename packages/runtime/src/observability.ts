@@ -199,6 +199,10 @@ export interface ObservabilitySink {
      * Pass this on the SAME sink object you give `createShardDO` — the DO reads it
      * when recording a measurement.
      */
+    // keep in sync with MetricHistoryOptions (`@lunora/do`'s `metric-history.ts`).
+    // Inlined rather than imported so this public runtime type stays free of a
+    // (type) dependency on `@lunora/do`'s internal module — the object is the same
+    // `{ maxSeries?, retentionBuckets? }` the DO consumes.
     metricHistory?: boolean | { maxSeries?: number; retentionBuckets?: number };
 
     /** Invoked once per `ctx.log.*` call from a function handler. */
