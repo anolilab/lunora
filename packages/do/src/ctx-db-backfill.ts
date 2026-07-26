@@ -192,9 +192,18 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
 
         lastId = id;
 
-        // A row whose `__doc__` blob won't parse is skipped rather than thrown:
-        // one corrupt document must not brick the shard's migration pass.
-        const record = rowToDocument(row);
+        // `rowToDocument` JSON.parses the stored blob and throws on a corrupt
+        // one. This runs inside `runShardMigrations`, so letting it propagate
+        // would make a single unparseable document brick the whole shard's cold
+        // start — skip the row and keep indexing instead. The cursor still
+        // advances past it, so the pass makes progress.
+        let record: Record<string, unknown> | undefined;
+
+        try {
+            record = rowToDocument(row);
+        } catch {
+            continue;
+        }
 
         if (!record) {
             continue;

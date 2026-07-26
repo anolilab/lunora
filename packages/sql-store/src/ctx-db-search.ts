@@ -384,16 +384,20 @@ const backfillSearchIndexPage = async (
  * Idempotent (`CREATE … IF NOT EXISTS` throughout, and the backfill resumes
  * from recorded progress).
  */
-const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
-    // The backfill below records its progress here, and hosts call this helper
-    // directly (not only through `ensureMigrated`), so provision it here too —
-    // `CREATE TABLE IF NOT EXISTS` makes the double call free.
+
+/**
+ * Materialize the companion tables (and the progress table they report into)
+ * for every declared search index. Split out because both entry points below
+ * need it: the migration pass, and the out-of-band runner a host may call
+ * before any ctx-db has migrated this binding.
+ */
+const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
     await migrateSearchState(exec, dialect);
 
     const ftsAvailable = await isFtsAvailable(exec);
     const { integer, key } = dialect.companionTypes;
 
-    for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
+    for (const [tableName, , index] of globalSearchIndexes(schema)) {
         const ftName = ftsTableName(tableName, index.name);
 
         if (ftsAvailable) {
@@ -431,7 +435,23 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
                 unique: false,
             });
         }
+    }
+};
 
+/**
+ * Provision the search companions, then index one bounded page of the rows that
+ * predate each index — unless it is declared `staged: true`, which leaves the
+ * whole backfill to {@link backfillSqlSearchIndexes}.
+ *
+ * Idempotent (`CREATE … IF NOT EXISTS` throughout, and the backfill resumes
+ * from recorded progress).
+ */
+const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
+    await ensureSearchCompanions(exec, schema, dialect);
+
+    const ftsAvailable = await isFtsAvailable(exec);
+
+    for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
         if (index.staged) {
             continue;
         }
@@ -451,7 +471,10 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
  * interrupted run picks up from its cursor.
  */
 const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
-    await migrateSearchState(exec, dialect);
+    // Self-sufficient: a host may run this before any ctx-db has migrated this
+    // binding, and "the documented remedy throws unless you happened to migrate
+    // first" is not a remedy.
+    await ensureSearchCompanions(exec, schema, dialect);
 
     const ftsAvailable = await isFtsAvailable(exec);
 

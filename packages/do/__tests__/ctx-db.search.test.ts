@@ -397,6 +397,35 @@ describe("ctx-db search", () => {
         });
     });
 
+    describe("ctx-db search — backfill robustness", () => {
+        it("skips a corrupt document instead of bricking the migration pass", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            await writer.insert("docs", { body: "readable one", channel: "x", title: "ok" });
+            await writer.insert("docs", { body: "readable two", channel: "x", title: "also ok" });
+
+            // Corrupt one stored blob, then drop the companion so a fresh
+            // migration pass has to re-index from scratch. `rowToDocument`
+            // JSON.parses the blob and throws — inside `runShardMigrations`,
+            // an unhandled throw would take the whole shard's cold start down.
+            harness.raw(`UPDATE "docs" SET "__doc__" = ? WHERE id = ?`, "{not json", "d1");
+            harness.raw(`DROP TABLE IF EXISTS "docs__fts_by_body"`);
+            harness.raw(`DELETE FROM "__lunora_search_state"`);
+
+            expect(() => { runShardMigrations(harness.sql, searchSchema); }).not.toThrow();
+
+            const results = await createShardContextDatabase({ schema: searchSchema, sql: harness.sql })
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "readable"))
+                .collect();
+
+            // The intact row is still indexed; only the unreadable one is lost.
+            expect(results.map((document) => document["title"])).toStrictEqual(["also ok"]);
+        });
+    });
+
     describe("ctx-db search — nested fields", () => {
         it("indexes a dot-separated path into a nested object", async () => {
             expect.assertions(1);
