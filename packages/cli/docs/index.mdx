@@ -12,12 +12,13 @@ files are identical regardless of how they were produced.
 
 ```bash
 # Project
-lunora init [name] [-t <template>]      # scaffold a new project (default template: vite)
+lunora init [name] [-t <template>]      # scaffold a new project (default: react)
             [-i | --yes]                 #   offer (or skip) adding auth + email
 lunora add <auth|email>                 # add a feature to the current project
 lunora view [--remote]                  # open the Lunora studio in your browser
 lunora docs [section]                   # open the docs site in your browser
 lunora info [--json]                    # print versions, wrangler summary, schema overview
+lunora doctor                           # preflight the project (bindings, placeholders, secrets)
 lunora registry <add|list|view|build>   # component registry
 lunora rules <install|check>            # install the AI agent skills into .agents/skills/
 
@@ -25,8 +26,11 @@ lunora rules <install|check>            # install the AI agent skills into .agen
 lunora dev [--port n] [--worker-port n] # wrangler worker + studio + codegen watch
             [--no-studio] [--no-codegen]
 lunora codegen [--api-spec <spec>]      # one-shot codegen
+            [--format <pretty|json>]
 lunora run <fn> [--args <json>]         # send a single RPC to a running worker
             [--shard <key>] [--url <u>]
+lunora insights [--shard <key>]         # write-conflict / error / latency hot-spots
+            [--limit n] [--json] [--prod --url <u>]
 lunora reset [--all] [--yes]            # clear local Miniflare state
 
 # Deploy
@@ -42,6 +46,8 @@ lunora deployments <list|inspect|rollback|promote>   # history + traffic control
 lunora verify [--api-spec <spec>]       # dry-run codegen + tsc --noEmit (no files written)
               [--no-typecheck]
 lunora analyze [--json]                 # wrangler dry-run: bundle size + top modules
+lunora containers <build|push|images|list|info|delete> [args…]
+            [--tag <name:tag>] [--push] [--env <n>]
 
 # Data
 lunora logs [worker]                    # stream live Worker logs via wrangler tail
@@ -51,6 +57,8 @@ lunora env <list|get|set|unset|push|diff|doctor>
 lunora export [--out <file>] [--tables <t1,t2>] [--url <u>] [--token <tok>]
 lunora import <file> [--table <name>] [--batch-size n]
 lunora backup <create|list|restore|pitr> [--dir <d>] [--at <iso>]
+lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
+            [--seed n] [--dry-run] [--reset]
 ```
 
 ### `lunora init`
@@ -63,16 +71,27 @@ SHA can't be resolved (offline / rate-limited) it falls back to the branch with
 a one-line UNPINNED warning. Pass `-t` / `--template` to choose the starting
 point:
 
-| Template         | Description                                                           |
-| ---------------- | --------------------------------------------------------------------- |
-| `vite`           | React + Vite + the Lunora plugin (the default)                        |
-| `standalone`     | Worker-only, no frontend                                              |
-| `astro`          | Astro + the standalone CLI                                            |
-| `next`           | Next.js (App Router) + OpenNext on Cloudflare + `@lunora/react`       |
-| `nuxt`           | Nuxt + the standalone CLI                                             |
-| `sveltekit`      | SvelteKit + the standalone CLI                                        |
-| `expo`           | React Native (Expo) app — iOS/Android/web — + a Lunora worker backend |
-| `tanstack-start` | TanStack Start + the standalone CLI                                   |
+| Value                  | Description                                                                |
+| ---------------------- | -------------------------------------------------------------------------- |
+| `react`                | React SPA — the official create-vite base + the Lunora layer (default)     |
+| `vue`                  | Vue SPA — create-vite base + Lunora                                        |
+| `solid`                | Solid SPA — create-vite base + Lunora                                      |
+| `svelte`               | Svelte SPA — create-vite base + Lunora                                     |
+| `next`                 | Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker |
+| `tanstack-start-react` | TanStack Start (React) — SSR with live-loader routes                       |
+| `tanstack-start-solid` | TanStack Start (Solid)                                                     |
+| `react-router`         | React Router v7 (framework mode) — SSR composed into the Lunora worker     |
+| `astro`                | Astro + a standalone Lunora worker                                         |
+| `analog`               | AnalogJS (Angular) — single-worker, Lunora mounted in Nitro                |
+| `nuxt`                 | Nuxt (Vue) — single-worker, Lunora mounted in Nitro                        |
+| `sveltekit`            | SvelteKit + a standalone Lunora worker                                     |
+| `expo`                 | React Native (Expo) — an iOS/Android/web app + a Lunora worker backend     |
+| `standalone`           | Worker only — no frontend                                                  |
+
+The four create-vite frameworks (`react`, `vue`, `solid`, `svelte`) scaffold
+through the **overlay** engine — the official create-vite base plus the Lunora
+layer — while the rest are bespoke Lunora templates. Run `lunora init` with no
+`-t` to pick from the same list interactively.
 
 Additional flags:
 
@@ -101,6 +120,62 @@ lunora add email                # transactional email (Cloudflare Email Workers 
 | `email` | the `mail` registry item                                  | Cloudflare Email Workers transport (`SEND_EMAIL` binding) + the dev mail catcher                                   |
 
 Flags: `--provider <auth\|clerk\|auth0>`, `--yes`, `--from <dir>` (local registry root), `--source <ref>`, `--allow-unsafe-source`.
+
+### `lunora view`
+
+Opens the Lunora studio in your browser. Defaults to the local dev studio;
+`--remote` opens the deployed worker's studio instead (resolved from
+`.lunora/project.json`, see `lunora link`).
+
+```bash
+lunora view            # local dev studio
+lunora view --remote   # the deployed studio
+```
+
+### `lunora docs`
+
+Opens the documentation site in your browser. Pass an optional section path to
+jump straight to a page.
+
+```bash
+lunora docs                  # the docs home
+lunora docs addons/studio    # a specific section
+```
+
+### `lunora info`
+
+Prints the resolved project configuration: the installed `@lunora/*` versions, a
+`wrangler.jsonc` summary, and an overview of the tables declared in
+`lunora/schema.ts`. `--json` emits the same snapshot machine-readably — useful in
+bug reports and CI diagnostics.
+
+```bash
+lunora info
+lunora info --json
+```
+
+### `lunora doctor`
+
+A read-only preflight over the current project. It reports pass / warn / fail for:
+
+- **`wrangler.jsonc`** — that it exists, parses as JSONC, and declares the `SHARD`
+  Durable Object binding.
+- **D1 placeholders** — a `database_id` still left at the scaffold placeholder.
+- **Email destination** — a `send_email` binding whose `destination_address` is
+  still a placeholder.
+- **`.dev.vars`** — secrets present but left with unfilled values.
+- **`LUNORA_ADMIN_TOKEN`** — whether it is set.
+- **Containers** — every container declared in your config is actually exported
+  by the worker entry.
+- **Version skew** — `@lunora/*` packages spanning different versions, or mixing
+  release channels (e.g. stable + alpha).
+
+```bash
+lunora doctor
+```
+
+It writes nothing and exits non-zero when any hard check fails, so it works as a
+CI gate. See [Debugging](/docs/concepts/debugging) for how to act on each finding.
 
 ### `lunora dev`
 
@@ -260,6 +335,59 @@ lunora run messages:send --args '{"channelId":"general","text":"hi"}'
 `--shard` overrides shard routing; `--url` lets you point at a deployed
 Worker instead of `http://localhost:8787`.
 
+### `lunora codegen`
+
+Runs codegen once and exits — the one-shot form of what `lunora dev` and the
+Vite plugin do in watch mode. It reads `lunora/schema.ts` plus your function
+files and writes `lunora/_generated/`.
+
+```bash
+lunora codegen
+lunora codegen --api-spec both     # also emit openapi.json and openrpc.json
+lunora codegen --format json       # machine-readable output
+```
+
+`--api-spec` selects which API description to emit alongside the generated
+modules: `openapi` (the default) writes `openapi.json`, `openrpc` writes
+`openrpc.json`, `both` writes both, and `none` writes neither.
+
+### `lunora insights`
+
+Reports per-function metrics from a **running** worker, ranked into three
+sections:
+
+- **Write-conflict hot-spots** — functions that lose OCC retries most often.
+  These are your sharding candidates: a high conflict rate means many writers are
+  contending on one Durable Object.
+- **Error hot-spots** — functions by error rate, with the most recent error
+  message.
+- **Latency outliers** — slowest single call, plus the mean, per function.
+
+```bash
+lunora insights                      # against the local dev worker
+lunora insights --shard channel:demo # scope to one shard
+lunora insights --limit 25           # more rows per section (default 10)
+lunora insights --json               # raw report
+lunora insights --prod --url https://app.example.com --token $LUNORA_ADMIN_TOKEN
+```
+
+Targeting production requires an explicit `--url`. See
+[Sharding](/docs/concepts/sharding) for what to do about a write-conflict
+hot-spot, and [Performance](/docs/concepts/observability) for the latency side.
+
+### `lunora reset`
+
+Clears local Miniflare state — the simulated Durable Objects, D1, R2, and KV
+that `lunora dev` persists under `.wrangler/state`. This is the "start from an
+empty database" button for local development; it never touches a deployed
+worker.
+
+```bash
+lunora reset          # clear Miniflare state (prompts to confirm)
+lunora reset --all    # also remove .lunora-cache
+lunora reset --yes    # skip the prompt (required when stdin is not a TTY)
+```
+
 ### `lunora env`
 
 Manage `.dev.vars` (local secrets) and push them to Cloudflare via `wrangler secret`:
@@ -305,6 +433,30 @@ lunora backup pitr --at 2024-06-01T12:00:00Z   # read PITR bookmark
 lunora backup pitr --at 2024-06-01T12:00:00Z --restore --yes   # restore to that point
 ```
 
+See [Backups, export & import](/docs/concepts/backups) for the full picture —
+snapshot format, restore drills, and moving data between deployments.
+
+### `lunora seed`
+
+Generates deterministic fake data from `lunora/schema.ts` and bulk-inserts it
+through the worker's admin endpoint. Rows are derived from a seed number, so the
+same `--seed` always produces identical data — which makes seeded fixtures
+reproducible across machines and CI runs.
+
+```bash
+lunora seed                          # every table, default 10 rows each
+lunora seed --table posts --count 50 # 50 posts; FK parents seeded automatically
+lunora seed --seed 7 --dry-run       # print the NDJSON for seed 7, insert nothing
+lunora seed --reset                  # wipe local .wrangler/state, then seed
+```
+
+Seeding respects foreign keys: naming one table with `--table` also seeds the
+tables it references. `--batch-size` (default 500) sets rows per HTTP request.
+Targeting a non-local worker needs `--prod` plus an explicit `--url`, and prompts
+unless you pass `--yes`; prefer `LUNORA_ADMIN_TOKEN` over `--token`, which is
+visible to other local processes through the process table. See
+[@lunora/seed](/docs/packages/seed) for using the same generator inside tests.
+
 ### `lunora registry`
 
 Fetch and manage reusable Lunora components (queries, mutations, UI widgets):
@@ -335,6 +487,26 @@ lunora rules check --strict       # exit non-zero when missing (CI gate)
 Runs a `wrangler` dry-deploy and reports bundle size, the heaviest modules,
 and the state of `_generated/` files. Pass `--json` to pipe the output to a
 CI artifact.
+
+### `lunora containers`
+
+Thin wrappers over `wrangler containers …`, so container image and instance
+management lives under the same CLI as the rest of the deploy workflow. The
+split matters in CI: build and push the image in one step, then ship the worker
+with `lunora deploy` in another.
+
+```bash
+lunora containers build ./containers/transcoder --tag transcoder:v1
+lunora containers build ./containers/transcoder --tag transcoder:v1 --push
+lunora containers push transcoder:v1
+lunora containers images list
+lunora containers images delete transcoder:v1
+```
+
+`build` uses your local Docker engine; `--push` uploads to the Cloudflare
+Registry in the same step. `--env` selects the Cloudflare environment. See
+[@lunora/container](/docs/packages/container) for declaring containers in the
+first place.
 
 ### `lunora logs`
 

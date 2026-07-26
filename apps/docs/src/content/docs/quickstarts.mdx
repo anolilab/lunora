@@ -1,0 +1,116 @@
+---
+title: Quickstarts
+description: Every starting point Lunora scaffolds — pick your framework, run one command, and get a live backend wired to it.
+---
+
+`lunora init` scaffolds a complete project: a Lunora worker, a schema, a working
+query and mutation, and the client wiring for your framework. Run it with no
+flags to pick interactively, or pass `-t` to go straight to one.
+
+```bash
+npx lunorash@alpha init my-app          # interactive picker
+npx lunorash@alpha init my-app -t next  # straight to a template
+```
+
+Then:
+
+```bash
+cd my-app
+pnpm install
+pnpm dev
+```
+
+## Pick a starting point
+
+### Single-page apps
+
+Scaffolded from the official create-vite base with the Lunora layer applied on
+top, so you get the standard Vite project you would have created yourself, plus
+the plugin, codegen, and Studio.
+
+| Framework | Command                     | Guide                             |
+| --------- | --------------------------- | --------------------------------- |
+| React     | `lunora init app -t react`  | [React](/docs/frameworks/react)   |
+| Vue       | `lunora init app -t vue`    | [Vue](/docs/frameworks/vue)       |
+| Solid     | `lunora init app -t solid`  | [Solid](/docs/frameworks/solid)   |
+| Svelte    | `lunora init app -t svelte` | [Svelte](/docs/frameworks/svelte) |
+
+React is the default when you do not choose.
+
+### Server-rendered apps
+
+These pair SSR with live subscriptions — the server render resolves data, and the
+client hydrates it into a live query rather than refetching.
+
+| Framework              | Command                                   | Topology                                 |
+| ---------------------- | ----------------------------------------- | ---------------------------------------- |
+| Next.js (App Router)   | `lunora init app -t next`                 | Two workers — OpenNext + a Lunora worker |
+| TanStack Start (React) | `lunora init app -t tanstack-start-react` | Single worker                            |
+| TanStack Start (Solid) | `lunora init app -t tanstack-start-solid` | Single worker                            |
+| React Router v7        | `lunora init app -t react-router`         | SSR composed into the Lunora worker      |
+| SvelteKit              | `lunora init app -t sveltekit`            | Standalone Lunora worker                 |
+| Astro                  | `lunora init app -t astro`                | Standalone Lunora worker                 |
+| Nuxt                   | `lunora init app -t nuxt`                 | Single worker — Lunora mounted in Nitro  |
+| AnalogJS (Angular)     | `lunora init app -t analog`               | Single worker — Lunora mounted in Nitro  |
+
+The topology column matters for deployment. **Single worker** means one
+`wrangler deploy`. **Two workers** means the framework's worker and the Lunora
+worker deploy separately — see [Next.js](/docs/frameworks/nextjs) for why and
+how.
+
+### Mobile
+
+| Target              | Command                   | Guide                                         |
+| ------------------- | ------------------------- | --------------------------------------------- |
+| React Native (Expo) | `lunora init app -t expo` | [React Native](/docs/frameworks/react-native) |
+
+Scaffolds an iOS / Android / web app plus a Lunora worker backend.
+
+### Backend only
+
+| Target     | Command                         | Use for                                          |
+| ---------- | ------------------------------- | ------------------------------------------------ |
+| Standalone | `lunora init api -t standalone` | A worker with no frontend — an API, a job runner |
+
+Pair it with any client through the [REST API](/docs/concepts/rest-api) or a
+[server-side client](/docs/concepts/server-clients).
+
+## Adding Lunora to an app you already have
+
+Scaffolding a new project is not the only path. `--here` detects the framework
+in the current directory, patches its config, scaffolds `lunora/`, and prints the
+wiring steps:
+
+```bash
+npx lunorash@alpha init --here
+```
+
+For a considered walkthrough — including how to run Lunora next to an existing
+database — see
+[Adopt in an existing app](/docs/concepts/adopt-in-an-existing-app).
+
+## What you get either way
+
+Whichever starting point you choose, the scaffold includes:
+
+- `lunora/schema.ts` — a schema with one table
+- a query and a mutation, already wired to the UI
+- `lunora/_generated/` — the typed API surface, regenerated on save
+- `wrangler.jsonc` — the `SHARD` Durable Object binding and migration
+- the Studio, served alongside the dev server
+
+Add authentication and transactional email at any point with `lunora add auth`
+and `lunora add email`, and scaffold a CI deploy pipeline with
+`--ci github` or `--ci gitlab`.
+
+## Next steps
+
+- [Getting started](/docs/getting-started) — the guided first run
+- [Realtime chat tutorial](/docs/tutorial/realtime-chat) — build something end to end
+- [Schema](/docs/concepts/schema) — model your data
+- [Deployment](/docs/deployment) — ship it
+
+## See also
+
+- [Bring your framework](/docs/frameworks/bring-your-framework)
+- [@lunora/cli](/docs/packages/cli)

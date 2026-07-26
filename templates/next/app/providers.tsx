@@ -19,9 +19,18 @@ import { useState } from "react";
  * Two-worker split: NEXT_PUBLIC_LUNORA_URL points at the standalone Lunora
  * worker (see `wrangler.lunora.jsonc`). It is inlined at build time; the
  * localhost fallback matches `wrangler dev`'s default port during local dev.
+ * The fallback is development-only on purpose — in a production build an unset
+ * value would otherwise point every visitor's browser at their own machine, so
+ * it fails loudly instead.
  */
+const lunoraUrl = process.env.NEXT_PUBLIC_LUNORA_URL ?? (process.env.NODE_ENV === "development" ? "http://localhost:8787" : undefined);
+
+if (!lunoraUrl) {
+    throw new Error("NEXT_PUBLIC_LUNORA_URL must be set — it is inlined into the client bundle at build time.");
+}
+
 export function Providers({ children }: { children: ReactNode }) {
-    const [client] = useState(() => new LunoraClient({ url: process.env.NEXT_PUBLIC_LUNORA_URL ?? "http://localhost:8787" }));
+    const [client] = useState(() => new LunoraClient({ url: lunoraUrl }));
 
     return <LunoraProvider client={client}>{children}</LunoraProvider>;
 }

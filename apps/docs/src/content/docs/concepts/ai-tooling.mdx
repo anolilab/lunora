@@ -1,0 +1,119 @@
+---
+title: AI coding agents
+description: Teach Claude Code, Cursor, and Copilot how to use Lunora — agent skills, agent-aware dev mode, and the MCP server.
+---
+
+Lunora ships three things for AI coding agents, addressing different problems:
+
+| You want                                      | Use            |
+| --------------------------------------------- | -------------- |
+| The agent to write Lunora code correctly      | Agent skills   |
+| The agent to run and inspect your dev server  | Agent mode     |
+| The agent to query and call a live deployment | The MCP server |
+
+## Agent skills
+
+Skills are portable instructions that teach an agent how Lunora works — the
+schema API, the procedure builders, indexing rules, the deploy flow. Install them
+into your project and any skill-aware agent picks them up:
+
+```bash
+lunora rules install              # copy the skills into .agents/skills/
+lunora rules install --overwrite  # reinstall, replacing local edits
+lunora rules check                # report which are present
+lunora rules check --strict       # exit non-zero when missing — a CI gate
+```
+
+`.agents/skills/` is the portable location Cursor, Claude Code, and GitHub
+Copilot all discover, so one install covers every agent on the project.
+
+The shipped set is a **router skill** (`lunora`) plus focused skills it delegates
+to — quickstart, functions, realtime, auth setup, package authoring, migrations,
+deploy, and performance auditing. The router's presence is what marks the rule
+set as installed, because every other skill is reachable through it.
+
+`install` leaves files you have edited alone, so local customisation survives a
+reinstall unless you pass `--overwrite`. `lunora dev`, the Vite plugin, and the
+Studio all nudge you when the rules are missing.
+
+## Agent mode
+
+When the CLI detects it is being driven by a coding agent — Claude Code, Cursor,
+Codex, Gemini CLI, Cline, and others — it changes two defaults so the agent does
+not get stuck:
+
+- **Background dev server.** `lunora dev` detaches instead of blocking forever on
+  a foreground process. It returns once the server accepts requests, printing the
+  URL and PID.
+- **JSON logging.** Output becomes machine-readable.
+
+Neither needs a flag in an agent workflow. Set `LUNORA_AGENT_MODE=0` to opt out,
+or `=1` to force it on.
+
+The background server is managed rather than fire-and-forget. A state record at
+`.lunora/dev.json` acts as a lockfile, so starting twice reports the running
+instance instead of spawning a conflict, and every subcommand is idempotent —
+stopping when nothing runs succeeds silently:
+
+```bash
+lunora dev --background   # detach; blocks until ready, prints URL + PID
+lunora dev status         # URL, PID, uptime (--json for machine-readable)
+lunora dev logs           # captured output (--lines n, 0 = all)
+lunora dev stop           # SIGTERM, then SIGKILL after 10s
+```
+
+Agents can also poll `GET /_lunora/status` on the running worker — a public,
+secret-free health probe answering `{"ok":true}`.
+
+JSON logs are available to everyone, agent or not, via `lunora dev --json` or
+`LUNORA_LOG_JSON=1`.
+
+## The MCP server
+
+`@lunora/mcp` exposes a **deployed** Lunora app to an agent over the
+[Model Context Protocol](https://modelcontextprotocol.io). Where skills teach an
+agent to write Lunora code, MCP lets it introspect and call a running
+deployment: list functions and tables, read a function's schema, and run
+queries, mutations, and actions.
+
+```jsonc
+{
+    "mcpServers": {
+        "lunora": {
+            "command": "lunora-mcp",
+            "env": {
+                "LUNORA_URL": "https://app.example.workers.dev",
+                "LUNORA_ADMIN_TOKEN": "...",
+            },
+        },
+    },
+}
+```
+
+<Callout type="warn">
+    The server is **read-only by default**, and deliberately so — an agent gets introspection and queries, but not writes. Mutations and actions are exposed
+    only when you set `LUNORA_MCP_ALLOW_WRITES`, and agent tools only when you set `LUNORA_MCP_ALLOW_AGENTS`. Point it at a development deployment before you
+    point it at production.
+</Callout>
+
+See [@lunora/mcp](/docs/packages/mcp) for the full tool list, the
+`createLunoraMcpServer` API for other transports, and how to front durable
+[`@lunora/agent`](/docs/packages/agent) runs.
+
+## Keeping generated types honest
+
+An agent editing your schema is an agent that can leave `_generated/` stale.
+Gate it the same way you would a human contributor:
+
+```bash
+lunora verify              # wrangler validation + codegen dry-run + tsc --noEmit
+lunora rules check --strict
+```
+
+## See also
+
+- [@lunora/mcp](/docs/packages/mcp)
+- [@lunora/agent](/docs/packages/agent)
+- [Generated code](/docs/concepts/generated-code)
+- [Debugging](/docs/concepts/debugging)
+- [@lunora/cli](/docs/packages/cli)
