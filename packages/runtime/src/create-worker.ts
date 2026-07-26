@@ -246,7 +246,16 @@ type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
  * settled. `dispatch` runs only after payment is verified — an unpaid or
  * invalid request never reaches the shard.
  */
-type X402ChargeGate = (request: Request, spec: { functionPath: string; price: number | string }, dispatch: () => Promise<Response>) => Promise<Response>;
+type X402ChargeGate = (
+    request: Request,
+    spec: { functionPath: string; price: number | string },
+    dispatch: () => Promise<Response>,
+    // Mirrors `@lunora/x402`'s `ChargeHandlerDeps` structurally — the runtime
+    // deliberately doesn't import `@lunora/x402` (the gate is injected). The
+    // request's `ctx.waitUntil`, forwarded so the settlement-receipt sink
+    // survives past the response instead of being cancelled when the request ends.
+    deps?: { waitUntil?: (promise: Promise<unknown>) => void },
+) => Promise<Response>;
 
 /**
  * Lists objects in the storage bucket for the admin file browser. Structurally
@@ -1259,6 +1268,17 @@ const buildSinkContext = (environment: unknown, request: Request, waitUntil?: (p
         ...(waitUntil === undefined ? {} : { waitUntil }),
     };
 };
+
+/**
+ * Normalize a `waitUntil`-bearing source — an `ExecutionContext` (RPC), or an
+ * SSR host's `{ waitUntil }` (REST) — into the `{ waitUntil? }` deps shape the
+ * x402 gate expects. Both gate sites forward through this one helper so they
+ * pass an identically-shaped `deps`. Forwarding through the source (rather than
+ * extracting the method) preserves its receiver, and a source without a
+ * `waitUntil` yields `{}` so the gate falls back to fire-and-forget.
+ */
+const forwardWaitUntil = (source?: { waitUntil?: (promise: Promise<unknown>) => void }): { waitUntil?: (promise: Promise<unknown>) => void } =>
+    source?.waitUntil ? { waitUntil: (promise): void => source.waitUntil?.(promise) } : {};
 
 /**
  * Project a dispatch's trace context onto the `ObservabilityEvent` fields that
@@ -3478,7 +3498,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // presence was already asserted above when `x402Tag` is set, so the
             // `x402Charge` re-check here is only for the type system.
             if (x402Tag && options.x402Charge) {
-                return options.x402Charge(request, { functionPath: envelope.functionPath, price: x402Tag.price }, dispatch);
+                return options.x402Charge(request, { functionPath: envelope.functionPath, price: x402Tag.price }, dispatch, forwardWaitUntil(context));
             }
 
             return dispatch();
@@ -4134,7 +4154,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const x402Tag = resolveX402Charge(envelope, options);
 
         if (x402Tag && options.x402Charge) {
-            return options.x402Charge(request, { functionPath, price: x402Tag.price }, dispatch);
+            return options.x402Charge(request, { functionPath, price: x402Tag.price }, dispatch, forwardWaitUntil({ waitUntil }));
         }
 
         return dispatch();
