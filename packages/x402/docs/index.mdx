@@ -232,6 +232,11 @@ single decimal precision: paying USDC on Base and USDC on Solana under one cap i
 fine (both 6-decimal), but mixing a 6- and an 18-decimal asset is refused rather
 than summed into a meaningless total.
 
+The default list covers the networks with a friendly alias **except Ethereum
+mainnet** (`eip155:1`), which the underlying SDK ships no default stablecoin for.
+Paying there needs an explicit `allowedAssets` entry — without one every
+requirement is filtered out, which looks like a silent failure to pay.
+
 ## Safety notes
 
 - The pay rail is deliberately unavailable on queries and mutations — only

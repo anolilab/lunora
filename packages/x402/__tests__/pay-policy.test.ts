@@ -163,6 +163,45 @@ describe("buildSpendPolicy — asset gate (X402-01)", () => {
         expect(() => buildSpendPolicy({ allowedAssets: [{ asset: USDC_BASE, decimals: -1, network: "base" }] })).toThrow(/non-negative integer/);
     });
 
+    it("refuses two entries for one asset that disagree on decimals", () => {
+        // Silently taking the last would pick a precision at random — the very
+        // mis-pricing the asset gate exists to prevent. Easy to hit when two
+        // allowlists are concatenated.
+        expect(() =>
+            buildSpendPolicy({
+                allowedAssets: [
+                    { asset: USDC_BASE, decimals: 6, network: "base" },
+                    { asset: USDC_BASE, decimals: 18, network: "base" },
+                ],
+                maxPerCall: "$1",
+            }),
+        ).toThrow(/twice with different decimals/);
+    });
+
+    it("tolerates a duplicate entry that agrees on decimals", () => {
+        const policy = buildSpendPolicy({
+            allowedAssets: [
+                { asset: USDC_BASE, decimals: 6, network: "base" },
+                // Same asset written case-differently on the same network — still one entry.
+                { asset: USDC_BASE.toLowerCase(), decimals: 6, network: "base" },
+            ],
+            maxPerCall: "$1",
+        });
+
+        expect(policy(2, [requirement()])).toHaveLength(1);
+    });
+
+    it("refuses a server amount that isn't a canonical atomic quantity", () => {
+        const policy = buildSpendPolicy({ maxPerCall: "$1" });
+
+        // `BigInt` would throw on the first three (an exception escaping the filter
+        // instead of a fail-closed rejection) and *accept* the negative one, whose
+        // value slips under every cap comparison.
+        for (const amount of ["", "abc", "1.5", "1e6", " 10000", "0x10", "-1"]) {
+            expect(policy(2, [requirement({ amount })])).toEqual([]);
+        }
+    });
+
     it("refuses the removed policy-wide `decimals` with a migration message", () => {
         // Keeping it silently honoured would leave the mis-pricing hole open behind a
         // field that reads like a formatting detail.
@@ -179,6 +218,17 @@ describe("buildPaymentGuard", () => {
         const result = await guard(guardContext(requirement({ amount: "10000", asset: OTHER_ASSET })));
 
         expect(result).toEqual({ abort: true, reason: expect.stringMatching(/not in this wallet's allowed assets/) });
+        expect(state.spentAtomic).toBe(0n);
+    });
+
+    it("aborts on a non-canonical amount instead of throwing out of the hook", async () => {
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ maxPerRun: "$1" }, state);
+
+        const result = await guard(guardContext(requirement({ amount: "-1" })));
+
+        expect(result).toEqual({ abort: true, reason: expect.stringMatching(/not a canonical atomic quantity/) });
+        // Nothing reserved: the abort happens before the reservation.
         expect(state.spentAtomic).toBe(0n);
     });
 

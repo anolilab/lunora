@@ -40,6 +40,18 @@ const normaliseAddress = (address: string, network: string): string => (network.
 /** Lookup key for an allowed asset: its network plus its address, normalised per that network's casing rules. */
 const assetKey = (asset: string, network: string): string => `${network}|${normaliseAddress(asset, network)}`;
 
+/** A requirement's atomic base-unit amount: canonical digits only — no sign, no decimal point, no whitespace. */
+const ATOMIC_AMOUNT = /^\d+$/;
+
+/**
+ * Parse a requirement's `amount`, or return `undefined` if it isn't a canonical atomic
+ * quantity. The value is chosen by the *server*, so bare `BigInt` is the wrong tool
+ * twice over: it throws on junk — an exception escaping the selection filter rather
+ * than a fail-closed rejection — and it accepts `"-1"`, which slips under every cap
+ * comparison. Callers refuse anything this can't parse.
+ */
+const parseAtomicAmount = (raw: string): bigint | undefined => (ATOMIC_AMOUNT.test(raw) ? BigInt(raw) : undefined);
+
 /**
  * USDC uses 6 decimals, so a USD price converts to atomic base units at `10 ** 6`.
  * This is only the *default* for the standalone {@link usdToAtomic} helper —
@@ -236,8 +248,21 @@ const buildAssetTable = (policy: SpendPolicy): Map<string, AllowedAsset> => {
         }
 
         const network = toCaip2(asset.network);
+        const key = assetKey(asset.asset, network);
+        const existing = table.get(key);
 
-        table.set(assetKey(asset.asset, network), { ...asset, network });
+        // Last-wins on a conflicting duplicate would silently pick a precision — the
+        // exact mis-pricing the asset gate exists to prevent. Two entries that merely
+        // repeat the same decimals are harmless (easy to produce when allowlists are
+        // concatenated), so only a genuine disagreement is refused.
+        if (existing !== undefined && existing.decimals !== asset.decimals) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `x402 policy: allowedAssets lists ${asset.asset} on ${network} twice with different decimals (${String(existing.decimals)} and ${String(asset.decimals)}). One asset cannot have two precisions.`,
+            );
+        }
+
+        table.set(key, { ...asset, network });
     }
 
     return table;
@@ -293,9 +318,15 @@ export const buildSpendPolicy = (policy: SpendPolicy): PaymentPolicy => {
                 return false;
             }
 
+            const amount = parseAtomicAmount(requirement.amount);
+
+            if (amount === undefined) {
+                return false;
+            }
+
             const cap = maxPerCall.get(asset.decimals);
 
-            if (cap !== undefined && BigInt(requirement.amount) > cap) {
+            if (cap !== undefined && amount > cap) {
                 return false;
             }
 
@@ -364,7 +395,15 @@ export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): Befor
             };
         }
 
-        const amount = BigInt(requirement.amount);
+        const amount = parseAtomicAmount(requirement.amount);
+
+        if (amount === undefined) {
+            return {
+                abort: true,
+                reason: `x402 policy: this payment's amount (${requirement.amount}) is not a canonical atomic quantity, so it cannot be checked against the caps.`,
+            };
+        }
+
         const cap = maxPerRun.get(asset.decimals);
 
         if (cap !== undefined && state.spentAtomic + amount > cap) {
