@@ -67,6 +67,29 @@ const memoizeIdentityPerRequest = (resolver: IdentityResolver): IdentityResolver
 /** Tuning for {@link memoizeIdentity}. */
 interface MemoizeIdentityOptions {
     /**
+     * Override how a request is reduced to its cache key — **required for
+     * correctness** if your resolver authenticates off anything other than the
+     * `Cookie` / `Authorization` headers.
+     *
+     * The default key ({@link credentialKey}) is the raw `Cookie` + `Authorization`
+     * pair. That is a *safe* key only when the resolver reads nothing else: two
+     * requests share a cache entry precisely when they present identical
+     * credentials, so no principal can ever be served another's identity. The
+     * moment the resolver keys off some other attribute — an `X-API-Key` header, a
+     * client-certificate fingerprint, `new URL(request.url).origin`, a
+     * `CF-Access-Jwt-Assertion` — the default is **unsafe**: two distinct
+     * principals that happen to share (or both omit) Cookie/Authorization collide
+     * onto one entry and the cache serves the WRONG identity across the security
+     * boundary.
+     *
+     * Supply `cacheKey` so the key covers *exactly* the attributes the resolver
+     * authenticates on. Return `undefined` for a request that must never be cached
+     * (e.g. one carrying no credential at all) — it falls back to the
+     * per-request memoization, same as the default key's anonymous case.
+     */
+    cacheKey?: (request: Request) => string | undefined;
+
+    /**
      * Cache size before the oldest entry is evicted. Defaults to 500 — an isolate
      * serves a bounded set of concurrent users, and an unbounded map in a
      * long-lived isolate is a leak.
@@ -93,7 +116,7 @@ const DEFAULT_TTL_MS = 5000;
 const DEFAULT_MAX_ENTRIES = 500;
 
 /**
- * The credential a request authenticates with — the cache key.
+ * The credential a request authenticates with — the DEFAULT cache key.
  *
  * Deliberately the raw `Cookie` + `Authorization` header pair: it is exactly what the
  * resolver verifies, so two requests share a cache entry only when they present
@@ -101,6 +124,14 @@ const DEFAULT_MAX_ENTRIES = 500;
  * never cached (an anonymous request has nothing to memoize, and caching "anonymous"
  * under an empty key would let one unauthenticated request suppress verification for
  * the next authenticated one).
+ *
+ * **Contract — safe ONLY if the resolver reads nothing but `Cookie` / `Authorization`.**
+ * This key is the identity of the *credential*, not of the *request*. If the
+ * resolver authenticates off any other attribute (an `X-API-Key` header, a client
+ * cert, `new URL(request.url).origin`, an Access JWT header, …), two distinct
+ * principals sharing (or both lacking) Cookie/Authorization collide onto one entry
+ * and the cache serves the WRONG identity. Such a resolver MUST pass
+ * {@link MemoizeIdentityOptions.cacheKey} so the key covers exactly what it reads.
  */
 const credentialKey = (request: Request): string | undefined => {
     const cookie = request.headers.get("cookie") ?? "";
@@ -110,10 +141,10 @@ const credentialKey = (request: Request): string | undefined => {
         return undefined;
     }
 
-    // Escaped NUL (\x00) as the separator so the two header values can never
+    // Escaped NUL (\u0000) as the separator so the two header values can never
     // collide across the boundary; written as an escape, not a literal 0x00 byte,
     // to keep this file text (greppable/diffable). Byte-identical key at runtime.
-    return `${authorization}\x00${cookie}`;
+    return `${authorization}\u0000${cookie}`;
 };
 
 /**
@@ -127,17 +158,26 @@ const credentialKey = (request: Request): string | undefined => {
  * is reused regardless of TTL.
  *
  * An anonymous request (no cookie, no bearer) is never cached.
+ *
+ * **The cross-request cache is keyed on the credential, not the request.** By
+ * default that key is the `Cookie` + `Authorization` pair, which is correct *only*
+ * if the resolver reads nothing else. A resolver that authenticates off any other
+ * attribute MUST supply {@link MemoizeIdentityOptions.cacheKey}, or the cache will
+ * serve one principal's identity to another — see that option's contract.
  */
 const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOptions = {}): IdentityResolver => {
     const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     const maxEntries = Math.max(1, options.maxEntries ?? DEFAULT_MAX_ENTRIES);
+    // A caller whose resolver reads non-standard attributes supplies its own key
+    // covering exactly those; otherwise fall back to the Cookie/Authorization key.
+    const keyOf = options.cacheKey ?? credentialKey;
     const perRequest = memoizeIdentityPerRequest(resolver);
 
     // Insertion-ordered, so evicting the first key evicts the oldest entry.
     const cache = new Map<string, { expiresAt: number; value: ReturnType<IdentityResolver> }>();
 
     return (request, env) => {
-        const key = credentialKey(request);
+        const key = keyOf(request);
 
         if (key === undefined) {
             return perRequest(request, env);
