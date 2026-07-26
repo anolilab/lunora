@@ -137,6 +137,16 @@ export interface CheckpointRegistry {
     awaitCheckpoint: (cursor: number) => Promise<void>;
     /** Resolve once the server has echoed a `lastMutationId >= id` for this client. */
     awaitMutationId: (id: number) => Promise<void>;
+    /**
+     * Tear the registry down: `clearTimeout` every armed fallback timer and empty
+     * the armed set. Idempotent. A discarded registry (Vite HMR dispose, sign-out)
+     * can otherwise hold up to `fallbackMs` of pending `setTimeout`s alive through
+     * their closures — keeping a Node/SSR event loop from draining. Distinct from
+     * {@link resolve}: `resolve` settles parked *waiters* (and disarms the timers it
+     * subsumes as a side effect); `dispose` guarantees no armed timer survives,
+     * independent of any watermark.
+     */
+    dispose: () => void;
     /** Advance the gates from a sync frame's watermark; later callers past the mark settle immediately. */
     resolve: (watermark: CheckpointWatermark) => void;
     /** Diagnostics counters — notably how often the fallback had to fire. */
@@ -246,6 +256,13 @@ export const createCheckpointRegistry = (options: CheckpointRegistryOptions = {}
         },
         awaitCheckpoint: (cursor) => checkpointGate.await(cursor),
         awaitMutationId: (id) => mutationGate.await(id),
+        dispose: () => {
+            for (const entry of armed) {
+                clearTimeout(entry.handle);
+            }
+
+            armed.clear();
+        },
         resolve: ({ checkpoint, mutationId }) => {
             if (checkpoint !== undefined) {
                 checkpointGate.advance(checkpoint);
@@ -362,7 +379,12 @@ export const releaseShardCheckpoints = (client: LunoraClient): void => {
     }
 
     for (const registry of byShard.values()) {
+        // Settle every parked waiter (the writes were already sent; the server is
+        // authoritative), then guarantee no armed fallback timer outlives the
+        // discarded registry — `resolve` disarms the timers it subsumes, but
+        // `dispose` makes the teardown explicit and independent of that side effect.
         registry.resolve({ checkpoint: Number.POSITIVE_INFINITY, mutationId: Number.POSITIVE_INFINITY });
+        registry.dispose();
     }
 
     registriesByClient.delete(client);
