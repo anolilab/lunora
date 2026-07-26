@@ -205,8 +205,10 @@ describe(useAgentChat, () => {
 
         // The turn lands (user seq 50 + assistant seq 51) and the window slides to
         // keep its last 50 rows, evicting the oldest turn (seqs 0, 1). The durable
-        // USER-row count is unchanged (still 25), so the positional reconcile can
-        // never see the acknowledging row — only the seq-advance fallback retires it.
+        // USER-row count is unchanged (still 25), so a positional/count reconcile
+        // could never see the acknowledging row — the seq-based content match
+        // (user "new turn" at seq 50 > the send-time max of 49) retires it instead,
+        // window-independent because it matches on the monotonic seq, not a count.
         const slidWindow = [...seededWindow.slice(2), { content: "new turn", role: "user", seq: 50 }, { content: "answer", role: "assistant", seq: 51 }];
 
         fake.push(MESSAGES_REF, { key: "t1", limit: 50 }, slidWindow);

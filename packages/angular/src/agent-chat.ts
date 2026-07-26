@@ -1,6 +1,7 @@
 import type { Signal } from "@angular/core";
 import { computed, DestroyRef, inject, signal } from "@angular/core";
-import type { FunctionReference, LunoraClient } from "@lunora/client";
+import type { FunctionReference, LunoraClient, OptimisticMessage } from "@lunora/client";
+import { maxSeq, reconcileOptimistic } from "@lunora/client";
 
 import type { AgentChatMessage, AgentLiveEvent, AgentThreadRecord, AgentThreadStatus, AgentTokenDelta } from "./agent";
 import { resolveLunoraClient } from "./client";
@@ -114,98 +115,12 @@ interface AgentChatResult {
     streamingText: Signal<string>;
 }
 
-/** A local optimistic user turn awaiting server acknowledgement. */
-interface OptimisticMessage {
-    content: string;
-
-    /**
-     * Count of durable `user` rows present when this row was sent — the reconcile
-     * baseline. Only a durable user row at or after this position (clamped to the
-     * current count) can retire it, so a durable row that predates the send (e.g.
-     * an identical earlier prompt already acknowledged) can never satisfy it.
-     */
-    durableUserCountAtSend: number;
-    id: number;
-
-    /**
-     * The highest durable `seq` present when this row was sent — the age baseline
-     * for the windowed fallback. Once the durable history advances at least
-     * {@link RETIRE_AFTER_DURABLE_SEQ_ADVANCE} past it the row is retired even when
-     * a bounded `limit` evicted its acknowledging turn before the positional scan
-     * could match it; without this a saturated window would ghost the row forever.
-     */
-    maxDurableSeqAtSend: number;
-}
-
 /**
  * A placeholder stream reference so the stream primitive is called unconditionally
  * even when the caller supplies no token stream. Paired with `"skip"` args, it
  * never opens a stream.
  */
 const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
-
-/**
- * Retire a pending optimistic row once the durable history's highest `seq` has
- * advanced at least this far past the value present when the row was sent, even
- * though positional matching never claimed it. Under a bounded `limit` a new turn
- * evicts an older row as it lands, so the durable user-row COUNT can stay flat and
- * the positional scan never fires — the optimistic row would otherwise ghost for
- * the rest of the session. `seq` is globally monotonic, so it still climbs when the
- * count does not; one acknowledged turn persists at least a user row and an
- * assistant row, so a `>= 2` advance means the window has moved on by a full turn
- * and the pending row should be retired (a late drop, never a permanent duplicate).
- * This is the client-only mitigation; the robust fix is a server-echoed correlation
- * id (see plan 188).
- */
-const RETIRE_AFTER_DURABLE_SEQ_ADVANCE = 2;
-
-/**
- * Drop the optimistic user turns the durable history has now caught up on. A
- * pending row is retired when a durable `user` row at or after the count present
- * when it was sent (clamped to the current count, so a slid or shrunk window still
- * scans a valid range) carries the same content — one-to-one consumption, lowest
- * eligible index first, keeps repeated identical prompts sent back-to-back from
- * collapsing onto a single durable row. It is also retired when the durable
- * history's highest `seq` has advanced at least
- * {@link RETIRE_AFTER_DURABLE_SEQ_ADVANCE} past the value seen at send: the windowed
- * fallback for when a bounded `limit` evicted the acknowledging row before the
- * positional scan could see it (the user-row count stayed flat).
- *
- * Pure: it reads only the two arrays plus values captured on each pending row at
- * send time — no clock, no state mutation — so it is safe to run in render.
- */
-const reconcileOptimistic = (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<AgentChatMessage>): OptimisticMessage[] => {
-    const durableUserRows = durable.filter((message) => message.role === "user");
-
-    let maxDurableSeq = -1;
-
-    for (const message of durable) {
-        if (message.seq > maxDurableSeq) {
-            maxDurableSeq = message.seq;
-        }
-    }
-
-    const consumed = new Set<number>();
-
-    return optimistic.filter((pending) => {
-        for (let index = Math.min(pending.durableUserCountAtSend, durableUserRows.length); index < durableUserRows.length; index += 1) {
-            const row = durableUserRows[index];
-
-            if (row !== undefined && !consumed.has(index) && row.content === pending.content) {
-                consumed.add(index);
-
-                return false;
-            }
-        }
-
-        // Windowed fallback: the acknowledging row was evicted by the bounded
-        // `limit` (user-row count stayed flat), so the positional scan above can't
-        // see it. `seq` still advances even when the count does not, so keep the
-        // pending row only while the durable history has moved on by less than a
-        // full turn; once it has caught up, retire rather than ghost.
-        return maxDurableSeq - pending.maxDurableSeqAtSend < RETIRE_AFTER_DURABLE_SEQ_ADVANCE;
-    });
-};
 
 /**
  * A first-class agent chat surface: live durable history + in-flight token
@@ -268,13 +183,7 @@ const agentChat = (options: AgentChatOptions): AgentChatResult => {
         // Base synthetic seqs above the highest real durable seq (not just
         // `rows.length`, which can under-count when durable rows have gaps) so an
         // optimistic row's placeholder seq never collides with a real one.
-        let maxDurableSeq = -1;
-
-        for (const message of rows) {
-            if (message.seq > maxDurableSeq) {
-                maxDurableSeq = message.seq;
-            }
-        }
+        const maxDurableSeq = maxSeq(rows);
 
         return [
             ...rows,
@@ -310,19 +219,13 @@ const agentChat = (options: AgentChatOptions): AgentChatResult => {
 
         nextId += 1;
 
+        // Capture the reconcile baseline: the highest durable `seq` present now, so
+        // only a matching user row that lands AFTER this send retires the row.
+        const maxDurableSeqAtSend = maxSeq(durable());
+
         // Prune already-acknowledged optimistic rows as we add the new one, so the
         // list stays bounded without a history-dependent effect.
-        const durableUserCountAtSend = durable().filter((message) => message.role === "user").length;
-
-        let maxDurableSeqAtSend = -1;
-
-        for (const message of durable()) {
-            if (message.seq > maxDurableSeqAtSend) {
-                maxDurableSeqAtSend = message.seq;
-            }
-        }
-
-        optimistic.set([...reconcileOptimistic(optimistic(), durable()), { content: input, durableUserCountAtSend, id, maxDurableSeqAtSend }]);
+        optimistic.set([...reconcileOptimistic(optimistic(), durable()), { content: input, id, maxDurableSeqAtSend }]);
 
         try {
             await client.mutation(sendReference, { input, threadKey, ...sendArgs, ...arguments_ });

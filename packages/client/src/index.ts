@@ -1,3 +1,5 @@
+export type { OptimisticMessage, ReconcileDurableMessage } from "./agent-chat-reconcile";
+export { maxSeq, reconcileOptimistic, RETIRE_AFTER_DURABLE_SEQ_ADVANCE } from "./agent-chat-reconcile";
 export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-storage-persistence";
 export { createAsyncStoragePersistence } from "./async-storage-persistence";
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
