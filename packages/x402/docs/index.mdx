@@ -192,17 +192,45 @@ overspending. At least one bound must be set or the rail refuses to build:
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `maxPerCall`        | Hard ceiling on a single payment, in USD.                                                                                      |
 | `maxPerRun`         | Hard ceiling on cumulative spend across the wallet's lifetime (the ctx, for `ctx.x402`).                                       |
+| `allowedAssets`     | Which stablecoins may be paid, each with its own `decimals`. Defaults to canonical USDC per friendly network.                  |
 | `allowedRecipients` | Only these `payTo` addresses may be paid.                                                                                      |
 | `allowedNetworks`   | Only these networks may be paid on.                                                                                            |
 | `onPaymentRequired` | Async approval gate called with the selected requirement before signing — return `false` to refuse. Use for human-in-the-loop. |
-| `decimals`          | Stablecoin decimals for USD→atomic conversion (default 6, USDC).                                                               |
 
-Enforcement is fail-closed at every step: requirement selection filters the
-server's offers down to those within the per-call cap and on the allowlists
-(nothing survives → nothing is signed); a pre-signature guard enforces the
-stateful per-run cap and the confirmation gate; a post-signature recorder adds
-the committed amount to the running ledger. USD amounts are converted to
-atomic units digit-by-digit — no float drift can round a cap the wrong way.
+Only `maxPerCall`, `maxPerRun`, or `onPaymentRequired` count as a bound.
+`allowedRecipients` / `allowedNetworks` / `allowedAssets` narrow _where_ money can
+go but cap no amount, so a policy carrying only allowlists is refused.
+
+Enforcement is fail-closed at every step. Requirement selection drops every offer
+that isn't in an allowed asset, over the per-call cap, or off the allowlists —
+nothing survives, nothing is signed. A pre-signature guard then enforces the
+stateful per-run cap and the confirmation gate, _reserving_ the amount the moment
+the check passes so concurrent paid fetches can't each pass against the same
+running total; a failed signature releases the reservation. USD amounts are
+converted to atomic units digit-by-digit — no float drift can round a cap the
+wrong way.
+
+**Why the asset matters.** A 402 server names the token contract the payment
+transfers, and `amount` is in _that token's_ atomic base units. So a USD cap only
+means something once the asset is pinned: 10000 units is a cent of USDC, but the
+same 10000 units of an 8-decimal, six-figure-a-coin token is roughly $10. The
+policy therefore refuses any asset it wasn't told about, and scales the caps by
+that asset's declared `decimals` rather than assuming six:
+
+```ts
+policy: {
+  maxPerCall: "$0.10",
+  maxPerRun: "$5.00",
+  // Omit to accept canonical USDC on the networks with a friendly alias.
+  allowedAssets: [{ asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6, network: "base" }],
+}
+```
+
+Every entry must be dollar-pegged — the caps are USD and the per-run ledger sums
+atomic units, so a non-$1 asset mis-prices both. One run also stays locked to a
+single decimal precision: paying USDC on Base and USDC on Solana under one cap is
+fine (both 6-decimal), but mixing a 6- and an 18-decimal asset is refused rather
+than summed into a meaningless total.
 
 ## Safety notes
 

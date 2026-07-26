@@ -2,13 +2,33 @@ import type { PaymentRequirements } from "@x402/core/types";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SpendPolicy } from "../src/pay/policy";
-import { assertBoundedPolicy, buildPaymentGuard, buildSpendPolicy, createSpendState, releaseSpendOnFailure, usdToAtomic } from "../src/pay/policy";
+import {
+    assertBoundedPolicy,
+    buildPaymentGuard,
+    buildSpendPolicy,
+    createSpendState,
+    DEFAULT_ALLOWED_ASSETS,
+    releaseSpendOnFailure,
+    usdToAtomic,
+} from "../src/pay/policy";
+
+/**
+ * Real asset addresses, because the policy now gates on them. These must match
+ * {@link DEFAULT_ALLOWED_ASSETS} — a requirement naming anything else is refused.
+ */
+const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const USDC_POLYGON = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
+const USDC_SOLANA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const SOLANA_MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+
+/** Some other token contract on Base. Not a dollar stablecoin, and not in the default allowlist. */
+const OTHER_ASSET = "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c";
 
 /** A PaymentRequirements fixture (USDC on Base by default; `amount` is atomic base units). */
 const requirement = (overrides: Partial<PaymentRequirements> = {}): PaymentRequirements => {
     return {
         amount: "10000",
-        asset: "0xUSDC",
+        asset: USDC_BASE,
         extra: {},
         maxTimeoutSeconds: 60,
         network: "eip155:8453",
@@ -68,7 +88,9 @@ describe("buildSpendPolicy", () => {
 
     it("filters by network allowlist (friendly names resolve to CAIP-2)", () => {
         const policy = buildSpendPolicy({ allowedNetworks: ["base"] });
-        const kept = policy(2, [requirement({ network: "eip155:8453" }), requirement({ network: "eip155:1" })]);
+        // Both are allowed *assets* (USDC on Base, USDC on Polygon), so the network
+        // allowlist is what does the filtering here rather than the asset gate.
+        const kept = policy(2, [requirement(), requirement({ asset: USDC_POLYGON, network: "eip155:137" })]);
 
         expect(kept.map((r) => r.network)).toEqual(["eip155:8453"]);
     });
@@ -84,7 +106,132 @@ describe("buildSpendPolicy", () => {
     });
 });
 
+describe("buildSpendPolicy — asset gate (X402-01)", () => {
+    it("refuses a requirement whose asset is not on the allowlist, even under the per-call cap", () => {
+        // The exploit: the server names the token contract the scheme will sign a
+        // transfer against. Against a wrapped-BTC-style token (8 decimals, ~$100k a coin)
+        // 10000 atomic units is ~$0.01 *of USDC* but ~$10 of that token — it slips under a
+        // $0.01 cap priced at an assumed 6 decimals while moving a thousand times the
+        // authorised value. Whatever the wallet happens to hold, the policy must pin which
+        // asset the cap is denominated in.
+        const policy = buildSpendPolicy({ maxPerCall: "$0.01" });
+
+        expect(policy(2, [requirement({ amount: "10000", asset: OTHER_ASSET })])).toEqual([]);
+    });
+
+    it("keeps a known-stablecoin requirement under the cap", () => {
+        const policy = buildSpendPolicy({ maxPerCall: "$0.01" });
+
+        expect(policy(2, [requirement({ amount: "10000" })])).toHaveLength(1);
+    });
+
+    it("refuses a known asset offered on the wrong network", () => {
+        // Base USDC's address on Polygon is not Polygon USDC — the pair is what's allowed.
+        const policy = buildSpendPolicy({ maxPerCall: "$1" });
+
+        expect(policy(2, [requirement({ asset: USDC_BASE, network: "eip155:137" })])).toEqual([]);
+    });
+
+    it("matches EVM asset addresses case-insensitively but SVM mints exactly", () => {
+        const policy = buildSpendPolicy({ maxPerCall: "$1" });
+
+        expect(policy(2, [requirement({ asset: USDC_BASE.toUpperCase().replace("0X", "0x") })])).toHaveLength(1);
+        expect(policy(2, [requirement({ asset: USDC_SOLANA, network: SOLANA_MAINNET })])).toHaveLength(1);
+        // Base58 is case-sensitive: a differently-cased mint is a different account.
+        expect(policy(2, [requirement({ asset: USDC_SOLANA.toLowerCase(), network: SOLANA_MAINNET })])).toEqual([]);
+    });
+
+    it("scales the per-call cap by the matched asset's decimals, not an assumed 6", () => {
+        const policy = buildSpendPolicy({
+            allowedAssets: [{ asset: OTHER_ASSET, decimals: 18, network: "base" }],
+            maxPerCall: "$1",
+        });
+
+        // $1 of an 18-decimal asset is 1e18 atomic units. Under an assumed 6 decimals the
+        // cap would have been 1e6 and every one of these would have been refused.
+        expect(policy(2, [requirement({ amount: (10n ** 18n).toString(), asset: OTHER_ASSET })])).toHaveLength(1);
+        expect(policy(2, [requirement({ amount: (10n ** 18n + 1n).toString(), asset: OTHER_ASSET })])).toEqual([]);
+    });
+
+    it("defaults to canonical USDC per friendly network", () => {
+        expect(DEFAULT_ALLOWED_ASSETS.every((asset) => asset.decimals === 6)).toBe(true);
+        expect(DEFAULT_ALLOWED_ASSETS.map((asset) => asset.network)).toContain("base");
+    });
+
+    it("rejects a policy that cannot express a real asset gate", () => {
+        expect(() => buildSpendPolicy({ allowedAssets: [], maxPerCall: "$1" })).toThrow(/allowedAssets` is empty/);
+        expect(() => buildSpendPolicy({ allowedAssets: [{ asset: USDC_BASE, decimals: -1, network: "base" }] })).toThrow(/non-negative integer/);
+    });
+
+    it("refuses the removed policy-wide `decimals` with a migration message", () => {
+        // Keeping it silently honoured would leave the mis-pricing hole open behind a
+        // field that reads like a formatting detail.
+        expect(() => buildSpendPolicy({ decimals: 18, maxPerCall: "$1" })).toThrow(/`decimals` is no longer supported/);
+        expect(() => buildPaymentGuard({ decimals: 18, maxPerRun: "$1" }, createSpendState())).toThrow(/`decimals` is no longer supported/);
+    });
+});
+
 describe("buildPaymentGuard", () => {
+    it("aborts a payment in an asset outside the allowlist (X402-01, defence in depth)", async () => {
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ maxPerRun: "$1" }, state);
+
+        const result = await guard(guardContext(requirement({ amount: "10000", asset: OTHER_ASSET })));
+
+        expect(result).toEqual({ abort: true, reason: expect.stringMatching(/not in this wallet's allowed assets/) });
+        expect(state.spentAtomic).toBe(0n);
+    });
+
+    it("sums same-decimals assets across networks into one per-run ledger", async () => {
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ maxPerRun: "$0.02" }, state);
+
+        // USDC on Base and USDC on Solana are both 6-decimal and dollar-pegged, so their
+        // atomic amounts are directly comparable — a multi-network agent isn't penalised.
+        await expect(guard(guardContext(requirement({ amount: "15000" })))).resolves.toBeUndefined();
+        await expect(guard(guardContext(requirement({ amount: "4000", asset: USDC_SOLANA, network: SOLANA_MAINNET })))).resolves.toBeUndefined();
+        expect(state.spentAtomic).toBe(19_000n);
+
+        const third = await guard(guardContext(requirement({ amount: "2000", asset: USDC_SOLANA, network: SOLANA_MAINNET })));
+
+        expect(third).toEqual({ abort: true, reason: expect.stringMatching(/per-run cap/) });
+    });
+
+    it("refuses to mix asset precisions under one per-run cap", async () => {
+        const state = createSpendState();
+        const guard = buildPaymentGuard(
+            {
+                allowedAssets: [
+                    { asset: USDC_BASE, decimals: 6, network: "base" },
+                    { asset: OTHER_ASSET, decimals: 18, network: "base" },
+                ],
+                maxPerRun: "$100",
+            },
+            state,
+        );
+
+        await expect(guard(guardContext(requirement({ amount: "10000" })))).resolves.toBeUndefined();
+
+        // 18-decimal units in the same scalar ledger as 6-decimal units would make the
+        // running total meaningless, so the run stays locked to the precision it started in.
+        const mixed = await guard(guardContext(requirement({ amount: (10n ** 18n).toString(), asset: OTHER_ASSET })));
+
+        expect(mixed).toEqual({ abort: true, reason: expect.stringMatching(/cannot mix asset precisions/) });
+        expect(state.spentAtomic).toBe(10_000n);
+    });
+
+    it("scales the per-run cap by the run's asset decimals", async () => {
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ allowedAssets: [{ asset: OTHER_ASSET, decimals: 18, network: "base" }], maxPerRun: "$2" }, state);
+
+        await expect(guard(guardContext(requirement({ amount: (10n ** 18n).toString(), asset: OTHER_ASSET })))).resolves.toBeUndefined();
+        expect(state.spentAtomic).toBe(10n ** 18n);
+
+        const over = await guard(guardContext(requirement({ amount: (10n ** 18n + 1n).toString(), asset: OTHER_ASSET })));
+
+        expect(over).toEqual({ abort: true, reason: expect.stringMatching(/per-run cap/) });
+    });
+
     it("reserves atomically on pass, then blocks a subsequent payment that would exceed the per-run cap", async () => {
         const state = createSpendState();
         const guard = buildPaymentGuard({ maxPerRun: "$0.02" }, state);
