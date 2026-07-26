@@ -49,6 +49,33 @@
  */
 
 export { passkey } from "@better-auth/passkey";
+
+/**
+ * SCIM 2.0 **server** — directory-driven user provisioning, so an enterprise IdP
+ * (Okta, Entra) can create/update/deactivate users without anyone signing in.
+ *
+ * `@better-auth/scim` is **Users-only**: it serves `/Users`, not `/Groups`, so
+ * group→role sync is not covered by adding this plugin. Two of its behaviours need
+ * companion plugins — `active: false` deactivation needs `admin`, and org-scoped
+ * provisioning needs `organization`.
+ */
+export { scim } from "@better-auth/scim";
+
+/**
+ * Enterprise SSO — OIDC / OAuth2 / SAML 2.0 providers registered per email domain
+ * or per organization, with `provisionUser` / `organizationProvisioning` hooks for
+ * just-in-time account creation.
+ *
+ * **Bundle note.** This module statically imports `samlify` (and `node:crypto`'s
+ * `X509Certificate`) for its SAML path, so those land in the bundle even when only
+ * the OIDC mode is configured. The module does load and construct in workerd —
+ * `__tests__/workerd/enterprise-auth.workerd.test.ts` is the standing proof — but
+ * the SAML *code path* (ACS assertion verify, pure-JS RSA) has not been measured
+ * against a Worker CPU budget here. Treat OIDC/OAuth2 as the supported mode and
+ * SAML as unverified until that spike exists; upstream better-auth#10343 tracks a
+ * pluggable remote executor as the sanctioned edge path for SAML.
+ */
+export { sso } from "@better-auth/sso";
 // `captcha` (Cloudflare Turnstile, reCAPTCHA, hCaptcha, captchafox) has no
 // dedicated `better-auth/plugins/<name>` subpath in better-auth's exports map —
 // it ships only via the `better-auth/plugins` barrel, so it is re-exported from

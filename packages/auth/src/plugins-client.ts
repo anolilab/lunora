@@ -33,6 +33,14 @@
 // Passkey/WebAuthn ships its client half under `@better-auth/passkey/client`,
 // mirroring the server `passkey` re-export from `@lunora/auth/plugins`.
 export { passkeyClient } from "@better-auth/passkey/client";
+// SCIM's client half is for *managing* provisioning from your own admin UI (the
+// IdV drives the `/Users` endpoints server-to-server with a bearer token, not
+// through this client).
+export { scimClient } from "@better-auth/scim/client";
+// `ssoClient` adds `authClient.signIn.sso({ email | domain | providerId })` — the
+// domain-based provider lookup is the whole point of enterprise SSO, and it is
+// unavailable without registering this half.
+export { ssoClient } from "@better-auth/sso/client";
 export { adminClient } from "better-auth/client/plugins";
 export { anonymousClient } from "better-auth/client/plugins";
 export { customSessionClient } from "better-auth/client/plugins";

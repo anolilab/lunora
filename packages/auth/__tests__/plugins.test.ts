@@ -14,7 +14,9 @@ import {
     oidcProvider,
     organization,
     phoneNumber,
+    scim,
     siwe,
+    sso,
     twoFactor,
     username,
 } from "../src/plugins";
@@ -33,7 +35,9 @@ const plugins = {
     oidcProvider,
     organization,
     phoneNumber,
+    scim,
     siwe,
+    sso,
     twoFactor,
     username,
 };
@@ -60,7 +64,9 @@ describe("@lunora/auth/plugins", () => {
         "oidcProvider",
         "organization",
         "phoneNumber",
+        "scim",
         "siwe",
+        "sso",
         "twoFactor",
         "username",
     ] as const;

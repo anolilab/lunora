@@ -4,11 +4,69 @@
 - **Priority**: P2
 - **Effort**: M–L · **Risk**: MED (LOW for the OIDC-SSO + SCIM-Users half;
   MED–HIGH for SAML-on-workerd — see Phase 0)
-- **Status**: TODO
+- **Status**: **Phase 1a SHIPPED** (OIDC SSO + SCIM Users) — Phase 1b (SAML) and the
+  real-IdP exit criterion still open. See "Progress" below.
 - **Baseline**: `70331e9b` (2026-07-21)
 - **Goal**: make enterprise SSO and SCIM directory provisioning first-class in
   `@lunora/auth`, closing the enterprise-auth gap vs Supabase / Firebase Identity
   Platform / WorkOS-style offerings.
+
+## Progress (2026-07-26, branch `feat/166-sso-scim`)
+
+**A plan premise was wrong and is corrected here.** The plan split risk as "OIDC
+edge-safe, SAML risky", but that split does not exist at the module level:
+`@better-auth/sso`'s `dist/index.mjs` **statically** imports `samlify` (which
+`require`s `fs`, `crypto`, `zlib`) and `node:crypto`'s `X509Certificate`. Configuring
+only the OIDC mode still loads the whole SAML dependency tree, so the Phase-0 load
+question gated _both_ halves, not just SAML.
+
+That question is now answered **GO**: a worker importing and constructing both
+plugins boots in real workerd. The standing proof is a gated workerd suite
+(`LUNORA_WORKERD_TESTS=1`, mirroring the x402/do pattern) at
+`packages/auth/__tests__/workerd/enterprise-auth.workerd.test.ts`.
+
+Shipped:
+
+- `@better-auth/scim` + `@better-auth/sso` at **exact 1.6.23**, joining the existing
+  `catalog:auth` lockstep (both peer on `better-auth ^1.6.23`; a caret would float
+  them to 1.6.24+, which the comment there explains breaks the expo client generics).
+  No `minimumReleaseAgeExclude` entry needed — 1.6.23 predates the window.
+- `sso` + `scim` on the curated server surface, `ssoClient` + `scimClient` on the
+  client surface, each carrying the caveat that bit during implementation.
+- Behaviour tests (`__tests__/enterprise-auth.behaviour.test.ts`, real better-auth
+  against `memoryAdapter`, only the external IdP stubbed at the fetch boundary):
+  `authTables` derivation, OIDC provider registration, **domain→provider
+  resolution**, unknown-domain refusal, and SCIM `PUT`/`PATCH`/`DELETE` routing.
+- Docs section covering setup plus three things that are not obvious:
+  registration makes an **outbound discovery call**; `trustedOrigins` is an **SSRF
+  gate** (public-routability first, then allowlist — `discovery_untrusted_origin`
+  otherwise); and `scimProvider.scimToken` is **credential material at rest in D1**.
+
+Verified against live code, replacing plan guesses:
+
+- `authTables` auto-derives `ssoProvider` (issuer, oidcConfig, samlConfig, userId,
+  providerId, organizationId, domain) and `scimProvider` (providerId, scimToken,
+  organizationId) — the plan's claim holds.
+- The dispatch chain passes SCIM's non-GET/POST verbs: `dispatchAuth`
+  (`packages/runtime/src/create-worker.ts`) runs ahead of routing with no method
+  gate, and `handleAuthRequest` hands the whole `Request` to `auth.handler`. Only the
+  shared 1 MiB body cap applies.
+
+Still open (do not read this plan as finished):
+
+- **Phase 1b SAML.** Module loads; the ACS _code path_ (pure-JS RSA assertion verify)
+  is unmeasured against a Worker CPU budget. Documented as unverified rather than
+  half-wired, with better-auth#10343 / PR #10347 named as the sanctioned edge path.
+- **Real-IdP exit criterion.** No Okta/Entra tenant was exercised — the IdP is
+  stubbed at the fetch boundary. The token exchange and userinfo mapping are
+  therefore unproven against a real provider.
+- **`lunoraAuthAdapter` compat.** The behaviour tests run on `memoryAdapter`. The
+  no-join CRUD adapter was _not_ driven against the sso/scim endpoints, so that
+  Phase-0 item stands.
+- **SSO identity → `ctx.auth`.** SSO sign-in issues a standard better-auth session,
+  so session resolution needs no new code — but that path was not exercised
+  end-to-end, so treat it as inherited-by-construction, not tested.
+- **Phase 2 SCIM Groups.** Untouched; `@better-auth/scim` is Users-only.
 
 > **Risk correction (Fable 5 deep-analysis, 2026-07-21).** The original "LOW —
 > mostly wiring" rating only holds for the **OIDC-based SSO + SCIM-Users** path.
@@ -52,25 +110,35 @@ unknown:
 - [x] Confirm plugins + licensing + edge-safety of the non-SAML path.
       _Done 2026-07-21 (Fable 5): `@better-auth/sso` + `@better-auth/scim`, MIT,
       v1.6.23; OIDC/SCIM edge-safe, SAML is the risk._
-- [ ] **Workerd SAML spike (blocking).** Import `@better-auth/sso`, run a SAML ACS
-      verify under `wrangler dev` with `nodejs_compat` (signed + encrypted
-      assertion), measure CPU ms (`node-rsa` is pure-JS RSA). GO/NO-GO on
-      SAML-on-workerd.
-- [ ] Track better-auth#10343 / PR #10347 (pluggable remote SAML executor) as the
-      sanctioned edge path; decide the fallback (OIDC façade in front of the IdP)
-      if it stays unmerged.
-- [ ] Adapter compat: run sso/scim endpoints against `lunoraAuthAdapter`'s no-join
-      CRUD; confirm `authTables` auto-picks up `ssoProvider` / `scimProvider`.
-- [ ] Confirm the generated worker dispatch passes PUT/PATCH/DELETE through
-      `handleAuthRequest` (SCIM requires them).
+- [x] **Workerd LOAD spike — GO.** `@better-auth/sso` + `@better-auth/scim` import
+      and construct in real workerd (`nodejs_compat`), samlify tree and
+      `X509Certificate` included. Standing suite:
+      `packages/auth/__tests__/workerd/enterprise-auth.workerd.test.ts`.
+- [ ] **Workerd SAML ACS spike (still blocking Phase 1b).** Run a real ACS verify
+      (signed + encrypted assertion) and measure CPU ms — `node-rsa` is pure-JS RSA.
+      Loading is proven; _executing_ the SAML path is not.
+- [x] Track better-auth#10343 / PR #10347 (pluggable remote SAML executor) as the
+      sanctioned edge path — named in both the `sso` re-export JSDoc and the docs
+      page. Fallback if it stays unmerged: OIDC is the supported mode, which every
+      major IdP offers, so the façade is only needed for SAML-only tenants.
+- [x] `authTables` auto-picks up `ssoProvider` / `scimProvider` — asserted in
+      `__tests__/enterprise-auth.behaviour.test.ts`.
+- [ ] Adapter compat: the endpoints were driven against `memoryAdapter`, NOT
+      `lunoraAuthAdapter`'s no-join CRUD. Still open.
+- [x] Generated worker dispatch passes PUT/PATCH/DELETE: `dispatchAuth`
+      (`runtime/src/create-worker.ts`) runs ahead of routing with no method gate and
+      `handleAuthRequest` forwards the whole `Request`. Pinned by a test.
 
 ## Phase 1a — OIDC-based enterprise SSO + SCIM Users (LOW, do first)
 
-- [ ] Add `@better-auth/sso` + `@better-auth/scim` to `catalog:auth` (lockstep with
-      `better-auth ^1.6.23`); export `ssoClient` in `plugins-client.ts`.
-- [ ] Wire `sso` (OIDC/OAuth2 mode) + `scim` into the curated plugin surface;
-      D1 tables auto-surface via `authTables`.
-- [ ] Map SSO identity → `ctx.auth` used by RLS; SCIM create/replace/patch/delete + `active:false` deactivation (with the `admin` plugin) → identity lifecycle.
+- [x] Added to `catalog:auth` at **exact 1.6.23** (the catalog is exact-pinned, not
+      caret); `ssoClient` + `scimClient` exported from `plugins-client.ts`.
+- [x] `sso` (OIDC/OAuth2 mode) + `scim` wired into the curated plugin surface; D1
+      tables auto-surface via `authTables`.
+- [~] SSO identity → `ctx.auth`: inherited by construction (SSO sign-in issues a
+  standard better-auth session, so session resolution is unchanged) but not
+  exercised end-to-end. SCIM create/replace/patch/delete routing is tested;
+  `active:false` deactivation needs the `admin` plugin, documented not tested.
 
 ## Phase 1b — SAML (gated on the Phase-0 GO)
 
@@ -88,9 +156,10 @@ unknown:
 
 - [ ] OIDC-SSO login + SCIM Users provisioning work end-to-end against a real IdP
       (Okta/Entra test tenant).
-- [ ] SAML either works on workerd (spike GREEN) or is explicitly deferred with the
-      remote-executor path documented — not silently half-wired.
-- [ ] Docs + example; tests over the identity map and SCIM lifecycle.
+- [x] SAML explicitly deferred with the remote-executor path documented — not
+      silently half-wired (docs say OIDC is the supported mode).
+- [x] Docs + tests over the schema derivation, the domain→provider map, and SCIM
+      request routing. (A runnable example app is not included.)
 
 ## Non-goals
 

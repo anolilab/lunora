@@ -125,6 +125,99 @@ Callbacks are served under `/api/auth/callback/<provider>` by
 `handleAuthRequest`. For providers beyond the built-in list, add
 `genericOAuth({ config: [...] })` to `plugins`.
 
+## Enterprise SSO and SCIM provisioning
+
+Two curated plugins cover what enterprise buyers ask for — sign-in through the
+customer's own identity provider, and user lifecycle driven by their directory:
+
+```ts
+import { createAuth, lunoraD1Adapter } from "@lunora/auth";
+import { admin, organization, scim, sso } from "@lunora/auth/plugins";
+
+export const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    database: lunoraD1Adapter(env.DB),
+    // The IdP's origin must be trusted before a provider can be registered — see below.
+    trustedOrigins: ["https://acme.okta.com"],
+    plugins: [sso(), scim(), admin(), organization()],
+});
+```
+
+Both tables come for free: `authTables` derives `ssoProvider` and `scimProvider`
+from the plugin list, so `lunora migrate` picks them up with no schema edits.
+
+### SSO — one provider per email domain
+
+The plugin's real affordance is domain routing: a user types a work email and
+lands at their own IdP without picking anything from a list. Register a provider
+once per customer, keyed by their domain, then let the client resolve it:
+
+```ts
+// Server — as a signed-in admin of the tenant.
+await auth.api.registerSSOProvider({
+    body: {
+        providerId: "acme-oidc",
+        issuer: "https://acme.okta.com",
+        domain: "acme.com",
+        oidcConfig: { clientId: env.ACME_CLIENT_ID, clientSecret: env.ACME_CLIENT_SECRET, scopes: ["openid", "email", "profile"] },
+    },
+    headers,
+});
+
+// Client — `ssoClient` from `@lunora/auth/plugins/client`.
+await authClient.signIn.sso({ email: "someone@acme.com", callbackURL: "/dashboard" });
+```
+
+Two things to know before wiring this up:
+
+- **Registration makes an outbound call.** better-auth fetches the issuer's OIDC
+  discovery document during `registerSSOProvider` — unconditionally, deriving the
+  URL from `issuer` when you don't pass `discoveryEndpoint`. In a Worker that is a
+  subrequest at registration time, so a firewalled IdP fails here, not at sign-in.
+- **`trustedOrigins` is an SSRF gate, not boilerplate.** Discovery URLs are checked
+  against public-routability first (loopback, RFC 1918, link-local, and cloud
+  metadata hosts like `169.254.169.254` are refused), then against your
+  `trustedOrigins`. A self-hosted IdP on a private network needs its origin listed
+  or registration fails with `discovery_untrusted_origin`.
+
+Use `provisionUser` / `organizationProvisioning` on `sso()` to shape the
+just-in-time account (roles, org membership) the first time someone signs in.
+
+### SCIM — directory-driven provisioning
+
+`scim()` serves SCIM 2.0 at `/api/auth/scim/v2/Users`, so an IdP can create,
+update, and deactivate accounts without anyone signing in. Generate a bearer token
+per connection (`/api/auth/scim/generate-token`) and paste it into the IdP's
+provisioning config.
+
+Boundaries worth knowing up front:
+
+- **Users only.** There is no `/Groups` endpoint, so directory _group_ → role sync
+  is not covered. Map roles yourself (via `organization`) or defer it.
+- **Deactivation needs `admin`.** A SCIM `PATCH` setting `active: false` maps onto
+  the `admin` plugin's ban mechanics; without `admin` loaded, deactivation has
+  nothing to act on. Org-scoped provisioning likewise needs `organization`.
+- **The token lives in D1.** `scimProvider.scimToken` is credential material at
+  rest in your database — treat it like any other secret when granting D1 access,
+  and rotate by regenerating the connection token.
+
+The IdP drives these endpoints with `PUT`, `PATCH`, and `DELETE`. Lunora's
+dispatch is method-agnostic and runs auth ahead of function routing, so those pass
+straight through; only the shared 1 MiB request-body cap applies.
+
+### SAML status
+
+`sso()` supports SAML 2.0 as well, and the module loads in workerd — the
+`LUNORA_WORKERD_TESTS=1` suite proves the plugin (with its `samlify` dependency
+tree) boots and constructs in the real runtime. What is **not** yet measured here
+is the SAML _code path_: assertion verification runs pure-JS RSA, and upstream
+[better-auth#10343](https://github.com/better-auth/better-auth/issues/10343) flags
+ACS as a poor fit for a Worker's CPU budget, proposing a pluggable remote executor.
+
+Treat **OIDC/OAuth2 as the supported mode** and SAML as unverified until that
+measurement exists. Note that the `samlify` import is static, so its bundle cost
+applies whether or not you configure SAML.
+
 ## Background tasks (waitUntil)
 
 better-auth runs some work _after_ sending the response — most importantly the

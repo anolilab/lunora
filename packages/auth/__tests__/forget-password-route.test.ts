@@ -94,6 +94,8 @@ describe("auth — /api/auth/forget-password HTTP route", () => {
     });
 
     it("sign-up succeeds and the password-reset request returns 200", async () => {
+        expect.assertions(2);
+
         const auth = buildAuth();
 
         const signup = await handleAuthRequest(auth, jsonRequest("/api/auth/sign-up/email", { email: EMAIL, name: EMAIL, password: PASSWORD }));
@@ -111,6 +113,8 @@ describe("auth — /api/auth/forget-password HTTP route", () => {
     });
 
     it("the removed `/forget-password` path now 404s (guards the rename)", async () => {
+        expect.assertions(1);
+
         const auth = buildAuth();
 
         const legacy = await handleAuthRequest(auth, jsonRequest("/api/auth/forget-password", { email: EMAIL }));

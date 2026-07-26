@@ -1,0 +1,14 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-pool-workers` to boot
+// the test Worker in a real workerd runtime.
+//
+// IMPORTANT: this file is not deployed. No D1 binding is declared — this suite is
+// about whether the enterprise-auth plugin *modules* load and construct inside
+// workerd, which happens before any database call. Endpoint behaviour against D1
+// is covered by the Node suites.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-auth-enterprise-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+}

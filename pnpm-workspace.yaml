@@ -449,8 +449,15 @@ catalogs:
     # so re-test with `pnpm --filter "@lunora/react-native..." run build` first.
     # Adopting >=1.6.24 means updating the react-native auth bridge, so it is a
     # migration rather than a dep bump.
+    #
+    # `@better-auth/scim` and `@better-auth/sso` join that lockstep: both peer on
+    # `better-auth ^1.6.23`, so they are exact-pinned here for the same reason —
+    # a caret would float them to 1.6.24+, dragging a `better-auth` the expo
+    # client-plugin generics can't take.
     "@better-auth/expo": 1.6.23
     "@better-auth/passkey": 1.6.23
+    "@better-auth/scim": 1.6.23
+    "@better-auth/sso": 1.6.23
     "better-auth": 1.6.23
     jose: ^6.2.4
   drizzle:
