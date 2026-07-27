@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "aliasOwnership" | "metricPoints" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alertRuleState" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "aliasOwnership" | "metricPoints" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alertRuleState" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents" | "rateLimits";
 
 /**
  * The tables **this app declared** — every {@link TableName} except those an add-on
@@ -50,7 +50,7 @@ export type TableName = "cells" | "organizations" | "members" | "projects" | "de
  * const EXPORTED: readonly AppTableName[] = ["nodes", "tagColors"];
  * ```
  */
-export type AppTableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "aliasOwnership" | "metricPoints" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alertRuleState" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type AppTableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "aliasOwnership" | "metricPoints" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alertRuleState" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents" | "rateLimits";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -509,6 +509,15 @@ export interface Doc_usageEvents {
     reportedToProvider: boolean;
 }
 
+export interface Doc_rateLimits {
+    _id: Id<"rateLimits">;
+    _creationTime: number;
+    key: string;
+    prev?: number;
+    ts: number;
+    value: number;
+}
+
 export interface DataModel {
     cells: Doc_cells;
     organizations: Doc_organizations;
@@ -542,6 +551,7 @@ export interface DataModel {
     paymentSessions: Doc_paymentSessions;
     subscriptions: Doc_subscriptions;
     usageEvents: Doc_usageEvents;
+    rateLimits: Doc_rateLimits;
 }
 
 export type Doc<T extends keyof DataModel> = DataModel[T];
@@ -583,6 +593,7 @@ export interface IndexNamesByTable {
     paymentSessions: "by_reference" | "by_provider_session";
     subscriptions: "by_reference" | "by_provider_subscription";
     usageEvents: "by_reference_feature" | "by_idempotency";
+    rateLimits: "by_key";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
@@ -621,6 +632,7 @@ export interface SearchIndexNamesByTable {
     paymentSessions: never;
     subscriptions: never;
     usageEvents: never;
+    rateLimits: never;
 }
 
 export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
@@ -659,6 +671,7 @@ export interface RankIndexNamesByTable {
     paymentSessions: never;
     subscriptions: never;
     usageEvents: never;
+    rateLimits: never;
 }
 
 export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
@@ -697,6 +710,7 @@ export interface GeoIndexNamesByTable {
     paymentSessions: never;
     subscriptions: never;
     usageEvents: never;
+    rateLimits: never;
 }
 
 export type GeoIndexName<T extends keyof DataModel> = GeoIndexNamesByTable[T];
@@ -1159,6 +1173,15 @@ export interface Insert_usageEvents {
     reportedToProvider: boolean;
 }
 
+export interface Insert_rateLimits {
+    _id?: Id<"rateLimits">;
+    _creationTime?: number;
+    key: string;
+    prev?: number;
+    ts: number;
+    value: number;
+}
+
 /** Per-table insert shape, accepted by `ctx.db.<table>.insert(...)`. */
 export interface InsertModel {
     cells: Insert_cells;
@@ -1193,6 +1216,7 @@ export interface InsertModel {
     paymentSessions: Insert_paymentSessions;
     subscriptions: Insert_subscriptions;
     usageEvents: Insert_usageEvents;
+    rateLimits: Insert_rateLimits;
 }
 
 export type Insert<T extends keyof DataModel> = InsertModel[T];
@@ -1246,6 +1270,7 @@ export interface Relations {
     paymentSessions: {};
     subscriptions: {};
     usageEvents: {};
+    rateLimits: {};
 }
 
 /** The `with` argument for table `T` — see `@lunora/server/data-model`. */

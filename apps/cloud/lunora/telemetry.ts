@@ -1,4 +1,5 @@
 import { fingerprintError } from "@lunora/fingerprint";
+import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { AlertChannel, AlertDelivery as AlertDeliveryBase, FiringRule, MetricObservation, MetricRule, MetricTarget } from "../src/telemetry/alerts";
@@ -7,6 +8,7 @@ import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server.js";
 import { authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 /**
  * Telemetry ingest for the Cloud Observability pipeline (superlog model). The
@@ -271,6 +273,7 @@ const upsertIncident = async (
  * under the unique `(org, hash)` index).
  */
 export const ingest = mutation
+    .use(dbRateLimit(RATE_LIMITS, "ingest", { key: callerKey }))
     .input({
         deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
         deploymentId: v.optional(v.id("deployments")),
@@ -300,7 +303,7 @@ export const ingest = mutation
                 throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_OBSERVATIONS)} observations)`);
             }
 
-            const now = context.now;
+            const { now } = context;
 
             // Persist every span as an observation (Traces). Additive to the error
             // fold below — the same OTLP payload feeds both. Best-effort per row so
@@ -319,34 +322,38 @@ export const ingest = mutation
             // Count-crossing rules (issue/incident) evaluated per upserted group below.
             const rules: FiringRule[] = enabledRules
                 .filter((rule) => COUNT_TARGETS.has(rule.target))
-                .map((rule) => ({
-                    channel: rule.channel,
-                    destination: rule.destination,
-                    name: rule.name,
-                    ruleId: rule._id,
-                    target: rule.target as "incident" | "issue",
-                    threshold: rule.threshold,
-                }));
+                .map((rule) => {
+                    return {
+                        channel: rule.channel,
+                        destination: rule.destination,
+                        name: rule.name,
+                        ruleId: rule._id,
+                        target: rule.target as "incident" | "issue",
+                        threshold: rule.threshold,
+                    };
+                });
             // Metric-window rules (error_rate/latency_p95/llm_cost) evaluated once
             // over the freshly-ingested observation window, after the loop.
             const metricRules: MetricRule[] = enabledRules
                 .filter((rule): rule is AlertRuleRow & { target: MetricTarget } => METRIC_TARGETS.has(rule.target as MetricTarget))
-                .map((rule) => ({
-                    channel: rule.channel,
-                    comparator: rule.comparator ?? "gt",
-                    destination: rule.destination,
-                    functionPath: rule.functionPath,
-                    name: rule.name,
-                    ruleId: rule._id,
-                    target: rule.target,
-                    threshold: rule.threshold,
-                    windowMinutes: rule.windowMinutes ?? 60,
-                }));
+                .map((rule) => {
+                    return {
+                        channel: rule.channel,
+                        comparator: rule.comparator ?? "gt",
+                        destination: rule.destination,
+                        functionPath: rule.functionPath,
+                        name: rule.name,
+                        ruleId: rule._id,
+                        target: rule.target,
+                        threshold: rule.threshold,
+                        windowMinutes: rule.windowMinutes ?? 60,
+                    };
+                });
             const firedAlerts: AlertDelivery[] = [];
 
             // The typed ctx.db insert, adapted to the shared firing loop's structural
             // row (cast is the same idiom the rulePage read above uses).
-            const insertAlert = (row: Record<string, unknown>): Promise<Id<"alerts">> => context.db.insert("alerts", row as never);
+            const insertAlert = (row: Record<string, unknown>): Promise<Id<"alerts">> => context.db.insert("alerts", row);
 
             // Fire every enabled rule this source's count just crossed, via the shared
             // `fireCrossedRules` — the same firing loop + `alerts` row shape the uptime
@@ -432,7 +439,7 @@ export const ingest = mutation
                                       lastEvaluatedAt: now,
                                       lastValue: value,
                                       organizationId: args.organizationId,
-                                      ruleId: ruleId as Id<"alertRules">,
+                                      ruleId,
                                       updatedAt: now,
                                   }));
                         },
@@ -480,7 +487,7 @@ export const pruneObservations = internalMutation.mutation(async ({ ctx: context
 /**
  * Resolve the org that owns a deploy key, for the standard OTLP ingest endpoints
  * (`/v1/traces`, `/v1/logs`) — a stock OpenTelemetry exporter sends only an
- * `Authorization: Bearer <key>` header, so the route resolves the org from the
+ * `Authorization: Bearer &lt;key>` header, so the route resolves the org from the
  * key before delegating to the deploy-key-authorized ingest. SYSTEM only.
  */
 export const orgForDeployKey = internalQuery

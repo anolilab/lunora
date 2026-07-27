@@ -1,9 +1,11 @@
+import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota } from "./entitlements";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 interface MemberRow {
     _id: Id<"members">;
@@ -28,6 +30,7 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 
 /** Add a member to an organization (owners/admins only). Idempotent per user. */
 export const add = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({
         organizationId: v.id("organizations"),
         role,
@@ -60,6 +63,7 @@ export const add = mutation
 
 /** Remove a member (owners/admins only). */
 export const remove = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({ id: v.id("members"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -73,6 +77,7 @@ export const remove = mutation
  * an org must always have one.
  */
 export const setRole = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({
         id: v.id("members"),
         organizationId: v.id("organizations"),

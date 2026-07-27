@@ -820,4 +820,19 @@ export default defineSchema({
         .global()
         .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
         .index("by_reference_feature", ["referenceId", "featureId"]),
+
+    // Token-bucket state for the RPC rate limiter (`lunora/guards.ts`), one row
+    // per (bucket, caller). Deliberately the only NON-`.global()` table in this
+    // schema: it lives in the control-plane Durable Object's SQLite rather than
+    // D1. Two reasons — `createDbStore` does a read-then-write per call, which is
+    // atomic only under the DO's input gate (a D1 round-trip from a Worker-side
+    // action would race and under-count), and the ingest path would otherwise pay
+    // a D1 write per telemetry batch. Shape is fixed by `@lunora/ratelimit`'s
+    // database store.
+    rateLimits: defineTable({
+        key: v.string(),
+        prev: v.optional(v.number()),
+        ts: v.number(),
+        value: v.number(),
+    }).index("by_key", ["key"]),
 });

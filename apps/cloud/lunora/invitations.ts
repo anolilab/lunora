@@ -1,9 +1,11 @@
+import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 /**
  * Team invitations (CLOUD-PLAN.md §3 / Phase 3). An owner/admin invites an email
@@ -47,6 +49,7 @@ export const list = query
  * single-use token **once** — the caller mails it; only its hash is persisted.
  */
 export const invite = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({
         email: v.string().check((value) => value.length <= 320, { message: "must be at most 320 characters", schema: { maxLength: 320 } }),
         organizationId: v.id("organizations"),
@@ -54,7 +57,7 @@ export const invite = mutation
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"invitations">; token: string }> => {
         const { userId } = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
-        const now = context.now;
+        const { now } = context;
         const token = randomSecret();
 
         const id = await context.db.insert("invitations", {
@@ -73,6 +76,7 @@ export const invite = mutation
 
 /** Revoke a pending invitation (owners/admins only). */
 export const revoke = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({ id: v.id("invitations"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -87,6 +91,7 @@ export const revoke = mutation
  * member with the invited role and marks the invitation accepted.
  */
 export const accept = mutation
+    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
     .input({ token: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }) })
     .mutation(async ({ ctx: context, args: { token } }): Promise<{ organizationId: Id<"organizations"> }> => {
         const { userId } = context.auth;
