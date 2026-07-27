@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { MutationCtx } from "../lunora/_generated/server";
 import { accept } from "../lunora/invitations";
 import { sha256Hex } from "../src/deploy/keys";
+import withRateLimitStore from "./support/rate-limit-db";
 
 type Row = Record<string, unknown>;
 
@@ -38,8 +39,12 @@ const makeCtx = (
     return {
         ctx: {
             auth: { getIdentity: () => Promise.resolve(null), userId },
-            db: database,
+            db: withRateLimitStore(database),
             log: {},
+            // Handlers read the clock through `ctx.now`; without it the expiry
+            // comparison comes out `expiresAt < undefined` → false, and an
+            // expired invitation would be silently accepted.
+            now: Date.now(),
             runMutation: () => Promise.resolve(undefined),
             runQuery: () => Promise.resolve(undefined),
             scheduler: {},

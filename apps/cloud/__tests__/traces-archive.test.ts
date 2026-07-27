@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ActionCtx, QueryCtx } from "../lunora/_generated/server";
 import { getArchived, list as listTraces } from "../lunora/traces";
+import withRateLimitStore from "./support/rate-limit-db";
 
 type Row = Record<string, unknown>;
 
@@ -41,9 +42,10 @@ const fakeFetch = (rows: Row[]): typeof globalThis.fetch =>
 const makeCtx = (options: { env?: Row; fetch?: typeof globalThis.fetch }): ActionCtx =>
     ({
         auth: { getIdentity: () => Promise.resolve(null), userId: "u1" },
-        db: memberDb,
+        db: withRateLimitStore(memberDb),
         env: options.env,
         fetch: options.fetch ?? globalThis.fetch,
+        now: Date.now(),
     }) as unknown as ActionCtx;
 
 describe("traces.getArchived (D1-empty fallback)", () => {

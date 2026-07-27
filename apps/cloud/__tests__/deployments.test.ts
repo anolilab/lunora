@@ -11,6 +11,9 @@ const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch:
 
     const ctx = {
         auth: { getIdentity: () => Promise.resolve(null), userId: null },
+        // Handlers read the clock through `ctx.now` (deterministic under OCC retry),
+        // so the double has to supply it — `Date.now()` is no longer reachable there.
+        now: Date.now(),
         db: {
             deployments: {
                 findMany: (args?: { where?: Row }) => {

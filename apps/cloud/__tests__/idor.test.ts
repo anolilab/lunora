@@ -5,6 +5,7 @@ import { revoke as revokeKey } from "../lunora/deploy-keys";
 import { revoke as revokeInvite } from "../lunora/invitations";
 import { remove as removeMember } from "../lunora/members";
 import { list as listSecrets, remove as removeSecret, store as storeSecret } from "../lunora/secrets";
+import withRateLimitStore from "./support/rate-limit-db";
 
 type Row = Record<string, unknown>;
 
@@ -17,7 +18,9 @@ const makeCtx = (targetOrg: string) => {
     const writes: string[] = [];
     const ctx = {
         auth: { getIdentity: () => Promise.resolve(null), userId: "u1" },
-        db: {
+        // Revoke/remove stamp `ctx.now` on the row they patch.
+        now: Date.now(),
+        db: withRateLimitStore({
             delete: (id: string) => {
                 writes.push(id);
 
@@ -38,7 +41,7 @@ const makeCtx = (targetOrg: string) => {
 
                 return Promise.resolve();
             },
-        },
+        }),
     } as unknown as MutationCtx;
 
     return { ctx, writes };
