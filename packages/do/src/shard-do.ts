@@ -341,9 +341,9 @@ interface ShardDOState {
     /**
      * Concurrency-blocking gate — `state.blockConcurrencyWhile(fn)` delays
      * the next fetch dispatch until `fn` resolves. Used by
-     * {@link ShardDO.runInTransaction} to serialize the BEGIN/COMMIT span
-     * against concurrent RPCs so a raw-SQL transaction is isolated from
-     * other in-flight handlers on the same DO.
+     * {@link ShardDO.runInTransaction} to serialize the whole transaction span
+     * against concurrent RPCs, so the handler's reads and writes are isolated
+     * from other in-flight handlers on the same DO.
      */
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
     getWebSockets: (tag?: string) => WebSocket[];
@@ -382,9 +382,9 @@ interface ShardDOState {
             readonly databaseSize?: number;
 
             /**
-             * Run a SQL statement without parameters — used by the
-             * transaction helper for BEGIN / COMMIT / ROLLBACK. The runtime
-             * exposes this as `state.storage.sql.exec(...)`.
+             * Run a SQL statement without parameters. The runtime exposes this as
+             * `state.storage.sql.exec(...)`; {@link ShardDO.runInTransaction} also
+             * probes for it to confirm the handler will have a SQL connection.
              */
             exec?: (query: string) => unknown;
         };
@@ -1915,7 +1915,7 @@ abstract class ShardDO {
     private drizzleHandle: DrizzleSqliteDODatabase<Record<string, unknown>> | undefined;
 
     /**
-     * Tracks BEGIN/COMMIT nesting so we can reject nested transactions —
+     * Tracks transaction nesting so we can reject nested transactions —
      * SQLite-in-DO does not support them and the runtime would crash with
      * "cannot start a transaction within a transaction".
      */
@@ -2990,10 +2990,11 @@ abstract class ShardDO {
      * loudly rather than silently flattening them.
      *
      * Drizzle queries issued via `db` inside the handler participate
-     * in this transaction implicitly — drizzle and the BEGIN/COMMIT below
-     * both write through the same `state.storage.sql` handle, so the tx
-     * boundary is shared. Do **not** call `this.db.transaction(...)` from
-     * inside a handler; that would attempt a nested SQLite transaction.
+     * in this transaction implicitly — drizzle writes through the same
+     * `state.storage.sql` handle the transaction below is opened on, and that
+     * transaction is connection-scoped, so the boundary is shared without any
+     * handle being threaded through. Do **not** call `this.db.transaction(...)`
+     * from inside a handler; that would attempt a nested SQLite transaction.
      *
      * Why `state.storage.transaction(closure)` and not raw BEGIN/COMMIT SQL, and
      * not `this.db.transaction(handler)` either:
