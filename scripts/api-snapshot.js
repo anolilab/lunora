@@ -66,6 +66,7 @@ const TIER_2 = [
     "storage",
     "scheduler",
     "mail",
+    "notify",
     "ratelimit",
     "seed",
     "db",

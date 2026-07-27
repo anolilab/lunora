@@ -1,0 +1,89 @@
+---
+title: System tables
+description: Read pending scheduled jobs and stored file metadata through ctx.db.system — a read-only, eventually consistent view outside the mutation snapshot.
+---
+
+`ctx.db.system` is a read-only reader over Lunora's system tables. It lets a
+query or mutation introspect state the framework manages on your behalf, without
+that state having to live in your schema.
+
+| Table                  | Rows                   | Backed by     |
+| ---------------------- | ---------------------- | ------------- |
+| `_scheduled_functions` | Pending scheduled jobs | `SchedulerDO` |
+| `_storage`             | Stored object metadata | R2            |
+
+## The one caveat that matters
+
+Unlike `ctx.db.<table>` — which reads the same transactional SQLite snapshot the
+mutation writes into — the data behind these tables does **not** live in the
+shard. Scheduled functions live in the `SchedulerDO`; storage objects live in
+R2. Every read reaches across a network boundary.
+
+Three consequences follow, and all three are load-bearing:
+
+- **Eventually consistent.** Each call issues a fresh read. A job a mutation just
+  scheduled may not be visible yet; a job that just fired may still look pending.
+- **Not part of the transaction snapshot.** Reading a system table inside a
+  mutation does not pin it. There is no OCC guard and no subscription dependency
+  is recorded — so a live query does **not** re-run when a system table changes.
+- **Read-only.** There is no `insert`, `patch`, or `delete`. Change scheduled
+  jobs through `ctx.scheduler` and stored objects through `ctx.storage`.
+
+Treat every result as a point-in-time best effort. If your logic must be correct
+with respect to a scheduled job, record the fact in your own table inside the
+same mutation.
+
+## The read surface
+
+Deliberately minimal — no indexes, no filters, no pagination:
+
+```ts
+import { query } from "@/lunora/_generated/server";
+
+export const pendingJobs = query.query(async ({ ctx }) => {
+    const jobs = await ctx.db.system.query("_scheduled_functions").collect();
+
+    return jobs.filter((job) => job.scheduledFor > Date.now());
+});
+```
+
+`get(table, id)` resolves a single row, returning `null` when absent — the id is
+the job id for `_scheduled_functions`, and the object key for `_storage`.
+
+## `_scheduled_functions`
+
+One row per pending invocation:
+
+| Field          | Type                      | Meaning                                           |
+| -------------- | ------------------------- | ------------------------------------------------- |
+| `id`           | `string`                  | The job id                                        |
+| `functionPath` | `string`                  | Fully-qualified function to invoke                |
+| `args`         | `Record<string, unknown>` | Arguments it will be dispatched with              |
+| `scheduledFor` | `number`                  | When it fires (epoch ms)                          |
+| `enqueuedAt`   | `number`                  | When it was enqueued (epoch ms)                   |
+| `attempts`     | `number \| undefined`     | Dispatch attempts so far; absent until a retry    |
+| `shardKey`     | `string \| undefined`     | Routing hint so dispatch lands on the right shard |
+
+## `_storage`
+
+One row per stored object:
+
+| Field            | Type                                  | Meaning                                 |
+| ---------------- | ------------------------------------- | --------------------------------------- |
+| `key`            | `string`                              | The object key                          |
+| `size`           | `number`                              | Body length in bytes                    |
+| `contentType`    | `string \| undefined`                 | Recorded `Content-Type`                 |
+| `sha256`         | `string \| undefined`                 | Hex SHA-256, when R2 carries a checksum |
+| `uploaded`       | `number \| undefined`                 | Last write (epoch ms), when reported    |
+| `customMetadata` | `Record<string, string> \| undefined` | Metadata set at upload time             |
+
+`_storage` reads require a storage binding to be configured; without one, they
+report that storage is not configured. The `_scheduled_functions` half is
+independent and keeps working either way.
+
+## See also
+
+- [Scheduling](/docs/concepts/scheduling)
+- [File storage](/docs/concepts/file-storage)
+- [Function context](/docs/concepts/function-context)
+- [OCC & atomicity](/docs/concepts/occ)

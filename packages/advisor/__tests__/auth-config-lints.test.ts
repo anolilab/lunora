@@ -6,6 +6,7 @@ import { fromServerSchema } from "../src";
 import type { AdvisorAuthConfig } from "../src/auth-config";
 import authCsrfCheckDisabled from "../src/lints/static/auth-csrf-check-disabled";
 import authEmailVerificationDisabled from "../src/lints/static/auth-email-verification-disabled";
+import authScimWithoutTransactions from "../src/lints/static/auth-scim-without-transactions";
 import authSecureCookiesDisabled from "../src/lints/static/auth-secure-cookies-disabled";
 import authSessionFreshageZero from "../src/lints/static/auth-session-freshage-zero";
 import authTrustedOriginsWildcard from "../src/lints/static/auth-trusted-origins-wildcard";
@@ -22,6 +23,7 @@ const authConfig = (overrides: Partial<AdvisorAuthConfig> = {}): AdvisorAuthConf
         file: "auth",
         line: 1,
         requireEmailVerification: false,
+        scimOnNonTransactionalAdapter: false,
         secureCookiesDisabled: false,
         sessionFreshAgeZero: false,
         trustedOriginsWildcard: false,
@@ -160,5 +162,37 @@ describe("auth_session_freshage_zero", () => {
         expect.assertions(1);
 
         expect(authSessionFreshageZero.run({ schema: schema() })).toHaveLength(0);
+    });
+});
+
+describe("authScimWithoutTransactions", () => {
+    it("flags scim() on an adapter with no native transactions", async () => {
+        expect.assertions(2);
+
+        const findings = await authScimWithoutTransactions.run({ authConfigs: [authConfig({ scimOnNonTransactionalAdapter: true })], ...schema() } as never);
+
+        // This exact pairing shipped in documentation once and throws on the first SCIM
+        // request; there is no reason for build time not to say so.
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.level).toBe("ERROR");
+    });
+
+    it("stays quiet when the adapter does have transactions", async () => {
+        expect.assertions(1);
+
+        const findings = await authScimWithoutTransactions.run({ authConfigs: [authConfig()], ...schema() } as never);
+
+        expect(findings).toStrictEqual([]);
+    });
+
+    it("skips an opaque config rather than guessing at its database", async () => {
+        expect.assertions(1);
+
+        const findings = await authScimWithoutTransactions.run({
+            authConfigs: [authConfig({ analyzable: false, scimOnNonTransactionalAdapter: true })],
+            ...schema(),
+        } as never);
+
+        expect(findings).toStrictEqual([]);
     });
 });

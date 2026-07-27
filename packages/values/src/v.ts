@@ -605,12 +605,21 @@ const array = <V extends Validator>(inner: V): ColumnValidator<Infer<V>[], Infer
                 }
 
                 const { length } = value;
-                const out: Infer<V>[] = Array.from({ length });
+                // Built by `push` onto an empty literal rather than preallocated
+                // with `Array.from({ length })`. `Array.from` over a bare
+                // array-like has no fast path in V8 — it walks the length-only
+                // object through the generic iteration protocol, which measured
+                // ~27x slower than either alternative and made parsing a 32-item
+                // array several times slower than the naive loop it replaced
+                // (see `__bench__/parse-hotpath.bench.ts`). `push` also keeps the
+                // result PACKED, which `new Array(length)` would not — a holey
+                // array stays slower for every downstream consumer that iterates it.
+                const out: Infer<V>[] = [];
                 const { path } = context;
 
                 for (let index = 0; index < length; index += 1) {
                     path.push(index);
-                    out[index] = innerInternal._parse(value[index], context);
+                    out.push(innerInternal._parse(value[index], context));
                     path.pop();
                 }
 

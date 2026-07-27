@@ -3,7 +3,9 @@ title: "@lunora/do"
 description: The Durable Object base classes — ShardDO and SessionDO.
 ---
 
-`@lunora/do` ships the two Durable Object base classes the runtime expects.
+`@lunora/do` ships the Durable Object base classes. `ShardDO` is the one the runtime
+drives on every request; `SessionDO` is a standalone building block (see the caveat
+below).
 You only touch them in `src/server/*.ts` when you need to add a custom RPC
 method or wire bespoke storage logic. The defaults are enough for most apps.
 
@@ -31,20 +33,33 @@ hits its single-instance ceiling.
 
 ## `SessionDO`
 
-Stateful session record for `@lunora/auth`. Holds short-lived session
-state and expires records after `SESSION_DO_TTL_DEFAULT` seconds (7 days)
-unless a shorter TTL is requested. Every request must present the
-`SESSION_DO_SECRET` shared secret in the `x-lunora-session-do-secret`
-header; when the secret is unset the DO rejects all calls with 401.
+A TTL'd session store in a Durable Object: records expire after
+`SESSION_DO_TTL_DEFAULT` seconds (7 days) unless a shorter TTL is requested, a GC
+alarm sweeps daily, and instance count stays bounded by keying on the token prefix
+(`idFromName(token.slice(0, 16))`). Every request must present the
+`SESSION_DO_SECRET` shared secret in the `x-lunora-session-do-secret` header; when
+the secret is unset the DO rejects all calls with 401.
+
+<Callout type="warn">
+    **`@lunora/auth` does not use this class.** It never has —
+    `grep -rn "SessionDO" packages/auth/src/` finds nothing, and no commit in that
+    package's history references it. So exporting `SessionDO`, binding it as `SESSION`,
+    and setting `SESSION_DO_SECRET` gets you a correctly-configured object that nothing
+    ever calls; sessions still live in the auth database.
+
+    For auth on Durable Object storage, use `LunoraAuthDO` / `.auth({ namespace })`
+    from [`@lunora/auth`](/docs/packages/auth) — that path puts the whole better-auth
+    schema, sessions included, in an object with real transactions (which is what
+    `@better-auth/scim` requires). `SessionDO` remains usable on its own terms as a
+    TTL'd token store; it is just not wired into auth.
+
+</Callout>
 
 ```ts
 import { SessionDO } from "lunorash/do";
 
 export class MySessionDO extends SessionDO {}
 ```
-
-Most apps re-export the default class; subclass it only if you need
-to extend the session shape.
 
 ## `SessionRecord`
 
@@ -60,9 +75,10 @@ interface SessionRecord {
 
 ## Hibernation
 
-`ShardDO` and `SessionDO` both run with WebSocket hibernation enabled —
-inactive sockets cost zero CPU until a message arrives. Exposed via the
-`HibernatableWebSocket` type for unit tests.
+`ShardDO` runs with WebSocket hibernation enabled — inactive sockets cost zero CPU
+until a message arrives. Exposed via the `HibernatableWebSocket` type for unit tests.
+(`SessionDO` has no WebSocket surface at all: it is HTTP-only, so hibernation does not
+apply to it.)
 
 ## `ShardDOState` / `SocketAttachment` / `MutationDelta` / `RpcRequest` / `SubscriptionEnvelope` / `SubscriptionQuery`
 

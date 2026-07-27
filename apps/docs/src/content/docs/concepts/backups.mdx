@@ -1,0 +1,151 @@
+---
+title: Backups, export & import
+description: Snapshot a deployment, recover a shard to any moment in the last 30 days, and move data in and out as NDJSON.
+---
+
+Lunora has three ways to get data back after something goes wrong, and they
+solve different problems. Pick by how far back you need to go and whether the
+copy has to live outside Cloudflare.
+
+| Tier                   | Command / wiring             | Window    | Where the data lives         |
+| ---------------------- | ---------------------------- | --------- | ---------------------------- |
+| Point-in-time recovery | `lunora backup pitr`         | 30 days   | in place, on the platform    |
+| Snapshot backups       | `lunora backup create`       | unbounded | a file you keep (`.ndjson`)  |
+| Scheduled R2 backups   | `backupCron` + `backupStore` | unbounded | an R2 bucket in your account |
+
+Everything below talks to admin-gated endpoints on a running worker, so each
+command needs an admin bearer token. Prefer the `LUNORA_ADMIN_TOKEN` environment
+variable over `--token`, which is visible to other local processes through the
+process table. Targeting anything other than localhost requires `--prod`
+together with an explicit `--url` — the guardrail that stops a production script
+from quietly hitting `http://localhost:8787`.
+
+## Point-in-time recovery
+
+PITR drives the platform's own Durable Object change log, so it restores a shard
+to any moment in the last 30 days without replaying a snapshot or reading an
+object store. It is the fastest way back from a bad mutation or a botched
+migration.
+
+```bash
+lunora backup pitr --at 2026-06-01T12:00:00Z          # read the bookmark for that moment
+lunora backup pitr --at 2026-06-01T12:00:00Z --restore --yes
+lunora backup pitr --bookmark <bookmark> --restore --restart --yes
+```
+
+Without `--restore` the command only _reads_ the bookmark for a time — a safe
+way to confirm you have the right moment before acting. `--at` accepts an ISO
+timestamp or epoch milliseconds and must fall inside the 30-day window.
+`--bookmark` passes an explicit bookmark and wins over `--at`; that is how you
+undo a restore, since each restore hands back an undo bookmark.
+
+Recovery applies when the Durable Object next starts. Pass `--restart` to restart
+the shard immediately instead of waiting. `--shard` targets a specific shard —
+omit it for the root shard. Because PITR is per shard, a
+[sharded](/docs/concepts/sharding) app recovers one shard at a time.
+
+<Callout type="warn">
+    A production `pitr --restore` overwrites live data and requires `--yes`. Read the bookmark first, and take a snapshot before restoring so you can get back
+    to the current state if the target moment turns out to be wrong.
+</Callout>
+
+## Snapshot backups
+
+`lunora backup create` exports every table to a timestamped NDJSON file under a
+backup directory and records it in a `manifest.json`. This is the portable tier:
+the file is yours, it outlives the 30-day PITR window, and it can be restored
+into a different deployment.
+
+```bash
+lunora backup create                    # snapshot every table
+lunora backup create --tables users,messages
+lunora backup create --dir ./snapshots  # default: .lunora-backups
+lunora backup list                      # print the manifest
+lunora backup restore 2026-06-01T12-00-00-000Z
+lunora backup restore ./snapshots/some-file.ndjson
+```
+
+A snapshot's id is the ISO timestamp it was taken at, and the manifest records
+the file, row count, byte size, and the table allowlist if one was used.
+`restore` accepts either an id from the manifest or a direct path to an NDJSON
+file.
+
+There is no managed backup schedule in the CLI — `create` is a plain command, so
+schedule it wherever you already run periodic jobs (a CI cron, or a
+[cron-triggered action](/docs/concepts/scheduling)).
+
+### Scheduled backups into R2
+
+For a schedule that runs on the platform itself rather than in CI, the worker
+can take its own snapshots on a Cron Trigger and write them to an R2 bucket in
+your account. Wire `backupStore`, `backupCron`, and `backupRetain` on
+`createWorker` — see
+[scheduled backups in @lunora/runtime](/docs/packages/runtime#scheduled-backups)
+for the full configuration. Each run writes the snapshot plus a manifest object,
+prunes older snapshots past the retention count, and produces exactly the format
+`lunora backup restore <file>` consumes.
+
+## Export and import
+
+`lunora export` and `lunora import` are the plumbing under the backup commands,
+exposed directly for one-off data movement — seeding a staging deployment from
+production, migrating between accounts, or piping rows into another system.
+
+```bash
+lunora export --out ./data.ndjson
+lunora export --tables messages,channels --out ./subset.ndjson
+lunora export                            # stream NDJSON to stdout
+
+lunora import ./data.ndjson
+lunora import ./users.ndjson --table users
+lunora import ./data.ndjson --batch-size 200
+```
+
+### The NDJSON format
+
+One JSON object per line, each an envelope naming its table:
+
+```json
+{ "table": "users", "doc": { "_id": "...", "_creationTime": 1735689600000, "email": "a@example.com" } }
+{ "table": "messages", "doc": { "_id": "...", "_creationTime": 1735689601000, "text": "hi" } }
+```
+
+The envelope is what makes a single file able to carry a whole deployment.
+Export streams rows as they are produced — shard-local tables first, then
+`.global()` tables — so a large export does not have to fit in memory. Import
+reads the file back and POSTs it in batches (500 rows per request by default),
+reporting inserted and errored counts per batch.
+
+If your source file is bare documents rather than envelopes — rows exported from
+somewhere else — pass `--table` and the CLI wraps each line for you.
+
+Because documents carry their `_id`, a restore preserves identity, so
+[relations](/docs/concepts/relations) between tables survive the round trip.
+Import the referenced table before the table that references it.
+
+## Streaming data out continuously
+
+Snapshots are point-in-time. To keep an external warehouse or ETL sink in step
+with the deployment as it changes, use the continuous CDC export tap instead: it
+streams the shard op-log to named sinks with at-least-once, per-shard-ordered,
+resumable delivery. Configuration and delivery semantics are covered in
+[@lunora/runtime](/docs/packages/runtime#continuous-cdc-export-tap).
+
+## Practising a restore
+
+A backup you have never restored is a hypothesis. The cheapest drill:
+
+1. `lunora backup create` against production.
+2. Spin up a scratch deployment, or `lunora reset` a local one.
+3. `lunora import ./the-snapshot.ndjson` against it.
+4. Run your app against the restored data and confirm it behaves.
+
+Do this before you need it, and again whenever the schema changes shape.
+
+## See also
+
+- [@lunora/cli — backup, export, import](/docs/packages/cli)
+- [Migrations](/docs/concepts/migrations)
+- [Sharding](/docs/concepts/sharding)
+- [Production checklist](/docs/production-checklist)
+- [@lunora/runtime](/docs/packages/runtime)

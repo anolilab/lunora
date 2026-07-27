@@ -1,6 +1,6 @@
 {
     "name": "@lunora/testing",
-    "version": "1.0.0-alpha.54",
+    "version": "1.0.0-alpha.71",
     "description": "Testing toolkit for Lunora: an in-memory harness for queries, mutations, and actions",
     "keywords": [
         "cloudflare",
@@ -40,6 +40,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./playwright": {
+            "types": "./dist/playwright.d.ts",
+            "import": "./dist/playwright.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -60,11 +64,11 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/agent": "1.0.0-alpha.9",
-        "@lunora/do": "1.0.0-alpha.43",
-        "@lunora/errors": "1.0.0-alpha.7",
-        "@lunora/mail": "1.0.0-alpha.17",
-        "@lunora/server": "1.0.0-alpha.30"
+        "@lunora/agent": "1.0.0-alpha.25",
+        "@lunora/do": "1.0.0-alpha.51",
+        "@lunora/errors": "1.0.0-alpha.8",
+        "@lunora/mail": "1.0.0-alpha.31",
+        "@lunora/server": "1.0.0-alpha.46"
     },
     "devDependencies": {
         "@types/node": "catalog:types",
@@ -74,6 +78,14 @@
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@playwright/test": "catalog:e2e"
+    },
+    "peerDependenciesMeta": {
+        "@playwright/test": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

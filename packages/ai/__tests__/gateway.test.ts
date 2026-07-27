@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { AI_GATEWAY_ACCOUNT_ID_ENV, AI_GATEWAY_ID_ENV, AI_GATEWAY_TOKEN_ENV, buildAiGatewayMetadataFields, resolveAiGateway } from "../src/gateway";
 
@@ -64,6 +64,34 @@ describe(resolveAiGateway, () => {
         const resolved = resolveAiGateway(configuredEnv(), {});
 
         expect(resolved?.headers).toStrictEqual({});
+    });
+
+    it("warns once when a token is set on the Workers AI binding path (which can't carry it)", () => {
+        expect.assertions(4);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        try {
+            const env = { ...configuredEnv(), [AI_GATEWAY_TOKEN_ENV]: "gw-secret" };
+
+            // The Workers AI binding's native `gateway` option has no authorization
+            // field, so a configured token would be silently dropped on this path —
+            // resolveAiGateway warns instead so it isn't diagnosed at inference time.
+            const resolved = resolveAiGateway(env, undefined, "workers-ai-binding");
+
+            // The token still appears in `headers` (that is what the BYO-provider
+            // path sends); only the binding path can't use it.
+            expect(resolved?.headers).toStrictEqual({ "cf-aig-authorization": "Bearer gw-secret" });
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(String(warn.mock.calls[0]?.[0])).toContain(AI_GATEWAY_TOKEN_ENV);
+
+            // One-shot per isolate: a second binding-path resolution stays quiet so a
+            // hot dispatch path doesn't flood the log.
+            resolveAiGateway(env, undefined, "workers-ai-binding");
+            expect(warn).toHaveBeenCalledTimes(1);
+        } finally {
+            warn.mockRestore();
+        }
     });
 });
 

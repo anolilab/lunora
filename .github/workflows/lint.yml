@@ -265,14 +265,11 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `vis sort-package-json` writes in place and exits 0 even on drift,
-            # so gate on a leftover diff.
+            # `--check` writes nothing, names each unsorted file and exits 1, so no
+            # write-then-diff gate is needed (an earlier version of this job did
+            # that, believing the command could only sort in place).
             - "name": "Check package.json sort order"
-              "shell": "bash"
-              "run": |
-                  set -euo pipefail
-                  pnpm exec vis sort-package-json
-                  git diff --exit-code -- '**/package.json' 'package.json'
+              "run": "pnpm run lint:package-json"
 
     "secrets":
         "name": "Secrets"

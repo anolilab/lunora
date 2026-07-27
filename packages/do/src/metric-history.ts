@@ -171,6 +171,18 @@ const knownBucketsFor = (sql: SqlExec): Set<string> => {
 };
 
 /**
+ * Tunable caps for {@link recordMetricHistory}, threaded from the sink's
+ * `metricHistory` option. Each falls back to its module-constant default, so an
+ * omitted field keeps the historical behaviour.
+ */
+interface MetricHistoryOptions {
+    /** Distinct series tracked before a brand-new one is dropped (default {@link METRIC_HISTORY_MAX_SERIES}). */
+    maxSeries?: number;
+    /** Minute-buckets kept per series before older rows are trimmed (default {@link METRIC_HISTORY_BUCKET_RETENTION}). */
+    retentionBuckets?: number;
+}
+
+/**
  * Fold one measurement into its `(series, minute)` bucket. Runs per
  * `ctx.metrics.*` call (unlike `function-metrics.ts`, which runs once per
  * dispatch), so it's tuned for the in-minute repeat: a bucket this instance has
@@ -184,8 +196,15 @@ const knownBucketsFor = (sql: SqlExec): Set<string> => {
  * `exemplarTraceId` (the recording dispatch's trace, when it had one) is stored on
  * the bucket so the studio can link a chart point back to a trace. Latest wins:
  * a later sample carrying a trace replaces an earlier bucket's exemplar.
+ *
+ * `options` tunes the distinct-series cap and retention window from the sink's
+ * `metricHistory` flag (see {@link MetricHistoryOptions}); each defaults to its
+ * module constant.
  */
-const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?: string): void => {
+const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?: string, options: MetricHistoryOptions = {}): void => {
+    const maxSeries = options.maxSeries ?? METRIC_HISTORY_MAX_SERIES;
+    const retentionBuckets = options.retentionBuckets ?? METRIC_HISTORY_BUCKET_RETENTION;
+
     ensureMetricHistoryTable(sql);
 
     const key = metricSeriesKey(event);
@@ -216,7 +235,7 @@ const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?:
         if (!seriesTracked) {
             const seriesCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(DISTINCT series_key) AS n FROM "${METRIC_HISTORY_TABLE}"`).one();
 
-            if (seriesCountRow.n >= METRIC_HISTORY_MAX_SERIES) {
+            if (seriesCountRow.n >= maxSeries) {
                 return;
             }
         }
@@ -266,7 +285,7 @@ const recordMetricHistory = (sql: SqlExec, event: MetricEvent, exemplarTraceId?:
                 SELECT MAX(bucket_ms) - ? FROM "${METRIC_HISTORY_TABLE}" WHERE series_key = ?
                )`,
             key,
-            METRIC_HISTORY_BUCKET_RETENTION * METRIC_HISTORY_BUCKET_MS,
+            retentionBuckets * METRIC_HISTORY_BUCKET_MS,
             key,
         );
     }
@@ -369,4 +388,4 @@ const readMetricHistory = (sql: SqlExec, options: { sinceMs?: number } = {}): Me
 };
 
 export { readMetricHistory, recordMetricHistory };
-export type { MetricHistoryPoint, MetricHistoryResult, MetricHistorySeries };
+export type { MetricHistoryOptions, MetricHistoryPoint, MetricHistoryResult, MetricHistorySeries };

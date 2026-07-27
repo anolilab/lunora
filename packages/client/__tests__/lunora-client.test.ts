@@ -3484,4 +3484,290 @@ describe("lunoraClient", () => {
             client.close();
         });
     });
+
+    /**
+     * The questions an adopter can't otherwise answer from outside the client: is the
+     * socket open, what watermark has the server confirmed, has this subscription
+     * been acked, is anything stuck in the queue.
+     */
+    describe("lunoraClient — debug snapshot", () => {
+        it("reports an idle client before anything connects", () => {
+            expect.assertions(4);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const snapshot = client.debug();
+
+            expect(snapshot.connectionStatus).toBe("idle");
+            expect(snapshot.shards).toStrictEqual([]);
+            expect(snapshot.subscriptions).toStrictEqual([]);
+            expect(snapshot.clientId).toEqual(expect.any(String));
+
+            client.close();
+        });
+
+        it("reports the socket state, ack, and cursor of a live query subscription", () => {
+            expect.assertions(6);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = firstSub(socket);
+
+            socket.receive({ cursor: 12, data: [], id: sub.id, type: "data" });
+
+            const snapshot = client.debug();
+            const subscription = snapshot.subscriptions[0];
+
+            expect(snapshot.connectionStatus).toBe("connected");
+            expect(snapshot.shards[0]?.wsState).toBe("open");
+            expect(snapshot.shards[0]?.hasSocket).toBe(true);
+            expect(subscription?.functionPath).toBe("messages:list");
+            expect(subscription?.kind).toBe("query");
+            expect(subscription?.serverCursor).toBe(12);
+
+            client.close();
+        });
+
+        it("reports a shape subscription's rowset separately from queries", () => {
+            expect.assertions(3);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribeShape({ args: {}, name: "wholeOutline" }, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const snapshot = client.debug();
+            const shape = snapshot.subscriptions.find((entry) => entry.kind === "shape");
+
+            // Named `shape:<name>` so a mixed list stays readable at a glance.
+            expect(shape?.functionPath).toBe("shape:wholeOutline");
+            expect(shape?.rowCount).toBe(0);
+            expect(shape?.subscriberCount).toBe(1);
+
+            client.close();
+        });
+
+        it("surfaces the confirmed per-shard mutation watermark", async () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(async () => jsonResponse({ lastMutationId: 4, result: null })),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await client.callMutator("mutators:send", {}, { clientSeq: 1, shardKey: "user-1" });
+
+            const shard = client.debug().shards.find((entry) => entry.shardKey === "user-1");
+
+            // The single most useful number when an overlay won't clear: what the
+            // server has actually confirmed for this client on this shard.
+            expect(shard?.confirmedMutationWatermark).toBe(4);
+            expect(shard?.wsState).toBe("idle");
+
+            client.close();
+        });
+
+        it("reports a closed client", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.close();
+
+            expect(client.debug().closed).toBe(true);
+        });
+    });
+
+    // --- Bulk import --------------------------------------------------------------
+
+    describe("lunoraClient — importRows", () => {
+        /**
+         * Run `importRows` against a fetch mock that records, per chunk, the
+         * `x-lunora-mutation-id` idempotency key and the rows that chunk carried.
+         * Returns a `key → JSON(rows)` map so a resume can be checked for aliasing.
+         */
+        const runImport = async (
+            rows: ReadonlyArray<unknown>,
+            options: { chunkSize: number; importId: string },
+        ): Promise<{ keyToRows: Map<string, string>; result: { chunks: number; imported: number } }> => {
+            const keyToRows = new Map<string, string>();
+
+            const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+                const request = init as RequestInit;
+                const key = (request.headers as Record<string, string>)["x-lunora-mutation-id"] ?? "<missing>";
+                const body = JSON.parse(request.body as string) as { args: { rows: unknown[] } };
+
+                keyToRows.set(key, JSON.stringify(body.args.rows));
+
+                return jsonResponse({ result: null });
+            });
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const result = await client.importRows(fnRef("migrate:importRows"), rows, options);
+
+            client.close();
+
+            return { keyToRows, result };
+        };
+
+        it("chunks the rows, reports progress, and returns the imported count", async () => {
+            expect.assertions(4);
+
+            const rows = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }];
+            const progress: { done: number; total: number }[] = [];
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: null }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const result = await client.importRows(fnRef("migrate:importRows"), rows, {
+                chunkSize: 2,
+                onProgress: (p) => progress.push(p),
+            });
+
+            expect(result).toEqual({ chunks: 3, imported: 5 });
+            // 5 rows / chunkSize 2 → 3 POSTs (2 + 2 + 1).
+            expect(fetchMock).toHaveBeenCalledTimes(3);
+            expect(progress).toEqual([
+                { done: 2, total: 5 },
+                { done: 4, total: 5 },
+                { done: 5, total: 5 },
+            ]);
+
+            // The last chunk carried the tail row only.
+            const lastBody = JSON.parse((fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body as string) as {
+                args: { rows: unknown[] };
+            };
+
+            expect(lastBody.args.rows).toEqual([{ id: 5 }]);
+        });
+
+        it("keys each chunk under the importId-plus-index form so a retry dedupes server-side", async () => {
+            expect.assertions(1);
+
+            const { keyToRows } = await runImport([{ id: 1 }, { id: 2 }, { id: 3 }], { chunkSize: 2, importId: "imp" });
+
+            expect([...keyToRows.keys()]).toEqual(["imp:0", "imp:1"]);
+        });
+
+        // Resume-safety: this asserts the CORRECT behavior and is EXPECTED TO FAIL against
+        // the current position-based idempotency key (importId plus chunk index). When a
+        // resume uses a different `chunkSize`, the same key aliases different content, so the
+        // server dedupes and silently drops rows. `it.fails` keeps the suite green while
+        // pinning the bug; it flips to a real failure (prompting an un-skip) once the client
+        // importRows content-key fix lands. See the plans index (plan 192 depends on that fix).
+        it.fails("does not reuse a mutation key for differently-chunked content across a resume", async () => {
+            expect.hasAssertions();
+
+            const rows = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
+
+            const first = await runImport(rows, { chunkSize: 2, importId: "imp" });
+            const resumed = await runImport(rows, { chunkSize: 1, importId: "imp" });
+
+            // A key that appears in both runs must carry identical content in both —
+            // otherwise the resume's chunk is deduped away against the first run's. Collect
+            // every aliasing key so the single assertion lives outside the loop.
+            const aliasedKeys = [...resumed.keyToRows]
+                .filter(([key, content]) => first.keyToRows.has(key) && first.keyToRows.get(key) !== content)
+                .map(([key]) => key);
+
+            expect(aliasedKeys).toEqual([]);
+        });
+    });
+
+    // --- Log archive --------------------------------------------------------------
+
+    describe("lunoraClient — queryLogArchive", () => {
+        it("pOSTs the query to the admin archive endpoint and returns rows + cursor", async () => {
+            expect.assertions(4);
+
+            const page = { nextCursor: { ts: 1_699_999_000_000 }, rows: [{ functionPath: "messages:list", level: "error", message: "boom", ts: 1 }] };
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(page));
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const result = await client.queryLogArchive({ level: "error" });
+
+            expect(result).toEqual(page);
+
+            const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(requestUrl).toBe("https://app.example/_lunora/admin/logs/archive");
+            expect(init.method).toBe("POST");
+            expect(JSON.parse(init.body as string)).toEqual({ level: "error" });
+        });
+
+        it("round-trips the opaque cursor back into the next page's request body", async () => {
+            expect.assertions(1);
+
+            const cursor = { shard: "user-1", ts: 42 };
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ rows: [] }));
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await client.queryLogArchive({ cursor });
+
+            const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+
+            // The cursor is passed through unchanged — the client never inspects it.
+            expect(JSON.parse(init.body as string)).toEqual({ cursor });
+        });
+
+        it("defaults to an empty rows array (and no cursor) when the worker omits them", async () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({}),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const result = await client.queryLogArchive();
+
+            expect(result.rows).toEqual([]);
+            expect(result.nextCursor).toBeUndefined();
+        });
+    });
 });

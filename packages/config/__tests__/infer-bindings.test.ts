@@ -74,7 +74,7 @@ describe("inferLunoraBindings", () => {
         expect(result.durableObjects.find((object) => object.binding === "SHARD")?.className).toBe("ShardDO");
     });
 
-    it("does NOT bind SessionDO when @lunora/auth is used but no SessionDO is exported", async () => {
+    it("binds no auth Durable Object for a D1-backed auth app, and says which mode it is in", async () => {
         expect.assertions(3);
 
         write("wrangler.jsonc", WRANGLER);
@@ -84,7 +84,11 @@ describe("inferLunoraBindings", () => {
 
         expect(result.usesAuth).toBe(true);
         expect(result.durableObjects.some((object) => object.binding === "SESSION")).toBe(false);
-        expect(result.signals.some((signal) => signal.includes("SessionDO"))).toBe(true);
+        // The hint used to promise that exporting `SessionDO` produced DO-backed
+        // sessions. `@lunora/auth` has never called that class, so following the hint
+        // got you a bound, secret-configured, entirely unused Durable Object. It now
+        // names the mechanism that actually exists.
+        expect(result.signals.some((signal) => signal.includes("pass `namespace` to .auth()"))).toBe(true);
     });
 
     it("infers D1 from a .global() table even with no env.DB access", async () => {
@@ -257,6 +261,27 @@ export { TranscoderContainer } from "../../lunora/_generated/containers.js";
 
         expect(result.containers[0]).toMatchObject({ exported: false });
         expect(result.signals.join(" ")).toContain("not exported by the worker entry");
+    });
+
+    it("still detects a value class export when a separate `export type { … }` of the same name coexists", async () => {
+        expect.assertions(1);
+
+        // A value re-export of the generated class AND a separate type-only export of
+        // the same name — the type-only line must NOT suppress the value binding, or
+        // `wrangler deploy` fails on a missing `class_name`. (Prior whole-file regex bug.)
+        write("wrangler.jsonc", WRANGLER);
+        write("lunora/containers.ts", CONTAINERS_TS);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_ONLY}
+export { TranscoderContainer } from "../../lunora/_generated/containers.js";
+export type { TranscoderContainer } from "../../lunora/_generated/containers.js";
+`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.containers[0]).toMatchObject({ exported: true });
     });
 
     it("reports no containers for a project without lunora/containers.ts", async () => {

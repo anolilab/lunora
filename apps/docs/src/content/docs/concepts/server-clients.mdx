@@ -1,0 +1,145 @@
+---
+title: Server-side & non-reactive clients
+description: Calling a Lunora deployment without a live subscription — from SSR loaders, scripts, other languages, or plain HTTP.
+---
+
+Most Lunora clients are reactive: a `useQuery` opens a WebSocket and re-renders
+when data changes. But plenty of callers do not want a subscription — an SSR
+loader, a cron script, a service in another language, a webhook handler. This
+page covers those.
+
+Pick by what the caller is:
+
+| Caller                            | Reach for                    |
+| --------------------------------- | ---------------------------- |
+| An SSR loader / Server Component  | `@lunora/client/ssr`         |
+| A Node or Bun script              | `LunoraClient` over HTTP RPC |
+| A one-off call from your terminal | `lunora run`                 |
+| Python                            | the Python SDK               |
+| Anything else                     | the REST/HTTP API            |
+
+## From an SSR loader
+
+`@lunora/client/ssr` builds a request-scoped client that talks HTTP RPC only. A
+`LunoraClient` opens its socket lazily on `.subscribe()` / `.stream()`, and SSR
+loading never calls those, so no live connection is established even when the
+server runtime happens to expose a global `WebSocket`.
+
+```ts
+import { createServerClient } from "@lunora/client/ssr";
+
+import { api } from "@/lunora/_generated/api";
+
+const client = createServerClient({
+    url: process.env.LUNORA_URL!,
+    token: sessionToken, // runs the load as the signed-in user
+});
+
+const messages = await client.query(api.messages.list, { channelId });
+```
+
+<Callout type="warn">
+    Create the client **per request**, not once at module scope. The bearer token and any forwarded cookies are per-user — a shared module-level client leaks
+    one request's identity into another request.
+</Callout>
+
+`getServerSession` resolves the session from the incoming request's headers, and
+`preloadQuery` / `serializePreloaded` hand a result across an SSR boundary so the
+client can hydrate it into a live subscription without a second round trip. The
+React binding for this is described in [Next.js](/docs/frameworks/nextjs); the
+same primitives back every framework adapter's loaders.
+
+## From a script
+
+The same client works in any JavaScript runtime with `fetch` — Node 18+, Bun, or
+another Worker. Construct it, call `query` / `mutation` / `action`, and skip the
+subscription API entirely:
+
+```ts
+import { LunoraClient } from "@lunora/client";
+
+import { api } from "@/lunora/_generated/api";
+
+const client = new LunoraClient({ url: process.env.LUNORA_URL! });
+
+await client.mutation(api.messages.send, { channelId: "general", text: "deploy finished" });
+```
+
+Both `query` and `mutation` take a generated **function reference** — `api.<file>.<function>` —
+rather than a string path, which is what carries the argument and return types to
+the call site. The string form (`"messages:send"`) is what the CLI and the
+non-TypeScript SDKs use.
+
+For an admin-shaped script — backfills, one-off repairs — prefer an
+[internal function](/docs/concepts/internal-functions) invoked with an admin
+token over widening a public function's surface.
+
+## From the terminal
+
+`lunora run` sends a single RPC without any SDK at all:
+
+```bash
+lunora run messages:send --args '{"channelId":"general","text":"hi"}'
+lunora run messages:list --args '{}' --url https://my-app.workers.dev
+```
+
+`--shard` overrides shard routing. This is the quickest way to check a function
+end to end without writing a client.
+
+## From Python
+
+The Python SDK implements the wire protocol directly — HTTP RPC, live
+subscriptions, the poke-based shape protocol, and the full value codec. The core
+is standard-library only; only the live WebSocket loop needs the optional
+`websockets` package.
+
+```python
+import asyncio
+from lunora import LunoraClient, WireBigInt
+
+async def main():
+    client = LunoraClient(url="https://my-app.example.com", auth_token="…")
+
+    messages = await client.query("messages:list", {"channel": "general"})
+    await client.mutation("ledger:add", {"amount": WireBigInt(1000)})
+
+asyncio.run(main())
+```
+
+Because Python has no distinct `bigint`, `Date`, `Map`, or `Set`, those types are
+expressed through small wrappers — `WireBigInt`, `WireDate`, `WireMap`,
+`WireSet`, `WireUrl`, `WireBytes`. Plain values map straight to JSON. See
+[Data types](/docs/concepts/data-types) for which types need the codec at all.
+
+<Callout type="info">
+    The Python SDK is a v1 proof that the protocol ports cleanly. Optimistic updates, the offline queue, and generated typed bindings are follow-ups.
+</Callout>
+
+## From any language, over HTTP
+
+Every function can be reached as a plain HTTP endpoint, so a language with no SDK
+still has a first-class path in. The surface is **default-closed** — a function is
+only reachable over REST when you expose it — and Lunora emits an OpenAPI 3.1
+document describing exactly what you exposed.
+
+See [REST API](/docs/concepts/rest-api) for URLs, argument encoding, shard
+selection, authentication, and rate limiting, and
+[Wire protocol](/docs/concepts/wire-protocol) if you are implementing a client
+rather than calling one.
+
+## Writing a new SDK
+
+The protocol is specified rather than implied: the RPC envelope, the WebSocket
+frame types (`data` / `delta` / `ack` / `error` / `resume` / `settled`), the poke
+frames for partial replication, and the value codec are all documented in
+[Wire protocol](/docs/concepts/wire-protocol). The Python SDK exists mainly to
+prove that spec is complete — it is the reference to read when porting to another
+language.
+
+## See also
+
+- [REST API](/docs/concepts/rest-api)
+- [Wire protocol](/docs/concepts/wire-protocol)
+- [Next.js](/docs/frameworks/nextjs)
+- [Reactive loaders](/docs/frameworks/reactive-loaders)
+- [@lunora/client](/docs/packages/client)

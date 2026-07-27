@@ -31,6 +31,22 @@ const isFalseLiteral = (node: TsNode | undefined): boolean => node?.getKind() ==
 /** Whether `node` is the numeric literal `0`. */
 const isZeroLiteral = (node: TsNode | undefined): boolean => node !== undefined && Node.isNumericLiteral(node) && node.getLiteralValue() === 0;
 
+/** Adapters that cannot satisfy `@better-auth/scim`: single-table CRUD with no native transactions. */
+const NON_TRANSACTIONAL_ADAPTERS = new Set(["lunoraAuthAdapter", "lunoraD1Adapter"]);
+
+/** Whether a `plugins` array-literal initializer contains a `scim(...)` call. */
+const hasScimPlugin = (node: TsNode | undefined): boolean => {
+    if (!node || !Node.isArrayLiteralExpression(node)) {
+        return false;
+    }
+
+    return node.getElements().some((element) => Node.isCallExpression(element) && calleeName(element.getExpression()) === "scim");
+};
+
+/** Whether a `database` initializer is one of the adapters with no native transactions. */
+const isNonTransactionalAdapter = (node: TsNode | undefined): boolean =>
+    node !== undefined && Node.isCallExpression(node) && NON_TRANSACTIONAL_ADAPTERS.has(calleeName(node.getExpression()) ?? "");
+
 /** Whether a `trustedOrigins` array-literal initializer contains a `"*"` string element. */
 const hasWildcardOrigin = (node: TsNode | undefined): boolean => {
     if (!node || !Node.isArrayLiteralExpression(node)) {
@@ -56,6 +72,8 @@ const readAuthConfig = (config: ObjectLiteralExpression): Omit<AuthConfigIR, "ex
         disableCsrfCheck: isTrueLiteral(propertyInitializer(advanced, "disableCSRFCheck")),
         emailPasswordEnabled: isTrueLiteral(propertyInitializer(emailAndPassword, "enabled")),
         requireEmailVerification: isTrueLiteral(propertyInitializer(emailAndPassword, "requireEmailVerification")), // gitleaks:allow -- ts-morph property-name lookup, not a secret
+        scimOnNonTransactionalAdapter:
+            hasScimPlugin(propertyInitializer(config, "plugins")) && isNonTransactionalAdapter(propertyInitializer(config, "database")),
         secureCookiesDisabled: isFalseLiteral(propertyInitializer(advanced, "useSecureCookies")),
         sessionFreshAgeZero: isZeroLiteral(propertyInitializer(session, "freshAge")),
         trustedOriginsWildcard: hasWildcardOrigin(propertyInitializer(config, "trustedOrigins")),
@@ -74,6 +92,7 @@ const unanalyzableAuthConfig = (): Omit<AuthConfigIR, "exportName" | "file" | "l
         disableCsrfCheck: false,
         emailPasswordEnabled: false,
         requireEmailVerification: false,
+        scimOnNonTransactionalAdapter: false,
         secureCookiesDisabled: false,
         sessionFreshAgeZero: false,
         trustedOriginsWildcard: false,

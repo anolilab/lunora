@@ -14,8 +14,9 @@ Lunora exposes a Convex-style functional API (`defineSchema`, `query`,
 `mutation`, `action`) on top of Cloudflare Workers and Durable Objects. State
 lives in a per-app `ShardDO` (SQLite, OCC, hibernated WebSocket subscriptions)
 by default; `.shardBy(key)` partitions it across many DOs and `.global()`
-replicates a table to D1 for low-latency cross-region reads. A Vite plugin
-drives codegen and end-to-end type sync.
+replicates a table to D1 — or to Postgres/MySQL over Hyperdrive — for
+low-latency cross-region reads. A Vite plugin drives codegen and end-to-end
+type sync.
 
 If a more specific Lunora skill clearly matches the request, use that instead.
 
@@ -47,12 +48,13 @@ After codegen is green, use the most specific Lunora skill for the task:
 - Wiring live data into a client (hooks, optimistic updates): `lunora-realtime`
 - Authentication setup (email/password, OAuth, magic link, OTP):
   `lunora-setup-auth`
-- Wiring a prebuilt capability (mail, file storage, scheduled jobs, rate
-  limiting, vectors, AI, containers, payments, MCP): install it with
-  `lunora registry add <item>` (see `lunora registry list`). Capabilities with a
-  dedicated skill: `lunora-setup-mail` (mail), `lunora-setup-storage` (R2 file
-  storage), `lunora-setup-scheduler` (deferred `ctx.scheduler` + cron jobs). For
-  the rest, read the item's README after installing.
+- Transactional email: `lunora-setup-mail`
+- R2 file storage (signed upload/download): `lunora-setup-storage`
+- Deferred work (`ctx.scheduler`) and cron jobs: `lunora-setup-scheduler`
+- Querying an **existing** Postgres/MySQL database from an action (`ctx.sql`,
+  non-reactive): `lunora-setup-hyperdrive`
+- Using Postgres/MySQL as a **reactive `.global()` backend**, or migrating a D1
+  `.global()` dataset onto it: `lunora-setup-hyperdrive-global`
 - Building a reusable capability — a registry item or an `@lunora/*` package:
   `lunora-create-package`
 - Planning or running a schema/data migration: `lunora-migration-helper`
@@ -63,6 +65,41 @@ After codegen is green, use the most specific Lunora skill for the task:
 
 If one of those clearly matches the user's goal, switch to it instead of staying
 in this skill.
+
+## Capabilities Without a Dedicated Skill
+
+Most other capabilities install as a **registry item** — `lunora registry add
+<item>` scaffolds the `lunora/` glue, wrangler bindings, and env vars, then
+prints post-install steps. Browse with `lunora registry list`; preview with
+`lunora registry view <item>`. Read the installed item's README, and the
+package's `docs/` for the API.
+
+| Goal                                          | Install / package                                            |
+| --------------------------------------------- | ------------------------------------------------------------ |
+| Background jobs on Cloudflare Queues          | `registry add queue` → `@lunora/queue` (`ctx.queues`)        |
+| Durable multi-step workflows                  | `registry add workflow` → `@lunora/workflow` (`ctx.runStep`) |
+| Durable AI agents (tool loops, HITL, memory)  | `@lunora/agent` (`defineAgent`)                              |
+| Workers AI / RAG                              | `registry add ai` → `@lunora/ai` (`ctx.ai`, `defineRag`)     |
+| Feature flags (OpenFeature)                   | `registry add flags` → `@lunora/flags` (`ctx.flags`)         |
+| Payments (Stripe / Polar)                     | `registry add payment` → `@lunora/payment`                   |
+| Rate limiting                                 | `registry add ratelimit` → `@lunora/ratelimit`               |
+| Headless browser (action-only)                | `registry add browser` → `@lunora/browser` (`ctx.browser`)   |
+| Cloudflare Containers                         | `@lunora/container` (`defineContainer`, `ctx.containers`)    |
+| Presence / who's-here                         | `registry add presence`                                      |
+| Cloudflare Access (Zero Trust) identity       | `registry add cloudflare-access`                             |
+| Backup / restore                              | `registry add backup`                                        |
+| Testing (in-memory harness, agent doubles)    | `@lunora/testing` (`lunoraTest`)                             |
+| Deterministic seed data                       | `@lunora/seed` + `lunora seed`                               |
+| Local-first replica / offline mirror          | `@lunora/replica`                                            |
+| Exposing the deployment to AI agents over MCP | `@lunora/mcp`                                                |
+
+Scaffolding inside this repo uses `vis generate lunora-<kind>` — `query`,
+`mutation`, `action`, `http-route`, `table`, `cron`, `container`, `workflow`,
+`queue`, `step`, `agent`, `flags`, `collections`, `package` (`vis generate
+--list` for the full set). Most take a name: **always** pass it as
+`--name=value`, since vis parses a space-separated `--name foo` as `--name=true`
+plus a stray positional. `lunora-flags` and `lunora-collections` are singletons
+and take no name.
 
 ## Core Mental Model
 
@@ -75,7 +112,9 @@ in this skill.
 - **Reads go through indexes.** Prefer `ctx.db.query("t").withIndex(...)` over
   `.filter(...)`; declare the index with `.index("by_x", ["x"])`.
 - **Clients** subscribe over WebSocket. `useQuery`/`useMutation` (React, Vue,
-  Solid, Svelte) re-render the moment a mutation changes the queried rows.
+  Solid, Svelte, React Native; signals in Angular) re-render the moment a
+  mutation changes the queried rows. Subscriptions run under the socket's
+  verified identity, so `rls()` / `ctx.auth` apply to live updates too.
 
 ## When Not to Use
 

@@ -27,8 +27,21 @@ const K = new Uint32Array([
 
 const rotr = (value: number, shift: number): number => (value >>> shift) | (value << (32 - shift));
 
+// Module-level singletons, reused across calls. `sha256Hex` is synchronous and
+// JS is single-threaded, so there is no reentrancy: the encoder is stateless
+// for `encode`, and the message schedule `w` is fully overwritten (indices
+// 0-15 from the block, 16-63 derived) before any entry is read each block.
+// This keeps every fingerprint from allocating a fresh encoder + 256-byte
+// scratch array — the hash is the floor of the whole package and runs once per
+// grouped row. (`K` above is already a module-level singleton for the same
+// reason.)
+const textEncoder = new TextEncoder();
+const w = new Uint32Array(64);
+
+const toHex = (value: number): string => (value >>> 0).toString(16).padStart(8, "0");
+
 export const sha256Hex = (message: string): string => {
-    const bytes = new TextEncoder().encode(message);
+    const bytes = textEncoder.encode(message);
 
     // Padded length: message + 0x80 marker + zero fill + 8-byte length, rounded
     // up to a whole number of 64-byte blocks.
@@ -53,8 +66,6 @@ export const sha256Hex = (message: string): string => {
     let h5 = 0x9b05688c;
     let h6 = 0x1f83d9ab;
     let h7 = 0x5be0cd19;
-
-    const w = new Uint32Array(64);
 
     for (let offset = 0; offset < paddedLength; offset += 64) {
         for (let index = 0; index < 16; index += 1) {
@@ -105,8 +116,6 @@ export const sha256Hex = (message: string): string => {
         h6 = (h6 + g) >>> 0;
         h7 = (h7 + h) >>> 0;
     }
-
-    const toHex = (value: number): string => (value >>> 0).toString(16).padStart(8, "0");
 
     return toHex(h0) + toHex(h1) + toHex(h2) + toHex(h3) + toHex(h4) + toHex(h5) + toHex(h6) + toHex(h7);
 };

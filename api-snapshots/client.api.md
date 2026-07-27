@@ -102,6 +102,48 @@ interface CachedQuery {
 }
 ```
 
+### `ClientDebugShard` (interface)
+
+```ts
+interface ClientDebugShard {
+    confirmedMutationWatermark: number;
+    hasSocket: boolean;
+    shardKey: string | undefined;
+    wasEverConnected: boolean;
+    wsState: WSState;
+}
+```
+
+### `ClientDebugSnapshot` (interface)
+
+```ts
+interface ClientDebugSnapshot {
+    clientId: string;
+    closed: boolean;
+    connectionStatus: ConnectionStatus;
+    pendingWrites: number;
+    shards: ClientDebugShard[];
+    subscriptions: ClientDebugSubscription[];
+}
+```
+
+### `ClientDebugSubscription` (interface)
+
+```ts
+interface ClientDebugSubscription {
+    acked: boolean;
+    functionPath: string;
+    id: string;
+    kind: "query" | "shape";
+    lastMutationId?: number;
+    pendingOptimisticLayers: number;
+    rowCount?: number;
+    serverCursor?: number;
+    shardKey: string | undefined;
+    subscriberCount: number;
+}
+```
+
 ### `ClientMessage` (type)
 
 ```ts
@@ -373,6 +415,7 @@ class LunoraClient {
     connectionStatus(): ConnectionStatus;
     onConnectionStatus(listener: (status: ConnectionStatus) => void): Unsubscribe;
     pendingCount(): number;
+    debug(): ClientDebugSnapshot;
     onPendingChange(listener: (pending: number) => void): Unsubscribe;
     onMutationSettled(listener: (event: MutationSettledEvent) => void): Unsubscribe;
     getWebSocketImpl(): typeof WebSocket | undefined;
@@ -397,6 +440,19 @@ class LunoraClient {
     action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: {
         shardKey?: string;
     }): Promise<ReturnOf<F>>;
+    importRows(function_: FunctionReference, rows: ReadonlyArray<unknown>, options?: {
+        chunkSize?: number;
+        importId?: string;
+        onProgress?: (progress: {
+            done: number;
+            total: number;
+        }) => void;
+        shardKey?: string;
+        toArgs?: (chunk: ReadonlyArray<unknown>) => Record<string, unknown>;
+    }): Promise<{
+        chunks: number;
+        imported: number;
+    }>;
     shardTraffic(table: string): Promise<ShardTrafficResult>;
     listScheduledJobs(): Promise<ScheduleRecord[]>;
     schedulerStatus(): Promise<SchedulerStatus>;
@@ -855,6 +911,16 @@ interface OptimisticLocalStore {
 }
 ```
 
+### `OptimisticMessage` (interface)
+
+```ts
+interface OptimisticMessage {
+    content: string;
+    id: number;
+    maxDurableSeqAtSend: number;
+}
+```
+
 ### `OptimisticUpdate` (type)
 
 ```ts
@@ -970,6 +1036,22 @@ interface QueuedMutation<T = unknown> {
     readonly reject: (error: unknown) => void;
     readonly resolve: (value: T) => void;
     readonly shardKey?: string;
+}
+```
+
+### `RETIRE_AFTER_DURABLE_SEQ_ADVANCE` (const)
+
+```ts
+const RETIRE_AFTER_DURABLE_SEQ_ADVANCE = 2;
+```
+
+### `ReconcileDurableMessage` (interface)
+
+```ts
+interface ReconcileDurableMessage {
+    content: string;
+    role: "assistant" | "system" | "tool" | "user";
+    seq: number;
 }
 ```
 
@@ -1531,6 +1613,14 @@ const isUnauthorizedError: (error: unknown) => error is Error & {
 };
 ```
 
+### `maxSeq` (const)
+
+```ts
+const maxSeq: (messages: ReadonlyArray<{
+    seq: number;
+}>) => number;
+```
+
 ### `preloadQuery` (const)
 
 ```ts
@@ -1549,6 +1639,12 @@ const preloadedQueryResult: <T>(preloaded: Preloaded<T>) => T;
 
 ```ts
 const queryCacheKey: (functionPath: string, argsKey: string, shardKey?: string) => string;
+```
+
+### `reconcileOptimistic` (const)
+
+```ts
+const reconcileOptimistic: (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<ReconcileDurableMessage>) => OptimisticMessage[];
 ```
 
 ### `sendToSw` (const)

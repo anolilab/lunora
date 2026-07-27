@@ -1,6 +1,6 @@
 {
     "name": "@lunora/astro",
-    "version": "1.0.0-alpha.48",
+    "version": "1.0.0-alpha.54",
     "description": "Astro integration for Lunora — single-worker composition plus reactive-loader server helpers",
     "keywords": [
         "astro",
@@ -64,14 +64,14 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.27",
-        "@lunora/runtime": "1.0.0-alpha.36"
+        "@lunora/client": "1.0.0-alpha.31",
+        "@lunora/runtime": "1.0.0-alpha.41"
     },
     "devDependencies": {
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
-        "astro": "7.1.1",
+        "astro": "7.1.3",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",

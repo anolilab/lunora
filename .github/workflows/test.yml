@@ -147,7 +147,7 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                "package": ["client", "container", "d1", "do", "queue", "runtime", "scheduler", "storage", "workflow", "x402"]
+                "package": ["auth", "client", "container", "d1", "do", "queue", "runtime", "scheduler", "storage", "workflow", "x402"]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4

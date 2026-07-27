@@ -1,0 +1,235 @@
+---
+title: Adopt in an existing app
+description: Add Lunora to a working product that already has its own auth, Worker, and data layer — without rewriting either.
+---
+
+Most Lunora adoptions are not greenfield. The app already exists, already ships,
+already has a session authority (better-auth, Clerk, Auth.js, its own cookie), its
+own Worker with its own routes, and a data layer it can't switch off on a Tuesday.
+Lunora comes in beside all of that, takes over one slice of sync, and proves itself
+before anything is deleted.
+
+This page is that path: what to keep, what to wire, and the specific things that
+will otherwise cost you an afternoon.
+
+<Callout type="info">
+    **Keep your auth.** The single most common wrong turn is standing up a second signup stack. Don't. Your existing session authority stays authoritative;
+    Lunora reads it.
+</Callout>
+
+## Keep your session authority
+
+Lunora ships `@lunora/auth`, but it is optional and it is _not_ the adoption path for
+an app that already authenticates users. Running a second signup/session stack beside
+your real one means two user tables, two cookie lifetimes, and two places a session
+can be revoked.
+
+Instead, bridge the session you already have with `resolveIdentity`. It receives the
+inbound request and returns the identity Lunora should trust:
+
+```ts
+import { createWorker } from "lunorash/runtime";
+
+export default createWorker({
+    shardDO: ShardDO,
+
+    // Your existing session authority, unchanged.
+    resolveIdentity: async (request, env) => {
+        const auth = createAuth(env, new URL(request.url).origin);
+        const session = await auth.api.getSession({ headers: request.headers });
+
+        if (!session) {
+            return null; // anonymous
+        }
+
+        // `userId` becomes ctx.auth.userId on the shard; the rest is forwarded as
+        // claims for ctx.auth.getIdentity() and any claim-reading RLS policy.
+        return { email: session.user.email, userId: session.user.id };
+    },
+
+    // Which shard a given identity may reach. With `.shardBy("userId")` this is the
+    // whole per-user isolation boundary.
+    authorizeShard: (identity, shardKey) => identity?.userId === shardKey,
+});
+```
+
+### Memoize it
+
+`resolveIdentity` is called **once per RPC and once per fan-out leg**, so a
+cross-shard query verifies the session once per shard — and the
+`createAuth(...)` line above runs every time too. Wrap it:
+
+```ts
+import { memoizeIdentityPerRequest } from "lunorash/runtime";
+
+resolveIdentity: memoizeIdentityPerRequest(async (request, env) => { … }),
+```
+
+`memoizeIdentityPerRequest` is keyed on the `Request` object, so it cannot serve a
+stale identity — it just stops the duplication. If verification is genuinely expensive
+(a JWKS fetch, a database read), `memoizeIdentity(resolver, { ttlMs: 5000 })` also
+caches across requests. `ttlMs` is in **milliseconds** — `5000` is five seconds — and it
+is your revocation delay, so keep it to a few seconds.
+
+## Declare ownership once
+
+With `.shardBy("userId")` and `authorizeShard` already stating who owns what, don't
+restate it in every shape's `where`. Declare it on the table:
+
+```ts
+// lunora/schema.ts
+nodes: defineTable({ text: v.string(), userId: v.string() })
+    .shardBy("userId")
+    .ownedBy("userId"),
+```
+
+```ts
+// lunora/shapes.ts — no predicate needed; the filter comes from the verified identity
+export const myNodes = defineShape({ owner: true, table: "nodes" });
+```
+
+A shape's `where` returns a **predicate**, not a boolean, so if you do write one, use
+`deny()` for the unauthorized branch:
+
+```ts
+import { deny } from "lunorash/server";
+
+where: (ctx, { channelId }) => (ctx.auth.userId === null ? deny() : { channelId }),
+```
+
+`deny()` is `{ OR: [] }` — a disjunction over zero branches, which matches nothing.
+The plausible-looking `{}` is its exact opposite and replicates the entire table,
+silently. `false` works as sugar for the same thing.
+
+## Call Lunora from your own Worker
+
+Your app probably has server-side code that needs Lunora data — an MCP server, a
+webhook handler, a cron, an admin route. Don't reach for the raw DO stub and
+hand-roll the protocol. Use the typed client:
+
+```ts
+import { createShardClient } from "lunorash/runtime";
+
+import { internal } from "../lunora/_generated/api";
+
+const shard = createShardClient(env.SHARD).as({ userId }).forShard(userId);
+const nodes = await shard.call(internal.mcp.listNodes, { userId });
+//    ^? typed from the function's own args + return validators
+```
+
+A fresh client is a **system** caller (it may invoke `internalQuery` /
+`internalMutation`), because code holding the DO binding is already inside the trust
+boundary. `.as({ userId })` additionally attaches a verified identity so the call runs
+under that user's RLS context. Pass `{ system: false }` if you want it to behave
+exactly like an end-user RPC.
+
+<Callout type="warn">
+    `createShardClient` does **not** run `authorizeShard` — you chose the shard key. Verify the identity owns the shard first, normally the same one-line check
+    your worker's `authorizeShard` does.
+</Callout>
+
+## Dev proxy: two silent failures
+
+If Vite serves your app and proxies `/_lunora` to a separately-running worker, two
+things go wrong in a way that looks identical — the page loads, HTTP RPC answers, and
+the live query never arrives, so the UI sits on its loading state with nothing in the
+console.
+
+```ts
+// vite.config.ts
+server: {
+    proxy: {
+        // ws: true is REQUIRED. The string shorthand ("/_lunora": "http://…") and
+        // the object form without `ws` do not install the upgrade listener.
+        "/_lunora": { target: "http://localhost:8787", ws: true },
+    },
+},
+```
+
+The second is `changeOrigin: true`: it rewrites the Host, so the worker computes a
+different self-origin than the browser's `Origin` and the CSRF guard rejects the
+cookie-bearing upgrade with `FORBIDDEN_ORIGIN`. Loopback-to-loopback is trusted by
+default, so the common `localhost:3000 → localhost:8787` case just works; any other
+dev host needs the dev-server origin in `security.csrf.trustedOrigins`.
+
+`@lunora/vite` warns about both at startup, and the `FORBIDDEN_ORIGIN` body names the
+origin it received, the origin it expected, and the knob.
+
+## Run both engines during the migration
+
+Cut over behind a flag, not in one commit. Read the flag at the boundary where the
+data layer is constructed, so the old path is untouched when it's off:
+
+```tsx
+export function DataLayer({ children }: { children: ReactNode }) {
+    const [useLunora, setUseLunora] = useState(false);
+
+    // Read in an effect, not during render, so SSR/prerender and hydration agree.
+    useEffect(() => setUseLunora(isLunoraEnabled()), []);
+
+    if (!useLunora) {
+        return <>{children}</>; // legacy path, unchanged
+    }
+
+    return <LunoraProvider client={getLunoraClient()}>{children}</LunoraProvider>;
+}
+```
+
+Pair it with a server-side switch read from the same preference, so a user's browser
+and your server-side code (MCP, webhooks) agree about which backend owns their data.
+
+### Move the data
+
+One-shot import per user. Chunk it — a per-row loop pays a round-trip _and_ a
+watermark wait per row:
+
+```ts
+await client.importRows(api.migrate.importNodes, rows, {
+    importId: `migrate-${userId}`, // stable → a retried chunk is deduped, not doubled
+    onProgress: ({ done, total }) => setProgress(done / total),
+    shardKey: userId,
+    toArgs: (chunk) => ({ nodes: chunk }),
+});
+```
+
+Back the receiving mutation with `ctx.db.insertMany(...)` (or `insertManyUnsafe` for
+data you vouch for). For the reverse — a user leaving, or GDPR erasure — use
+`ctx.db.wipeShard()` from an `internalMutation`.
+
+## Test it without a worker
+
+Don't stand up a worker and a DO per e2e test, and don't hand-roll the wire protocol
+either — the watermark bookkeeping is easy to get subtly wrong, and then the failure
+looks like a Lunora bug:
+
+```ts
+import { mockLunora } from "@lunora/testing/playwright";
+
+const lunora = await mockLunora(page, {
+    rows: { nodes: [{ _id: "n1", text: "hello", userId: "u1" }] },
+    shapes: { myNodes: { tables: ["nodes"], where: { userId: "u1" } } },
+});
+
+await page.goto("/");
+await expect(page.getByText("hello")).toBeVisible();
+
+await lunora.insert("nodes", { _id: "n2", text: "world", userId: "u1" });
+await expect(page.getByText("world")).toBeVisible();
+
+lunora.suppressPokes(); // reproduce a dropped poke
+lunora.failWrites("CONFLICT"); // reproduce a rejected mutation
+```
+
+## When something is stuck
+
+`client.debug()` answers the questions that are otherwise unanswerable from outside
+the client — is the socket open, what watermark has the server confirmed for this
+shard, has this subscription been acked, is anything queued:
+
+```ts
+const { shards, subscriptions } = client.debug();
+```
+
+And `lunora doctor` checks the project-level things: the `SHARD` binding, `.dev.vars`
+placeholders, and whether your `@lunora/*` versions are a coherent set (they are
+versioned independently, so a partial update is easy to miss).

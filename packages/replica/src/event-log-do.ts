@@ -50,6 +50,15 @@ const isIdempotencyConflictError = (error: unknown): error is Error => error ins
  * identical data always encodes identically regardless of object-key
  * insertion order at ANY nesting depth. Arrays keep their order — only
  * object keys are sorted.
+ *
+ * Keys sort by UTF-16 code unit, NOT `localeCompare`, for the same reason
+ * `canonicalizeForHash` in `apply-diff.ts` does (REPLICA-05): `localeCompare`
+ * resolves against the runtime's default locale and ICU version, so it is not a
+ * stable ordering across machines. Here that is an idempotency hazard rather
+ * than a replication one — this feeds {@link fingerprintBatch}, which binds a
+ * `batchId` to its contents, so two DO instances on different ICU builds (or one
+ * Node upgrade shifting collation) would fingerprint the SAME batch differently
+ * and report a legitimate retry as an idempotency conflict.
  */
 const canonicalizeForFingerprint = (value: unknown): unknown => {
     if (Array.isArray(value)) {
@@ -58,7 +67,11 @@ const canonicalizeForFingerprint = (value: unknown): unknown => {
 
     if (value !== null && typeof value === "object") {
         const record = value as Record<string, unknown>;
-        const sortedKeys = Object.keys(record).toSorted((a, b) => a.localeCompare(b));
+        const sortedKeys = Object.keys(record);
+
+        // eslint-disable-next-line sonarjs/no-alphabetical-sort -- code-unit order is required for cross-machine determinism; a localeCompare comparator is the bug, not the fix
+        sortedKeys.sort();
+
         const result: Record<string, unknown> = {};
 
         for (const key of sortedKeys) {

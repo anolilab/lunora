@@ -32,6 +32,12 @@ export interface AdvisorAuthConfig {
     // eslint-disable-next-line no-secrets/no-secrets -- the dotted config-path in the doc comment, not a credential
     /** `emailAndPassword.requireEmailVerification === true` present. */
     requireEmailVerification: boolean;
+    /**
+     * `plugins` includes `scim(...)` while `database` is `lunoraD1Adapter` /
+     * `lunoraAuthAdapter` — neither exposes native transactions, which `@better-auth/scim`
+     * refuses to serve without.
+     */
+    scimOnNonTransactionalAdapter: boolean;
     /** `advanced.useSecureCookies === false`. */
     secureCookiesDisabled: boolean;
     /** `session.freshAge === 0` (explicit literal). */

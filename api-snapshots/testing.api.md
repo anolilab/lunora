@@ -240,6 +240,7 @@ interface TestHarness {
         <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): TestSubscription<R>;
         <R>(inline: InlineQueryFunction<R>): TestSubscription<R>;
     };
+    wideEvent: () => RecordedWideEvent;
     withIdentity: (identity: TestIdentity) => TestHarness;
 }
 ```
@@ -363,3 +364,91 @@ const toolCallTurn: (id: string, name: string, input: unknown, text?: string) =>
 ### `waitForMail` (const)
 
 Re-exported from `@lunora/mail` — signature tracked at its source.
+
+## `@lunora/testing/playwright`
+
+### `MockLunora` (interface)
+
+```ts
+interface MockLunora {
+    dispose: () => Promise<void>;
+    failWrites: (code: false | string) => void;
+    insert: (table: string, row: MockRow) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
+    remove: (table: string, id: string) => Promise<void>;
+    resync: () => Promise<void>;
+    rows: (table: string) => MockRow[];
+    suppressPokes: (suppressed?: boolean) => void;
+    watermarks: () => Record<string, number>;
+}
+```
+
+### `MockLunoraOptions` (interface)
+
+```ts
+interface MockLunoraOptions {
+    functions?: Record<string, unknown>;
+    path?: string;
+    rows?: Record<string, ReadonlyArray<MockRow>>;
+    shapes?: Record<string, MockShape>;
+}
+```
+
+### `MockRoute` (interface)
+
+```ts
+interface MockRoute {
+    fulfill: (response: {
+        body?: string;
+        contentType?: string;
+        status?: number;
+    }) => Promise<void>;
+    request: () => {
+        headers: () => Record<string, string>;
+        postData: () => null | string;
+    };
+}
+```
+
+### `MockRow` (type)
+
+```ts
+type MockRow = Record<string, unknown> & {
+    _id: string;
+};
+```
+
+### `MockShape` (interface)
+
+```ts
+interface MockShape {
+    tables: ReadonlyArray<string>;
+    where?: Record<string, unknown>;
+}
+```
+
+### `MockWebSocketRoute` (interface)
+
+```ts
+interface MockWebSocketRoute {
+    onMessage: (handler: (message: string) => void) => void;
+    send: (message: string) => void;
+}
+```
+
+### `MockablePage` (interface)
+
+```ts
+interface MockablePage {
+    route: (url: string, handler: (route: MockRoute) => Promise<void> | void) => Promise<void>;
+    routeWebSocket: (url: RegExp | string, handler: (ws: MockWebSocketRoute) => void) => Promise<void>;
+    unroute: (url: string) => Promise<void>;
+    unrouteAll?: () => Promise<void>;
+}
+```
+
+### `mockLunora` (const)
+
+```ts
+const mockLunora: (page: MockablePage, options?: MockLunoraOptions) => Promise<MockLunora>;
+```

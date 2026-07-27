@@ -1,0 +1,125 @@
+---
+title: Data types
+description: The value types a Lunora document can hold, how each is stored, and which ones need the wire codec to survive JSON.
+---
+
+A Lunora document is a JSON-shaped object stored as a row in SQLite. The
+[validators](/docs/concepts/validation) in `v.*` define which value types a
+column may hold; this page is the reference for what those types actually are.
+
+## The type table
+
+| Validator              | TypeScript type  | Notes                                                         |
+| ---------------------- | ---------------- | ------------------------------------------------------------- |
+| `v.string()`           | `string`         |                                                               |
+| `v.number()`           | `number`         | IEEE-754 double                                               |
+| `v.boolean()`          | `boolean`        |                                                               |
+| `v.null()`             | `null`           | The explicit "no value" — distinct from absent                |
+| `v.bigint()`           | `bigint`         | Needs the wire codec (see below)                              |
+| `v.bytes()`            | `ArrayBuffer`    | Needs the wire codec                                          |
+| `v.id("table")`        | `Id<"table">`    | A reference — see [Document IDs](/docs/concepts/document-ids) |
+| `v.timestamp()`        | `number`         | Epoch milliseconds                                            |
+| `v.date()`             | `number`         | Calendar date, also stored as epoch ms                        |
+| `v.geoPoint()`         | `{ lat, lng }`   | WGS84 decimal degrees                                         |
+| `v.storage(bucket?)`   | `string`         | An R2 object key                                              |
+| `v.array(inner)`       | `T[]`            |                                                               |
+| `v.object({ … })`      | `{ … }`          | Nested object with a declared shape                           |
+| `v.record(key, value)` | `Record<K, V>`   | Open-ended keys, uniform values                               |
+| `v.union(a, b, …)`     | `A \| B \| …`    |                                                               |
+| `v.literal(value)`     | the literal      | `string`, `number`, `boolean`, `bigint`, or `null`            |
+| `v.optional(inner)`    | `T \| undefined` | The field may be absent                                       |
+| `v.any()`              | `unknown`        | Unchecked — the escape hatch                                  |
+| `v.from(schema)`       | inferred         | Adapt a Standard Schema validator; **arguments only**         |
+
+Every document additionally carries the framework-managed `_id` and
+`_creationTime`, described in [Document IDs](/docs/concepts/document-ids).
+
+## Numbers, bigints, and dates
+
+`v.number()` is a JavaScript double, so integers above 2^53 lose precision. When
+you need exact large integers — ledger amounts, external 64-bit ids — use
+`v.bigint()`.
+
+`v.timestamp()` and `v.date()` both store a finite epoch-millisecond **number**;
+they differ only in intent, and both pair with `.defaultNow()` to stamp the
+insert time:
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export default defineSchema({
+    invoices: defineTable({
+        amountCents: v.bigint(),
+        issuedAt: v.timestamp().defaultNow(),
+        dueOn: v.date(),
+    }),
+});
+```
+
+Storing times as numbers keeps them sortable and range-queryable through an
+ordinary [index](/docs/concepts/indexes) — no date parsing on the read path.
+
+## Optional versus null
+
+These are different, and the difference is load-bearing:
+
+- **`v.optional(v.string())`** — the field may be **absent**. Reading it gives
+  `undefined`.
+- **`v.union(v.string(), v.null())`** — the field is **present and explicitly
+  empty**.
+
+That distinction shows up when you write. `patch` rejects an explicit
+`undefined`: to clear a nullable field set it to `null`, and to leave a field
+untouched omit the key entirely. Setting a field to `undefined` is an error
+rather than a silent no-op, because the two intents are too easy to confuse.
+
+## Values that JSON cannot carry
+
+The RPC and WebSocket transport is JSON, and JSON has no `bigint` and no
+`ArrayBuffer` — `JSON.stringify(1n)` throws, and an `ArrayBuffer` silently
+stringifies to `{}`. Lunora therefore runs a **wire codec** over every payload
+that tags exactly those leaves so they survive the round trip.
+
+Encoded by the codec: `bigint`, `ArrayBuffer` and typed-array views
+(`Uint8Array`, `Float32Array`, …), `Date`, `URL`, `Map`, `Set`, `Error`,
+`NaN` / `±Infinity`, and `undefined` in **array positions** (where JSON would
+turn it into `null`).
+
+Rejected outright: cyclic graphs, functions, and non-plain objects such as
+`RegExp` or a class instance. These have no own enumerable keys, so instead of
+silently encoding to `{}` they throw a `TypeError`. Nesting deeper than 64
+levels throws a `RangeError`.
+
+A value with no special leaves encodes to a byte-identical JSON tree, so the
+codec costs nothing on ordinary payloads. See
+[Wire protocol](/docs/concepts/wire-protocol) for the encoding itself and how
+non-TypeScript clients (the Python SDK's `WireBigInt`, `WireBytes`, …) express
+these types.
+
+## Size limits
+
+Values live in Durable Object SQLite, so the platform's storage envelope applies:
+a single storage operation is capped at **128 KB**, and a Durable Object's SQLite
+tops out at **10 GB**. Large binary payloads belong in R2 via
+[file storage](/docs/concepts/file-storage) with a `v.storage()` column holding
+the key, not inline in a `v.bytes()` field. See [Limits](/docs/limits) for the
+full table.
+
+## Types outside the schema
+
+`v.from(schema)` adapts any [Standard Schema](https://standardschema.dev)
+validator (Zod, Valibot, ArkType) for **function arguments**. It is deliberately
+not allowed as a table column — `defineTable` throws if you try — because the
+schema is what codegen, the studio, and the advisors read to understand your
+data. Validation must also be synchronous; a validator returning a Promise
+throws.
+
+## See also
+
+- [Validation](/docs/concepts/validation)
+- [Schema](/docs/concepts/schema)
+- [Document IDs](/docs/concepts/document-ids)
+- [Wire protocol](/docs/concepts/wire-protocol)
+- [Limits](/docs/limits)
+- [@lunora/values](/docs/packages/values)
