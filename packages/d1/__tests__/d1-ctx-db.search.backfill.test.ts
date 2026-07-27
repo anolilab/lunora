@@ -1,8 +1,11 @@
 import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
+import { MAX_INDEXED_TOKENS } from "@lunora/do";
+import type { SqlDialect } from "@lunora/sql-store";
+import { backfillSqlSearchIndexes, createSqlCtxDb, runSqlSearchMigrations } from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { D1Exec } from "../src/d1-ctx-db";
-import { backfillD1SearchIndexes, createD1CtxDb as createD1ContextDatabase, runD1SearchMigrations } from "../src/d1-ctx-db";
+import sqliteDialect from "../src/sqlite-dialect";
 import createD1Exec from "./_helpers/node-sqlite-d1";
 
 /**
@@ -39,22 +42,12 @@ const stagedSchema = tableOf([{ field: "body", filterFields: ["channel"], name: 
 const englishSchema = tableOf([{ field: "body", filterFields: ["channel"], language: "en", name: "by_body" }]);
 
 /**
- * Force the portable inverted companion by failing the fts5 probe, whether or
- * not this Node build happens to ship fts5 — these assertions are about the
- * `(token, id, occurrences)` layout Postgres and MySQL use.
+ * The SQLite dialect with fts5 declared unavailable — the portable
+ * `(token, id, occurrences)` layout Postgres and MySQL use. A dialect override
+ * rather than a stubbed connection: the engine's capability is what actually
+ * decides the layout, so saying so directly beats intercepting SQL.
  */
-const withoutFts5 = (inner: D1Exec): D1Exec => {
-    return {
-        all: (sql, parameters) => inner.all(sql, parameters),
-        run: (sql, parameters) => {
-            if (sql.includes("__lunora_fts_probe") && sql.includes("CREATE")) {
-                return Promise.reject(new Error("fts5 unavailable (forced)"));
-            }
-
-            return inner.run(sql, parameters);
-        },
-    };
-};
+const invertedDialect: SqlDialect = { ...sqliteDialect, supportsFts5: false };
 
 let harness: ReturnType<typeof createD1Exec>;
 let exec: D1Exec;
@@ -63,7 +56,7 @@ const createDocsTable = (): void => {
     harness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT)`);
 };
 
-const writerFor = (schema: SchemaLike): DatabaseWriterLike => createD1ContextDatabase({ clock: () => 1_700_000_000_000, exec, schema });
+const writerFor = (schema: SchemaLike): DatabaseWriterLike => createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: invertedDialect, exec, schema });
 
 const companionRows = async (): Promise<Record<string, unknown>[]> =>
     harness.exec.all(`SELECT "__token__", "__id__", "__n__" FROM "docs__fts_by_body" ORDER BY "__token__", "__id__"`, []);
@@ -71,7 +64,7 @@ const companionRows = async (): Promise<Record<string, unknown>[]> =>
 describe("d1 ctx-db search backfill", () => {
     beforeEach(() => {
         harness = createD1Exec();
-        exec = withoutFts5(harness.exec);
+        exec = harness.exec;
         createDocsTable();
     });
 
@@ -98,7 +91,7 @@ describe("d1 ctx-db search backfill", () => {
             .withSearchIndex("by_body", (q) => q.search("body", "ancient"))
             .collect();
 
-        await backfillD1SearchIndexes(exec, stagedSchema);
+        await backfillSqlSearchIndexes(exec, stagedSchema, invertedDialect);
 
         const after = await writerFor(stagedSchema)
             .query("docs")
@@ -127,12 +120,12 @@ describe("d1 ctx-db search backfill", () => {
         }
 
         // One migration pass indexes a bounded page, not the whole table.
-        await runD1SearchMigrations(exec, searchSchema);
+        await runSqlSearchMigrations(exec, searchSchema, invertedDialect);
 
         const afterOnePass = await harness.exec.all(`SELECT COUNT(DISTINCT "__id__") AS c FROM "docs__fts_by_body"`, []);
 
         // The explicit runner loops to completion.
-        await backfillD1SearchIndexes(exec, searchSchema);
+        await backfillSqlSearchIndexes(exec, searchSchema, invertedDialect);
 
         const afterRunner = await harness.exec.all(`SELECT COUNT(DISTINCT "__id__") AS c FROM "docs__fts_by_body"`, []);
 
@@ -147,14 +140,14 @@ describe("d1 ctx-db search backfill", () => {
 
         await plain.insert("docs", { _id: "d1", body: "repeat repeat unique", channel: "x" }, { allowExplicitId: true });
 
-        await backfillD1SearchIndexes(exec, searchSchema);
+        await backfillSqlSearchIndexes(exec, searchSchema, invertedDialect);
 
         const first = await companionRows();
 
         // Re-running must converge, not accumulate: doubled counts would skew
         // every relevance score, and duplicate rows would return the same
         // document twice on the fts5 path.
-        await backfillD1SearchIndexes(exec, searchSchema);
+        await backfillSqlSearchIndexes(exec, searchSchema, invertedDialect);
 
         await expect(companionRows()).resolves.toStrictEqual(first);
     });
@@ -163,17 +156,17 @@ describe("d1 ctx-db search backfill", () => {
         expect.assertions(1);
 
         const plain = writerFor(plainSchema);
-        const body = Array.from({ length: 1200 }, (_, index) => `token${String(index)}`).join(" ");
+        const body = Array.from({ length: MAX_INDEXED_TOKENS + 200 }, (_, index) => `token${String(index)}`).join(" ");
 
         await plain.insert("docs", { _id: "big", body, channel: "x" }, { allowExplicitId: true });
 
-        await backfillD1SearchIndexes(exec, searchSchema);
+        await backfillSqlSearchIndexes(exec, searchSchema, invertedDialect);
 
         const rows = await harness.exec.all(`SELECT COUNT(*) AS c FROM "docs__fts_by_body" WHERE "__id__" = ?`, ["big"]);
 
         // Bounded, so one huge text column can't fan a single row write out into
         // hundreds of sequential statements.
-        expect(Number(rows[0]?.["c"])).toBe(1000);
+        expect(Number(rows[0]?.["c"])).toBe(MAX_INDEXED_TOKENS);
     });
 
     it("rebuilds the companion when the analysis profile changes", async () => {
@@ -182,14 +175,14 @@ describe("d1 ctx-db search backfill", () => {
         const plain = writerFor(plainSchema);
 
         await plain.insert("docs", { _id: "d1", body: "the quick fox", channel: "x" }, { allowExplicitId: true });
-        await backfillD1SearchIndexes(exec, searchSchema);
+        await backfillSqlSearchIndexes(exec, searchSchema, invertedDialect);
 
         const folded = await harness.exec.all(`SELECT "__token__" FROM "docs__fts_by_body" ORDER BY "__token__"`, []);
 
         // Declaring a language changes what a token *is*, so rows indexed under
         // the old profile would half-match forever. The recorded profile catches
         // it and the companion is rebuilt.
-        await backfillD1SearchIndexes(exec, englishSchema);
+        await backfillSqlSearchIndexes(exec, englishSchema, invertedDialect);
 
         const analyzed = await harness.exec.all(`SELECT "__token__" FROM "docs__fts_by_body" ORDER BY "__token__"`, []);
 
@@ -212,7 +205,7 @@ describe("d1 ctx-db search backfill", () => {
 
         await plain.insert("docs", { _id: "d1", body: "the who", channel: "x" }, { allowExplicitId: true });
 
-        await backfillD1SearchIndexes(exec, englishSchema);
+        await backfillSqlSearchIndexes(exec, englishSchema, invertedDialect);
 
         const stopwordOnly = await writerFor(englishSchema)
             .query("docs")

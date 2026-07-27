@@ -36,11 +36,8 @@
  * mechanism exists so it can land later and rebuild indexes automatically.
  */
 
-/**
- * A language whose analysis profile this runtime knows. `"none"` (the default
- * when a search index declares no language) folds text but keeps every word.
- */
-type SearchLanguage = "de" | "en" | "es" | "fr" | "it" | "nl" | "none" | "pt";
+import type { SearchLanguage } from "../../../shared/search-languages";
+import { isSearchLanguage } from "../../../shared/search-languages";
 
 /**
  * English function words. Deliberately short — an aggressive list makes
@@ -99,7 +96,13 @@ const foldText = (text: string): string => text.normalize("NFD").replaceAll(LATI
  */
 const stopwordSet = (words: string): ReadonlySet<string> => new Set(foldText(words).split(" "));
 
-const STOPWORDS: Record<string, ReadonlySet<string>> = {
+/**
+ * One list per declared language. Typed over the shared union rather than
+ * `string`, so adding a language to `shared/search-languages.ts` without a list
+ * here is a compile error instead of an index that silently stops dropping
+ * function words.
+ */
+const STOPWORDS: Record<SearchLanguage, ReadonlySet<string>> = {
     de: stopwordSet(DE_STOPWORDS),
     en: stopwordSet(EN_STOPWORDS),
     es: stopwordSet(ES_STOPWORDS),
@@ -109,9 +112,6 @@ const STOPWORDS: Record<string, ReadonlySet<string>> = {
     none: new Set<string>(),
     pt: stopwordSet(PT_STOPWORDS),
 };
-
-/** Every language `.searchIndex({ language })` accepts. */
-const SEARCH_LANGUAGES: ReadonlySet<string> = new Set(Object.keys(STOPWORDS));
 
 /**
  * Analysis version. Bumped whenever folding, stopwords or (eventually)
@@ -143,14 +143,14 @@ const analyzerCache = new Map<string, SearchAnalyzer>();
  * this language" rather than an error on the read path.
  */
 const createSearchAnalyzer = (language: string | undefined): SearchAnalyzer => {
-    const resolved = language !== undefined && SEARCH_LANGUAGES.has(language) ? language : "none";
+    const resolved: SearchLanguage = language !== undefined && isSearchLanguage(language) ? language : "none";
     const cached = analyzerCache.get(resolved);
 
     if (cached) {
         return cached;
     }
 
-    const stopwords = STOPWORDS[resolved] ?? new Set<string>();
+    const stopwords = STOPWORDS[resolved];
 
     const split = (text: string): string[] => {
         const tokens = foldText(text).match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -184,5 +184,7 @@ const createSearchAnalyzer = (language: string | undefined): SearchAnalyzer => {
     return analyzer;
 };
 
-export type { SearchAnalyzer, SearchLanguage };
-export { createSearchAnalyzer, SEARCH_LANGUAGES };
+export type { SearchLanguage } from "../../../shared/search-languages";
+export { SEARCH_LANGUAGES } from "../../../shared/search-languages";
+export type { SearchAnalyzer };
+export { createSearchAnalyzer };

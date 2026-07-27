@@ -115,22 +115,40 @@ export interface SqlDialect {
      * shared scorer — which is why it is opt-in and why the parity suite asserts
      * matching, not order, for indexes that use it.
      *
-     * Recall still matches the portable path: the stored vector is built from
-     * the tokens Lunora's analyzer already produced, with a config (`simple`)
-     * that adds no stemming or stopwords of the engine's own.
+     * Recall still matches the portable path: the stored form is built from the
+     * tokens Lunora's analyzer already produced, under a configuration that adds
+     * no stemming or stopwords of the engine's own.
+     *
+     * Every member returns a *statement*, not a fragment, so no engine grammar
+     * reaches the store core: Postgres matches with `@@` against a `tsvector`
+     * column while MySQL would use `MATCH … AGAINST` against a text column, and
+     * both fit here without the caller knowing which.
      */
     nativeTextSearch?: {
-        /** DDL for the column holding the indexed vector. */
-        columnType: string;
-        /** Index method for that column (`GIN`). */
-        indexMethod: string;
-        /** Rank expression, best first. */
-        rank: (column: SQL, query: SQL) => SQL;
-        /** Build the match predicate for a query's analyzed terms, final term as a prefix. */
-        toQuery: (terms: ReadonlyArray<string>) => SQL;
-        /** Build the stored vector from an already-analyzed token stream. */
-        toVector: (bound: SQL) => SQL;
+        /** DDL for the companion table holding the engine's indexed form, keyed by document id. */
+        createCompanion: (companion: string, keyType: string) => SQL;
+        /** DDL for the indexes that make the match fast. */
+        createIndexes: (companion: string) => SQL[];
+        /** Replace one document's row, given its already-analyzed token stream. */
+        indexDocument: (companion: string, id: string, analyzed: string) => SQL;
+        /** The `WHERE` predicate matching a query's analyzed terms, final term as a prefix. */
+        matches: (companion: string, terms: ReadonlyArray<string>) => SQL;
+        /** The `ORDER BY` expression, best first. */
+        rank: (companion: string, terms: ReadonlyArray<string>) => SQL;
     };
+
+    /**
+     * True when the engine ships SQLite's FTS5 module, which decides whether a
+     * search index is stored as an FTS5 shadow or as the portable inverted
+     * companion.
+     *
+     * A static property of the engine, so it is declared rather than probed:
+     * the previous `CREATE VIRTUAL TABLE` capability probe spent a round trip
+     * (and an error in the database's log) on every fresh connection to
+     * rediscover something the dialect already knows. Tests that want the
+     * portable layout override this instead of intercepting SQL strings.
+     */
+    supportsFts5: boolean;
 
     /** True when the engine supports `UPDATE/DELETE ... RETURNING` (SQLite/PG yes, MySQL no → use `affectedRows`). */
     supportsReturning: boolean;

@@ -1,5 +1,10 @@
 import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
+// The declared analysis languages, shared with the engine that maps them onto
+// stopword lists. Inlined by the bundler rather than depended on — the schema
+// builder must stay usable without the DO runtime. See shared/search-languages.ts.
+import type { SearchLanguage } from "../../../shared/search-languages";
+
 // Cache the namespace proxies and the per-function reference objects so that
 // `api.foo.bar` returns the *same* object on every access. React hooks
 // (`useMutation`, `useQuery`) put the reference in dependency arrays; a fresh
@@ -131,9 +136,6 @@ interface IndexDefinition {
 
 /** How a search index is stored and matched: portable everywhere, or the engine's own index. */
 type SearchStrategy = "native" | "portable";
-
-/** A language whose search analysis (accent folding + stopwords) the runtime knows. */
-type SearchLanguage = "de" | "en" | "es" | "fr" | "it" | "nl" | "none" | "pt";
 
 interface SearchIndexDefinition {
     /** Indexed text column; a dot-separated path (`"properties.name"`) reads a nested field. */
@@ -2135,7 +2137,6 @@ export type {
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,
-    SearchLanguage,
     SearchStrategy,
     Secrets,
     SecretsStoreSecretLike,
@@ -2193,3 +2194,5 @@ export type {
     WorkflowStatusResult,
     X402ProcedureConfig,
 };
+
+export { type SearchLanguage } from "../../../shared/search-languages";

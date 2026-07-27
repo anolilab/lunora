@@ -1,8 +1,10 @@
 import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
+import { createSqlCtxDb } from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { D1Exec } from "../src/d1-ctx-db";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
+import sqliteDialect from "../src/sqlite-dialect";
 import createD1Exec from "./_helpers/node-sqlite-d1";
 
 /**
@@ -301,27 +303,6 @@ describe("d1 ctx-db avg divisor excludes non-numeric fields", () => {
     });
 });
 
-/**
- * `D1Exec` decorator that forces the fts5-availability probe to report "not
- * available" — the probe creates a `__lunora_fts_probe` virtual table, so we
- * make that one CREATE throw while passing every other statement through to the
- * underlying engine. This deterministically routes `.search()` down the
- * LIKE-scan fallback (`searchViaScan`) regardless of whether the test runner's
- * `node:sqlite` ships fts5.
- */
-const withoutFts5 = (inner: D1Exec): D1Exec => {
-    return {
-        all: (sql, parameters) => inner.all(sql, parameters),
-        run: (sql, parameters) => {
-            if (sql.includes("__lunora_fts_probe") && sql.includes("CREATE")) {
-                return Promise.reject(new Error("fts5 unavailable (forced)"));
-            }
-
-            return inner.run(sql, parameters);
-        },
-    };
-};
-
 describe("d1 ctx-db search forced scan path", () => {
     beforeEach(() => {
         harness = createD1Exec();
@@ -334,7 +315,7 @@ describe("d1 ctx-db search forced scan path", () => {
     it("uses the portable inverted index when fts5 is unavailable", async () => {
         expect.assertions(2);
 
-        const exec = withoutFts5(harness.exec);
+        const { exec } = harness;
 
         await createDocsTable(exec);
 
@@ -348,7 +329,7 @@ describe("d1 ctx-db search forced scan path", () => {
         // ensureMigrated() runs runD1SearchMigrations, which materializes the
         // portable `(token, id, occurrences)` companion on an engine without
         // fts5 — the shape Postgres and MySQL behind Hyperdrive use.
-        const writer = createD1ContextDatabase({ exec, idGenerator, schema: searchSchema });
+        const writer = createSqlCtxDb({ dialect: { ...sqliteDialect, supportsFts5: false }, exec, idGenerator, schema: searchSchema });
 
         await writer.insert("docs", { body: "alpha beta", channel: "x", title: "low" });
         await writer.insert("docs", { body: "alpha alpha alpha", channel: "x", title: "high" });

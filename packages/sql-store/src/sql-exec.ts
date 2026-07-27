@@ -99,58 +99,6 @@ interface SqlCtxExec {
 const serializeColumnValue: (value: unknown) => unknown = sqliteEncode;
 
 /**
- * Memoized per-`SqlCtxExec` FTS5 capability probe. D1's SQLite ships FTS5;
- * `node:sqlite` (used in tests) does not. We create and drop a throwaway virtual
- * table once per handle and cache the resolving promise — the exec handle is
- * stable for the ctx-db's lifetime, so this runs at most once per binding. The
- * cached value is a `Promise` so concurrent first-callers share the single probe
- * rather than racing two CREATE/DROP round-trips.
- */
-const ftsAvailabilityCache = new WeakMap<SqlCtxExec, Promise<boolean>>();
-
-const isFtsAvailable = (exec: SqlCtxExec, dialect?: SqlDialect): Promise<boolean> => {
-    // fts5 is a SQLite module. On Postgres and MySQL the probe below is a DDL
-    // statement that is *guaranteed* to fail — a wasted round trip on every
-    // fresh connection plus an error in the database's log — so answer from the
-    // dialect and never issue it.
-    if (dialect && dialect.name !== "sqlite") {
-        return Promise.resolve(false);
-    }
-
-    const cached = ftsAvailabilityCache.get(exec);
-
-    if (cached !== undefined) {
-        return cached;
-    }
-
-    const probe = (async (): Promise<boolean> => {
-        let available: boolean;
-
-        try {
-            await exec.run(`CREATE VIRTUAL TABLE IF NOT EXISTS "__lunora_fts_probe" USING fts5(x)`, []);
-            available = true;
-        } catch {
-            available = false;
-        } finally {
-            // Always attempt the DROP so the probe table never lingers — if the
-            // CREATE threw, the IF EXISTS makes the DROP a no-op.
-            try {
-                await exec.run(`DROP TABLE IF EXISTS "__lunora_fts_probe"`, []);
-            } catch {
-                // The probe table cleanup is best-effort; swallow so the
-                // availability decision still propagates.
-            }
-        }
-
-        return available;
-    })();
-
-    ftsAvailabilityCache.set(exec, probe);
-
-    return probe;
-};
-
-/**
  * The `field → effective column kind` mapping for a table, derived once per
  * (immutable) definition and memoized. `effectiveColumnKind` is pure over the
  * validator and the shape never mutates after `defineSchema`, so the mapping is
@@ -301,7 +249,6 @@ export {
     decodeRow,
     decodeRows,
     forEachRowPaged,
-    isFtsAvailable,
     physicalColumn,
     queryAll,
     queryRun,

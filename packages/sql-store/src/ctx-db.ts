@@ -1030,7 +1030,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // once per ctx-db, lazily, before any path that can touch a companion. The
     // cached value is the resolving `Promise` so concurrent first-callers share
     // the single round-trip rather than racing duplicate DDL (mirrors the
-    // `isFtsAvailable` probe). CREATE IF NOT EXISTS is idempotent, so running it
+    // dialect's fts5 flag). CREATE IF NOT EXISTS is idempotent, so running it
     // once per instance is cheap.
     let migratedPromise: Promise<void> | undefined;
 
@@ -2786,7 +2786,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         }
 
                         // Cursor decoding, the bounded-page refusal and the cap
-                        // are the shared policy in `search-text`, so both
+                        // are the shared policy in `search-query`, so both
                         // backends page identically; one row past the page is
                         // fetched so `hasMore` is observed, not guessed.
                         const plan = planSearchPage(pageOptions);

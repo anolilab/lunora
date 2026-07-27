@@ -414,7 +414,9 @@ describe("ctx-db search", () => {
             harness.raw(`DROP TABLE IF EXISTS "docs__fts_by_body"`);
             harness.raw(`DELETE FROM "__lunora_search_state"`);
 
-            expect(() => { runShardMigrations(harness.sql, searchSchema); }).not.toThrow();
+            expect(() => {
+                runShardMigrations(harness.sql, searchSchema);
+            }).not.toThrow();
 
             const results = await createShardContextDatabase({ schema: searchSchema, sql: harness.sql })
                 .query("docs")

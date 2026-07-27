@@ -87,18 +87,14 @@ import {
     buildFtsMatch,
     createSearchBuilder,
     finishSearchPage,
-    FTS_ID_COLUMN,
-    FTS_TEXT_COLUMN,
-    ftsTableName,
     MAX_SEARCH_SCAN,
     planSearchPage,
-    resolveSearchField,
     resolveSearchScan,
     scoreDocument,
     searchPageScan,
-    stringifySearchText,
     tokenizeSearch,
-} from "./search-text";
+} from "./search-query";
+import { FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, resolveSearchField, stringifySearchText } from "./search-text";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import { ConflictError } from "./transaction";
@@ -1585,7 +1581,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
      * One page of a relevance-ordered search. The window is fetched one row
      * past the page so `hasMore` is observed rather than guessed; everything
      * else — cursor decoding, the bounded-page refusal, the cap — is the shared
-     * policy in `search-text`, so the two backends page identically.
+     * policy in `search-query`, so the two backends page identically.
      */
     const paginateSearchStage = (options: PaginationOptions): QueryPage => {
         const plan = planSearchPage(options);

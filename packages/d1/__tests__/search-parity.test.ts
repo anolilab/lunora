@@ -2,10 +2,12 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { DatabaseWriterLike, SchemaLike, SqlCursor, SqlExec, ValidatorLike } from "@lunora/do";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/do";
+import type { SqlDialect } from "@lunora/sql-store";
+import { createSqlCtxDb } from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { D1Exec } from "../src/d1-ctx-db";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
+import sqliteDialect from "../src/sqlite-dialect";
 import createD1Exec from "./_helpers/node-sqlite-d1";
 
 /**
@@ -13,7 +15,8 @@ import createD1Exec from "./_helpers/node-sqlite-d1";
  *
  * `.searchIndex()` promises one thing above all: the same corpus and the same
  * query return the same documents, in the same order, whichever backend stores
- * them. The two implementations share only the primitives in `search-text` —
+ * them. The two implementations share only the primitives in `search-text` /
+ * `search-query` —
  * the DO side scores in JS over a JSON blob, the `.global()` side aggregates in
  * SQL over an inverted companion — so nothing but a test comparing their actual
  * output can hold that promise.
@@ -70,6 +73,14 @@ const CORPUS: Document[] = [
     { body: "Ünïcödé stress", channel: "general", id: "m" },
 ];
 
+/**
+ * The SQLite dialect with fts5 declared unavailable — the portable
+ * `(token, id, occurrences)` layout Postgres and MySQL use. Saying so through
+ * the dialect is the honest lever: the engine's capability is what selects the
+ * layout, and this Node build happens to ship fts5.
+ */
+const invertedDialect: SqlDialect = { ...sqliteDialect, supportsFts5: false };
+
 let doHarness: DatabaseSync;
 let globalHarness: ReturnType<typeof createD1Exec>;
 let invertedHarness: ReturnType<typeof createD1Exec>;
@@ -103,20 +114,6 @@ const shardExec = (database: DatabaseSync): SqlExec => {
     };
 };
 
-/**
- * Force the portable inverted companion by failing the fts5 probe. Without this
- * every harness here runs on fts5 (this Node build ships it), so the comparison
- * would be fts5-against-fts5 and would never exercise the layout Postgres and
- * MySQL actually use.
- */
-const withoutFts5 = (inner: D1Exec): D1Exec => {
-    return {
-        all: (sql, parameters) => inner.all(sql, parameters),
-        run: (sql, parameters) =>
-            sql.includes("__lunora_fts_probe") && sql.includes("CREATE") ? Promise.reject(new Error("fts5 unavailable (forced)")) : inner.run(sql, parameters),
-    };
-};
-
 /** Seed all three engines with the identical corpus, on the identical clock. */
 const seedBoth = async (): Promise<{ global: DatabaseWriterLike; inverted: DatabaseWriterLike; shard: DatabaseWriterLike }> => {
     const clockFrom = (): (() => number) => {
@@ -141,7 +138,7 @@ const seedBoth = async (): Promise<{ global: DatabaseWriterLike; inverted: Datab
 
     invertedHarness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT)`);
 
-    const inverted = createD1ContextDatabase({ clock: clockFrom(), exec: withoutFts5(invertedHarness.exec), schema: globalSchema });
+    const inverted = createSqlCtxDb({ clock: clockFrom(), dialect: invertedDialect, exec: invertedHarness.exec, schema: globalSchema });
 
     for (const document of CORPUS) {
         const row = { _id: document.id, body: document.body, channel: document.channel };
@@ -172,26 +169,42 @@ describe("search parity — sharded DO vs .global()", () => {
         invertedHarness.close();
     });
 
-    const cases: { name: string; term: string }[] = [
-        { name: "single term", term: "hello" },
-        { name: "two terms, AND semantics", term: "hello world" },
-        { name: "prefix on the final term", term: "hello wor" },
-        { name: "prefix shadowed by an earlier exact term", term: "javascript java" },
-        { name: "prefix that is also a whole word", term: "java" },
-        { name: "repeated term", term: "hello hello" },
-        { name: "term matching nothing", term: "nonexistent" },
-        { name: "mixed case query", term: "HeLLo WoRLd" },
-        { name: "punctuation in the query", term: "hello, world!" },
-        { name: "empty query", term: "" },
-        { name: "whitespace-only query", term: "   " },
-        { name: "punctuation-only query", term: "!!!" },
-        { name: "accented query against unaccented text", term: "café" },
-        { name: "unaccented query against accented text", term: "cafe" },
-        { name: "mixed diacritics", term: "unicode" },
+    /**
+     * `expectedIds` is what makes this a parity gate rather than a
+     * they-agree-on-something gate: three engines can agree and all three be
+     * wrong. The ids are derived from the corpus by hand under the documented
+     * rules — AND over terms, the final term prefix-matching, score = summed
+     * occurrences, ties broken by `_creationTime DESC` (later insert first) then
+     * `id ASC` — so a change in ranking has to be argued for here, not absorbed.
+     */
+    const cases: { expectedIds: string[]; name: string; term: string }[] = [
+        // b/h carry "hello" twice; the rest score 1 and fall back to the tiebreak.
+        { expectedIds: ["h", "b", "i", "g", "d", "a"], name: "single term", term: "hello" },
+        { expectedIds: ["h", "b", "i", "g", "d", "a"], name: "two terms, AND semantics", term: "hello world" },
+        // "wor" prefix-matches "world" and "worldwide", but not "wonderful".
+        { expectedIds: ["h", "b", "i", "g", "d", "a"], name: "prefix on the final term", term: "hello wor" },
+        // "java" prefix-matches the same token "javascript" already matched
+        // exactly — both terms are satisfied, and e must not be dropped.
+        { expectedIds: ["e"], name: "prefix shadowed by an earlier exact term", term: "javascript java" },
+        // f's whole word and e's prefix both count once; tiebreak orders them.
+        { expectedIds: ["f", "e"], name: "prefix that is also a whole word", term: "java" },
+        // The query side de-duplicates, so this is the single-term query.
+        { expectedIds: ["h", "b", "i", "g", "d", "a"], name: "repeated term", term: "hello hello" },
+        { expectedIds: [], name: "term matching nothing", term: "nonexistent" },
+        { expectedIds: ["h", "b", "i", "g", "d", "a"], name: "mixed case query", term: "HeLLo WoRLd" },
+        { expectedIds: ["h", "b", "i", "g", "d", "a"], name: "punctuation in the query", term: "hello, world!" },
+        // No terms means no match, never "match everything".
+        { expectedIds: [], name: "empty query", term: "" },
+        { expectedIds: [], name: "whitespace-only query", term: "   " },
+        { expectedIds: [], name: "punctuation-only query", term: "!!!" },
+        // Folding is what makes these two find each other on every engine.
+        { expectedIds: ["l", "k"], name: "accented query against unaccented text", term: "café" },
+        { expectedIds: ["l", "k"], name: "unaccented query against accented text", term: "cafe" },
+        { expectedIds: ["m"], name: "mixed diacritics", term: "unicode" },
     ];
 
     it.each(cases)("agrees on $name", async (searchCase) => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const { global, inverted, shard } = await seedBoth();
         const run = async (writer: DatabaseWriterLike): Promise<unknown[]> =>
@@ -202,13 +215,12 @@ describe("search parity — sharded DO vs .global()", () => {
                     .collect(),
             );
 
-        const shardResults = await run(shard);
-
-        await expect(run(global)).resolves.toStrictEqual(shardResults);
+        await expect(run(shard)).resolves.toStrictEqual(searchCase.expectedIds);
+        await expect(run(global)).resolves.toStrictEqual(searchCase.expectedIds);
         // The third engine is the one that matters most here: it ranks with a
         // different mechanism than fts5, so a divergence shows up only when the
         // inverted layout is in the comparison.
-        await expect(run(inverted)).resolves.toStrictEqual(shardResults);
+        await expect(run(inverted)).resolves.toStrictEqual(searchCase.expectedIds);
     });
 
     it("folds accents identically on every backend", async () => {
@@ -426,7 +438,7 @@ describe("search parity — sharded DO vs .global()", () => {
 
             const shard = createShardContextDatabase({ schema: englishDoSchema, sql });
             const global = createD1ContextDatabase({ exec: globalHarness.exec, schema: englishGlobalSchema });
-            const inverted = createD1ContextDatabase({ exec: withoutFts5(invertedHarness.exec), schema: englishGlobalSchema });
+            const inverted = createSqlCtxDb({ dialect: invertedDialect, exec: invertedHarness.exec, schema: englishGlobalSchema });
 
             expect(refuses(shard, term)).toBe(expected);
             expect(refuses(global, term)).toBe(expected);

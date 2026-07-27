@@ -211,35 +211,38 @@ export type { LogEventInput } from "./request-log";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
 export type { SearchAnalyzer, SearchLanguage } from "./search-analyzer";
 export { createSearchAnalyzer, SEARCH_LANGUAGES } from "./search-analyzer";
-export type { SearchBackfillPass, SearchBackfillState, SearchBuilderLike, SearchPagePlan, SearchStageLike } from "./search-text";
+export type { SearchBuilderLike, SearchPagePlan, SearchStageLike } from "./search-query";
 export {
-    analyzedSearchText,
     assertSearchWithinCap,
     buildFtsMatch,
-    countSearchTokens,
     createSearchBuilder,
     encodeSearchCursor,
     finishSearchPage,
+    MAX_SEARCH_FILTERS,
+    MAX_SEARCH_SCAN,
+    MAX_SEARCH_TERMS,
+    parseSearchCursor,
+    planSearchPage,
+    resolveSearchScan,
+    scoreDocument,
+    searchPageScan,
+    tokenizeSearch,
+} from "./search-query";
+export type { SearchBackfillPass, SearchBackfillState } from "./search-text";
+export {
+    analyzedSearchText,
+    countSearchTokens,
     FTS_COUNT_COLUMN,
     FTS_ID_COLUMN,
     FTS_TEXT_COLUMN,
     FTS_TOKEN_COLUMN,
     ftsTableName,
     MAX_INDEXED_TOKENS,
-    MAX_SEARCH_FILTERS,
-    MAX_SEARCH_SCAN,
-    MAX_SEARCH_TERMS,
-    parseSearchCursor,
     planSearchBackfillPass,
-    planSearchPage,
     resolveSearchField,
-    resolveSearchScan,
-    scoreDocument,
-    searchPageScan,
     searchTextUnchanged,
     splitSearchTokens,
     stringifySearchText,
-    tokenizeSearch,
 } from "./search-text";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";

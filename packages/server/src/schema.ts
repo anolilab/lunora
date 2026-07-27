@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import type { Validator } from "@lunora/values";
 import { isOrWrapsFromValidator, v } from "@lunora/values";
 
+import { isSearchLanguage, SEARCH_LANGUAGES } from "../../../shared/search-languages";
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
 import type {
@@ -42,15 +43,6 @@ import type {
  * copy on each side of a package boundary.
  */
 const MAX_SEARCH_FILTER_FIELDS = 16;
-
-/**
- * Languages `.searchIndex({ language })` accepts. Restated here rather than
- * imported because `@lunora/server` has no dependency edge to the engines that
- * own the analyzers — and a typo'd language silently falling back to
- * folding-only is exactly the kind of quiet wrong answer a schema-time check
- * should catch instead.
- */
-const SEARCH_LANGUAGES: ReadonlySet<string> = new Set<string>(["de", "en", "es", "fr", "it", "nl", "none", "pt"]);
 
 /** Options for `.vectorize(field, opts)` (DSL Shape A). */
 interface VectorizeOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
@@ -435,11 +427,17 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
                 );
             }
 
-            if (options.language !== undefined && !SEARCH_LANGUAGES.has(options.language)) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `searchIndex "${name}": unknown language "${options.language}" (supported: ${[...SEARCH_LANGUAGES].toSorted((left, right) => left.localeCompare(right)).join(", ")})`,
-                );
+            // A typo'd language silently falling back to folding-only is
+            // exactly the kind of quiet wrong answer a schema-time check should
+            // catch, so it is rejected here rather than shrugged off at read
+            // time by the analyzer.
+            // Widened to `string` deliberately: the option is typed, so TS
+            // narrows the failing branch to `never` — but the check exists for
+            // the callers TS can't reach (JS, or a schema built from config).
+            const { language }: { language?: string } = options;
+
+            if (language !== undefined && !isSearchLanguage(language)) {
+                throw new LunoraError("INTERNAL", `searchIndex "${name}": unknown language "${language}" (supported: ${SEARCH_LANGUAGES.join(", ")})`);
             }
 
             searchIndexes.push({
