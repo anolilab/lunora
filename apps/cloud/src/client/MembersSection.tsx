@@ -1,4 +1,5 @@
-import { useMutation, useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { useMutation, usePreloadedQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -8,6 +9,8 @@ import type { OrgId } from "./types";
 
 interface MembersSectionProps {
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.members.list>>;
 }
 
 /**
@@ -15,8 +18,8 @@ interface MembersSectionProps {
  * control. New members default to the `member` role server-side; role changes
  * and ownership transfer are governed by `authz.assertMember`.
  */
-export const MembersSection = ({ organizationId }: MembersSectionProps): ReactElement => {
-    const members = useQuery(api.members.list, { organizationId });
+export const MembersSection = ({ organizationId, preloaded }: MembersSectionProps): ReactElement => {
+    const members = usePreloadedQuery(preloaded);
     const addMember = useMutation(api.members.add);
     const removeMember = useMutation(api.members.remove);
 

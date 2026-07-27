@@ -1,4 +1,5 @@
-import { useMutation, useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { useMutation, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -8,6 +9,8 @@ import type { OrgId, ProjectId } from "./types";
 
 interface DomainsSectionProps {
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.projects.listByOrg>>;
 }
 
 interface TxtRecord {
@@ -21,8 +24,8 @@ interface TxtRecord {
  * runs the DNS checks and records the outcome; the list is live, so the
  * verified badge flips on its own. Removing is a direct mutation.
  */
-export const DomainsSection = ({ organizationId }: DomainsSectionProps): ReactElement => {
-    const projects = useQuery(api.projects.listByOrg, { organizationId });
+export const DomainsSection = ({ organizationId, preloaded }: DomainsSectionProps): ReactElement => {
+    const projects = usePreloadedQuery(preloaded);
     const [projectId, setProjectId] = useState<ProjectId | "">("");
     const domains = useQuery(api.domains.list, projectId ? { organizationId, projectId } : "skip");
     const removeDomain = useMutation(api.domains.remove);

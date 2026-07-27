@@ -1,4 +1,5 @@
-import { useMutation, useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { useMutation, usePreloadedQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -8,6 +9,8 @@ import type { OrgId } from "./types";
 
 interface DeployKeysSectionProps {
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.deploy_keys.list>>;
 }
 
 const KEY_TYPES = ["production", "preview", "dev"] as const;
@@ -17,8 +20,8 @@ const KEY_TYPES = ["production", "preview", "dev"] as const;
  * is shown exactly once — right after `deploy_keys.issue` returns it — and never
  * again. Revoked keys stay listed (with their `revokedAt`) for the audit trail.
  */
-export const DeployKeysSection = ({ organizationId }: DeployKeysSectionProps): ReactElement => {
-    const keys = useQuery(api.deploy_keys.list, { organizationId });
+export const DeployKeysSection = ({ organizationId, preloaded }: DeployKeysSectionProps): ReactElement => {
+    const keys = usePreloadedQuery(preloaded);
     const issueKey = useMutation(api.deploy_keys.issue);
     const revokeKey = useMutation(api.deploy_keys.revoke);
 
