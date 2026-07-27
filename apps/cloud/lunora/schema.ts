@@ -677,6 +677,10 @@ export default defineSchema({
         organizationId: v.id("organizations"),
         statusCode: v.optional(v.number()),
     })
+        // Written by the every-minute synthetic-uptime sweep in `src/uptime/sweep.ts`
+        // (control-plane `scheduled()`), not by any lunora/ mutation — so no
+        // `ctx.db.insert` is discoverable for it.
+        .externallyManaged()
         .global()
         .index("by_org_deployment", ["organizationId", "deploymentId"]),
 
@@ -694,6 +698,8 @@ export default defineSchema({
         organizationId: v.id("organizations"),
         updatedAt: v.number(),
     })
+        // Same writer as `uptimeChecks`: the sweep advances this row directly.
+        .externallyManaged()
         .global()
         .index("by_deployment", ["deploymentId"])
         .index("by_org", ["organizationId"]),
@@ -760,6 +766,9 @@ export default defineSchema({
         providerCustomerId: v.string(),
         referenceId: v.string(),
     })
+        // The `@lunora/payment` store writes these rows through `ctx.payments`
+        // (checkout + webhook sync), never via a `ctx.db.insert` in lunora/.
+        .externallyManaged()
         .global()
         .index("by_provider_customer", ["provider", "providerCustomerId"], { unique: true })
         .index("by_reference", ["referenceId"]),
@@ -770,6 +779,8 @@ export default defineSchema({
         providerEventId: v.string(),
         type: v.string(),
     })
+        // Written by the `@lunora/payment` webhook sync (see `customers`).
+        .externallyManaged()
         .global()
         .index("by_provider_event", ["provider", "providerEventId"], { unique: true }),
 
@@ -785,6 +796,8 @@ export default defineSchema({
         state: v.string(),
         updatedAt: v.number(),
     })
+        // Written by the `@lunora/payment` checkout flow (see `customers`).
+        .externallyManaged()
         .global()
         .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })
         .index("by_reference", ["referenceId"]),
@@ -802,6 +815,8 @@ export default defineSchema({
         state: v.string(),
         updatedAt: v.number(),
     })
+        // Written by the `@lunora/payment` webhook sync (see `customers`).
+        .externallyManaged()
         .global()
         .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
         .index("by_reference", ["referenceId"]),
@@ -817,6 +832,8 @@ export default defineSchema({
         referenceId: v.string(),
         reportedToProvider: v.boolean(),
     })
+        // Written by `ctx.payments.track` metered-usage reporting (see `customers`).
+        .externallyManaged()
         .global()
         .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
         .index("by_reference_feature", ["referenceId", "featureId"]),
@@ -834,5 +851,9 @@ export default defineSchema({
         prev: v.optional(v.number()),
         ts: v.number(),
         value: v.number(),
-    }).index("by_key", ["key"]),
+    })
+        // `@lunora/ratelimit`'s store owns every row here — the canonical
+        // `.externallyManaged()` case named in the builder's own docs.
+        .externallyManaged()
+        .index("by_key", ["key"]),
 });

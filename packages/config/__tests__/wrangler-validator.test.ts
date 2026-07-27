@@ -953,6 +953,17 @@ describe("wrangler-validator", () => {
             expect(missingBinding.errors.join(" ")).toContain('must have a non-empty "binding"');
         });
 
+        it("accepts `stream`, wrangler's rename of the deprecated `pipeline` field, without warning", () => {
+            expect.assertions(2);
+
+            // wrangler deprecation-warns on `pipeline`, so a correctly-wired binding
+            // now spells it `stream`; that must not trip the missing-hint warning.
+            const stream = validateWranglerConfig(validBase({ pipelines: [{ binding: "PIPE", stream: "events" }] }));
+
+            expect(stream.valid).toBe(true);
+            expect(stream.warnings.join(" ")).not.toMatch(/wrangler pipelines create/u);
+        });
+
         it("accepts a well-formed analytics_engine_datasets binding; warns on a missing dataset; errors on a missing binding", () => {
             expect.assertions(3);
 

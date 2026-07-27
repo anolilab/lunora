@@ -134,7 +134,7 @@ interface WranglerConfig {
     // Pipelines (R2-backed streaming ingestion). The `pipeline` name is a remote
     // resource (`wrangler pipelines create`) Lunora can't mint — warn, don't
     // fail. See `validatePipelineBindings`.
-    pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string } | null | undefined>;
+    pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string; stream?: string } | null | undefined>;
     // Smart Placement (`{ mode: "smart" }` — the only documented mode). See
     // `validatePlacement`.
     placement?: { mode?: string };
@@ -555,11 +555,14 @@ const HINT_BINDING_RULES = [
         key: "hyperdrive",
     },
     {
-        arrayMessage: "pipelines must be an array of { binding, pipeline } entries",
+        arrayMessage: "pipelines must be an array of { binding, stream } entries",
         bindingMessage: (label: string) => `${label} must have a non-empty "binding" naming the Pipelines binding`,
-        hintField: "pipeline",
+        // wrangler renamed `pipeline` → `stream` and now deprecation-warns on the
+        // old spelling; accept both so neither wrangler nor this validator is the
+        // one complaining about a correctly-wired binding.
+        hintField: ["stream", "pipeline"],
         hintMessage: (label: string, binding: string) =>
-            `${label} ("${binding}") has no "pipeline" — run \`wrangler pipelines create <name>\` and set the pipeline name, or the binding can't resolve`,
+            `${label} ("${binding}") has no "stream" — run \`wrangler pipelines create <name>\` and set the stream name, or the binding can't resolve`,
         key: "pipelines",
     },
     {
@@ -573,7 +576,8 @@ const HINT_BINDING_RULES = [
 ] as const satisfies ReadonlyArray<{
     arrayMessage: string;
     bindingMessage: (label: string) => string;
-    hintField: string;
+    /** Field carrying the un-mintable remote id, or every accepted spelling of it. */
+    hintField: ReadonlyArray<string> | string;
     hintMessage: (label: string, binding: string) => string;
     key: keyof WranglerConfig;
 }>;
@@ -605,7 +609,11 @@ const validateHintBinding = (wrangler: WranglerConfig, rule: (typeof HINT_BINDIN
             continue;
         }
 
-        if (!isNonEmptyString(entry[rule.hintField])) {
+        // `hintField` may name several accepted spellings — a field wrangler has
+        // renamed still satisfies the rule under its old name (see `pipelines`).
+        const hintFields = Array.isArray(rule.hintField) ? rule.hintField : [rule.hintField];
+
+        if (!hintFields.some((field) => isNonEmptyString(entry[field]))) {
             warnings.push(rule.hintMessage(label, entry.binding));
         }
     }
