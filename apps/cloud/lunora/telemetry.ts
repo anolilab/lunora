@@ -189,8 +189,15 @@ const groupEvents = (
     return groups;
 };
 
-/** Upsert one issue group; returns its count before/after so rules can evaluate. */
-const upsertIssue = async (
+/**
+ * Upsert one issue group; returns its count before/after so rules can evaluate.
+ *
+ * Exported so codegen's write-side discovery can attribute its
+ * `ctx.db.insert("issues", …)` to a real function — the feeder only walks
+ * exported declarations, so as a file-local helper this insert was invisible and
+ * `issues` looked like a table nothing ever wrote to.
+ */
+export const upsertIssue = async (
     context: MutationContext,
     group: EventGroup,
     organizationId: Id<"organizations">,
@@ -231,8 +238,8 @@ const upsertIssue = async (
     return { after: before + group.count, before };
 };
 
-/** Upsert one container group's incident; returns its count before/after. */
-const upsertIncident = async (
+/** Upsert one container group's incident; returns its count before/after. Exported for the same reason as {@link upsertIssue}. */
+export const upsertIncident = async (
     context: MutationContext,
     group: EventGroup,
     organizationId: Id<"organizations">,
