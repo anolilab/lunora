@@ -85,19 +85,22 @@ interface VectorMetadataResult {
 const ensureVectorMetadataIndexes = async (inputs: {
     cwd: string;
     entries: ReadonlyArray<VectorMetadataIndex>;
-    execArgs: ReadonlyArray<string>;
+    /** The package-manager invocation for `wrangler`, as `execArgsFor` returns it. */
+    exec: { args: ReadonlyArray<string>; command: string };
     logger: Logger;
     spawner: Spawner;
 }): Promise<VectorMetadataResult[]> => {
-    const { cwd, entries, execArgs, logger, spawner } = inputs;
+    const { cwd, entries, exec, logger, spawner } = inputs;
     const results: VectorMetadataResult[] = [];
 
     for (const entry of entries) {
         // eslint-disable-next-line no-await-in-loop -- wrangler invocations are sequential by nature; parallel ones interleave their output
         const result = await spawner({
-            args: [...execArgs.slice(1), ...createMetadataIndexArgs(entry)],
-            captureStdout: true,
-            command: execArgs[0] ?? "npx",
+            args: [...exec.args, ...createMetadataIndexArgs(entry)],
+            // stderr, not stdout: wrangler reports the already-exists case as an
+            // error there, and stdout has to stay clean for `--format json`.
+            captureStderr: true,
+            command: exec.command,
             cwd,
             stdoutToStderr: true,
         });
@@ -108,7 +111,7 @@ const ensureVectorMetadataIndexes = async (inputs: {
             continue;
         }
 
-        const output = result.stdout ?? "";
+        const output = `${result.stderr ?? ""}${result.stdout ?? ""}`;
 
         if (ALREADY_EXISTS.test(output)) {
             results.push({ entry, status: "exists" });

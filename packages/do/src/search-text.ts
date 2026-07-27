@@ -22,7 +22,7 @@ import { resolveDocumentPath } from "../../../shared/document-path";
 import type { QueryPage } from "./query-args";
 import { fromBase64, invalidCursor, toBase64 } from "./query-args";
 import type { SearchAnalyzer } from "./search-analyzer";
-import { createSearchAnalyzer, defaultSearchAnalyzer } from "./search-analyzer";
+import { createSearchAnalyzer } from "./search-analyzer";
 
 /**
  * Name of the companion table backing a search index — the FTS5 shadow on
@@ -88,7 +88,7 @@ export const MAX_INDEXED_TOKENS = 1000;
  * Analysis (folding, stopwords) belongs to the index's `language`; see
  * {@link SearchAnalyzer}.
  */
-export const splitSearchTokens = (text: string, analyzer: SearchAnalyzer = defaultSearchAnalyzer): string[] => analyzer.document(text);
+export const splitSearchTokens = (text: string, analyzer: SearchAnalyzer): string[] => analyzer.document(text);
 
 /**
  * Split a search string into lowercased alphanumeric tokens. The Unicode
@@ -100,7 +100,7 @@ export const splitSearchTokens = (text: string, analyzer: SearchAnalyzer = defau
  * implements. De-duplication keeps the last occurrence so the caller's final
  * term stays final and still gets prefix matching.
  */
-export const tokenizeSearch = (query: string, analyzer: SearchAnalyzer = defaultSearchAnalyzer): string[] => analyzer.query(query);
+export const tokenizeSearch = (query: string, analyzer: SearchAnalyzer): string[] => analyzer.query(query);
 
 /**
  * Read the value a search index covers out of a document. `field` is a
@@ -147,7 +147,7 @@ export const stringifySearchText = (value: unknown): string => {
  * of occurrences, giving a coarse term-frequency relevance order — the ranking
  * the inverted index reproduces in SQL as `SUM(occurrences)`.
  */
-export const scoreDocument = (text: string, tokens: ReadonlyArray<string>, analyzer: SearchAnalyzer = defaultSearchAnalyzer): number => {
+export const scoreDocument = (text: string, tokens: ReadonlyArray<string>, analyzer: SearchAnalyzer): number => {
     // The document side keeps repeats: occurrences are the score.
     const documentTokens = splitSearchTokens(text, analyzer);
 
@@ -206,9 +206,15 @@ export const searchTextUnchanged = (
  * one backend but not another. Feeding it tokens we already folded (and
  * stopword-filtered) leaves it nothing to disagree about: they contain no
  * punctuation or case for its tokenizer to act on.
+ *
+ * Capped at {@link MAX_INDEXED_TOKENS} like every other layout: an index whose
+ * recall depended on which companion shape it happened to use would be the same
+ * class of divergence this module exists to prevent.
  */
 export const analyzedSearchText = (document: Record<string, unknown>, index: { field: string; language?: string }): string =>
-    splitSearchTokens(stringifySearchText(resolveSearchField(document, index.field)), createSearchAnalyzer(index.language)).join(" ");
+    splitSearchTokens(stringifySearchText(resolveSearchField(document, index.field)), createSearchAnalyzer(index.language))
+        .slice(0, MAX_INDEXED_TOKENS)
+        .join(" ");
 
 /**
  * Tally a document's indexed text into the `(token, occurrences)` rows the
@@ -217,7 +223,7 @@ export const analyzedSearchText = (document: Record<string, unknown>, index: { f
  * yields an empty map (nothing to index, and nothing to delete beyond the
  * unconditional by-id purge the write path already issues).
  */
-export const countSearchTokens = (text: string, analyzer: SearchAnalyzer = defaultSearchAnalyzer): Map<string, number> => {
+export const countSearchTokens = (text: string, analyzer: SearchAnalyzer): Map<string, number> => {
     const counts = new Map<string, number>();
 
     for (const token of splitSearchTokens(text, analyzer)) {
@@ -255,8 +261,13 @@ export interface SearchBuilderLike {
  * column, too many terms, too many filters — so both backends share this one
  * implementation and can never drift in what they accept or in what they say
  * when they refuse.
+ *
+ * `analyzer` is required, not defaulted, because the term cap counts *analyzed*
+ * terms: a backend that forgot to pass one would count under folding-only while
+ * the other counted under the index's language, and the same query would be
+ * accepted on one and rejected on the other. That is a compile error now.
  */
-export const createSearchBuilder = (stage: SearchStageLike, tableName: string, analyzer: SearchAnalyzer = defaultSearchAnalyzer): SearchBuilderLike => {
+export const createSearchBuilder = (stage: SearchStageLike, tableName: string, analyzer: SearchAnalyzer): SearchBuilderLike => {
     const builder: SearchBuilderLike = {
         eq: (field, value) => {
             if (!stage.definition.filterFields?.includes(field)) {
@@ -305,6 +316,72 @@ export const createSearchBuilder = (stage: SearchStageLike, tableName: string, a
 
     return builder;
 };
+
+/**
+ * How far a companion's backfill has progressed, and under which analysis.
+ * Declared here rather than beside either engine's state table: both record the
+ * same three facts, and the decisions made from them are the shared policy
+ * below.
+ */
+export interface SearchBackfillState {
+    /** Last `id` indexed, or `undefined` when no page has run yet. */
+    cursor: string | undefined;
+    /** True once a page came back short — the table is fully indexed. */
+    done: boolean;
+    /** Analyzer profile the stored rows were built with; `undefined` predates profile tracking. */
+    profile: string | undefined;
+}
+
+/** What a backfill pass should do, given where the last one got to. */
+export interface SearchBackfillPass {
+    /** Resume past this id; `undefined` starts from the beginning of the table. */
+    cursor: string | undefined;
+    /** Nothing left to index. */
+    finished: boolean;
+    /** Discard the companion's contents before walking — its rows were analyzed by rules the query side no longer uses. */
+    wipe: boolean;
+}
+
+/**
+ * Decide a backfill pass from recorded progress. Pure, and shared, because this
+ * is a *policy* rather than an engine detail — and when each backend owned a
+ * copy they immediately disagreed about the two cases that matter: whether a
+ * row with no recorded profile may be resumed (it may not — nothing says what
+ * analyzed it), and whether a never-started index is worth wiping (it is not,
+ * there is nothing in it).
+ */
+export const planSearchBackfillPass = (state: SearchBackfillState, profile: string): SearchBackfillPass => {
+    if (state.profile !== profile) {
+        return { cursor: undefined, finished: false, wipe: state.cursor !== undefined || state.done };
+    }
+
+    return { cursor: state.cursor, finished: state.done, wipe: false };
+};
+
+/**
+ * Refuse an unbounded read whose result set doesn't fit the cap.
+ *
+ * `.collect()` asks for one row past {@link MAX_SEARCH_SCAN} precisely so this
+ * can tell "exactly the cap" from "more than the cap". Returning the prefix
+ * would be the one outcome the docs promise against: a truncated result set
+ * that looks complete.
+ */
+export const assertSearchWithinCap = (rows: ReadonlyArray<unknown>): void => {
+    if (rows.length > MAX_SEARCH_SCAN) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `more than ${String(MAX_SEARCH_SCAN)} documents match this search — narrow it with filters or read it a page at a time with .paginate()`,
+        );
+    }
+};
+
+/**
+ * The engine limit for one page: the window the page slices, never more than
+ * the cap. `planSearchPage` has already refused anything that reaches past it,
+ * so clamping here can only trim the extra probe row — which is exactly the
+ * case where "is there another page?" is already answered by the cap.
+ */
+export const searchPageScan = (plan: SearchPagePlan): number => Math.min(plan.offset + plan.numItems + 1, MAX_SEARCH_SCAN);
 
 /**
  * Encode a search page cursor. Relevance order can't be keyset-seeked — the
@@ -403,7 +480,10 @@ export const finishSearchPage = (window: ReadonlyArray<Record<string, unknown>>,
  */
 export const resolveSearchScan = (limit: number | undefined): number => {
     if (limit === undefined) {
-        return MAX_SEARCH_SCAN;
+        // One past the cap, so an unbounded read can *detect* that it was
+        // capped instead of silently returning a prefix — see
+        // {@link assertSearchWithinCap}.
+        return MAX_SEARCH_SCAN + 1;
     }
 
     if (!Number.isFinite(limit)) {

@@ -69,6 +69,14 @@ const tickingClock = (): (() => number) => {
     };
 };
 
+/** The shared notes corpus, used by every search suite below. */
+const seedNotes = async (writer: DatabaseWriterLike): Promise<void> => {
+    await writer.insert("notes", { _id: "n1", body: "hello world", channel: "general", title: "one" }, { allowExplicitId: true });
+    await writer.insert("notes", { _id: "n2", body: "hello hello wonderful world", channel: "general", title: "two" }, { allowExplicitId: true });
+    await writer.insert("notes", { _id: "n3", body: "goodbye world", channel: "general", title: "three" }, { allowExplicitId: true });
+    await writer.insert("notes", { _id: "n4", body: "hello world", channel: "other", title: "four" }, { allowExplicitId: true });
+};
+
 describe("hyperdrive global — Postgres (pglite) integration", () => {
     beforeEach(async () => {
         harness = await createPgliteHarness();
@@ -293,13 +301,6 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             return createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: searchSchema });
         };
 
-        const seedNotes = async (writer: DatabaseWriterLike): Promise<void> => {
-            await writer.insert("notes", { _id: "n1", body: "hello world", channel: "general", title: "one" }, { allowExplicitId: true });
-            await writer.insert("notes", { _id: "n2", body: "hello hello wonderful world", channel: "general", title: "two" }, { allowExplicitId: true });
-            await writer.insert("notes", { _id: "n3", body: "goodbye world", channel: "general", title: "three" }, { allowExplicitId: true });
-            await writer.insert("notes", { _id: "n4", body: "hello world", channel: "other", title: "four" }, { allowExplicitId: true });
-        };
-
         it("matches every term, prefix-matches the last, and ranks by occurrences", async () => {
             expect.assertions(1);
 
@@ -516,13 +517,6 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             },
         };
 
-        const seedNative = async (writer: DatabaseWriterLike): Promise<void> => {
-            await writer.insert("notes", { _id: "n1", body: "hello world", channel: "general", title: "one" }, { allowExplicitId: true });
-            await writer.insert("notes", { _id: "n2", body: "hello hello wonderful world", channel: "general", title: "two" }, { allowExplicitId: true });
-            await writer.insert("notes", { _id: "n3", body: "goodbye world", channel: "general", title: "three" }, { allowExplicitId: true });
-            await writer.insert("notes", { _id: "n4", body: "hello world", channel: "other", title: "four" }, { allowExplicitId: true });
-        };
-
         const nativeWriter = async (): Promise<DatabaseWriterLike> => {
             await runSqlGlobalTableMigrations(harness.exec, nativeSchema, postgresDialect);
 
@@ -534,7 +528,7 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
 
             const writer = await nativeWriter();
 
-            await seedNative(writer);
+            await seedNotes(writer);
 
             // Matching must agree with every other backend — only the ordering
             // is the engine's. The vector is built from the same analyzed
@@ -562,7 +556,7 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
 
             const writer = await nativeWriter();
 
-            await seedNative(writer);
+            await seedNotes(writer);
 
             const scoped = await writer
                 .query("notes")
@@ -603,6 +597,18 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             expect(ids(results)).toEqual(["n9"]);
         });
 
+        it("caps an oversized document instead of blowing tsvector's size limit", async () => {
+            expect.assertions(1);
+
+            const writer = await nativeWriter();
+            // ~900 KB of prose. `to_tsvector` refuses a value over ~1 MB and
+            // inflates roughly 1.5x on the way, so an uncapped column turns the
+            // write into a raw Postgres error rather than a partial index.
+            const body = Array.from({ length: 60_000 }, (_, index) => `word${String(index % 5000)}`).join(" ");
+
+            await expect(writer.insert("notes", { body, channel: "general", title: "huge" })).resolves.toBeDefined();
+        });
+
         it("indexes rows that predate the index through the same backfill", async () => {
             expect.assertions(1);
 
@@ -611,7 +617,7 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             };
 
             await runSqlGlobalTableMigrations(harness.exec, plainSchema, postgresDialect);
-            await seedNative(createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: plainSchema }));
+            await seedNotes(createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: plainSchema }));
 
             const results = await createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema: nativeSchema })
                 .query("notes")
@@ -619,6 +625,74 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 .collect();
 
             expect(ids(results)).toEqual(["n3"]);
+        });
+    });
+
+    describe("switching an index between layouts", () => {
+        const portableSchema: SchemaLike = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body" }],
+                    shape: { body: col("string"), channel: col("string"), title: col("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        };
+        const nativeSchema: SchemaLike = {
+            tables: {
+                notes: {
+                    ...portableSchema.tables["notes"]!,
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body", strategy: "native" }],
+                },
+            },
+        };
+
+        const writerFor = (schema: SchemaLike): DatabaseWriterLike =>
+            createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec: harness.exec, schema });
+
+        it("rebuilds the companion instead of running DDL against the wrong shape", async () => {
+            expect.assertions(3);
+
+            await runSqlGlobalTableMigrations(harness.exec, portableSchema, postgresDialect);
+
+            const portable = writerFor(portableSchema);
+
+            await portable.insert("notes", { _id: "n1", body: "hello world", channel: "general", title: "one" }, { allowExplicitId: true });
+
+            // The companion now holds (token, id, occurrences) rows. Flipping to
+            // native must not leave that shape in place: the GIN DDL would then
+            // reference a column that doesn't exist, and the throw escapes
+            // `ensureMigrated` — taking every read and write down, not just search.
+            const native = writerFor(nativeSchema);
+
+            await expect(
+                native
+                    .query("notes")
+                    .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                    .collect(),
+            ).resolves.toStrictEqual([expect.objectContaining({ _id: "n1" })]);
+
+            // Plain reads and writes keep working through the switch.
+            await expect(native.get("n1")).resolves.toMatchObject({ title: "one" });
+            await expect(native.insert("notes", { body: "after the flip", channel: "general", title: "two" })).resolves.toBeDefined();
+        });
+
+        it("rebuilds again when switching back", async () => {
+            expect.assertions(1);
+
+            await runSqlGlobalTableMigrations(harness.exec, nativeSchema, postgresDialect);
+
+            const native = writerFor(nativeSchema);
+
+            await native.insert("notes", { _id: "n1", body: "hello world", channel: "general", title: "one" }, { allowExplicitId: true });
+
+            const results = await writerFor(portableSchema)
+                .query("notes")
+                .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                .collect();
+
+            expect(ids(results)).toEqual(["n1"]);
         });
     });
 });

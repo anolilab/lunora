@@ -105,6 +105,33 @@ export interface SqlDialect {
     /** A short engine tag for diagnostics/branching (`"sqlite" | "postgres" | "mysql"`). The store core selects drizzle's matching dialect for rendering off this. */
     readonly name: "mysql" | "postgres" | "sqlite";
 
+    /**
+     * Optional: the engine's own full-text index, opted into per search index
+     * with `.searchIndex({ strategy: "native" })`.
+     *
+     * Only Postgres supplies one today (`tsvector` + GIN + `to_tsquery`). It
+     * scales sublinearly where the portable inverted companion aggregates every
+     * matching token row, but it ranks with the engine's formula rather than the
+     * shared scorer — which is why it is opt-in and why the parity suite asserts
+     * matching, not order, for indexes that use it.
+     *
+     * Recall still matches the portable path: the stored vector is built from
+     * the tokens Lunora's analyzer already produced, with a config (`simple`)
+     * that adds no stemming or stopwords of the engine's own.
+     */
+    nativeTextSearch?: {
+        /** DDL for the column holding the indexed vector. */
+        columnType: string;
+        /** Index method for that column (`GIN`). */
+        indexMethod: string;
+        /** Rank expression, best first. */
+        rank: (column: SQL, query: SQL) => SQL;
+        /** Build the match predicate for a query's analyzed terms, final term as a prefix. */
+        toQuery: (terms: ReadonlyArray<string>) => SQL;
+        /** Build the stored vector from an already-analyzed token stream. */
+        toVector: (bound: SQL) => SQL;
+    };
+
     /** True when the engine supports `UPDATE/DELETE ... RETURNING` (SQLite/PG yes, MySQL no → use `affectedRows`). */
     supportsReturning: boolean;
 
@@ -127,31 +154,4 @@ export interface SqlDialect {
      * token index reads it.
      */
     textPatternOperatorClass?: string;
-
-    /**
-     * Optional: the engine's own full-text index, opted into per search index
-     * with `.searchIndex({ strategy: "native" })`.
-     *
-     * Only Postgres supplies one today (`tsvector` + GIN + `to_tsquery`). It
-     * scales sublinearly where the portable inverted companion aggregates every
-     * matching token row, but it ranks with the engine's formula rather than the
-     * shared scorer — which is why it is opt-in and why the parity suite asserts
-     * matching, not order, for indexes that use it.
-     *
-     * Recall still matches the portable path: the stored vector is built from
-     * the tokens Lunora's analyzer already produced, with a config (`simple`)
-     * that adds no stemming or stopwords of the engine's own.
-     */
-    nativeTextSearch?: {
-        /** DDL for the column holding the indexed vector. */
-        columnType: string;
-        /** Index method for that column (`GIN`). */
-        indexMethod: string;
-        /** Build the stored vector from an already-analyzed token stream. */
-        toVector: (bound: SQL) => SQL;
-        /** Build the match predicate for a query's analyzed terms, final term as a prefix. */
-        toQuery: (terms: ReadonlyArray<string>) => SQL;
-        /** Rank expression, best first. */
-        rank: (column: SQL, query: SQL) => SQL;
-    };
 }

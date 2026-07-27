@@ -22,32 +22,30 @@ import { sql as dsql } from "drizzle-orm";
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
+import type { SearchBackfillState } from "./search-text";
 
 /** Reserved table holding one backfill-progress row per search companion. */
 const SEARCH_STATE_TABLE = "__lunora_search_state";
 
-/** How far a companion's backfill has progressed. */
-interface SearchBackfillState {
-    /** Last `id` indexed, or `undefined` when no page has run yet. */
-    cursor: string | undefined;
-    /** True once a page came back short — the table is fully indexed. */
-    done: boolean;
-
-    /**
-     * The analyzer profile the stored rows were built with. A mismatch means
-     * the shadow holds text analyzed by rules the query side no longer uses —
-     * a changed `language`, a new analyzer version — so it is discarded and
-     * rebuilt rather than left to half-match forever.
-     */
-    profile: string | undefined;
-}
-
 /** Create the progress table. Idempotent; called from `runShardMigrations`. */
 const migrateSearchState = (sql: SqlExec): void => {
+    // A table created by an earlier build has no `profile` column, and
+    // `CREATE TABLE IF NOT EXISTS` will not add one — every read would then
+    // fail on the missing column. Mirrors the sql-store twin.
+    const addProfileColumn = (): void => {
+        try {
+            runDrizzle(sql, dsql`ALTER TABLE ${dsql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${dsql.identifier("profile")} TEXT`);
+        } catch {
+            // Already present (or the table was just created with it).
+        }
+    };
+
     runDrizzle(
         sql,
         dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")} TEXT PRIMARY KEY, ${dsql.identifier("cursor")} TEXT, ${dsql.identifier("done")} INTEGER NOT NULL DEFAULT 0, ${dsql.identifier("profile")} TEXT)`,
     );
+
+    addProfileColumn();
 };
 
 /** Read a companion's progress. An unknown companion has done nothing yet. */
@@ -77,5 +75,4 @@ const writeSearchBackfillState = (sql: SqlExec, companion: string, cursor: strin
     );
 };
 
-export type { SearchBackfillState };
 export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState };

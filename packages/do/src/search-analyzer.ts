@@ -184,8 +184,5 @@ const createSearchAnalyzer = (language: string | undefined): SearchAnalyzer => {
     return analyzer;
 };
 
-/** The analyzer used when a search index declares no language: folding only. */
-const defaultSearchAnalyzer: SearchAnalyzer = createSearchAnalyzer(undefined);
-
 export type { SearchAnalyzer, SearchLanguage };
-export { createSearchAnalyzer, defaultSearchAnalyzer, SEARCH_LANGUAGES };
+export { createSearchAnalyzer, SEARCH_LANGUAGES };

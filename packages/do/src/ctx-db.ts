@@ -38,6 +38,7 @@ import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from 
 import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "./aggregate-tally";
 import type { AggregateIndexDefinitionLike, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions } from "./aggregates";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
+import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange } from "./ctx-db-cdc";
 import { createCompanionSync } from "./ctx-db-companions";
@@ -82,16 +83,19 @@ import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from
 import { guardWriter } from "./rls-guard";
 import { createSearchAnalyzer } from "./search-analyzer";
 import {
+    assertSearchWithinCap,
     buildFtsMatch,
     createSearchBuilder,
     finishSearchPage,
     FTS_ID_COLUMN,
     FTS_TEXT_COLUMN,
     ftsTableName,
+    MAX_SEARCH_SCAN,
     planSearchPage,
     resolveSearchField,
     resolveSearchScan,
     scoreDocument,
+    searchPageScan,
     stringifySearchText,
     tokenizeSearch,
 } from "./search-text";
@@ -961,13 +965,13 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
     // `_creationTime` ties with them on bulk-imported rows, and without a unique
     // terminal column the engine may order tied rows differently per execution —
     // which offset pagination would surface as a duplicated or skipped row.
-    // `f.rank` (bm25) decides only which rows survive the cap when a query
-    // matches more than `limit`; the returned order comes from `scoreDocument`
-    // below. bm25 weights document length and inverse document frequency, the
-    // shared scorer counts occurrences — leaving the engine's order in place
-    // would mean the same corpus ranks differently on fts5 than on the portable
-    // inverted layout, which is the one thing every backend must agree on.
-    const query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)}, f.${dsql.identifier(FTS_TEXT_COLUMN)} FROM ${dsql.identifier(ftName)} f JOIN ${dsql.identifier(tableName)} m ON m.id = f.${dsql.identifier(FTS_ID_COLUMN)} WHERE ${dsql.join(whereClauses, dsql` AND `)} ORDER BY f.rank LIMIT ${dsql.raw(String(limit))}`;
+    // The window is the scan cap, NOT `limit`: bm25 decides which rows we fetch
+    // and `scoreDocument` decides how they are ordered, so fetching only
+    // `limit` rows would let bm25 pick a different subset than our scorer's
+    // true top-N — and a `.take(2)` would then disagree with the portable
+    // layout even though a `.collect()` agrees. Fetch the capped window,
+    // re-rank, slice at the end.
+    const query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)}, f.${dsql.identifier(FTS_TEXT_COLUMN)} FROM ${dsql.identifier(ftName)} f JOIN ${dsql.identifier(tableName)} m ON m.id = f.${dsql.identifier(FTS_ID_COLUMN)} WHERE ${dsql.join(whereClauses, dsql` AND `)} ORDER BY f.rank LIMIT ${dsql.raw(String(MAX_SEARCH_SCAN))}`;
 
     const analyzer = createSearchAnalyzer(search.definition.language);
     const scored: { creationTime: number; doc: Record<string, unknown>; id: string; score: number }[] = [];
@@ -991,7 +995,7 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
 
     scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
 
-    return scored.map((entry) => entry.doc);
+    return scored.slice(0, limit).map((entry) => entry.doc);
 };
 
 /**
@@ -1535,6 +1539,13 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
             throw new LunoraError("INTERNAL", "runSearchFetch called without a staged search");
         }
 
+        // Advance the backfill on read. `runShardMigrations` runs once per
+        // isolate, so a warm DO would otherwise index one page and then stop —
+        // a large table stays permanently half-indexed, serving partial results
+        // with no error and no signal. The page is bounded and a completed
+        // index costs one indexed state lookup, so reads pay almost nothing.
+        backfillSearchIndexesForTable(sql, tableName, tableDefinition);
+
         const filtered = stage.inMemoryFilters.length > 0;
         // Relevance order means the engine read is always bounded: the caller's
         // limit when there is one, `MAX_SEARCH_SCAN` otherwise — including when a
@@ -1546,6 +1557,12 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
             : searchViaScan(sql, tableName, search, engineLimit, scopeCondition);
 
         if (!filtered) {
+            // An unbounded read asked for one row past the cap; if it came back
+            // full, the caller would otherwise receive a prefix that looks whole.
+            if (limit === undefined) {
+                assertSearchWithinCap(docs);
+            }
+
             return docs;
         }
 
@@ -1573,7 +1590,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
     const paginateSearchStage = (options: PaginationOptions): QueryPage => {
         const plan = planSearchPage(options);
 
-        return finishSearchPage(runSearchFetch(plan.offset + plan.numItems + 1), plan);
+        return finishSearchPage(runSearchFetch(searchPageScan(plan)), plan);
     };
 
     const buildOrderClause = (): SQL => {

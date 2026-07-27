@@ -146,9 +146,10 @@ row, so a search page has no bounded (`endCursor`) form — pass `cursor` and
 | `filterFields` per index                 | 16    |
 | Documents returned per search            | 1024  |
 
-All of them throw when exceeded — including asking for more than 1024 documents
-via `.take(n)` or paging past that offset, so a truncated result set is never
-mistaken for the whole one.
+All of them throw when exceeded. That includes `.collect()` over a result set
+larger than 1024 and `.take(n)` / `.paginate()` reaching past it — a truncated
+result set is never handed back as if it were the whole one. Narrow the query,
+or read it a page at a time.
 
 The 1024 bounds documents **returned**, not the work the engine does: ranking is
 an aggregate over every matching token row, so a very common term is expensive

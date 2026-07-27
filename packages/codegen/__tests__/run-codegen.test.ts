@@ -2853,7 +2853,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                     vectorIndexes: [],
                 },
             ],
-            vectorIndexes: [{ dimensions: 768, field: "body", metric: "cosine", name: "docs-body", on: "docs" }],
+            vectorIndexes: [{ dimensions: 768, field: "body", metric: "cosine", name: "docs-body", table: "docs" }],
         };
 
         it("narrows ctx.vectors to the declared index names", () => {

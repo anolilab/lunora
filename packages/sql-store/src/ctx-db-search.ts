@@ -35,6 +35,8 @@ import {
     FTS_TOKEN_COLUMN,
     ftsTableName,
     MAX_INDEXED_TOKENS,
+    MAX_SEARCH_SCAN,
+    planSearchBackfillPass,
     resolveSearchField,
     scoreDocument,
     searchTextUnchanged,
@@ -110,16 +112,18 @@ const searchViaFts = async (
         conditions.push(sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
     }
 
-    // Soft delete: hide soft-deleted rows from search (qualified to the joined
-    // doc table `m`).
     if (definition.softDeleteMode) {
         conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
     }
 
-    // `f.rank` (bm25) only decides which rows survive the cap; the order comes
-    // from `scoreDocument` below, so this path ranks identically to the portable
-    // inverted layout instead of by the engine's own formula. See the DO twin.
-    const query = sql`SELECT m.*, f.${sql.identifier(FTS_TEXT_COLUMN)} FROM ${sql.identifier(ftName)} f JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = f.${sql.identifier(FTS_ID_COLUMN)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY f.rank LIMIT ${sql.raw(String(limit))}`;
+    // The window is the scan cap, NOT the caller's limit — this is the subtle
+    // part. bm25 decides which rows we fetch and `scoreDocument` decides how
+    // they are ordered, so fetching only `limit` rows would let bm25 pick a
+    // different subset than our scorer's true top-N: a `.take(2)` and the first
+    // page of a `.paginate({ numItems: 2 })` would disagree with the portable
+    // layout even though a `.collect()` agrees. Fetch the whole capped window,
+    // re-rank it, and slice at the end.
+    const query = sql`SELECT m.*, f.${sql.identifier(FTS_TEXT_COLUMN)} FROM ${sql.identifier(ftName)} f JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = f.${sql.identifier(FTS_ID_COLUMN)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY f.rank LIMIT ${sql.raw(String(MAX_SEARCH_SCAN))}`;
 
     const analyzer = createSearchAnalyzer(search.definition.language);
     const rows = await queryAll(exec, dialect, query);
@@ -144,7 +148,7 @@ const searchViaFts = async (
 
     scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
 
-    return scored.map((entry) => entry.doc);
+    return scored.slice(0, limit).map((entry) => entry.doc);
 };
 
 /**
@@ -155,6 +159,26 @@ const searchViaFts = async (
  */
 const usesNativeSearch = (index: SearchIndexDefinitionLike, dialect: SqlDialect): boolean =>
     index.strategy === "native" && dialect.nativeTextSearch !== undefined;
+
+/**
+ * Which physical layout a companion holds. Recorded with the backfill profile,
+ * because the three layouts store *different columns*: flipping
+ * `strategy: "native"` on an index that already has a portable companion, or
+ * losing fts5 under an existing shadow, leaves a table whose shape no longer
+ * matches the SQL about to run against it. Without this in the profile the
+ * state row still says `done` and the mismatched companion is never rebuilt.
+ */
+const layoutFor = (index: SearchIndexDefinitionLike, dialect: SqlDialect, ftsAvailable: boolean): string => {
+    if (usesNativeSearch(index, dialect)) {
+        return "native";
+    }
+
+    return ftsAvailable ? "fts5" : "inverted";
+};
+
+/** The profile recorded for a companion: its analysis *and* its physical layout. */
+const companionProfile = (index: SearchIndexDefinitionLike, dialect: SqlDialect, ftsAvailable: boolean): string =>
+    `${createSearchAnalyzer(index.language).profile}/${layoutFor(index, dialect, ftsAvailable)}`;
 
 /** Column holding the engine-native indexed vector, in the companion table. */
 const FTS_VECTOR_COLUMN = "__vector__";
@@ -263,7 +287,6 @@ const searchViaInverted = async (
         conditions.push(sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
     }
 
-    // Soft delete: hide soft-deleted rows from search.
     if (definition.softDeleteMode) {
         conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
     }
@@ -388,7 +411,10 @@ const indexDocument = async (
     if (native) {
         // The engine builds the vector, but from *our* tokens — so recall stays
         // identical to the portable path rather than depending on whatever
-        // analysis the engine would have applied to raw text.
+        // analysis the engine would have applied to raw text. Capped like the
+        // portable layout: `to_tsvector` refuses a value over ~1 MB, and it
+        // inflates roughly 1.5x, so an uncapped prose column turns a write into
+        // a raw "string is too long for tsvector" error.
         await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(ftName)} WHERE ${sql.identifier(FTS_ID_COLUMN)} = ${id}`);
         await queryRun(
             exec,
@@ -436,22 +462,19 @@ const backfillSearchIndexPage = async (
     ftsAvailable: boolean,
 ): Promise<boolean> => {
     const ftName = ftsTableName(tableName, index.name);
-    const { profile } = createSearchAnalyzer(index.language);
-    const state = await readSearchBackfillState(exec, dialect, ftName);
+    const profile = companionProfile(index, dialect, ftsAvailable);
+    const pass = planSearchBackfillPass(await readSearchBackfillState(exec, dialect, ftName), profile);
 
-    // A row with no recorded profile predates profile tracking, so what its
-    // companion holds was analyzed by unknown rules — treat it as stale rather
-    // than resuming on top of it.
-    const staleProfile = state.profile !== profile;
+    if (pass.finished) {
+        return true;
+    }
 
-    if (staleProfile && (state.cursor !== undefined || state.done)) {
+    if (pass.wipe) {
         // The stored tokens were analyzed by rules the query side no longer
         // uses (a changed `language`, a new analyzer version). Half-matching
         // forever is the worst outcome, so discard and walk the table again.
         await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(ftName)}`);
         await writeSearchBackfillState(exec, dialect, ftName, undefined, false, profile);
-    } else if (state.done) {
-        return true;
     }
 
     // The source table may not exist yet — the companion DDL runs for every
@@ -466,13 +489,11 @@ const backfillSearchIndexPage = async (
         return true;
     }
 
-    const resuming = !staleProfile;
-
     // Counts rows *walked*, not rows indexed: a page whose rows are missing an
     // id (or fail to decode) would otherwise look short and be mistaken for the
     // end of the table, permanently stranding everything after it.
     let walked = 0;
-    let lastId = resuming ? state.cursor : undefined;
+    let lastId = pass.cursor;
 
     await forEachRowPaged(
         exec,
@@ -492,7 +513,7 @@ const backfillSearchIndexPage = async (
 
             await indexDocument(exec, dialect, ftName, id, document, index, ftsAvailable);
         },
-        { after: lastId, limit: SEARCH_BACKFILL_BATCH_ROWS },
+        { after: pass.cursor, limit: SEARCH_BACKFILL_BATCH_ROWS },
     );
 
     const done = walked < SEARCH_BACKFILL_BATCH_ROWS;
@@ -526,6 +547,20 @@ const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dial
 
     for (const [tableName, , index] of globalSearchIndexes(schema)) {
         const ftName = ftsTableName(tableName, index.name);
+        const profile = companionProfile(index, dialect, ftsAvailable);
+        // eslint-disable-next-line no-await-in-loop -- one indexed probe per index, on the shared connection.
+        const recorded = await readSearchBackfillState(exec, dialect, ftName);
+
+        // A companion built for a different layout has different *columns*, so
+        // `CREATE TABLE IF NOT EXISTS` leaves the old shape in place and the
+        // index DDL below then references a column that isn't there — a throw
+        // that escapes `ensureMigrated` and takes every read and write on this
+        // binding down, not just search. Drop it and rebuild; the profile
+        // mismatch makes the backfill repopulate.
+        if (recorded.profile !== undefined && recorded.profile !== profile) {
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
+            await queryRun(exec, dialect, sql`DROP TABLE IF EXISTS ${sql.identifier(ftName)}`);
+        }
 
         if (usesNativeSearch(index, dialect)) {
             const native = dialect.nativeTextSearch as NonNullable<SqlDialect["nativeTextSearch"]>;

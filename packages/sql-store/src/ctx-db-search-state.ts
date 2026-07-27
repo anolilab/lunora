@@ -13,6 +13,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts", the established module name in this package. */
 
+import type { SearchBackfillState } from "@lunora/do";
 import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
@@ -21,23 +22,6 @@ import { queryAll, queryRun } from "./sql-exec";
 
 /** Reserved table holding one backfill-progress row per search companion. */
 const SEARCH_STATE_TABLE = "__lunora_search_state";
-
-/** How far a companion's backfill has progressed, and under which analysis. */
-interface SearchBackfillState {
-    /** Last `id` indexed, or `undefined` when no page has run yet. */
-    cursor: string | undefined;
-    /** True once a page came back short — the table is fully indexed. */
-    done: boolean;
-
-    /**
-     * The analyzer profile the stored rows were built with. When it no longer
-     * matches the index's current profile — a changed `language`, a new
-     * analyzer version — the companion holds tokens analyzed by rules the query
-     * side no longer uses, so it is discarded and rebuilt rather than left to
-     * half-match forever.
-     */
-    profile: string | undefined;
-}
 
 /** Create the progress table. Idempotent; runs alongside the companion DDL. */
 const migrateSearchState = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<void> => {
@@ -112,5 +96,4 @@ const writeSearchBackfillState = async (
     );
 };
 
-export type { SearchBackfillState };
 export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState };

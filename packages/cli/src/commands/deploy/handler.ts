@@ -5,9 +5,9 @@ import { discoverMigrations, runCodegen } from "@lunora/codegen";
 import {
     DEV_VARS_FILE,
     discoverContainerInfo,
+    discoverSchemaInfo,
     findWranglerFile,
     generateSecretValue,
-    discoverSchemaInfo,
     inferLunoraBindings,
     isMintableSecretKey,
     packageNamesFromBindings,
@@ -39,9 +39,9 @@ import { resolveWorkerUrl } from "../../util/resolve-target";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
+import { createTuiConfirm } from "../../util/tui-prompts";
 import type { VectorMetadataIndex } from "../../util/vectorize-metadata";
 import { ensureVectorMetadataIndexes, metadataTypeFor } from "../../util/vectorize-metadata";
-import { createTuiConfirm } from "../../util/tui-prompts";
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
 import { listRemoteSecrets } from "../../util/wrangler-secrets";
 import { validateWrangler } from "../../util/wrangler-validator";
@@ -808,12 +808,6 @@ const checkLocalhostOriginVariables = (cwd: string, logger: Logger): string | un
 };
 
 /**
- * After a successful `wrangler deploy`, run any requested data migrations and —
- * only when the whole operation succeeded — advance the committed schema
- * baseline via the gate's deferred `rebless`. Extracted from `executeDeploy` to
- * keep its cognitive complexity within the 15-node budget.
- */
-/**
  * Create the Vectorize metadata indexes the schema's `.vectorize({ metadata })`
  * declarations imply.
  *
@@ -854,7 +848,7 @@ const provisionVectorMetadataIndexes = async (options: DeployCommandOptions, cwd
     const results = await ensureVectorMetadataIndexes({
         cwd,
         entries,
-        execArgs: execArgsFor(detectPackageManager(cwd), "wrangler", []),
+        exec: execArgsFor(detectPackageManager(cwd), "wrangler", []),
         logger: options.logger,
         spawner: options.spawner ?? defaultSpawner,
     });
@@ -865,6 +859,12 @@ const provisionVectorMetadataIndexes = async (options: DeployCommandOptions, cwd
     }
 };
 
+/**
+ * After a successful `wrangler deploy`, run any requested data migrations and —
+ * only when the whole operation succeeded — advance the committed schema
+ * baseline via the gate's deferred `rebless`. Extracted from `executeDeploy` to
+ * keep its cognitive complexity within the 15-node budget.
+ */
 const finalizeSuccessfulDeploy = async (
     options: DeployCommandOptions,
     cwd: string,

@@ -204,54 +204,55 @@ describe("search parity — sharded DO vs .global()", () => {
 
         const shardResults = await run(shard);
 
-        expect(await run(global)).toStrictEqual(shardResults);
+        await expect(run(global)).resolves.toStrictEqual(shardResults);
         // The third engine is the one that matters most here: it ranks with a
         // different mechanism than fts5, so a divergence shows up only when the
         // inverted layout is in the comparison.
-        expect(await run(inverted)).toStrictEqual(shardResults);
+        await expect(run(inverted)).resolves.toStrictEqual(shardResults);
     });
 
-    it("folds accents identically on both backends", async () => {
-        expect.assertions(2);
+    it("folds accents identically on every backend", async () => {
+        expect.assertions(3);
 
-        const { global, shard } = await seedBoth();
+        const { global, inverted, shard } = await seedBoth();
+        const sorted = async (writer: DatabaseWriterLike, term: string): Promise<unknown[]> =>
+            idsOf(
+                await writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", term))
+                    .collect(),
+            ).toSorted((left, right) => String(left).localeCompare(String(right)));
 
-        // Both spellings must find both documents — the case that used to
-        // depend on which engine's collation happened to be underneath.
-        const shardResults = await shard
-            .query("docs")
-            .withSearchIndex("by_body", (q) => q.search("body", "café"))
-            .collect();
-        const globalResults = await global
-            .query("docs")
-            .withSearchIndex("by_body", (q) => q.search("body", "cafe"))
-            .collect();
-
-        expect(idsOf(shardResults).toSorted((left, right) => String(left).localeCompare(String(right)))).toStrictEqual(["k", "l"]);
-        expect(idsOf(globalResults).toSorted((left, right) => String(left).localeCompare(String(right)))).toStrictEqual(["k", "l"]);
+        // Both spellings must find both documents on all three engines — the
+        // case that used to depend on which collation happened to be underneath.
+        await expect(sorted(shard, "café")).resolves.toStrictEqual(["k", "l"]);
+        await expect(sorted(global, "cafe")).resolves.toStrictEqual(["k", "l"]);
+        await expect(sorted(inverted, "cafe")).resolves.toStrictEqual(["k", "l"]);
     });
 
     it("agrees when an .eq() filter narrows the match", async () => {
-        expect.assertions(1);
+        expect.assertions(3);
 
-        const { global, shard } = await seedBoth();
+        const { global, inverted, shard } = await seedBoth();
+        const run = async (writer: DatabaseWriterLike): Promise<unknown[]> =>
+            idsOf(
+                await writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "hello").eq("channel", "other"))
+                    .collect(),
+            );
 
-        const shardResults = await shard
-            .query("docs")
-            .withSearchIndex("by_body", (q) => q.search("body", "hello").eq("channel", "other"))
-            .collect();
-        const globalResults = await global
-            .query("docs")
-            .withSearchIndex("by_body", (q) => q.search("body", "hello").eq("channel", "other"))
-            .collect();
-
-        expect(idsOf(globalResults)).toStrictEqual(idsOf(shardResults));
+        // The filter narrows differently per layout — a WHERE on the joined doc
+        // table for fts5, the same but past a GROUP BY for the inverted one.
+        await expect(run(shard)).resolves.toStrictEqual(["d"]);
+        await expect(run(global)).resolves.toStrictEqual(["d"]);
+        await expect(run(inverted)).resolves.toStrictEqual(["d"]);
     });
 
     it("agrees on the page boundary, including the cursor sequence", async () => {
-        expect.assertions(3);
+        expect.assertions(5);
 
-        const { global, shard } = await seedBoth();
+        const { global, inverted, shard } = await seedBoth();
 
         const shardPage = await shard
             .query("docs")
@@ -275,34 +276,53 @@ describe("search parity — sharded DO vs .global()", () => {
             .paginate({ cursor: globalPage.continueCursor, numItems: 2 });
 
         expect(idsOf(globalNext.page)).toStrictEqual(idsOf(shardNext.page));
+
+        // The inverted layout pages over a different query shape (offset into a
+        // GROUP BY result), so it gets the same walk rather than an assumption.
+        const invertedPage = await inverted
+            .query("docs")
+            .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+            .paginate({ numItems: 2 });
+        const invertedNext = await inverted
+            .query("docs")
+            .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+            .paginate({ cursor: invertedPage.continueCursor, numItems: 2 });
+
+        expect(idsOf(invertedPage.page)).toStrictEqual(idsOf(shardPage.page));
+        expect(idsOf(invertedNext.page)).toStrictEqual(idsOf(shardNext.page));
     });
 
     it("agrees after updates and deletes", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        const { global, shard } = await seedBoth();
+        const { global, inverted, shard } = await seedBoth();
 
-        await shard.patch("a", { body: "totally rewritten" });
-        await global.patch("a", { body: "totally rewritten" });
-        await shard.delete("b");
-        await global.delete("b");
+        for (const writer of [shard, global, inverted]) {
+            // eslint-disable-next-line no-await-in-loop -- the three engines must see the same writes in the same order
+            await writer.patch("a", { body: "totally rewritten" });
+            // eslint-disable-next-line no-await-in-loop -- same
+            await writer.delete("b");
+        }
 
-        const shardResults = await shard
-            .query("docs")
-            .withSearchIndex("by_body", (q) => q.search("body", "hello"))
-            .collect();
-        const globalResults = await global
-            .query("docs")
-            .withSearchIndex("by_body", (q) => q.search("body", "hello"))
-            .collect();
+        const run = async (writer: DatabaseWriterLike): Promise<unknown[]> =>
+            idsOf(
+                await writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                    .collect(),
+            );
+        const shardResults = await run(shard);
 
-        expect(idsOf(globalResults)).toStrictEqual(idsOf(shardResults));
+        await expect(run(global)).resolves.toStrictEqual(shardResults);
+        // Delete-then-insert on the inverted layout touches N token rows rather
+        // than one shadow row, which is where a stale-row bug would show.
+        await expect(run(inverted)).resolves.toStrictEqual(shardResults);
     });
 
     it("agrees on a tie, which is what the id tiebreak exists for", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
-        const { global, shard } = await seedBoth();
+        const { global, inverted, shard } = await seedBoth();
 
         // "hello world" scores identically for a, d and g (case-folded), and the
         // corpus gives them distinct creation times — so the order is fully
@@ -316,7 +336,101 @@ describe("search parity — sharded DO vs .global()", () => {
             .withSearchIndex("by_body", (q) => q.search("body", "hello world"))
             .collect();
 
+        const invertedResults = await inverted
+            .query("docs")
+            .withSearchIndex("by_body", (q) => q.search("body", "hello world"))
+            .collect();
+
         expect(idsOf(globalResults)).toStrictEqual(idsOf(shardResults));
+        expect(idsOf(invertedResults)).toStrictEqual(idsOf(shardResults));
         expect(idsOf(shardResults).length).toBeGreaterThan(1);
+    });
+
+    it("agrees on bounded reads, where a limit decides which rows survive", async () => {
+        expect.assertions(10);
+
+        const { global, inverted, shard } = await seedBoth();
+        const take = async (writer: DatabaseWriterLike, n: number): Promise<unknown[]> =>
+            idsOf(
+                await writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "hello"))
+                    .take(n),
+            );
+
+        // The case a `.collect()` comparison cannot see: on fts5 the engine's
+        // own ranking decides which rows come back before the shared scorer
+        // re-ranks them, so a narrow `.take(n)` used to return a *different set*
+        // of documents than the portable layout — not merely a different order.
+        for (const n of [1, 2, 3, 4, 5]) {
+            // eslint-disable-next-line no-await-in-loop -- each bound is a separate read against all three engines
+            const expected = await take(shard, n);
+
+            // eslint-disable-next-line no-await-in-loop -- same
+            await expect(take(global, n)).resolves.toStrictEqual(expected);
+            // eslint-disable-next-line no-await-in-loop -- same
+            await expect(take(inverted, n)).resolves.toStrictEqual(expected);
+        }
+    });
+
+    describe("query-surface limits", () => {
+        // Declares a language, so analysis *changes the term count* — which is
+        // the whole point: the cap counts analyzed terms, and a backend that
+        // counted raw ones would accept a query the other refuses.
+        const englishDoSchema: SchemaLike = {
+            tables: {
+                docs: {
+                    ...doSchema.tables["docs"]!,
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], language: "en", name: "by_body" }],
+                },
+            },
+        };
+        const englishGlobalSchema: SchemaLike = {
+            tables: {
+                docs: {
+                    ...globalSchema.tables["docs"]!,
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], language: "en", name: "by_body" }],
+                },
+            },
+        };
+
+        const refuses = (writer: DatabaseWriterLike, term: string): boolean => {
+            try {
+                writer.query("docs").withSearchIndex("by_body", (q) => q.search("body", term));
+
+                return false;
+            } catch {
+                return true;
+            }
+        };
+
+        it.each([
+            // 17 content words: over the cap under any analysis.
+            { expected: true, name: "a query over the cap under any analysis", term: Array.from({ length: 17 }, (_, index) => `t${String(index)}`).join(" ") },
+            // 19 raw words, 16 once English stopwords are dropped. Counting raw
+            // terms refuses this; counting analyzed terms accepts it — and the
+            // two backends must not disagree about which.
+            {
+                expected: false,
+                name: "a query only the analyzer brings under the cap",
+                term: `the and of ${Array.from({ length: 16 }, (_, index) => `t${String(index)}`).join(" ")}`,
+            },
+        ])("agrees on $name", async ({ expected, term }) => {
+            expect.assertions(3);
+
+            const sql = shardExec(doHarness);
+
+            runShardMigrations(sql, englishDoSchema);
+            globalHarness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT)`);
+            invertedHarness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT)`);
+
+            const shard = createShardContextDatabase({ schema: englishDoSchema, sql });
+            const global = createD1ContextDatabase({ exec: globalHarness.exec, schema: englishGlobalSchema });
+            const inverted = createD1ContextDatabase({ exec: withoutFts5(invertedHarness.exec), schema: englishGlobalSchema });
+
+            expect(refuses(shard, term)).toBe(expected);
+            expect(refuses(global, term)).toBe(expected);
+            expect(refuses(inverted, term)).toBe(expected);
+        });
     });
 });

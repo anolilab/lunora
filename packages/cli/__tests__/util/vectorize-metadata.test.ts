@@ -77,7 +77,7 @@ describe("ensureVectorMetadataIndexes", () => {
                 { index: "docs-body", property: "authorId", type: "string" },
                 { index: "docs-body", property: "published", type: "boolean" },
             ],
-            execArgs: ["npx", "wrangler"],
+            exec: { args: ["wrangler"], command: "npx" },
             logger: recordingLogger().logger,
             spawner,
         });
@@ -93,12 +93,12 @@ describe("ensureVectorMetadataIndexes", () => {
         expect.assertions(2);
 
         const { logger, warnings } = recordingLogger();
-        const { spawner } = spawnerReturning([{ code: 1, stdout: "A metadata index for property authorId already exists" }]);
+        const { spawner } = spawnerReturning([{ code: 1, stderr: "✘ [ERROR] A metadata index for property authorId already exists" }]);
 
         const results = await ensureVectorMetadataIndexes({
             cwd: "/app",
             entries: [{ index: "docs-body", property: "authorId", type: "string" }],
-            execArgs: ["npx", "wrangler"],
+            exec: { args: ["wrangler"], command: "npx" },
             logger,
             spawner,
         });
@@ -111,27 +111,27 @@ describe("ensureVectorMetadataIndexes", () => {
         expect.assertions(3);
 
         const { logger, warnings } = recordingLogger();
-        const { spawner } = spawnerReturning([{ code: 1, stdout: "index not found" }]);
+        const { spawner } = spawnerReturning([{ code: 1, stderr: "✘ [ERROR] index not found" }]);
 
         // The worker is already live by this point, so a provisioning failure
         // must degrade to a warning rather than fail the deploy.
         const results = await ensureVectorMetadataIndexes({
             cwd: "/app",
             entries: [{ index: "docs-body", property: "authorId", type: "string" }],
-            execArgs: ["npx", "wrangler"],
+            exec: { args: ["wrangler"], command: "npx" },
             logger,
             spawner,
         });
 
         expect(results[0]?.status).toBe("failed");
-        expect(results[0]?.error).toBe("index not found");
+        expect(results[0]?.error).toContain("index not found");
         expect(warnings[0]).toContain("vectorize create-metadata-index docs-body --property-name=authorId --type=string");
     });
 
     it("keeps provisioning the rest after one property fails", async () => {
         expect.assertions(1);
 
-        const { spawner } = spawnerReturning([{ code: 1, stdout: "boom" }, { code: 0 }]);
+        const { spawner } = spawnerReturning([{ code: 1, stderr: "boom" }, { code: 0 }]);
 
         const results = await ensureVectorMetadataIndexes({
             cwd: "/app",
@@ -139,12 +139,34 @@ describe("ensureVectorMetadataIndexes", () => {
                 { index: "docs-body", property: "authorId", type: "string" },
                 { index: "docs-body", property: "published", type: "boolean" },
             ],
-            execArgs: ["npx", "wrangler"],
+            exec: { args: ["wrangler"], command: "npx" },
             logger: recordingLogger().logger,
             spawner,
         });
 
         expect(results.map((result) => result.status)).toStrictEqual(["failed", "created"]);
+    });
+});
+
+describe("stream handling", () => {
+    it("reads the outcome from stderr, which is where wrangler reports it", async () => {
+        expect.assertions(2);
+
+        const { calls, spawner } = spawnerReturning([{ code: 1, stderr: "already indexed" }]);
+        const { logger, warnings } = recordingLogger();
+
+        const results = await ensureVectorMetadataIndexes({
+            cwd: "/app",
+            entries: [{ index: "docs-body", property: "authorId", type: "string" }],
+            exec: { args: ["wrangler"], command: "npx" },
+            logger,
+            spawner,
+        });
+
+        // stdout stays untouched so `deploy --format json` keeps emitting one
+        // JSON document; the reason comes from the captured stderr.
+        expect(calls[0]).toMatchObject({ captureStderr: true, stdoutToStderr: true });
+        expect([results[0]?.status, warnings.length]).toStrictEqual(["exists", 0]);
     });
 });
 

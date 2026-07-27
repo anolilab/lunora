@@ -16,14 +16,15 @@ import join from "./path";
 interface VectorMetadataDeclaration {
     /** The vector index the property belongs to. */
     index: string;
-    /** Column mirrored into vector metadata. */
-    property: string;
+
     /**
      * The validator kind behind the column, or `undefined` when the column
      * isn't in the owning table's shape. Callers map it to the Vectorize
      * metadata type; a kind that can't be filtered on is reported, not indexed.
      */
     kind: string | undefined;
+    /** Column mirrored into vector metadata. */
+    property: string;
 }
 
 interface SchemaInfo {
@@ -31,6 +32,7 @@ interface SchemaInfo {
     hasGlobalTable: boolean;
     /** Names of vector indexes declared via `.vectorize()` / `defineVectorIndex()`. */
     vectorIndexNames?: ReadonlyArray<string>;
+
     /**
      * Metadata properties declared filterable on a vector index. Cloudflare
      * needs an explicit metadata index per property before a `filter` can match
@@ -66,8 +68,7 @@ const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): Disco
         // wrangler validator consistent with what codegen emits.
         const schema = discoverSchema(project, schemaPath, projectRoot);
 
-        const shapeOf = (tableName: string): Record<string, { kind?: string }> =>
-            (schema.tables.find((table) => table.name === tableName)?.shape ?? {}) as Record<string, { kind?: string }>;
+        const shapeOf = (tableName: string): Record<string, { kind?: string }> => schema.tables.find((table) => table.name === tableName)?.shape ?? {};
 
         return {
             info: {

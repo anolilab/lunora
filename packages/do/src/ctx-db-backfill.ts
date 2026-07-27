@@ -31,7 +31,7 @@ import { param } from "./drizzle";
 import type { RankIndexDefinitionLike } from "./rank";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
 import { createSearchAnalyzer } from "./search-analyzer";
-import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName } from "./search-text";
+import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass } from "./search-text";
 
 /**
  * Backfill one aggregate counter table by scanning the source rows once and
@@ -170,18 +170,19 @@ const SEARCH_BACKFILL_BATCH_ROWS = 500;
 const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): boolean => {
     const ftName = ftsTableName(tableName, index.name);
     const { profile } = createSearchAnalyzer(index.language);
-    const state = readSearchBackfillState(sql, ftName);
-    const resuming = state.profile === undefined || state.profile === profile;
+    const pass = planSearchBackfillPass(readSearchBackfillState(sql, ftName), profile);
 
-    if (!resuming) {
-        // Stored text was analyzed by rules the query side no longer uses (a
-        // changed `language`, a new analyzer version) — discard and re-walk.
-        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)}`);
-    } else if (state.done) {
+    if (pass.finished) {
         return true;
     }
 
-    const cursor = resuming ? state.cursor : undefined;
+    if (pass.wipe) {
+        // Stored text was analyzed by rules the query side no longer uses (a
+        // changed `language`, a new analyzer version) — discard and re-walk.
+        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)}`);
+    }
+
+    const { cursor } = pass;
     const rows = runDrizzle(
         sql,
         cursor === undefined
@@ -189,7 +190,11 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
             : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id > ${cursor} ORDER BY id ASC LIMIT ${dsql.raw(String(SEARCH_BACKFILL_BATCH_ROWS))}`,
     ).toArray();
 
-    let lastId: string | undefined;
+    // Seeded from the resume point, never from nothing: a page whose rows all
+    // fail the id check would otherwise write back an empty cursor and send the
+    // next pass to the start of the table — forever, since a full page also
+    // reports "not done".
+    let lastId = cursor;
 
     for (const row of rows) {
         const { id } = row;
@@ -210,10 +215,15 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
         try {
             record = rowToDocument(row);
         } catch {
-            continue;
+            record = undefined;
         }
 
         if (!record) {
+            // Drop whatever the companion still holds for this id. Skipping
+            // outright would leave a stale row serving text the document no
+            // longer has — worse than the row being unsearchable.
+            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
+
             continue;
         }
 

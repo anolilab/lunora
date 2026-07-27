@@ -210,10 +210,11 @@ export { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from
 export type { LogEventInput } from "./request-log";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
 export type { SearchAnalyzer, SearchLanguage } from "./search-analyzer";
-export { createSearchAnalyzer, defaultSearchAnalyzer, SEARCH_LANGUAGES } from "./search-analyzer";
-export type { SearchBuilderLike, SearchPagePlan, SearchStageLike } from "./search-text";
+export { createSearchAnalyzer, SEARCH_LANGUAGES } from "./search-analyzer";
+export type { SearchBackfillPass, SearchBackfillState, SearchBuilderLike, SearchPagePlan, SearchStageLike } from "./search-text";
 export {
     analyzedSearchText,
+    assertSearchWithinCap,
     buildFtsMatch,
     countSearchTokens,
     createSearchBuilder,
@@ -229,10 +230,12 @@ export {
     MAX_SEARCH_SCAN,
     MAX_SEARCH_TERMS,
     parseSearchCursor,
+    planSearchBackfillPass,
     planSearchPage,
     resolveSearchField,
     resolveSearchScan,
     scoreDocument,
+    searchPageScan,
     searchTextUnchanged,
     splitSearchTokens,
     stringifySearchText,

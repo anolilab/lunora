@@ -44,12 +44,14 @@ import {
     applyOnDelete,
     applySelect,
     assertFlatPredicate,
+    assertSearchWithinCap,
     assertValidClientId,
     buildSeekWhere,
     coerceAggregateNumber,
     compileWhereSql,
     ConflictError,
     CountRlsUnsupportedError,
+    createSearchAnalyzer,
     createSearchBuilder,
     decodeCursor,
     encodeAggregateKey,
@@ -77,6 +79,7 @@ import {
     resolveWith,
     runRowValidators,
     runTriggers,
+    searchPageScan,
     selectIndexForAggregate,
     selectIndexForCount,
     selectIndexForGroupBy,
@@ -2728,6 +2731,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 const rows = await runSqlSearch(exec, dialect, definition, tableName, stage, resolveSearchScan(filtered ? undefined : limit));
 
                 if (!filtered) {
+                    // An unbounded read asked for one row past the cap; a full
+                    // window means the caller would get a prefix that looks whole.
+                    if (limit === undefined) {
+                        assertSearchWithinCap(rows);
+                    }
+
                     return rows;
                 }
 
@@ -2782,7 +2791,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         // fetched so `hasMore` is observed, not guessed.
                         const plan = planSearchPage(pageOptions);
 
-                        return finishSearchPage(await runSearch(stage, plan.offset + plan.numItems + 1), plan);
+                        return finishSearchPage(await runSearch(stage, searchPageScan(plan)), plan);
                     },
                     async take(limit) {
                         if (!stage) {
@@ -2837,7 +2846,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                             query: "",
                         };
 
-                        search(createSearchBuilder(searchStage, tableName));
+                        search(createSearchBuilder(searchStage, tableName, createSearchAnalyzer(searchDefinition.language)));
 
                         if (!searchStage.hasQuery) {
                             throw new LunoraError("INTERNAL", `search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);

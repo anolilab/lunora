@@ -14,9 +14,9 @@ import {
 } from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
-import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import type { DoctorOptions } from "./index";
 
 /** Severity of a single doctor check. `fail` drives a non-zero exit; `warn`/`info`/`pass` don't. */

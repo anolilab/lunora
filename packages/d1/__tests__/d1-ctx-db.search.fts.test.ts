@@ -222,8 +222,11 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const matchStatement = statements.find((statement) => statement.sql.includes(" MATCH "));
 
+        // `LIMIT 1024` rather than the caller's `take(5)`: bm25 chooses which
+        // rows we fetch and the shared scorer re-ranks them, so a narrower
+        // fetch would let bm25 pick a different subset than the true top-5.
         expect(matchStatement?.sql).toBe(
-            'SELECT m.*, f."__text__" FROM "docs__fts_by_body" f JOIN "docs" m ON m."id" = f."__id__" WHERE f."__text__" MATCH ? AND m."channel" = ? ORDER BY f.rank LIMIT 5',
+            'SELECT m.*, f."__text__" FROM "docs__fts_by_body" f JOIN "docs" m ON m."id" = f."__id__" WHERE f."__text__" MATCH ? AND m."channel" = ? ORDER BY f.rank LIMIT 1024',
         );
         expect(matchStatement?.params).toStrictEqual(['"hello" AND "wor"*', "x"]);
 
