@@ -2654,63 +2654,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "user_creating_mutation_without_captcha",
         "remediation": "Add a server-verified human check: `.use(verifyTurnstile({ secret, token }))` from `@lunora/auth`, or wrap it with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Pair with a rate limit for defense in depth.",
         "title": "Account-creating / mail-sending write without a CAPTCHA"
-    },
-    {
-        "cacheKey": "signup_mutation_without_disposable_gating:invitations:accept",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` that creates a user/session/account row has no disposable-email gate. Throwaway mailboxes farm free trials, evade bans, and pollute the user table.",
-        "detail": "Public mutation `accept` (invitations) writes a user/session/account table but has no disposable-email gate. Add `.use(emailGateMiddleware(...))` from `@lunora/auth/email-guard`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "accept",
-            "file": "invitations",
-            "kind": "mutation",
-            "writesUserTable": true
-        },
-        "name": "signup_mutation_without_disposable_gating",
-        "remediation": "Add `.use(emailGateMiddleware({ email: (ctx) => ctx.args.email }))` from `@lunora/auth/email-guard` to reject disposable domains at signup, or gate better-auth's native signup with `withEmailGate(...)` / `emailGateDatabaseHooks(...)`.",
-        "title": "Account-creating write without a disposable-email gate"
-    },
-    {
-        "cacheKey": "signup_mutation_without_disposable_gating:members:add",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` that creates a user/session/account row has no disposable-email gate. Throwaway mailboxes farm free trials, evade bans, and pollute the user table.",
-        "detail": "Public mutation `add` (members) writes a user/session/account table but has no disposable-email gate. Add `.use(emailGateMiddleware(...))` from `@lunora/auth/email-guard`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "add",
-            "file": "members",
-            "kind": "mutation",
-            "writesUserTable": true
-        },
-        "name": "signup_mutation_without_disposable_gating",
-        "remediation": "Add `.use(emailGateMiddleware({ email: (ctx) => ctx.args.email }))` from `@lunora/auth/email-guard` to reject disposable domains at signup, or gate better-auth's native signup with `withEmailGate(...)` / `emailGateDatabaseHooks(...)`.",
-        "title": "Account-creating write without a disposable-email gate"
-    },
-    {
-        "cacheKey": "signup_mutation_without_disposable_gating:organizations:create",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `mutation`/`action` that creates a user/session/account row has no disposable-email gate. Throwaway mailboxes farm free trials, evade bans, and pollute the user table.",
-        "detail": "Public mutation `create` (organizations) writes a user/session/account table but has no disposable-email gate. Add `.use(emailGateMiddleware(...))` from `@lunora/auth/email-guard`.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "create",
-            "file": "organizations",
-            "kind": "mutation",
-            "writesUserTable": true
-        },
-        "name": "signup_mutation_without_disposable_gating",
-        "remediation": "Add `.use(emailGateMiddleware({ email: (ctx) => ctx.args.email }))` from `@lunora/auth/email-guard` to reject disposable domains at signup, or gate better-auth's native signup with `withEmailGate(...)` / `emailGateDatabaseHooks(...)`.",
-        "title": "Account-creating write without a disposable-email gate"
     }
 ];
 
