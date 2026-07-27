@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { Logger } from "../../src/util/logger";
-import { compareVersions, formatUpdateNotice, isCacheFresh, isNewer, maybeNotifyUpdate } from "../../src/util/update-notifier";
+import { compareVersions, distTagFor, formatUpdateNotice, isCacheFresh, isNewer, maybeNotifyUpdate } from "../../src/util/update-notifier";
 
 const recordingLogger = (): { logger: Logger; warns: string[] } => {
     const warns: string[] = [];
@@ -23,20 +23,39 @@ const okFetch = (version: string) => async () => {
 };
 
 describe("update-notifier helpers", () => {
-    it("compareVersions orders by major.minor.patch and ignores prerelease", () => {
-        expect.assertions(4);
+    it("compareVersions orders by full semver precedence", () => {
+        expect.assertions(7);
 
         expect(compareVersions("1.2.3", "1.2.4")).toBe(-1);
         expect(compareVersions("2.0.0", "1.9.9")).toBe(1);
         expect(compareVersions("1.2.3", "1.2.3")).toBe(0);
-        expect(compareVersions("1.2.3", "1.2.3-beta.1")).toBe(0);
+        // A release outranks its own prereleases, and prereleases order among
+        // themselves — the whole point, since this package lives on
+        // `1.0.0-alpha.N` and a core-only comparison would rate every alpha
+        // equal to every other and never report an update.
+        expect(compareVersions("1.2.3", "1.2.3-beta.1")).toBe(1);
+        expect(compareVersions("1.0.0-alpha.5", "1.0.0-alpha.119")).toBe(-1);
+        expect(compareVersions("1.0.0-alpha.119", "1.0.0-alpha.119")).toBe(0);
+        expect(compareVersions("1.0.0-alpha.2", "1.0.0-beta.1")).toBe(-1);
+    });
+
+    it("distTagFor keeps a prerelease user on their own channel", () => {
+        expect.assertions(4);
+
+        // Checking an alpha user against `latest` is worse than not checking:
+        // the tag may not exist, and installing it moves them off the channel.
+        expect(distTagFor("1.0.0-alpha.119")).toBe("alpha");
+        expect(distTagFor("1.0.0-beta.2")).toBe("beta");
+        expect(distTagFor("1.2.3")).toBe("latest");
+        expect(distTagFor("1.2.3-0")).toBe("latest");
     });
 
     it("isNewer is true only for a strictly greater release", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         expect(isNewer("1.0.0", "1.0.1")).toBe(true);
         expect(isNewer("1.0.1", "1.0.0")).toBe(false);
+        expect(isNewer("1.0.0-alpha.118", "1.0.0-alpha.119")).toBe(true);
     });
 
     it("isCacheFresh honours the TTL window", () => {
@@ -47,9 +66,11 @@ describe("update-notifier helpers", () => {
     });
 
     it("formatUpdateNotice mentions both versions", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         expect(formatUpdateNotice("1.0.0", "2.0.0")).toContain("1.0.0 → 2.0.0");
+        // The advice must keep the user on their own channel.
+        expect(formatUpdateNotice("1.0.0-alpha.1", "1.0.0-alpha.2", "alpha")).toContain("@lunora/cli@alpha");
     });
 });
 
