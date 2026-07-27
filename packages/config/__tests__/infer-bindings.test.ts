@@ -74,7 +74,7 @@ describe("inferLunoraBindings", () => {
         expect(result.durableObjects.find((object) => object.binding === "SHARD")?.className).toBe("ShardDO");
     });
 
-    it("does NOT bind SessionDO when @lunora/auth is used but no SessionDO is exported", async () => {
+    it("binds no auth Durable Object for a D1-backed auth app, and says which mode it is in", async () => {
         expect.assertions(3);
 
         write("wrangler.jsonc", WRANGLER);
@@ -84,7 +84,11 @@ describe("inferLunoraBindings", () => {
 
         expect(result.usesAuth).toBe(true);
         expect(result.durableObjects.some((object) => object.binding === "SESSION")).toBe(false);
-        expect(result.signals.some((signal) => signal.includes("SessionDO"))).toBe(true);
+        // The hint used to promise that exporting `SessionDO` produced DO-backed
+        // sessions. `@lunora/auth` has never called that class, so following the hint
+        // got you a bound, secret-configured, entirely unused Durable Object. It now
+        // names the mechanism that actually exists.
+        expect(result.signals.some((signal) => signal.includes("pass `namespace` to .auth()"))).toBe(true);
     });
 
     it("infers D1 from a .global() table even with no env.DB access", async () => {

@@ -277,29 +277,61 @@ isolated from concurrent dispatch), so better-auth can run inside an object on i
 SQLite:
 
 ```ts
-import { createAuth, lunoraDoAdapter } from "@lunora/auth";
+// lunora/auth-do.ts — a thin subclass; the base class owns everything else.
+import { LunoraAuthDO } from "@lunora/auth";
 import { admin, scim } from "@lunora/auth/plugins";
 
-export class AuthDO {
-    #auth;
-
+export class AuthDO extends LunoraAuthDO {
     constructor(state: DurableObjectState, env: Env) {
-        this.#auth = createAuth({
-            secret: env.AUTH_SECRET,
-            database: lunoraDoAdapter(state.storage),
-            plugins: [scim({ connections: [{ id: "okta-acme", credentials: [{ type: "bearer", id: "primary", token: env.SCIM_TOKEN }] }] }), admin()],
-        });
-    }
-
-    async fetch(request: Request) {
-        return (await handleAuthRequest(this.#auth, request)) ?? new Response("not found", { status: 404 });
+        super(
+            state,
+            () => ({
+                secret: env.AUTH_SECRET,
+                plugins: [scim({ connections: [{ id: "okta-acme", credentials: [{ type: "bearer", id: "primary", token: env.SCIM_TOKEN }] }] }), admin()],
+            }),
+            { internalSecret: env.AUTH_DO_SECRET },
+        );
     }
 }
 ```
 
-Route `/api/auth/*` from your worker to the object, and the object owns the auth tables.
-Verified against a real Durable Object in workerd (`__tests__/workerd/do-adapter.workerd.test.ts`),
-not just a SQLite stand-in.
+`LunoraAuthDO` builds the instance lazily on the first request, **creates its own
+tables**, serves `/api/auth/*`, and answers one internal route the worker uses to
+resolve identity. Then point the builder at it:
+
+```ts
+app.auth({
+    namespace: (env) => env.AUTH_DO,
+    internalSecret: (env) => env.AUTH_DO_SECRET,
+    options: (env) => ({ secret: env.AUTH_SECRET, plugins: [scim({ ... }), admin()] }),
+});
+```
+
+Re-export `AuthDO` from your worker entry and the config layer adds the
+`durable_objects` binding and the `new_sqlite_classes` migration for you. Pass `d1` or
+`namespace`, never both — the builder throws on the ambiguous shape rather than letting
+one silently win, and `namespace` without `internalSecret` throws too (identity
+resolution is gated on that secret and would otherwise fail closed on every request).
+
+### Why the schema is created for you
+
+better-auth's migrator is kysely-only, so `ensureMigrated` cannot target DO storage.
+The object derives its DDL from better-auth's own resolved tables instead — which
+matters more than it sounds: better-auth expresses `unique: true` as a separate
+`CREATE UNIQUE INDEX`, not a column constraint. A materialiser that walks `fields` and
+writes columns produces tables that look correct and **silently accept duplicate
+emails**, duplicate session tokens, and duplicates across all twelve of SCIM's unique
+fields. If you hand-roll this, emit the indexes; or call `authDoSchemaStatements(options)`
+and execute what it returns.
+
+### What DO mode does not give you
+
+`ctx.authApi`, sign-in, sessions, and SCIM all work. **The studio's auth pages and the
+audit feed do not** — `authAdmin` and `authAuditReader` read the auth tables directly
+from the worker, which DO storage does not permit, so they report "not configured"
+rather than returning empty data. Identity resolution costs a round-trip to the object
+on requests that touch `ctx.auth`; enable better-auth's `session.cookieCache` to serve
+most of them from the signed cookie instead, accepting a staleness window on revocation.
 
 <Callout type="warn">
     `lunoraDoAdapter` is `@experimental`, and the trade is architectural rather than cosmetic: `user`, `session` and the SCIM tables live inside **one** Durable
