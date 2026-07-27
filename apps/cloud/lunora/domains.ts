@@ -38,11 +38,13 @@ const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-
 /** Add a hostname to a project (owner/admin) and mint its TXT verification token. */
 export const add = mutation
     .input({
-        hostname: v.string(),
+        hostname: v.string().check((value) => value.length <= 253, { message: "must be at most 253 characters", schema: { maxLength: 253 } }),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
         redirectStatusCode: v.optional(v.number()),
-        redirectTo: v.optional(v.string()),
+        redirectTo: v.optional(
+            v.string().check((value) => value.length <= 2_048, { message: "must be at most 2_048 characters", schema: { maxLength: 2_048 } }),
+        ),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"domains">; txtName: string; txtToken: string }> => {
         const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
@@ -64,7 +66,7 @@ export const add = mutation
         }
 
         const txtToken = randomSecret();
-        const now = Date.now();
+        const now = context.now;
         const id = await context.db.insert("domains", {
             createdAt: now,
             hostname,
@@ -113,7 +115,7 @@ export const remove = mutation
         await context.db.insert("auditLog", {
             action: "domain.remove",
             actorUserId: member.userId,
-            createdAt: Date.now(),
+            createdAt: context.now,
             organizationId,
             target: domain?.hostname,
         });
@@ -125,15 +127,20 @@ export const remove = mutation
  * hostname id once the 🌐 provisioning path creates it.
  */
 export const markVerified = mutation
-    .input({ customHostnameId: v.optional(v.string()), id: v.id("domains"), organizationId: v.id("organizations"), verified: v.boolean() })
+    .input({
+        customHostnameId: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
+        id: v.id("domains"),
+        organizationId: v.id("organizations"),
+        verified: v.boolean(),
+    })
     .mutation(async ({ ctx: context, args: { customHostnameId, id, organizationId, verified } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, id, organizationId, "domain");
 
         await context.db.patch(id, {
             ...(customHostnameId === undefined ? {} : { customHostnameId }),
-            updatedAt: Date.now(),
-            verifiedAt: verified ? Date.now() : undefined,
+            updatedAt: context.now,
+            verifiedAt: verified ? context.now : undefined,
         });
     });
 
@@ -144,7 +151,7 @@ export const markVerified = mutation
  * through a bearer-gated control-plane endpoint. Unverified rows never route.
  */
 export const routeForHostname = query
-    .input({ hostname: v.string() })
+    .input({ hostname: v.string().check((value) => value.length <= 253, { message: "must be at most 253 characters", schema: { maxLength: 253 } }) })
     .query(async ({ ctx: context, args: { hostname } }): Promise<null | { redirectStatusCode?: number; redirectTo?: string; scriptName?: string }> => {
         const { page } = await context.db.domains.findMany({ where: { hostname: hostname.toLowerCase() } });
         const domain = (page as unknown as DomainRow[])[0];

@@ -132,7 +132,11 @@ export const get = query
 
 /** Create a named dashboard (owners/admins). Starts with the given panels (usually none). */
 export const create = mutation
-    .input({ name: v.string(), organizationId: v.id("organizations"), panels: v.optional(v.array(panel)) })
+    .input({
+        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        organizationId: v.id("organizations"),
+        panels: v.optional(v.array(panel)),
+    })
     .mutation(async ({ ctx: context, args }): Promise<Id<"dashboards">> => {
         await assertMember(context, args.organizationId, ["owner", "admin"]);
 
@@ -141,7 +145,7 @@ export const create = mutation
 
         requireValidPanels(panels);
 
-        const now = Date.now();
+        const now = context.now;
 
         return context.db.insert("dashboards", {
             createdAt: now,
@@ -161,7 +165,7 @@ export const create = mutation
 export const update = mutation
     .input({
         id: v.id("dashboards"),
-        name: v.optional(v.string()),
+        name: v.optional(v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } })),
         organizationId: v.id("organizations"),
         panels: v.optional(v.array(panel)),
     })
@@ -169,7 +173,7 @@ export const update = mutation
         await assertMember(context, args.organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, args.id, args.organizationId, "dashboard");
 
-        const patch: { name?: string; panels?: DashboardPanel[]; updatedAt: number } = { updatedAt: Date.now() };
+        const patch: { name?: string; panels?: DashboardPanel[]; updatedAt: number } = { updatedAt: context.now };
 
         if (args.name !== undefined) {
             patch.name = requireName(args.name);

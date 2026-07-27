@@ -102,7 +102,7 @@ interface LogEntry {
 
 /** Insert one batch of already-authorized lines into `tenantLogs` (shared by both ingest paths). */
 const insertLines = async (context: MutationContext, organizationId: Id<"organizations">, scriptName: string, lines: LogEntry[]): Promise<void> => {
-    const now = Date.now();
+    const now = context.now;
 
     for (const entry of lines) {
         // eslint-disable-next-line no-await-in-loop -- bounded batch; sequential keeps the writer simple
@@ -164,10 +164,10 @@ const matchesSearch = (row: TenantLogRow, needle: string): boolean => {
  */
 export const ingest = mutation
     .input({
-        deployKey: v.string(),
+        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
         lines: v.array(logEntry),
         organizationId: v.id("organizations"),
-        scriptName: v.string(),
+        scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
     })
     .mutation(async ({ ctx: context, args: { deployKey, lines, organizationId, scriptName } }): Promise<{ ingested: number }> => {
         await authorizeTelemetryKey(context, organizationId, deployKey);
@@ -189,7 +189,7 @@ export const ingest = mutation
  * (e.g. a superseded/destroyed release the tail lags behind). SYSTEM only.
  */
 export const orgForScript = internalQuery
-    .input({ scriptName: v.string() })
+    .input({ scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }) })
     .query(async ({ ctx: context, args: { scriptName } }): Promise<{ organizationId: Id<"organizations"> } | null> => {
         const { page } = await context.db.deployments.findMany({ where: { scriptName } });
         const row = (page as unknown as { organizationId: Id<"organizations"> }[])[0];
@@ -208,7 +208,7 @@ export const ingestInternal = internalMutation
     .input({
         lines: v.array(logEntry),
         organizationId: v.id("organizations"),
-        scriptName: v.string(),
+        scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
     })
     .mutation(async ({ ctx: context, args: { lines, organizationId, scriptName } }): Promise<{ ingested: number }> => {
         if (lines.length > MAX_BATCH) {
@@ -233,14 +233,14 @@ export const list = query
     .input({
         afterCreatedAt: v.optional(v.number()),
         from: v.optional(v.number()),
-        functionPath: v.optional(v.string()),
+        functionPath: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
         levels: v.optional(v.array(logLevel)),
         limit: v.optional(v.number()),
         organizationId: v.id("organizations"),
-        scriptName: v.string(),
-        search: v.optional(v.string()),
+        scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        search: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
         to: v.optional(v.number()),
-        traceId: v.optional(v.string()),
+        traceId: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
     })
     .query(async ({ ctx: context, args }): Promise<TenantLogView[]> => {
         await assertMember(context, args.organizationId);
@@ -302,7 +302,7 @@ export const list = query
 
 /** Delete log lines past retention (GAPS.md B2). SYSTEM only (cron dispatch). */
 export const prune = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
-    const cutoff = Date.now() - LOG_RETENTION_MS;
+    const cutoff = context.now - LOG_RETENTION_MS;
     const { page } = await context.db.tenantLogs.findMany({});
     const stale = (page as unknown as TenantLogRow[]).filter((row) => row.createdAt < cutoff);
 
