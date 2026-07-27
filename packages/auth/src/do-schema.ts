@@ -167,7 +167,13 @@ const addColumnClause = (column: string, field: AuthField): string => {
     return clause.join(" ");
 };
 
-/** One column's `"name" type [NOT NULL] [DEFAULT …]` clause. */
+/**
+ * One column's `"name" type [NOT NULL]` clause, for a fresh `CREATE TABLE`.
+ *
+ * No `DEFAULT`: better-auth's own fresh-table DDL emits none — it writes every field on
+ * insert — so adding one here would be a divergence with nothing to buy. The `ADD
+ * COLUMN` path is different, and says why.
+ */
 const columnClause = (fieldName: string, field: AuthField): string => {
     const clause = [quoteIdentifier(fieldName), columnType(fieldName, field)];
 
@@ -175,12 +181,6 @@ const columnClause = (fieldName: string, field: AuthField): string => {
     // `required: false` makes a column nullable.
     if (field.required !== false) {
         clause.push("NOT NULL");
-    }
-
-    const literal = defaultLiteral(field);
-
-    if (literal !== undefined) {
-        clause.push(`DEFAULT ${literal}`);
     }
 
     return clause.join(" ");
@@ -216,7 +216,11 @@ export const authDoSchemaStatements = (options: LunoraAuthOptions): string[] => 
         }
 
         const columns = [
-            `${quoteIdentifier("id")} text PRIMARY KEY`,
+            // `NOT NULL` is load-bearing: unlike `INTEGER PRIMARY KEY` (the rowid
+            // alias), a `TEXT PRIMARY KEY` in SQLite still accepts NULL. Upstream emits
+            // `"id" text not null primary key`; without this, so would we — minus the
+            // constraint.
+            `${quoteIdentifier("id")} text NOT NULL PRIMARY KEY`,
             ...Object.entries(table.fields).map(([key, field]) => columnClause(field.fieldName ?? key, field)),
         ];
 
