@@ -45,6 +45,25 @@ const seed = (dir: string, wrangler: string): void => {
     writeFileSync(join(dir, "wrangler.jsonc"), wrangler, "utf8");
 };
 
+/** Write a `lunora/schema.ts` so the schema-derived checks have something to read. */
+const seedSchema = (dir: string, source: string): void => {
+    mkdirSync(join(dir, "lunora"), { recursive: true });
+    writeFileSync(join(dir, "lunora", "schema.ts"), source, "utf8");
+};
+
+const SCHEMA_WITH_VECTOR_METADATA = `import { defineSchema, defineTable, v } from "@lunora/server";
+
+const embed = async (text: string): Promise<number[]> => [text.length];
+
+export const schema = defineSchema({
+    docs: defineTable({
+        body: v.string(),
+        tags: v.array(v.string()),
+        workspaceId: v.id("workspaces"),
+    }).vectorize("body", { dimensions: 1024, embed, index: "docs-body", metadata: ["workspaceId", "tags"], metric: "cosine" }),
+});
+`;
+
 let workdir: string;
 let savedToken: string | undefined;
 
@@ -86,6 +105,44 @@ describe("runDoctor", () => {
         expect(result.code).toBe(0);
         expect(result.findings.some((finding) => finding.level === "fail")).toBe(false);
         expect(result.findings.some((finding) => finding.level === "warn")).toBe(false);
+    });
+
+    /**
+     * The one check whose absence is invisible in production. Cloudflare only
+     * filters on a Vectorize metadata property that has an explicit metadata
+     * index; without one, `filter` matches nothing and returns an empty list
+     * that reads exactly like "no documents matched". `lunora deploy` creates
+     * them, so doctor's job is to name the command for anyone deploying with
+     * wrangler directly — and to refuse to promise a filter that can never work.
+     */
+    it("names the exact command for each declared Vectorize metadata index", async () => {
+        expect.assertions(2);
+
+        seed(workdir, CLEAN_WRANGLER);
+        seedSchema(workdir, SCHEMA_WITH_VECTOR_METADATA);
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+        const finding = result.findings.find((entry) => entry.level === "info" && entry.message.includes(`metadata "workspaceId"`));
+
+        expect(finding?.message).toContain(`vector index "docs-body"`);
+        // Pasteable, with the type derived from the column — a metadata index
+        // created with the wrong type never matches either.
+        expect(finding?.fix).toBe("wrangler vectorize create-metadata-index docs-body --property-name=workspaceId --type=string");
+    });
+
+    it("warns about a metadata property whose type Vectorize cannot filter on", async () => {
+        expect.assertions(2);
+
+        seed(workdir, CLEAN_WRANGLER);
+        seedSchema(workdir, SCHEMA_WITH_VECTOR_METADATA);
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+        const finding = result.findings.find((entry) => entry.level === "warn" && entry.message.includes(`metadata "tags"`));
+
+        // An array can be *stored* as metadata but never filtered on, so
+        // creating an index for it would be a command that cannot help.
+        expect(finding).toBeDefined();
+        expect(finding?.message).toContain("cannot filter on");
     });
 
     it("reports a failure when wrangler.jsonc is missing", async () => {
