@@ -59,8 +59,9 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
         statements.push({ params, sql });
 
         // The FTS5 probe (`CREATE VIRTUAL TABLE … fts5`) and all DDL/DML succeed
-        // by returning no rows. A MATCH search returns the canned result set so
-        // the reader can decode and order it. The id-probe and by-id reads
+        // by returning no rows. A search reads the vocabulary view and joins
+        // back to the document table; the canned rows stand in for that join's
+        // result so the reader can decode it. The id-probe and by-id reads
         // resolve to the canned rows so the patch/delete table-resolution path
         // (`tableNameFromId` + `get`) reaches the FTS write-sync.
         //
@@ -75,7 +76,7 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
             // already held data when the search index was declared.
             { pattern: /^SELECT COUNT\(\*\) AS count FROM /u, rows: () => [{ count: 0 }] as unknown as Row[] },
             { pattern: /^SELECT id, _creationTime, "__doc__" FROM "docs" ORDER BY id ASC/u, rows: () => matchRows as unknown as Row[] },
-            { pattern: / MATCH /u, rows: () => matchRows as unknown as Row[] },
+            { pattern: /__fts_by_body__vocab/u, rows: () => matchRows as unknown as Row[] },
             // `lookupById` folds every table into one UNION-ALL probe tagged
             // with `AS __t__`; resolve it to the canned rows (more specific
             // than the generic `LIMIT 1` probe below, so it must come first)
@@ -212,8 +213,8 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         expect(ftsWritesAfter[0]?.params).toStrictEqual(["d1"]);
     });
 
-    it("emits a MATCH query joined to the document table, then re-ranks with the shared scorer", async () => {
-        expect.assertions(3);
+    it("scores in SQL from the vocabulary view, bounded by the caller's limit", async () => {
+        expect.assertions(4);
 
         const matchRows: MatchRow[] = [
             { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), __text__: "hello world", _creationTime: 1, id: "d1" },
@@ -225,23 +226,23 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const writer = createShardContextDatabase({ schema: searchSchema, sql });
 
-        const results = await writer
+        await writer
             .query("docs")
             .withSearchIndex("by_body", (q) => q.search("body", "hello wor").eq("channel", "x"))
             .take(5);
 
-        const matchStatement = statements.find((statement) => statement.sql.includes(" MATCH "));
+        const read = statements.find((statement) => statement.sql.includes("__vocab") && statement.sql.startsWith("SELECT"));
 
-        // `LIMIT 1024` rather than the caller's `take(5)`: bm25 chooses which
-        // rows we fetch and the shared scorer re-ranks them, so a narrower
-        // fetch would let bm25 pick a different subset than the true top-5.
-        expect(matchStatement?.sql).toBe(
-            'SELECT m.id, m._creationTime, m."__doc__", f."__text__" FROM "docs__fts_by_body" f JOIN "docs" m ON m.id = f."__id__" WHERE f."__text__" MATCH ? AND json_extract(__doc__, \'$.channel\') = ? ORDER BY f.rank LIMIT 1024',
-        );
-        expect(matchStatement?.params).toStrictEqual(['"hello" AND "wor"*', "x"]);
-
-        // Re-ranked by the shared scorer (both score equally here, so the newer
-        // row leads on the `_creationTime` tiebreak), not by fts5's bm25.
-        expect(results.map((document) => document["_id"])).toStrictEqual(["d2", "d1"]);
+        // One branch per term — an exact equality for every term but the last,
+        // a half-open range for the one the user is still typing — UNION'd
+        // rather than OR'd, because SQLite silently drops a range constraint
+        // OR'd with an equality on this module.
+        expect(read?.sql).toContain('FROM "docs__fts_by_body__vocab" WHERE "term" = ?');
+        expect(read?.sql).toContain('WHERE "term" >= ? AND "term" < ?');
+        // The score is summed per term in SQL and the caller's limit bounds the
+        // read directly: no bm25 window, nothing re-ranked in memory. `wor` is
+        // bounded above by `wos`, its last character incremented.
+        expect(read?.sql).toContain('ORDER BY s."__score__" DESC, m._creationTime DESC, m.id ASC LIMIT 5');
+        expect(read?.params).toStrictEqual(["hello", "wor", "wos", "x"]);
     });
 });

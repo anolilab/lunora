@@ -8,7 +8,7 @@ import { backfillD1SearchIndexes, createD1CtxDb as createD1ContextDatabase, runD
  * The FTS5 production path can't run under `node:sqlite` (no fts5 module), so
  * this asserts the *emitted SQL* against the D1 column dialect instead of its
  * results: a recording `D1Exec` double that reports FTS5 available (the
- * create/drop probe succeeds), returns canned rows for any MATCH query, and
+ * create/drop probe succeeds), returns canned rows for the vocabulary read, and
  * captures every statement + params. We verify the virtual-table DDL, the
  * delete-then-insert write sync, and the MATCH/JOIN/ORDER-BY-rank search query.
  * Behavioral correctness of the query surface is covered by the LIKE-scan suite
@@ -60,13 +60,13 @@ const createRecordingFts = (matchRows: MatchRow[]): { exec: D1Exec; statements: 
 
         statements.push({ params: parameters, sql });
 
-        // A MATCH search returns the canned result set so the reader can decode
+        // A vocabulary-scored search returns the canned result set so the reader can decode
         // and order it. The id-probe and by-id reads resolve to the canned rows
         // so the patch/delete table-resolution path (`tableNameFromId` +
         // `rawRow`) reaches the FTS write-sync. The OCC-guarded UPDATE/DELETE
         // (`RETURNING "id"`) reports one changed row so the CAS passes.
         const routes: { pattern: RegExp; rows: () => Record<string, unknown>[] }[] = [
-            { pattern: / MATCH /u, rows: () => matchRows as unknown as Record<string, unknown>[] },
+            { pattern: /__fts_by_body__vocab/u, rows: () => matchRows as unknown as Record<string, unknown>[] },
             // The migration-time backfill probes for the source table and then
             // pages through it; the canned rows stand in for a table that
             // already held data when the search index was declared.
@@ -199,12 +199,9 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
         expect(ftsWritesAfter[0]?.params).toStrictEqual(["d1"]);
     });
 
-    it("emits a MATCH query joined to the document table, then re-ranks with the shared scorer", async () => {
-        expect.assertions(3);
+    it("scores in SQL from the vocabulary view, bounded by the caller's limit", async () => {
+        expect.assertions(4);
 
-        // `__text__` is the analyzed token stream the shadow stores; the reader
-        // scores against it rather than trusting fts5's bm25, so that this path
-        // ranks identically to the portable inverted layout.
         const matchRows: MatchRow[] = [
             { __text__: "hello world", _creationTime: 1, body: "hello world", channel: "x", id: "d1", title: "first" },
             { __text__: "hello words wordy world", _creationTime: 2, body: "hello words wordy world", channel: "x", id: "d2", title: "second" },
@@ -215,24 +212,21 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const writer = createD1ContextDatabase({ exec, schema: searchSchema });
 
-        const results = await writer
+        await writer
             .query("docs")
             .withSearchIndex("by_body", (q) => q.search("body", "hello wor").eq("channel", "x"))
             .take(5);
 
-        const matchStatement = statements.find((statement) => statement.sql.includes(" MATCH "));
+        const read = statements.find((statement) => statement.sql.includes("__vocab") && statement.sql.startsWith("SELECT"));
 
-        // `LIMIT 1024` rather than the caller's `take(5)`: bm25 chooses which
-        // rows we fetch and the shared scorer re-ranks them, so a narrower
-        // fetch would let bm25 pick a different subset than the true top-5.
-        expect(matchStatement?.sql).toBe(
-            'SELECT m.*, f."__text__" FROM "docs__fts_by_body" f JOIN "docs" m ON m."id" = f."__id__" WHERE f."__text__" MATCH ? AND m."channel" = ? ORDER BY f.rank LIMIT 1024',
-        );
-        expect(matchStatement?.params).toStrictEqual(['"hello" AND "wor"*', "x"]);
-
-        // d2 scores higher on the shared scorer (three tokens match the "wor"
-        // prefix against d1's one), so it leads regardless of the row order the
-        // engine returned.
-        expect(results.map((document) => document["_id"])).toStrictEqual(["d2", "d1"]);
+        // One branch per term — exact for every term but the last, a half-open
+        // range for the one still being typed — UNION'd rather than OR'd,
+        // because SQLite silently drops a range OR'd with an equality here.
+        expect(read?.sql).toContain('FROM "docs__fts_by_body__vocab" WHERE "term" = ?');
+        expect(read?.sql).toContain('WHERE "term" >= ? AND "term" < ?');
+        // The caller's limit bounds the read directly — no bm25 window, nothing
+        // re-ranked in memory — because the score is summed per term in SQL.
+        expect(read?.sql).toContain('ORDER BY s."__score__" DESC, m."_creationTime" DESC, m."id" ASC LIMIT 5');
+        expect(read?.params).toStrictEqual(["hello", "wor", "wos", "x"]);
     });
 });

@@ -22,16 +22,14 @@
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/do";
 import {
     analyzedSearchText,
-    buildFtsMatch,
     countSearchTokens,
     createSearchAnalyzer,
     FTS_COUNT_COLUMN,
     FTS_ID_COLUMN,
     FTS_TEXT_COLUMN,
     FTS_TOKEN_COLUMN,
-    ftsCandidateWindow,
     ftsTableName,
-    rankSearchRows,
+    searchTermRange,
     tokenizeSearch,
 } from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
@@ -204,6 +202,30 @@ const runInvertedSearch = async (
     return decodeRows(definition, await queryAll(exec, dialect, query));
 };
 
+/**
+ * Run a search against the FTS5 shadow.
+ *
+ * The score is computed *in SQL*, from the index's own vocabulary view, rather
+ * than by fetching a window and re-ranking it in memory. That distinction is
+ * the whole point: FTS5 orders by bm25, which penalises document length and
+ * common terms, and our contract orders by summed occurrences. The two are
+ * unrelated, so a bm25-selected window is not the scorer's top-N — on a corpus
+ * where more documents match than the window holds, the documents the contract
+ * ranks highest can sit outside it entirely and never be considered. A
+ * `.take(3)` then returned three arbitrary rows that claimed to be the best
+ * three, and the two FTS5 backends did not even agree with each other.
+ *
+ * `fts5vocab(…, instance)` exposes one row per term instance, so a term's
+ * frequency in a document is a `COUNT`. That makes the query the same shape the
+ * portable layout uses — one `SUM(CASE …)` per term, added — and therefore the
+ * same answer, by construction rather than by test. `LIMIT` is now exact, so an
+ * unbounded read's over-cap probe row reaches the caller's cap check
+ * instead of being clamped away.
+ *
+ * One branch per term rather than one `WHERE … OR …`: SQLite's planner silently
+ * drops a range constraint that is OR'd with an equality on this module, which
+ * returns *no* rows for the range half rather than an error.
+ */
 const runFtsSearch = async (
     exec: SqlCtxExec,
     dialect: SqlDialect,
@@ -218,11 +240,26 @@ const runFtsSearch = async (
         return [];
     }
 
-    const ftName = ftsTableName(tableName, search.indexName);
-    // MATCH must target the FTS table (by name or an indexed column), never the
-    // bare alias `f` — `f MATCH ?` is a "no such column: f" error in SQLite.
-    // We match the indexed `__text__` column so the alias join still works.
-    const conditions: SQL[] = [sql`f.${sql.identifier(FTS_TEXT_COLUMN)} MATCH ${buildFtsMatch(tokens)}`];
+    const companion = ftsTableName(tableName, search.indexName);
+    const vocabulary = `${companion}__vocab`;
+    const lastIndex = tokens.length - 1;
+    const branches = tokens.map((token, index) => {
+        const range = searchTermRange(token, index === lastIndex);
+        const predicate = range.exact
+            ? sql`${sql.identifier("term")} = ${range.lower}`
+            : sql`${sql.identifier("term")} >= ${range.lower} AND ${sql.identifier("term")} < ${range.upper}`;
+
+        return sql`SELECT ${sql.identifier("doc")}, ${sql.raw(String(index))} AS ${sql.identifier("__term__")}, COUNT(*) AS ${sql.identifier("__n__")} FROM ${sql.identifier(vocabulary)} WHERE ${predicate} GROUP BY ${sql.identifier("doc")}`;
+    });
+    const perTerm = tokens.map(
+        (_, index) => sql`SUM(CASE WHEN u.${sql.identifier("__term__")} = ${sql.raw(String(index))} THEN u.${sql.identifier("__n__")} ELSE 0 END)`,
+    );
+    const scored = sql`SELECT f.${sql.identifier(FTS_ID_COLUMN)} AS ${sql.identifier(FTS_ID_COLUMN)}, ${sql.join(perTerm, sql` + `)} AS ${sql.identifier("__score__")} FROM (${sql.join(branches, sql` UNION ALL `)}) u JOIN ${sql.identifier(companion)} f ON f.rowid = u.${sql.identifier("doc")} GROUP BY f.${sql.identifier(FTS_ID_COLUMN)} HAVING ${sql.join(
+        perTerm.map((term) => sql`${term} > 0`),
+        sql` AND `,
+    )}`;
+
+    const conditions: SQL[] = [];
 
     for (const filter of search.filters) {
         conditions.push(sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
@@ -232,33 +269,15 @@ const runFtsSearch = async (
         conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
     }
 
-    // `ftsCandidateWindow` decides how wide to fetch — never `limit` (bm25 would
-    // pick a different subset than our scorer's top-N) and never a bare cap
-    // (that makes the over-cap probe row unreachable).
-    const query = sql`SELECT m.*, f.${sql.identifier(FTS_TEXT_COLUMN)} FROM ${sql.identifier(ftName)} f JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = f.${sql.identifier(FTS_ID_COLUMN)} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY f.rank LIMIT ${sql.raw(String(ftsCandidateWindow(limit)))}`;
+    let query = sql`SELECT m.* FROM (${scored}) s JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = s.${sql.identifier(FTS_ID_COLUMN)}`;
 
-    return rankSearchRows(
-        await queryAll(exec, dialect, query),
-        (row) => {
-            const [document] = decodeRows(definition, [row]);
+    if (conditions.length > 0) {
+        query = sql`${query} WHERE ${sql.join(conditions, sql` AND `)}`;
+    }
 
-            if (!document) {
-                return undefined;
-            }
+    query = sql`${query} ORDER BY s.${sql.identifier("__score__")} DESC, m.${sql.identifier("_creationTime")} DESC, m.${sql.identifier("id")} ASC LIMIT ${sql.raw(String(limit))}`;
 
-            const indexed = row[FTS_TEXT_COLUMN];
-
-            return {
-                creationTime: typeof document["_creationTime"] === "number" ? document["_creationTime"] : 0,
-                doc: document,
-                id: typeof document["_id"] === "string" ? document["_id"] : "",
-                indexed: typeof indexed === "string" ? indexed : "",
-            };
-        },
-        tokens,
-        createSearchAnalyzer(search.definition.language),
-        limit,
-    );
+    return decodeRows(definition, await queryAll(exec, dialect, query));
 };
 
 /**
@@ -362,7 +381,17 @@ const fts5Layout: SearchLayout = {
         await queryRun(
             exec,
             dialect,
-            sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(companion)} USING fts5(${sql.identifier("__text__")}, ${sql.identifier(FTS_ID_COLUMN)} UNINDEXED)`,
+            sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(companion)} USING fts5(${sql.identifier(FTS_TEXT_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)} UNINDEXED)`,
+        );
+        // The vocabulary view over that index: one row per term *instance*, so a
+        // term's frequency in a document is a COUNT. It is what lets this layout
+        // rank by the shared scorer in SQL rather than approximating it — see
+        // `runFtsSearch`. Part of the FTS5 extension, so wherever the virtual
+        // table above can be created this can too.
+        await queryRun(
+            exec,
+            dialect,
+            sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(`${companion}__vocab`)} USING fts5vocab(${sql.identifier(companion)}, ${sql.raw("instance")})`,
         );
     },
     indexDocument: async (exec, dialect, companion, id, document, index) => {
@@ -429,9 +458,17 @@ const companionProfile = (index: SearchIndexDefinitionLike, dialect: SqlDialect)
 
 /**
  * Every table a `.global()` companion can be built for, paired with its index.
- * A `.shardBy()` table's rows live in the DOs, so a companion over one could
- * never be populated; schemas authored before the `.global()` flag existed
- * don't set `shardMode` at all and still get theirs.
+ *
+ * Deliberately looser than `runSqlGlobalTableMigrations`, which provisions only
+ * `kind === "global"`: a schema that declares no `shardMode` at all is admitted
+ * here, mirroring the "probe every table" tolerance the read path keeps for
+ * schemas that predate the flag. The cost is a companion created in the
+ * `.global()` database for a table whose rows may live in the Durable Objects —
+ * its source-table probe finds nothing, the backfill records itself complete,
+ * and it is never touched again. Tightening it to match provisioning was tried
+ * and reverted: `SchemaLike` callers legitimately omit `shardMode`, so the
+ * strict filter silently stops indexing tables that do want a companion, which
+ * is a far worse failure than an empty table.
  */
 const globalSearchIndexes = function* (schema: SchemaLike): Generator<[string, TableDefinitionLike, SearchIndexDefinitionLike]> {
     for (const [tableName, definition] of Object.entries(schema.tables)) {

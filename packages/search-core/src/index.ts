@@ -52,23 +52,22 @@ export type { SearchBackfillPass, SearchBackfillState } from "./backfill";
 export { planSearchBackfillPass } from "./backfill";
 export type { SearchLanguage, SearchStrategy } from "./languages";
 export { isSearchLanguage, isSearchStrategy, SEARCH_LANGUAGES, SEARCH_STRATEGIES } from "./languages";
-export type { SearchBuilderLike, SearchCandidate, SearchPage, SearchPagePlan, SearchStageLike } from "./query";
+export type { SearchBuilderLike, SearchPage, SearchPagePlan, SearchStageLike } from "./query";
 export {
     assertSearchWithinCap,
     buildFtsMatch,
     createSearchBuilder,
     encodeSearchCursor,
     finishSearchPage,
-    ftsCandidateWindow,
     MAX_SEARCH_FILTERS,
     MAX_SEARCH_SCAN,
     MAX_SEARCH_TERMS,
     parseSearchCursor,
     planSearchPage,
-    rankSearchRows,
     resolveSearchScan,
     scoreDocument,
     searchPageScan,
+    searchTermRange,
     tokenizeSearch,
 } from "./query";
 export {

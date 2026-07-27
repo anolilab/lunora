@@ -33,19 +33,17 @@ import { LunoraError } from "@lunora/errors";
 import {
     analyzedSearchText,
     assertSearchWithinCap,
-    buildFtsMatch,
     createSearchAnalyzer,
     createSearchBuilder,
     finishSearchPage,
     FTS_ID_COLUMN,
-    FTS_TEXT_COLUMN,
-    ftsCandidateWindow,
     ftsTableName,
+    MAX_SEARCH_SCAN,
     planSearchPage,
-    rankSearchRows,
     resolveSearchScan,
     scoreDocument,
     searchPageScan,
+    searchTermRange,
     tokenizeSearch,
 } from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
@@ -932,9 +930,38 @@ const createRangeBuilder = (stage: QueryStage): IndexRangeBuilderLike => {
 };
 
 /**
- * Run a search via the FTS5 shadow table: MATCH the query against the indexed
- * text column, JOIN back to the document table on the stored id, narrow by any
- * `.eq()` filter fields, and order by FTS5's `rank` (bm25 — best first).
+ * How many rows the scan fallback fetches to serve a read bounded by `limit`.
+ *
+ * The FTS5 and `.global()` layouts order by the true score in SQL, so their
+ * `LIMIT` is exact and none of them needs a window. This path has no index to
+ * order by relevance — it scores every row it fetched, in memory — so cutting
+ * at `limit` in SQL would discard rows before they were scored. It takes the
+ * cap's worth instead, and never less than the cap, because an unbounded read
+ * resolves to one row *past* it so {@link assertSearchWithinCap} can tell
+ * "exactly the cap" from "more than the cap".
+ */
+const scanCandidateWindow = (limit: number): number => Math.max(limit, MAX_SEARCH_SCAN);
+
+/**
+ * Run a search via the FTS5 shadow table, scoring in SQL from the index's own
+ * vocabulary view.
+ *
+ * FTS5 orders by bm25, which penalises document length and common terms; our
+ * contract orders by summed occurrences. The two are unrelated, so selecting a
+ * window with bm25 and re-ranking it in memory is not the contract's top-N —
+ * on a corpus where more documents match than the window holds, the documents
+ * the contract ranks highest can sit outside it entirely. `.take(3)` returned
+ * three arbitrary rows that claimed to be the best three.
+ *
+ * `fts5vocab(…, instance)` exposes one row per term instance, so a term's
+ * frequency in a document is a `COUNT`, and the query becomes the same shape
+ * the `.global()` layouts use — one `SUM(CASE …)` per term, added. Same answer
+ * by construction rather than by test, and `LIMIT` is exact, so an unbounded
+ * read's over-cap probe row survives to `assertSearchWithinCap`.
+ *
+ * One branch per term rather than one `WHERE … OR …`: SQLite's planner silently
+ * drops a range constraint OR'd with an equality on this module, returning no
+ * rows for the range half rather than an error.
  */
 const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number, scopeCondition?: SQL): Record<string, unknown>[] => {
     const tokens = tokenizeSearch(search.query, createSearchAnalyzer(search.definition.language));
@@ -944,55 +971,53 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
     }
 
     const ftName = ftsTableName(tableName, search.indexName);
-    // MATCH must target the FTS table (by name or an indexed column), never the
-    // bare alias `f` — `f MATCH ?` is a "no such column: f" error in SQLite.
-    // We match the indexed `__text__` column so the alias join still works.
-    const whereClauses: SQL[] = [dsql`f.${dsql.identifier(FTS_TEXT_COLUMN)} MATCH ${buildFtsMatch(tokens)}`];
+    const vocabulary = `${ftName}__vocab`;
+    const lastIndex = tokens.length - 1;
+    const branches = tokens.map((token, index) => {
+        const range = searchTermRange(token, index === lastIndex);
+        const predicate = range.exact
+            ? dsql`${dsql.identifier("term")} = ${range.lower}`
+            : dsql`${dsql.identifier("term")} >= ${range.lower} AND ${dsql.identifier("term")} < ${range.upper}`;
+
+        return dsql`SELECT ${dsql.identifier("doc")}, ${dsql.raw(String(index))} AS ${dsql.identifier("__term__")}, COUNT(*) AS ${dsql.identifier("__n__")} FROM ${dsql.identifier(vocabulary)} WHERE ${predicate} GROUP BY ${dsql.identifier("doc")}`;
+    });
+    const perTerm = tokens.map(
+        (_, index) => dsql`SUM(CASE WHEN u.${dsql.identifier("__term__")} = ${dsql.raw(String(index))} THEN u.${dsql.identifier("__n__")} ELSE 0 END)`,
+    );
+    const scored = dsql`SELECT f.${dsql.identifier(FTS_ID_COLUMN)} AS ${dsql.identifier(FTS_ID_COLUMN)}, ${dsql.join(perTerm, dsql` + `)} AS ${dsql.identifier("__score__")} FROM (${dsql.join(branches, dsql` UNION ALL `)}) u JOIN ${dsql.identifier(ftName)} f ON f.rowid = u.${dsql.identifier("doc")} GROUP BY f.${dsql.identifier(FTS_ID_COLUMN)} HAVING ${dsql.join(
+        perTerm.map((term) => dsql`${term} > 0`),
+        dsql` AND `,
+    )}`;
+
+    const whereClauses: SQL[] = [];
 
     for (const filter of search.filters) {
         whereClauses.push(dsql`${jsonPathSql(filter.field)} = ${serializeSqlValue(filter.value)}`);
     }
 
-    // Soft delete: the unqualified `__doc__` in the scope predicate resolves to
-    // the joined doc table `m` (the FTS table `f` has no `__doc__`).
     if (scopeCondition) {
         whereClauses.push(scopeCondition);
     }
 
-    // `f.rank` is FTS5's bm25 relevance (best first); the `_creationTime DESC`
-    // tiebreak matches the scan fallback so equal-rank rows order newest-first
-    // on both engines.
-    // `m.id` closes the sort: rank ties are common (equal term frequency) and
-    // `_creationTime` ties with them on bulk-imported rows, and without a unique
-    // terminal column the engine may order tied rows differently per execution —
-    // which offset pagination would surface as a duplicated or skipped row.
-    // `ftsCandidateWindow` decides how wide to fetch — never `limit` (bm25 would
-    // pick a different subset than our scorer's top-N) and never a bare cap
-    // (that makes the over-cap probe row unreachable).
-    const query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)}, f.${dsql.identifier(FTS_TEXT_COLUMN)} FROM ${dsql.identifier(ftName)} f JOIN ${dsql.identifier(tableName)} m ON m.id = f.${dsql.identifier(FTS_ID_COLUMN)} WHERE ${dsql.join(whereClauses, dsql` AND `)} ORDER BY f.rank LIMIT ${dsql.raw(String(ftsCandidateWindow(limit)))}`;
+    let query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)} FROM (${scored}) s JOIN ${dsql.identifier(tableName)} m ON m.id = s.${dsql.identifier(FTS_ID_COLUMN)}`;
 
-    return rankSearchRows(
-        runDrizzle(sql, query).toArray(),
-        (row) => {
-            const record = tryRowToDocument(row);
+    if (whereClauses.length > 0) {
+        query = dsql`${query} WHERE ${dsql.join(whereClauses, dsql` AND `)}`;
+    }
 
-            if (!record) {
-                return undefined;
-            }
+    query = dsql`${query} ORDER BY s.${dsql.identifier("__score__")} DESC, m._creationTime DESC, m.id ASC LIMIT ${dsql.raw(String(limit))}`;
 
-            const indexed = row[FTS_TEXT_COLUMN];
+    const documents: Record<string, unknown>[] = [];
 
-            return {
-                creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0,
-                doc: record,
-                id: typeof record["_id"] === "string" ? record["_id"] : "",
-                indexed: typeof indexed === "string" ? indexed : "",
-            };
-        },
-        tokens,
-        createSearchAnalyzer(search.definition.language),
-        limit,
-    );
+    for (const row of runDrizzle(sql, query)) {
+        const record = tryRowToDocument(row);
+
+        if (record) {
+            documents.push(record);
+        }
+    }
+
+    return documents;
 };
 
 /**
@@ -1031,7 +1056,7 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
     // same order the tiebreak uses — rather than left to the engine. Past the
     // cap the fallback is therefore approximate, which the FTS5 paths are not;
     // it only runs on an engine without FTS5, which no Durable Object is.
-    query = dsql`${query} ORDER BY _creationTime DESC, id ASC LIMIT ${dsql.raw(String(ftsCandidateWindow(limit)))}`;
+    query = dsql`${query} ORDER BY _creationTime DESC, id ASC LIMIT ${dsql.raw(String(scanCandidateWindow(limit)))}`;
 
     const rows = runDrizzle(sql, query).toArray();
     const scored: { creationTime: number; doc: Record<string, unknown>; id: string; score: number }[] = [];

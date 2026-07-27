@@ -145,79 +145,29 @@ export const scoreDocument = (text: string, tokens: ReadonlyArray<string>, analy
 };
 
 /**
- * One candidate row an FTS5 shadow returned, decoded far enough to rank it.
- * `indexed` is the analyzed text the companion stored — what the scorer reads,
- * not the raw column.
+ * The vocabulary range a query term matches, as an inclusive lower bound and an
+ * exclusive upper bound.
+ *
+ * The final term of a query prefix-matches, and a prefix over a sorted
+ * vocabulary is a range scan: every term from `token` up to `token` with its
+ * last character incremented. Every other term matches exactly, which is the
+ * degenerate range `[token, token]` — expressed as `exact: true` so callers can
+ * emit an equality instead and let the engine use its term index directly.
+ *
+ * Shared because both engines have to derive the *same* bound or their result
+ * sets differ on the one term the user is still typing. The increment assumes
+ * the last code point is not the maximum, which holds for the `[\p{L}\p{N}]+`
+ * tokens the analyzer produces.
  */
-export interface SearchCandidate {
-    creationTime: number;
-    doc: Record<string, unknown>;
-    id: string;
-    indexed: string;
-}
-
-/**
- * How many rows an FTS5 candidate query must fetch to serve a read bounded by
- * `limit`.
- *
- * Never `limit` itself. bm25 decides which rows come back and
- * {@link scoreDocument} decides how they are ordered, so fetching only `limit`
- * of them would let bm25 pick a different subset than our scorer's true top-N —
- * a `.take(2)` would then disagree with the portable layout even though a
- * `.collect()` agrees.
- *
- * And never a bare {@link MAX_SEARCH_SCAN} either, which is the subtler half:
- * an unbounded read resolves to one row *past* the cap precisely so
- * {@link assertSearchWithinCap} can tell "exactly the cap" from "more than the
- * cap". Clamping the query to the cap makes that probe row unreachable and the
- * guard dead, and the caller silently receives 1024 rows as though they were
- * the whole result set — the one outcome the cap exists to prevent.
- */
-export const ftsCandidateWindow = (limit: number): number => Math.max(limit, MAX_SEARCH_SCAN);
-
-/**
- * Rank a fetched candidate window by the shared scorer and cut it to `limit`.
- *
- * Both engines run this identically — it *is* the cross-backend ordering
- * contract, down to the `_creationTime DESC` then `id ASC` tiebreak — so it
- * lives here rather than beside either of them. When each owned a copy, the
- * parity gate existed to catch them drifting apart; one implementation is
- * strictly better than a test that watches two.
- *
- * A candidate scoring zero is dropped rather than ranked last. FTS5 matched it
- * through its own tokenizer over the analyzed text we stored, so a zero here
- * means the two disagree about the document — and the portable layout, whose
- * `HAVING` requires every term, would not have returned it either.
- */
-export const rankSearchRows = <Row>(
-    rows: ReadonlyArray<Row>,
-    toCandidate: (row: Row) => SearchCandidate | undefined,
-    tokens: ReadonlyArray<string>,
-    analyzer: SearchAnalyzer,
-    limit: number,
-): Record<string, unknown>[] => {
-    const scored: { candidate: SearchCandidate; score: number }[] = [];
-
-    for (const row of rows) {
-        const candidate = toCandidate(row);
-
-        if (!candidate) {
-            continue;
-        }
-
-        const score = scoreDocument(candidate.indexed, tokens, analyzer);
-
-        if (score > 0) {
-            scored.push({ candidate, score });
-        }
+export const searchTermRange = (token: string, isPrefix: boolean): { exact: boolean; lower: string; upper: string } => {
+    if (!isPrefix) {
+        return { exact: true, lower: token, upper: token };
     }
 
-    scored.sort(
-        (left, right) =>
-            right.score - left.score || right.candidate.creationTime - left.candidate.creationTime || left.candidate.id.localeCompare(right.candidate.id),
-    );
+    const lastCodePoint = token.codePointAt(token.length - 1) ?? 0;
+    const head = token.slice(0, Math.max(0, token.length - String.fromCodePoint(lastCodePoint).length));
 
-    return scored.slice(0, limit).map((entry) => entry.candidate.doc);
+    return { exact: false, lower: token, upper: head + String.fromCodePoint(lastCodePoint + 1) };
 };
 
 /**

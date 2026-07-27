@@ -374,6 +374,60 @@ describe.skipIf(!FTS5_IN_BUILD)("search parity — sharded DO vs .global()", () 
         expect(idsOf(shardResults).length).toBeGreaterThan(1);
     });
 
+    /**
+     * The case that used to be impossible to hold, and is now structural.
+     *
+     * FTS5 orders by bm25, which penalises document length and common terms;
+     * the contract orders by summed occurrences. While the FTS5 backends
+     * selected a bm25 window and re-ranked it in memory, the documents the
+     * contract ranks highest could sit outside that window entirely — so a
+     * `.take(3)` over a corpus with more matches than the window holds returned
+     * three arbitrary rows, and the two FTS5 backends did not even agree with
+     * each other. All three score in SQL now, so the top-N is exact everywhere.
+     */
+    it("agrees on the top-N of a corpus larger than the scan cap", async () => {
+        expect.assertions(3);
+
+        const { global, inverted, shard } = await seedBoth();
+
+        // Deliberately adversarial for bm25: three long documents that repeat
+        // the needle, buried among far more short ones that mention it once.
+        // Length normalisation ranks the short ones first, so a bm25-selected
+        // window is exactly the wrong 1024 rows.
+        const filler = Array.from({ length: 400 }, (_, index) => `filler${String(index)}`).join(" ");
+
+        for (let index = 0; index < 1100; index += 1) {
+            const body = index < 3 ? `${"needle ".repeat(20)}${filler}` : `needle short${String(index)}`;
+            const row = { _id: `n${String(index).padStart(5, "0")}`, body, channel: "general" };
+
+            // eslint-disable-next-line no-await-in-loop -- deterministic creation times require sequential inserts
+            await shard.insert("docs", row, { allowExplicitId: true });
+            // eslint-disable-next-line no-await-in-loop -- same, on the fts5 global twin
+            await global.insert("docs", row, { allowExplicitId: true });
+            // eslint-disable-next-line no-await-in-loop -- and on the inverted layout
+            await inverted.insert("docs", row, { allowExplicitId: true });
+        }
+
+        const top = async (writer: DatabaseWriterLike): Promise<unknown[]> =>
+            idsOf(
+                await writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "needle"))
+                    .take(3),
+            );
+
+        // The three heavy documents, newest first — 20 occurrences each beats
+        // every one-occurrence document regardless of length.
+        const expected = ["n00002", "n00001", "n00000"];
+
+        await expect(top(shard)).resolves.toStrictEqual(expected);
+        await expect(top(global)).resolves.toStrictEqual(expected);
+        await expect(top(inverted)).resolves.toStrictEqual(expected);
+        // Seeding 1100 documents into three engines is the cost of a corpus
+        // that actually exceeds the cap; the default 5s budget is not enough
+        // for it when the suite runs alongside the rest of the repo.
+    }, 30_000);
+
     it("agrees on bounded reads, where a limit decides which rows survive", async () => {
         expect.assertions(10);
 

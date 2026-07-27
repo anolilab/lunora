@@ -83,6 +83,14 @@ const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: Table
             sql,
             dsql`CREATE VIRTUAL TABLE IF NOT EXISTS ${dsql.identifier(ftName)} USING fts5(${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)} UNINDEXED)`,
         );
+        // The vocabulary view over that index: one row per term *instance*, so a
+        // term's frequency in a document is a COUNT. It is what lets the reader
+        // rank by the shared scorer in SQL instead of approximating it over a
+        // bm25-selected window — see `searchViaFts`.
+        runDrizzle(
+            sql,
+            dsql`CREATE VIRTUAL TABLE IF NOT EXISTS ${dsql.identifier(`${ftName}__vocab`)} USING fts5vocab(${dsql.identifier(ftName)}, ${dsql.raw("instance")})`,
+        );
     }
 
     backfillSearchIndexesForTable(sql, tableName, definition);
