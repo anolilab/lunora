@@ -145,6 +145,28 @@ const fieldIndexStatements = (modelName: string, fields: Record<string, AuthFiel
     return statements;
 };
 
+/**
+ * The clause for an `ADD COLUMN`, which is narrower than a `CREATE TABLE` column.
+ *
+ * SQLite refuses `NOT NULL` without a default on `ADD COLUMN` (existing rows would
+ * violate it immediately), so the constraint is only emitted when a static default
+ * accompanies it.
+ */
+const addColumnClause = (column: string, field: AuthField): string => {
+    const clause = [quoteIdentifier(column), columnType(column, field)];
+    const literal = defaultLiteral(field);
+
+    if (field.required !== false && literal !== undefined) {
+        clause.push("NOT NULL");
+    }
+
+    if (literal !== undefined) {
+        clause.push(`DEFAULT ${literal}`);
+    }
+
+    return clause.join(" ");
+};
+
 /** One column's `"name" type [NOT NULL] [DEFAULT …]` clause. */
 const columnClause = (fieldName: string, field: AuthField): string => {
     const clause = [quoteIdentifier(fieldName), columnType(fieldName, field)];
@@ -179,7 +201,7 @@ const columnClause = (fieldName: string, field: AuthField): string => {
  * @returns SQL statements to execute in order.
  * @experimental
  */
-const authDoSchemaStatements = (options: LunoraAuthOptions): string[] => {
+export const authDoSchemaStatements = (options: LunoraAuthOptions): string[] => {
     const { indexesByTable, tables } = getAuthTablesWithResolvedIndexes(options);
 
     const tableStatements: string[] = [];
@@ -213,4 +235,61 @@ const authDoSchemaStatements = (options: LunoraAuthOptions): string[] => {
     return [...tableStatements, ...indexStatements];
 };
 
-export default authDoSchemaStatements;
+/**
+ * `ALTER TABLE … ADD COLUMN` statements for columns the live schema is missing.
+ *
+ * ## Why this is needed at all
+ *
+ * {@link authDoSchemaStatements} is entirely `IF NOT EXISTS`, which makes it safe to
+ * re-run but blind to change: a *new table* appears on the next cold start, a *new
+ * column on an existing table* never does. That is not a hypothetical — enabling the
+ * `admin` plugin after first deploy adds `role` / `banned` / `banExpires` to `user`,
+ * and without this the object would keep serving a `user` table that cannot hold them.
+ *
+ * Additive only. Nothing here drops, renames, or retypes a column: a column that
+ * exists is left exactly as it is, so a schema someone has deliberately diverged is
+ * never "corrected" underneath them.
+ *
+ * ## What SQLite will not let us do
+ *
+ * `ADD COLUMN` cannot introduce a `NOT NULL` column without a default (existing rows
+ * would violate it immediately), and cannot introduce `UNIQUE`. So a required column
+ * with a static default is added with both; a required column *without* one is added
+ * **nullable**, which differs from what a fresh `CREATE TABLE` would produce. That is
+ * the deliberate trade: better-auth writes these fields on every insert, so nullable
+ * is harmless, whereas refusing to add the column at all would leave the object
+ * broken. Uniqueness is unaffected — better-auth expresses it as a separate index, and
+ * those are `IF NOT EXISTS`, so they are created by the statements above.
+ * @param options The better-auth options the DO runs, already resolved.
+ * @param existingColumns Physical column names currently present on a table; empty/absent for a table that does not exist yet (it will be created instead).
+ * @returns SQL statements to execute in order; empty when the live schema is current.
+ * @experimental
+ */
+export const authDoColumnAdditions = (options: LunoraAuthOptions, existingColumns: (table: string) => Iterable<string>): string[] => {
+    const { tables } = getAuthTablesWithResolvedIndexes(options);
+    const statements: string[] = [];
+
+    for (const table of Object.values(tables)) {
+        if (table.disableMigrations === true) {
+            continue;
+        }
+
+        const present = new Set(existingColumns(table.modelName));
+
+        // No columns reported means the table is absent — `CREATE TABLE IF NOT EXISTS`
+        // handles that case, and emitting ALTERs against a missing table would throw.
+        if (present.size === 0) {
+            continue;
+        }
+
+        for (const [key, field] of Object.entries(table.fields)) {
+            const column = field.fieldName ?? key;
+
+            if (!present.has(column)) {
+                statements.push(`ALTER TABLE ${quoteIdentifier(table.modelName)} ADD COLUMN ${addColumnClause(column, field)}`);
+            }
+        }
+    }
+
+    return statements;
+};

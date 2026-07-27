@@ -390,6 +390,17 @@ interface AuthMember {
 }
 ```
 
+### `AuthNamespaceLike` (interface)
+
+```ts
+interface AuthNamespaceLike {
+    get: (id: unknown) => {
+        fetch: (request: Request) => Promise<Response>;
+    };
+    idFromName: (name: string) => unknown;
+}
+```
+
 ### `AuthOrgRole` (interface)
 
 ```ts
@@ -533,6 +544,28 @@ interface CreateAuthAdminOptions {
 
 ```ts
 const DEFAULT_AUTH_BASE_PATH: string;
+```
+
+### `DoAuthWiring` (interface)
+
+```ts
+interface DoAuthWiring {
+    authHandler: (request: Request) => Promise<Response | undefined>;
+    resolveIdentity: (request: Request) => Promise<null | {
+        userId: string;
+    }>;
+}
+```
+
+### `DoAuthWiringOptions` (interface)
+
+```ts
+interface DoAuthWiringOptions {
+    basePath?: string;
+    internalSecret: string | undefined;
+    namespace: AuthNamespaceLike | undefined;
+    objectName?: string;
+}
 ```
 
 ### `EmailClass` (type)
@@ -767,6 +800,10 @@ const assertEmailAllowed: (email: string, config?: EmailGateConfig) => Promise<E
 const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAuthMiddleware>;
 ```
 
+### `authDoColumnAdditions` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `authDoSchemaStatements` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -812,6 +849,10 @@ const createAuthAdmin: (auth: LunoraAuth, options?: CreateAuthAdminOptions) => A
 ```ts
 const createAuthAuditReader: (executor: SqlExecutor) => AuthAuditReader;
 ```
+
+### `createDoAuthWiring` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `createMemoryAuthStore` (const)
 

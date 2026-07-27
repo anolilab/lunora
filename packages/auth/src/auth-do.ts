@@ -31,7 +31,7 @@ import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { lunoraDoAdapter } from "./adapter";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
-import authDoSchemaStatements from "./do-schema";
+import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
 import { handleAuthRequest } from "./handler";
 
@@ -132,8 +132,19 @@ class LunoraAuthDO {
             // that table only appears in `getAuthTables` once the option is set. Deriving
             // from the raw options would omit it and the limiter's first read would fail
             // on a missing table.
-            for (const statement of authDoSchemaStatements(resolveAuthOptions(options))) {
+            const resolved = resolveAuthOptions(options);
+
+            for (const statement of authDoSchemaStatements(resolved)) {
                 // The cursor is lazy in workerd — iterating is what runs the statement.
+                [...this.#storage.sql.exec(statement)];
+            }
+
+            // `CREATE TABLE IF NOT EXISTS` covers a table that did not exist; it says
+            // nothing about a table that exists with FEWER columns than the current
+            // plugin set needs. Adding `admin()` to a deployed app is exactly that
+            // case (`role` / `banned` / `banExpires` land on `user`), so the missing
+            // columns are added rather than left to fail on the next write.
+            for (const statement of authDoColumnAdditions(resolved, (table) => this.#columnNames(table))) {
                 [...this.#storage.sql.exec(statement)];
             }
 
@@ -145,7 +156,22 @@ class LunoraAuthDO {
         return this.#auth;
     }
 
-    /** Whether the caller presented the configured internal secret. */
+    /**
+     * The physical column names on a table, or none when the table does not exist.
+     *
+     * Uses `pragma_table_info` as a table-valued function, which SQLite-in-DO allows.
+     * D1 refuses those through the Worker binding with `SQLITE_AUTH`, so this technique
+     * is DO-only — worth remembering before reusing it on the D1 path.
+     */
+    #columnNames(table: string): string[] {
+        const rows = [...this.#storage.sql.exec(`SELECT name FROM pragma_table_info(?)`, table)];
+
+        return rows.map((row) => String(row["name"]));
+    }
+
+    /**
+     * Whether the caller presented the configured internal secret.
+     */
     #isTrustedCaller(request: Request): boolean {
         const { internalSecret } = this.#options;
 

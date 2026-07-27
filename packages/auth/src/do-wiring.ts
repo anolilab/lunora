@@ -1,0 +1,120 @@
+/**
+ * The worker half of DO-backed auth: what `authHandler` and `resolveIdentity` become
+ * when the auth tables live inside a Durable Object.
+ *
+ * ## Why this is a package function and not codegen output
+ *
+ * It used to be emitted inline by `@lunora/codegen` as a template string. Logic in a
+ * template literal cannot be unit-tested — it is only ever typechecked after
+ * generation, so a wrong header name or a mis-built URL compiles cleanly and fails in
+ * production. Here it is ordinary code with ordinary tests, and codegen emits a call.
+ * @experimental
+ */
+/* eslint-disable unicorn/no-null -- `resolveIdentity` is a runtime contract that returns `null` for an anonymous request; `undefined` would be a different signal */
+import { INTERNAL_SECRET_HEADER, RESOLVE_SESSION_PATH } from "./auth-do";
+import { DEFAULT_AUTH_BASE_PATH } from "./handler";
+
+/** The slice of a Durable Object namespace this needs — structural, so tests need no runtime. */
+export interface AuthNamespaceLike {
+    get: (id: unknown) => { fetch: (request: Request) => Promise<Response> };
+    idFromName: (name: string) => unknown;
+}
+
+/** What {@link createDoAuthWiring} needs, already resolved against `env`. */
+export interface DoAuthWiringOptions {
+    /** Base path the auth routes are served under. Defaults to `/api/auth`. */
+    basePath?: string;
+
+    /**
+     * Shared secret presented on the object's internal session route. `undefined`
+     * means identity resolution fails closed — see {@link DoAuthWiring.resolveIdentity}.
+     */
+    internalSecret: string | undefined;
+
+    /** The bound namespace, or `undefined` when the binding is absent from `env`. */
+    namespace: AuthNamespaceLike | undefined;
+
+    /**
+     * Name of the object instance holding the auth tables. Defaults to `"auth"`.
+     *
+     * One object owns the whole auth schema, so this exists to let an app pick the
+     * name (or run separate objects per deployment/tenant) rather than being pinned to
+     * a hardcoded one.
+     */
+    objectName?: string;
+}
+
+/** The two worker options DO-backed auth replaces. */
+export interface DoAuthWiring {
+    /** Forwards `/api/auth/*` to the object; `undefined` for anything else. */
+    authHandler: (request: Request) => Promise<Response | undefined>;
+
+    /** Resolves a request's identity by asking the object. `null` when anonymous, unreachable, or ungated. */
+    resolveIdentity: (request: Request) => Promise<null | { userId: string }>;
+}
+
+/**
+ * Build the worker-side wiring for an auth Durable Object.
+ *
+ * Every failure path answers "not authenticated" rather than throwing: this runs on
+ * the request path for every request that touches `ctx.auth`, and a throw there would
+ * turn a misconfiguration into a 500 on traffic that has nothing to do with auth.
+ * @param options The resolved namespace, secret, and names.
+ * @returns The `authHandler` / `resolveIdentity` pair.
+ * @experimental
+ */
+export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring => {
+    const { basePath = DEFAULT_AUTH_BASE_PATH, internalSecret, namespace, objectName = "auth" } = options;
+
+    /** The object's stub, or `undefined` when the binding is missing. */
+    const stub = (): undefined | { fetch: (request: Request) => Promise<Response> } => {
+        if (!namespace) {
+            return undefined;
+        }
+
+        return namespace.get(namespace.idFromName(objectName));
+    };
+
+    return {
+        authHandler: async (request) => {
+            // Only auth routes go to the object; everything else falls through to the
+            // Lunora worker exactly as it does in D1 mode.
+            if (!new URL(request.url).pathname.startsWith(basePath)) {
+                return undefined;
+            }
+
+            return stub()?.fetch(request);
+        },
+        resolveIdentity: async (request) => {
+            // Fail closed on a missing secret. The object would refuse the call anyway;
+            // returning `null` here makes that an anonymous request rather than a
+            // round-trip that is guaranteed to 401.
+            if (!internalSecret) {
+                return null;
+            }
+
+            const target = stub();
+
+            if (!target) {
+                return null;
+            }
+
+            // Forward the caller's headers so the session cookie reaches the object,
+            // then add the secret that authorises the question.
+            const headers = new Headers(request.headers);
+
+            headers.set(INTERNAL_SECRET_HEADER, internalSecret);
+
+            const response = await target.fetch(new Request(new URL(RESOLVE_SESSION_PATH, request.url), { headers }));
+
+            if (!response.ok) {
+                return null;
+            }
+
+            // `Response.json()` resolves to `unknown`, so narrow once here.
+            const body: null | { userId?: string } = await response.json();
+
+            return body?.userId ? { userId: body.userId } : null;
+        },
+    };
+};

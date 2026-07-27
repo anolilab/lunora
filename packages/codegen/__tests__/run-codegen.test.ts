@@ -1509,9 +1509,9 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             expect(result.generated.app).toContain("public auth(");
             expect(result.generated.app).toContain(
-                'import { AUTH_DO_SECRET_HEADER, AUTH_DO_SESSION_PATH, createAuth, createAuthAdmin, createAuthAuditReader, d1Executor, DEFAULT_AUTH_BASE_PATH, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
+                'import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
             );
-            expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(d1(env) as never));");
+            expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));");
             expect(result.generated.app).toContain("await ensureMigrated(");
         });
 
@@ -1530,12 +1530,12 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             // `namespace` selects the DO mode — the tables live in the object because
             // `@better-auth/scim` needs transactions D1 cannot provide.
             expect(app).toContain("namespace?: Selector<Env, ShardNamespaceLike>;");
-            expect(app).toContain("if (this.authDeclaration?.namespace) {");
+            expect(app).toContain("if (authDeclaration && authNamespace) {");
 
             // Identity resolution becomes a call to the object, gated on the shared
             // secret, because DO storage is unreachable from the worker.
-            expect(app).toContain("headers.set(AUTH_DO_SECRET_HEADER, secret);");
-            expect(app).toContain("AUTH_DO_SESSION_PATH");
+            expect(app).toContain("const authWiring = createDoAuthWiring({");
+            expect(app).toContain("options.resolveIdentity = authWiring.resolveIdentity;");
 
             // Both modes must be rejected together — silently doing nothing is worse.
             expect(app).toContain("pass either `d1` or `namespace`, not both");

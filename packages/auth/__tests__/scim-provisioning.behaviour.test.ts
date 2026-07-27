@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { lunoraD1Adapter, lunoraDoAdapter } from "../src/adapter";
 import { createAuth, resolveAuthOptions } from "../src/create-auth";
-import authDoSchemaStatements from "../src/do-schema";
+import { authDoSchemaStatements } from "../src/do-schema";
 import { handleAuthRequest } from "../src/handler";
 import { admin, scim } from "../src/plugins";
 import createDoStorage from "./helpers/do-storage";

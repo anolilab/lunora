@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { AUTH_DO_SECRET_HEADER, AUTH_DO_SESSION_PATH, createAuth, createAuthAdmin, createAuthAuditReader, d1Executor, DEFAULT_AUTH_BASE_PATH, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
@@ -58,6 +58,8 @@ interface AuthDeclaration<Env> {
     d1?: Selector<Env, unknown>;
     /** Shared secret the worker presents on the object's internal session route. REQUIRED with `namespace`: the binding is reachable from any worker bound to it, so the secret — not the binding — is the authorization boundary. Without it identity resolution fails closed. */
     internalSecret?: Selector<Env, string>;
+    /** Name of the Durable Object instance holding the auth tables. Defaults to `"auth"`. Set it to run separate auth objects (per deployment, per tenant) off one namespace. */
+    objectName?: Selector<Env, string>;
     /** The auth Durable Object namespace — the DO-backed mode. Needed for `@better-auth/scim`, which requires native transactions that D1 has none of. The object owns the auth tables, so `/api/auth/*` and identity resolution both go through it. */
     namespace?: Selector<Env, ShardNamespaceLike>;
     /** Build the better-auth options from `env` (secret, plugins, email/password, …). */
@@ -389,64 +391,26 @@ class AppBuilder<Env extends object> {
 
         options.logArchive = resolveLogArchiveFromEnv(env);
 
-        // Captured before the branch so the narrowing survives into the closures
-        // below — reading `this.authDeclaration.namespace` again inside them would be
-        // optional all over again.
+        // Captured before the branch so the narrowing survives — reading
+        // `this.authDeclaration.namespace` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
         if (authDeclaration && authNamespace) {
             // DO-backed mode. The auth tables live inside the object and DO storage is
-            // unreachable from here, so better-auth runs in there and this worker
-            // forwards to it. That is the whole structural difference from D1 mode.
-            // A selector may find no binding (the namespace is optional on `env`), so
-            // this reports that instead of dereferencing undefined — a missing binding
-            // should read as "auth not configured", not a TypeError mid-request.
-            const authStub = (): undefined | { fetch: (request: Request) => Promise<Response> } => {
-                const bound = authNamespace(env);
+            // unreachable from here, so better-auth runs in there and this worker talks
+            // to it. `createDoAuthWiring` is a tested function in `@lunora/auth` rather
+            // than more emitted code: request-path logic in generated output can only be
+            // typechecked, never unit-tested.
+            const authWiring = createDoAuthWiring({
+                internalSecret: authDeclaration.internalSecret?.(env),
+                namespace: authNamespace(env),
+                objectName: authDeclaration.objectName?.(env),
+            });
 
-                return bound ? bound.get(bound.idFromName("auth")) : undefined;
-            };
-
-            options.authHandler = async (request) => {
-                // Only auth routes are forwarded; everything else falls through to the
-                // Lunora worker exactly as it does in D1 mode.
-                if (!new URL((request as Request).url).pathname.startsWith(DEFAULT_AUTH_BASE_PATH)) {
-                    return undefined;
-                }
-
-                return authStub()?.fetch(request as Request);
-            };
-            options.resolveIdentity = async (request) => {
-                const secret = authDeclaration.internalSecret?.(env);
-
-                // Fail closed: without the shared secret the object refuses to answer,
-                // and guessing here would turn every request anonymous silently.
-                if (!secret) {
-                    return null;
-                }
-
-                const stub = authStub();
-
-                if (!stub) {
-                    return null;
-                }
-
-                const headers = new Headers((request as Request).headers);
-
-                headers.set(AUTH_DO_SECRET_HEADER, secret);
-
-                const response = await stub.fetch(new Request(new URL(AUTH_DO_SESSION_PATH, (request as Request).url), { headers }));
-
-                if (!response.ok) {
-                    return null;
-                }
-
-                const body = (await response.json()) as { userId?: string };
-
-                return body.userId ? { userId: body.userId } : null;
-            };
+            options.authHandler = authWiring.authHandler;
+            options.resolveIdentity = authWiring.resolveIdentity;
             // `authAdmin` / `authAuditReader` are D1-only for now: both read the auth
             // tables directly from the worker, which DO storage does not allow. The
             // studio's auth pages and the audit feed therefore report "not configured"

@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { scim } from "@better-auth/scim";
 import { describe, expect, it } from "vitest";
 
-import authDoSchemaStatements from "../src/do-schema";
+import { authDoColumnAdditions, authDoSchemaStatements } from "../src/do-schema";
 import { admin } from "../src/plugins";
 
 /**
@@ -23,6 +23,13 @@ const SECRET = "lunora-do-schema-secret-lunora-do-schema-xx";
 const scimOptions = {
     connections: [{ credentials: [{ id: "primary", token: "do-schema-token", type: "bearer" as const }], id: "okta-acme" }], // secret-scanner:allow
 };
+
+/** Physical column names on a table, the way the DO reads them. */
+const columnNames = (database: DatabaseSync, table: string): string[] =>
+    database
+        .prepare(`SELECT name FROM pragma_table_info(?)`)
+        .all(table)
+        .map((row) => String(row.name));
 
 /** Apply the statements to an in-memory SQLite and hand back the connection. */
 const materialise = (options: Parameters<typeof authDoSchemaStatements>[0]): DatabaseSync => {
@@ -107,6 +114,54 @@ describe("authDoSchemaStatements", () => {
                 database.exec(statement);
             }
         }).not.toThrow();
+    });
+
+    it("adds the columns a newly-enabled plugin needs to an existing table", () => {
+        expect.assertions(3);
+
+        // Deploy once without `admin`…
+        const database = materialise({ secret: SECRET });
+        const columnsOf = (table: string): string[] => columnNames(database, table);
+
+        expect(columnsOf("user")).not.toContain("role");
+
+        // …then enable it. `CREATE TABLE IF NOT EXISTS` is a no-op on the existing
+        // `user` table, so without the additions below the column never arrives and
+        // every admin write fails on an unknown column.
+        const withAdmin = { plugins: [admin()], secret: SECRET };
+
+        for (const statement of authDoSchemaStatements(withAdmin)) {
+            database.exec(statement);
+        }
+
+        const additions = authDoColumnAdditions(withAdmin, columnsOf);
+
+        expect(additions.length).toBeGreaterThan(0);
+
+        for (const statement of additions) {
+            database.exec(statement);
+        }
+
+        expect(columnsOf("user")).toContain("role");
+    });
+
+    it("adds nothing when the live schema is already current", () => {
+        expect.assertions(1);
+
+        const options = { plugins: [admin()], secret: SECRET };
+        const database = materialise(options);
+        const columnsOf = (table: string): string[] => columnNames(database, table);
+
+        // Idempotence matters as much as the addition: this runs on every cold start.
+        expect(authDoColumnAdditions(options, columnsOf)).toStrictEqual([]);
+    });
+
+    it("never emits an addition for a table that does not exist yet", () => {
+        expect.assertions(1);
+
+        // An empty column list means "absent" — emitting ALTER against it would throw,
+        // and `CREATE TABLE IF NOT EXISTS` is what handles that case.
+        expect(authDoColumnAdditions({ plugins: [admin()], secret: SECRET }, () => [])).toStrictEqual([]);
     });
 
     it("names indexes the way better-auth's own introspection expects", () => {
