@@ -7,9 +7,12 @@ description: The host contracts every Lunora target implements — ShardHost, So
 runtime dependencies and near-zero runtime code: it exists so a second target
 implements a **contract** rather than forking the engine.
 
-Hosts live in `@lunora/platform-<target>` — never as subpaths here, because each
-host carries its own provider dependencies and this package must stay
-installable anywhere.
+The Cloudflare host — the adapters plus the `createShardPlatform` /
+`createWorkerPlatform` composition root — lives in `@lunora/do`, where the
+Durable Object code it wraps lives. A future second target gets its own
+`@lunora/platform-<target>` package when it exists; hosts are never subpaths
+here, because each carries its own provider dependencies and this package must
+stay installable anywhere.
 
 ```ts
 import type { ShardHost, SocketHost, PlatformCapabilities } from "@lunora/platform";
@@ -49,9 +52,25 @@ import { CLOUDFLARE_CAPABILITIES } from "@lunora/platform";
 
 ## Conformance
 
-A host is only correct if it passes `@lunora/platform-conformance`, which is the
-executable form of these contracts. See its docs for what the suite asserts and
-what it does not yet cover.
+A host is only correct if it passes the conformance TCK — the executable form of
+these contracts, shipped as a subpath of this package so it can never version
+apart from what it asserts:
+
+```ts
+import { defineHostContractSuite } from "@lunora/platform/conformance/suite"; // pure — safe in workerd
+import { createReferenceHost } from "@lunora/platform/conformance"; // adds the node:sqlite reference host
+```
+
+Host variance is declared through presence-based optional hooks on
+`ConformanceHost` (`createSocket`, `simulateRecycle`, `awaitAlarmFired`,
+`scheduler`) rather than skipped blocks, so a gap shows up in the suite output
+instead of vanishing from it.
+
+The TCK covers host primitives. It does **not** yet cover the engine-level
+guarantees (OCC-409, poke ordering, RLS under a live subscription, scheduler
+at-least-once) — those are implemented by code still being extracted from
+`@lunora/do`, and they move into the suite as that completes. A passing host
+means "the primitives are right", not "the engine will behave".
 
 ## Adding to the matrix
 

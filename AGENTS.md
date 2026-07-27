@@ -75,14 +75,12 @@ The CLI binary is `lunora`. The npm scope is `@lunora/*`. The "main" server pack
 
 There is an unscoped **umbrella** package `lunorash` (directory `packages/lunora/`; npm name is `lunorash` because `lunora` is taken on npm, but the directory and CLI bin stay `lunora`). It re-exports the base packages (`@lunora/server` + subpaths, `@lunora/values`, `@lunora/runtime`, `@lunora/do`, `@lunora/client`) via subpaths (`lunorash/server`, …) and ships the `lunora` CLI bin. Codegen emits `lunorash/*` imports in `_generated/*` when a project declares a `lunorash` dependency (else `@lunora/*`) — opt-in and backward-compatible. Add-ons/adapters/Vite plugin stay separate installs.
 
-**Platform family (plan 114).** Multi-platform support is split across a named family:
+**Platform family (plan 114).** Multi-platform support ships as exactly **two** packages:
 
-- `@lunora/platform` — **contracts only** (types + capability matrix, near-zero runtime): `ShardHost`, `SocketHost`, `ShardDirectory`, `SchedulerHost`, canonical binding `*Like` projections, `PlatformCapabilities`.
-- `@lunora/platform-<target>` — one package per host (`platform-cloudflare`, `platform-aws`, `platform-node`, …). Never subpath-export hosts from the contracts package — each host carries its own provider deps.
-- `@lunora/platform-conformance` — the behavioral TCK every host must pass.
+- `@lunora/platform` — **contracts** (types + capability matrix, zero deps): `ShardHost`, `SocketHost`, `ShardDirectory`, `ShardKvStore`, `SchedulerHost`, the canonical binding `*Like` projections, `PlatformCapabilities`. The behavioural TCK lives at the `@lunora/platform/conformance` subpath (`/conformance/suite` is the workerd-safe pure suite; the barrel adds the `node:sqlite` reference host) — the TCK versions in lockstep with the contracts it asserts, and a subpath keeps the root import types-only.
 - `@lunora/shard-engine` — the host-neutral reactive engine (extracted from `@lunora/do`).
 
-Existing Cloudflare-specific packages (`@lunora/do`, `@lunora/d1`, `@lunora/storage`, …) gradually fold into `@lunora/platform-cloudflare`; their public APIs stay stable until then.
+There is deliberately **no** `@lunora/platform-cloudflare` package yet: the Cloudflare adapters and the composition root (`createShardPlatform` / `createWorkerPlatform`) live in `@lunora/do`, because that is where the Durable Object code they wrap lives, and a host package with one host and zero consumers is a hypothetical seam. Mint `@lunora/platform-<target>` when a second target actually exists (plan 115) — never as subpaths of the contracts package, since each host carries its own provider deps.
 
 ### Packages
 

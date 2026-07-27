@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createWorkerPlatform } from "../src";
+import { createWorkerPlatform } from "../src/platform";
 
 /** A namespace binding double — enough for `createShardDirectory` to resolve. */
 const namespace = () => {
@@ -42,20 +42,22 @@ describe("createWorkerPlatform", () => {
         expect(createWorkerPlatform({ SHARD: namespace() }).scheduler).toBeUndefined();
     });
 
-    it("builds the scheduler from the default SCHEDULER binding", () => {
+    it("passes an injected scheduler host through untouched", () => {
         expect.assertions(1);
 
-        const platform = createWorkerPlatform({ SCHEDULER: namespace() }, { scheduler: { originUrl: "https://worker.test" } });
+        // The scheduler is INJECTED, not constructed: building one needs
+        // `@lunora/scheduler` (`createSchedulerHost`), an edge this package
+        // deliberately does not take. The factory's whole contract here is
+        // identity — whatever host the worker entry built is what callers see.
+        const scheduler = {
+            cancel: async () => {},
+            schedule: async () => {
+                return { id: "job-1", scheduledFor: 0 };
+            },
+        };
+        const platform = createWorkerPlatform({ SHARD: namespace() }, { scheduler });
 
-        expect(platform.scheduler?.schedule).toBeDefined();
-    });
-
-    // Asking for a scheduler the deployment cannot provide is a configuration
-    // error, not something to paper over with a silently absent scheduler.
-    it("throws when the scheduler is configured but its binding is absent", () => {
-        expect.assertions(1);
-
-        expect(() => createWorkerPlatform({}, { scheduler: { originUrl: "https://worker.test" } })).toThrow(/no Durable Object namespace bound as "SCHEDULER"/);
+        expect(platform.scheduler).toBe(scheduler);
     });
 
     it("honours a custom scheduler binding name", () => {

@@ -87,7 +87,6 @@ overrides:
   "@lunora/nuxt": "workspace:*"
   "@lunora/payment": "workspace:*"
   "@lunora/platform": "workspace:*"
-  "@lunora/platform-conformance": "workspace:*"
   "@lunora/queue": "workspace:*"
   "@lunora/ratelimit": "workspace:*"
   "@lunora/react": "workspace:*"

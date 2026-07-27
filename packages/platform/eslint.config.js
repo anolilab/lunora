@@ -90,6 +90,29 @@ export default createConfig(
             "unicorn/number-literal-case": "off",
         },
     },
+    // The conformance TCK (src/conformance/**): test infrastructure shipped as
+    // source. Its reference host and suite are DELIBERATELY test-shaped — null
+    // fixtures where the contract says null, async closures the suite awaits
+    // uniformly whether or not a given host's method is async, socket doubles
+    // that reassign their parameter, vitest-typed injection. These were the
+    // allowances the standalone @lunora/platform-conformance package carried;
+    // they are scoped to the subpath so the contracts in src/*.ts stay strict.
+    {
+        files: ["src/conformance/**/*.{ts,tsx}"],
+        rules: {
+            "@typescript-eslint/prefer-promise-reject-errors": "off",
+            "@typescript-eslint/require-await": "off",
+            "@typescript-eslint/restrict-template-expressions": "off",
+            "import/no-extraneous-dependencies": "off",
+            "no-param-reassign": "off",
+            "no-underscore-dangle": "off",
+            "promise/catch-or-return": "off",
+            "sonarjs/no-unused-collection": "off",
+            "unicorn/no-array-callback-reference": "off",
+            "unicorn/no-null": "off",
+            "unicorn/prevent-abbreviations": "off",
+        },
+    },
     // Test files: relax rules that are noisy or inappropriate in test code (loose
     // mocks/typing, inline regex, null fixtures, async helpers without await, toEqual,
     // describe titles). Source files still enforce all of these.
@@ -118,6 +141,17 @@ export default createConfig(
             "unused-imports/no-unused-vars": "off",
             "vitest/prefer-describe-function-title": "off",
             "vitest/prefer-strict-equal": "off",
+        },
+    },
+    // The conformance smoke test registers every `it` dynamically through
+    // defineHostContractSuite's injection; sonarjs cannot see through that and
+    // reports the file as empty at position 0:1, which no inline disable reaches.
+    {
+        files: ["**/__tests__/conformance.test.ts"],
+        rules: {
+            "sonarjs/no-empty-test-file": "off",
+            // Same injection: the suite call at describe-scope IS the hook.
+            "vitest/require-hook": "off",
         },
     },
     // Markdown code blocks: don't enforce language tags.

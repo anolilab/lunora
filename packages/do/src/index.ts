@@ -159,6 +159,10 @@ export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
 export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
+// The Cloudflare composition root: every `@lunora/platform` contract assembled
+// from the two lifetimes a Worker has (DO state, worker env).
+export type { ShardPlatform, WorkerPlatform, WorkerPlatformOptions } from "./platform";
+export { createShardPlatform, createWorkerPlatform } from "./platform";
 export { serveRelationFanout } from "./relation-fanout";
 export type { LogEventInput } from "./request-log";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";

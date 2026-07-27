@@ -1,12 +1,12 @@
 /**
- * `@lunora/platform-cloudflare` — the Cloudflare host: one place that composes
+ * The Cloudflare composition root: one place that composes
  * every `@lunora/platform` contract over Workers, Durable Objects, and
  * `SchedulerDO`.
  *
- * # Why this package exists
+ * # Why this module exists
  *
- * The adapters themselves live in `@lunora/do`, because that is where the
- * Durable Object code they wrap lives. But wiring them up was the caller's job,
+ * The adapters live in `./cloudflare-host`, because that is where the Durable
+ * Object code they wrap lives. But wiring them up was the caller's job,
  * and that job had sharp edges: five separate factories, two different argument
  * shapes (`state` for some, `state.storage` for others), no scheduler at all,
  * and no association between a host and the capability matrix that describes
@@ -28,17 +28,18 @@
  * # What is deliberately not here
  *
  * The contracts themselves are not re-exported — import those from
- * `@lunora/platform`, which is zero-dependency and safe on every runtime. This
- * package pulls in `@lunora/do` and `@lunora/scheduler`, so anything that needs
- * only types should not depend on it.
+ * `@lunora/platform`, which is zero-dependency and safe on every runtime. And
+ * the scheduler is INJECTED, not constructed: building it needs
+ * `@lunora/scheduler`, an edge this package must not take. The worker entry
+ * that has scheduler wiring builds a host with `createSchedulerHost` from
+ * `@lunora/scheduler` and passes it in; everyone else omits it and
+ * {@link WorkerPlatform.scheduler} is `undefined`, which callers already handle.
  */
 
-import { createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "@lunora/do";
 import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { CLOUDFLARE_CAPABILITIES } from "@lunora/platform";
 
-import type { CloudflareSchedulerOptions } from "./scheduler";
-import { createCloudflareScheduler } from "./scheduler";
+import { createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "./cloudflare-host";
 
 /**
  * The contracts available inside one Durable Object instance.
@@ -84,15 +85,13 @@ export interface WorkerPlatform {
 /** Options for {@link createWorkerPlatform}. */
 export interface WorkerPlatformOptions {
     /**
-     * Wiring for the durable scheduler. Omit it when the app declares no
-     * scheduled work: {@link WorkerPlatform.scheduler} is then `undefined`,
-     * which callers already have to handle.
-     *
-     * `namespace` is the *binding name* to look up in `env` (default
-     * `"SCHEDULER"`), not the namespace object — callers hold `env`, not
-     * individual bindings.
+     * The durable scheduler host, when the app has one. Injected rather than
+     * constructed here: building it requires `@lunora/scheduler` (it wraps
+     * `SchedulerDO`), and that is an edge this package must not take for a
+     * feature most shards never use. Build it once at the worker entry with
+     * `createSchedulerHost` from `@lunora/scheduler` and pass it in.
      */
-    scheduler?: Omit<CloudflareSchedulerOptions, "namespace"> & { namespace?: string };
+    scheduler?: SchedulerHost;
 }
 
 /**
@@ -131,38 +130,15 @@ export const createWorkerPlatform = (env: unknown, options: WorkerPlatformOption
         const namespace = bindings[binding];
 
         if (namespace === undefined) {
-            throw new Error(
-                `@lunora/platform-cloudflare: no Durable Object namespace bound as "${binding}" — add it to wrangler.jsonc's durable_objects.bindings`,
-            );
+            throw new Error(`@lunora/do: no Durable Object namespace bound as "${binding}" — add it to wrangler.jsonc's durable_objects.bindings`);
         }
 
         return createShardDirectory(namespace as Parameters<typeof createShardDirectory>[0]);
     };
 
-    const schedulerOptions = options.scheduler;
-
-    if (schedulerOptions === undefined) {
+    if (options.scheduler === undefined) {
         return { capabilities: CLOUDFLARE_CAPABILITIES, directory };
     }
 
-    const schedulerBinding = schedulerOptions.namespace ?? "SCHEDULER";
-    const namespace = bindings[schedulerBinding];
-
-    if (namespace === undefined) {
-        throw new Error(
-            `@lunora/platform-cloudflare: scheduler configured but no Durable Object namespace bound as "${schedulerBinding}" — add it to wrangler.jsonc or drop the scheduler option`,
-        );
-    }
-
-    return {
-        capabilities: CLOUDFLARE_CAPABILITIES,
-        directory,
-        scheduler: createCloudflareScheduler({
-            ...schedulerOptions,
-            namespace: namespace as CloudflareSchedulerOptions["namespace"],
-        }),
-    };
+    return { capabilities: CLOUDFLARE_CAPABILITIES, directory, scheduler: options.scheduler };
 };
-
-export type { CloudflareSchedulerOptions } from "./scheduler";
-export { createCloudflareScheduler } from "./scheduler";

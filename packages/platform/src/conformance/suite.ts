@@ -1,5 +1,4 @@
-import { resolveShard } from "@lunora/platform";
-
+import { resolveShard } from "../index";
 import type { ConformanceHostFactory } from "./reference-host";
 
 /**
@@ -25,7 +24,7 @@ type VitestApi = {
  *
  * ```ts
  * import { describe, expect, it } from "vitest";
- * import { createReferenceHost, defineHostContractSuite } from "@lunora/platform-conformance";
+ * import { createReferenceHost, defineHostContractSuite } from "@lunora/platform/conformance";
  *
  * defineHostContractSuite("reference", createReferenceHost, { describe, expect, it });
  * ```

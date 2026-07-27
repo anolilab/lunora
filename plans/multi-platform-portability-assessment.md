@@ -247,6 +247,22 @@ The CLI and Vite plugin assume wrangler. A multi-platform Lunora needs:
     - `SocketHandle.id` is stable across hibernation: the adapter mints an id tag at accept and reads it back via `state.getTags(ws)`, since Cloudflare exposes no native socket identifier that survives recycling.
     - Gate: 1139 `@lunora/do` tests (mocks + workerd projects) and the two-host TCK green; `lint:types` green across all 64 projects.
 
+7. ~~Consolidate the package split.~~ The family shipped as four packages and
+   two failed the deletion test: `@lunora/platform-cloudflare` had **zero
+   consumers** (275 lines wrapping adapters that live in `@lunora/do`, dragging
+   `@lunora/do` + `@lunora/scheduler` as deps), and
+   `@lunora/platform-conformance`'s only dependency was the contracts package it
+   asserts — meaning the TCK could version apart from the contracts.
+   Consolidated to **two**: the TCK is now `@lunora/platform/conformance`
+   (subpath; `/conformance/suite` stays workerd-pure, the barrel adds the
+   `node:sqlite` reference host, root import stays types-only), and the
+   composition root (`createShardPlatform`/`createWorkerPlatform`) lives in
+   `@lunora/do` beside the adapters it composes, with the `SchedulerHost`
+   adapter in `@lunora/scheduler` (it wraps `SchedulerDO`; the scheduler is now
+   injected into `createWorkerPlatform`, killing the do→scheduler edge). Mint
+   `@lunora/platform-<target>` when a second target exists — one host is a
+   hypothetical seam.
+
 ### Open
 
 7. ~~**Add a durable key-value contract (`ShardKvStore`).**~~ **Done.** `@lunora/platform` ships `ShardKvStore` (`get`/`put`/`delete`/`list({prefix})`) — the surface `ShardHost` deliberately omits, since a DO that keeps plain records wants ordered key lookup and prefix scans, not a SQL dialect. `SessionDO` is re-bound onto it plus the shared `ShardAlarms` (both built by `createShardKvStore`/`createShardAlarms` in `cloudflare-host.ts`), so the same session logic can run on any host that supplies a `ShardKvStore`. Covered by three new TCK cases (read-back, idempotent delete, exact prefix scan) that pass against both the reference host and the Cloudflare adapter in real workerd, and by a new GC-sweep unit test — the `list`/alarm path had no coverage before. Everything else left in `@lunora/do` is genuinely Cloudflare-specific and stays for now: `ctx-db.ts`, `ctx-db-*.ts`, `relation-fanout.ts`, `introspect.ts`, `shard-do.ts`, `shard-registry-do.ts`, and the relay tier.

@@ -395,6 +395,17 @@ interface SchedulerEnv {
 }
 ```
 
+### `SchedulerHostOptions` (interface)
+
+```ts
+interface SchedulerHostOptions {
+    instanceName?: string;
+    jurisdiction?: "eu" | "fedramp" | "us";
+    namespace: Parameters<typeof createScheduler>[0]["namespace"];
+    originUrl: string;
+}
+```
+
 ### `SchedulerPoolStatus` (interface)
 
 ```ts
@@ -498,6 +509,12 @@ const createQueueWorkpool: (options: QueueWorkpoolOptions) => QueueWorkpool;
 
 ```ts
 const createScheduler: (options: LunoraSchedulerOptions) => Scheduler;
+```
+
+### `createSchedulerHost` (const)
+
+```ts
+const createSchedulerHost: (options: SchedulerHostOptions) => SchedulerHost;
 ```
 
 ### `createWorkpool` (const)

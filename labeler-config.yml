@@ -85,12 +85,6 @@
 "package: platform":
     - changed-files:
           - any-glob-to-any-file: "packages/platform/**/*"
-"package: platform-cloudflare":
-    - changed-files:
-          - any-glob-to-any-file: "packages/platform-cloudflare/**/*"
-"package: platform-conformance":
-    - changed-files:
-          - any-glob-to-any-file: "packages/platform-conformance/**/*"
 "package: queue":
     - changed-files:
           - any-glob-to-any-file: "packages/queue/**/*"

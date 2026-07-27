@@ -18,10 +18,11 @@
  */
 
 import type { ScheduledJob, ScheduleOptions, SchedulerHost } from "@lunora/platform";
-import { createScheduler } from "@lunora/scheduler";
+
+import createScheduler from "./create-scheduler";
 
 /** What the Cloudflare scheduler host needs from the Worker's environment. */
-interface CloudflareSchedulerOptions {
+interface SchedulerHostOptions {
     /**
      * Named scheduler instance — one `SchedulerDO` per name, useful for tenant
      * isolation. Defaults to `"default"`.
@@ -65,7 +66,7 @@ const resolveScheduledFor = (options: ScheduleOptions | undefined): number => {
  *
  * The returned host has no `cron` member — see the module docstring.
  */
-const createCloudflareScheduler = (options: CloudflareSchedulerOptions): SchedulerHost => {
+const createSchedulerHost = (options: SchedulerHostOptions): SchedulerHost => {
     const scheduler = createScheduler({
         instanceName: options.instanceName,
         jurisdiction: options.jurisdiction,
@@ -103,5 +104,5 @@ const createCloudflareScheduler = (options: CloudflareSchedulerOptions): Schedul
     };
 };
 
-export type { CloudflareSchedulerOptions };
-export { createCloudflareScheduler };
+export type { SchedulerHostOptions };
+export { createSchedulerHost };

@@ -2525,6 +2525,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `ShardPlatform` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `ShardRankPageResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2713,6 +2717,14 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `WorkerPlatform` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `WorkerPlatformOptions` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `WorkflowMetadata` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2845,6 +2857,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `createShardPlatform` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `createSocketHost` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2854,6 +2870,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `createTracer` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `createWorkerPlatform` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 

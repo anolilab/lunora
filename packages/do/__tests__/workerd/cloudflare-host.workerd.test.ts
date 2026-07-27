@@ -28,12 +28,13 @@
  * records the gap. Assembling all four contracts under one TCK run is
  * `@lunora/platform-cloudflare`'s job.
  */
-import type { ConformanceHost } from "@lunora/platform-conformance";
-import { defineHostContractSuite } from "@lunora/platform-conformance/suite";
+import type { ConformanceHost } from "@lunora/platform/conformance";
+import { defineHostContractSuite } from "@lunora/platform/conformance/suite";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "../../src/cloudflare-host";
+import { createShardDirectory } from "../../src/cloudflare-host";
+import { createShardPlatform } from "../../src/platform";
 
 /**
  * The `DurableObjectState` of the object the current test body is running
@@ -58,6 +59,8 @@ const createCloudflareHost = (): ConformanceHost => {
         throw new Error("no DurableObjectState in scope — the conformance body ran outside runInDurableObject");
     }
 
+    const platform = createShardPlatform(state);
+
     return {
         cleanup: () => {
             // Leave no armed alarm behind: the suite's alarm test schedules one
@@ -74,10 +77,14 @@ const createCloudflareHost = (): ConformanceHost => {
 
             return pair[1];
         },
+        // Built through the composition root, not the individual adapters, so
+        // this TCK run covers BOTH: the adapters' behaviour and the assembly
+        // `createShardPlatform` performs. A wiring mistake in the root — the
+        // wrong storage handle into `kv`, say — fails here, not in production.
         directory: createShardDirectory(env.ECHO as unknown as Parameters<typeof createShardDirectory>[0]),
-        kv: createShardKvStore(state.storage),
-        shard: createShardHost(state as unknown as Parameters<typeof createShardHost>[0]),
-        socket: createSocketHost(state as unknown as Parameters<typeof createSocketHost>[0]),
+        kv: platform.kv,
+        shard: platform.shard,
+        socket: platform.sockets,
     };
 };
 

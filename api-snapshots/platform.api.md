@@ -727,3 +727,115 @@ interface VectorizeVector {
 ```ts
 const resolveShard: (directory: ShardDirectory, name: string) => ShardStub;
 ```
+
+## `@lunora/platform/conformance`
+
+### `ConformanceHost` (interface)
+
+```ts
+interface ConformanceHost {
+    awaitAlarmFired?: (target: number) => Promise<void>;
+    cleanup?: () => void;
+    createSocket?: () => unknown;
+    directory: ShardDirectory;
+    kv?: ShardKvStore;
+    restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
+    scheduler?: SchedulerHost;
+    shard: ShardHost;
+    simulateRecycle?: () => void;
+    socket: SocketHost;
+}
+```
+
+### `ConformanceHostFactory` (type)
+
+```ts
+type ConformanceHostFactory = () => ConformanceHost | Promise<ConformanceHost>;
+```
+
+### `ReferenceHost` (interface)
+
+```ts
+interface ReferenceHost extends ConformanceHost {
+    restoreSocket: (id: string, attachment: unknown) => SocketHandle;
+    simulateRecycle: () => void;
+}
+```
+
+### `VitestApi` (type)
+
+```ts
+type VitestApi = {
+    describe: typeof import("vitest").describe;
+    expect: typeof import("vitest").expect;
+    it: typeof import("vitest").it;
+};
+```
+
+### `createReferenceHost` (const)
+
+```ts
+const createReferenceHost: () => ReferenceHost;
+```
+
+### `defineHostContractSuite` (const)
+
+```ts
+const defineHostContractSuite: (name: string, factory: ConformanceHostFactory, vitest: VitestApi) => void;
+```
+
+## `@lunora/platform/conformance/suite`
+
+### `C` (interface)
+
+```ts
+interface ConformanceHost {
+    awaitAlarmFired?: (target: number) => Promise<void>;
+    cleanup?: () => void;
+    createSocket?: () => unknown;
+    directory: ShardDirectory;
+    kv?: ShardKvStore;
+    restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
+    scheduler?: SchedulerHost;
+    shard: ShardHost;
+    simulateRecycle?: () => void;
+    socket: SocketHost;
+}
+```
+
+### `R` (interface)
+
+```ts
+interface ReferenceHost extends ConformanceHost {
+    restoreSocket: (id: string, attachment: unknown) => SocketHandle;
+    simulateRecycle: () => void;
+}
+```
+
+### `VitestApi` (type)
+
+```ts
+type VitestApi = {
+    describe: typeof import("vitest").describe;
+    expect: typeof import("vitest").expect;
+    it: typeof import("vitest").it;
+};
+```
+
+### `a` (type)
+
+```ts
+type ConformanceHostFactory = () => ConformanceHost | Promise<ConformanceHost>;
+```
+
+### `c` (const)
+
+```ts
+const createReferenceHost: () => ReferenceHost;
+```
+
+### `defineHostContractSuite` (const)
+
+```ts
+const defineHostContractSuite: (name: string, factory: ConformanceHostFactory, vitest: VitestApi) => void;
+```

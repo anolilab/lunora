@@ -13,7 +13,7 @@ import type {
     ShardStub,
     SocketHandle,
     SocketHost,
-} from "@lunora/platform";
+} from "../index";
 
 /**
  * A conformance host bundles all four platform contracts so a single factory

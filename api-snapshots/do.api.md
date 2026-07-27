@@ -1579,6 +1579,16 @@ interface ShardDOState {
 }
 ```
 
+### `ShardPlatform` (interface)
+
+```ts
+interface ShardPlatform {
+    kv: ShardKvStore;
+    shard: ShardHost;
+    sockets: SocketHost;
+}
+```
+
 ### `ShardRankPageResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -1944,6 +1954,24 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `WorkerPlatform` (interface)
+
+```ts
+interface WorkerPlatform {
+    capabilities: PlatformCapabilities;
+    directory: (binding: string) => ShardDirectory;
+    scheduler?: SchedulerHost;
+}
+```
+
+### `WorkerPlatformOptions` (interface)
+
+```ts
+interface WorkerPlatformOptions {
+    scheduler?: SchedulerHost;
+}
+```
+
 ### `WorkflowMetadata` (interface)
 
 ```ts
@@ -2126,6 +2154,12 @@ const createShardHost: (state: DurableObjectState) => ShardHost;
 const createShardKvStore: (storage: KvStorageLike) => ShardKvStore;
 ```
 
+### `createShardPlatform` (const)
+
+```ts
+const createShardPlatform: (state: unknown) => ShardPlatform;
+```
+
 ### `createSocketHost` (const)
 
 ```ts
@@ -2142,6 +2176,12 @@ const createSystemReader: (options?: SystemReaderOptions) => SystemDatabaseReade
 
 ```ts
 const createTracer: (deps: TracerDeps) => ContextTracer;
+```
+
+### `createWorkerPlatform` (const)
+
+```ts
+const createWorkerPlatform: (env: unknown, options?: WorkerPlatformOptions) => WorkerPlatform;
 ```
 
 ### `decodeCursor` (const)

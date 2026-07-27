@@ -72,8 +72,6 @@ const TIER_1 = [
     // The platform family: `platform` is contracts-only, so its surface IS the
     // product and drifting it silently is the failure this guard exists to catch.
     "platform",
-    "platform-cloudflare",
-    "platform-conformance",
     "shard-engine",
 ];
 
