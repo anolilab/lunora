@@ -14,7 +14,7 @@
         "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit"
     },
     "dependencies": {
-        "@better-auth/expo": "1.6.23",
+        "@better-auth/expo": "catalog:auth",
         "@lunora/auth": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/react-native": "workspace:*",

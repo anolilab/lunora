@@ -438,20 +438,43 @@ catalogs:
     vitest: 4.1.10
     zod: 4.4.3
   auth:
-    # EXACT-pinned (no caret) and held at 1.6.23: from 1.6.24 onward better-auth
+    # EXACT-pinned (no caret) and held at a 1.7.0 PRERELEASE. Two constraints meet
+    # here, and both are load-bearing:
+    #
+    # 1. Security floor. `@better-auth/scim` < 1.7.0-beta.4 carries GHSA-j8v8-g9cx-5qf4
+    #    (HIGH, CWE-639/862): with the default `providerOwnership.enabled: false` the
+    #    `userId` owner column is never created, so provider rows bind to nobody —
+    #    any signed-in user can enumerate SCIM connections, mint a token for someone
+    #    else's, read the whole directory, and rewrite a victim's `userName` into an
+    #    address they control. Every 1.6.x is in the vulnerable range, so staying on
+    #    1.6.x was not an option once SCIM shipped.
+    # 2. Lockstep. The plugins peer on an exact `better-auth`/`@better-auth/core`
+    #    prerelease (`^1.7.0-rc.2`), and prereleases must be pinned exactly — a caret
+    #    on a prerelease range resolves unpredictably as new rc tags land.
+    #
+    # Note 1.7.0 is NOT GA (`latest` on npm is still 1.6.25). Revisit this block when
+    # it ships, and drop the prerelease pins for the release.
+    #
+    # History worth keeping: the previous hold at 1.6.23 existed because 1.6.24+
     # changed the client-plugin generics so `@better-auth/expo`'s `getActions` no
-    # longer satisfies `BetterAuthClientPlugin` — `examples/expo` fails to
-    # typecheck (App.tsx `expoBearerToken(authClient)` TS2345 + src/auth-client.ts
-    # TS2322, against packages/react-native/dist/auth.d.ts). Verified: 1.6.23
-    # clean, 1.6.24 and 1.6.25 both fail. A caret here silently floats past 1.6.23
-    # and reintroduces it, which is why these three are exact — and note the
-    # failure only reproduces with a freshly built @lunora/react-native `dist`,
-    # so re-test with `pnpm --filter "@lunora/react-native..." run build` first.
-    # Adopting >=1.6.24 means updating the react-native auth bridge, so it is a
-    # migration rather than a dep bump.
-    "@better-auth/expo": 1.6.23
-    "@better-auth/passkey": 1.6.23
-    "better-auth": 1.6.23
+    # longer satisfied `BetterAuthClientPlugin`, breaking `examples/expo`'s typecheck.
+    # That migration is done (see packages/react-native). The failure only reproduces
+    # against a freshly built `@lunora/react-native` dist, so when touching these
+    # versions re-run `pnpm --filter "@lunora/react-native..." run build` first, then
+    # typecheck `examples/expo`.
+    # Direct dependency since 1.7: `createLocalAccountIssuer` (needed to link a local
+    # password account) lives in `@better-auth/core/db`, not the `better-auth` barrel.
+    "@better-auth/core": 1.7.0-rc.2
+    "@better-auth/expo": 1.7.0-rc.2
+    # `mcp` / `withMcpAuth` and `oidcProvider` left better-auth's core barrel in 1.7
+    # (the latter was already `@deprecated` in 1.6 in favour of the oauth-provider
+    # package). They live in these two packages now, on the same prerelease.
+    "@better-auth/mcp": 1.7.0-rc.2
+    "@better-auth/oauth-provider": 1.7.0-rc.2
+    "@better-auth/passkey": 1.7.0-rc.2
+    "@better-auth/scim": 1.7.0-rc.2
+    "@better-auth/sso": 1.7.0-rc.2
+    "better-auth": 1.7.0-rc.2
     jose: ^6.2.4
   drizzle:
     drizzle-orm: ^0.45.2
@@ -550,14 +573,14 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - '@ai-sdk/gateway@3.0.128'
   - '@ai-sdk/provider-utils@4.0.28'
-  - '@better-auth/core@1.6.16'
-  - '@better-auth/drizzle-adapter@1.6.16'
-  - '@better-auth/kysely-adapter@1.6.16'
-  - '@better-auth/memory-adapter@1.6.16'
-  - '@better-auth/mongo-adapter@1.6.16'
-  - '@better-auth/passkey@1.6.16'
-  - '@better-auth/prisma-adapter@1.6.16'
-  - '@better-auth/telemetry@1.6.16'
+  - '@better-auth/core@1.7.0-rc.2'
+  - '@better-auth/drizzle-adapter@1.7.0-rc.2'
+  - '@better-auth/kysely-adapter@1.7.0-rc.2'
+  - '@better-auth/memory-adapter@1.7.0-rc.2'
+  - '@better-auth/mongo-adapter@1.7.0-rc.2'
+  - '@better-auth/passkey@1.7.0-rc.2'
+  - '@better-auth/prisma-adapter@1.7.0-rc.2'
+  - '@better-auth/telemetry@1.7.0-rc.2'
   - '@better-fetch/fetch@1.2.2'
   - '@cloudflare/flagship@0.4.2'
   - '@cloudflare/vite-plugin@1.40.1'
@@ -595,7 +618,7 @@ minimumReleaseAgeExclude:
   - '@tanstack/react-virtual@3.14.2'
   - '@tanstack/virtual-core@3.17.0'
   - '@types/react@19.2.16'
-  - 'better-auth@1.6.16'
+  - 'better-auth@1.7.0-rc.2'
   - 'deslop-js@0.0.21'
   - 'eslint-plugin-react-dom@5.8.17'
   - 'eslint-plugin-react-jsx@5.8.17'

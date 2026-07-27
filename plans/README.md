@@ -915,16 +915,16 @@ trust win — boundaries read as deliberate, not missing.
 
 ### Plans (FRAMEWORK-bucketed gaps)
 
-| Plan | Title                                                                                                                                                          | Category     | Pkg          | Pri | Effort | Risk | Status                                                         |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------ | --- | ------ | ---- | -------------------------------------------------------------- |
-| 164  | Non-TypeScript client SDK (Swift _or_ Python) — prove the wire protocol isn't TS-bound; biggest ceiling vs Convex                                              | feat         | client (new) | P2  | L      | MED  | SHIPPED                                                        |
-| 165  | `@lunora/push` — Web Push (VAPID) → FCM/APNs; grep-confirmed zero push code today                                                                              | feat         | push (new)   | P2  | L      | MED  | SHIPPED                                                        |
-| 166  | Enterprise auth: SSO + SCIM — `@better-auth/sso` + `@better-auth/scim` (MIT); OIDC/SCIM-Users LOW, SAML-on-workerd is the risk                                 | feat         | auth         | P2  | M–L    | MED  | TODO                                                           |
-| 167  | Opt-in public REST/GraphQL surface — extend the existing OpenAPI/OpenRPC spec (`cli/api-spec.ts`) for non-TS/interop, RLS-enforced                             | feat         | runtime/cli  | P3  | L      | MED  | SHIPPED (REST; GraphQL Phase 2 demand-gated)                   |
-| 168  | Cross-shard transaction story — **design spike first** (saga vs 2PC vs documented boundary+lint); no code until ratified                                       | architecture | do/runtime   | P2  | XL     | HIGH | TODO                                                           |
-| 169  | `@lunora/collab` (CRDT) — Yjs persistence + awareness over `ShardDO` + `whisper`; reuse `y-partyserver` (ISC); demand-gated                                    | feat         | collab (new) | P3  | XL     | MED  | TODO                                                           |
-| 170  | Continuous CDC export tap (op-log → external sink) — the streaming counterpart to CDC-in; snapshot export/backup already exist                                 | feat         | runtime/do   | P3  | L      | MED  | SHIPPED (tap + webhook/R2 sinks; warehouse connectors = Cloud) |
-| 171  | "Design boundaries / non-goals" docs page — state the NON-GOAL bucket plainly (no arbitrary SQL, RPC-not-REST-first, cross-shard eventual); cheapest trust win | docs         | docs         | P2  | S      | LOW  | SHIPPED                                                        |
+| Plan | Title                                                                                                                                                          | Category     | Pkg          | Pri | Effort | Risk | Status                                                                 |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------ | --- | ------ | ---- | ---------------------------------------------------------------------- |
+| 164  | Non-TypeScript client SDK (Swift _or_ Python) — prove the wire protocol isn't TS-bound; biggest ceiling vs Convex                                              | feat         | client (new) | P2  | L      | MED  | SHIPPED                                                                |
+| 165  | `@lunora/push` — Web Push (VAPID) → FCM/APNs; grep-confirmed zero push code today                                                                              | feat         | push (new)   | P2  | L      | MED  | SHIPPED                                                                |
+| 166  | Enterprise auth: SSO + SCIM — `@better-auth/sso` + `@better-auth/scim` (MIT); OIDC/SCIM-Users LOW, SAML-on-workerd is the risk                                 | feat         | auth         | P2  | M–L    | MED  | 🔶 PHASE 1a SHIPPED (OIDC SSO + SCIM; incl. better-auth 1.7 migration) |
+| 167  | Opt-in public REST/GraphQL surface — extend the existing OpenAPI/OpenRPC spec (`cli/api-spec.ts`) for non-TS/interop, RLS-enforced                             | feat         | runtime/cli  | P3  | L      | MED  | SHIPPED (REST; GraphQL Phase 2 demand-gated)                           |
+| 168  | Cross-shard transaction story — **design spike first** (saga vs 2PC vs documented boundary+lint); no code until ratified                                       | architecture | do/runtime   | P2  | XL     | HIGH | TODO                                                                   |
+| 169  | `@lunora/collab` (CRDT) — Yjs persistence + awareness over `ShardDO` + `whisper`; reuse `y-partyserver` (ISC); demand-gated                                    | feat         | collab (new) | P3  | XL     | MED  | TODO                                                                   |
+| 170  | Continuous CDC export tap (op-log → external sink) — the streaming counterpart to CDC-in; snapshot export/backup already exist                                 | feat         | runtime/do   | P3  | L      | MED  | SHIPPED (tap + webhook/R2 sinks; warehouse connectors = Cloud)         |
+| 171  | "Design boundaries / non-goals" docs page — state the NON-GOAL bucket plainly (no arbitrary SQL, RPC-not-REST-first, cross-shard eventual); cheapest trust win | docs         | docs         | P2  | S      | LOW  | SHIPPED                                                                |
 
 ### Studio / surface tails (Wave 14 — ✅ all shipped)
 
@@ -1029,6 +1029,21 @@ deliberately on Cloudflare Workflows — different substrate, not a reuse.
 
 ### Notes
 
+- **166 Phase 1a shipped** (`feat/166-sso-scim`): `scim` on the curated plugin surface,
+  `sso` behind `@lunora/auth/plugins/enterprise` as an optional peer (its samlify tree
+  should not be in every install). Shipping it required migrating the whole better-auth
+  stack to **1.7.0-rc.2**: `@better-auth/scim` < 1.7.0-beta.4 carries a HIGH advisory
+  (GHSA-j8v8-g9cx-5qf4) that no 1.6.x escapes. That migration also re-homed removed
+  public surface (`oidcProvider` → `oauthProvider`, `withMcpAuth` → `requireMcpAuth`,
+  `genericOAuthClient`/`oidcClient`/`scimClient` dropped) and fixed the expo bridge the
+  old pin existed to protect. 1.7.0 is NOT GA — revisit the prerelease pins on release.
+  Phase 2 (SCIM Groups) is obsolete: 1.7 ships `/Groups` upstream. The plan's risk split was
+  wrong in one respect — `@better-auth/sso` _statically_ imports `samlify` +
+  `node:crypto`'s `X509Certificate`, so the OIDC-only path drags the SAML tree in and
+  the load question gated both halves. A gated workerd suite answers it GO (the
+  plugins boot and construct in the real runtime). Still open: the SAML **ACS
+  execution** spike (CPU cost of pure-JS RSA), a real Okta/Entra tenant, and
+  `lunoraAuthAdapter` (vs `memoryAdapter`) compat.
 - **166 is LOW-risk only for the OIDC-SSO + SCIM-Users half** (Fable 5 verified:
   `@better-auth/sso` + `@better-auth/scim`, first-party MIT, edge-safe on that
   path). **SAML is the risk** — `samlify` → `xml-crypto`/`node-rsa` are Node-only,
