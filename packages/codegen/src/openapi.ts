@@ -3,7 +3,7 @@ import type { JsonSchema } from "@lunora/values";
 import type { RestFunctionKind } from "../../../shared/rest-surface";
 import { restMethodForKind, restPathForFunction } from "../../../shared/rest-surface";
 import { GENERATED_HEADER } from "./emit";
-import type { FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
+import type { ExposeCacheIR, FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
 import sanitizeNamespace from "./paths";
 import { argsObjectSchema, LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
 
@@ -171,6 +171,54 @@ const rpcOperation = (definition: FunctionIR): { operation: Record<string, unkno
 };
 
 /**
+ * Describe the cache headers a `.expose({ cache })` endpoint answers with, as an
+ * OpenAPI `headers` block for the 200 response. Returns `{}` when the endpoint
+ * declares no caching, so it spreads away to nothing.
+ *
+ * The documented `Cache-Control` states the DECLARED scope but spells out the
+ * runtime's downgrade rule, because a caller reading the spec needs to know that
+ * a credentialed request is answered `private` regardless (see
+ * `@lunora/runtime`'s `rest-cache`).
+ */
+const cacheResponseHeaders = (cache: ExposeCacheIR | undefined): { headers?: Record<string, unknown> } => {
+    if (cache === undefined) {
+        return {};
+    }
+
+    const directives = [cache.scope ?? "private", `max-age=${String(cache.maxAge ?? 0)}`];
+
+    if (cache.staleWhileRevalidate !== undefined) {
+        directives.push(`stale-while-revalidate=${String(cache.staleWhileRevalidate)}`);
+    }
+
+    const headers: Record<string, unknown> = {
+        "Cache-Control": {
+            description:
+                cache.scope === "public"
+                    ? "Caching policy. `public` applies only to an uncredentialed request — a request carrying `Authorization` or `Cookie` is always answered `private`."
+                    : "Caching policy. Restricted to the caller's own cache; never stored by a shared/edge cache.",
+            schema: { example: directives.join(", "), type: "string" },
+        },
+    };
+
+    if (cache.tag !== undefined) {
+        headers["Cache-Tag"] = {
+            description: "Purge tag for `ctx.cache.purge({ tags: [...] })`.",
+            schema: { example: cache.tag, type: "string" },
+        };
+    }
+
+    if (cache.scope === "public" || cache.vary !== undefined) {
+        headers.Vary = {
+            description: "Request headers this response varies by.",
+            schema: { type: "string" },
+        };
+    }
+
+    return { headers };
+};
+
+/**
  * Build the OpenAPI operation for one `.expose({ rest: true })` procedure (plan
  * 167). Unlike the synthetic RPC operations, these are REAL REST endpoints on
  * `/_lunora/rest/&lt;namespace>/&lt;fn>` — the exact path + method the runtime router
@@ -204,6 +252,7 @@ const restOperation = (definition: FunctionIR): { method: "get" | "post"; operat
                     },
                 },
                 description: "Successful result (TypeScript-inferred return shape, documented best-effort).",
+                ...cacheResponseHeaders(definition.expose?.cache),
             },
             default: { $ref: ERROR_COMPONENT_REF },
         },

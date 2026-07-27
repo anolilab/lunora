@@ -343,7 +343,7 @@ describe("discoverFunctions", () => {
 
     interface QueryBuilder<Args> {
         readonly __lunoraProcedure: "query";
-        expose: (config: { rest?: boolean }) => QueryBuilder<Args>;
+        expose: (config: { cache?: { maxAge: number; scope: "private" | "public"; staleWhileRevalidate?: number; tag?: string; vary?: string }; rest?: boolean }) => QueryBuilder<Args>;
         input: <X extends Record<string, unknown>>(validators: X) => QueryBuilder<Args & X>;
         use: <C>(middleware: (options: { ctx: unknown }) => C) => QueryBuilder<Args>;
         query: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "query" };
@@ -351,7 +351,7 @@ describe("discoverFunctions", () => {
 
     interface MutationBuilder<Args> {
         readonly __lunoraProcedure: "mutation";
-        expose: (config: { rest?: boolean }) => MutationBuilder<Args>;
+        expose: (config: { cache?: { maxAge: number; scope: "private" | "public"; staleWhileRevalidate?: number; tag?: string; vary?: string }; rest?: boolean }) => MutationBuilder<Args>;
         input: <X extends Record<string, unknown>>(validators: X) => MutationBuilder<Args & X>;
         mutation: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "mutation" };
     }
@@ -449,6 +449,42 @@ describe("discoverFunctions", () => {
             // A procedure without `.expose()` stays RPC-only (default-closed).
             expect(byName.get("secret")?.expose).toBeUndefined();
             expect(byName.get("list")?.args.channelId).toEqual({ kind: "id", tableName: "channels" });
+        });
+
+        it("reads the `cache` block of `.expose(...)`, recording only statically-readable literals", () => {
+            expect.assertions(4);
+
+            writeFunction(
+                "messages.ts",
+                `${BUILDER_PREAMBLE}
+            declare const computedMaxAge: number;
+
+            export const list = c.query
+                .expose({ rest: true, cache: { scope: "public", maxAge: 60, staleWhileRevalidate: 120, tag: "messages" } })
+                .query(() => null);
+
+            export const feed = c.query
+                .expose({ rest: true, cache: { scope: "private", maxAge: computedMaxAge } })
+                .query(() => null);
+
+            export const plain = c.query
+                .expose({ rest: true })
+                .query(() => null);
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const byName = new Map(discoverFunctions(project, workdir).map((f) => [f.exportName, f]));
+
+            expect(byName.get("list")?.expose).toEqual({
+                cache: { maxAge: 60, scope: "public", staleWhileRevalidate: 120, tag: "messages" },
+                rest: true,
+            });
+            // A computed `maxAge` can't be read statically — it is omitted rather
+            // than guessed, so the emitted spec under-documents instead of lying.
+            expect(byName.get("feed")?.expose?.cache).toEqual({ scope: "private" });
+            expect(byName.get("plain")?.expose).toEqual({ rest: true });
+            expect(byName.get("plain")?.expose?.cache).toBeUndefined();
         });
 
         it("falls back to the import name when the builder brand can't resolve (uninstalled deps)", () => {

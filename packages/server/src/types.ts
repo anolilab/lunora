@@ -496,7 +496,52 @@ interface X402ProcedureConfig {
  * enforced), and the generated OpenAPI describes it. Everything is default-closed
  * — a procedure without this tag is unreachable over REST.
  */
+
+/**
+ * HTTP caching for an exposed REST endpoint, declared as
+ * `.expose({ rest: true, cache: { scope: "public", maxAge: 60 } })`. The runtime
+ * turns this into `Cache-Control` / `Cache-Tag` / `Vary` response headers — the
+ * same header trio `httpRoute(...).cacheControl()` writes, so a `cache.tag` is
+ * purgeable through the identical `ctx.cache.purge({ tags: [...] })` surface.
+ *
+ * Caching a procedure whose result depends on the caller is how a REST cache
+ * turns into a data leak, so `scope` is enforced at runtime rather than trusted:
+ * a request that carries credentials (an `Authorization` header or any `Cookie`)
+ * is ALWAYS answered `private`, even under `scope: "public"` — see
+ * {@link https://developer.mozilla.org/docs/Web/HTTP/Headers/Cache-Control MDN}
+ * for what `private` forbids. So a per-user response can never be stored in a
+ * shared/edge cache, and the worst a mis-declared `scope` can cost is a missed
+ * cache hit. `scope: "public"` additionally emits `Vary: authorization, cookie`
+ * so an intermediary can't hand a stored anonymous variant to a signed-in caller.
+ *
+ * Only ever applied to a cacheable exchange: a `GET` (so `query` procedures — a
+ * `mutation` / `action` is `POST`-only) that produced a 2xx.
+ */
+interface RestCacheConfig {
+    /** `max-age` in seconds — how long a fresh response may be reused. */
+    readonly maxAge: number;
+
+    /**
+     * `"public"` allows shared/edge caches to store the response (only ever for
+     * an uncredentialed request, per the downgrade rule above); `"private"`
+     * restricts it to the caller's own browser cache.
+     */
+    readonly scope: "private" | "public";
+
+    /** `stale-while-revalidate` in seconds — serve stale this long while refreshing behind the request. */
+    readonly staleWhileRevalidate?: number;
+
+    /** `Cache-Tag` value for tag-based purging via `ctx.cache.purge({ tags: [...] })`. */
+    readonly tag?: string;
+
+    /** Extra `Vary` header names, merged with the ones `scope` implies. */
+    readonly vary?: string;
+}
+
 interface ExposeConfig {
+    /** Opt this endpoint's responses into HTTP caching. Omit to leave them uncached. */
+    readonly cache?: RestCacheConfig;
+
     /** Publish this procedure over the public REST surface. */
     readonly rest?: boolean;
 }
@@ -2128,6 +2173,7 @@ export type {
     RegisteredQuery,
     RegisteredStream,
     RelationDefinition,
+    RestCacheConfig,
     ScheduledFunctionDoc,
     ScheduledJob,
     Scheduler,

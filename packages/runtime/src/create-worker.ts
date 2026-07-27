@@ -39,6 +39,7 @@ import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";
 import { createResourceAttributeResolver } from "./resource-detect";
+import type { RestCacheConfigLike } from "./rest-cache";
 import type { RestInvoke, RestRateLimit } from "./rest-routes";
 import { buildRestRoutes } from "./rest-routes";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
@@ -200,8 +201,11 @@ interface FunctionRegistryEntry {
      * routing THROUGH the procedure so auth/RLS/validators are enforced. Rides
      * along on the registered function's identity (like `fn.x402` / `fn.rls`), so
      * reading it needs no change to the generated registry shape.
+     *
+     * `cache` is the optional response-caching policy the REST router turns into
+     * `Cache-Control` / `Cache-Tag` / `Vary` headers (see `rest-cache`).
      */
-    expose?: { readonly rest?: boolean };
+    expose?: { readonly cache?: RestCacheConfigLike; readonly rest?: boolean };
 
     /**
      * The generated registry carries `"stream"` alongside query/mutation/action;

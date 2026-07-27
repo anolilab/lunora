@@ -282,4 +282,46 @@ describe("emitOpenApi — opt-in public REST surface (plan 167)", () => {
 
         expect(restPaths).toEqual([]);
     });
+
+    it("documents the cache headers a `.expose({ cache })` endpoint answers with", () => {
+        expect.assertions(4);
+
+        const document = buildOpenApiDocument({
+            functions: [
+                makeFunction({
+                    expose: { cache: { maxAge: 60, scope: "public", staleWhileRevalidate: 120, tag: "messages" }, rest: true },
+                    exportName: "list",
+                }),
+            ],
+            httpRoutes: [],
+        });
+
+        const { paths } = document as {
+            paths: Record<
+                string,
+                Record<string, { responses: Record<string, { headers?: Record<string, { description: string; schema: { example?: string } }> }> }>
+            >;
+        };
+        const headers = paths["/_lunora/rest/messages/list"]?.get?.responses["200"]?.headers;
+
+        expect(headers?.["Cache-Control"]?.schema.example).toBe("public, max-age=60, stale-while-revalidate=120");
+        expect(headers?.["Cache-Tag"]?.schema.example).toBe("messages");
+        expect(headers?.Vary).toBeDefined();
+        // A caller reading the spec must learn about the credentialed downgrade,
+        // otherwise `public` reads as an unconditional promise.
+        expect(headers?.["Cache-Control"]?.description).toContain("always answered `private`");
+    });
+
+    it("omits the cache headers block entirely for an endpoint that declares no cache", () => {
+        expect.assertions(1);
+
+        const document = buildOpenApiDocument({
+            functions: [makeFunction({ expose: { rest: true }, exportName: "list" })],
+            httpRoutes: [],
+        });
+
+        const { paths } = document as { paths: Record<string, Record<string, { responses: Record<string, { headers?: unknown }> }>> };
+
+        expect(paths["/_lunora/rest/messages/list"]?.get?.responses["200"]?.headers).toBeUndefined();
+    });
 });

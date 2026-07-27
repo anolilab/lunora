@@ -179,6 +179,78 @@ ordering are covered in
 the browser-side `defineMutator` / `bindMutators` live in
 [`@lunora/db`](/docs/packages/db#custom-mutators).
 
+## List endpoints
+
+`defineListArgs(config)` is the shared convention for a paginated list query: it
+returns the validator map for `.input()` plus the translation into
+`ctx.db.<table>.findMany(...)` options, so every list endpoint agrees on how
+filtering, sorting, and paging are spelled — and the generated OpenAPI describes
+them without special-casing.
+
+```ts
+const listMessages = defineListArgs({
+    filter: { authorId: v.id("users"), status: v.string() },
+    orderBy: ["_creationTime", "status"],
+    // defaultLimit: 25, maxLimit: 100
+});
+
+export const list = c.query
+    .input(listMessages.args)
+    .expose({ rest: true })
+    .query(({ args, ctx }) => ctx.db.messages.findMany(listMessages.toQueryArgs(args)));
+```
+
+Callers get `where`, `orderBy`, `cursor`, and `limit`. `where` accepts either a
+bare value (equality) or the operator object mirroring the `ctx.db` `where` DSL
+(`{ gte, lt, in, contains, isNull, … }`).
+
+Three constraints are deliberate:
+
+- **Keyset paging, not offset.** There is no `page` / `page_size`. Offset paging
+  re-scans from row 0 for every page and shifts rows between pages whenever the
+  data changes — which, under a live query, it always is.
+- **Filterable columns are enumerated.** `filter` is an allow-list. `v.object`
+  drops undeclared keys, so a caller cannot predicate on a column you didn't
+  publish. Keep the list to indexed columns; `@lunora/advisor`'s
+  `filter-without-index` lint flags the static cases.
+- **No `AND` / `OR` / `NOT` trees.** A flat field⇒predicate map keeps every
+  filter routable to an index. Compose richer logic inside the procedure.
+
+`limit` is clamped into `[1, maxLimit]` rather than rejected, and `orderBy`
+fields outside the allow-list are refused by the validator and re-checked in
+`toQueryArgs`.
+
+`lunora introspect` emits `list` procedures built on this helper — see the
+[CLI docs](/docs/packages/cli#lunora-introspect).
+
+## Caching an exposed REST endpoint
+
+`.expose({ rest: true })` publishes a procedure at
+`/_lunora/rest/<namespace>/<fn>`. Add `cache` to have the runtime answer with
+`Cache-Control` / `Cache-Tag` / `Vary`:
+
+```ts
+export const listPublicPosts = c.query
+    .input(listPosts.args)
+    .expose({ rest: true, cache: { scope: "public", maxAge: 60, staleWhileRevalidate: 300, tag: "posts" } })
+    .query(({ args, ctx }) => ctx.db.posts.findMany(listPosts.toQueryArgs(args)));
+```
+
+Caching a procedure-backed endpoint is how a REST cache turns into a data leak,
+since the procedure runs under `ctx.auth` and RLS. So `scope` is enforced, not
+trusted: **a request carrying an `Authorization` header or any `Cookie` is always
+answered `private`**, even under `scope: "public"`. A per-caller response can
+therefore never be stored in a shared or edge cache, and the worst a mis-declared
+`scope` costs you is a missed cache hit. `scope: "public"` additionally emits
+`Vary: authorization, cookie` so an intermediary can't hand the stored anonymous
+variant to a signed-in caller.
+
+Headers are only ever applied to a cacheable exchange — a `GET` (so `query`
+procedures; a `mutation` / `action` is `POST`-only) that returned 2xx. An error
+response is never cached. `tag` is purgeable through the same
+`ctx.cache.purge({ tags: [...] })` surface `httpRoute(...).cacheTag()` uses, and
+the emitted OpenAPI documents the headers a caller will observe.
+
 ## Subpaths
 
 - `@lunora/server/rls/testing` — `expectPolicy(policies)`, an in-process RLS
