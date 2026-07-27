@@ -562,6 +562,8 @@ export interface OtlpMetricsPayload {
 
 /** One flattened metric measurement, as the store writes it. */
 export interface MetricPoint {
+    /** Measurement time (epoch ms, from the data point's `timeUnixNano`). */
+    at: number;
     /** Selected `lunora.*` string attributes on the data point. */
     attributes?: Record<string, string>;
     /** The `lunora.function_path` attribute, when the measurement was attributed. */
@@ -615,6 +617,7 @@ export const decodeMetricPoints = (payload: OtlpMetricsPayload): MetricPoint[] =
                         }
 
                         points.push({
+                            at: epochMsFromNano(dataPoint.timeUnixNano),
                             attributes: lunoraAttributes(dataPoint.attributes),
                             functionPath: attributeString(dataPoint.attributes, "lunora.function_path"),
                             kind,
