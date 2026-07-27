@@ -1,12 +1,14 @@
+import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import { highestPlan } from "../src/billing/plans";
 import { previewExpiry } from "../src/deploy/preview";
 import type { Id } from "./_generated/dataModel.js";
-import type { MutationCtx } from "./_generated/server.js";
+import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 type DeploymentStatus = "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued" | "superseded" | "verifying";
 
@@ -51,7 +53,7 @@ interface AliasOwnershipRow {
  * the same new alias by a *different* project loses on the unique constraint and
  * is rejected. Idempotent for the owning project (re-deploys reuse their alias).
  */
-export const claimAlias = async (context: MutationCtx, alias: string, organizationId: Id<"organizations">, projectId: Id<"projects">): Promise<void> => {
+export const claimAlias = async (context: MutationContext, alias: string, organizationId: Id<"organizations">, projectId: Id<"projects">): Promise<void> => {
     const currentOwner = async (): Promise<AliasOwnershipRow | undefined> => {
         const { page } = await context.db.aliasOwnership.findMany({ where: { alias } });
 
@@ -186,15 +188,14 @@ export const listByProject = query
  * separately and reports progress back through `updateStatus`.
  */
 export const create = mutation
+    .use(dbRateLimit(RATE_LIMITS, "provision", { key: callerKey }))
     .input({
         // Tenant admin token the platform set on the worker (for the admin proxy).
         // Sealed at the edge before it reaches here: the encrypted fields are the
         // norm; `adminToken` (plaintext) is only the no-master-key dev fallback.
-        adminToken: v.optional(
-            v.string().check((value) => value.length <= 1_024, { message: "must be at most 1_024 characters", schema: { maxLength: 1_024 } }),
-        ),
+        adminToken: v.optional(v.string().check((value) => value.length <= 1024, { message: "must be at most 1_024 characters", schema: { maxLength: 1024 } })),
         adminTokenCiphertext: v.optional(
-            v.string().check((value) => value.length <= 4_096, { message: "must be at most 4_096 characters", schema: { maxLength: 4_096 } }),
+            v.string().check((value) => value.length <= 4096, { message: "must be at most 4_096 characters", schema: { maxLength: 4096 } }),
         ),
         adminTokenIv: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
         branch: v.optional(v.string().check((value) => value.length <= 255, { message: "must be at most 255 characters", schema: { maxLength: 255 } })),
@@ -248,7 +249,7 @@ export const create = mutation
         const { page: existing } = await context.db.deployments.findMany({ where: { projectId: arguments_.projectId } }); // secret-scanner:allow -- domain field name
         const version = 1 + Math.max(0, ...(existing as unknown as DeploymentRow[]).filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
 
-        const now = context.now;
+        const { now } = context;
         const deploymentId = await context.db.insert("deployments", {
             ...(arguments_.adminToken ? { adminToken: arguments_.adminToken } : {}),
             ...(arguments_.adminTokenCiphertext && arguments_.adminTokenIv
@@ -282,6 +283,7 @@ export const create = mutation
  * the deploy key (CI) or an owner/admin member session.
  */
 export const activate = mutation
+    .use(dbRateLimit(RATE_LIMITS, "machine", { key: callerKey }))
     .input({
         deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
         id: v.id("deployments"),
@@ -301,7 +303,7 @@ export const activate = mutation
             throw new LunoraError("CONFLICT", `cannot activate a ${deployment.status} deployment`);
         }
 
-        const now = context.now;
+        const { now } = context;
         const { page } = await context.db.deployments.findMany({ where: { projectId: deployment.projectId } }); // secret-scanner:allow -- domain field name
         const others = (page as unknown as DeploymentRow[]).filter((d) => d._id !== id && d.kind === deployment.kind && d.status === "live");
 
@@ -320,6 +322,7 @@ export const activate = mutation
  * active deployment is marked `superseded`.
  */
 export const rollback = mutation
+    .use(dbRateLimit(RATE_LIMITS, "machine", { key: callerKey }))
     .input({
         deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
         id: v.id("deployments"),
@@ -344,7 +347,7 @@ export const rollback = mutation
             throw new LunoraError("CONFLICT", `cannot roll back to a ${target.status} deployment`);
         }
 
-        const now = context.now;
+        const { now } = context;
         const project = (await context.db.get(target.projectId)) as ProjectRow | null;
 
         if (project?.activeDeploymentId && project.activeDeploymentId !== id) {
@@ -404,7 +407,7 @@ export const SUPERSEDED_RETENTION = 3;
  * unboundedly. SYSTEM only (cron dispatch).
  */
 export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
-    const now = context.now;
+    const { now } = context;
     const { page } = await context.db.deployments.findMany({});
     const superseded = (page as unknown as DeploymentRow[]).filter((deployment) => deployment.status === "superseded");
 
@@ -441,7 +444,7 @@ export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }
  * Alchemy lands; this records the lifecycle transition.
  */
 export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: context }): Promise<{ destroyed: number }> => {
-    const now = context.now;
+    const { now } = context;
     const { page } = await context.db.deployments.findMany({ where: { kind: "preview" } });
 
     const expired = (page as unknown as DeploymentRow[]).filter(
@@ -469,6 +472,7 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
  * here instead (deploy key or org membership).
  */
 export const updateStatus = mutation
+    .use(dbRateLimit(RATE_LIMITS, "machine", { key: callerKey }))
     .input({
         bundleHash: v.optional(v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } })),
         deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
@@ -483,7 +487,7 @@ export const updateStatus = mutation
             v.literal("failed"),
             v.literal("destroyed"),
         ),
-        url: v.optional(v.string().check((value) => value.length <= 2_048, { message: "must be at most 2_048 characters", schema: { maxLength: 2_048 } })),
+        url: v.optional(v.string().check((value) => value.length <= 2048, { message: "must be at most 2_048 characters", schema: { maxLength: 2048 } })),
     })
     .mutation(async ({ ctx: context, args: { bundleHash, deployKey, id, status, url } }): Promise<void> => {
         const existing = (await context.db.get(id)) as DeploymentRow | null;
@@ -496,7 +500,7 @@ export const updateStatus = mutation
             ? authorizeDeployKey(context, existing.organizationId, deployKey, existing.projectId)
             : assertMember(context, existing.organizationId));
 
-        const now = context.now;
+        const { now } = context;
         const phaseColumn = PHASE_TIMESTAMP[status];
 
         await context.db.patch(id, {

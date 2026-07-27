@@ -1,8 +1,11 @@
+import { dbRateLimit } from "@lunora/ratelimit";
+
 import { isDeployCapable } from "../src/deploy/capability";
 import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 /** Public view of a deploy key — never exposes the stored hash. */
 interface DeployKeyView {
@@ -53,6 +56,7 @@ export const list = query
  * only.
  */
 export const issue = mutation
+    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
     .input({
         // `ingest` mints a telemetry-only key (OTLP push, no deploy); omitted/`deploy` is a full deploy key.
         capability: v.optional(v.union(v.literal("deploy"), v.literal("ingest"))),
@@ -89,6 +93,7 @@ export const issue = mutation
 
 /** Revoke a deploy key (owners/admins only). A revoked key fails `verify`. */
 export const revoke = mutation
+    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
     .input({ id: v.id("deployKeys"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -111,6 +116,7 @@ export const revoke = mutation
  * `lastUsedAt` bump on a genuine match.
  */
 export const verify = mutation
+    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
     .input({ key: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }) })
     .mutation(
         async ({
@@ -183,7 +189,7 @@ export const ingestKeyCipher = query
 
         const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
 
-        return findActiveIngestKey(page as unknown as IngestKeyRow[])?.encryptedSecret ?? null;
+        return findActiveIngestKey(page)?.encryptedSecret ?? null;
     });
 
 /**
@@ -193,6 +199,7 @@ export const ingestKeyCipher = query
  * token whose hash wasn't stored). Deploy-key authorized.
  */
 export const recordIngestKey = mutation
+    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
     .input({
         deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
         encryptedSecret: v.object({
@@ -206,7 +213,7 @@ export const recordIngestKey = mutation
         await authorizeDeployKey(context, organizationId, deployKey);
 
         const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
-        const existing = findActiveIngestKey(page as unknown as IngestKeyRow[]);
+        const existing = findActiveIngestKey(page);
 
         if (existing?.encryptedSecret) {
             return existing.encryptedSecret; // a racing deploy already provisioned it

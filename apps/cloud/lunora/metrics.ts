@@ -1,3 +1,4 @@
+import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { StoredMetricPoint } from "../src/telemetry/metric-series";
@@ -7,6 +8,7 @@ import { createMetricsReader, DEFAULT_METRICS_WINDOW_MS } from "../src/telemetry
 import type { Id } from "./_generated/dataModel.js";
 import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeTelemetryKey } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 /**
  * Cloud metrics trend read (GAPS.md ring 3 "metrics trend UI"). Tenant
@@ -42,15 +44,19 @@ interface MetricsEnv {
 }
 
 /** Project the read-model series onto the wire view (identity + trend points). */
-const toView = (series: MetricSeries): MetricSeriesView => ({
-    firstValue: series.firstValue,
-    functionPath: series.functionPath,
-    kind: series.kind,
-    lastValue: series.lastValue,
-    name: series.name,
-    points: series.points.map((point) => ({ t: point.t, value: point.value })),
-    trend: series.trend,
-});
+const toView = (series: MetricSeries): MetricSeriesView => {
+    return {
+        firstValue: series.firstValue,
+        functionPath: series.functionPath,
+        kind: series.kind,
+        lastValue: series.lastValue,
+        name: series.name,
+        points: series.points.map((point) => {
+            return { t: point.t, value: point.value };
+        }),
+        trend: series.trend,
+    };
+};
 
 /**
  * Per-metric trend series for the org over the `[from, to]` window (defaults to
@@ -58,6 +64,7 @@ const toView = (series: MetricSeries): MetricSeriesView => ({
  * the read fails — never throws on the dashboard's read path.
  */
 export const list = action
+    .use(dbRateLimit(RATE_LIMITS, "archive", { key: callerKey }))
     .input({
         from: v.optional(v.number()),
         organizationId: v.id("organizations"),
@@ -113,6 +120,7 @@ const metricPointInput = v.object({
  * Metrics UI can read exact per-bucket series from {@link series}.
  */
 export const ingest = mutation
+    .use(dbRateLimit(RATE_LIMITS, "ingest", { key: callerKey }))
     .input({
         deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
         deploymentId: v.optional(v.id("deployments")),
@@ -126,7 +134,7 @@ export const ingest = mutation
             throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_METRIC_POINTS)} points)`);
         }
 
-        const now = context.now;
+        const { now } = context;
 
         for (const point of args.points) {
             // eslint-disable-next-line no-await-in-loop -- bounded batch; sequential keeps the writer simple
