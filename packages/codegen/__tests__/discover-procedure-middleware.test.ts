@@ -20,13 +20,34 @@ const PREAMBLE = `
     declare const protectPublic: (options: { rateLimit?: unknown; captcha?: unknown }) => (options: { ctx: unknown }) => unknown;
     declare const mutation: <R>(config: { args: Record<string, unknown>; handler: (ctx: unknown) => R }) => { kind: "mutation" };
 
+    declare const v: { id: (table: string) => unknown; string: () => unknown };
+
     interface MutationBuilder<Args> {
         readonly __lunoraProcedure: "mutation";
         use: <C>(middleware: (options: { ctx: unknown }) => C) => MutationBuilder<Args>;
+        input: <A>(args: A) => MutationBuilder<A>;
         mutation: <R>(handler: (options: { args: Args; ctx: { db: { insert: (table: string, value: unknown) => Promise<void> }; mail: { send: (m: unknown) => Promise<void> } } }) => R) => { kind: "mutation" };
     }
 
     declare const c: { mutation: MutationBuilder<Record<never, never>> };
+`;
+
+/** A builder-form user-table write whose input carries an email — the gate is actionable. */
+const EMAIL_ARG_SIGNUP = `${PREAMBLE}
+    export const signUp = c.mutation
+        .input({ email: v.string() })
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
+/** The B2B shape: a membership write whose input has no email anywhere. */
+const NO_EMAIL_ARG_MEMBER_ADD = `${PREAMBLE}
+    export const add = c.mutation
+        .input({ organizationId: v.id("organizations"), userId: v.string() })
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("members", {});
+        });
 `;
 
 /** A bare-factory mutation that writes the user table — public, no protections. */
@@ -189,6 +210,29 @@ describe("discoverProcedureMiddleware", () => {
             visibility: "public",
             writesUserTable: true,
         });
+    });
+
+    it("flags an email-shaped input argument", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "signup.ts"), EMAIL_ARG_SIGNUP, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "signUp", hasEmailArg: true, writesUserTable: true });
+    });
+
+    it("reports no email argument for a membership write that never receives one", () => {
+        expect.assertions(1);
+
+        // The B2B false positive `signup_mutation_without_disposable_gating` used
+        // to hit: "members" matches the user-table pattern, but there is no
+        // address for `emailGateMiddleware` to select.
+        writeFileSync(join(workdir, "lunora", "members.ts"), NO_EMAIL_ARG_MEMBER_ADD, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "add", hasEmailArg: false, writesUserTable: true });
     });
 
     it("records a scheduler fan-out from a public mutation", () => {

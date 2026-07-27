@@ -482,6 +482,7 @@ interface AdvisorProcedureProtection {
     exportName: string;
     fanOut: boolean;
     file: string;
+    hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
     unboundedAiGeneration: boolean;
     usesCaptcha: boolean;

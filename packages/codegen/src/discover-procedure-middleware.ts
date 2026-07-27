@@ -1,4 +1,4 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
@@ -22,6 +22,52 @@ const MIDDLEWARE_FLAGS: Record<string, "usesCaptcha" | "usesEmailGate" | "usesMa
 
 /** Tables whose insert marks a procedure as user/session-creating (captcha-expected). */
 const USER_TABLE_RE = /account|credential|member|passkey|session|user/iu;
+
+/**
+ * Argument names that carry an email address. Matched against the keys of the
+ * builder's `.input({...})` literals so `signup_mutation_without_disposable_gating`
+ * only fires where there is actually an address to gate — `emailGateMiddleware`
+ * needs a selector onto one, so a procedure that never receives an email cannot
+ * action that lint.
+ */
+const EMAIL_ARG_RE = /^(?:.*_)?e-?mail(?:_?address)?$|email/iu;
+
+/** Every `.input({...})` object literal walked leftward out of a builder chain. */
+const inputObjectsInChain = (receiver: TsNode): ObjectLiteralExpression[] => {
+    const objects: ObjectLiteralExpression[] = [];
+    let node: TsNode = receiver;
+
+    while (Node.isCallExpression(node)) {
+        const chainCallee = node.getExpression();
+
+        if (!Node.isPropertyAccessExpression(chainCallee)) {
+            break;
+        }
+
+        if (chainCallee.getName() === "input") {
+            const argument = node.getArguments()[0];
+
+            if (argument && Node.isObjectLiteralExpression(argument)) {
+                objects.push(argument);
+            }
+        }
+
+        node = chainCallee.getExpression();
+    }
+
+    return objects;
+};
+
+/** True when any `.input({...})` in the chain declares an email-shaped argument. */
+const declaresEmailArgument = (receiver: TsNode | undefined): boolean => {
+    if (!receiver) {
+        return false;
+    }
+
+    return inputObjectsInChain(receiver).some((object) =>
+        object.getProperties().some((property) => Node.isPropertyAssignment(property) && EMAIL_ARG_RE.test(property.getName())),
+    );
+};
 
 /** The set of protections a builder chain carries. */
 interface Protections {
@@ -333,6 +379,7 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         exportName: declaration.getName(),
         fanOut,
         file: relativePath,
+        hasEmailArg: declaresEmailArgument(classified.receiver),
         kind: classified.kind,
         unboundedAiGeneration,
         usesCaptcha: protections.usesCaptcha,

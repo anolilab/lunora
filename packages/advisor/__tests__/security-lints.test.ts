@@ -131,6 +131,27 @@ describe("signup_mutation_without_disposable_gating", () => {
         expect(signupMutationWithoutDisposableGating.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
     });
 
+    it("ignores a user-table write that declares no email argument", () => {
+        expect.assertions(1);
+
+        // A B2B membership write (`members.add(userId, role)`) matches the
+        // user-table pattern but has no address to gate, so the lint is
+        // unactionable and must stay quiet.
+        const procedures = [procedure({ hasEmailArg: false, writesUserTable: true })];
+
+        expect(signupMutationWithoutDisposableGating.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
+    });
+
+    it("still flags when the feeder reports no email evidence at all", () => {
+        expect.assertions(1);
+
+        // `hasEmailArg` absent (an older feeder) must not clear the finding —
+        // the lint is fail-closed on unknown.
+        const procedures = [procedure({ hasEmailArg: undefined, writesUserTable: true })];
+
+        expect(signupMutationWithoutDisposableGating.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(1);
+    });
+
     it("ignores a procedure that writes no user table, and internal procedures", () => {
         expect.assertions(2);
 
