@@ -283,7 +283,7 @@ import { admin, scim } from "@lunora/auth/plugins";
 export class AuthDO {
     #auth;
 
-    constructor(state: DurableObjectState) {
+    constructor(state: DurableObjectState, env: Env) {
         this.#auth = createAuth({
             secret: env.AUTH_SECRET,
             database: lunoraDoAdapter(state.storage),
