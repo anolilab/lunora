@@ -1,6 +1,9 @@
+import { dbRateLimit } from "@lunora/ratelimit";
+
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 interface AuditRow {
     _id: Id<"auditLog">;
@@ -17,6 +20,7 @@ interface AuditRow {
  * did what.
  */
 export const record = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({
         action: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
         organizationId: v.id("organizations"),

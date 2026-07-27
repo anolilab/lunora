@@ -1,3 +1,4 @@
+import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import { evaluateSpendCap } from "../src/billing/spend";
@@ -5,6 +6,7 @@ import { aggregateUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 /**
  * Platform resource metering (CLOUD-PLAN.md §4). `record` is written by the
@@ -43,6 +45,7 @@ export const record = internalMutation
  * path). The tenant Worker / metering sidecar reports requests/CPU/storage here.
  */
 export const ingest = mutation
+    .use(dbRateLimit(RATE_LIMITS, "ingest", { key: callerKey }))
     .input({
         deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
         deploymentId: v.optional(v.id("deployments")),
@@ -252,7 +255,7 @@ export const recordOverageDebit = internalMutation
     .mutation(async ({ ctx: context, args: { debitedCredits, organizationId, periodStart } }): Promise<void> => {
         const { page } = await context.db.overageDebits.findMany({ where: { organizationId, periodStart } });
         const row = (page as unknown as OverageDebitRow[])[0];
-        const now = context.now;
+        const { now } = context;
 
         if (!row) {
             await context.db.insert("overageDebits", { debitedCredits, organizationId, periodStart, updatedAt: now });

@@ -1,9 +1,11 @@
+import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeTelemetryKey } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 /**
  * Tenant runtime logs (GAPS.md B2) — full log management. The dispatch-namespace
@@ -102,7 +104,7 @@ interface LogEntry {
 
 /** Insert one batch of already-authorized lines into `tenantLogs` (shared by both ingest paths). */
 const insertLines = async (context: MutationContext, organizationId: Id<"organizations">, scriptName: string, lines: LogEntry[]): Promise<void> => {
-    const now = context.now;
+    const { now } = context;
 
     for (const entry of lines) {
         // eslint-disable-next-line no-await-in-loop -- bounded batch; sequential keeps the writer simple
@@ -123,17 +125,19 @@ const insertLines = async (context: MutationContext, organizationId: Id<"organiz
 };
 
 /** Project a stored row to the dashboard view (drop `_id`/`organizationId`/`scriptName`). */
-const toView = (row: TenantLogRow): TenantLogView => ({
-    createdAt: row.createdAt,
-    fields: row.fields,
-    functionPath: row.functionPath,
-    level: row.level,
-    message: row.message,
-    shardKey: row.shardKey,
-    spanId: row.spanId,
-    traceId: row.traceId,
-    userId: row.userId,
-});
+const toView = (row: TenantLogRow): TenantLogView => {
+    return {
+        createdAt: row.createdAt,
+        fields: row.fields,
+        functionPath: row.functionPath,
+        level: row.level,
+        message: row.message,
+        shardKey: row.shardKey,
+        spanId: row.spanId,
+        traceId: row.traceId,
+        userId: row.userId,
+    };
+};
 
 /** True when the line matches the case-insensitive `needle` over its message, function path, or field values. */
 const matchesSearch = (row: TenantLogRow, needle: string): boolean => {
@@ -163,6 +167,7 @@ const matchesSearch = (row: TenantLogRow, needle: string): boolean => {
  * rejected outright.
  */
 export const ingest = mutation
+    .use(dbRateLimit(RATE_LIMITS, "ingest", { key: callerKey }))
     .input({
         deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
         lines: v.array(logEntry),

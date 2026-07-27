@@ -1,7 +1,7 @@
+import { summarizeUptime } from "../src/uptime/probe";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { summarizeUptime } from "../src/uptime/probe";
 
 /**
  * Synthetic uptime (§ Observability). The control plane's every-minute sweep
@@ -72,7 +72,7 @@ export const summary = query
                     orderBy: [{ createdAt: "desc" }],
                     where: { deploymentId: state.deploymentId, organizationId },
                 });
-                const summarized = summarizeUptime(checkPage as unknown as { latencyMs?: number; ok: boolean }[]);
+                const summarized = summarizeUptime(checkPage);
 
                 return {
                     ...(summarized.avgLatencyMs === undefined ? {} : { avgLatencyMs: summarized.avgLatencyMs }),
@@ -104,7 +104,7 @@ export const recent = query
             where: { deploymentId: args.deploymentId, organizationId: args.organizationId },
         });
 
-        return page as unknown as UptimeCheckRow[];
+        return page;
     });
 
 /** Prune probe rows past the retention window so the time series stays bounded. */
