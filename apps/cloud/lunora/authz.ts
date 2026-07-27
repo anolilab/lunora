@@ -125,7 +125,7 @@ export const authorizeTelemetryKey = async (context: QueryContext, organizationI
 /**
  * Resolve a deploy key to its owning org from the key ALONE (no org supplied) —
  * for the standard OTLP endpoints, where a stock OpenTelemetry exporter presents
- * only an `Authorization: Bearer <key>` header and no body auth fields. Matches
+ * only an `Authorization: Bearer &lt;key>` header and no body auth fields. Matches
  * the key by SHA-256 against the unique `by_hash` index. Returns `null` for an
  * unknown or revoked key (so the caller returns 401, never leaking which it was).
  */

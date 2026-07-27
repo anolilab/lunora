@@ -1,8 +1,10 @@
+import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 interface OrganizationRow {
     _id: Id<"organizations">;
@@ -75,6 +77,7 @@ export const getBySlug = query
  * `by_slug` global (D1) unique index.
  */
 export const create = mutation
+    .use(dbRateLimit(RATE_LIMITS, "provision", { key: callerKey }))
     .input({
         // Explicit cell placement; omit to let `jurisdiction` (or the default
         // pool) pick an active cell (GAPS.md F data-residency).
@@ -87,7 +90,7 @@ export const create = mutation
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"organizations">> => {
         const userId = assertSignedIn(context.auth.userId);
-        const now = context.now;
+        const { now } = context;
 
         let { cellId } = arguments_;
 
@@ -136,13 +139,14 @@ export const create = mutation
 
 /** Rename an organization (owner only). The slug is immutable (it's the URL identity). */
 export const rename = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({
         name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
         organizationId: v.id("organizations"),
     })
     .mutation(async ({ ctx: context, args: { name, organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner"]);
-        const now = context.now;
+        const { now } = context;
 
         await context.db.patch(organizationId, { name });
         await context.db.insert("auditLog", { action: "organization.rename", actorUserId: member.userId, createdAt: now, organizationId, target: name });
@@ -157,10 +161,11 @@ export const DELETION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  * {@link cancelDeletion}.
  */
 export const requestDeletion = mutation
+    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
     .input({ organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner"]);
-        const now = context.now;
+        const { now } = context;
 
         await context.db.patch(organizationId, { deletionRequestedAt: now });
         await context.db.insert("auditLog", { action: "organization.deletion.request", actorUserId: member.userId, createdAt: now, organizationId });
@@ -168,10 +173,11 @@ export const requestDeletion = mutation
 
 /** Cancel a pending deletion request (owner only). */
 export const cancelDeletion = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({ organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner"]);
-        const now = context.now;
+        const { now } = context;
 
         await context.db.patch(organizationId, { deletionRequestedAt: undefined });
         await context.db.insert("auditLog", { action: "organization.deletion.cancel", actorUserId: member.userId, createdAt: now, organizationId });

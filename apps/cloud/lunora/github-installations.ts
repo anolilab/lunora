@@ -1,8 +1,10 @@
+import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 /**
  * GitHub App installations (GAPS.md A4), staged-claim model: the HMAC-verified
@@ -50,6 +52,7 @@ export const record = internalMutation
  * re-claimed by another org.
  */
 export const claim = mutation
+    .use(dbRateLimit(RATE_LIMITS, "sensitive", { key: callerKey }))
     .input({ installationId: v.number(), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { installationId, organizationId } }): Promise<void> => {
         const { userId } = await assertMember(context, organizationId, ["owner", "admin"]);

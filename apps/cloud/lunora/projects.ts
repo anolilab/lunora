@@ -1,7 +1,10 @@
+import { dbRateLimit } from "@lunora/ratelimit";
+
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota } from "./entitlements";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 interface ProjectRow {
     _id: Id<"projects">;
@@ -41,6 +44,7 @@ export const byGithubRepo = query
  * `plan` column — see `lunora/entitlements.ts`).
  */
 export const create = mutation
+    .use(dbRateLimit(RATE_LIMITS, "provision", { key: callerKey }))
     .input({
         framework: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
         githubRepo: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
@@ -67,6 +71,7 @@ export const create = mutation
 
 /** Rename a project (owner/admin). The slug (and its URL alias) is immutable. */
 export const rename = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({
         id: v.id("projects"),
         name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),

@@ -42,12 +42,14 @@ export const list = query.query(async ({ ctx: context }): Promise<CellSummary[]>
 
     const { page } = await context.db.cells.findMany();
 
-    return (page as unknown as CellRow[]).map((cell) => ({
-        _id: cell._id,
-        jurisdiction: cell.jurisdiction,
-        name: cell.name,
-        status: cell.status,
-    }));
+    return (page as unknown as CellRow[]).map((cell) => {
+        return {
+            _id: cell._id,
+            jurisdiction: cell.jurisdiction,
+            name: cell.name,
+            status: cell.status,
+        };
+    });
 });
 
 /**
@@ -68,13 +70,13 @@ export const register = internalMutation
         jurisdiction: v.optional(v.string()),
         name: v.string(),
     })
-    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"cells">> => {
-        return context.db.insert("cells", {
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"cells">> =>
+        context.db.insert("cells", {
             cloudflareAccountId: arguments_.cloudflareAccountId,
             createdAt: context.now,
             dispatchNamespacePrefix: arguments_.dispatchNamespacePrefix,
             jurisdiction: arguments_.jurisdiction,
             name: arguments_.name,
             status: "active",
-        });
-    });
+        }),
+    );
