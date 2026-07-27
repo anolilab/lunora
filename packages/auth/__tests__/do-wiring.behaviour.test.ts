@@ -149,6 +149,42 @@ describe("createDoAuthWiring", () => {
         });
     });
 
+    describe("auditReader", () => {
+        it("reads entries out of the object", async () => {
+            expect.assertions(2);
+
+            const { namespace, requests } = createNamespace(() => ok({ entries: [{ event: "sign-in", outcome: "success", seq: 1, ts: 1 }] }));
+            const { auditReader } = createDoAuthWiring({ internalSecret: SECRET, namespace });
+
+            await expect(auditReader.read({ limit: 10 })).resolves.toStrictEqual([{ event: "sign-in", outcome: "success", seq: 1, ts: 1 }]);
+
+            // The options ride in the body, so the object does the filtering rather than
+            // the worker over-fetching and trimming.
+            await expect(requests[0]?.json()).resolves.toStrictEqual({ limit: 10 });
+        });
+
+        it("reads as empty rather than throwing when the object refuses", async () => {
+            expect.assertions(1);
+
+            const { namespace } = createNamespace(() => Response.json({ error: "unauthorized" }, { status: 401 }));
+            const { auditReader } = createDoAuthWiring({ internalSecret: SECRET, namespace });
+
+            // The studio renders this feed; an unavailable log should be an empty panel,
+            // not a 500.
+            await expect(auditReader.read({})).resolves.toStrictEqual([]);
+        });
+
+        it("reads as empty when no secret is configured", async () => {
+            expect.assertions(2);
+
+            const { namespace, requests } = createNamespace(() => ok({ entries: [] }));
+            const { auditReader } = createDoAuthWiring({ internalSecret: undefined, namespace });
+
+            await expect(auditReader.read({})).resolves.toStrictEqual([]);
+            expect(requests).toHaveLength(0);
+        });
+    });
+
     it("addresses the object by name, defaulting to `auth`", async () => {
         expect.assertions(2);
 

@@ -326,12 +326,29 @@ and execute what it returns.
 
 ### What DO mode does not give you
 
-`ctx.authApi`, sign-in, sessions, and SCIM all work. **The studio's auth pages and the
-audit feed do not** — `authAdmin` and `authAuditReader` read the auth tables directly
-from the worker, which DO storage does not permit, so they report "not configured"
-rather than returning empty data. Identity resolution costs a round-trip to the object
-on requests that touch `ctx.auth`; enable better-auth's `session.cookieCache` to serve
-most of them from the signed cookie instead, accepting a staleness window on revocation.
+`ctx.authApi`, sign-in, sessions, SCIM, and the studio's **audit feed** all work — the
+audit log lives in the object like every other auth table, and the worker reads it back
+through an internal route.
+
+**The studio's auth admin pages do not.** `authAdmin` is a ~30-method surface that reads
+the auth tables directly from the worker, which DO storage does not permit, so it
+reports "not configured" rather than returning empty data.
+
+Identity resolution costs a round-trip to the object on requests that touch `ctx.auth`.
+Enable better-auth's `session.cookieCache` to serve most of them from the signed cookie
+instead, accepting a staleness window on revocation — the `vis generate lunora-auth-do`
+scaffold turns it on by default for that reason.
+
+### Scaffolding it
+
+```bash
+vis generate lunora-auth-do --name=AuthDO
+```
+
+Writes `lunora/auth-do.ts` and reminds you of the two things the file alone does not do:
+re-export the class from your worker entry (that is what makes the config layer add the
+`durable_objects` binding and the `new_sqlite_classes` migration), and point the builder
+at it.
 
 <Callout type="warn">
     `lunoraDoAdapter` is `@experimental`, and the trade is architectural rather than cosmetic: `user`, `session` and the SCIM tables live inside **one** Durable

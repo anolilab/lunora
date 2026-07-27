@@ -4,7 +4,7 @@ import { scim } from "@better-auth/scim";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthDoOptions } from "../src/auth-do";
-import { INTERNAL_SECRET_HEADER, LunoraAuthDO, RESOLVE_SESSION_PATH } from "../src/auth-do";
+import { INTERNAL_SECRET_HEADER, LunoraAuthDO, READ_AUDIT_PATH, RESOLVE_SESSION_PATH } from "../src/auth-do";
 import type { LunoraAuthOptions } from "../src/create-auth";
 import { admin } from "../src/plugins";
 import createDoStorage from "./helpers/do-storage";
@@ -161,6 +161,41 @@ describe("lunoraAuthDO", () => {
         });
 
         await expect(resolved.json()).resolves.toMatchObject({ userId: expect.any(String) });
+    });
+
+    it("serves the audit log to a trusted caller, creating its table on demand", async () => {
+        expect.assertions(2);
+
+        const { authDo } = createDo();
+        const response = await authDo.fetch(
+            new Request(`https://example.test${READ_AUDIT_PATH}`, {
+                body: JSON.stringify({ limit: 5 }),
+                headers: { "content-type": "application/json", [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET },
+                method: "POST",
+            }),
+        );
+
+        expect(response.status).toBe(200);
+
+        // The audit table is not part of `authTables`, so a 200 with an empty list is
+        // the proof it was created rather than erroring on a missing table.
+        await expect(response.json()).resolves.toStrictEqual({ entries: [] });
+    });
+
+    it("refuses the audit log without the secret", async () => {
+        expect.assertions(1);
+
+        const { authDo } = createDo();
+        const response = await authDo.fetch(
+            new Request(`https://example.test${READ_AUDIT_PATH}`, {
+                body: JSON.stringify({}),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+        // The log is forensic data about real users; the same boundary as the session route.
+        expect(response.status).toBe(401);
     });
 
     it("404s a path that is neither an auth route nor the internal one", async () => {

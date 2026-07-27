@@ -620,10 +620,13 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
 
             options.authHandler = authWiring.authHandler;
             options.resolveIdentity = authWiring.resolveIdentity;
-            // \`authAdmin\` / \`authAuditReader\` are D1-only for now: both read the auth
-            // tables directly from the worker, which DO storage does not allow. The
-            // studio's auth pages and the audit feed therefore report "not configured"
-            // in this mode rather than silently returning empty data.
+            // The audit log lives in the object like every other auth table, so the feed
+            // reads through it rather than querying D1.
+            options.authAuditReader = authWiring.auditReader;
+            // \`authAdmin\` stays D1-only: its ~30 methods read the auth tables directly
+            // from the worker, which DO storage does not allow. The studio's auth pages
+            // therefore report "not configured" in this mode rather than silently
+            // returning empty data.
         } else if (authDeclaration && authD1) {
             options.authHandler = (request) => {
                 const auth = getAuth();

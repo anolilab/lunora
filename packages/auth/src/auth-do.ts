@@ -29,10 +29,13 @@
  */
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { lunoraDoAdapter } from "./adapter";
+import type { AuthAuditEntry } from "./audit";
+import { createAuthAuditReader, ensureAuthAuditTable } from "./audit";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
 import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
+import { doExecutor } from "./do-store";
 import { handleAuthRequest } from "./handler";
 
 /**
@@ -45,6 +48,14 @@ interface AuthDoState {
 
 /** Path the worker calls to resolve a request's identity. Not part of `/api/auth/*`. */
 const RESOLVE_SESSION_PATH = "/__lunora/auth/session";
+
+/**
+ * Path the worker calls to read the audit log. Also not part of `/api/auth/*`.
+ *
+ * The audit table lives in this object like every other auth table, so the worker
+ * cannot query it directly — same constraint as the session route, same shared secret.
+ */
+const READ_AUDIT_PATH = "/__lunora/auth/audit";
 
 /** Header carrying the shared secret that authenticates the calling worker. */
 const INTERNAL_SECRET_HEADER = "x-lunora-auth-do-secret";
@@ -170,6 +181,31 @@ class LunoraAuthDO {
     }
 
     /**
+     * Read the audit log — the worker's `authAuditReader` in DO mode.
+     *
+     * `AuthAuditEntry` is entirely JSON-safe (`ts` and `seq` are numbers, there are no
+     * `Date` values), so proxying it over HTTP is lossless rather than a lossy
+     * serialisation the studio would have to compensate for.
+     */
+    async #readAudit(request: Request): Promise<Response> {
+        if (!this.#isTrustedCaller(request)) {
+            return Response.json({ error: "unauthorized" }, { status: 401 });
+        }
+
+        const executor = doExecutor(this.#storage);
+
+        // The audit table is not part of `authTables`, so the schema pass does not
+        // create it. Ensuring it here (rather than on every cold start) keeps it off
+        // the request path for apps that never read the log.
+        await ensureAuthAuditTable(executor);
+
+        const options = await request.json();
+        const entries = await createAuthAuditReader(executor).read(options ?? {});
+
+        return Response.json({ entries } satisfies { entries: AuthAuditEntry[] });
+    }
+
+    /**
      * Whether the caller presented the configured internal secret.
      */
     #isTrustedCaller(request: Request): boolean {
@@ -217,6 +253,10 @@ class LunoraAuthDO {
             return this.#resolveSession(request);
         }
 
+        if (url.pathname === READ_AUDIT_PATH) {
+            return this.#readAudit(request);
+        }
+
         const auth = this.#ensureReady();
         const response = await handleAuthRequest(auth, request, this.#options.basePath);
 
@@ -225,4 +265,4 @@ class LunoraAuthDO {
 }
 
 export type { AuthDoOptions, AuthDoState };
-export { INTERNAL_SECRET_HEADER, LunoraAuthDO, RESOLVE_SESSION_PATH };
+export { INTERNAL_SECRET_HEADER, LunoraAuthDO, READ_AUDIT_PATH, RESOLVE_SESSION_PATH };

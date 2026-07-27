@@ -550,6 +550,7 @@ const DEFAULT_AUTH_BASE_PATH: string;
 
 ```ts
 interface DoAuthWiring {
+    auditReader: AuthAuditReader;
     authHandler: (request: Request) => Promise<Response | undefined>;
     resolveIdentity: (request: Request) => Promise<null | {
         userId: string;
