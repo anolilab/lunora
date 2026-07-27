@@ -1,3 +1,4 @@
+import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import { randomSecret } from "../src/deploy/keys";
@@ -5,6 +6,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 /**
  * Custom domains (GAPS.md B1). A hostname is added (minting a TXT verification
@@ -37,14 +39,13 @@ const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-
 
 /** Add a hostname to a project (owner/admin) and mint its TXT verification token. */
 export const add = mutation
+    .use(dbRateLimit(RATE_LIMITS, "provision", { key: callerKey }))
     .input({
         hostname: v.string().check((value) => value.length <= 253, { message: "must be at most 253 characters", schema: { maxLength: 253 } }),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
         redirectStatusCode: v.optional(v.number()),
-        redirectTo: v.optional(
-            v.string().check((value) => value.length <= 2_048, { message: "must be at most 2_048 characters", schema: { maxLength: 2_048 } }),
-        ),
+        redirectTo: v.optional(v.string().check((value) => value.length <= 2048, { message: "must be at most 2_048 characters", schema: { maxLength: 2048 } })),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"domains">; txtName: string; txtToken: string }> => {
         const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
@@ -66,7 +67,7 @@ export const add = mutation
         }
 
         const txtToken = randomSecret();
-        const now = context.now;
+        const { now } = context;
         const id = await context.db.insert("domains", {
             createdAt: now,
             hostname,
@@ -103,6 +104,7 @@ export const list = query
 
 /** Remove a domain (owner/admin). */
 export const remove = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({ id: v.id("domains"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
@@ -127,6 +129,7 @@ export const remove = mutation
  * hostname id once the 🌐 provisioning path creates it.
  */
 export const markVerified = mutation
+    .use(dbRateLimit(RATE_LIMITS, "machine", { key: callerKey }))
     .input({
         customHostnameId: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
         id: v.id("domains"),

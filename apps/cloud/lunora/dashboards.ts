@@ -1,3 +1,4 @@
+import { dbRateLimit } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import type { DashboardPanel } from "../src/telemetry/dashboards";
@@ -5,6 +6,7 @@ import { validatePanels } from "../src/telemetry/dashboards";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 /**
  * User-defined custom dashboards (Tier 2 observability) — Grafana-style saved
@@ -57,22 +59,26 @@ const panel = v.object({
 });
 
 /** Project a stored dashboard row onto the wire view. */
-const toView = (row: DashboardRow): DashboardView => ({
-    _id: row._id,
-    createdAt: row.createdAt,
-    name: row.name,
-    panels: row.panels.map((current) => ({
-        config: {
-            ...(current.config.filter === undefined ? {} : { filter: current.config.filter }),
-            ...(current.config.metricName === undefined ? {} : { metricName: current.config.metricName }),
-            ...(current.config.stat === undefined ? {} : { stat: current.config.stat }),
-        },
-        id: current.id,
-        kind: current.kind,
-        title: current.title,
-    })),
-    updatedAt: row.updatedAt,
-});
+const toView = (row: DashboardRow): DashboardView => {
+    return {
+        _id: row._id,
+        createdAt: row.createdAt,
+        name: row.name,
+        panels: row.panels.map((current) => {
+            return {
+                config: {
+                    ...(current.config.filter === undefined ? {} : { filter: current.config.filter }),
+                    ...(current.config.metricName === undefined ? {} : { metricName: current.config.metricName }),
+                    ...(current.config.stat === undefined ? {} : { stat: current.config.stat }),
+                },
+                id: current.id,
+                kind: current.kind,
+                title: current.title,
+            };
+        }),
+        updatedAt: row.updatedAt,
+    };
+};
 
 /** The stored dashboard row shape (the columns `findMany`/`get` return). */
 interface DashboardRow {
@@ -96,7 +102,7 @@ const requireName = (name: string): string => {
 };
 
 /** Re-validate panels on the server (the client validates too) before persisting. */
-const requireValidPanels = (panels: readonly DashboardPanel[]): void => {
+const requireValidPanels = (panels: ReadonlyArray<DashboardPanel>): void => {
     const error = validatePanels(panels);
 
     if (error !== null) {
@@ -123,7 +129,7 @@ export const get = query
 
         const row = (await context.db.get(id)) as DashboardRow | null;
 
-        if (row === null || row.organizationId !== organizationId) {
+        if (row?.organizationId !== organizationId) {
             return null;
         }
 
@@ -132,6 +138,7 @@ export const get = query
 
 /** Create a named dashboard (owners/admins). Starts with the given panels (usually none). */
 export const create = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({
         name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
         organizationId: v.id("organizations"),
@@ -145,7 +152,7 @@ export const create = mutation
 
         requireValidPanels(panels);
 
-        const now = context.now;
+        const { now } = context;
 
         return context.db.insert("dashboards", {
             createdAt: now,
@@ -163,6 +170,7 @@ export const create = mutation
  * a rename and a panel edit are independent calls.
  */
 export const update = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({
         id: v.id("dashboards"),
         name: v.optional(v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } })),
@@ -193,6 +201,7 @@ export const update = mutation
 
 /** Delete a dashboard (owners/admins), org-checked. */
 export const remove = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({ id: v.id("dashboards"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<Id<"dashboards">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);

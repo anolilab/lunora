@@ -1,6 +1,9 @@
+import { dbRateLimit } from "@lunora/ratelimit";
+
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 /**
  * Tenant secrets (CLOUD-PLAN.md §7). Values are AES-256-GCM encrypted at the
@@ -24,8 +27,9 @@ interface SecretRow {
 
 /** Persist an already-encrypted secret (owner/admin). Upserts by project+name. */
 export const store = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({
-        ciphertext: v.string().check((value) => value.length <= 8_192, { message: "must be at most 8_192 characters", schema: { maxLength: 8_192 } }),
+        ciphertext: v.string().check((value) => value.length <= 8192, { message: "must be at most 8_192 characters", schema: { maxLength: 8192 } }),
         // Deployment kind this secret applies to; defaults to "all" (shared).
         environment: v.optional(v.union(v.literal("all"), v.literal("production"), v.literal("preview"), v.literal("dev"))),
         iv: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
@@ -42,7 +46,7 @@ export const store = mutation
             where: { environment, name: arguments_.name, organizationId: arguments_.organizationId, projectId: arguments_.projectId }, // secret-scanner:allow -- domain field name
         });
         const existing = (page as unknown as SecretRow[])[0];
-        const now = context.now;
+        const { now } = context;
 
         if (existing) {
             await context.db.patch(existing._id, { ciphertext: arguments_.ciphertext, iv: arguments_.iv, updatedAt: now });
@@ -123,6 +127,7 @@ export const listEncrypted = query
 
 /** Delete a secret (owner/admin). */
 export const remove = mutation
+    .use(dbRateLimit(RATE_LIMITS, "api", { key: callerKey }))
     .input({ id: v.id("secrets"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);

@@ -1,3 +1,5 @@
+import { dbRateLimit } from "@lunora/ratelimit";
+
 import type { SpanObservation } from "../src/telemetry/otlp";
 import type { TelemetryStoreEnv } from "../src/telemetry/store";
 import { createCloudflareTelemetryStore } from "../src/telemetry/store";
@@ -7,6 +9,7 @@ import { foldObservationTraces } from "../src/telemetry/trace-tree";
 import type { Id } from "./_generated/dataModel.js";
 import { action, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
+import { callerKey, RATE_LIMITS } from "./guards";
 
 /**
  * Traces over stored **observations** (spans) — the real-duration Traces model
@@ -133,6 +136,7 @@ export const list = query
  * with the hot {@link list} rollups (deduping by `traceId`, hot wins). Members only.
  */
 export const listArchived = action
+    .use(dbRateLimit(RATE_LIMITS, "archive", { key: callerKey }))
     .input({
         from: v.number(),
         limit: v.optional(v.number()),
@@ -155,31 +159,33 @@ export const listArchived = action
         const spans = await store.readArchivedSpansInWindow({ from: args.from, limit: SCAN_LIMIT, organizationId: args.organizationId, to: args.to });
 
         // Reuse the same fold as the hot `list`, then cap.
-        return foldObservationTraces(spans as unknown as ObservationRow[], SCAN_LIMIT).slice(0, limit);
+        return foldObservationTraces(spans, SCAN_LIMIT).slice(0, limit);
     });
 
 /** Project a stored/archived span onto the wire {@link SpanView} (drops `_id` / `organizationId` / `serviceName`). */
-const toSpanView = (span: ObservationRow | SpanObservation): SpanView => ({
-    attributes: span.attributes,
-    completionTokens: span.completionTokens,
-    durationMs: span.durationMs,
-    endedAt: span.endedAt,
-    evaluations: span.evaluations,
-    functionPath: span.functionPath,
-    input: span.input,
-    kind: span.kind,
-    level: span.level,
-    model: span.model,
-    name: span.name,
-    output: span.output,
-    parentSpanId: span.parentSpanId,
-    promptTokens: span.promptTokens,
-    sessionId: span.sessionId,
-    spanId: span.spanId,
-    startedAt: span.startedAt,
-    statusMessage: span.statusMessage,
-    traceId: span.traceId,
-});
+const toSpanView = (span: ObservationRow | SpanObservation): SpanView => {
+    return {
+        attributes: span.attributes,
+        completionTokens: span.completionTokens,
+        durationMs: span.durationMs,
+        endedAt: span.endedAt,
+        evaluations: span.evaluations,
+        functionPath: span.functionPath,
+        input: span.input,
+        kind: span.kind,
+        level: span.level,
+        model: span.model,
+        name: span.name,
+        output: span.output,
+        parentSpanId: span.parentSpanId,
+        promptTokens: span.promptTokens,
+        sessionId: span.sessionId,
+        spanId: span.spanId,
+        startedAt: span.startedAt,
+        statusMessage: span.statusMessage,
+        traceId: span.traceId,
+    };
+};
 
 /**
  * Every span in one trace (`by_trace` index), for the drill-in waterfall. The
@@ -218,6 +224,7 @@ export const get = query
  * returns spans.
  */
 export const getArchived = action
+    .use(dbRateLimit(RATE_LIMITS, "archive", { key: callerKey }))
     .input({
         organizationId: v.id("organizations"),
         traceId: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
