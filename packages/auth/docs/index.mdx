@@ -301,7 +301,10 @@ connection details are shared between the two.
 Create the binding, pointed at your database:
 
 ```bash
-wrangler hyperdrive create lunora-auth --connection-string="postgres://user:pass@host:5432/db"
+# Pass the URL through the environment rather than typing it inline — an inline
+# connection string lands in your shell history.
+export LUNORA_AUTH_DATABASE_URL='postgres://…'
+wrangler hyperdrive create lunora-auth --connection-string="$LUNORA_AUTH_DATABASE_URL"
 ```
 
 ```jsonc
