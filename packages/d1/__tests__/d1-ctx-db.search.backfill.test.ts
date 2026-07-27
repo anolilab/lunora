@@ -169,6 +169,39 @@ describe("d1 ctx-db search backfill", () => {
         expect(Number(rows[0]?.["c"])).toBe(MAX_INDEXED_TOKENS);
     });
 
+    it("rebuilds a companion whose recorded profile predates profile tracking", async () => {
+        expect.assertions(2);
+
+        const plain = writerFor(plainSchema);
+
+        await plain.insert("docs", { _id: "d1", body: "quick fox", channel: "x" }, { allowExplicitId: true });
+        await backfillSqlSearchIndexes(exec, searchSchema, invertedDialect);
+
+        // A companion built before the profile column existed: the state row
+        // says "finished", but a NULL profile means nothing records what
+        // analyzed those tokens. The bogus row stands in for that unknown
+        // analysis — treating the row as resumable would leave it there forever.
+        await harness.exec.run(`INSERT INTO "docs__fts_by_body" ("__token__", "__id__", "__n__") VALUES (?, ?, ?)`, ["stale", "d1", 1]);
+        await harness.exec.run(`UPDATE "__lunora_search_state" SET "profile" = NULL, "done" = 1`, []);
+
+        await backfillSqlSearchIndexes(exec, searchSchema, invertedDialect);
+
+        const tokens = await harness.exec.all(`SELECT "__token__" FROM "docs__fts_by_body" ORDER BY "__token__"`, []);
+
+        expect(tokens.map((row) => row["__token__"])).toStrictEqual(["fox", "quick"]);
+
+        // And the same for a *partial* legacy companion: a recorded cursor with
+        // no profile must restart the walk rather than resume past rows whose
+        // analysis is unknown, or the index stays half-analyzed forever.
+        await harness.exec.run(`UPDATE "__lunora_search_state" SET "profile" = NULL, "done" = 0, "cursor" = ?`, ["d9"]);
+        await harness.exec.run(`DELETE FROM "docs__fts_by_body"`, []);
+        await backfillSqlSearchIndexes(exec, searchSchema, invertedDialect);
+
+        const resumed = await harness.exec.all(`SELECT "__token__" FROM "docs__fts_by_body" ORDER BY "__token__"`, []);
+
+        expect(resumed.map((row) => row["__token__"])).toStrictEqual(["fox", "quick"]);
+    });
+
     it("rebuilds the companion when the analysis profile changes", async () => {
         expect.assertions(3);
 
