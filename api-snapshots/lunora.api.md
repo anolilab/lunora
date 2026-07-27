@@ -3167,6 +3167,14 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 ## `lunorash/errors`
 
+### `CLOUDFLARE_PLATFORM_ERRORS` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `CloudflarePlatformError` (interface)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
 ### `ERROR_CATALOG` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
@@ -3224,6 +3232,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `ToErrorBodyResult` (interface)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `findCloudflarePlatformSolution` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 

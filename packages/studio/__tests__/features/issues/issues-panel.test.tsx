@@ -343,4 +343,44 @@ describe("issuesPanel explainer", () => {
 
         expect(screen.getByTestId("issues-hint-empty-deadbeefcafe0009")).toBeDefined();
     });
+
+    it("drops an explanation once a live re-fold changes the message it was grounded in", async () => {
+        expect.assertions(3);
+
+        const mock = createExplainClient({
+            degraded: false,
+            explanation: "This error means the Worker script threw before responding.",
+            groundedId: "cloudflare-error-1101",
+            model: "test",
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(await screen.findByTestId("issues-toggle-deadbeefcafe0001"));
+        fireEvent.click(screen.getByTestId("issues-explain-deadbeefcafe0001"));
+
+        const explanation = await screen.findByTestId("issues-explanation-deadbeefcafe0001");
+
+        expect(explanation.textContent).toContain("threw before responding");
+
+        // The Issues read is live: the same hash re-folds onto a fresher sample
+        // message. The explanation (and its "grounded in the fix above" framing)
+        // describes text that is no longer on screen, so it must go.
+        mock.emit(ADMIN_FUNCTIONS.getIssues, {
+            issues: [ISSUE({ sampleMessage: "Error 1102: Worker exceeded resource limits", title: "Worker threw exception" })],
+        });
+
+        // Wait (without an `expect`, so retries don't inflate the assertion count)
+        // for the re-fold to land, then assert.
+        await waitFor(() => {
+            if (!screen.getByTestId("issues-detail-deadbeefcafe0001").textContent?.includes("Error 1102")) {
+                throw new Error("re-folded message not rendered yet");
+            }
+        });
+
+        expect(screen.queryByTestId("issues-explanation-deadbeefcafe0001")).toBeNull();
+
+        // The grounded fix, being derived from the current message, tracks the re-fold.
+        expect(screen.getByTestId("issues-hint-deadbeefcafe0001").textContent).toContain("CPU");
+    });
 });

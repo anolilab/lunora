@@ -303,6 +303,16 @@ describe("cloudflare platform errors", () => {
         expect(findCloudflarePlatformSolution("cloudflare job 15221 finished")).toBeUndefined();
     });
 
+    it("prefers an explicit `Error <code>` over a weaker cloudflare-plus-number match", () => {
+        expect.assertions(2);
+
+        // `524` sits earlier in the table than `1102`, so a single-pass scan would
+        // let the incidental "524 ms" win — and ground the explainer in the wrong fix.
+        expect(findCloudflarePlatformSolution("Cloudflare Error 1102: exceeded after 524 ms")?.id).toBe("cloudflare-error-1102");
+        // Without the explicit phrasing, the weak heuristic still applies.
+        expect(findCloudflarePlatformSolution("cloudflare gave up after 524 ms")?.id).toBe("cloudflare-error-524");
+    });
+
     it("resolveHint grounds a CF platform error from a message", () => {
         expect.assertions(2);
 

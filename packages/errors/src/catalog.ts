@@ -498,53 +498,91 @@ export const CLOUDFLARE_PLATFORM_ERRORS: ReadonlyArray<CloudflarePlatformError> 
 ];
 
 /**
+ * True when `code` appears in `haystack` as a standalone numeric token (not part
+ * of a longer number like `5200` or a version `1.1011`). A boundary-checked
+ * `indexOf` scan rather than a `RegExp` so no per-code pattern is constructed
+ * from a (here trusted, but conventionally avoided) dynamic string.
+ */
+const hasStandaloneNumber = (haystack: string, code: string): boolean => {
+    const isDigit = (character: string | undefined): boolean => character !== undefined && character >= "0" && character <= "9";
+
+    for (let from = haystack.indexOf(code); from !== -1; from = haystack.indexOf(code, from + code.length)) {
+        if (!isDigit(haystack[from - 1]) && !isDigit(haystack[from + code.length])) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Cheap pre-filter over the RAW message. Every match in
+ * {@link findCloudflarePlatformSolution} needs one of these two words, and a
+ * static case-insensitive pattern settles that without allocating a lowercased
+ * copy of the message. That matters: this table is a fallback, so the
+ * overwhelmingly common call is a message that matches nothing, and it sits on
+ * `resolveHint` — the error path of every transport surface.
+ */
+const CF_PLATFORM_PREFILTER = /error|cloudflare/iu;
+
+/** Render one {@link CloudflarePlatformError} as the {@link Solution} the CLI and the Issue explainer ground in. */
+const cloudflarePlatformSolution = (entry: CloudflarePlatformError): Solution => {
+    return {
+        body: [
+            entry.summary,
+            "",
+            `**Likely cause:** ${entry.causes}.`,
+            "",
+            `**Fix:** ${entry.fix}.`,
+            "",
+            `See [Cloudflare's ${entry.family} error docs](${entry.docsUrl}).`,
+        ].join("\n"),
+        header: `Cloudflare Error ${entry.code}: ${entry.title}`,
+        id: `cloudflare-error-${entry.code}`,
+    };
+};
+
+/**
  * Recognize a Cloudflare platform-error {@link CloudflarePlatformError} in a raw
  * error message, conservatively: the message must carry Cloudflare's own
  * `Error &lt;code>` phrasing, or mention `cloudflare` alongside the standalone
  * code. That keeps a bare number (`expected 520 items`) from false-matching a 5xx
  * code, at the cost of missing a context-free code — the safe trade for a
- * grounded hint. Returns the first matching code's {@link Solution}, or
- * `undefined`.
+ * grounded hint. Returns the matched code's {@link Solution}, or `undefined`.
+ *
+ * Matching runs in two passes, strongest first: Cloudflare's own `Error &lt;code>`
+ * phrasing is unambiguous, so it must win over the weaker "mentions cloudflare
+ * near some number" heuristic regardless of table order. A single pass let a weak
+ * match on an earlier entry beat an explicit match on a later one — `"Cloudflare
+ * Error 1102: exceeded after 524 ms"` resolved to 524, and that wrong grounded
+ * fix is exactly what the explainer prompt is built from.
  */
 export const findCloudflarePlatformSolution = (message: string): Solution | undefined => {
-    // True when `code` appears in `haystack` as a standalone numeric token (not
-    // part of a longer number like `5200` or a version `1.1011`). A boundary-
-    // checked `indexOf` scan rather than a `RegExp` so no per-code pattern is
-    // constructed from a (here trusted, but conventionally avoided) dynamic string.
-    const hasStandaloneNumber = (haystack: string, code: string): boolean => {
-        const isDigit = (character: string | undefined): boolean => character !== undefined && character >= "0" && character <= "9";
-
-        for (let from = haystack.indexOf(code); from !== -1; from = haystack.indexOf(code, from + code.length)) {
-            if (!isDigit(haystack[from - 1]) && !isDigit(haystack[from + code.length])) {
-                return true;
-            }
-        }
-
-        return false;
-    };
+    // A message carrying neither word cannot match any code — bail before both
+    // the lowercasing and the per-entry scans.
+    if (!CF_PLATFORM_PREFILTER.test(message)) {
+        return undefined;
+    }
 
     const lower = message.toLowerCase();
+    const mentionsError = lower.includes("error");
+    const mentionsCloudflare = lower.includes("cloudflare");
 
-    for (const entry of CLOUDFLARE_PLATFORM_ERRORS) {
-        const matches =
-            lower.includes(`error ${entry.code}`) ||
-            lower.includes(`error: ${entry.code}`) ||
-            (lower.includes("cloudflare") && hasStandaloneNumber(lower, entry.code));
+    // Pass 1 — Cloudflare's own `Error <code>` phrasing is unambiguous.
+    if (mentionsError) {
+        for (const entry of CLOUDFLARE_PLATFORM_ERRORS) {
+            if (lower.includes(`error ${entry.code}`) || lower.includes(`error: ${entry.code}`)) {
+                return cloudflarePlatformSolution(entry);
+            }
+        }
+    }
 
-        if (matches) {
-            return {
-                body: [
-                    entry.summary,
-                    "",
-                    `**Likely cause:** ${entry.causes}.`,
-                    "",
-                    `**Fix:** ${entry.fix}.`,
-                    "",
-                    `See [Cloudflare's ${entry.family} error docs](${entry.docsUrl}).`,
-                ].join("\n"),
-                header: `Cloudflare Error ${entry.code}: ${entry.title}`,
-                id: `cloudflare-error-${entry.code}`,
-            };
+    // Pass 2 — the weaker "mentions cloudflare + a standalone code" heuristic.
+    if (mentionsCloudflare) {
+        for (const entry of CLOUDFLARE_PLATFORM_ERRORS) {
+            if (hasStandaloneNumber(lower, entry.code)) {
+                return cloudflarePlatformSolution(entry);
+            }
         }
     }
 

@@ -1,7 +1,7 @@
 import { findSolutionByMessage, flattenHint } from "@lunora/errors";
 import { useLunora } from "@lunora/react";
 import type { KeyboardEvent, ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
@@ -112,27 +112,34 @@ const IssueRow = ({ busy, issue, rowError, runTriage, shardKey }: IssueRowProps)
 
     const [expanded, setExpanded] = useState<boolean>(false);
     const [explanation, setExplanation] = useState<ExplainIssueResult | undefined>(undefined);
+    // The sample message `explanation` was grounded in. The Issues read is live, so
+    // a re-fold can swap `issue.sampleMessage` under a row whose `hash` is unchanged
+    // — an explanation of the old text (and its "grounded in the suggested fix
+    // above" framing) must not survive next to the new one, nor may a late response
+    // for the old text land on the new. Rendering is gated on this matching.
+    const [explainedFor, setExplainedFor] = useState<string | undefined>(undefined);
     const { busy: explaining, error: explainError, run } = useAsyncSubmit();
 
     // Grounded fix, computed client-side from the catalog — offline and instant.
     // Flattened to plain text (markdown emphasis stripped) to match ErrorAlert.
-    const groundedHint = useMemo<string | undefined>(() => {
-        const solution = findSolutionByMessage(issue.sampleMessage);
-
-        return solution === undefined ? undefined : flattenHint(solution.body);
-    }, [issue.sampleMessage]);
+    // Not memoized: the React Compiler already caches this per `issue.sampleMessage`.
+    const solution = findSolutionByMessage(issue.sampleMessage);
+    const groundedHint = solution === undefined ? undefined : flattenHint(solution.body);
 
     const toggle = (): void => {
         setExpanded((previous) => !previous);
     };
 
     const onExplain = (): void => {
+        const requestedFor = issue.sampleMessage;
+
         run(async () => {
-            const args: ExplainIssueArgs = { culprit: issue.culprit, sampleMessage: issue.sampleMessage, title: issue.title };
+            const args: ExplainIssueArgs = { culprit: issue.culprit, sampleMessage: requestedFor, title: issue.title };
 
             const result = (await client.query(EXPLAIN_ISSUE, args, callOptions(shardKey))) as ExplainIssueResult;
 
             setExplanation(result);
+            setExplainedFor(requestedFor);
         });
     };
 
@@ -325,6 +332,7 @@ const IssueRow = ({ busy, issue, rowError, runTriage, shardKey }: IssueRowProps)
                             )}
 
                             {explanation !== undefined &&
+                                explainedFor === issue.sampleMessage &&
                                 (explanation.degraded ? (
                                     <p className="text-xs text-muted-foreground" data-testid={`issues-degraded-${issue.hash}`}>
                                         {explanation.reason === "no-ai-binding"

@@ -1578,7 +1578,7 @@ describe("shardDO admin introspection", () => {
 
         expect(result.degraded).toBe(false);
         expect(result.explanation).toBe("Your Worker threw an unhandled exception. Check the stack trace via wrangler tail.");
-        expect(result.model).toBe("@cf/meta/llama-3.1-8b-instruct");
+        expect(result.model).toBe("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
         // The grounded hint still rides along, so the client can show both.
         expect(result.hint).toContain("JavaScript exception");
 
@@ -1637,6 +1637,62 @@ describe("shardDO admin introspection", () => {
         await shard.fetch(adminRequest(ADMIN_FUNCTIONS.explainIssue, { model: "@cf/custom/model", sampleMessage: "boom" }, ADMIN_TOKEN));
 
         expect(models).toStrictEqual(["@cf/custom/model"]);
+    });
+
+    it("explainIssue caps title and culprit alongside the message", async () => {
+        expect.assertions(3);
+
+        const calls: Record<string, unknown>[] = [];
+        const AI = {
+            run: (_model: string, inputs: Record<string, unknown>) => {
+                calls.push(inputs);
+
+                return Promise.resolve({ response: "ok" });
+            },
+        };
+        const shard = new AdminShard(state, { AI, LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(
+            adminRequest(
+                ADMIN_FUNCTIONS.explainIssue,
+                { culprit: "c".repeat(5000), sampleMessage: `boom ${"m".repeat(5000)}`, title: "t".repeat(5000) },
+                ADMIN_TOKEN,
+            ),
+        );
+
+        const messages = calls[0]?.["messages"] as { content: string; role: string }[];
+        const userMessage = messages.find((message) => message.role === "user")?.content ?? "";
+
+        // Every caller-supplied field rides the same prompt, so each is capped:
+        // 200 for the short context fields, 2000 for the raw message.
+        expect(userMessage).toContain(`Title: ${"t".repeat(200)}\n`);
+        expect(userMessage).toContain(`Source: ${"c".repeat(200)}\n`);
+        expect(userMessage).toContain(`Error message: boom ${"m".repeat(1995)}`);
+    });
+
+    it("explainIssue degrades to the hint when the model exceeds the inference deadline", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            // Never settles — only the deadline can end this call.
+            const AI = { run: () => new Promise<never>(() => {}) };
+            const shard = new AdminShard(state, { AI, LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const pending = shard.fetch(adminRequest(ADMIN_FUNCTIONS.explainIssue, { sampleMessage: "Error 522 from cloudflare" }, ADMIN_TOKEN));
+
+            await vi.advanceTimersByTimeAsync(10_000);
+
+            const response = await pending;
+            const { result } = await response.json<{ result: ExplainIssueResultShape }>();
+
+            // A hung model must not pin the DO's admin dispatch — it lands on `ai-error`.
+            expect(result).toMatchObject({ degraded: true, reason: "ai-error" });
+            expect(result.hint).toBeDefined();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("explainIssue rejects a missing sampleMessage with a 400", async () => {

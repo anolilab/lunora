@@ -1397,13 +1397,26 @@ const parseReplayQueueMessageArgs = (args: Record<string, unknown>): { id: strin
 
 /**
  * The Workers AI text model the Issue explainer uses when the caller does not
- * override it. A small, universally-available instruct model — the explainer is
- * a short, grounded rewrite (not a reasoning task), so latency/cost beats size.
+ * override it. The fp8-fast instruct model the rest of the repo defaults to —
+ * the explainer is a short, grounded rewrite (not a reasoning task), so a
+ * latency-optimized build beats a larger one. Deliberately not the retired
+ * `@cf/meta/llama-3.1-8b-instruct`: a deprecated model-id makes `binding.run`
+ * throw, which would silently degrade every explain to `"ai-error"`.
  */
-const DEFAULT_EXPLAIN_ISSUE_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+const DEFAULT_EXPLAIN_ISSUE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 /** Cap the raw error text fed to the model so a pathological message can't blow the prompt budget. */
 const EXPLAIN_ISSUE_MESSAGE_CAP = 2000;
+
+/** Cap the short context fields too — `title`/`culprit` ride the same prompt as the message. */
+const EXPLAIN_ISSUE_CONTEXT_CAP = 200;
+
+/**
+ * Deadline for one explainer inference. `binding.run` is awaited on a
+ * single-threaded DO's admin dispatch, so a hung model would hold that dispatch
+ * open indefinitely; racing a timer degrades to the grounded hint instead.
+ */
+const EXPLAIN_ISSUE_TIMEOUT_MS = 10_000;
 
 /**
  * Structural projection of the Workers `AI` binding's `run` method — declared
@@ -1428,6 +1441,14 @@ interface ExplainIssueArgs {
 }
 
 /**
+ * Why the explainer fell back to the grounded hint alone. A closed union rather
+ * than a bare `string` so `degraded(reason)` rejects a typo'd sentinel at compile
+ * time instead of letting it fall through to the client's generic error copy.
+ * Mirrored by `ExplainIssueResult["reason"]` in `@lunora/studio`'s `lib/admin.ts`.
+ */
+type ExplainIssueDegradedReason = "ai-error" | "empty-response" | "no-ai-binding";
+
+/**
  * The `__lunora_admin__:explainIssue` result. The grounded `hint` (a catalog /
  * Cloudflare-platform solution matched to the message) is always present when one
  * exists — it is offline, deterministic, and the client already renders it. The
@@ -1446,14 +1467,18 @@ interface ExplainIssueResult {
     hint?: string;
     /** The Workers AI model-id used, present only on the non-degraded path. */
     model?: string;
-    /** Why the AI path degraded (`"no-ai-binding"` | `"ai-error"` | `"empty-response"`), for the client to surface. */
-    reason?: string;
+    /** Why the AI path degraded, for the client to surface. */
+    reason?: ExplainIssueDegradedReason;
 }
 
 /**
  * Validate the `__lunora_admin__:explainIssue` payload. Requires a non-empty
  * `sampleMessage` (the grounding fact); `title`, `culprit`, and `model` are
  * optional context/overrides. Throws a 400 `LunoraError` on a bad shape.
+ *
+ * Every caller-supplied field that reaches the prompt is capped here — capping
+ * `sampleMessage` alone left `title`/`culprit` as an open door onto the same
+ * prompt budget.
  */
 const parseExplainIssueArgs = (args: Record<string, unknown>): ExplainIssueArgs => {
     const sampleMessage = typeof args["sampleMessage"] === "string" ? args["sampleMessage"] : "";
@@ -1464,12 +1489,21 @@ const parseExplainIssueArgs = (args: Record<string, unknown>): ExplainIssueArgs 
 
     const model = typeof args["model"] === "string" && args["model"].trim() !== "" ? args["model"].trim() : undefined;
 
+    /** Trim a caller-supplied context field, drop it when empty, and cap what survives. */
+    const context = (value: unknown): string | undefined => {
+        if (typeof value !== "string" || value.trim() === "") {
+            return undefined;
+        }
+
+        return value.trim().slice(0, EXPLAIN_ISSUE_CONTEXT_CAP);
+    };
+
     return {
-        culprit: typeof args["culprit"] === "string" && args["culprit"].trim() !== "" ? args["culprit"].trim() : undefined,
+        culprit: context(args["culprit"]),
         model,
         // Cap defensively so a runaway message can't inflate the model prompt.
         sampleMessage: sampleMessage.slice(0, EXPLAIN_ISSUE_MESSAGE_CAP),
-        title: typeof args["title"] === "string" && args["title"].trim() !== "" ? args["title"].trim() : undefined,
+        title: context(args["title"]),
     };
 };
 
@@ -1508,12 +1542,26 @@ const runExplainIssueModel = async (
         "You explain a backend error to the developer who owns it. Use ONLY the facts provided — do not invent causes, fixes, file names, or APIs beyond them. " +
         "If the facts are thin, say plainly what the error means and what to check, without speculating. Be concise (2 to 4 short sentences), concrete, and practical. Plain text, no Markdown headings.";
 
-    const result = await binding.run(model, {
-        max_tokens: 400,
-        messages: [
-            { content: system, role: "system" },
-            { content: facts.join("\n"), role: "user" },
-        ],
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+
+    // Race the inference against a deadline — `handleExplainIssue` already turns
+    // any throw into `degraded("ai-error")`, so a timeout lands on the grounded
+    // hint rather than pinning the DO's admin dispatch on a hung model.
+    const result = await Promise.race([
+        binding.run(model, {
+            max_tokens: 400,
+            messages: [
+                { content: system, role: "system" },
+                { content: facts.join("\n"), role: "user" },
+            ],
+        }),
+        new Promise<never>((_resolve, reject) => {
+            deadline = setTimeout(() => {
+                reject(new Error("explainIssue: inference timed out"));
+            }, EXPLAIN_ISSUE_TIMEOUT_MS);
+        }),
+    ]).finally(() => {
+        clearTimeout(deadline);
     });
 
     // Workers AI text-generation returns `{ response: string }` (non-streaming).

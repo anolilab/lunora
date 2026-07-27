@@ -1159,6 +1159,11 @@ export interface MetricHistoryResult {
  * being explained; `model` overrides the default Workers AI text model. The DO
  * re-derives the grounded solution from `sampleMessage` itself — it never trusts a
  * client-supplied hint.
+ *
+ * This and {@link ExplainIssueResult} are hand-mirrored — `@lunora/studio` must not
+ * take a dependency edge on `@lunora/do` — so nothing type-checks the two sides
+ * against each other. Change either shape here and in `packages/do/src/shard-do.ts`
+ * (`ExplainIssueArgs` / `ExplainIssueResult` / `ExplainIssueDegradedReason`) together.
  */
 export interface ExplainIssueArgs {
     culprit?: string;
@@ -1168,14 +1173,20 @@ export interface ExplainIssueArgs {
 }
 
 /**
+ * Why the explainer fell back to the grounded hint alone, mirroring `@lunora/do`'s
+ * `ExplainIssueDegradedReason`. A closed union so the `reason === "no-ai-binding"`
+ * branch in `issues-panel.tsx` stays exhaustively checkable.
+ */
+export type ExplainIssueDegradedReason = "ai-error" | "empty-response" | "no-ai-binding";
+
+/**
  * Payload of a `__lunora_admin__:explainIssue` call, mirroring `@lunora/do`'s
  * `ExplainIssueResult`. When the app wires an `AI` binding and the model returns
  * text, `degraded` is `false` and `explanation` holds the plain-language write-up
  * (grounded strictly in the catalog `hint`, whose `groundedId` names the matched
- * solution). Otherwise `degraded` is `true` and `reason` says why
- * (`no-ai-binding` | `ai-error` | `empty-response`) — the studio then falls back to
- * rendering the always-available grounded `hint` alone. `model` echoes the model
- * that produced a successful explanation.
+ * solution). Otherwise `degraded` is `true` and `reason` says why — the studio
+ * then falls back to rendering the always-available grounded `hint` alone.
+ * `model` echoes the model that produced a successful explanation.
  */
 export interface ExplainIssueResult {
     degraded: boolean;
@@ -1183,7 +1194,7 @@ export interface ExplainIssueResult {
     groundedId?: string;
     hint?: string;
     model?: string;
-    reason?: string;
+    reason?: ExplainIssueDegradedReason;
 }
 
 /**
