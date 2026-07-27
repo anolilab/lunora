@@ -1,4 +1,4 @@
-export { lunoraAuthAdapter, lunoraD1Adapter } from "./adapter";
+export { lunoraAuthAdapter, lunoraD1Adapter, lunoraDoAdapter } from "./adapter";
 export type {
     AuthAccount,
     AuthAdmin,
