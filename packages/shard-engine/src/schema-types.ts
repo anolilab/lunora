@@ -1,3 +1,4 @@
+import type { SystemDatabaseReader } from "./system-reader";
 import type { WhereInput } from "./where-types";
 
 /**
@@ -44,11 +45,17 @@ export interface RankIndexDefinitionLike {
     readonly where?: Record<string, unknown>;
 }
 
-/** Structural mirror of `@lunora/server`'s `SearchIndexDefinition`. */
 export interface SearchIndexDefinitionLike {
+    /** Indexed text column; a dot-separated path reads a nested field. */
     readonly field: string;
     readonly filterFields?: ReadonlyArray<string>;
+    /** Analysis profile (folding + stopwords) — see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly language?: string;
     readonly name: string;
+    /** Skip the migration-time backfill of the search companion — see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly staged?: boolean;
+    /** `"native"` opts into the engine's own full-text index where it has one; see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly strategy?: string;
 }
 
 /** Auth slice handed to a `.serverDefault(fn)` factory at write time. */
@@ -434,7 +441,16 @@ export interface DatabaseWriterLike {
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: { allowExplicitId?: boolean }) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
-    system?: unknown;
+
+    /**
+     * The system-table reader.
+     *
+     * Typed as `unknown` until the engine extraction completed: `system-reader`
+     * lived in `@lunora/do` while this file was already here, so naming it would
+     * have inverted the dependency. Both are in this package now, so the real
+     * type applies and callers stop asserting their way past it.
+     */
+    system?: SystemDatabaseReader;
     wipeShard?: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => Promise<{
         deleted: number;
         tables: Record<string, number>;

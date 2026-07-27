@@ -1,23 +1,26 @@
 import { LunoraError } from "@lunora/errors";
-import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike, ShardRankPageResult, SocketAttachment } from "@lunora/shard-engine";
-import { rankKeyFromDoc } from "@lunora/shard-engine";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
-import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
-import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration";
-import { runDataMigration } from "../src/data-migration";
 import type {
     AdvisoryFinding,
+    AggregateIndexDefinitionLike,
+    DatabaseWriterLike,
     FanoutMetricsResult,
     FanoutPathCounters,
     FanoutTopicStat,
     FlagEvaluation,
     FlagsResult,
     QueueMetadata,
+    RankIndexDefinitionLike,
+    SchemaLike,
+    ShardRankPageResult,
+    SocketAttachment,
+    SqlExec,
     StudioFeaturesResult,
-} from "../src/introspect";
-import { ADMIN_FUNCTIONS } from "../src/introspect";
+} from "@lunora/shard-engine";
+import { ADMIN_FUNCTIONS, applyCdcChanges, createShardCtxDb as createShardContextDatabase, rankKeyFromDoc, runShardMigrations } from "@lunora/shard-engine";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration";
+import { runDataMigration } from "../src/data-migration";
 import type { MetricSeries } from "../src/metric-buffer";
 import type { MetricHistoryPoint, MetricHistorySeries } from "../src/metric-history";
 import type { QueueMessageRow, RecordQueueMessageInput } from "../src/queue-catcher";

@@ -1,6 +1,14 @@
+// Test fixture, intentionally duplicated with `@lunora/do`'s copy.
+//
+// Both packages' suites need it — `@lunora/do` for the shard/socket tests that
+// stayed, this package for the `ctx-db` family that moved here. Sharing it would
+// mean either exporting a test fixture from a published package's public API, or
+// a cross-package relative import that `rootDir` rejects. Neither is worth it for
+// a schema literal and a `node:sqlite` factory; if they drift, they drift in the
+// direction each suite needs.
 import { DatabaseSync } from "node:sqlite";
 
-import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
+import type { SqlCursor, SqlExec } from "../src/ctx-db";
 
 /**
  * Adapts Node's built-in `node:sqlite` engine to the `SqlExec` surface the

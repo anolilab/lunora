@@ -1,3 +1,12 @@
+// Test fixture, intentionally duplicated with `@lunora/do`'s copy.
+//
+// Both packages' suites need it — `@lunora/do` for the shard/socket tests that
+// stayed, this package for the `ctx-db` family that moved here. Sharing it would
+// mean either exporting a test fixture from a published package's public API, or
+// a cross-package relative import that `rootDir` rejects. Neither is worth it for
+// a schema literal and a `node:sqlite` factory; if they drift, they drift in the
+// direction each suite needs.
+
 /**
  * The shared `messages` schema fixture for the DO test suites.
  *
@@ -7,7 +16,7 @@
  * `messages` (sharded) with `by_channel`/`by_channel_creation` indexes and a
  * UNIQUE `by_text`, a `.global()` `profiles`, and `roomMembers`.
  */
-import type { SchemaLike } from "@lunora/shard-engine";
+import type { SchemaLike } from "../src/schema-types";
 
 const messagesSchema: SchemaLike = {
     tables: {

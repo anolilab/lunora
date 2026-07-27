@@ -1,9 +1,9 @@
 import { LunoraError } from "@lunora/errors";
-import type { SortDirection } from "@lunora/shard-engine";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
+import type { SortDirection } from "./schema-types";
 
 /**
  * Reserved `functionPath` prefix for admin introspection RPCs. These travel

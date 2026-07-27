@@ -14,7 +14,7 @@
  * both call it defensively, and mutated through the {@link runSql} indirection
  * that keeps the literal SQL out of the secret-scan hook's way.
  */
-import type { SqlCursor, SqlExec } from "./ctx-db";
+import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
 
 /** Reserved table holding one triage-state row per Issue fingerprint. Auto-hidden by the `__lunora` prefix. */
 const ISSUE_STATE_TABLE = "__lunora_issue_state__";

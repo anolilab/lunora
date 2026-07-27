@@ -1,9 +1,9 @@
-import type { RankIndexDefinitionLike } from "@lunora/shard-engine";
-import { rankKeyFromDoc } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { backfillRankIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { rankKeyFromDoc } from "../src/rank";
+import type { RankIndexDefinitionLike } from "../src/schema-types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**

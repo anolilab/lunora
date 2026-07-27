@@ -1,8 +1,8 @@
+import type { SchemaLike } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
 import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
-import type { SchemaLike } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 
 /**
  * §1.2's keyset cursor seek is O(limit) per page; an offset-style

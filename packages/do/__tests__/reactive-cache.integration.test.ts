@@ -5,12 +5,10 @@
  */
 import { DatabaseSync } from "node:sqlite";
 
-import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
-import { ReactiveCache, reactiveCacheKey } from "@lunora/shard-engine";
+import type { SchemaLike, SocketAttachment, SqlExec, SubscriptionEnvelope } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, ReactiveCache, reactiveCacheKey, runShardMigrations } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { SchemaLike, SqlExec } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { ShardDOOptions, ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 

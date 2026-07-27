@@ -26,30 +26,22 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-companions" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
 import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, searchTextUnchanged } from "@lunora/search-core";
-import type { AggregateIndexDefinitionLike, AggregateTally, MutationDelta, RankIndexDefinitionLike } from "@lunora/shard-engine";
-import {
-    aggregateSqlFunction,
-    aggregateTableName,
-    coerceAggregateNumber,
-    encodeAggregateKey,
-    encodeGeohash,
-    encodePartitionKey,
-    foldAggregateTally,
-    GEO_DEFAULT_PRECISION,
-    matchesRankStaticWhere,
-    matchesStaticWhere,
-    param,
-    rankTableName,
-    sortColumnName,
-} from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import { aggregateSqlFunction, matchesStaticWhere } from "./aggregate-sql";
+import type { AggregateTally } from "./aggregate-tally";
+import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally } from "./aggregate-tally";
 // Type-only imports for the structural surfaces the DO writer threads in — value
 // imports would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
+import { param } from "./drizzle";
+import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
+import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
+import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
+import type { MutationDelta } from "./types";
 
 /**
  * Whether none of the fields a rank index reads (partition / sort / static

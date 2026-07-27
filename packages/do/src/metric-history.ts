@@ -18,10 +18,11 @@
  * that produced it (OpenTelemetry's exemplar model). The reserved `__lunora`
  * prefix auto-hides the table from the data browser.
  */
+import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
+
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
 import { stableStringify } from "../../../shared/stable-key";
-import type { SqlCursor, SqlExec } from "./ctx-db";
 // Shared so the durable history and the live buffer agree byte-for-byte on what
 // "one series" is — the studio joins the two on this identity.
 import { metricSeriesKey } from "./metric-buffer";

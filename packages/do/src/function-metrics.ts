@@ -50,8 +50,7 @@
  * hides them automatically.
  */
 
-import type { SqlCursor, SqlExec } from "./ctx-db";
-import type { FunctionCallStat, FunctionScanAttribution } from "./introspect";
+import type { FunctionCallStat, FunctionScanAttribution, SqlCursor, SqlExec } from "@lunora/shard-engine";
 
 /** Reserved per-function accumulator table. Auto-hidden from the data browser by the `__lunora` prefix. */
 const FUNCTION_METRICS_TABLE = "__lunora_metrics";

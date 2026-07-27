@@ -12,8 +12,7 @@
  * sibling helpers and concatenates the two streams.
  */
 import { toErrorBody } from "@lunora/errors";
-
-import type { DatabaseWriterLike, SchemaLike } from "./ctx-db";
+import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
 
 /** One NDJSON line: a row from `table` shaped per its schema. */
 interface ExportRow {

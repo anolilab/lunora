@@ -1,6 +1,6 @@
+import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
 import { beforeAll, bench, describe } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { makeWriter } from "./shared";
 
 /**

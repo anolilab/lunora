@@ -12,8 +12,8 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+import type { DatabaseWriterLike, SqlExec } from "@lunora/shard-engine";
 
-import type { DatabaseWriterLike, SqlExec } from "./ctx-db";
 import { deserializeCursor, maxCursorValue, migrateSourceCursor, readSourceCursor, writeSourceCursor } from "./external-source-cursor";
 import type { MaterializeResult } from "./external-source-materialize";
 import { materializeExternalRowsIncremental, runExternalSourceTick } from "./external-source-materialize";

@@ -1,7 +1,7 @@
+import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { readSourceCursor } from "../src/external-source-cursor";
 import type { ExternalSourceLike, SourceClientLike } from "../src/external-source-pull";
 import {

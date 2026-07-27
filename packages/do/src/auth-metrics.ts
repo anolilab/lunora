@@ -28,7 +28,7 @@
  * them automatically.
  */
 
-import type { SqlCursor, SqlExec } from "./ctx-db";
+import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
 
 /** Reserved single-row auth accumulator table. Auto-hidden from the data browser by the `__lunora` prefix. */
 const AUTH_METRICS_TABLE = "__lunora_auth_metrics";

@@ -1,7 +1,7 @@
+import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations } from "../src/ctx-db";
 import { materializeExternalRows, materializeExternalRowsIncremental, runExternalSourceTick } from "../src/external-source-materialize";
 import createSqliteExec from "./_helpers/node-sqlite";
 

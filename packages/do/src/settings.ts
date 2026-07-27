@@ -1,4 +1,4 @@
-import type { DeployInfo, SettingEntry, SettingsResult } from "./introspect";
+import type { DeployInfo, SettingEntry, SettingsResult } from "@lunora/shard-engine";
 
 /**
  * Names that, by convention, hold a secret regardless of the value's shape. A

@@ -13,10 +13,10 @@
  * passed straight through — structurally compatible with `ShardDOState`.
  */
 import type { MutationDelta } from "@lunora/shard-engine";
+import type { DatabaseWriterLike } from "@lunora/shard-engine";
+import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 import { DurableObject } from "cloudflare:workers";
 
-import type { DatabaseWriterLike } from "../../src/ctx-db";
-import { createShardCtxDb, runShardMigrations } from "../../src/ctx-db";
 import { SessionDO } from "../../src/session-do";
 import type { ShardDOState } from "../../src/shard-do";
 import { ShardDO } from "../../src/shard-do";

@@ -1,8 +1,8 @@
-import type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { backfillAggregateIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import type { AggregateIndexDefinitionLike } from "../src/schema-types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**

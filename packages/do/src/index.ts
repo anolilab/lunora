@@ -16,7 +16,6 @@ export {
     selectExportTables,
     validateImportRow,
 } from "./admin-export-import";
-export type { AuditEntry } from "./audit-log";
 export type { AuthMetrics, AuthMetricsBucket, RecordAuthEventInput } from "./auth-metrics";
 export {
     AUTH_METRICS_BUCKET_MS,
@@ -32,47 +31,6 @@ export {
 export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "./cloudflare-host";
 export type { ContextMetrics, ContextTracer, MetricsDeps, SpanHandle, TraceAnchor, TracerDeps } from "./context-telemetry";
 export { createMetrics, createTracer, dispatchRootSpan } from "./context-telemetry";
-export type {
-    BroadcastDelta,
-    CdcChange,
-    Clock,
-    ColumnMetaLike,
-    CountArgs,
-    CtxDbOptions,
-    DatabaseWriterLike,
-    GeoFilterBuilderLike,
-    GeoIndexDefinitionLike,
-    IdGenerator,
-    IndexDefinitionLike,
-    IndexRangeBuilderLike,
-    PaginationOptions,
-    ReadHook,
-    SchemaLike,
-    SearchFilterBuilderLike,
-    SearchIndexDefinitionLike,
-    ServerDefaultContextLike,
-    SqlCursor,
-    SqlExec,
-    TableDefinitionLike,
-    TableReaderLike,
-    ValidatorLike,
-    WriteEvent,
-    WriteHook,
-} from "./ctx-db";
-export {
-    applyCdcChanges,
-    assertValidClientId,
-    backfillAggregateIndexes,
-    backfillRankIndexes,
-    backfillSearchIndexes,
-    CDC_LOG_TABLE,
-    createShardCtxDb,
-    normalizeIdStructurally,
-    NotUniqueError,
-    readCdcChanges,
-    runShardMigrations,
-    trimCdcChanges,
-} from "./ctx-db";
 export type {
     DataMigrationDocument,
     DataMigrationLike,
@@ -108,53 +66,6 @@ export {
     readFunctionMetricsTotals,
     recordFunctionMetric,
 } from "./function-metrics";
-export type {
-    AdvisoriesResult,
-    AdvisoryFinding,
-    AuditLogResult,
-    ColumnMeta,
-    DeployInfo,
-    FacetColumnOptions,
-    FacetColumnResult,
-    FacetValue,
-    FlagEvaluation,
-    FlagsResult,
-    FunctionCallStat,
-    FunctionStatsResult,
-    MaskColumnMetadata,
-    MaskPoliciesResult,
-    QueueMetadata,
-    QueuesResult,
-    ReadTablePageOptions,
-    RlsPoliciesResult,
-    RlsPolicyMetadata,
-    RlsRoleMetadata,
-    SelectMatchingIdsOptions,
-    SettingEntry,
-    SettingKind,
-    SettingsResult,
-    StorageRuleMetadata,
-    StorageRulesResult,
-    StudioFeaturesResult,
-    TableColumnsResult,
-    TableIndexesResult,
-    TableIndexInfo,
-    TableInfo,
-    TablePage,
-    TablesColumnsResult,
-    WorkflowMetadata,
-    WorkflowsResult,
-} from "./introspect";
-export {
-    ADMIN_FUNCTION_PREFIX,
-    ADMIN_FUNCTIONS,
-    facetColumn,
-    FLAGS_FUNCTION_PREFIX,
-    listTables,
-    readTablePage,
-    RELATION_FUNCTION_PREFIX,
-    selectMatchingIds,
-} from "./introspect";
 export type { LogEntry, LogLevel } from "./log-buffer";
 export { LogBuffer } from "./log-buffer";
 export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
@@ -199,6 +110,73 @@ export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDelt
 export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";
 export type { SqlConsoleResult } from "./sql-console";
 export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "./sql-console";
+export type { TtlSweepSpec } from "./ttl-sweep";
+export { selectExpiredIds } from "./ttl-sweep";
+export type { AuditEntry } from "@lunora/shard-engine";
+export type {
+    BroadcastDelta,
+    CdcChange,
+    Clock,
+    ColumnMetaLike,
+    CountArgs,
+    CtxDbOptions,
+    DatabaseWriterLike,
+    GeoFilterBuilderLike,
+    GeoIndexDefinitionLike,
+    IdGenerator,
+    IndexDefinitionLike,
+    IndexRangeBuilderLike,
+    PaginationOptions,
+    ReadHook,
+    SchemaLike,
+    SearchFilterBuilderLike,
+    SearchIndexDefinitionLike,
+    ServerDefaultContextLike,
+    SqlCursor,
+    SqlExec,
+    TableDefinitionLike,
+    TableReaderLike,
+    ValidatorLike,
+    WriteEvent,
+    WriteHook,
+} from "@lunora/shard-engine";
+export type {
+    AdvisoriesResult,
+    AdvisoryFinding,
+    AuditLogResult,
+    ColumnMeta,
+    DeployInfo,
+    FacetColumnOptions,
+    FacetColumnResult,
+    FacetValue,
+    FlagEvaluation,
+    FlagsResult,
+    FunctionCallStat,
+    FunctionStatsResult,
+    MaskColumnMetadata,
+    MaskPoliciesResult,
+    QueueMetadata,
+    QueuesResult,
+    ReadTablePageOptions,
+    RlsPoliciesResult,
+    RlsPolicyMetadata,
+    RlsRoleMetadata,
+    SelectMatchingIdsOptions,
+    SettingEntry,
+    SettingKind,
+    SettingsResult,
+    StorageRuleMetadata,
+    StorageRulesResult,
+    StudioFeaturesResult,
+    TableColumnsResult,
+    TableIndexesResult,
+    TableIndexInfo,
+    TableInfo,
+    TablePage,
+    TablesColumnsResult,
+    WorkflowMetadata,
+    WorkflowsResult,
+} from "@lunora/shard-engine";
 export type {
     ScheduledFunctionDoc,
     SystemDatabaseReader,
@@ -208,8 +186,7 @@ export type {
     SystemReaderSchedulerLike,
     SystemReaderStorageLike,
     SystemTableName,
-} from "./system-reader";
-export { createSystemReader } from "./system-reader";
+} from "@lunora/shard-engine";
 export type {
     RunTriggersOptions,
     SchedulableWorkflowReferenceLike,
@@ -219,10 +196,7 @@ export type {
     TriggerEventLike,
     TriggerOpLike,
     TriggerTimingLike,
-} from "./triggers";
-export { hasTrigger, runTriggers } from "./triggers";
-export type { TtlSweepSpec } from "./ttl-sweep";
-export { selectExpiredIds } from "./ttl-sweep";
+} from "@lunora/shard-engine";
 export type { AggregateTally } from "@lunora/shard-engine";
 export type {
     AggregateIndexDefinitionLike,
@@ -256,6 +230,32 @@ export type { CacheEntry, ReactiveCacheOptions } from "@lunora/shard-engine";
 export type { FieldOperators, WhereInput } from "@lunora/shard-engine";
 export type { DependencyTracker } from "@lunora/shard-engine";
 export type { TransactionSqlLike } from "@lunora/shard-engine";
+export {
+    applyCdcChanges,
+    assertValidClientId,
+    backfillAggregateIndexes,
+    backfillRankIndexes,
+    backfillSearchIndexes,
+    CDC_LOG_TABLE,
+    createShardCtxDb,
+    normalizeIdStructurally,
+    NotUniqueError,
+    readCdcChanges,
+    runShardMigrations,
+    trimCdcChanges,
+} from "@lunora/shard-engine";
+export {
+    ADMIN_FUNCTION_PREFIX,
+    ADMIN_FUNCTIONS,
+    facetColumn,
+    FLAGS_FUNCTION_PREFIX,
+    listTables,
+    readTablePage,
+    RELATION_FUNCTION_PREFIX,
+    selectMatchingIds,
+} from "@lunora/shard-engine";
+export { createSystemReader } from "@lunora/shard-engine";
+export { hasTrigger, runTriggers } from "@lunora/shard-engine";
 export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "@lunora/shard-engine";
 export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "@lunora/shard-engine";
 export {

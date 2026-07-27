@@ -1,7 +1,7 @@
+import type { DatabaseWriterLike, SchemaLike, SqlExec } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { DataMigrationLike } from "../src/data-migration";
 import { DATA_MIGRATION_STATE_TABLE, runDataMigration } from "../src/data-migration";
 import createSqliteExec from "./_helpers/node-sqlite";

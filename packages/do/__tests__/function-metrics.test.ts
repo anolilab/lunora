@@ -1,3 +1,4 @@
+import type { FunctionCallStat } from "@lunora/shard-engine";
 import { ConflictError, SCAN_DEP } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
@@ -16,7 +17,6 @@ import {
     readFunctionMetricsTotals,
     recordFunctionMetric,
 } from "../src/function-metrics";
-import type { FunctionCallStat } from "../src/introspect";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";

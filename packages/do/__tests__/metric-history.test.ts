@@ -1,7 +1,7 @@
+import type { SqlExec } from "@lunora/shard-engine";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { MetricEvent } from "../../../shared/metric-event";
-import type { SqlExec } from "../src/ctx-db";
 import { readMetricHistory, recordMetricHistory } from "../src/metric-history";
 import createSqliteExec from "./_helpers/node-sqlite";
 

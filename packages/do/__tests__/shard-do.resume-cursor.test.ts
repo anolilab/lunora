@@ -1,7 +1,7 @@
+import type { SqlExec } from "@lunora/shard-engine";
+import { CDC_LOG_TABLE, readCdcEpoch, runShardMigrations } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
-import type { SqlExec } from "../src/ctx-db";
-import { CDC_LOG_TABLE, readCdcEpoch, runShardMigrations } from "../src/ctx-db";
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import messagesSchema from "./_helpers/messages-schema";

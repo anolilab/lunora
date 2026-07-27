@@ -1,8 +1,8 @@
+import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
 import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 
 /**
  * Hot-path cost of the two new read-layer features.

@@ -1,6 +1,6 @@
+import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ADMIN_FUNCTIONS } from "../src/introspect";
 import { buildSettings, isDevEnvironment } from "../src/settings";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";

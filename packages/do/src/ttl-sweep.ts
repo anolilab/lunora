@@ -10,11 +10,9 @@
  * are excluded from the scan so the sweep doesn't re-process tombstones.
  */
 
+import type { SqlExec } from "@lunora/shard-engine";
+import { jsonPathSql, runDrizzle } from "@lunora/shard-engine";
 import { sql as dsql } from "drizzle-orm";
-
-import type { SqlExec } from "./ctx-db";
-import { runDrizzle } from "./do-exec";
-import { jsonPathSql } from "./do-sql";
 
 /** One table's resolved TTL policy, as surfaced to the DO alarm by the generated shard subclass. */
 export interface TtlSweepSpec {
