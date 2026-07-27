@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { findSolutionByMessage, isLunoraError } from "@lunora/errors";
 import { createCerebro } from "@visulima/cerebro";
@@ -74,22 +76,57 @@ const COMMANDS = [
 
 type CommandName = (typeof COMMANDS)[number];
 
+/** How far up from this module to look for the package root before giving up. */
+const PACKAGE_JSON_SEARCH_DEPTH = 8;
+
 /**
- * The CLI version, read from the package's own `package.json` at load time. The
- * bundle lives in `dist/`, so `package.json` sits one directory up; in dev
- * (running `src/` under vitest) it resolves to `packages/cli/package.json`.
- * Falls back to the `0.0.0` dev sentinel when the read fails — which also keeps
- * the update notifier inert in dev/unpublished builds.
+ * The CLI version, read from the package's own `package.json` at load time.
+ *
+ * It **walks up** looking for the manifest rather than resolving a fixed
+ * `../package.json`, because this module's depth is not fixed: from `src/` under
+ * vitest the manifest is one level up, but packem hoists the built module into a
+ * hashed `dist/packem_shared/` chunk where it is two — so the fixed path silently
+ * resolved to a nonexistent `dist/package.json` and every published build
+ * reported the `0.0.0` sentinel. (`@visulima/vis` solves the same problem by
+ * pinning its emitted depth, `../../package.json`, plus a `VIS_VERSION` env
+ * override set by its non-bundled launcher; walking costs one extra `stat` or
+ * two and survives a re-chunk. `@lunora/mcp` walks for the same reason.)
+ *
+ * The name check matters: without it the walk would happily accept the first
+ * `package.json` it met, which in a nested install is some dependency's.
+ *
+ * Falls back to the `0.0.0` dev sentinel when nothing is found, which also keeps
+ * the update notifier quiet rather than comparing against a bogus version.
  */
 const readCliVersion = (): string => {
     try {
-        const parsed: unknown = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-        const version = parsed !== null && typeof parsed === "object" ? (parsed as { version?: unknown }).version : undefined;
+        let directory = dirname(fileURLToPath(import.meta.url));
 
-        return typeof version === "string" && version.length > 0 ? version : "0.0.0";
+        for (let depth = 0; depth < PACKAGE_JSON_SEARCH_DEPTH; depth += 1) {
+            try {
+                const parsed: unknown = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+                const manifest = parsed !== null && typeof parsed === "object" ? (parsed as { name?: unknown; version?: unknown }) : undefined;
+
+                if (manifest?.name === "@lunora/cli" && typeof manifest.version === "string" && manifest.version.length > 0) {
+                    return manifest.version;
+                }
+            } catch {
+                // No (or unreadable) package.json at this level — keep climbing.
+            }
+
+            const parent = dirname(directory);
+
+            if (parent === directory) {
+                break;
+            }
+
+            directory = parent;
+        }
     } catch {
-        return "0.0.0";
+        // Fall through to the sentinel below.
     }
+
+    return "0.0.0";
 };
 
 const VERSION: string = readCliVersion();

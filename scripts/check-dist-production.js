@@ -21,6 +21,7 @@
  * Root script: `pnpm run dist:check`. Run it AFTER a build.
  */
 
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,6 +101,52 @@ if (checkedPackages === 0) {
     process.exit(1);
 }
 
+/**
+ * The built CLI must report its real version.
+ *
+ * `@lunora/cli` reads its own `package.json` at load time to answer `--version`
+ * (and to decide whether to check for updates). That read is relative to the
+ * built module, whose depth packem chooses — so a re-chunk can silently move the
+ * manifest out of reach and every published build falls back to the `0.0.0` dev
+ * sentinel. That shipped: alpha.116's binary reported `0.0.0`.
+ *
+ * No unit test can catch it, because from `src/` under vitest the manifest is
+ * always exactly where the resolver looks. Only the artifact shows the bug, so
+ * the check belongs here.
+ */
+const checkCliVersion = () => {
+    const cliDir = join(packagesDir, "cli");
+    const binary = join(cliDir, "dist", "bin.mjs");
+
+    if (!dirExists(join(cliDir, "dist"))) {
+        return true;
+    }
+
+    const { version } = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8"));
+    let reported;
+
+    try {
+        reported = execFileSync(process.execPath, [binary, "--version"], { encoding: "utf8", timeout: 30_000 }).trim();
+    } catch (error) {
+        console.error(`❌ Could not run the built CLI (${relative(rootDir, binary)}): ${error.message}`);
+
+        return false;
+    }
+
+    if (!reported.includes(version)) {
+        console.error(`❌ The built CLI reports "${reported}" but its package.json says "${version}".`);
+        console.error("   `readCliVersion` in packages/cli/src/cli.ts can no longer find the manifest from the built module.");
+
+        return false;
+    }
+
+    console.log(`✅ The built CLI reports its real version (${version}).`);
+
+    return true;
+};
+
+const cliVersionOk = checkCliVersion();
+
 if (violations.length > 0) {
     console.error(`❌ Development-build artifacts found in ${violations.length} file(s):\n`);
 
@@ -110,6 +157,10 @@ if (violations.length > 0) {
 
     console.error("\nThese packages were built with `build` (--development) instead of `build:prod` (--production).");
     console.error("Rebuild with `pnpm run build:packages:prod` before publishing.");
+    process.exit(1);
+}
+
+if (!cliVersionOk) {
     process.exit(1);
 }
 
