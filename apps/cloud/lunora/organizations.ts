@@ -75,6 +75,14 @@ export const getBySlug = query
  * Create an organization on a given cell, seed its creator as `owner`, and
  * record the action in the audit log. Slug uniqueness is enforced by the
  * `by_slug` global (D1) unique index.
+ *
+ * Carries no CAPTCHA, so `user_creating_mutation_without_captcha` flags it (the
+ * lint keys on the `members` insert below, which matches its user/session-table
+ * pattern). Accepted deliberately: this is a *signed-in* endpoint, so a bot must
+ * already have cleared better-auth's sign-up + email verification — which is
+ * where the human check belongs, and where better-auth's own `rateLimit` runs.
+ * The abuse ceiling here is the `provision` bucket. Same reasoning applies to
+ * `members.add` and `invitations.accept`.
  */
 export const create = mutation
     .use(dbRateLimit(RATE_LIMITS, "provision", { key: callerKey }))
