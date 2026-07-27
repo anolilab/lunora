@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+    CLOUDFLARE_PLATFORM_ERRORS,
     ERROR_CATALOG,
+    findCloudflarePlatformSolution,
     findSolutionByMessage,
     flattenHint,
     invariant,
@@ -254,6 +256,85 @@ describe("catalog message solutions", () => {
         expect(resolveHint({ hint: "explicit" })).toBe("explicit");
         expect(resolveHint({ code: "CONFLICT" })).toBe(ERROR_CATALOG.CONFLICT.hint);
         expect(resolveHint("optimistic concurrency conflict on row")).toBe(ERROR_CATALOG.CONFLICT.hint.join("\n"));
+    });
+});
+
+describe("cloudflare platform errors", () => {
+    it("recognizes a Worker exception via Cloudflare's `Error <code>` phrasing", () => {
+        expect.assertions(5);
+
+        const solution = findCloudflarePlatformSolution("Error 1101: Worker threw exception");
+
+        expect(solution?.id).toBe("cloudflare-error-1101");
+        expect(solution?.header).toBe("Cloudflare Error 1101: Worker threw a JavaScript exception");
+        // The grounded body must carry cause, fix, and the family docs link.
+        expect(solution?.body).toContain("**Likely cause:**");
+        expect(solution?.body).toContain("**Fix:**");
+        expect(solution?.body).toContain("cloudflare-1xxx-errors");
+    });
+
+    it("recognizes the `Error: <code>` colon phrasing", () => {
+        expect.assertions(1);
+
+        expect(findCloudflarePlatformSolution("Error: 522 connecting to origin")?.id).toBe("cloudflare-error-522");
+    });
+
+    it("recognizes a standalone code only when `cloudflare` is also mentioned", () => {
+        expect.assertions(2);
+
+        expect(findCloudflarePlatformSolution("Cloudflare returned 520 from the origin")?.id).toBe("cloudflare-error-520");
+        // A 5xx docs link for the 52x family.
+        expect(findCloudflarePlatformSolution("Cloudflare returned 520 from the origin")?.body).toContain("cloudflare-5xx-errors");
+    });
+
+    it("does not false-match a bare number without Cloudflare context", () => {
+        expect.assertions(2);
+
+        // No `error <code>` phrasing and no `cloudflare` mention → not a platform error.
+        expect(findCloudflarePlatformSolution("expected 520 items in the array")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("retry after 522 ms")).toBeUndefined();
+    });
+
+    it("does not match a code embedded in a longer number", () => {
+        expect.assertions(2);
+
+        // `5200` and `15201` contain `520`/`521` as substrings but not as standalone tokens.
+        expect(findCloudflarePlatformSolution("cloudflare processed 5200 requests")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("cloudflare job 15221 finished")).toBeUndefined();
+    });
+
+    it("resolveHint grounds a CF platform error from a message", () => {
+        expect.assertions(2);
+
+        const hint = resolveHint({ message: "Error 524: A timeout occurred" });
+
+        expect(typeof hint).toBe("string");
+        expect(hint as string).toContain("did not respond in time");
+    });
+
+    it("resolveHint from a bare string also grounds a CF platform error", () => {
+        expect.assertions(1);
+
+        expect(resolveHint("Error 1102: Worker exceeded resource limits")).toContain("CPU-time");
+    });
+
+    it("every catalog code resolves via its `Error <code>` phrasing", () => {
+        expect.hasAssertions();
+
+        for (const entry of CLOUDFLARE_PLATFORM_ERRORS) {
+            const solution = findCloudflarePlatformSolution(`Error ${entry.code}`);
+
+            expect(solution?.id).toBe(`cloudflare-error-${entry.code}`);
+        }
+    });
+
+    it("findSolutionByMessage falls back to the CF table but Lunora solutions win", () => {
+        expect.assertions(2);
+
+        // A Lunora message-solution still takes precedence over the CF fallback.
+        expect(findSolutionByMessage("defineSchema() not found in schema.ts")?.id).toBe("lunora-schema-missing");
+        // A message no Lunora rule recognizes falls through to the CF table.
+        expect(findSolutionByMessage("Error 1101: boom")?.id).toBe("cloudflare-error-1101");
     });
 });
 
