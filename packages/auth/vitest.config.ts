@@ -21,6 +21,11 @@ const coverage = {
         "**/node_modules/**",
         "**/dist/**",
     ],
+    // Imported, not copied. Moving this package off `getVitestConfig` for the workers
+    // pool otherwise drops its coverage floor silently — which is a poor trade on an
+    // auth package. The default run here is node-only (workerd is opt-in), so unlike
+    // the always-workerd packages the number is complete and the floor is meaningful.
+    thresholds: { ...DEFAULT_COVERAGE_THRESHOLDS },
 };
 
 /**

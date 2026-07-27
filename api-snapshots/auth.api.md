@@ -1195,7 +1195,11 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 ### `mcp` (const)
 
-Re-exported from `better-auth` — signature tracked at its source.
+Re-exported from `@better-auth/mcp` — signature tracked at its source.
+
+### `mcpHandler` (const)
+
+Re-exported from `@better-auth/mcp` — signature tracked at its source.
 
 ### `multiSession` (const)
 
@@ -1205,9 +1209,9 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 Re-exported from `better-auth` — signature tracked at its source.
 
-### `oidcProvider` (const)
+### `oauthProvider` (const)
 
-Re-exported from `better-auth` — signature tracked at its source.
+Re-exported from `@better-auth/oauth-provider` — signature tracked at its source.
 
 ### `oneTimeToken` (const)
 
@@ -1225,6 +1229,14 @@ Re-exported from `@better-auth/passkey` — signature tracked at its source.
 
 Re-exported from `better-auth` — signature tracked at its source.
 
+### `requireMcpAuth` (const)
+
+Re-exported from `@better-auth/mcp` — signature tracked at its source.
+
+### `scim` (function)
+
+Re-exported from `@better-auth/scim` — signature tracked at its source.
+
 ### `siwe` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
@@ -1234,10 +1246,6 @@ Re-exported from `better-auth` — signature tracked at its source.
 Re-exported from `better-auth` — signature tracked at its source.
 
 ### `username` (const)
-
-Re-exported from `better-auth` — signature tracked at its source.
-
-### `withMcpAuth` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
 
@@ -1260,10 +1268,6 @@ Re-exported from `better-auth` — signature tracked at its source.
 Re-exported from `better-auth` — signature tracked at its source.
 
 ### `emailOTPClient` (const)
-
-Re-exported from `better-auth` — signature tracked at its source.
-
-### `genericOAuthClient` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
 
@@ -1291,9 +1295,9 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 Re-exported from `better-auth` — signature tracked at its source.
 
-### `oidcClient` (const)
+### `oauthProviderClient` (const)
 
-Re-exported from `better-auth` — signature tracked at its source.
+Re-exported from `@better-auth/oauth-provider` — signature tracked at its source.
 
 ### `oneTimeTokenClient` (const)
 
@@ -1322,6 +1326,71 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `usernameClient` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
+
+## `@lunora/auth/plugins/enterprise`
+
+### `OIDCConfig` (interface)
+
+```ts
+interface OIDCConfig {
+    issuer: string;
+    pkce: boolean;
+    clientId: string;
+    clientSecret?: string;
+    authorizationEndpoint?: string | undefined;
+    discoveryEndpoint: string;
+    userInfoEndpoint?: string | undefined;
+    scopes?: string[] | undefined;
+    overrideUserInfo?: boolean | undefined;
+    tokenEndpoint?: string | undefined;
+    tokenEndpointAuthentication?: ("client_secret_post" | "client_secret_basic" | "private_key_jwt") | undefined;
+    privateKeyId?: string | undefined;
+    privateKeyAlgorithm?: string | undefined;
+    jwksEndpoint?: string | undefined;
+    mapping?: OIDCMapping | undefined;
+    allowIdpInitiated?: boolean | undefined;
+}
+```
+
+### `sso` (function)
+
+```ts
+function sso<O extends SSOOptions & {
+    domainVerification?: {
+        enabled: true;
+    };
+}>(options?: O | undefined): {
+    id: "sso";
+    version: string;
+    endpoints: SSOEndpoints<O> & DomainVerificationEndpoints;
+    schema: SSOProviderSchema<O>;
+    $Infer: {
+        SSOProvider: InferSSOProvider<O>;
+    };
+    options: NoInfer<O>;
+};
+
+function sso<O extends SSOOptions>(options?: O | undefined): {
+    id: "sso";
+    version: string;
+    endpoints: SSOEndpoints<O>;
+    schema: SSOProviderSchema<O>;
+    $Infer: {
+        SSOProvider: InferSSOProvider<O>;
+    };
+    options: NoInfer<O>;
+};
+```
+
+## `@lunora/auth/plugins/enterprise/client`
+
+### `SSOClientPlugin` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `ssoClient` (const)
+
+Re-exported from `@better-auth/sso` — signature tracked at its source.
 
 ## `@lunora/auth/schema`
 
