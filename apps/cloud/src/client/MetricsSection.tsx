@@ -20,6 +20,11 @@ interface MetricsSectionProps {
  * new points land. Empty until a tenant emits measurements; never fabricates a
  * series. (The sampled Analytics-Engine mirror, `metrics.list`, remains the
  * archive tier for windows older than the D1 hot retention.)
+ *
+ * The one tab that is NOT server-rendered: its series is keyed on the time range
+ * the `TimeRangePicker` owns in client state, so there is nothing in the URL for a
+ * loader to preload — and preloading a default window would go stale the moment
+ * the picker moved. Everything else preloads in its route loader.
  */
 export const MetricsSection = ({ organizationId }: MetricsSectionProps): ReactElement => {
     const { from, to } = useTimeRange();
@@ -44,7 +49,7 @@ export const MetricsSection = ({ organizationId }: MetricsSectionProps): ReactEl
                 </section>
             ) : null}
 
-            {series !== undefined && series.length === 0 ? (
+            {series?.length === 0 ? (
                 <section className="card">
                     <p className="muted">
                         No metrics for this window. Emit measurements with <code>ctx.metrics.*</code> in your app and they appear here as they arrive.

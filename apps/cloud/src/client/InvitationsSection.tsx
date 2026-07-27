@@ -1,4 +1,5 @@
-import { useMutation, useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { useMutation, usePreloadedQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -8,6 +9,8 @@ import type { OrgId } from "./types";
 
 interface InvitationsSectionProps {
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.invitations.list>>;
 }
 
 /**
@@ -17,8 +20,8 @@ interface InvitationsSectionProps {
  * invitee, never shown in the browser. Pending/accepted/revoked status comes
  * from the live `invitations.list` query; revoking stays a direct mutation.
  */
-export const InvitationsSection = ({ organizationId }: InvitationsSectionProps): ReactElement => {
-    const invitations = useQuery(api.invitations.list, { organizationId });
+export const InvitationsSection = ({ organizationId, preloaded }: InvitationsSectionProps): ReactElement => {
+    const invitations = usePreloadedQuery(preloaded);
     const revoke = useMutation(api.invitations.revoke);
 
     const [email, setEmail] = useState("");

@@ -1,4 +1,5 @@
-import { useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -7,6 +8,8 @@ import type { OrgId } from "./types";
 
 interface UptimeSectionProps {
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.billing.entitlements>>;
 }
 
 /** Format a `[0,1]` uptime fraction as a percentage, to two decimals. */
@@ -23,8 +26,8 @@ const formatLatency = (ms: number | undefined): string => (ms === undefined ? "â
  * behind the `logStreams` entitlement like Issues/Incidents. Configure an alert
  * that pages you on an outage from the Alerts tab (target "uptime").
  */
-export const UptimeSection = ({ organizationId }: UptimeSectionProps): ReactElement => {
-    const entitlements = useQuery(api.billing.entitlements, { organizationId });
+export const UptimeSection = ({ organizationId, preloaded }: UptimeSectionProps): ReactElement => {
+    const entitlements = usePreloadedQuery(preloaded);
     const gated = entitlements ? !entitlements.features.includes("logStreams") : false;
     const rows = useQuery(api.uptime.summary, gated ? "skip" : { organizationId });
 

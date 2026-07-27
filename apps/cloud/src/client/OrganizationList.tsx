@@ -1,4 +1,5 @@
-import { useMutation, useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { useMutation, usePreloadedQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -8,6 +9,10 @@ import type { CellId, OrgId } from "./types";
 
 interface OrganizationListProps {
     onSelect: (id: OrgId) => void;
+    /** Cells, server-rendered by the `/` route loader. */
+    preloadedCells: Preloaded<ReturnOf<typeof api.cells.list>>;
+    /** Organizations, server-rendered by the `/` route loader. */
+    preloadedOrganizations: Preloaded<ReturnOf<typeof api.organizations.list>>;
 }
 
 /** Derive a url-safe slug from a free-text organization name. */
@@ -40,9 +45,10 @@ const slugify = (value: string): string => {
  * `organizations.create` mutation, which requires choosing the cell (account
  * shard) the org's tenants will be provisioned into.
  */
-export const OrganizationList = ({ onSelect }: OrganizationListProps): ReactElement => {
-    const organizations = useQuery(api.organizations.list, {});
-    const cells = useQuery(api.cells.list, {});
+export const OrganizationList = ({ onSelect, preloadedCells, preloadedOrganizations }: OrganizationListProps): ReactElement => {
+    // Seeded from the SSR render, then live over the WebSocket from mount on.
+    const organizations = usePreloadedQuery(preloadedOrganizations);
+    const cells = usePreloadedQuery(preloadedCells);
     const createOrg = useMutation(api.organizations.create);
 
     const [name, setName] = useState("");
