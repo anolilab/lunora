@@ -128,7 +128,7 @@ const NO_DEPLOYMENT_MESSAGE = "no Lunora dev server is running for this project 
 ### `PaidMcpChargeConfig` (type)
 
 ```ts
-type PaidMcpChargeConfig = Omit<X402ChargeConfig, "price">;
+type PaidMcpChargeConfig = X402ChargeSettings;
 ```
 
 ### `PaidMcpServer` (interface)
