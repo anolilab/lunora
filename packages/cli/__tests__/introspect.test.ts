@@ -1,0 +1,297 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { dialectFromUrl } from "../src/commands/introspect/connect";
+import { emitIntrospection, identifierFor, indexedColumns } from "../src/commands/introspect/emit";
+import type { IntrospectedDatabase, IntrospectedTable } from "../src/commands/introspect/model";
+import { validatorForColumn } from "../src/commands/introspect/model";
+import type { SqlExecutor } from "../src/commands/introspect/read-database";
+import { readDatabase, resolveType } from "../src/commands/introspect/read-database";
+
+const emitOptions = { procedures: true, serverImport: "@lunora/server" };
+
+const usersTable: IntrospectedTable = {
+    columns: [
+        { arrayDepth: 0, dataType: "int4", name: "id", nullable: false },
+        { arrayDepth: 0, dataType: "text", name: "email", nullable: false },
+        { arrayDepth: 0, dataType: "text", name: "display_name", nullable: true },
+        { arrayDepth: 0, dataType: "timestamptz", name: "created_at", nullable: false },
+    ],
+    indexes: [{ columns: ["email"], name: "users_email_key", unique: true }],
+    name: "users",
+    primaryKey: ["id"],
+};
+
+const postsTable: IntrospectedTable = {
+    columns: [
+        { arrayDepth: 0, dataType: "int4", name: "id", nullable: false },
+        { arrayDepth: 0, dataType: "int4", name: "author_id", nullable: false, references: { column: "id", table: "users" } },
+        { arrayDepth: 1, dataType: "text", name: "tags", nullable: true },
+        { arrayDepth: 0, dataType: "geometry", name: "location", nullable: true },
+    ],
+    indexes: [],
+    name: "posts",
+    primaryKey: ["id"],
+};
+
+const database: IntrospectedDatabase = { dialect: "postgres", tables: [postsTable, usersTable] };
+
+describe("validatorForColumn", () => {
+    it("maps common Postgres types onto v.* validators", () => {
+        expect.assertions(4);
+
+        expect(validatorForColumn({ arrayDepth: 0, dataType: "text", name: "a", nullable: false }, "postgres").expression).toBe("v.string()");
+        expect(validatorForColumn({ arrayDepth: 0, dataType: "int8", name: "a", nullable: false }, "postgres").expression).toBe("v.bigint()");
+        expect(validatorForColumn({ arrayDepth: 0, dataType: "timestamptz", name: "a", nullable: false }, "postgres").expression).toBe("v.timestamp()");
+        expect(validatorForColumn({ arrayDepth: 0, dataType: "jsonb", name: "a", nullable: false }, "postgres").expression).toBe("v.any()");
+    });
+
+    it("wraps a nullable column in v.optional and an array column in v.array", () => {
+        expect.assertions(2);
+
+        expect(validatorForColumn({ arrayDepth: 0, dataType: "text", name: "a", nullable: true }, "postgres").expression).toBe("v.optional(v.string())");
+        expect(validatorForColumn({ arrayDepth: 1, dataType: "text", name: "a", nullable: true }, "postgres").expression).toBe(
+            "v.optional(v.array(v.string()))",
+        );
+    });
+
+    it("expresses a foreign key as a branded v.id of the target table", () => {
+        expect.assertions(1);
+
+        const column = { arrayDepth: 0, dataType: "int4", name: "author_id", nullable: false, references: { column: "id", table: "users" } };
+
+        expect(validatorForColumn(column, "postgres").expression).toBe('v.id("users")');
+    });
+
+    it("falls back to v.any() and reports the type as unknown rather than guessing", () => {
+        expect.assertions(2);
+
+        const result = validatorForColumn({ arrayDepth: 0, dataType: "geometry", name: "a", nullable: false }, "postgres");
+
+        expect(result.expression).toBe("v.any()");
+        expect(result.known).toBe(false);
+    });
+});
+
+describe("emitIntrospection — schema module", () => {
+    it("emits a defineSchema module with every table marked .global on the hyperdrive backend", () => {
+        expect.assertions(4);
+
+        const schema = emitIntrospection(database, emitOptions).files.find((file) => file.path === "schema.ts");
+
+        expect(schema?.contents).toContain('import { defineSchema, defineTable, v } from "@lunora/server";');
+        expect(schema?.contents).toContain("users: defineTable({");
+        // The rows live in the external database, so sharding into a DO is wrong.
+        expect(schema?.contents).toContain('.global({ backend: "hyperdrive" })');
+        expect(schema?.contents).toContain("email: v.string(),");
+    });
+
+    it("carries the source primary key over as a unique index, since Lunora mints its own _id", () => {
+        expect.assertions(1);
+
+        const schema = emitIntrospection(database, emitOptions).files.find((file) => file.path === "schema.ts");
+
+        expect(schema?.contents).toContain('.index("by_id", ["id"], { unique: true })');
+    });
+
+    it("carries secondary indexes over with their uniqueness", () => {
+        expect.assertions(1);
+
+        const schema = emitIntrospection(database, emitOptions).files.find((file) => file.path === "schema.ts");
+
+        expect(schema?.contents).toContain('.index("users_email_key", ["email"], { unique: true })');
+    });
+
+    it("annotates an unmapped column with a TODO and reports it as a warning", () => {
+        expect.assertions(2);
+
+        const result = emitIntrospection(database, emitOptions);
+        const schema = result.files.find((file) => file.path === "schema.ts");
+
+        expect(schema?.contents).toContain("// TODO: `geometry` has no direct validator");
+        expect(result.warnings.some((warning) => warning.includes("geometry"))).toBe(true);
+    });
+
+    it("skips a column that collides with a Lunora system field and says so", () => {
+        expect.assertions(2);
+
+        const result = emitIntrospection(
+            {
+                dialect: "postgres",
+                tables: [{ columns: [{ arrayDepth: 0, dataType: "text", name: "_id", nullable: false }], indexes: [], name: "t", primaryKey: [] }],
+            },
+            emitOptions,
+        );
+
+        expect(result.files[0]?.contents).not.toContain("_id: v.string()");
+        expect(result.warnings.some((warning) => warning.includes("system column"))).toBe(true);
+    });
+
+    it("quotes a column name that isn't a bare JS identifier", () => {
+        expect.assertions(1);
+
+        const result = emitIntrospection(
+            {
+                dialect: "postgres",
+                tables: [{ columns: [{ arrayDepth: 0, dataType: "text", name: "user-id", nullable: false }], indexes: [], name: "t", primaryKey: [] }],
+            },
+            emitOptions,
+        );
+
+        expect(result.files[0]?.contents).toContain('"user-id": v.string(),');
+    });
+});
+
+describe("emitIntrospection — procedure modules", () => {
+    it("emits a list/get module per table, built on defineListArgs", () => {
+        expect.assertions(3);
+
+        const posts = emitIntrospection(database, emitOptions).files.find((file) => file.path === "posts.ts");
+
+        expect(posts?.contents).toContain("defineListArgs({");
+        expect(posts?.contents).toContain("export const list = c.query");
+        expect(posts?.contents).toContain("export const get = c.query");
+    });
+
+    it("publishes only index-backed columns as filterable, so the scaffold can't hand out a table scan", () => {
+        expect.assertions(2);
+
+        const users = emitIntrospection(database, emitOptions).files.find((file) => file.path === "users.ts");
+
+        // `id` (primary key) and `email` (indexed) are filterable...
+        expect(users?.contents).toContain("email: v.string(),");
+        // ...`display_name` has no index, so it is not published as a filter.
+        expect(users?.contents).not.toContain("display_name:");
+    });
+
+    it("leaves the procedures RPC-only — publishing over REST stays an explicit decision", () => {
+        expect.assertions(2);
+
+        const posts = emitIntrospection(database, emitOptions).files.find((file) => file.path === "posts.ts");
+        // Only the guidance comment may mention `.expose` — no emitted code calls it.
+        const code = (posts?.contents ?? "").split("\n").filter((line) => !line.trimStart().startsWith("*") && !line.trimStart().startsWith("/*"));
+
+        expect(code.some((line) => line.includes(".expose("))).toBe(false);
+        expect(posts?.contents).toContain("Add `.expose({ rest: true })`");
+    });
+
+    it("omits procedure modules entirely when procedures are disabled", () => {
+        expect.assertions(1);
+
+        const {files} = emitIntrospection(database, { ...emitOptions, procedures: false });
+
+        expect(files.map((file) => file.path)).toEqual(["schema.ts"]);
+    });
+});
+
+describe("identifierFor", () => {
+    it("camelCases a snake_case table name into a usable const name", () => {
+        expect.assertions(3);
+
+        expect(identifierFor("order_items")).toBe("orderItems");
+        expect(identifierFor("users")).toBe("users");
+        expect(identifierFor("2fa_tokens")).toBe("faTokens");
+    });
+});
+
+describe("indexedColumns", () => {
+    it("includes primary-key, indexed, and foreign-key columns", () => {
+        expect.assertions(2);
+
+        expect(indexedColumns(usersTable).toSorted((a, b) => a.localeCompare(b))).toEqual(["email", "id"]);
+        expect(indexedColumns(postsTable).toSorted((a, b) => a.localeCompare(b))).toEqual(["author_id", "id"]);
+    });
+});
+
+describe("resolveType", () => {
+    it("unwraps a Postgres array into its element type plus a depth", () => {
+        expect.assertions(1);
+
+        expect(resolveType({ data_type: "ARRAY", udt_name: "_text" }, "postgres")).toEqual({ arrayDepth: 1, dataType: "text" });
+    });
+
+    it("prefers the specific udt_name spelling over the generic data_type", () => {
+        expect.assertions(1);
+
+        expect(resolveType({ data_type: "integer", udt_name: "int4" }, "postgres")).toEqual({ arrayDepth: 0, dataType: "int4" });
+    });
+
+    it("uses data_type directly for MySQL, which has no array types", () => {
+        expect.assertions(1);
+
+        expect(resolveType({ DATA_TYPE: "VARCHAR" }, "mysql")).toEqual({ arrayDepth: 0, dataType: "varchar" });
+    });
+});
+
+describe("readDatabase", () => {
+    /** Fake executor that answers each of the four introspection queries by matching on a distinctive fragment. */
+    const executor: SqlExecutor = vi.fn<SqlExecutor>(async (sql: string) => {
+        if (sql.includes("information_schema.columns")) {
+            return [
+                { column_name: "id", data_type: "integer", is_nullable: "NO", table_name: "users", udt_name: "int4" },
+                { column_name: "email", data_type: "text", is_nullable: "NO", table_name: "users", udt_name: "text" },
+                { column_name: "author_id", data_type: "integer", is_nullable: "NO", table_name: "posts", udt_name: "int4" },
+            ];
+        }
+
+        if (sql.includes("PRIMARY KEY")) {
+            return [{ column_name: "id", table_name: "users" }];
+        }
+
+        if (sql.includes("FOREIGN KEY")) {
+            return [{ column_name: "author_id", foreign_column: "id", foreign_table: "users", table_name: "posts" }];
+        }
+
+        return [
+            { column_name: "email", index_name: "users_email_key", is_unique: "true", table_name: "users" },
+            { column_name: "a", index_name: "posts_ab", is_unique: "false", table_name: "posts" },
+            { column_name: "b", index_name: "posts_ab", is_unique: "false", table_name: "posts" },
+        ];
+    });
+
+    it("folds the four queries into one dialect-neutral model, sorted by table name", async () => {
+        expect.assertions(4);
+
+        const result = await readDatabase(executor, "postgres", "public");
+
+        expect(result.tables.map((table) => table.name)).toEqual(["posts", "users"]);
+        expect(result.tables.find((table) => table.name === "users")?.primaryKey).toEqual(["id"]);
+        expect(result.tables.find((table) => table.name === "posts")?.columns[0]?.references).toEqual({ column: "id", table: "users" });
+        // A composite index keeps its column order.
+        expect(result.tables.find((table) => table.name === "posts")?.indexes).toEqual([{ columns: ["a", "b"], name: "posts_ab", unique: false }]);
+    });
+
+    it("never issues a write — every query is a read against information_schema/pg_catalog", async () => {
+        expect.assertions(1);
+
+        const seen: string[] = [];
+
+        await readDatabase(
+            async (sql) => {
+                seen.push(sql);
+
+                return [];
+            },
+            "postgres",
+            "public",
+        );
+
+        expect(seen.every((sql) => /^\s*SELECT/i.test(sql))).toBe(true);
+    });
+});
+
+describe("dialectFromUrl", () => {
+    it("infers the dialect from the connection-string scheme", () => {
+        expect.assertions(4);
+
+        expect(dialectFromUrl("postgres://localhost/shop")).toBe("postgres");
+        expect(dialectFromUrl("postgresql://localhost/shop")).toBe("postgres");
+        expect(dialectFromUrl("mysql://localhost/shop")).toBe("mysql");
+        expect(dialectFromUrl("mariadb://localhost/shop")).toBe("mysql");
+    });
+
+    it("rejects an unrecognised scheme with an actionable message", () => {
+        expect.assertions(1);
+
+        expect(() => dialectFromUrl("mongodb://localhost/shop")).toThrow(/Unrecognised database URL scheme/);
+    });
+});

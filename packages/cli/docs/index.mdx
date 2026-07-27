@@ -66,6 +66,8 @@ lunora import <file> [--table <name>] [--batch-size n]
 lunora backup <create|list|restore|pitr> [--dir <d>] [--at <iso>]
 lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
             [--seed n] [--dry-run] [--reset]
+lunora introspect [--url <u>] [--tables <t1,t2>]  # scaffold schema.ts from an
+                  [--schema <s>] [--no-procedures] # existing Postgres/MySQL DB
 ```
 
 ### `lunora init`
@@ -463,6 +465,43 @@ Targeting a non-local worker needs `--prod` plus an explicit `--url`, and prompt
 unless you pass `--yes`; prefer `LUNORA_ADMIN_TOKEN` over `--token`, which is
 visible to other local processes through the process table. See
 [@lunora/seed](/docs/packages/seed) for using the same generator inside tests.
+
+### `lunora introspect`
+
+Reads an existing Postgres or MySQL database and scaffolds `lunora/schema.ts`
+from it, plus a `list`/`get` procedure module per table. Use it when you're
+adopting Lunora on top of a database that already exists, instead of
+transcribing the schema by hand.
+
+```bash
+lunora introspect --url postgres://localhost/shop  # every base table
+lunora introspect --tables users,orders            # just these (reads $DATABASE_URL)
+lunora introspect --dry-run                        # print, write nothing
+lunora introspect --no-procedures --force          # schema only, overwrite
+```
+
+The command is **read-only against the source database** — it queries
+`information_schema` (and `pg_index` on Postgres) and never writes. It also
+refuses to overwrite an existing file unless you pass `--force`.
+
+What it emits is a **starting point you own**, not a build artifact: review it
+before shipping. Specifically:
+
+- Every table is `.global({ backend: "hyperdrive" })`, because the rows live in
+  the external database. Point the `HYPERDRIVE` binding at it — see
+  [@lunora/hyperdrive](/docs/packages/hyperdrive).
+- Lunora mints its own `_id`, so the source primary key is carried over as a
+  unique index rather than replacing it.
+- Foreign keys become `v.id("<target>")`; a type with no direct validator becomes
+  `v.any()` with a `TODO` beside it, and is reported as a warning.
+- The emitted procedures are **RPC-only**. Publishing one over REST stays an
+  explicit `.expose({ rest: true })` decision you make after adding whatever auth
+  or RLS the table needs — `introspect` cannot know who may read your data.
+- `list` is built on [`defineListArgs`](/docs/packages/server#list-endpoints), so
+  only index-backed columns are filterable and paging is keyset-based.
+
+The driver is loaded on demand and is not a CLI dependency: install `pg` or
+`mysql2` in your project first.
 
 ### `lunora registry`
 
