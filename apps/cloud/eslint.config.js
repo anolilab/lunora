@@ -121,6 +121,36 @@ export default createConfig(
         rules: {
             "no-void": "off",
             "react-perf/jsx-no-new-function-as-prop": "off",
+            // Router `params={{ … }}` / `search={{ … }}` literals — same call as the
+            // inline handlers above: idiomatic for the admin UI, no perf concern.
+            "react-perf/jsx-no-new-object-as-prop": "off",
+            "sonarjs/void-use": "off",
+            "unicorn/filename-case": "off",
+        },
+    },
+    // TanStack Start file routes (src/routes) + their SSR loader helpers.
+    //
+    // `no-use-before-define` is off because every route file has a genuine ordering
+    // bind: the component must be declared BEFORE `export const Route`, since
+    // `component: X` is evaluated the moment the route object is built — an arrow
+    // `const` declared after it is still in its TDZ and throws at module load. But
+    // the component body then references `Route.useParams()` / `Route.useLoaderData()`
+    // "before" `Route` exists. That reference is deferred into a function body and
+    // only runs at render, long after the module finished evaluating, so it is safe;
+    // the hoisted-`function` form that would satisfy the rule is itself rejected by
+    // `func-style` / `react/function-component-definition`. Same file-local
+    // fire-and-forget navigation exemptions as `src/client`.
+    {
+        files: ["src/routes/**/*.{ts,tsx}", "src/ssr/**/*.ts"],
+        rules: {
+            // `throw redirect({ to })` is TanStack Router's control-flow idiom for a
+            // navigation from `beforeLoad`/`loader`; `redirect()` returns a plain
+            // object, so the thrown value is intentionally not an Error.
+            "@typescript-eslint/only-throw-error": "off",
+            "@typescript-eslint/no-use-before-define": "off",
+            "no-void": "off",
+            "react-perf/jsx-no-new-function-as-prop": "off",
+            "react-perf/jsx-no-new-object-as-prop": "off",
             "sonarjs/void-use": "off",
             "unicorn/filename-case": "off",
         },

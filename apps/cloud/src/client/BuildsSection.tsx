@@ -1,4 +1,5 @@
-import { useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -9,6 +10,8 @@ import type { OrgId, ProjectId } from "./types";
 
 interface BuildsSectionProps {
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.projects.listByOrg>>;
 }
 
 type BuildId = Id<"builds">;
@@ -18,8 +21,8 @@ type BuildId = Id<"builds">;
  * push-to-deploy creates them) → expand one to tail its streamed output. The
  * log query is live, so lines appear as the runner writes them.
  */
-export const BuildsSection = ({ organizationId }: BuildsSectionProps): ReactElement => {
-    const projects = useQuery(api.projects.listByOrg, { organizationId });
+export const BuildsSection = ({ organizationId, preloaded }: BuildsSectionProps): ReactElement => {
+    const projects = usePreloadedQuery(preloaded);
     const [projectId, setProjectId] = useState<ProjectId | "">("");
     const builds = useQuery(api.builds.listByProject, projectId ? { organizationId, projectId } : "skip");
     const [openBuildId, setOpenBuildId] = useState<BuildId | "">("");

@@ -1,6 +1,10 @@
 # Lunora codegen output (regenerated on each build)
 lunora/_generated/
 
+# TanStack Router's generated route tree — emitted by the tanstackStart() Vite
+# plugin from src/routes/**, same as lunora/_generated (matches the template).
+src/routeTree.gen.ts
+
 # Wrangler state
 .wrangler/
 .dev.vars
