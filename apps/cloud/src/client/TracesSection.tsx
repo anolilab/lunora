@@ -82,6 +82,24 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
         };
     }, [client, d1Empty, organizationId, traceId]);
 
+    // Seamless "load older": traces past D1's hot window folded straight from the
+    // columnar archive (`traces.listArchived`, an action). Keyed by the current
+    // browse context so a stale result for a previous deployment/range is ignored
+    // downstream (mirrors the per-trace archive keying above — no reset effect).
+    const [olderArchive, setOlderArchive] = useState<{ key: string; traces: NonNullable<typeof traces> } | undefined>(undefined);
+    const [loadingOlder, setLoadingOlder] = useState(false);
+    const archiveKey = `${deploymentId}:${String(from)}:${String(to)}`;
+    const olderTraces = olderArchive?.key === archiveKey ? olderArchive.traces : undefined;
+
+    const loadOlderFromArchive = (): void => {
+        setLoadingOlder(true);
+        client
+            .action(api.traces.listArchived, { from, organizationId, to })
+            .then((rows) => setOlderArchive({ key: archiveKey, traces: rows }))
+            .catch(() => setOlderArchive({ key: archiveKey, traces: [] }))
+            .finally(() => setLoadingOlder(false));
+    };
+
     // Only honor the archive fetch that belongs to the trace currently open (a
     // stale fetch for a previous trace is ignored — no reset effect needed).
     const archivedSpans = archived?.traceId === traceId ? archived.spans : undefined;
@@ -90,12 +108,18 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
     const displaySpans = spans && spans.length > 0 ? spans : (archivedSpans ?? spans);
     const fromArchive = spans?.length === 0 && (archivedSpans?.length ?? 0) > 0;
 
-    const selected = (traces ?? []).find((trace) => trace.traceId === traceId);
+    // Hot rollups first, then archived rows the hot window doesn't already carry
+    // (dedup by traceId, hot wins) — one seamless, newest-first list.
+    const hotIds = new Set((traces ?? []).map((trace) => trace.traceId));
+    const archivedRows = (olderTraces ?? []).filter((trace) => !hotIds.has(trace.traceId));
+    const rows = [...(traces ?? []), ...archivedRows];
+
+    const selected = rows.find((trace) => trace.traceId === traceId);
     const waterfall = buildTraceTree(displaySpans ?? []);
     const selectedSpan = waterfall.find((span) => span.spanId === selectedSpanId);
 
     // The longest trace on screen, so each list row's latency bar reads relative to it.
-    const maxDuration = Math.max(1, ...(traces ?? []).map((trace) => trace.durationMs));
+    const maxDuration = Math.max(1, ...rows.map((trace) => trace.durationMs));
 
     return (
         <div className="stack">
@@ -164,7 +188,7 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
                             </tr>
                         </thead>
                         <tbody>
-                            {(traces ?? []).map((trace) => (
+                            {rows.map((trace) => (
                                 <tr
                                     aria-selected={trace.traceId === traceId}
                                     className={`trace-clickable${trace.errorCount > 0 ? " trace-error" : ""}${trace.traceId === traceId ? " active" : ""}`}
@@ -174,7 +198,10 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
                                         setTraceId(trace.traceId === traceId ? "" : trace.traceId);
                                     }}
                                 >
-                                    <td className="trace-id">{trace.traceId.slice(0, 12)}</td>
+                                    <td className="trace-id">
+                                        {trace.traceId.slice(0, 12)}
+                                        {hotIds.has(trace.traceId) ? null : <span className="log-badge trace-archive-badge">archive</span>}
+                                    </td>
                                     <td className="log-fn">{trace.rootFunctionPath ?? trace.rootName}</td>
                                     <td>{trace.spanCount}</td>
                                     <td>
@@ -200,10 +227,19 @@ export const TracesSection = ({ focusTraceId, onOpenTab, organizationId }: Trace
                             ))}
                         </tbody>
                     </table>
-                    {traces?.length === 0 ? (
+                    {rows.length === 0 ? (
                         <p className="muted">
                             No traces yet. Spans arrive as your app handles dispatched requests (or you point an OTel exporter at /v1/traces).
                         </p>
+                    ) : null}
+                    {/* Seamless deeper history: fold older traces out of the columnar archive
+                        for the selected window (fails open to none where no archive is provisioned). */}
+                    {olderTraces === undefined ? (
+                        <button className="trace-load-older" disabled={loadingOlder} onClick={loadOlderFromArchive} type="button">
+                            {loadingOlder ? "Loading…" : "Load older from archive"}
+                        </button>
+                    ) : archivedRows.length === 0 ? (
+                        <p className="muted">No older traces in the archive for this window.</p>
                     ) : null}
                 </section>
             ) : null}

@@ -123,6 +123,41 @@ export const list = query
         return filtered.slice(0, limit);
     });
 
+/**
+ * Older traces folded straight out of the columnar archive (R2 SQL over Iceberg),
+ * for the `[from, to]` window that reaches past D1's hot retention. An **action**
+ * (the read is a `fetch` over R2 SQL; only actions carry `ctx.env`). Same
+ * fail-open contract as {@link getArchived}: an unconfigured cell yields `[]`, so
+ * the Traces list seamlessly shows "load older" results where the archive exists
+ * and simply stops at the hot window where it doesn't. The client merges these
+ * with the hot {@link list} rollups (deduping by `traceId`, hot wins). Members only.
+ */
+export const listArchived = action
+    .input({
+        from: v.number(),
+        limit: v.optional(v.number()),
+        organizationId: v.id("organizations"),
+        to: v.number(),
+    })
+    .action(async ({ ctx: context, args }): Promise<TraceRollupView[]> => {
+        await assertMember(context, args.organizationId);
+
+        const limit = Math.min(Math.max(Math.trunc(args.limit ?? DEFAULT_TRACE_LIMIT), 1), MAX_TRACE_LIMIT);
+        const environment = (context.env ?? {}) as Partial<TelemetryStoreEnv>;
+        const store = createCloudflareTelemetryStore({
+            CLOUDFLARE_ACCOUNT_ID: environment.CLOUDFLARE_ACCOUNT_ID,
+            R2_SQL_TOKEN: environment.R2_SQL_TOKEN,
+            TELEMETRY_BUCKET_NAME: environment.TELEMETRY_BUCKET_NAME,
+            TELEMETRY_SPAN_TABLE: environment.TELEMETRY_SPAN_TABLE,
+            fetch: context.fetch,
+        });
+
+        const spans = await store.readArchivedSpansInWindow({ from: args.from, limit: SCAN_LIMIT, organizationId: args.organizationId, to: args.to });
+
+        // Reuse the same fold as the hot `list`, then cap.
+        return foldObservationTraces(spans as unknown as ObservationRow[], SCAN_LIMIT).slice(0, limit);
+    });
+
 /** Project a stored/archived span onto the wire {@link SpanView} (drops `_id` / `organizationId` / `serviceName`). */
 const toSpanView = (span: ObservationRow | SpanObservation): SpanView => ({
     attributes: span.attributes,

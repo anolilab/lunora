@@ -1213,3 +1213,24 @@ button.link.danger {
     color: var(--muted);
     border: 1px solid var(--border);
 }
+
+.trace-load-older {
+    margin-top: 12px;
+    padding: 6px 12px;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.trace-load-older:hover:not(:disabled) {
+    background: var(--surface-3, var(--surface-2));
+    border-color: var(--accent, var(--border));
+}
+
+.trace-load-older:disabled {
+    opacity: 0.6;
+    cursor: default;
+}

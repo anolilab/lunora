@@ -197,6 +197,28 @@ export default defineSchema({
         .index("by_alias", ["alias"], { unique: true })
         .index("by_project", ["projectId"]),
 
+    // Exact metric measurements (the precise tier behind the Metrics UI). Every
+    // `ctx.metrics.*` data point OTLP-ingested via `/v1/metrics` lands here as one
+    // row, so the series read is exact per-bucket (all points averaged) — unlike the
+    // Analytics-Engine mirror (`store.ts` `recordMetrics`), which is sampled +
+    // bucket-approximated and now serves only as the >retention archive fallback.
+    // Same 7-day hot window as span observations, pruned by `metrics.prune`.
+    metricPoints: defineTable({
+        // Measurement time (epoch ms) — the series x-axis; the AE mirror can't give exact points.
+        at: v.number(),
+        createdAt: v.number(),
+        deploymentId: v.optional(v.id("deployments")),
+        functionPath: v.optional(v.string()),
+        kind: v.string(),
+        name: v.string(),
+        organizationId: v.id("organizations"),
+        serviceName: v.optional(v.string()),
+        value: v.number(),
+    })
+        .global()
+        .index("by_org_at", ["organizationId", "at"])
+        .index("by_org_name_at", ["organizationId", "name", "at"]),
+
     deployKeys: defineTable({
         // What the key is allowed to do. Absent = `deploy` (a full deploy key, the
         // historical default). An `ingest` key can ONLY push telemetry to the OTLP

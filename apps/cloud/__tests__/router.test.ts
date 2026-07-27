@@ -71,21 +71,27 @@ describe(createDeployRouter, () => {
 
     it("caps telemetry ingest per IP even when the bearer token is rotated every request", async () => {
         const router = createDeployRouter();
-        // The per-token bucket alone is bypassable by rotating the bearer value —
-        // a fresh token means a fresh bucket. The per-IP backstop (12_000/min) must
-        // still throttle a single IP that churns tokens. Drain it from one IP.
-        // A margin over the 12_000 capacity absorbs the bucket's refill during the loop.
+        // The per-token bucket alone is bypassable by rotating the bearer value — a
+        // fresh token means a fresh bucket. The per-IP backstop (12_000/min) must
+        // still throttle a single IP that churns tokens. Drain it from one IP,
+        // stopping at the first 429 — robust to the bucket's real-time refill (a
+        // fixed count would under/overshoot as loop wall-time varies). The ceiling
+        // is a generous safety net well above capacity + any plausible refill.
         let last = new Response();
 
-        for (let index = 0; index < 12_300; index += 1) {
+        for (let index = 0; index < 20_000; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential to drain one IP's telemetry backstop
             last = await router.fetch(
-                // eslint-disable-next-line no-await-in-loop -- sequential to drain one IP's telemetry backstop
                 new Request("https://control.lunora.app/v1/traces", {
                     headers: { authorization: `Bearer rotated-${String(index)}`, "cf-connecting-ip": "flooder" },
                     method: "POST",
                 }),
                 {},
             );
+
+            if (last.status === 429) {
+                break;
+            }
         }
 
         expect(last.status).toBe(429);

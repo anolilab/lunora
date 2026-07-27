@@ -110,6 +110,23 @@ export const aliasOwnership = sqliteTable("aliasOwnership", {
     by_alias: uniqueIndex("by_alias").on(t.alias),
 }));
 
+export const metricPoints = sqliteTable("metricPoints", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    at: real("at").notNull(),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId").references(() => deployments._id),
+    functionPath: text("functionPath"),
+    kind: text("kind").notNull(),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references(() => organizations._id).notNull(),
+    serviceName: text("serviceName"),
+    value: real("value").notNull(),
+}, (t) => ({
+    by_org_name_at: index("by_org_name_at").on(t.organizationId, t.name, t.at),
+    by_org_at: index("by_org_at").on(t.organizationId, t.at),
+}));
+
 export const deployKeys = sqliteTable("deployKeys", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

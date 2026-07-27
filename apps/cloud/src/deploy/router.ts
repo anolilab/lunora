@@ -835,21 +835,37 @@ const handleOtlpLogsRoute = (request: Request, environment: RouterEnv): Promise<
 
 /**
  * `POST /v1/metrics` — the **standard OTLP** metrics ingest. Each data point is
- * flattened and written to the Analytics Engine telemetry dataset (AE SQL).
+ * flattened, stored as an exact D1 `metricPoints` row (the precise tier behind
+ * `metrics.series`) AND mirrored to the Analytics Engine dataset (the sampled
+ * >retention archive, `metrics.list`).
  */
 const handleOtlpMetricsRoute = (request: Request, environment: RouterEnv): Promise<Response> =>
-    withOtlpIngest(request, environment, "metrics", "rejectedDataPoints", (payload, auth) => {
+    withOtlpIngest(request, environment, "metrics", "rejectedDataPoints", async (payload, auth, context) => {
         const decoded = decodeMetricPoints(payload as OtlpMetricsPayload);
         const kept = decoded.slice(0, MAX_OTLP_METRIC_POINTS);
 
-        // Best-effort — AE writes are fire-and-forget; a missing/throwing binding no-ops.
+        // Exact tier: persist each point in D1 (deploy-key authorized inside the mutation).
+        await context.runMutation(api.metrics.ingest, {
+            deployKey: auth.key,
+            organizationId: auth.organizationId,
+            points: kept.map((point) => ({
+                at: point.at,
+                ...(point.functionPath === undefined ? {} : { functionPath: point.functionPath }),
+                kind: point.kind,
+                name: point.name,
+                ...(point.serviceName === undefined ? {} : { serviceName: point.serviceName }),
+                value: point.value,
+            })),
+        });
+
+        // Sampled mirror — AE writes are fire-and-forget; a missing/throwing binding no-ops.
         try {
             createCloudflareTelemetryStore(environment).recordMetrics(kept, auth.organizationId);
         } catch {
             // A throwing/absent dataset binding must not fail the ingest.
         }
 
-        return Promise.resolve(decoded.length - kept.length);
+        return decoded.length - kept.length;
     });
 
 interface DomainBody {

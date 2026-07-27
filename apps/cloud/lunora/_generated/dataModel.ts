@@ -33,7 +33,7 @@ export type {
     WhereOperators,
 } from "@lunora/server/data-model";
 
-export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "aliasOwnership" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alertRuleState" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
+export type TableName = "cells" | "organizations" | "members" | "projects" | "deployments" | "aliasOwnership" | "metricPoints" | "deployKeys" | "overageDebits" | "tenantLogs" | "observations" | "githubInstallations" | "builds" | "buildLogs" | "domains" | "auditLog" | "invitations" | "platformUsage" | "issues" | "incidents" | "alertRules" | "alertRuleState" | "alerts" | "uptimeChecks" | "uptimeState" | "secrets" | "dashboards" | "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -125,6 +125,20 @@ export interface Doc_aliasOwnership {
     createdAt: number;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
+}
+
+export interface Doc_metricPoints {
+    _id: Id<"metricPoints">;
+    _creationTime: number;
+    at: number;
+    createdAt: number;
+    deploymentId?: Id<"deployments">;
+    functionPath?: string;
+    kind: string;
+    name: string;
+    organizationId: Id<"organizations">;
+    serviceName?: string;
+    value: number;
 }
 
 export interface Doc_deployKeys {
@@ -485,6 +499,7 @@ export interface DataModel {
     projects: Doc_projects;
     deployments: Doc_deployments;
     aliasOwnership: Doc_aliasOwnership;
+    metricPoints: Doc_metricPoints;
     deployKeys: Doc_deployKeys;
     overageDebits: Doc_overageDebits;
     tenantLogs: Doc_tenantLogs;
@@ -525,6 +540,7 @@ export interface IndexNamesByTable {
     projects: "by_org_slug" | "by_github_repo";
     deployments: "by_script" | "by_project" | "by_kind" | "by_alias";
     aliasOwnership: "by_project" | "by_alias";
+    metricPoints: "by_org_name_at" | "by_org_at";
     deployKeys: "by_org" | "by_hash";
     overageDebits: "by_org_period";
     tenantLogs: "by_trace" | "by_script_time" | "by_org";
@@ -562,6 +578,7 @@ export interface SearchIndexNamesByTable {
     projects: never;
     deployments: never;
     aliasOwnership: never;
+    metricPoints: never;
     deployKeys: never;
     overageDebits: never;
     tenantLogs: never;
@@ -599,6 +616,7 @@ export interface RankIndexNamesByTable {
     projects: never;
     deployments: never;
     aliasOwnership: never;
+    metricPoints: never;
     deployKeys: never;
     overageDebits: never;
     tenantLogs: never;
@@ -636,6 +654,7 @@ export interface GeoIndexNamesByTable {
     projects: never;
     deployments: never;
     aliasOwnership: never;
+    metricPoints: never;
     deployKeys: never;
     overageDebits: never;
     tenantLogs: never;
@@ -756,6 +775,20 @@ export interface Insert_aliasOwnership {
     createdAt: number;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
+}
+
+export interface Insert_metricPoints {
+    _id?: Id<"metricPoints">;
+    _creationTime?: number;
+    at: number;
+    createdAt: number;
+    deploymentId?: Id<"deployments">;
+    functionPath?: string;
+    kind: string;
+    name: string;
+    organizationId: Id<"organizations">;
+    serviceName?: string;
+    value: number;
 }
 
 export interface Insert_deployKeys {
@@ -1117,6 +1150,7 @@ export interface InsertModel {
     projects: Insert_projects;
     deployments: Insert_deployments;
     aliasOwnership: Insert_aliasOwnership;
+    metricPoints: Insert_metricPoints;
     deployKeys: Insert_deployKeys;
     overageDebits: Insert_overageDebits;
     tenantLogs: Insert_tenantLogs;
@@ -1169,6 +1203,7 @@ export interface Relations {
     projects: {};
     deployments: {};
     aliasOwnership: {};
+    metricPoints: {};
     deployKeys: {};
     overageDebits: {};
     tenantLogs: {};
