@@ -93,7 +93,9 @@ const createClientCache = (fetchImplementation: typeof fetch | undefined): ((dep
     const cache = new Map<string, LunoraClient>();
 
     return (deployment: LocalDeployment): LunoraClient => {
-        const key = `${deployment.url}|${deployment.token ?? ""}`;
+        // Serialized rather than delimiter-joined: a `|` inside either value
+        // would otherwise let two distinct pairs collide onto one client.
+        const key = JSON.stringify([deployment.url, deployment.token ?? ""]);
         const cached = cache.get(key);
 
         if (cached !== undefined) {

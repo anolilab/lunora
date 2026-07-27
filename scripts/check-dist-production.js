@@ -145,7 +145,99 @@ const checkCliVersion = () => {
     return true;
 };
 
+/**
+ * `@lunora/mcp/docs` must stay runnable off Node.
+ *
+ * The whole shape of `packages/mcp/src/docs/` — and the `serve-stateless.ts` and
+ * `tool-types.ts` splits that support it — exists so a docs site can serve the
+ * documentation tools from a Worker or an edge function. One `import … from
+ * "../server"` reintroduces the `node:fs` read that entry does at module scope,
+ * and one from `../tools` drags in `@lunora/client`. Either breaks the deploy
+ * with no failing test and no lint error, because both are perfectly legal
+ * TypeScript.
+ *
+ * So assert it where it is actually observable: in the emitted chunk graph.
+ */
+const EDGE_UNSAFE_SPECIFIERS = [
+    { specifier: "node:", why: "a Node built-in — unavailable on Workers and most edge runtimes" },
+    { specifier: "@lunora/client", why: "the deployment client — the docs surface must not depend on it" },
+];
+
+/** Every file `entry` pulls in, following relative imports transitively. */
+const chunkGraph = (entry) => {
+    const seen = new Set();
+    const queue = [entry];
+
+    while (queue.length > 0) {
+        const file = queue.pop();
+
+        if (seen.has(file)) {
+            continue;
+        }
+
+        seen.add(file);
+
+        for (const match of readFileSync(file, "utf8").matchAll(/from\s*["']([^"']+)["']/g)) {
+            const specifier = match[1];
+
+            if (specifier.startsWith(".")) {
+                queue.push(join(dirname(file), specifier));
+            }
+        }
+    }
+
+    return seen;
+};
+
+const checkDocsEntryIsEdgeSafe = () => {
+    const entry = join(packagesDir, "mcp", "dist", "docs", "index.mjs");
+
+    if (!dirExists(join(packagesDir, "mcp", "dist"))) {
+        return true;
+    }
+
+    let files;
+
+    try {
+        files = chunkGraph(entry);
+    } catch (error) {
+        console.error(`❌ Could not walk the @lunora/mcp/docs chunk graph from ${relative(rootDir, entry)}: ${error.message}`);
+
+        return false;
+    }
+
+    const found = [];
+
+    for (const file of files) {
+        const source = readFileSync(file, "utf8");
+
+        for (const { specifier, why } of EDGE_UNSAFE_SPECIFIERS) {
+            if (source.includes(`"${specifier}`) || source.includes(`'${specifier}`)) {
+                found.push({ file: relative(rootDir, file), specifier, why });
+            }
+        }
+    }
+
+    if (found.length > 0) {
+        console.error("❌ @lunora/mcp/docs pulls in code that cannot run on an edge runtime:\n");
+
+        for (const entryFound of found) {
+            console.error(`  ${entryFound.file}`);
+            console.error(`    ${entryFound.specifier} — ${entryFound.why}`);
+        }
+
+        console.error("\nThe /docs entry must not import from `src/server.ts`, `src/tools.ts`, or anything reaching a Node built-in.");
+
+        return false;
+    }
+
+    console.log(`✅ @lunora/mcp/docs stays edge-safe across ${files.size} emitted chunk(s).`);
+
+    return true;
+};
+
 const cliVersionOk = checkCliVersion();
+const docsEntryOk = checkDocsEntryIsEdgeSafe();
 
 if (violations.length > 0) {
     console.error(`❌ Development-build artifacts found in ${violations.length} file(s):\n`);
@@ -160,7 +252,7 @@ if (violations.length > 0) {
     process.exit(1);
 }
 
-if (!cliVersionOk) {
+if (!cliVersionOk || !docsEntryOk) {
     process.exit(1);
 }
 

@@ -77,6 +77,8 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 npm install @lunora/mcp
 ```
 
+Paid MCP tools (`createPaidMcpServer`) additionally need the optional peer [`@lunora/x402`](https://www.npmjs.com/package/@lunora/x402); it is loaded lazily, so installs that never charge for a tool don't pay for its dependency tree.
+
 ```sh
 yarn add @lunora/mcp
 ```
@@ -175,6 +177,14 @@ Point a client at the hosted endpoint with no install at all:
 ```sh
 claude mcp add --transport http lunora-docs https://lunora.sh/mcp
 ```
+
+### Hosting it safely
+
+`createDocsMcpFetchHandler` screens each request before the transport sees it, because this surface is meant to be public and unauthenticated:
+
+- **Bodies are capped** (128 KiB by default; override with `maxRequestBytes`).
+- **JSON-RPC batches are refused.** The stateless transport buffers a whole batch's replies into one response, so a single small request carrying thousands of `tools/call` messages would amplify into hundreds of megabytes out, with no session to rate-limit against. A docs client gains nothing from batching.
+- `lunora_search_docs` bounds its `query`, and `lunora_list_docs` caps how many pages it serialises.
 
 ## Local development server
 

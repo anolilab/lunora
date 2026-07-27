@@ -36,6 +36,16 @@ interface McpPathContext {
 }
 
 interface McpClientBase {
+    /**
+     * Absolute path of the config file, or `undefined` on a platform whose
+     * convention we don't know.
+     *
+     * Every client has one, including the ones we don't rewrite: detection ("is
+     * this client actually set up here?") is the same question regardless of the
+     * file's format, and hanging it off the format discriminant is what made
+     * Codex undetectable.
+     */
+    configPath: (context: McpPathContext) => string | undefined;
     /** Stable id the user types: `lunora mcp install cursor`. */
     id: string;
     /** Display name for messages. */
@@ -48,22 +58,17 @@ interface McpClientBase {
     scope: "project" | "user";
 }
 
+/** A client whose config we can safely read-modify-write. */
 interface JsonMcpClient extends McpClientBase {
-    /**
-     * The client's entry shape, or `undefined` when it cannot express this
-     * transport (e.g. a client with no remote-server support).
-     */
-    buildEntry: (spec: McpServerSpec) => Record<string, unknown> | undefined;
-    /** Absolute path of the config file, or `undefined` on an unsupported platform. */
-    configPath: (context: McpPathContext) => string | undefined;
+    /** The client's entry shape for a server. */
+    buildEntry: (spec: McpServerSpec) => Record<string, unknown>;
     format: "json";
     /** Top-level key holding the map of server name → entry. */
     key: string;
 }
 
+/** A client whose config we only print a snippet for — see {@link MCP_CLIENTS}. */
 interface ManualMcpClient extends McpClientBase {
-    /** Human description of the file to paste into, e.g. `"~/.codex/config.toml"`. */
-    configHint: string;
     format: "manual";
     /** The snippet to paste. */
     renderSnippet: (name: string, spec: McpServerSpec) => string;
@@ -72,20 +77,47 @@ interface ManualMcpClient extends McpClientBase {
 type McpClient = JsonMcpClient | ManualMcpClient;
 
 /**
- * The `{ command, args, env }` / `{ url }` entry shape that Claude Code, Claude
- * Desktop, Cursor, Windsurf, and the Gemini CLI all share.
+ * The stdio entry every client understands: `{ command, args, env }`.
+ *
+ * The remote shape is where they diverge, so each client pairs this with its
+ * own — see {@link standardEntry} and the builders below.
  */
-const standardEntry = (spec: McpServerSpec): Record<string, unknown> => {
-    if (spec.transport === "http") {
-        return { type: "http", url: spec.url };
-    }
-
+const stdioEntry = (spec: Extract<McpServerSpec, { transport: "stdio" }>): Record<string, unknown> => {
     return {
         args: [...spec.args],
         command: spec.command,
         ...(spec.env === undefined ? {} : { env: spec.env }),
     };
 };
+
+/**
+ * Claude Code, Cursor and VS Code: a remote server is `{ type: "http", url }`.
+ *
+ * This is NOT the universal shape it looks like. Getting it wrong is worse than
+ * failing to write anything, because the config lands, we report success, and
+ * the user discovers months later that the server never connected — so each
+ * client below spells out its own remote form rather than sharing this one.
+ */
+const standardEntry = (spec: McpServerSpec): Record<string, unknown> => (spec.transport === "http" ? { type: "http", url: spec.url } : stdioEntry(spec));
+
+/**
+ * Gemini CLI selects the transport by *property name*, ignoring `type`:
+ * `httpUrl` is Streamable HTTP, while a bare `url` means SSE — which this server
+ * does not speak.
+ */
+const geminiEntry = (spec: McpServerSpec): Record<string, unknown> => (spec.transport === "http" ? { httpUrl: spec.url } : stdioEntry(spec));
+
+/** Windsurf names the Streamable-HTTP endpoint `serverUrl`. */
+const windsurfEntry = (spec: McpServerSpec): Record<string, unknown> => (spec.transport === "http" ? { serverUrl: spec.url } : stdioEntry(spec));
+
+/**
+ * Claude Desktop validates stdio entries only — remote servers go through
+ * Custom Connectors, not this file. Rather than write an entry it will ignore,
+ * point it at the documented `mcp-remote` stdio bridge, which is how a desktop
+ * client reaches a Streamable-HTTP server today.
+ */
+const claudeDesktopEntry = (spec: McpServerSpec): Record<string, unknown> =>
+    spec.transport === "http" ? { args: ["-y", "mcp-remote", spec.url], command: "npx" } : stdioEntry(spec);
 
 /**
  * Claude Desktop stores its config under the OS application-data directory,
@@ -110,27 +142,39 @@ const claudeDesktopPath = ({ home, platform }: McpPathContext): string | undefin
     return undefined;
 };
 
+/** Escape a value for a TOML basic string, so a quote in a URL can't break the snippet. */
+const toml = (value: string): string =>
+    `"${value
+        .split("\\")
+        .join("\\\\")
+        .split('"')
+        .join(String.raw`\"`)}"`;
+
 /** Render a TOML `[mcp_servers.&lt;name>]` table — Codex's config format. */
 const codexSnippet = (name: string, spec: McpServerSpec): string => {
     if (spec.transport === "http") {
-        return `[mcp_servers.${name}]\nurl = "${spec.url}"\n`;
+        return `[mcp_servers.${name}]\nurl = ${toml(spec.url)}\n`;
     }
 
-    const args = spec.args.map((argument) => `"${argument}"`).join(", ");
+    const args = spec.args.map((argument) => toml(argument)).join(", ");
     const environment =
         spec.env === undefined
             ? ""
             : `env = { ${Object.entries(spec.env)
-                  .map(([key, value]) => `${key} = "${value}"`)
+                  .map(([key, value]) => `${key} = ${toml(value)}`)
                   .join(", ")} }\n`;
 
-    return `[mcp_servers.${name}]\ncommand = "${spec.command}"\nargs = [${args}]\n${environment}`;
+    return `[mcp_servers.${name}]\ncommand = ${toml(spec.command)}\nargs = [${args}]\n${environment}`;
 };
 
 /**
  * The supported clients, in the order `lunora mcp install --list` prints them:
  * project-scoped first (a teammate gets them by checking out the repo), then
  * per-machine ones.
+ *
+ * Codex is `manual` because its config is TOML: merging into it would mean
+ * carrying a TOML parser that preserves formatting, and a bad merge silently
+ * corrupts a file we don't own. Printing the snippet is the honest trade.
  */
 const MCP_CLIENTS: ReadonlyArray<McpClient> = [
     {
@@ -162,7 +206,7 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
         scope: "project",
     },
     {
-        buildEntry: standardEntry,
+        buildEntry: geminiEntry,
         configPath: ({ projectRoot }) => join(projectRoot, ".gemini", "settings.json"),
         format: "json",
         id: "gemini",
@@ -171,7 +215,7 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
         scope: "project",
     },
     {
-        buildEntry: standardEntry,
+        buildEntry: claudeDesktopEntry,
         configPath: claudeDesktopPath,
         format: "json",
         id: "claude-desktop",
@@ -180,7 +224,7 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
         scope: "user",
     },
     {
-        buildEntry: standardEntry,
+        buildEntry: windsurfEntry,
         configPath: ({ home }) => join(home, ".codeium", "windsurf", "mcp_config.json"),
         format: "json",
         id: "windsurf",
@@ -189,7 +233,7 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
         scope: "user",
     },
     {
-        configHint: "~/.codex/config.toml",
+        configPath: ({ home }) => join(home, ".codex", "config.toml"),
         format: "manual",
         id: "codex",
         label: "Codex CLI",
@@ -203,4 +247,4 @@ const MCP_CLIENT_IDS: ReadonlyArray<string> = MCP_CLIENTS.map((client) => client
 const findMcpClient = (id: string): McpClient | undefined => MCP_CLIENTS.find((client) => client.id === id.toLowerCase());
 
 export type { JsonMcpClient, ManualMcpClient, McpClient, McpPathContext, McpServerSpec };
-export { claudeDesktopPath, codexSnippet, findMcpClient, MCP_CLIENT_IDS, MCP_CLIENTS, standardEntry };
+export { claudeDesktopEntry, claudeDesktopPath, codexSnippet, findMcpClient, geminiEntry, MCP_CLIENT_IDS, MCP_CLIENTS, standardEntry, windsurfEntry };

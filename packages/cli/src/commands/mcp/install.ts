@@ -26,7 +26,7 @@ import type { Logger } from "../../util/logger";
 import type { JsonMcpClient, McpClient, McpServerSpec } from "../../util/mcp-clients";
 import { findMcpClient, MCP_CLIENT_IDS, MCP_CLIENTS } from "../../util/mcp-clients";
 import type { UpsertAction } from "../../util/mcp-config-file";
-import { upsertMcpEntry } from "../../util/mcp-config-file";
+import { hasMcpEntry, upsertMcpEntry } from "../../util/mcp-config-file";
 
 /** The hosted documentation MCP endpoint. */
 const DEFAULT_DOCS_MCP_URL = "https://lunora.sh/mcp";
@@ -85,10 +85,6 @@ const docsServerSpec = (url: string): McpServerSpec => {
 /** Clients whose config file already exists — the ones the user demonstrably uses. */
 const detectInstalledClients = (context: { home: string; platform: NodeJS.Platform; projectRoot: string }): ReadonlyArray<McpClient> =>
     MCP_CLIENTS.filter((client) => {
-        if (client.format !== "json") {
-            return false;
-        }
-
         const path = client.configPath(context);
 
         return path !== undefined && existsSync(path);
@@ -117,14 +113,21 @@ const installIntoJsonClient = (
 
     const entry = client.buildEntry(server.spec);
 
-    if (entry === undefined) {
-        options.logger.warn(`${client.label}: cannot express a ${server.spec.transport} server — skipped.`);
-
-        return undefined;
-    }
-
     if (options.print === true) {
-        options.logger.info(`${client.label} → ${displayPath(path, options.cwd)}\n${JSON.stringify({ [client.key]: { [server.name]: entry } }, undefined, 4)}`);
+        const shown = displayPath(path, options.cwd);
+
+        // Preview what a real run would do, not just what it would write: the
+        // write path skips an entry that already exists unless `--force`, so
+        // printing it unconditionally promises a change that won't happen.
+        if (options.force !== true && hasMcpEntry({ key: client.key, name: server.name, path })) {
+            options.logger.info(
+                `${client.label}: "${server.name}" already configured in ${shown} — a real install would skip it (re-run with --force to replace).`,
+            );
+
+            return { action: "printed", path };
+        }
+
+        options.logger.info(`${client.label} → ${shown}\n${JSON.stringify({ [client.key]: { [server.name]: entry } }, undefined, 4)}`);
 
         return { action: "printed", path };
     }
@@ -147,11 +150,19 @@ const installIntoJsonClient = (
 const installIntoManualClient = (
     client: Extract<McpClient, { format: "manual" }>,
     server: { name: string; spec: McpServerSpec },
-    options: McpInstallOptions,
-): { action: "printed"; path: string } => {
-    options.logger.info(`${client.label}: add this to ${client.configHint}\n\n${client.renderSnippet(server.name, server.spec)}`);
+    options: McpInstallOptions & { home: string; platform: NodeJS.Platform },
+): { action: "printed"; path: string } | undefined => {
+    const path = client.configPath({ home: options.home, platform: options.platform, projectRoot: options.cwd });
 
-    return { action: "printed", path: client.configHint };
+    if (path === undefined) {
+        options.logger.warn(`${client.label}: no known config location on ${options.platform} — skipped.`);
+
+        return undefined;
+    }
+
+    options.logger.info(`${client.label}: add this to ${displayPath(path, options.cwd)}\n\n${client.renderSnippet(server.name, server.spec)}`);
+
+    return { action: "printed", path };
 };
 
 /** Resolve which clients to act on, or `undefined` after reporting why none could be. */
@@ -189,7 +200,11 @@ const resolveClients = (options: McpInstallOptions, context: { home: string; pla
     return undefined;
 };
 
-/** Which servers to install, given the flags and whether `cwd` is a Lunora project. */
+/**
+ * Which servers to install, given the flags and whether `cwd` is a Lunora
+ * project. Returns empty when the flags select nothing — {@link runMcpInstall}
+ * turns that into the message explaining which flag is responsible.
+ */
 const resolveServers = (options: McpInstallOptions): ReadonlyArray<{ name: string; spec: McpServerSpec }> => {
     const servers: { name: string; spec: McpServerSpec }[] = [];
 
@@ -212,15 +227,42 @@ const runMcpInstallList = (options: Pick<McpInstallOptions, "cwd" | "logger"> & 
     options.logger.info("Supported MCP clients:");
 
     for (const client of MCP_CLIENTS) {
-        const path =
-            client.format === "json"
-                ? (client.configPath({ home, platform, projectRoot: options.cwd }) ?? "(unsupported on this platform)")
-                : client.configHint;
+        const path = client.configPath({ home, platform, projectRoot: options.cwd }) ?? "(unsupported on this platform)";
 
         options.logger.info(`  ${client.id.padEnd(15)} ${client.label.padEnd(24)} ${displayPath(path, options.cwd)}`);
     }
 
     return { code: 0, written: [] };
+};
+
+/** Why the flags selected no server at all — named precisely, so the user fixes the right thing. */
+const describeEmptySelection = (options: McpInstallOptions): string => {
+    if (options.docsOnly === true && options.localOnly === true) {
+        return "`--docs-only` and `--local-only` are mutually exclusive — pass at most one.";
+    }
+
+    return "`--local-only` was set but this directory is not a Lunora project (no `lunora/` directory and wrangler config).";
+};
+
+/** Install every server into every client, collecting what happened to each pair. */
+const installAll = (
+    clients: ReadonlyArray<McpClient>,
+    servers: ReadonlyArray<{ name: string; spec: McpServerSpec }>,
+    options: McpInstallOptions & { home: string; platform: NodeJS.Platform },
+): McpInstallResult["written"] => {
+    const written: { action: UpsertAction | "printed"; client: string; path: string; server: string }[] = [];
+
+    for (const client of clients) {
+        for (const server of servers) {
+            const result = client.format === "json" ? installIntoJsonClient(client, server, options) : installIntoManualClient(client, server, options);
+
+            if (result !== undefined) {
+                written.push({ action: result.action, client: client.id, path: result.path, server: server.name });
+            }
+        }
+    }
+
+    return written;
 };
 
 /** `lunora mcp install [client…]`. */
@@ -236,25 +278,12 @@ const runMcpInstall = (options: McpInstallOptions): McpInstallResult => {
     const servers = resolveServers(options);
 
     if (servers.length === 0) {
-        options.logger.error("mcp install: nothing to install — `--local-only` was set but this directory is not a Lunora project.");
+        options.logger.error(`mcp install: nothing to install — ${describeEmptySelection(options)}`);
 
         return { code: 1, written: [] };
     }
 
-    const written: { action: UpsertAction | "printed"; client: string; path: string; server: string }[] = [];
-
-    for (const client of clients) {
-        for (const server of servers) {
-            const result =
-                client.format === "json"
-                    ? installIntoJsonClient(client, server, { ...options, home, platform })
-                    : installIntoManualClient(client, server, options);
-
-            if (result !== undefined) {
-                written.push({ action: result.action, client: client.id, path: result.path, server: server.name });
-            }
-        }
-    }
+    const written = installAll(clients, servers, { ...options, home, platform });
 
     if (written.some((entry) => entry.action === "created" || entry.action === "updated")) {
         options.logger.info("Restart your editor (or reload its MCP servers) to pick up the change.");

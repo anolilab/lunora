@@ -48,11 +48,13 @@ interface DocsIndex {
     listPages: () => Promise<ReadonlyArray<DocsPageSummary>>;
 
     /**
-     * Full-text search. `limit` is the maximum number of hits the caller wants;
-     * a backend that cannot limit server-side may return more and let the
-     * caller truncate.
+     * Full-text search, returning whatever the backend found.
+     *
+     * Deliberately unbounded: the tool layer decides how many hits reach the
+     * model's context, so there is one truncation site rather than one per
+     * backend plus one in the tool.
      */
-    search: (query: string, limit: number) => Promise<ReadonlyArray<DocsSearchHit>>;
+    search: (query: string) => Promise<ReadonlyArray<DocsSearchHit>>;
 }
 
 export type { DocsIndex, DocsPage, DocsPageSummary, DocsSearchHit };

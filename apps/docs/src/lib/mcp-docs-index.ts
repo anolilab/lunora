@@ -17,7 +17,9 @@ import { searchServer } from "@/lib/search-server";
  * mounted at `/docs`, so that prefix is the base, not part of the slug.
  */
 const slugsFor = (url: string): string[] => {
-    const withoutBase = url.startsWith("/docs") ? url.slice("/docs".length) : url;
+    // Segment match, not prefix: a hypothetical `/docsomething` must not be
+    // sliced into `["omething"]`.
+    const withoutBase = url === "/docs" || url.startsWith("/docs/") ? url.slice("/docs".length) : url;
 
     return withoutBase.split("/").filter((segment) => segment.length > 0);
 };
@@ -55,5 +57,5 @@ export const mcpDocsIndex: DocsIndex = {
             };
         }),
 
-    search: async (query: string, limit: number): Promise<ReadonlyArray<DocsSearchHit>> => toDocsSearchHits(await searchServer.search(query), limit),
+    search: async (query: string): Promise<ReadonlyArray<DocsSearchHit>> => toDocsSearchHits(await searchServer.search(query)),
 };

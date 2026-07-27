@@ -155,6 +155,19 @@ describe("lunora mcp install", () => {
         expect(existsSync(join(home, ".codex"))).toBe(false);
     });
 
+    it("--print predicts the skip a real install would take", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, ".mcp.json"), JSON.stringify({ mcpServers: { "lunora-docs": { url: "https://old.example/mcp" } } }), "utf8");
+
+        const { logger, messages } = captureLogger();
+
+        runMcpInstall(baseOptions(logger, { clients: ["claude-code"], print: true }));
+
+        expect(messages.join("\n")).toContain("already configured");
+        expect(messages.join("\n")).toContain("--force");
+    });
+
     it("writes nothing with --print", () => {
         expect.assertions(3);
 
@@ -233,5 +246,149 @@ describe("lunora mcp install", () => {
 
         expect(result.code).toBe(0);
         expect(messages.join("\n")).toContain("windsurf");
+    });
+});
+
+describe("lunora mcp install — malformed configs", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-mcp-bad-"));
+        home = mkdtempSync(join(tmpdir(), "lunora-cli-home-bad-"));
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+        rmSync(home, { force: true, recursive: true });
+    });
+
+    /**
+     * `jsonc-parser`'s `modify` throws on any of these rather than returning
+     * edits. An escaping throw would abort the install mid-loop, leaving earlier
+     * clients written and later ones silently skipped, and surface as a bare
+     * `Can not add index to parent of type null` with no filename.
+     */
+    it.each([
+        ["an array root", "[]"],
+        ["a string at the server key", '{ "mcpServers": "oops" }'],
+        ["an array at the server key", '{ "mcpServers": [1, 2] }'],
+        ["null at the server key", '{ "mcpServers": null }'],
+    ])("reports %s instead of throwing, and leaves the file alone", (_label, contents) => {
+        expect.assertions(3);
+
+        const path = join(workdir, ".mcp.json");
+
+        writeFileSync(path, contents, "utf8");
+
+        const { logger } = captureLogger();
+        const result = runMcpInstall(baseOptions(logger, { clients: ["claude-code"] }));
+
+        expect(result.code).toBe(1);
+        expect(result.written[0]?.action).toBe("invalid");
+        expect(readFileSync(path, "utf8")).toBe(contents);
+    });
+
+    it("keeps installing into the remaining clients after one config is rejected", () => {
+        expect.assertions(3);
+
+        writeFileSync(join(workdir, ".mcp.json"), '{ "mcpServers": null }', "utf8");
+
+        const { logger } = captureLogger();
+        const result = runMcpInstall(baseOptions(logger, { clients: ["claude-code", "cursor"] }));
+
+        // The bad config is reported...
+        expect(result.written.find((entry) => entry.client === "claude-code")?.action).toBe("invalid");
+        // ...and the healthy one is still written, rather than being skipped by
+        // a throw unwinding the loop.
+        expect(result.written.find((entry) => entry.client === "cursor")?.action).toBe("created");
+        expect(readJson(join(workdir, ".cursor", "mcp.json")).mcpServers["lunora-docs"]).toBeDefined();
+    });
+
+    it("leaves no temp file behind on a successful write", () => {
+        expect.assertions(2);
+
+        const { logger } = captureLogger();
+
+        runMcpInstall(baseOptions(logger, { clients: ["claude-code"] }));
+
+        expect(existsSync(join(workdir, ".mcp.json"))).toBe(true);
+        expect(existsSync(join(workdir, ".mcp.json.lunora-tmp"))).toBe(false);
+    });
+});
+
+describe("per-client remote entry shapes", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-mcp-shape-"));
+        home = mkdtempSync(join(tmpdir(), "lunora-cli-home-shape-"));
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+        rmSync(home, { force: true, recursive: true });
+    });
+
+    /**
+     * Each client names the Streamable-HTTP endpoint differently, and writing
+     * the wrong key is worse than writing nothing: the config lands, we report
+     * success, and the server never connects.
+     */
+    it("writes httpUrl for the Gemini CLI, not url", () => {
+        expect.assertions(2);
+
+        const { logger } = captureLogger();
+
+        runMcpInstall(baseOptions(logger, { clients: ["gemini"] }));
+
+        const entry = readJson(join(workdir, ".gemini", "settings.json")).mcpServers["lunora-docs"];
+
+        expect(entry.httpUrl).toBe(DEFAULT_DOCS_MCP_URL);
+        // A bare `url` would be read as SSE, which this server does not speak.
+        expect(entry.url).toBeUndefined();
+    });
+
+    it("writes serverUrl for Windsurf", () => {
+        expect.assertions(1);
+
+        const { logger } = captureLogger();
+
+        runMcpInstall(baseOptions(logger, { clients: ["windsurf"] }));
+
+        expect(readJson(join(home, ".codeium", "windsurf", "mcp_config.json")).mcpServers["lunora-docs"].serverUrl).toBe(DEFAULT_DOCS_MCP_URL);
+    });
+
+    it("bridges Claude Desktop through mcp-remote, since it validates stdio entries only", () => {
+        expect.assertions(2);
+
+        const { logger } = captureLogger();
+
+        runMcpInstall(baseOptions(logger, { clients: ["claude-desktop"] }));
+
+        const entry = readJson(join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")).mcpServers["lunora-docs"];
+
+        expect(entry.command).toBe("npx");
+        expect(entry.args).toStrictEqual(["-y", "mcp-remote", DEFAULT_DOCS_MCP_URL]);
+    });
+
+    it("keeps type/url for the clients that do read it", () => {
+        expect.assertions(2);
+
+        const { logger } = captureLogger();
+
+        runMcpInstall(baseOptions(logger, { clients: ["claude-code", "vscode"] }));
+
+        expect(readJson(join(workdir, ".mcp.json")).mcpServers["lunora-docs"]).toStrictEqual({ type: "http", url: DEFAULT_DOCS_MCP_URL });
+        expect(readJson(join(workdir, ".vscode", "mcp.json")).servers["lunora-docs"]).toStrictEqual({ type: "http", url: DEFAULT_DOCS_MCP_URL });
+    });
+
+    it("detects a configured Codex install and prints an escaped TOML snippet", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(home, ".codex"), { recursive: true });
+        writeFileSync(join(home, ".codex", "config.toml"), "", "utf8");
+
+        const { logger, messages } = captureLogger();
+        // No client named: Codex must now be auto-detected like the JSON ones.
+        const result = runMcpInstall(baseOptions(logger, { docsUrl: 'https://example.test/"quoted"' }));
+
+        expect(result.written.map((entry) => entry.client)).toStrictEqual(["codex"]);
+        expect(messages.join("\n")).toContain(String.raw`url = "https://example.test/\"quoted\""`);
     });
 });

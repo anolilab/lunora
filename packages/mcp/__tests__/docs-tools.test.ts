@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { callDocsTool, DOCS_TOOL_DEFINITIONS, docsTools, MAX_SEARCH_LIMIT, normalizeDocUrl } from "../src/docs/tools";
+import { DOCS_TOOL_DEFINITIONS, docsTools, MAX_SEARCH_LIMIT, normalizeDocUrl } from "../src/docs/tools";
 import type { DocsIndex, DocsPage, DocsPageSummary, DocsSearchHit } from "../src/docs/types";
+import type { ToolResult } from "../src/tool-types";
 
 const PAGES: DocsPage[] = [
     { content: "Use `.shardBy(key)` to partition state.", description: "Partition state across DOs", title: "Sharding", url: "/docs/sharding" },
@@ -22,7 +23,7 @@ const stubIndex = (
             return { title, url };
         }),
     );
-    const search = vi.fn<(query: string, limit: number) => Promise<ReadonlyArray<DocsSearchHit>>>(async () => [
+    const search = vi.fn<(query: string) => Promise<ReadonlyArray<DocsSearchHit>>>(async () => [
         { excerpt: "Use .shardBy(key)", section: "Guides › Sharding", title: "Sharding", url: "/docs/sharding" },
     ]);
 
@@ -30,6 +31,20 @@ const stubIndex = (
 };
 
 const textOf = (result: { content: { text: string }[] }): string => result.content.map((part) => part.text).join("");
+
+/**
+ * Invoke a tool the way `createToolServer` does — through the handler bound to
+ * its advertised definition. There is no separate dispatch function to test.
+ */
+const call = async (index: DocsIndex, name: string, input: Record<string, unknown> = {}): Promise<ToolResult> => {
+    const tool = docsTools(index).find((entry) => entry.definition.name === name);
+
+    if (tool === undefined) {
+        throw new Error(`no docs tool named ${name}`);
+    }
+
+    return tool.handle(input);
+};
 
 describe("docs tool definitions", () => {
     it("advertises the three documentation tools", () => {
@@ -65,6 +80,7 @@ describe("normalizeDocUrl", () => {
     it.each([
         ["/docs/sharding", "/docs/sharding"],
         ["docs/sharding", "/docs/sharding"],
+        ["sharding", "/docs/sharding"],
         ["/docs/sharding/", "/docs/sharding"],
         ["https://lunora.sh/docs/sharding", "/docs/sharding"],
         ["https://lunora.sh/docs/sharding#occ", "/docs/sharding"],
@@ -82,33 +98,32 @@ describe("lunora_search_docs", () => {
         expect.assertions(3);
 
         const { asIndex, search } = stubIndex();
-        const result = await callDocsTool(asIndex, "lunora_search_docs", { query: "sharding" });
+        const result = await call(asIndex, "lunora_search_docs", { query: "sharding" });
 
         expect(result.isError).toBeUndefined();
-        expect(search).toHaveBeenCalledWith("sharding", 10);
+        expect(search).toHaveBeenCalledWith("sharding");
         expect(textOf(result)).toContain("/docs/sharding");
     });
 
-    it("clamps the limit into range and accepts a numeric string", async () => {
-        expect.assertions(4);
+    it.each([
+        ["an over-large limit is capped", 999, MAX_SEARCH_LIMIT],
+        ["a zero limit is raised to one", 0, 1],
+        ["a numeric string is accepted", "3", 3],
+        ["an unparseable limit falls back to the default", "nonsense", 10],
+    ])("%s", async (_label, limit, expected) => {
+        expect.assertions(1);
 
-        const { asIndex, search } = stubIndex();
+        const { asIndex } = stubIndex({
+            search: vi.fn<DocsIndex["search"]>(async () =>
+                Array.from({ length: 200 }, (_unused, index) => {
+                    return { title: `t${String(index)}`, url: `/docs/${String(index)}` };
+                }),
+            ),
+        });
 
-        await callDocsTool(asIndex, "lunora_search_docs", { limit: 999, query: "a" });
+        const parsed = JSON.parse(textOf(await call(asIndex, "lunora_search_docs", { limit, query: "a" }))) as { hits: unknown[] };
 
-        expect(search).toHaveBeenLastCalledWith("a", MAX_SEARCH_LIMIT);
-
-        await callDocsTool(asIndex, "lunora_search_docs", { limit: 0, query: "a" });
-
-        expect(search).toHaveBeenLastCalledWith("a", 1);
-
-        await callDocsTool(asIndex, "lunora_search_docs", { limit: "3", query: "a" });
-
-        expect(search).toHaveBeenLastCalledWith("a", 3);
-
-        await callDocsTool(asIndex, "lunora_search_docs", { limit: "nonsense", query: "a" });
-
-        expect(search).toHaveBeenLastCalledWith("a", 10);
+        expect(parsed.hits).toHaveLength(expected);
     });
 
     it("truncates a backend that returns more than the limit", async () => {
@@ -122,7 +137,7 @@ describe("lunora_search_docs", () => {
             ),
         });
 
-        const result = await callDocsTool(asIndex, "lunora_search_docs", { limit: 2, query: "a" });
+        const result = await call(asIndex, "lunora_search_docs", { limit: 2, query: "a" });
         const parsed = JSON.parse(textOf(result)) as { hits: unknown[] };
 
         expect(parsed.hits).toHaveLength(2);
@@ -132,31 +147,27 @@ describe("lunora_search_docs", () => {
         expect.assertions(2);
 
         const { asIndex } = stubIndex({ search: vi.fn<DocsIndex["search"]>(async () => []) });
-        const result = await callDocsTool(asIndex, "lunora_search_docs", { query: "zzz" });
+        const result = await call(asIndex, "lunora_search_docs", { query: "zzz" });
 
         expect(result.isError).toBeUndefined();
         expect(textOf(result)).toContain("lunora_list_docs");
     });
 
-    it("rejects a missing or blank query", async () => {
-        expect.assertions(9);
+    it("rejects a missing or blank query, naming the argument", async () => {
+        expect.assertions(5);
 
         const { asIndex, search } = stubIndex();
 
-        const results = await Promise.all(
-            [{}, { query: "" }, { query: "   " }, { query: 42 }].map(async (input) => callDocsTool(asIndex, "lunora_search_docs", input)),
-        );
-
-        for (const result of results) {
-            expect(result.isError).toBe(true);
-            expect(textOf(result)).toContain("query");
+        for (const input of [{}, { query: "" }, { query: "   " }, { query: 42 }]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential by design: each input must be rejected on its own
+            await expect(call(asIndex, "lunora_search_docs", input)).rejects.toThrow(/"query"/);
         }
 
         expect(search).not.toHaveBeenCalled();
     });
 
-    it("surfaces a backend failure as a tool error, not a rejection", async () => {
-        expect.assertions(2);
+    it("lets a backend failure propagate for the server to convert", async () => {
+        expect.assertions(1);
 
         const { asIndex } = stubIndex({
             search: vi.fn<DocsIndex["search"]>(async () => {
@@ -164,10 +175,7 @@ describe("lunora_search_docs", () => {
             }),
         });
 
-        const result = await callDocsTool(asIndex, "lunora_search_docs", { query: "a" });
-
-        expect(result.isError).toBe(true);
-        expect(textOf(result)).toContain("index offline");
+        await expect(call(asIndex, "lunora_search_docs", { query: "a" })).rejects.toThrow("index offline");
     });
 });
 
@@ -176,7 +184,7 @@ describe("lunora_get_doc", () => {
         expect.assertions(2);
 
         const { asIndex } = stubIndex();
-        const result = await callDocsTool(asIndex, "lunora_get_doc", { url: "https://lunora.sh/docs/sharding/" });
+        const result = await call(asIndex, "lunora_get_doc", { url: "https://lunora.sh/docs/sharding/" });
 
         expect(result.isError).toBeUndefined();
         expect(textOf(result)).toBe("# Sharding (/docs/sharding)\n\nUse `.shardBy(key)` to partition state.");
@@ -186,7 +194,7 @@ describe("lunora_get_doc", () => {
         expect.assertions(2);
 
         const { asIndex } = stubIndex();
-        const result = await callDocsTool(asIndex, "lunora_get_doc", { url: "/docs/nope" });
+        const result = await call(asIndex, "lunora_get_doc", { url: "/docs/nope" });
 
         expect(result.isError).toBe(true);
         expect(textOf(result)).toContain("lunora_search_docs");
@@ -198,21 +206,9 @@ describe("lunora_list_docs", () => {
         expect.assertions(1);
 
         const { asIndex } = stubIndex();
-        const result = await callDocsTool(asIndex, "lunora_list_docs", {});
+        const result = await call(asIndex, "lunora_list_docs", {});
         const parsed = JSON.parse(textOf(result)) as DocsPageSummary[];
 
         expect(parsed.map((page) => page.url)).toStrictEqual(["/docs/sharding", "/docs/schema"]);
-    });
-});
-
-describe("unknown tools", () => {
-    it("reports the name rather than throwing", async () => {
-        expect.assertions(2);
-
-        const { asIndex } = stubIndex();
-        const result = await callDocsTool(asIndex, "lunora_delete_everything", {});
-
-        expect(result.isError).toBe(true);
-        expect(textOf(result)).toContain("unknown tool: lunora_delete_everything");
     });
 });

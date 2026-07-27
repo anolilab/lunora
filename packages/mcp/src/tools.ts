@@ -1,7 +1,6 @@
 import type { FunctionDescriptor, FunctionReference, LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 
-import type { McpTool } from "./compose";
 import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tool-types";
 
 /**
@@ -346,21 +345,6 @@ const callTool = async (client: LunoraClient, name: string, input: Record<string
     }
 };
 
-/**
- * The deployment tool surface as composable {@link McpTool}s — each definition
- * paired with a handler bound to `client`. This is what a caller assembling a
- * server out of several surfaces (deployment + docs + local dev) hands to
- * `createToolServer`; `createLunoraMcpServer` keeps its own dispatch because it
- * also has to route the dynamically-named `agent_&lt;name>` tools.
- */
-const deploymentTools = (client: LunoraClient, allowWrites = false): ReadonlyArray<McpTool> =>
-    toolDefinitions(allowWrites).map((definition) => {
-        return {
-            definition,
-            handle: async (input: Record<string, unknown>): Promise<ToolResult> => callTool(client, definition.name, input, allowWrites),
-        };
-    });
-
-export { callTool, deploymentTools, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS };
+export { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS };
 
 export { type ToolDefinition, type ToolInputSchema, type ToolResult } from "./tool-types";

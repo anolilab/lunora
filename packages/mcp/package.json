@@ -69,10 +69,10 @@
     "dependencies": {
         "@lunora/client": "1.0.0-alpha.31",
         "@lunora/errors": "1.0.0-alpha.8",
-        "@lunora/x402": "1.0.0-alpha.18",
         "@modelcontextprotocol/sdk": "catalog:mcp"
     },
     "devDependencies": {
+        "@lunora/x402": "1.0.0-alpha.18",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
@@ -80,6 +80,14 @@
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@lunora/x402": ">=1.0.0-alpha.18 <2.0.0-0"
+    },
+    "peerDependenciesMeta": {
+        "@lunora/x402": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

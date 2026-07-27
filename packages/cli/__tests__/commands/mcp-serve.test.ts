@@ -6,6 +6,7 @@ import type { LocalMcpServerOptions } from "@lunora/mcp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { devTools, MAX_LOG_LINES } from "../../src/commands/mcp/dev-tools";
+import type { ClosableServer } from "../../src/commands/mcp/serve";
 import { resolveDeployment, runMcpServe } from "../../src/commands/mcp/serve";
 
 let workdir: string;
@@ -24,6 +25,26 @@ const recordDevServer = (state: Record<string, unknown> = {}): void => {
 };
 
 const textOf = (result: { content: { text: string }[] }): string => result.content.map((part) => part.text).join("");
+
+/**
+ * A connected server that closes as soon as the command starts serving, so a
+ * test asserting startup behaviour doesn't block on the (real) wait-for-close.
+ * The blocking behaviour itself is asserted separately, with a server that
+ * stays open.
+ */
+const selfClosingServer = async (): Promise<ClosableServer> => {
+    const server = {} as ClosableServer;
+
+    // Fire the moment the command registers its handler — deterministic, where
+    // scheduling the close beforehand would race the assignment.
+    Object.defineProperty(server, "onclose", {
+        set(handler: () => void) {
+            handler();
+        },
+    });
+
+    return server;
+};
 
 const toolNamed = (name: string): { handle: (input: Record<string, unknown>) => Promise<{ content: { text: string }[]; isError?: boolean }> } => {
     const tool = devTools(workdir).find((entry) => entry.definition.name === name);
@@ -82,13 +103,35 @@ describe("lunora mcp serve", () => {
                 url: "https://staging.example",
             });
         });
+
+        it("does NOT send the project's admin token to a non-local --url", () => {
+            expect.assertions(2);
+
+            recordDevServer();
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(workdir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local"\n', "utf8");
+            vi.stubEnv("LUNORA_ADMIN_TOKEN", "");
+
+            // `--url` exists to point elsewhere; pairing it with a token
+            // discovered for the local dev server would ship that bearer to an
+            // arbitrary origin on the strength of one flag.
+            expect(resolveDeployment({ cwd: workdir, url: "https://someone-elses.workers.dev", version: "1.0.0" })).toStrictEqual({
+                url: "https://someone-elses.workers.dev",
+            });
+
+            // A loopback --url is still the local dev server, so the token stands.
+            expect(resolveDeployment({ cwd: workdir, url: "http://127.0.0.1:8788", version: "1.0.0" })).toStrictEqual({
+                token: "local",
+                url: "http://127.0.0.1:8788",
+            });
+        });
     });
 
     describe("startup", () => {
         it("passes a resolver, not a fixed deployment, so a later `lunora dev` is picked up", async () => {
             expect.assertions(3);
 
-            const connect = vi.fn<(options: LocalMcpServerOptions) => Promise<unknown>>(async () => undefined);
+            const connect = vi.fn<(options: LocalMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
             const result = await runMcpServe({ cwd: workdir, version: "1.2.3", writeError: () => undefined }, connect);
 
             expect(result.code).toBe(0);
@@ -107,7 +150,7 @@ describe("lunora mcp serve", () => {
         it("is read-only unless --allow-writes is passed", async () => {
             expect.assertions(2);
 
-            const connect = vi.fn<(options: LocalMcpServerOptions) => Promise<unknown>>(async () => undefined);
+            const connect = vi.fn<(options: LocalMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
 
             await runMcpServe({ cwd: workdir, version: "1.0.0", writeError: () => undefined }, connect);
 
@@ -122,7 +165,7 @@ describe("lunora mcp serve", () => {
             expect.assertions(2);
 
             const written: string[] = [];
-            const connect = async (): Promise<unknown> => undefined;
+            const connect = selfClosingServer;
 
             recordDevServer();
 
@@ -136,7 +179,7 @@ describe("lunora mcp serve", () => {
             expect.assertions(2);
 
             const written: string[] = [];
-            const connect = async (): Promise<unknown> => {
+            const connect = async (): Promise<ClosableServer> => {
                 throw new Error("stdio unavailable");
             };
 
@@ -146,10 +189,42 @@ describe("lunora mcp serve", () => {
             expect(written.join("")).toContain("stdio unavailable");
         });
 
+        it("serves until the client disconnects, rather than exiting once connected", async () => {
+            expect.assertions(2);
+
+            const server: ClosableServer = {};
+            const pending = runMcpServe({ cwd: workdir, version: "1.0.0", writeError: () => undefined }, async () => server);
+
+            let settled = false;
+
+            pending
+                .then(() => {
+                    settled = true;
+
+                    return undefined;
+                })
+                .catch(() => undefined);
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, 10);
+            });
+
+            // Still serving: the command framework exits with whatever this
+            // resolves to, so resolving at connect time would kill the server
+            // before its first request.
+            expect(settled).toBe(false);
+
+            server.onclose?.();
+
+            const finished = await pending;
+
+            expect(finished.code).toBe(0);
+        });
+
         it("drops the documentation tools with --no-docs", async () => {
             expect.assertions(1);
 
-            const connect = vi.fn<(options: LocalMcpServerOptions) => Promise<unknown>>(async () => undefined);
+            const connect = vi.fn<(options: LocalMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
 
             await runMcpServe({ cwd: workdir, noDocs: true, version: "1.0.0", writeError: () => undefined }, connect);
 

@@ -24,6 +24,12 @@ const DEFAULT_SEARCH_LIMIT = 10;
  */
 const MAX_SEARCH_LIMIT = 50;
 
+/** The path segment the documentation lives under, used to expand a bare slug. */
+const DOCS_BASE_SEGMENT = "docs";
+
+/** Ceiling on pages returned by `lunora_list_docs` in one call. */
+const MAX_LISTED_PAGES = 500;
+
 const SEARCH_INPUT_SCHEMA: ToolInputSchema = {
     properties: {
         limit: { description: `Maximum hits to return (default ${String(DEFAULT_SEARCH_LIMIT)}, max ${String(MAX_SEARCH_LIMIT)})`, type: "number" },
@@ -43,27 +49,27 @@ const GET_DOC_INPUT_SCHEMA: ToolInputSchema = {
 
 const NO_INPUT_SCHEMA: ToolInputSchema = { properties: {}, type: "object" };
 
-const DOCS_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
-    {
-        description:
-            "Search the Lunora documentation and return matching pages and sections. Use this before writing Lunora code (schema, queries, mutations, actions, sharding, .global(), client hooks) so the answer reflects the framework's current API rather than a guess. Follow a hit with lunora_get_doc to read the full page.",
-        inputSchema: SEARCH_INPUT_SCHEMA,
-        name: "lunora_search_docs",
-    },
-    {
-        description: "Return one Lunora documentation page in full, as Markdown. Takes the `url` of a lunora_search_docs hit or a lunora_list_docs entry.",
-        inputSchema: GET_DOC_INPUT_SCHEMA,
-        name: "lunora_get_doc",
-    },
-    {
-        description: "List every Lunora documentation page with its title and description. Prefer lunora_search_docs when you know what you're looking for.",
-        inputSchema: NO_INPUT_SCHEMA,
-        name: "lunora_list_docs",
-    },
-];
+const SEARCH_TOOL_DEFINITION: ToolDefinition = {
+    description:
+        "Search the Lunora documentation and return matching pages and sections. Use this before writing Lunora code (schema, queries, mutations, actions, sharding, .global(), client hooks) so the answer reflects the framework's current API rather than a guess. Follow a hit with lunora_get_doc to read the full page.",
+    inputSchema: SEARCH_INPUT_SCHEMA,
+    name: "lunora_search_docs",
+};
 
-/** Names of the tools in {@link DOCS_TOOL_DEFINITIONS}, for callers filtering a composed surface. */
-const DOCS_TOOL_NAMES: ReadonlySet<string> = new Set(DOCS_TOOL_DEFINITIONS.map((tool) => tool.name));
+const GET_DOC_TOOL_DEFINITION: ToolDefinition = {
+    description: "Return one Lunora documentation page in full, as Markdown. Takes the `url` of a lunora_search_docs hit or a lunora_list_docs entry.",
+    inputSchema: GET_DOC_INPUT_SCHEMA,
+    name: "lunora_get_doc",
+};
+
+const LIST_DOCS_TOOL_DEFINITION: ToolDefinition = {
+    description: "List every Lunora documentation page with its title and description. Prefer lunora_search_docs when you know what you're looking for.",
+    inputSchema: NO_INPUT_SCHEMA,
+    name: "lunora_list_docs",
+};
+
+/** The advertised surface, in the order a caller should reach for it. */
+const DOCS_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [SEARCH_TOOL_DEFINITION, GET_DOC_TOOL_DEFINITION, LIST_DOCS_TOOL_DEFINITION];
 
 const ok = (value: unknown): ToolResult => {
     return { content: [{ text: JSON.stringify(value, undefined, 2), type: "text" }] };
@@ -73,12 +79,27 @@ const fail = (message: string): ToolResult => {
     return { content: [{ text: message, type: "text" }], isError: true };
 };
 
-/** Read a required non-empty string argument out of an MCP `arguments` bag. */
+/**
+ * Longest accepted string argument.
+ *
+ * A search query is a handful of words; a page URL is a short path. The cap
+ * exists because this surface is hosted unauthenticated, and an unbounded
+ * `query` is a free way to make the search engine do arbitrary work — the
+ * pre-existing `GET /api/search` was capped by URL length, and moving search
+ * behind a POST body removed that ceiling.
+ */
+const MAX_ARGUMENT_LENGTH = 512;
+
+/** Read a required, non-empty, bounded string argument out of an MCP `arguments` bag. */
 const readStringArgument = (input: Record<string, unknown>, key: string): string => {
     const value = input[key];
 
     if (typeof value !== "string" || value.trim().length === 0) {
         throw new TypeError(`"${key}" is required and must be a non-empty string`);
+    }
+
+    if (value.length > MAX_ARGUMENT_LENGTH) {
+        throw new RangeError(`"${key}" must be at most ${String(MAX_ARGUMENT_LENGTH)} characters`);
     }
 
     return value.trim();
@@ -109,8 +130,14 @@ const readLimit = (raw: unknown): number => {
  * (`sharding`, `docs/sharding`). All four are the same page, and failing three
  * of them would push the model into a guess-and-retry loop, so resolve them to
  * one form. A trailing slash is dropped for the same reason.
+ *
+ * A `..` segment is REJECTED rather than resolved. The remote backend appends
+ * this path to `/llms.mdx`, so `../../api/search` would walk back out of the
+ * documentation tree and pull an unrelated path on the docs origin into the
+ * model's context — harmless against a public site, less so against the
+ * internal host a self-hosted `--docs-url` may point at.
  */
-const normalizeDocumentUrl = (raw: string): string => {
+const normalizeDocUrl = (raw: string): string => {
     let value = raw.trim();
 
     // Strip an absolute origin: everything through the host, keeping the path.
@@ -134,64 +161,84 @@ const normalizeDocumentUrl = (raw: string): string => {
         value = value.slice(0, -1);
     }
 
+    // A bare slug is the model's own shorthand for a docs page, so resolve it
+    // into the documented namespace rather than to a site-root path that will
+    // never match. `docs/x` is already namespaced; `x` is not.
     if (!value.startsWith("/")) {
-        value = `/${value}`;
+        value = value.startsWith("docs/") ? `/${value}` : `/${DOCS_BASE_SEGMENT}/${value}`;
+    }
+
+    if (value.split("/").includes("..")) {
+        throw new RangeError(`"url" must not contain ".." segments: ${raw}`);
     }
 
     return value;
 };
 
 /**
- * Dispatch a documentation tool call against `index`. Unknown tools and thrown
- * errors come back as `isError` results rather than rejections, so the calling
- * model sees the failure as tool output it can correct.
+ * The documentation surface, bound to `index`.
+ *
+ * Each tool carries its own handler rather than routing through a shared
+ * `switch`: `createToolServer` already dispatches by name, so a second switch
+ * here would be a duplicate table with an unreachable `default`. It also owns
+ * the throw-to-`isError` conversion, so these handlers signal argument problems
+ * by throwing and return `isError` only for the expected misses a model should
+ * read and act on.
  */
-const callDocsTool = async (index: DocsIndex, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
-    try {
-        switch (name) {
-            case "lunora_get_doc": {
-                const url = normalizeDocumentUrl(readStringArgument(input, "url"));
-                const page = await index.getPage(url);
+const docsTools = (index: DocsIndex): ReadonlyArray<McpTool> => [
+    {
+        definition: SEARCH_TOOL_DEFINITION,
+        handle: async (input: Record<string, unknown>): Promise<ToolResult> => {
+            const query = readStringArgument(input, "query");
+            const limit = readLimit(input.limit);
+            // Truncation happens here and nowhere else: `DocsIndex.search` returns
+            // whatever its backend found, so there is one place that decides how
+            // much of it reaches the model's context.
+            const found = await index.search(query);
+            const hits = found.slice(0, limit);
 
-                if (page === undefined) {
-                    return fail(`documentation page not found: ${url}. Use lunora_search_docs or lunora_list_docs to find a valid url.`);
-                }
-
-                // Returned as raw Markdown, not JSON: the body is the payload,
-                // and JSON-escaping a whole page burns context and makes the
-                // fenced code samples in it harder for the model to reuse.
-                return { content: [{ text: `# ${page.title} (${page.url})\n\n${page.content}`, type: "text" }] };
+            if (hits.length === 0) {
+                return ok({ hits: [], note: `no documentation matched "${query}" — try fewer or more general terms, or lunora_list_docs to browse` });
             }
-            case "lunora_list_docs": {
-                return ok(await index.listPages());
+
+            return ok({ hits });
+        },
+    },
+    {
+        definition: GET_DOC_TOOL_DEFINITION,
+        handle: async (input: Record<string, unknown>): Promise<ToolResult> => {
+            const url = normalizeDocUrl(readStringArgument(input, "url"));
+            const page = await index.getPage(url);
+
+            if (page === undefined) {
+                return fail(`documentation page not found: ${url}. Use lunora_search_docs or lunora_list_docs to find a valid url.`);
             }
-            case "lunora_search_docs": {
-                const query = readStringArgument(input, "query");
-                const limit = readLimit(input.limit);
-                const hits = await index.search(query, limit);
 
-                if (hits.length === 0) {
-                    return ok({ hits: [], note: `no documentation matched "${query}" — try fewer or more general terms, or lunora_list_docs to browse` });
-                }
+            // Returned as raw Markdown, not JSON: the body is the payload, and
+            // JSON-escaping a whole page burns context and makes the fenced code
+            // samples in it harder for the model to reuse.
+            return { content: [{ text: `# ${page.title} (${page.url})\n\n${page.content}`, type: "text" }] };
+        },
+    },
+    {
+        definition: LIST_DOCS_TOOL_DEFINITION,
+        handle: async (): Promise<ToolResult> => {
+            const pages = await index.listPages();
 
-                return ok({ hits: hits.slice(0, limit) });
+            // Bounded like the search results, and for the same reason: this is
+            // the one tool that serialises the whole corpus in a single call, so
+            // an unbounded list is both a context hazard for the model and the
+            // largest response an anonymous caller can ask a hosted server for.
+            if (pages.length > MAX_LISTED_PAGES) {
+                return ok({
+                    note: `showing the first ${String(MAX_LISTED_PAGES)} of ${String(pages.length)} pages — use lunora_search_docs to find the rest`,
+                    pages: pages.slice(0, MAX_LISTED_PAGES),
+                });
             }
-            default: {
-                return fail(`unknown tool: ${name}`);
-            }
-        }
-    } catch (error: unknown) {
-        return fail(error instanceof Error ? error.message : String(error));
-    }
-};
 
-/** The documentation surface as composable {@link McpTool}s bound to `index`. */
-const docsTools = (index: DocsIndex): ReadonlyArray<McpTool> =>
-    DOCS_TOOL_DEFINITIONS.map((definition) => {
-        return {
-            definition,
-            handle: async (input: Record<string, unknown>): Promise<ToolResult> => callDocsTool(index, definition.name, input),
-        };
-    });
+            return ok(pages);
+        },
+    },
+];
 
-export { callDocsTool, DEFAULT_SEARCH_LIMIT, DOCS_TOOL_DEFINITIONS, DOCS_TOOL_NAMES, docsTools, MAX_SEARCH_LIMIT, normalizeDocumentUrl as normalizeDocUrl };
+export { DEFAULT_SEARCH_LIMIT, DOCS_TOOL_DEFINITIONS, docsTools, MAX_ARGUMENT_LENGTH, MAX_LISTED_PAGES, MAX_SEARCH_LIMIT, normalizeDocUrl };

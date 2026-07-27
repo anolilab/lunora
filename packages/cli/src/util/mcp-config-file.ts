@@ -11,11 +11,39 @@
  * A file we cannot parse is left strictly alone — reporting `"invalid"` beats
  * overwriting a config whose syntax error is probably a work in progress.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 
 import { dirname } from "@visulima/path";
 import type { ParseError } from "jsonc-parser";
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
+
+/**
+ * Write `contents` to `path` atomically: a sibling temp file, then a rename.
+ *
+ * These paths include files this CLI does not own and did not create —
+ * `~/Library/Application Support/Claude/claude_desktop_config.json`,
+ * `~/.codeium/windsurf/mcp_config.json` — holding every other MCP server the
+ * user has configured. `writeFileSync` truncates before it writes, so a crash,
+ * a Ctrl-C, or a full disk in between leaves that file empty, with no backup.
+ * `rename` within a directory is atomic, so a reader sees the old file or the
+ * new one and never a half-written one.
+ */
+const writeAtomic = (path: string, contents: string): void => {
+    const temporaryPath = `${path}.lunora-tmp`;
+
+    try {
+        writeFileSync(temporaryPath, contents, "utf8");
+        renameSync(temporaryPath, path);
+    } catch (error: unknown) {
+        try {
+            unlinkSync(temporaryPath);
+        } catch {
+            // Nothing to clean up, or we can't — the original is intact either way.
+        }
+
+        throw error;
+    }
+};
 
 /** Formatting applied to spliced-in values, matching the repo's 4-space style. */
 const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 4 } } as const;
@@ -59,15 +87,36 @@ const parseConfig = (text: string): { errors: ParseError[]; value: unknown } => 
     return { errors, value };
 };
 
+/** True for a JSON object (`{}`), excluding `null` and arrays — both are `typeof "object"`. */
+const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
 /** The entry currently stored at `[key][name]`, if any. */
 const existingEntry = (value: unknown, key: string, name: string): unknown => {
-    if (typeof value !== "object" || value === null) {
+    if (!isPlainObject(value)) {
         return undefined;
     }
 
-    const map = (value as Record<string, unknown>)[key];
+    const map = value[key];
 
-    return typeof map === "object" && map !== null ? (map as Record<string, unknown>)[name] : undefined;
+    return isPlainObject(map) ? map[name] : undefined;
+};
+
+/**
+ * True when `path` already holds an entry at `[key][name]`.
+ *
+ * Read-only counterpart to {@link upsertMcpEntry}, so a dry run can predict the
+ * skip the real write would take rather than promising a change.
+ */
+const hasMcpEntry = (options: { key: string; name: string; path: string }): boolean => {
+    if (!existsSync(options.path)) {
+        return false;
+    }
+
+    try {
+        return existingEntry(parseConfig(readFileSync(options.path, "utf8")).value, options.key, options.name) !== undefined;
+    } catch {
+        return false;
+    }
 };
 
 /**
@@ -79,7 +128,7 @@ const upsertMcpEntry = (options: UpsertMcpEntryOptions): UpsertMcpEntryResult =>
 
     if (!existsSync(path)) {
         mkdirSync(dirname(path), { recursive: true });
-        writeFileSync(path, `${JSON.stringify({ [key]: { [name]: entry } }, undefined, 4)}\n`, "utf8");
+        writeAtomic(path, `${JSON.stringify({ [key]: { [name]: entry } }, undefined, 4)}\n`);
 
         return { action: "created", path };
     }
@@ -89,29 +138,49 @@ const upsertMcpEntry = (options: UpsertMcpEntryOptions): UpsertMcpEntryResult =>
     // An empty (or whitespace-only) file parses to `undefined` with no errors;
     // treat it as a fresh file rather than as unrecoverable.
     if (text.trim().length === 0) {
-        writeFileSync(path, `${JSON.stringify({ [key]: { [name]: entry } }, undefined, 4)}\n`, "utf8");
+        writeAtomic(path, `${JSON.stringify({ [key]: { [name]: entry } }, undefined, 4)}\n`);
 
         return { action: "created", path };
     }
 
     const { errors, value } = parseConfig(text);
 
-    if (errors.length > 0 || typeof value !== "object" || value === null) {
-        return { action: "invalid", error: errors.length > 0 ? `parse error at offset ${String(errors[0]?.offset ?? 0)}` : "not a JSON object", path };
+    if (errors.length > 0) {
+        return { action: "invalid", error: `parse error at offset ${String(errors[0]?.offset ?? 0)}`, path };
+    }
+
+    if (!isPlainObject(value)) {
+        return { action: "invalid", error: "the file's root is not a JSON object", path };
+    }
+
+    // `modify` throws when the path it must descend isn't an object — an array,
+    // a string, or `null` at `[key]` are all plausible in a hand-edited config,
+    // and an escaping throw would abort the whole install mid-way, leaving
+    // earlier clients written and later ones silently skipped.
+    const existingMap = value[key];
+
+    if (existingMap !== undefined && !isPlainObject(existingMap)) {
+        return { action: "invalid", error: `"${key}" is not an object`, path };
     }
 
     if (existingEntry(value, key, name) !== undefined && !force) {
         return { action: "skipped", path };
     }
 
-    const edits = modify(text, [key, name], entry, FORMATTING);
+    try {
+        const edits = modify(text, [key, name], entry, FORMATTING);
 
-    if (edits.length > 0) {
-        writeFileSync(path, applyEdits(text, edits), "utf8");
+        if (edits.length > 0) {
+            writeAtomic(path, applyEdits(text, edits));
+        }
+    } catch (error: unknown) {
+        // Last line of defence: report the file rather than unwinding the
+        // caller's loop over the remaining clients.
+        return { action: "invalid", error: error instanceof Error ? error.message : String(error), path };
     }
 
     return { action: "updated", path };
 };
 
 export type { UpsertAction, UpsertMcpEntryOptions, UpsertMcpEntryResult };
-export { upsertMcpEntry };
+export { hasMcpEntry, upsertMcpEntry };

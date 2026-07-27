@@ -3,6 +3,9 @@
 /**
  * Translate fumadocs search results into {@link DocsSearchHit}s.
  *
+ * (Named for what it maps, not for fumadocs' `SortedResult` type — nothing here
+ * sorts.)
+ *
  * Both docs backends produce this shape — the docs site gets it in-process from
  * its Orama index, a remote reader gets the same objects as JSON from
  * `/api/search` — so the mapping lives here once and both call it. Keeping it
@@ -60,15 +63,11 @@ const toDocsSearchHit = (entry: unknown): DocsSearchHit | undefined => {
     };
 };
 
-/** Map up to `limit` results, skipping any entry {@link toDocsSearchHit} rejects. */
-const toDocsSearchHits = (results: ReadonlyArray<unknown>, limit: number): DocsSearchHit[] => {
+/** Map every result, skipping any entry {@link toDocsSearchHit} rejects. */
+const toDocsSearchHits = (results: ReadonlyArray<unknown>): DocsSearchHit[] => {
     const hits: DocsSearchHit[] = [];
 
     for (const entry of results) {
-        if (hits.length >= limit) {
-            break;
-        }
-
         const hit = toDocsSearchHit(entry);
 
         if (hit !== undefined) {

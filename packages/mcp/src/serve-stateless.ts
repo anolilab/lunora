@@ -28,18 +28,22 @@ type McpFetchHandler = (request: Request) => Promise<Response>;
  * `options.parsedBody` lets a caller hand over a body it already read (e.g. the
  * paid-tool gate, which peeks the JSON-RPC message to price the call) so the
  * transport doesn't re-read a consumed stream.
+ *
+ * Teardown runs in a `finally`: a rejection from `connect` or `handleRequest`
+ * would otherwise skip it and leak a server + transport per failed request,
+ * which on a public endpoint is exactly the request an attacker can repeat.
  */
 const serveStateless = async (server: Server, request: Request, options?: HandleRequestOptions): Promise<Response> => {
     const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true, sessionIdGenerator: undefined });
 
-    await server.connect(transport);
+    try {
+        await server.connect(transport);
 
-    const response = await transport.handleRequest(request, options);
-
-    transport.close().catch(() => undefined);
-    server.close().catch(() => undefined);
-
-    return response;
+        return await transport.handleRequest(request, options);
+    } finally {
+        transport.close().catch(() => undefined);
+        server.close().catch(() => undefined);
+    }
 };
 
 export type { McpFetchHandler };

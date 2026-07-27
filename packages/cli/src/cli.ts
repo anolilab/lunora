@@ -76,27 +76,27 @@ const COMMANDS = [
 
 type CommandName = (typeof COMMANDS)[number];
 
-/** How far up from this module to look for the package root before giving up. */
+/**
+ * How far up to look before giving up. Deep enough for the worst real layout —
+ * a nested `dist/packem_shared/` chunk inside a hoisted `node_modules` — and
+ * shallow enough to stop rather than walk to the filesystem root.
+ */
 const PACKAGE_JSON_SEARCH_DEPTH = 8;
 
 /**
  * The CLI version, read from the package's own `package.json` at load time.
  *
- * It **walks up** looking for the manifest rather than resolving a fixed
- * `../package.json`, because this module's depth is not fixed: from `src/` under
- * vitest the manifest is one level up, but packem hoists the built module into a
- * hashed `dist/packem_shared/` chunk where it is two — so the fixed path silently
- * resolved to a nonexistent `dist/package.json` and every published build
- * reported the `0.0.0` sentinel. (`@visulima/vis` solves the same problem by
- * pinning its emitted depth, `../../package.json`, plus a `VIS_VERSION` env
- * override set by its non-bundled launcher; walking costs one extra `stat` or
- * two and survives a re-chunk. `@lunora/mcp` walks for the same reason.)
+ * It walks up for the manifest rather than resolving a fixed `../package.json`,
+ * because this module's depth is not fixed: from `src/` under vitest the
+ * manifest is one level up, but packem hoists the built module into a hashed
+ * `dist/packem_shared/` chunk where it is two — so the fixed path resolved to a
+ * nonexistent `dist/package.json` and every published build reported `0.0.0`.
  *
- * The name check matters: without it the walk would happily accept the first
+ * The name check matters: without it the walk would accept the first
  * `package.json` it met, which in a nested install is some dependency's.
  *
- * Falls back to the `0.0.0` dev sentinel when nothing is found, which also keeps
- * the update notifier quiet rather than comparing against a bogus version.
+ * Falls back to the `0.0.0` dev sentinel, which also keeps the update notifier
+ * quiet rather than comparing against a bogus version.
  */
 const readCliVersion = (): string => {
     try {

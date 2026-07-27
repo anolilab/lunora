@@ -14,25 +14,67 @@
  * against any docs deployment, including older ones that predate the hosted
  * `/mcp` route, and avoids proxying MCP-over-MCP.
  *
- * Every method degrades to empty rather than throwing on a non-OK response, so
- * an offline or half-deployed docs site turns into "no results" instead of a
- * tool error the model has to interpret.
+ * It is therefore a CONTRACT WITH THE DOCS SITE, not just with a URL: the
+ * counterparts live in `apps/docs/src/routes/api/search.ts`,
+ * `llms[.]mdx.docs.$.ts` and `llms[.]txt.ts`. Change a response shape there and
+ * this reader degrades silently, so keep the two in step.
+ *
+ * A **miss** degrades to empty, so a half-deployed docs site turns into "no
+ * results" rather than a tool error the model has to interpret. Failing to
+ * reach the host at all is raised instead — see `get` for why the two are worth
+ * telling apart.
  */
-import { toDocsSearchHits } from "./sorted-results";
+import { toDocsSearchHits } from "./fumadocs-hits";
 import type { DocsIndex, DocsPage, DocsPageSummary, DocsSearchHit } from "./types";
 
 /** The public docs site the remote index reads when no base URL is configured. */
 const DEFAULT_DOCS_BASE_URL = "https://lunora.sh";
+
+/**
+ * Deadline for a single documentation request. Without one, an unresponsive
+ * docs host leaves the calling tool — and the agent waiting on it — hanging
+ * indefinitely, with no way for the model to recover.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 
 interface RemoteDocsIndexOptions {
     /** Origin of the docs site, e.g. `"https://lunora.sh"`. Defaults to {@link DEFAULT_DOCS_BASE_URL}. */
     baseUrl?: string;
     /** `fetch` implementation; defaults to the ambient global. */
     fetch?: typeof fetch;
+    /** Per-request deadline in ms. Defaults to {@link DEFAULT_REQUEST_TIMEOUT_MS}. */
+    timeoutMs?: number;
 }
 
 /** Drop the trailing slash so `${base}${path}` never doubles it. */
 const trimTrailingSlash = (value: string): string => (value.endsWith("/") ? value.slice(0, -1) : value);
+
+/** The escape character fumadocs uses in the index it writes. */
+const BACKSLASH = "\\";
+
+/**
+ * Index of the first `character` at or after `from` that is NOT backslash-escaped.
+ *
+ * fumadocs escapes parentheses inside a link target, so a naive `indexOf(")")`
+ * ends the URL at the first escaped paren and truncates it.
+ */
+const indexOfUnescaped = (value: string, character: string, from: number): number => {
+    for (let index = from; index < value.length; index += 1) {
+        if (value[index] === character && value[index - 1] !== BACKSLASH) {
+            return index;
+        }
+    }
+
+    return -1;
+};
+
+/** Undo the backslash escaping fumadocs applies to link titles and URLs. */
+const unescapeMarkdown = (value: string): string =>
+    value
+        .replaceAll(String.raw`\[`, "[")
+        .replaceAll(String.raw`\]`, "]")
+        .replaceAll(String.raw`\(`, "(")
+        .replaceAll(String.raw`\)`, ")");
 
 /**
  * Parse one `llms.txt` list item — `- [Title](/docs/x): description` — into a
@@ -54,14 +96,16 @@ const parseIndexLine = (line: string): DocsPageSummary | undefined => {
         return undefined;
     }
 
-    const urlEnd = trimmed.indexOf(")", linkEnd);
+    const urlEnd = indexOfUnescaped(trimmed, ")", linkEnd + 2);
 
     if (urlEnd === -1) {
         return undefined;
     }
 
-    const title = trimmed.slice(3, linkEnd).trim();
-    const url = trimmed.slice(linkEnd + 2, urlEnd).trim();
+    // fumadocs escapes `[`/`]` in titles and `(`/`)` in URLs when it writes the
+    // index, so unescape before handing either to a model.
+    const title = unescapeMarkdown(trimmed.slice(3, linkEnd).trim());
+    const url = unescapeMarkdown(trimmed.slice(linkEnd + 2, urlEnd).trim());
 
     if (title.length === 0 || url.length === 0) {
         return undefined;
@@ -126,26 +170,47 @@ const stripLeadingTitle = (markdown: string): string => {
 const createRemoteDocsIndex = (options: RemoteDocsIndexOptions = {}): DocsIndex => {
     const baseUrl = trimTrailingSlash(options.baseUrl ?? DEFAULT_DOCS_BASE_URL);
     const fetchImplementation = options.fetch ?? globalThis.fetch;
+    const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 
-    /** GET `path`, returning the body text, or `undefined` on any failure. */
-    const get = async (path: string): Promise<string | undefined> => {
+    /**
+     * GET `path`.
+     *
+     * A **miss** (non-OK status) and a **failure to reach the host at all** are
+     * reported differently on purpose. Collapsing both to "no results" means a
+     * typo'd `--docs-url`, a DNS failure and a genuine 404 are indistinguishable
+     * to the model, which can then never correct the one that is its user's
+     * misconfiguration.
+     */
+    const get = async (path: string): Promise<{ body: string } | { missing: true } | { unreachable: string }> => {
         try {
-            const response = await fetchImplementation(`${baseUrl}${path}`, { headers: { accept: "text/plain, application/json" } });
+            const response = await fetchImplementation(`${baseUrl}${path}`, {
+                headers: { accept: "text/plain, application/json" },
+                signal: AbortSignal.timeout(timeoutMs),
+            });
 
             if (!response.ok) {
-                return undefined;
+                return { missing: true };
             }
 
-            return await response.text();
-        } catch {
-            return undefined;
+            return { body: await response.text() };
+        } catch (error: unknown) {
+            return { unreachable: error instanceof Error ? error.message : String(error) };
         }
+    };
+
+    /** Raise a reachability failure; a miss stays a miss. */
+    const bodyOrThrow = (result: Awaited<ReturnType<typeof get>>, path: string): string | undefined => {
+        if ("unreachable" in result) {
+            throw new Error(`could not reach the documentation site at ${baseUrl}${path}: ${result.unreachable}`);
+        }
+
+        return "missing" in result ? undefined : result.body;
     };
 
     return {
         getPage: async (url: string): Promise<DocsPage | undefined> => {
             // `/llms.mdx` mirrors the docs tree, so the page path appends directly.
-            const markdown = await get(`/llms.mdx${url}`);
+            const markdown = bodyOrThrow(await get(`/llms.mdx${url}`), `/llms.mdx${url}`);
 
             if (markdown === undefined || markdown.trim().length === 0) {
                 return undefined;
@@ -155,7 +220,7 @@ const createRemoteDocsIndex = (options: RemoteDocsIndexOptions = {}): DocsIndex 
         },
 
         listPages: async (): Promise<ReadonlyArray<DocsPageSummary>> => {
-            const index = await get("/llms.txt");
+            const index = bodyOrThrow(await get("/llms.txt"), "/llms.txt");
 
             if (index === undefined) {
                 return [];
@@ -174,8 +239,9 @@ const createRemoteDocsIndex = (options: RemoteDocsIndexOptions = {}): DocsIndex 
             return pages;
         },
 
-        search: async (query: string, limit: number): Promise<ReadonlyArray<DocsSearchHit>> => {
-            const body = await get(`/api/search?query=${encodeURIComponent(query)}`);
+        search: async (query: string): Promise<ReadonlyArray<DocsSearchHit>> => {
+            const path = `/api/search?query=${encodeURIComponent(query)}`;
+            const body = bodyOrThrow(await get(path), path);
 
             if (body === undefined) {
                 return [];
@@ -189,10 +255,10 @@ const createRemoteDocsIndex = (options: RemoteDocsIndexOptions = {}): DocsIndex 
                 return [];
             }
 
-            return Array.isArray(parsed) ? toDocsSearchHits(parsed, limit) : [];
+            return Array.isArray(parsed) ? toDocsSearchHits(parsed) : [];
         },
     };
 };
 
 export type { RemoteDocsIndexOptions };
-export { createRemoteDocsIndex, DEFAULT_DOCS_BASE_URL, parseIndexLine };
+export { createRemoteDocsIndex, DEFAULT_DOCS_BASE_URL, DEFAULT_REQUEST_TIMEOUT_MS, parseIndexLine };

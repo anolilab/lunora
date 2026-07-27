@@ -42,6 +42,12 @@ describe("parseIndexLine", () => {
         expect(parseIndexLine("  - [Schema](/docs/schema)")).toStrictEqual({ title: "Schema", url: "/docs/schema" });
     });
 
+    it("unescapes the backslash escaping fumadocs writes into the index", () => {
+        expect.assertions(1);
+
+        expect(parseIndexLine(String.raw`- [Values \[v.*\]](/docs/values \(all\))`)).toStrictEqual({ title: "Values [v.*]", url: "/docs/values (all)" });
+    });
+
     it("handles brackets inside the title", () => {
         expect.assertions(1);
 
@@ -66,7 +72,7 @@ describe("createRemoteDocsIndex", () => {
             ]),
         });
 
-        const hits = await createRemoteDocsIndex({ baseUrl: "https://docs.test", fetch: asFetch }).search("shard by", 10);
+        const hits = await createRemoteDocsIndex({ baseUrl: "https://docs.test", fetch: asFetch }).search("shard by");
 
         expect(calls[0]).toBe("https://docs.test/api/search?query=shard%20by");
         expect(hits).toStrictEqual([
@@ -75,7 +81,7 @@ describe("createRemoteDocsIndex", () => {
         ]);
     });
 
-    it("stops at the requested limit", async () => {
+    it("returns everything the backend found — the tool layer decides how much reaches the model", async () => {
         expect.assertions(1);
 
         const { asFetch } = stubFetch({
@@ -86,25 +92,46 @@ describe("createRemoteDocsIndex", () => {
             ),
         });
 
-        const hits = await createRemoteDocsIndex({ baseUrl: "https://docs.test", fetch: asFetch }).search("a", 3);
+        const hits = await createRemoteDocsIndex({ baseUrl: "https://docs.test", fetch: asFetch }).search("a");
 
-        expect(hits).toHaveLength(3);
+        expect(hits).toHaveLength(8);
     });
 
-    it("returns no hits when the site is unreachable or the body is not JSON", async () => {
-        expect.assertions(3);
+    it("returns no hits for a miss or an unparseable body", async () => {
+        expect.assertions(2);
 
         const { asFetch } = stubFetch({ "/api/search?query=a": "<html>oops</html>" });
         const index = createRemoteDocsIndex({ baseUrl: "https://docs.test", fetch: asFetch });
 
-        await expect(index.search("a", 5)).resolves.toStrictEqual([]);
-        await expect(index.search("missing", 5)).resolves.toStrictEqual([]);
+        await expect(index.search("a")).resolves.toStrictEqual([]);
+        await expect(index.search("missing")).resolves.toStrictEqual([]);
+    });
+
+    it("reports an unreachable host rather than reporting no results", async () => {
+        expect.assertions(1);
 
         const throwingFetch = vi.fn<() => Promise<Response>>(async () => {
             throw new Error("ECONNREFUSED");
         }) as unknown as typeof fetch;
 
-        await expect(createRemoteDocsIndex({ baseUrl: "https://docs.test", fetch: throwingFetch }).search("a", 5)).resolves.toStrictEqual([]);
+        // A misconfigured --docs-url must be distinguishable from a genuine
+        // miss, or the model can never tell its user what to fix.
+        await expect(createRemoteDocsIndex({ baseUrl: "https://docs.test", fetch: throwingFetch }).search("a")).rejects.toThrow(/could not reach/);
+    });
+
+    it("gives up on an unresponsive host instead of hanging", async () => {
+        expect.assertions(1);
+
+        const hangingFetch = vi.fn<(input: string | URL, init?: RequestInit) => Promise<Response>>(
+            async (_input, init) =>
+                new Promise((_resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => { reject(new Error("The operation was aborted")); });
+                }),
+        ) as unknown as typeof fetch;
+
+        await expect(createRemoteDocsIndex({ baseUrl: "https://docs.test", fetch: hangingFetch, timeoutMs: 20 }).search("a")).rejects.toThrow(
+            /could not reach/,
+        );
     });
 
     it("reads a page through the llms.mdx route and strips its duplicate title line", async () => {

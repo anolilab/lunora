@@ -212,6 +212,21 @@ const server = createDocsMcpServer({ index: createRemoteDocsIndex({ baseUrl: "ht
 Because both backends map results through the same helper, a model sees
 identical hits whichever one answered.
 
+### Hosting it safely
+
+`createDocsMcpFetchHandler` screens each request before the transport sees it,
+because this surface is meant to be public and unauthenticated:
+
+- **Bodies are capped** — 128&nbsp;KiB by default, overridable with
+  `maxRequestBytes`.
+- **JSON-RPC batches are refused.** The stateless transport buffers a whole
+  batch's replies into one response body, so a single small request carrying
+  thousands of `tools/call` messages would amplify into hundreds of megabytes
+  out, with no `initialize` and no session to rate-limit against. A
+  documentation client gains nothing from batching.
+- `lunora_search_docs` bounds its `query`, and `lunora_list_docs` caps how many
+  pages it serialises in one call.
+
 ## Composing a local server
 
 `createLocalMcpServer` / `connectLocalStdio` assemble the docs tools, the

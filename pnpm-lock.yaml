@@ -2894,13 +2894,13 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
-      '@lunora/x402':
-        specifier: workspace:*
-        version: link:../x402
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
         version: 1.29.0(supports-color@10.2.2)(zod@4.4.3)
     devDependencies:
+      '@lunora/x402':
+        specifier: workspace:*
+        version: link:../x402
       '@types/node':
         specifier: catalog:types
         version: 26.1.1

@@ -43,16 +43,44 @@ interface McpServeResult {
     deployment: LocalDeployment | undefined;
 }
 
-/** The part of the connected MCP `Server` this command needs: a close signal. */
+/**
+ * The part of a connected MCP `Server` this command needs: a close signal.
+ *
+ * Typing the seam this narrowly (rather than `unknown`) is what lets
+ * {@link waitForClose} skip the runtime shape check and the cast — and lets a
+ * test drive the blocking path with a stub.
+ */
 interface ClosableServer {
     onclose?: () => void;
 }
+
+/** Hostnames that are unambiguously this machine. */
+const LOOPBACK_HOST_NAMES: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/** True when `url` points at this machine — where a locally-discovered token belongs. */
+const isLoopbackUrl = (url: string): boolean => {
+    try {
+        const { hostname } = new URL(url);
+
+        // `new URL` keeps IPv6 literals bracketed.
+        return LOOPBACK_HOST_NAMES.has(hostname.startsWith("[") ? hostname.slice(1, -1) : hostname);
+    } catch {
+        return false;
+    }
+};
 
 /**
  * Resolve the deployment the tools talk to: an explicit `--url`, else the dev
  * server currently recorded for this project. `undefined` means "nothing
  * running right now" — the deployment tools stay advertised and explain
  * themselves when called.
+ *
+ * The token is deliberately NOT carried across an explicit `--url` to a remote
+ * host. `LUNORA_ADMIN_TOKEN` is discovered from the environment or `.dev.vars`
+ * and is meant for the local dev server; `--url` exists precisely to point
+ * somewhere else, so pairing the two by default would ship the project's admin
+ * bearer to an arbitrary origin — including over plain HTTP — on the strength of
+ * one flag in a committed `.mcp.json`. Pass `--token` to send one deliberately.
  */
 const resolveDeployment = (options: McpServeOptions): LocalDeployment | undefined => {
     const url = options.url ?? readLiveDevServerState(options.cwd)?.url;
@@ -61,7 +89,15 @@ const resolveDeployment = (options: McpServeOptions): LocalDeployment | undefine
         return undefined;
     }
 
-    const token = options.token ?? resolveAdminToken(options.cwd);
+    if (options.token !== undefined && options.token.length > 0) {
+        return { token: options.token, url };
+    }
+
+    if (options.url !== undefined && !isLoopbackUrl(options.url)) {
+        return { url };
+    }
+
+    const token = resolveAdminToken(options.cwd);
 
     return token === undefined || token.length === 0 ? { url } : { token, url };
 };
@@ -74,20 +110,16 @@ const resolveDeployment = (options: McpServeOptions): LocalDeployment | undefine
  * code the handler returns, so resolving as soon as the transport is *connected*
  * would kill the server before it answered its first request.
  */
-const waitForClose = async (server: unknown): Promise<void> => {
-    if (typeof server !== "object" || server === null) {
-        return;
-    }
-
-    const closable = server as ClosableServer;
-
+const waitForClose = async (closable: ClosableServer): Promise<void> => {
     await new Promise<void>((resolve) => {
         const done = (): void => {
             resolve();
         };
 
-        // eslint-disable-next-line unicorn/prefer-add-event-listener -- the MCP SDK's `Server` signals teardown through an assignable `onclose` property; it is not an EventTarget, so there is no addEventListener to prefer.
+        /* eslint-disable no-param-reassign -- registering the close callback IS the point: the SDK's `Server` signals teardown through an assignable `onclose` property. */
+        // eslint-disable-next-line unicorn/prefer-add-event-listener -- `Server` is not an EventTarget, so there is no addEventListener to prefer.
         closable.onclose = done;
+        /* eslint-enable no-param-reassign */
 
         // Belt and braces: a client that simply closes the pipe (rather than
         // sending a shutdown) ends stdin without the transport reporting a
@@ -103,14 +135,21 @@ const waitForClose = async (server: unknown): Promise<void> => {
  * with nothing running the deployment tools are present but inert, and without
  * an admin token they are present but will be refused.
  */
-const describeStartup = (deployment: LocalDeployment | undefined): string => {
+const describeStartup = (deployment: LocalDeployment | undefined, options: McpServeOptions): string => {
     if (deployment === undefined) {
         return "lunora mcp serve: ready (documentation tools). No dev server running yet — start `lunora dev` and the deployment tools start working, no restart needed.\n";
     }
 
-    const tokenNote = deployment.token === undefined ? " (no LUNORA_ADMIN_TOKEN in .dev.vars; the deployment tools will be refused until one is set)" : "";
+    if (deployment.token !== undefined) {
+        return `lunora mcp serve: ready — deployment at ${deployment.url}\n`;
+    }
 
-    return `lunora mcp serve: ready — dev server at ${deployment.url}${tokenNote}\n`;
+    const withheld = options.url !== undefined && !isLoopbackUrl(options.url);
+    const why = withheld
+        ? "the project's admin token was NOT sent to this non-local --url; pass --token to authenticate deliberately"
+        : "no LUNORA_ADMIN_TOKEN in the environment or .dev.vars; the deployment tools will be refused until one is set";
+
+    return `lunora mcp serve: ready — deployment at ${deployment.url} (${why})\n`;
 };
 
 /**
@@ -122,7 +161,7 @@ const describeStartup = (deployment: LocalDeployment | undefined): string => {
  */
 const runMcpServe = async (
     options: McpServeOptions,
-    connect: (options: LocalMcpServerOptions) => Promise<unknown> = connectLocalStdio,
+    connect: (options: LocalMcpServerOptions) => Promise<ClosableServer> = connectLocalStdio,
 ): Promise<McpServeResult> => {
     const writeError =
         options.writeError ??
@@ -130,7 +169,7 @@ const runMcpServe = async (
             process.stderr.write(message);
         });
 
-    let server: unknown;
+    let server: ClosableServer;
 
     try {
         server = await connect({
@@ -150,12 +189,12 @@ const runMcpServe = async (
 
     const deployment = resolveDeployment(options);
 
-    writeError(describeStartup(deployment));
+    writeError(describeStartup(deployment, options));
 
     await waitForClose(server);
 
     return { code: 0, deployment };
 };
 
-export type { McpServeOptions, McpServeResult };
-export { resolveDeployment, runMcpServe };
+export type { ClosableServer, McpServeOptions, McpServeResult };
+export { isLoopbackUrl, resolveDeployment, runMcpServe };

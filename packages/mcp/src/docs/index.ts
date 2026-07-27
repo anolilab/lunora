@@ -15,17 +15,21 @@
  * published site over HTTP.
  *
  * This entry is free of Node built-ins and of `@lunora/client`, so it runs on
- * Workers, Netlify/Vercel functions, Deno, and Bun unchanged.
+ * Workers, Netlify/Vercel functions, Deno, and Bun unchanged —
+ * `scripts/check-dist-production.js` asserts that against the emitted chunks.
+ *
+ * Only the documentation surface lives here. The generic composition primitive
+ * (`createToolServer`) is exported from the package root, so a consumer using
+ * both entries gets one implementation rather than two copies.
  */
 export type { McpServerInfo, McpTool } from "../compose";
-export { createToolServer } from "../compose";
 export type { McpFetchHandler } from "../serve-stateless";
 export type { ToolDefinition, ToolInputSchema, ToolResult } from "../tool-types";
+export type { FumadocsSearchResult } from "./fumadocs-hits";
+export { toDocsSearchHits } from "./fumadocs-hits";
 export type { RemoteDocsIndexOptions } from "./remote-index";
 export { createRemoteDocsIndex, DEFAULT_DOCS_BASE_URL } from "./remote-index";
 export type { DocsMcpServerOptions } from "./server";
 export { createDocsMcpFetchHandler, createDocsMcpServer, DOCS_SERVER_NAME } from "./server";
-export type { FumadocsSearchResult } from "./sorted-results";
-export { toDocsSearchHits } from "./sorted-results";
-export { callDocsTool, DEFAULT_SEARCH_LIMIT, DOCS_TOOL_DEFINITIONS, DOCS_TOOL_NAMES, docsTools, MAX_SEARCH_LIMIT, normalizeDocUrl } from "./tools";
+export { DEFAULT_SEARCH_LIMIT, DOCS_TOOL_DEFINITIONS, docsTools, MAX_SEARCH_LIMIT, normalizeDocUrl } from "./tools";
 export type { DocsIndex, DocsPage, DocsPageSummary, DocsSearchHit } from "./types";

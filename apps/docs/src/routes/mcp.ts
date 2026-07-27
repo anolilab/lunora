@@ -63,7 +63,9 @@ export const Route = createFileRoute("/mcp")({
         handlers: {
             DELETE: async ({ request }) => withCors(await handle(request)),
             GET: async ({ request }) => {
-                if (!(request.headers.get("accept") ?? "").includes("text/event-stream")) {
+                // Media types are case-insensitive, so a compliant `Text/Event-Stream`
+                // must reach the transport rather than the help page.
+                if (!(request.headers.get("accept") ?? "").toLowerCase().includes("text/event-stream")) {
                     return withCors(new Response(CONNECT_HELP, { headers: { "content-type": "text/plain; charset=utf-8" } }));
                 }
 

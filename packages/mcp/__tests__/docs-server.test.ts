@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { McpTool } from "../src/compose";
 import { createToolServer } from "../src/compose";
-import { createDocsMcpFetchHandler, createDocsMcpServer, DOCS_SERVER_NAME } from "../src/docs/server";
+import { createDocsMcpFetchHandler, createDocsMcpServer, DEFAULT_MAX_REQUEST_BYTES, DOCS_SERVER_NAME } from "../src/docs/server";
 import type { DocsIndex } from "../src/docs/types";
 
 const index: DocsIndex = {
@@ -134,22 +134,6 @@ describe("createDocsMcpServer", () => {
 
         expect(listed.tools.map((entry) => entry.name)).toStrictEqual(["lunora_search_docs", "lunora_get_doc", "lunora_list_docs"]);
     });
-
-    it("appends extra tools when a host composes more onto the surface", async () => {
-        expect.assertions(1);
-
-        const server = createDocsMcpServer({
-            extraTools: [
-                tool("custom", async () => {
-                    return { content: [] };
-                }),
-            ],
-            index,
-        });
-        const listed = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({ params: {} })) as ListToolsResult;
-
-        expect(listed.tools.map((entry) => entry.name)).toContain("custom");
-    });
 });
 
 describe("createDocsMcpFetchHandler", () => {
@@ -176,5 +160,102 @@ describe("createDocsMcpFetchHandler", () => {
         const payload = (await response.json()) as { result: { serverInfo: { name: string; version: string } } };
 
         expect(payload.result.serverInfo).toStrictEqual({ name: DOCS_SERVER_NAME, version: "1.2.3" });
+    });
+});
+
+describe("createDocsMcpFetchHandler request screening", () => {
+    /**
+     * These are the limits that make an unauthenticated public endpoint
+     * defensible. The stateless transport buffers a whole batch's replies into
+     * one response body, and `lunora_list_docs` serialises the entire corpus per
+     * call — so without the batch refusal, one small request fans out into
+     * hundreds of megabytes with no session to rate-limit against.
+     */
+    const countingIndex = (): { calls: () => number; index: DocsIndex } => {
+        let calls = 0;
+
+        return {
+            calls: () => calls,
+            index: {
+                getPage: async () => undefined,
+                listPages: async () => {
+                    calls += 1;
+
+                    return [{ title: "Sharding", url: "/docs/sharding" }];
+                },
+                search: async () => [],
+            },
+        };
+    };
+
+    const post = async (handle: (request: Request) => Promise<Response>, body: string): Promise<Response> =>
+        handle(
+            new Request("https://docs.example/mcp", {
+                body,
+                headers: { accept: "application/json, text/event-stream", "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+    const toolCall = (id: number): Record<string, unknown> => {
+        return { id, jsonrpc: "2.0", method: "tools/call", params: { arguments: {}, name: "lunora_list_docs" } };
+    };
+
+    it("refuses a batched request without dispatching any of it", async () => {
+        expect.assertions(3);
+
+        const { calls, index: countedIndex } = countingIndex();
+        const response = await post(createDocsMcpFetchHandler({ index: countedIndex }), JSON.stringify([toolCall(1), toolCall(2), toolCall(3)]));
+
+        expect(response.status).toBe(400);
+        await expect(response.text()).resolves.toContain("batched requests are not supported");
+        // The point of the guard: no tool ran at all.
+        expect(calls()).toBe(0);
+    });
+
+    it("refuses a body over the size cap", async () => {
+        expect.assertions(3);
+
+        const { calls, index: countedIndex } = countingIndex();
+        const oversize = JSON.stringify({
+            id: 1,
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { arguments: { query: "z".repeat(DEFAULT_MAX_REQUEST_BYTES) }, name: "lunora_search_docs" },
+        });
+        const response = await post(createDocsMcpFetchHandler({ index: countedIndex }), oversize);
+
+        expect(response.status).toBe(413);
+        await expect(response.text()).resolves.toContain("exceeds");
+        expect(calls()).toBe(0);
+    });
+
+    it("honours a caller-supplied size cap", async () => {
+        expect.assertions(1);
+
+        const { index: countedIndex } = countingIndex();
+        const response = await post(createDocsMcpFetchHandler({ index: countedIndex, maxRequestBytes: 32 }), JSON.stringify(toolCall(1)));
+
+        expect(response.status).toBe(413);
+    });
+
+    it("answers a malformed body with a parse error rather than throwing", async () => {
+        expect.assertions(2);
+
+        const { index: countedIndex } = countingIndex();
+        const response = await post(createDocsMcpFetchHandler({ index: countedIndex }), "{ not json");
+
+        expect(response.status).toBe(400);
+        await expect(response.text()).resolves.toContain("parse error");
+    });
+
+    it("still serves a single well-formed call", async () => {
+        expect.assertions(2);
+
+        const { calls, index: countedIndex } = countingIndex();
+        const response = await post(createDocsMcpFetchHandler({ index: countedIndex }), JSON.stringify(toolCall(1)));
+
+        await expect(response.text()).resolves.toContain("/docs/sharding");
+        expect(calls()).toBe(1);
     });
 });
