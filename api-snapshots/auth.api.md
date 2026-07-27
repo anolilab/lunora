@@ -15,6 +15,18 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 const AUTH_AUDIT_TABLE = "__lunora_auth_audit__";
 ```
 
+### `AUTH_DO_SECRET_HEADER` (const)
+
+```ts
+const INTERNAL_SECRET_HEADER = "x-lunora-auth-do-secret";
+```
+
+### `AUTH_DO_SESSION_PATH` (const)
+
+```ts
+const RESOLVE_SESSION_PATH = "/__lunora/auth/session";
+```
+
 ### `AppendAuthAuditEntry` (interface)
 
 ```ts
@@ -339,6 +351,18 @@ interface AuthConfigInfo {
 }
 ```
 
+### `AuthDoOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AuthDoState` (interface)
+
+```ts
+interface AuthDoState {
+    storage: DoStorageLike;
+}
+```
+
 ### `AuthInvitation` (interface)
 
 ```ts
@@ -615,6 +639,10 @@ interface LunoraAuthApiContext<Auth extends LunoraAuth> {
 }
 ```
 
+### `LunoraAuthDO` (class)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `LunoraAuthHeadersError` (class)
 
 ```ts
@@ -738,6 +766,10 @@ const assertEmailAllowed: (email: string, config?: EmailGateConfig) => Promise<E
 ```ts
 const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAuthMiddleware>;
 ```
+
+### `authDoSchemaStatements` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `authTables` (const)
 

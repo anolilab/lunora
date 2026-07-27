@@ -1,0 +1,174 @@
+import { DatabaseSync } from "node:sqlite";
+
+import { scim } from "@better-auth/scim";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { AuthDoOptions } from "../src/auth-do";
+import { INTERNAL_SECRET_HEADER, LunoraAuthDO, RESOLVE_SESSION_PATH } from "../src/auth-do";
+import type { LunoraAuthOptions } from "../src/create-auth";
+import { admin } from "../src/plugins";
+import createDoStorage from "./helpers/do-storage";
+
+/**
+ * `LunoraAuthDO` — better-auth hosted inside a Durable Object.
+ *
+ * Two things are worth proving here beyond "it responds". First, the object
+ * materialises its own schema: better-auth's migrator is kysely-only, so if that
+ * step is wrong there are no tables and every route fails at the first write.
+ * Second, the internal session route is the object's only non-`/api/auth/*`
+ * surface and it answers identity questions — so its credential check is a real
+ * authorization boundary, not a formality, and it is asserted as one.
+ */
+
+const SECRET = "lunora-auth-do-secret-lunora-auth-do-xxxx";
+
+/** The secret the worker presents on the internal route. */
+const INTERNAL_SECRET = "auth-do-internal-secret"; // secret-scanner:allow
+
+/** The bearer credential the IdP presents to SCIM. */
+const SCIM_TOKEN = "auth-do-scim-token"; // secret-scanner:allow
+
+const scimOptions = {
+    connections: [{ credentials: [{ id: "primary", token: SCIM_TOKEN, type: "bearer" as const }], id: "okta-acme" }],
+};
+
+let database: DatabaseSync;
+
+/** Build a DO instance over a fresh in-memory database. */
+const createDo = (options: Partial<LunoraAuthOptions> = {}, doOptions?: AuthDoOptions): { authDo: LunoraAuthDO; factory: ReturnType<typeof vi.fn> } => {
+    const factory = vi.fn<() => LunoraAuthOptions>(() => {
+        return { secret: SECRET, ...options };
+    });
+    const authDo = new LunoraAuthDO({ storage: createDoStorage(database) }, factory, doOptions ?? { internalSecret: INTERNAL_SECRET });
+
+    return { authDo, factory };
+};
+
+/** Call the internal session route with an optional secret header. */
+const resolveSession = async (authDo: LunoraAuthDO, headers: Record<string, string> = {}): Promise<Response> =>
+    authDo.fetch(new Request(`https://example.test${RESOLVE_SESSION_PATH}`, { headers }));
+
+describe("lunoraAuthDO", () => {
+    beforeEach(() => {
+        database = new DatabaseSync(":memory:");
+    });
+
+    it("materialises its own schema, so the first request has tables to write to", async () => {
+        expect.assertions(2);
+
+        const { authDo } = createDo({ plugins: [scim(scimOptions), admin()] });
+
+        // Before any request the object has done nothing — the build is lazy.
+        expect(database.prepare(`SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'`).get()?.n).toBe(0);
+
+        await authDo.fetch(new Request("https://example.test/api/auth/scim/v2/Users", { headers: { authorization: `Bearer ${SCIM_TOKEN}` } }));
+
+        const tables = database
+            .prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+            .all()
+            .map((row) => String(row.name));
+
+        expect(tables).toStrictEqual(expect.arrayContaining(["account", "session", "user"]));
+    });
+
+    it("serves SCIM, which is the whole reason the tables live in a DO", async () => {
+        expect.assertions(2);
+
+        const { authDo } = createDo({ plugins: [scim(scimOptions), admin()] });
+
+        const response = await authDo.fetch(new Request("https://example.test/api/auth/scim/v2/Users", { headers: { authorization: `Bearer ${SCIM_TOKEN}` } }));
+
+        // On D1 this never gets past "requires a database adapter with native
+        // transaction support" — the DO's transaction is what makes it a 200.
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toMatchObject({ schemas: ["urn:ietf:params:scim:api:messages:2.0:ListResponse"] });
+    });
+
+    it("builds the auth instance once, not per request", async () => {
+        expect.assertions(1);
+
+        const { authDo, factory } = createDo();
+
+        await authDo.fetch(new Request("https://example.test/api/auth/get-session"));
+        await authDo.fetch(new Request("https://example.test/api/auth/get-session"));
+
+        expect(factory).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses the internal session route without the secret", async () => {
+        expect.assertions(2);
+
+        const { authDo } = createDo();
+        const response = await resolveSession(authDo);
+
+        expect(response.status).toBe(401);
+        await expect(response.json()).resolves.toStrictEqual({ error: "unauthorized" });
+    });
+
+    it("refuses the internal session route with the wrong secret", async () => {
+        expect.assertions(1);
+
+        const { authDo } = createDo();
+        const response = await resolveSession(authDo, { [INTERNAL_SECRET_HEADER]: "not-the-secret" });
+
+        expect(response.status).toBe(401);
+    });
+
+    it("refuses the internal session route when no secret is configured, rather than serving it open", async () => {
+        expect.assertions(1);
+
+        const { authDo } = createDo({}, {});
+
+        // A missing secret is a misconfiguration. Answering identity questions to
+        // any worker bound to the namespace is the one failure mode worth being
+        // loud about, so it fails closed.
+        const response = await resolveSession(authDo, { [INTERNAL_SECRET_HEADER]: "anything" });
+
+        expect(response.status).toBe(401);
+    });
+
+    it("reports an anonymous request as having no user", async () => {
+        expect.assertions(2);
+
+        const { authDo } = createDo();
+        const response = await resolveSession(authDo, { [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({});
+    });
+
+    it("resolves a signed-in session back to its user id", async () => {
+        expect.assertions(2);
+
+        const { authDo } = createDo({ emailAndPassword: { enabled: true } });
+
+        const signUp = await authDo.fetch(
+            new Request("https://example.test/api/auth/sign-up/email", {
+                body: JSON.stringify({ email: "ada@acme.test", name: "Ada", password: "correct-horse-battery" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+        expect(signUp.status).toBe(200);
+
+        // Carry the session cookie the way the worker forwards a real request's
+        // headers — this is exactly the path `resolveIdentity` takes in DO mode.
+        const cookie = signUp.headers.get("set-cookie") ?? "";
+        const resolved = await resolveSession(authDo, {
+            cookie: cookie.split(";")[0] ?? "",
+            [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET,
+        });
+
+        await expect(resolved.json()).resolves.toMatchObject({ userId: expect.any(String) });
+    });
+
+    it("404s a path that is neither an auth route nor the internal one", async () => {
+        expect.assertions(1);
+
+        const { authDo } = createDo();
+        const response = await authDo.fetch(new Request("https://example.test/not-auth"));
+
+        expect(response.status).toBe(404);
+    });
+});

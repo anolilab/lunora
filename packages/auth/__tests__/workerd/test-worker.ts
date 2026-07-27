@@ -17,11 +17,8 @@
  */
 import { scim } from "@better-auth/scim";
 import { sso } from "@better-auth/sso";
-import { getAuthTables } from "better-auth/db";
 
-import { lunoraDoAdapter } from "../../src/adapter";
-import { createAuth } from "../../src/create-auth";
-import { handleAuthRequest } from "../../src/handler";
+import { LunoraAuthDO, RESOLVE_SESSION_PATH } from "../../src/auth-do";
 import { admin } from "../../src/plugins";
 
 const SECRET = "lunora-workerd-do-secret-lunora-workerd-do-xx";
@@ -29,70 +26,36 @@ const SECRET = "lunora-workerd-do-secret-lunora-workerd-do-xx";
 /** The credential the suite presents as the IdP. */
 const SCIM_TOKEN = "workerd-do-scim-token"; // secret-scanner:allow
 
+/** The secret the worker presents on the auth DO's internal session route. */
+const INTERNAL_SECRET = "workerd-do-internal-secret"; // secret-scanner:allow
+
 const scimOptions = {
     connections: [{ credentials: [{ id: "primary", token: SCIM_TOKEN, type: "bearer" as const }], id: "okta-acme" }],
 };
 
-/** SQLite affinity for a better-auth field type. */
-const affinity = (type: ReadonlyArray<string> | string): string => {
-    if (type === "number") {
-        return "REAL";
-    }
-
-    return type === "boolean" ? "INTEGER" : "TEXT";
-};
-
 /**
- * A Durable Object that hosts better-auth on its own SQLite.
+ * The app's auth Durable Object.
  *
- * This is the shape an app would use: the object owns the auth tables, and
- * `lunoraDoAdapter(ctx.storage)` hands better-auth the object's storage — including
- * the transaction primitive that `@better-auth/scim` requires and D1 cannot provide.
+ * This is the shape codegen emits and an app writes by hand: a thin subclass of
+ * {@link LunoraAuthDO}, which owns the schema materialisation, the better-auth
+ * instance over `lunoraDoAdapter(state.storage)`, and the internal session route.
+ *
+ * Deliberately thin. When the suite exercised a hand-rolled copy of that logic
+ * instead, it proved the copy worked rather than the package — including a schema
+ * materialiser that created no UNIQUE indexes at all.
  */
-class AuthStorageDO {
-    readonly #auth: ReturnType<typeof createAuth>;
-
+class AuthStorageDO extends LunoraAuthDO {
     readonly #storage: DurableObjectState["storage"];
 
-    #ready = false;
-
     public constructor(state: DurableObjectState) {
+        super(
+            state,
+            () => {
+                return { plugins: [scim(scimOptions), admin()], secret: SECRET };
+            },
+            { internalSecret: INTERNAL_SECRET },
+        );
         this.#storage = state.storage;
-
-        const options = { plugins: [scim(scimOptions), admin()], secret: SECRET };
-
-        this.#auth = createAuth({ ...options, database: lunoraDoAdapter(state.storage) });
-        this.#options = options;
-    }
-
-    readonly #options: { plugins: unknown[]; secret: string };
-
-    /**
-     * Create the auth tables on first use.
-     *
-     * `ensureMigrated` is not usable here — better-auth's migrator is kysely-only and
-     * this object's storage is not a kysely dialect — so the schema is materialised
-     * from `authTables` directly, which is what the object's own migration would do.
-     */
-    #ensureSchema(): void {
-        if (this.#ready) {
-            return;
-        }
-
-        for (const table of Object.values(getAuthTables(this.#options as never))) {
-            const columns = [
-                `"id" TEXT PRIMARY KEY`,
-                ...Object.entries(table.fields).map(([field, attribute]) => `"${attribute.fieldName ?? field}" ${affinity(attribute.type)}`),
-            ];
-
-            this.#storage.sql.exec(`CREATE TABLE IF NOT EXISTS "${table.modelName}" (${columns.join(", ")})`);
-        }
-
-        // better-auth's rate limiter writes through the same store but is not part of
-        // `authTables`, so it has to be created by hand.
-        this.#storage.sql.exec('CREATE TABLE IF NOT EXISTS "rateLimit" ("id" TEXT PRIMARY KEY, "key" TEXT, "count" REAL, "lastRequest" REAL)');
-
-        this.#ready = true;
     }
 
     /** Rows in the object's own `user` table, for the suite to assert against. */
@@ -100,18 +63,12 @@ class AuthStorageDO {
         return [...this.#storage.sql.exec('SELECT "email" FROM "user"')];
     }
 
-    public async fetch(request: Request): Promise<Response> {
-        this.#ensureSchema();
-
-        const url = new URL(request.url);
-
-        if (url.pathname === "/__users") {
+    public override async fetch(request: Request): Promise<Response> {
+        if (new URL(request.url).pathname === "/__users") {
             return Response.json({ users: this.#users() });
         }
 
-        const response = await handleAuthRequest(this.#auth, request);
-
-        return response ?? new Response("not an auth route", { status: 404 });
+        return super.fetch(request);
     }
 }
 
@@ -132,8 +89,10 @@ const testWorker = {
             return Response.json({ ids: built.map((plugin) => plugin.id) });
         }
 
-        // Everything else goes to the object, so auth runs on DO storage.
-        if (url.pathname.startsWith("/api/auth/") || url.pathname === "/__users") {
+        // Everything else goes to the object, so auth runs on DO storage. The
+        // internal session path is forwarded too — that is the hop the generated
+        // worker's `resolveIdentity` makes.
+        if (url.pathname.startsWith("/api/auth/") || url.pathname === "/__users" || url.pathname === RESOLVE_SESSION_PATH) {
             const stub = env.AUTH_DO.get(env.AUTH_DO.idFromName("auth"));
 
             return stub.fetch(request);
@@ -147,4 +106,4 @@ export default testWorker;
 // Exports last, per the repo's `import/exports-last` rule. `AuthStorageDO` is named
 // by wrangler.jsonc's DO binding; `SCIM_TOKEN` is shared with the suite so the
 // credential is declared once.
-export { AuthStorageDO, SCIM_TOKEN };
+export { AuthStorageDO, INTERNAL_SECRET, SCIM_TOKEN };
