@@ -124,17 +124,19 @@ export const get = query
         return (page as unknown as SessionObservationRow[])
             .filter((row) => row.kind === "generation")
             .toSorted((a, b) => a.startedAt - b.startedAt)
-            .map((row) => ({
-                completionTokens: row.completionTokens,
-                durationMs: row.durationMs,
-                endedAt: row.endedAt,
-                evaluations: row.evaluations,
-                level: row.level,
-                model: row.model,
-                name: row.name,
-                promptTokens: row.promptTokens,
-                spanId: row.spanId,
-                startedAt: row.startedAt,
-                traceId: row.traceId,
-            }));
+            .map((row) => {
+                return {
+                    completionTokens: row.completionTokens,
+                    durationMs: row.durationMs,
+                    endedAt: row.endedAt,
+                    evaluations: row.evaluations,
+                    level: row.level,
+                    model: row.model,
+                    name: row.name,
+                    promptTokens: row.promptTokens,
+                    spanId: row.spanId,
+                    startedAt: row.startedAt,
+                    traceId: row.traceId,
+                };
+            });
     });
