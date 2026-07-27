@@ -370,6 +370,52 @@ describe("ctx.trace", () => {
         expect(seen[0]?.attributes?.["cost"]).toBe(0.0004);
     });
 
+    it("records an evaluation as gen_ai.evaluation.<name>.score/.label on the generation span", async () => {
+        expect.assertions(2);
+
+        const seen: SpanEvent[] = [];
+        const trace = tracerInto(seen);
+
+        // A scorer grades the turn's output only once the generation resolves —
+        // the eval rides the same span as the generation it graded.
+        await trace(
+            "chat gpt-4o-mini",
+            async (_child, handle) => {
+                await Promise.resolve();
+                handle.recordEvaluation({ label: "pass", name: "exact-match", score: 1 });
+            },
+            { "gen_ai.request.model": "gpt-4o-mini" },
+        );
+
+        expect(seen[0]?.attributes).toStrictEqual({
+            "gen_ai.evaluation.exact-match.label": "pass",
+            "gen_ai.evaluation.exact-match.score": 1,
+            "gen_ai.request.model": "gpt-4o-mini",
+        });
+        // A scorer name carrying a colon is sanitized into a well-formed key.
+        expect(seen[0]?.attributes?.["gen_ai.evaluation.exact-match.score"]).toBe(1);
+    });
+
+    it("emits one attribute pair per scorer and rejects a malformed evaluation", async () => {
+        expect.assertions(2);
+
+        const seen: SpanEvent[] = [];
+        const trace = tracerInto(seen);
+
+        await trace("chat", (_child, handle) => {
+            // Two distinct scorers → two distinct key namespaces, no collision.
+            handle.recordEvaluation({ name: "contains:shipped", score: 0.5 });
+            handle.recordEvaluation({ name: "keyword-coverage", score: 0.8 });
+        });
+
+        expect(seen[0]?.attributes).toStrictEqual({
+            "gen_ai.evaluation.contains_shipped.score": 0.5,
+            "gen_ai.evaluation.keyword-coverage.score": 0.8,
+        });
+        // A non-finite score is caller misuse and surfaces rather than poisoning the grade.
+        await expect(trace("chat", (_child, handle) => handle.recordEvaluation({ name: "x", score: Number.NaN }))).rejects.toThrow("finite number");
+    });
+
     it("lets a post-hoc attribute win over a start attribute on a key clash", async () => {
         expect.assertions(1);
 

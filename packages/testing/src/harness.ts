@@ -302,6 +302,7 @@ const HARNESS_SPAN_CONTEXT = { spanId: "0000000000000001", traceId: "00000000000
 const noopSpan: SpanHandle = {
     addEvent: () => undefined,
     addLink: () => undefined,
+    recordEvaluation: () => undefined,
     recordException: () => undefined,
     setAttribute: () => undefined,
     setAttributes: () => undefined,

@@ -1554,6 +1554,21 @@ interface LunoraLogger {
  * three drift apart. Start attributes are snapshotted before the body runs;
  * handle writes are merged over them at record time, post-hoc winning on a clash.
  */
+/**
+ * One AI **evaluation** verdict — a scorer's `{name, score, label?}` — to attach
+ * to a generation span via {@link SpanHandle.recordEvaluation}. Declared
+ * structurally to mirror `shared/evaluation-attributes.ts`'s `EvaluationInput`
+ * without a dependency edge.
+ */
+interface SpanEvaluation {
+    /** Optional categorical label (e.g. `"pass"` / `"fail"`), emitted as `.label`. */
+    label?: string;
+    /** Scorer name — the key's name segment; non-`[A-Za-z0-9._-]` chars become `_`. */
+    name: string;
+    /** Numeric score (typically `[0, 1]`), emitted as `.score`. */
+    score: number;
+}
+
 interface SpanHandle {
     /**
      * Record a timestamped event on the enclosing span — a retry, a cache miss, a
@@ -1569,6 +1584,16 @@ interface SpanHandle {
      * one giant trace.
      */
     addLink: (link: SpanLink) => void;
+
+    /**
+     * Attach an AI **evaluation** verdict to this (generation) span as the
+     * `gen_ai.evaluation.<name>.score` / `.label` OpenTelemetry attributes, so a
+     * scorer's grade rides the same trace as the generation it graded. Convenience
+     * over {@link SpanHandle.setAttributes} that owns the key format; privacy-safe —
+     * only the name, score, and optional label are emitted. Throws on an empty name
+     * or a non-finite score.
+     */
+    recordEvaluation: (evaluation: SpanEvaluation) => void;
 
     /**
      * Record a **handled** exception as the OTel-conventional `exception` span
@@ -2064,6 +2089,7 @@ export type {
     Secrets,
     SecretsStoreSecretLike,
     ShardMode,
+    SpanEvaluation,
     SpanHandle,
     SpanKind,
     SpanLink,

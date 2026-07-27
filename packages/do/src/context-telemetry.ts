@@ -14,6 +14,7 @@
  * (`ShardDO.recordSpan` / `recordMetric`); this module decides only *what* a
  * span or measurement is, never where it goes.
  */
+import { evaluationAttributes } from "../../../shared/evaluation-attributes";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
@@ -334,6 +335,15 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }): S
                 spanId: link.spanId,
                 traceId: link.traceId,
             });
+        },
+        recordEvaluation: (evaluation) => {
+            // Build the `gen_ai.evaluation.<name>.score`/`.label` pair (the exact
+            // keys the cloud OTLP decoder reads back) and merge it in like any
+            // other post-hoc attribute, so it flushes on this span over OTLP with
+            // no special casing downstream. `evaluationAttributes` throws on an
+            // empty name / non-finite score — caller misuse, so it surfaces in the
+            // body rather than being silently dropped.
+            Object.assign(collected.attributes, normalizeLogFields(evaluationAttributes(evaluation)));
         },
         recordException: (error) => {
             // The OTel-conventional `exception` event. `exception.stacktrace` is
