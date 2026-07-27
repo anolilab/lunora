@@ -93,6 +93,18 @@
             "bucket_name": "lunora-cloud-telemetry",
         },
     ],
+    // The producer half of that archive. `src/telemetry/store.ts` reads it as
+    // `env.TELEMETRY_PIPELINE` and no-ops when absent, so declaring the binding
+    // costs nothing where the pipeline hasn't been created yet. The `pipeline`
+    // name must match what `wrangler pipelines create` minted for the cell —
+    // it is NOT auto-provisioned; see the note above.
+    "pipelines": [
+        {
+            "binding": "TELEMETRY_PIPELINE",
+            // `stream`, not the deprecated `pipeline` — wrangler renamed the field.
+            "stream": "lunora-cloud-telemetry",
+        },
+    ],
     // Workers AI — powers the on-demand incident AI-triage action
     // (`incidents.triage`). Inference is billed per call; the action only runs
     // when a member clicks "Triage" in the dashboard. AI has no local emulation
