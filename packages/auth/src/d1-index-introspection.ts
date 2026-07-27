@@ -19,8 +19,10 @@
  * CLI, which makes it an easy afternoon to lose.)
  *
  * This is an upstream bug — D1 is a first-party better-auth target, and its own
- * D1 dialect introspects columns the D1-safe way — but it has to be worked around
- * here or no Lunora app can boot `.auth()` against D1.
+ * D1 dialect introspects columns the D1-safe way — reported as
+ * better-auth/better-auth#10551. It still has to be worked around here, or no
+ * Lunora app can boot `.auth()` against D1. Remove this module once a released
+ * better-auth stops emitting the pragma join.
  *
  * The fix intercepts that one statement at the **D1 binding**, not inside kysely:
  * better-auth builds its D1 dialect from the binding we hand it, and the dialect

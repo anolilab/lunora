@@ -81,6 +81,31 @@ is custom work" no longer holds, and Phase 2 needs no Lunora work.
   moved off the shared helper, and corrected a docs claim that auth routes are covered
   by the runtime's 1 MiB body cap (they are not — `dispatchAuth` bypasses it).
 
+### better-auth 1.7 is not D1-compatible out of the box
+
+`getDatabaseIndexes()`, new in 1.7's `getMigrations()`, joins `sqlite_master` against
+the table-valued `pragma_index_list()` / `pragma_index_info()` functions. D1's
+authorizer refuses those through the Worker binding, so the migration aborts before
+any table exists and the first sign-up 500s with `no such table: user` — the
+playground's whole auth E2E suite was red on it.
+
+`packages/auth/src/d1-index-introspection.ts` answers that one statement from
+`sqlite_master` instead, wrapped around the migration path only. Reported upstream as
+**better-auth/better-auth#10551**; delete the shim once a released better-auth stops
+emitting the pragma join.
+
+Two things not to re-derive: the pragma functions fail the same way with a bound
+parameter _and_ with an inline literal, and `wrangler d1 execute` accepts both — so
+this never reproduces from the CLI, only through the binding.
+
+Bundling better-auth (moving it to `devDependencies` so a `pnpm patch` would reach
+consumers) was tried and reverted. `createAuth({ plugins })` is an extension point and
+apps pass plugins built against their own better-auth — `examples/expo` must, because
+`@better-auth/expo` needs Expo native modules and can never be a dependency of
+`@lunora/auth`. Bundling makes the two better-auths distinct types and distinct
+runtimes; `examples/expo` stops typechecking, which is the visible half of a
+double-instance hazard.
+
 ### Still open
 
 - **SAML ACS execution.** Loading is proven; the pure-JS RSA verify path is unmeasured
