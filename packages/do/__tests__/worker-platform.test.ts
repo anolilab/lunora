@@ -50,7 +50,7 @@ describe("createWorkerPlatform", () => {
         // deliberately does not take. The factory's whole contract here is
         // identity — whatever host the worker entry built is what callers see.
         const scheduler = {
-            cancel: async () => {},
+            cancel: async () => true,
             schedule: async () => {
                 return { id: "job-1", scheduledFor: 0 };
             },
@@ -60,21 +60,21 @@ describe("createWorkerPlatform", () => {
         expect(platform.scheduler).toBe(scheduler);
     });
 
-    it("honours a custom scheduler binding name", () => {
-        expect.assertions(1);
-
-        const platform = createWorkerPlatform({ TIMERS: namespace() }, { scheduler: { namespace: "TIMERS", originUrl: "https://worker.test" } });
-
-        expect(platform.scheduler).toBeDefined();
-    });
-
     // Cloudflare crons are declared in wrangler.jsonc and reconciled at build
     // time, so there is no runtime call that could register one. Absence is the
-    // contract's signal for that — see `SchedulerHost.cron`.
+    // contract's signal for that — and the passthrough must not invent members
+    // the injected host does not have: an injected host without `cron` comes
+    // out without `cron`.
     it("never exposes runtime cron, because Cloudflare has none", () => {
         expect.assertions(1);
 
-        const platform = createWorkerPlatform({ SCHEDULER: namespace() }, { scheduler: { originUrl: "https://worker.test" } });
+        const scheduler = {
+            cancel: async () => true,
+            schedule: async () => {
+                return { id: "job-1", scheduledFor: 0 };
+            },
+        };
+        const platform = createWorkerPlatform({ SCHEDULER: namespace() }, { scheduler });
 
         expect(platform.scheduler?.cron).toBeUndefined();
     });
