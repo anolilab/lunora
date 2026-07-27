@@ -17,6 +17,14 @@
  * resolution all come from better-auth rather than being mirrored here, and the
  * column types below match its own SQLite type map arm for arm.
  *
+ * The one thing it cannot reuse is the column rendering itself: better-auth's `getType`
+ * (its dialect type map) and its `NOT NULL` / `DEFAULT` construction are closures inside
+ * `getMigrations`, which also refuses to run for a non-kysely adapter. So that last mile
+ * is mirrored here, and `__tests__/do-schema-parity.behaviour.test.ts` diffs it against
+ * better-auth's own compiled DDL so drift fails a test rather than reaching a database.
+ * Requested upstream as better-auth/better-auth#10559; when a renderer is exported, the
+ * mirror below should be deleted in favour of calling it.
+ *
  * That matters most for **uniqueness**. better-auth does not express `unique: true`
  * as a column constraint — it emits a separate `CREATE UNIQUE INDEX`. A
  * materialiser that only walks `fields` and writes columns therefore produces
