@@ -40,6 +40,7 @@ export const ADMIN_FUNCTIONS = {
     deleteRows: "__lunora_admin__:deleteRows",
     describeTable: "__lunora_admin__:describeTable",
     describeTables: "__lunora_admin__:describeTables",
+    explainIssue: "__lunora_admin__:explainIssue",
     exportShard: "__lunora_admin__:exportShard",
     facetColumn: "__lunora_admin__:facetColumn",
     getAdvisories: "__lunora_admin__:getAdvisories",
@@ -1149,6 +1150,40 @@ export interface MetricHistorySeries {
 /** Payload of a `__lunora_admin__:getMetricHistory` call: every tracked series with its time-ordered buckets. */
 export interface MetricHistoryResult {
     series: MetricHistorySeries[];
+}
+
+/**
+ * Arguments for the opt-in `__lunora_admin__:explainIssue` action, mirroring
+ * `@lunora/do`'s `ExplainIssueArgs`. `sampleMessage` is the representative raw
+ * error text (required); `title`/`culprit` add context from the {@link ErrorIssue}
+ * being explained; `model` overrides the default Workers AI text model. The DO
+ * re-derives the grounded solution from `sampleMessage` itself — it never trusts a
+ * client-supplied hint.
+ */
+export interface ExplainIssueArgs {
+    culprit?: string;
+    model?: string;
+    sampleMessage: string;
+    title?: string;
+}
+
+/**
+ * Payload of a `__lunora_admin__:explainIssue` call, mirroring `@lunora/do`'s
+ * `ExplainIssueResult`. When the app wires an `AI` binding and the model returns
+ * text, `degraded` is `false` and `explanation` holds the plain-language write-up
+ * (grounded strictly in the catalog `hint`, whose `groundedId` names the matched
+ * solution). Otherwise `degraded` is `true` and `reason` says why
+ * (`no-ai-binding` | `ai-error` | `empty-response`) — the studio then falls back to
+ * rendering the always-available grounded `hint` alone. `model` echoes the model
+ * that produced a successful explanation.
+ */
+export interface ExplainIssueResult {
+    degraded: boolean;
+    explanation?: string;
+    groundedId?: string;
+    hint?: string;
+    model?: string;
+    reason?: string;
 }
 
 /**
