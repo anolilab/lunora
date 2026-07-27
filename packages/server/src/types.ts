@@ -1,3 +1,8 @@
+// The declared analysis languages and storage strategies. Inlined by the
+// bundler from `shared/search` rather than depended on, so the schema builder
+// still stands up without the DO runtime — it just no longer restates the
+// unions that the engines validate against.
+import type { SearchLanguage, SearchStrategy } from "@lunora/search-core";
 import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
 // Cache the namespace proxies and the per-function reference objects so that
@@ -130,9 +135,51 @@ interface IndexDefinition {
 }
 
 interface SearchIndexDefinition {
+    /** Indexed text column; a dot-separated path (`"properties.name"`) reads a nested field. */
     field: string;
+    /** Columns `.eq()` may narrow by inside the search builder. At most 16. */
     filterFields?: ReadonlyArray<string>;
+
+    /**
+     * Text analysis for this index. Accent folding is always applied — it is
+     * what makes `café` and `cafe` the same token on every backend, which they
+     * otherwise are not. Naming a language additionally drops that language's
+     * stopwords from both documents and queries.
+     *
+     * Analysis is baked into the stored index, so changing this rebuilds it:
+     * the runtime records which profile a companion was built with and
+     * re-indexes when it no longer matches.
+     */
+    language?: SearchLanguage;
     name: string;
+
+    /**
+     * Skip the migration-time backfill. By default, creating the index's
+     * companion also indexes the rows already in the table, so a search index
+     * added to a populated table works immediately. On a very large table that
+     * scan is expensive to run inside a deploy: `staged: true` maintains the
+     * index on write only and leaves the initial population to an out-of-band
+     * `backfillSearchIndexes`.
+     */
+    staged?: boolean;
+
+    /**
+     * How the index is stored and matched.
+     *
+     * `"portable"` (default) keeps one implementation on every backend, with
+     * identical matching *and* ranking — the invariant the rest of the search
+     * docs rest on.
+     *
+     * `"native"` hands matching to the engine's own full-text index where it has
+     * one (Postgres `tsvector` + GIN today; ignored elsewhere). It scales far
+     * better on large corpora and common terms, because the portable path
+     * aggregates every matching token row before ranking. The trade: the engine
+     * ranks, so results are ordered by its formula rather than the shared
+     * scorer. Matching still agrees — the vector is built from the same analyzed
+     * tokens — but a `.global()` table using it will not return rows in the same
+     * order as the sharded twin.
+     */
+    strategy?: SearchStrategy;
 }
 
 /**
@@ -1441,9 +1488,9 @@ interface VectorRecord {
  * Read-only vector surface exposed on {@link QueryCtx}. Mirrors the read half
  * of `@lunora/bindings/vectors`' `LunoraVectors` so the live adapter is assignable.
  */
-interface VectorSearchReader {
-    getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
-    query: (indexName: string, input: VectorQueryInput) => Promise<VectorMatches>;
+interface VectorSearchReader<IndexName extends string = string> {
+    getByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
+    query: (indexName: IndexName, input: VectorQueryInput) => Promise<VectorMatches>;
 }
 
 /**
@@ -1451,10 +1498,10 @@ interface VectorSearchReader {
  * is queued post-commit by default; `upsertNow` forces a synchronous write.
  * `db.delete` on a vectorized table auto-propagates the matching `deleteByIds`.
  */
-interface VectorSearch extends VectorSearchReader {
-    deleteByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<void>;
-    upsert: (indexName: string, input: VectorUpsertInput) => Promise<void>;
-    upsertNow: (indexName: string, input: VectorUpsertInput) => Promise<void>;
+interface VectorSearch<IndexName extends string = string> extends VectorSearchReader<IndexName> {
+    deleteByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<void>;
+    upsert: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
+    upsertNow: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
 }
 
 /**
@@ -2143,3 +2190,5 @@ export type {
     WorkflowStatusResult,
     X402ProcedureConfig,
 };
+
+export type { SearchLanguage, SearchStrategy } from "@lunora/search-core";

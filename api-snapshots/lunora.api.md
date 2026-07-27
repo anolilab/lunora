@@ -2469,6 +2469,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `SearchIndexDefinitionLike` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `SecurityAuditResult` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2781,11 +2785,11 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `boundingBoxGeohashes` (const)
+### `backfillSearchIndexes` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `buildFtsMatch` (const)
+### `boundingBoxGeohashes` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2898,10 +2902,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `foldAggregateTally` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `ftsTableName` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3105,10 +3105,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `scoreDocument` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `selectExpiredIds` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -3153,19 +3149,11 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `stringifySearchText` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `subscriptionListDeltas` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `throwingScheduler` (const)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `tokenizeSearch` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -6674,6 +6662,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 ### `SearchIndexDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SearchLanguage` (type)
+
+Re-exported from `@lunora/search-core` — signature tracked at its source.
+
+### `SearchStrategy` (type)
+
+Re-exported from `@lunora/search-core` — signature tracked at its source.
 
 ### `Secrets` (interface)
 

@@ -2,7 +2,7 @@ import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase, runD1SearchMigrations } from "../src/d1-ctx-db";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import { createD1Exec, FTS5_IN_BUILD } from "./_helpers/node-sqlite-d1";
 
 /**
  * Behavioral coverage of `.withSearchIndex().search()` against the D1 column
@@ -67,7 +67,11 @@ const setupWriter = async (): Promise<DatabaseWriterLike> => {
     return createD1ContextDatabase({ clock, exec: harness.exec, idGenerator, schema: searchSchema });
 };
 
-describe("d1 ctx-db search", () => {
+// Gated on the module actually being present: this suite runs the real D1
+// factory, whose dialect declares FTS5 because D1 has it. A Node build without
+// the module cannot stand in for D1 here — the parity and backfill suites,
+// which override the dialect to the portable layout, cover it on every build.
+describe.skipIf(!FTS5_IN_BUILD)("d1 ctx-db search", () => {
     beforeEach(() => {
         harness = createD1Exec();
     });
@@ -261,7 +265,62 @@ describe("d1 ctx-db search", () => {
             expect(() => writer.query("docs").withSearchIndex("by_body", (q) => q)).toThrow(/requires a \.search/u);
         });
 
-        it("throws when paginate() is called on a search query", async () => {
+        it("throws past the search-term cap", async () => {
+            expect.assertions(1);
+
+            const writer = await setupWriter();
+            const term = Array.from({ length: 17 }, (_, index) => `t${String(index)}`).join(" ");
+
+            expect(() => writer.query("docs").withSearchIndex("by_body", (q) => q.search("body", term))).toThrow(/at most 16 search terms/u);
+        });
+
+        it("throws past the .eq() filter cap", async () => {
+            expect.assertions(1);
+
+            const writer = await setupWriter();
+
+            expect(() =>
+                writer.query("docs").withSearchIndex("by_body", (q) => {
+                    let builder = q.search("body", "x");
+
+                    for (let index = 0; index < 9; index += 1) {
+                        builder = builder.eq("channel", "x");
+                    }
+
+                    return builder;
+                }),
+            ).toThrow(/at most 8 \.eq\(\) filters/u);
+        });
+    });
+
+    describe("d1 ctx-db search — pagination", () => {
+        it("walks the relevance-ordered result set page by page", async () => {
+            expect.assertions(4);
+
+            const writer = await setupWriter();
+
+            await writer.insert("docs", { body: "page page page", channel: "x", title: "first" });
+            await writer.insert("docs", { body: "page page", channel: "x", title: "second" });
+            await writer.insert("docs", { body: "page", channel: "x", title: "third" });
+
+            const firstPage = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "page"))
+                .paginate({ numItems: 2 });
+
+            expect(firstPage.page.map((document) => document["title"])).toStrictEqual(["first", "second"]);
+            expect(firstPage.isDone).toBe(false);
+
+            const secondPage = await writer
+                .query("docs")
+                .withSearchIndex("by_body", (q) => q.search("body", "page"))
+                .paginate({ cursor: firstPage.continueCursor, numItems: 2 });
+
+            expect(secondPage.page.map((document) => document["title"])).toStrictEqual(["third"]);
+            expect(secondPage.isDone).toBe(true);
+        });
+
+        it("rejects a cursor that is not a search cursor", async () => {
             expect.assertions(1);
 
             const writer = await setupWriter();
@@ -270,8 +329,8 @@ describe("d1 ctx-db search", () => {
                 writer
                     .query("docs")
                     .withSearchIndex("by_body", (q) => q.search("body", "x"))
-                    .paginate({ numItems: 5 }),
-            ).rejects.toThrow(/pagination is not supported/u);
+                    .paginate({ cursor: "not-a-cursor", numItems: 5 }),
+            ).rejects.toThrow(/invalid cursor/u);
         });
     });
 

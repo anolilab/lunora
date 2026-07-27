@@ -25,6 +25,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-companions" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
+import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, searchTextUnchanged } from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
@@ -41,7 +42,6 @@ import { param } from "./drizzle";
 import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
 import type { RankIndexDefinitionLike } from "./rank";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
-import { ftsTableName, stringifySearchText } from "./search-text";
 import type { MutationDelta } from "./types";
 
 /**
@@ -139,8 +139,13 @@ interface CompanionSync {
     syncGeo: (tableName: string, id: string, document: Record<string, unknown> | undefined) => void;
     /** Post-write hook: apply the `-prev + next` step for every declared rank index. */
     syncRanks: (tableName: string, id: string, previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined) => void;
-    /** Keep the FTS5 shadow tables in step with a row write (no-op without search indexes / FTS5). */
-    syncSearch: (tableName: string, id: string, document: Record<string, unknown> | undefined) => void;
+
+    /**
+     * Keep the FTS5 shadow tables in step with a row write (no-op without search
+     * indexes / FTS5). `previous` lets an index whose text didn't change skip
+     * the rewrite entirely.
+     */
+    syncSearch: (tableName: string, id: string, document: Record<string, unknown> | undefined, previous?: Record<string, unknown>) => void;
 }
 
 /**
@@ -561,7 +566,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      * insert makes it idempotent across insert/update; `doc === undefined`
      * deletes only (row removal).
      */
-    const syncSearch = (tableName: string, id: string, document: Record<string, unknown> | undefined): void => {
+    const syncSearch = (tableName: string, id: string, document: Record<string, unknown> | undefined, previous?: Record<string, unknown>): void => {
         const indexes = schema.tables[tableName]?.searchIndexes;
 
         if (!indexes || indexes.length === 0 || !isFtsAvailable(sql)) {
@@ -569,14 +574,21 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
         }
 
         for (const index of indexes) {
+            // Fast path: this write didn't touch the indexed text, so the
+            // companion rows are already correct (mirrors the rank companion's
+            // `rankIndexFieldsUnchanged` skip).
+            if (searchTextUnchanged(previous, document, index)) {
+                continue;
+            }
+
             const ftName = ftsTableName(tableName, index.name);
 
-            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier("__id__")} = ${id}`);
+            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
 
             if (document) {
                 runDrizzle(
                     sql,
-                    dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier("__text__")}, ${dsql.identifier("__id__")}) VALUES (${stringifySearchText(document[index.field])}, ${id})`,
+                    dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(document, index)}, ${id})`,
                 );
             }
         }

@@ -18,6 +18,16 @@ export interface SpawnDescriptor {
     args: ReadonlyArray<string>;
 
     /**
+     * Capture the child's stderr (in addition to streaming it to the parent).
+     * Needed when a tool reports the *expected* outcome as an error there —
+     * `wrangler vectorize create-metadata-index` writes "already exists" to
+     * stderr, and without this the caller can only see a bare exit code and
+     * would warn on every re-run. Composes with `stdoutToStderr`, so a caller
+     * can keep stdout clean for `--format json` and still read the reason.
+     */
+    captureStderr?: boolean;
+
+    /**
      * Capture the child's stdout (in addition to streaming it to the parent), so
      * the caller can parse it — used by `deploy` to read the deployed URL from
      * `wrangler deploy` output. Each chunk is still teed to the parent's stdout
@@ -46,6 +56,8 @@ export interface SpawnDescriptor {
 
 export interface SpawnResult {
     code: number;
+    /** The captured stderr, present only when the descriptor set `captureStderr`. */
+    stderr?: string;
     /** The captured stdout, present only when the descriptor set `captureStdout`. */
     stdout?: string;
 }
@@ -128,10 +140,19 @@ export const defaultSpawner: Spawner = (descriptor) =>
             cwd: descriptor.cwd ?? process.cwd(),
             env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
             shell: exec.shell,
-            stdio: [hasInput ? "pipe" : "inherit", stdout, "inherit"],
+            stdio: [hasInput ? "pipe" : "inherit", stdout, descriptor.captureStderr === true ? "pipe" : "inherit"],
         });
 
         let captured = "";
+        let capturedError = "";
+
+        if (descriptor.captureStderr === true && child.stderr) {
+            child.stderr.on("data", (chunk: Buffer) => {
+                capturedError += chunk.toString("utf8");
+                // Tee to the parent so the user still sees the tool's own output.
+                process.stderr.write(chunk);
+            });
+        }
 
         if (wantCapture && child.stdout) {
             child.stdout.on("data", (chunk: Buffer) => {
@@ -149,7 +170,11 @@ export const defaultSpawner: Spawner = (descriptor) =>
             // A signal-killed child reports `code === null`; treat that as a
             // failure (non-zero) rather than silently passing — e.g. an
             // OOM-killed `tsc` must not read as a clean type-check.
-            resolve({ code: code ?? (signal ? 1 : 0), stdout: wantCapture ? captured : undefined });
+            resolve({
+                code: code ?? (signal ? 1 : 0),
+                stderr: descriptor.captureStderr === true ? capturedError : undefined,
+                stdout: wantCapture ? captured : undefined,
+            });
         });
 
         if (hasInput && child.stdin) {

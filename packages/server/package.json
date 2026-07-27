@@ -83,6 +83,7 @@
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.8",
         "@lunora/scheduler": "1.0.0-alpha.12",
+        "@lunora/search-core": "workspace:*",
         "@lunora/values": "1.0.0-alpha.11",
         "drizzle-orm": "catalog:drizzle",
         "hono": "catalog:http"

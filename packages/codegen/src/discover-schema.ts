@@ -75,6 +75,21 @@ const getNumberProperty = (object: ObjectLiteralExpression, key: string): number
     return undefined;
 };
 
+/** Read a boolean-literal property, or `undefined` when absent (or not a literal). */
+const getBooleanProperty = (object: ObjectLiteralExpression, key: string): boolean | undefined => {
+    const property = object.getProperty(key);
+
+    if (property && Node.isPropertyAssignment(property)) {
+        const initializer = property.getInitializer();
+
+        if (initializer && (Node.isTrueLiteral(initializer) || Node.isFalseLiteral(initializer))) {
+            return initializer.getLiteralValue();
+        }
+    }
+
+    return undefined;
+};
+
 /** Read an array-of-string-literals property, or `undefined`. */
 const getStringArrayProperty = (object: ObjectLiteralExpression, key: string): string[] | undefined => {
     const property = object.getProperty(key);
@@ -230,13 +245,19 @@ const parseSearchIndexCall = (args: ReadonlyArray<Node>): SearchIndexIR => {
     const [indexName, optionsExpression] = args;
     let field = "_unknown_";
     let filterFields: string[] | undefined;
+    let language: string | undefined;
+    let staged: boolean | undefined;
+    let strategy: string | undefined;
 
     if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
         field = getStringProperty(optionsExpression, "field") ?? field;
         filterFields = getStringArrayProperty(optionsExpression, "filterFields");
+        language = getStringProperty(optionsExpression, "language");
+        staged = getBooleanProperty(optionsExpression, "staged");
+        strategy = getStringProperty(optionsExpression, "strategy");
     }
 
-    return { field, filterFields, name: indexNameOf(indexName) };
+    return { field, filterFields, language, name: indexNameOf(indexName), staged, strategy };
 };
 
 /** Parse a `.geoIndex(name, { field, precision? })` call into a {@link GeoIndexIR}. */

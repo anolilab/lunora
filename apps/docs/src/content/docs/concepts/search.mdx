@@ -7,6 +7,13 @@ A `searchIndex` adds a full-text index over one string column so you can match
 documents by their words rather than by an exact key. Results come back ordered
 by **relevance**, with optional exact-match filtering on declared filter fields.
 
+Search behaves the same on every backend — sharded Durable Object tables,
+`.global()` tables on D1, and `.global()` tables on PlanetScale behind
+Hyperdrive. Same tokenizer, same AND/prefix rules, same ranking, same accent
+folding: Lunora analyzes text before it reaches the engine, so `café` and `cafe`
+match each other everywhere rather than depending on whose collation is
+underneath.
+
 ## Declaring a search index
 
 Add `.searchIndex(name, { field, filterFields })` to a table. `field` is the
@@ -31,6 +38,46 @@ export default defineSchema({
 });
 ```
 
+`field` may be a dot-separated path into a nested object —
+`.searchIndex("search_name", { field: "properties.name" })` indexes the `name`
+inside a `v.object()` column.
+
+## Language
+
+Text is always folded — decomposed, stripped of accents, lowercased — so
+diacritics and case never decide a match. Naming a `language` additionally drops
+that language's function words:
+
+```ts
+.searchIndex("search_text", { field: "text", language: "en" })
+```
+
+Supported: `de`, `en`, `es`, `fr`, `it`, `nl`, `pt`, and `none` (the default —
+folding only). An unknown language is a schema error rather than a silent
+fallback.
+
+Stopwords apply to documents and queries alike, so `"the who"` indexes and
+searches on `who` alone, and a query made only of stopwords matches nothing
+rather than everything. Note the trade-off: a query for `"the"` on an English
+index returns no results at all. Leave `language` off for identifier-ish or
+mixed-language corpora.
+
+Stemming is **not** applied — `running` does not find `run`. It is stored
+analysis, so a wrong stemmer would be frozen into every index built while it was
+wrong; the machinery to add it later (and rebuild automatically) is in place.
+
+Analysis is baked into the stored index, so changing `language` changes what a
+token _is_. The runtime records which analysis a companion was built with and
+rebuilds it when that no longer matches — no manual reindex, though a large
+table pays the backfill again.
+
+Two limits worth knowing. `ß` is left alone — collapsing it to `ss` needs a
+case-folding table this deliberately doesn't carry. And folding only strips
+_Latin_ diacritics (U+0300–U+036F): text in other scripts is Unicode-normalized
+but otherwise untouched, so Japanese voiced sound marks and Korean jamo survive
+— `が` stays distinct from `か`, which stripping every combining mark would
+have merged.
+
 ## Running a search query
 
 Use `.withSearchIndex(name, q => …)`. The builder's `.search(field, query)` runs
@@ -48,6 +95,16 @@ export const searchMessages = query.input({ channelId: v.id("channels"), term: v
 });
 ```
 
+## Matching rules
+
+The query string splits into lowercased alphanumeric terms. A document matches
+when it contains **every** term, and the **final** term matches as a prefix — so
+`"hello wor"` finds "hello world", which is what makes as-you-type search work.
+Repeated terms collapse: `"cat cat"` is the same query as `"cat"`.
+
+Matches are ordered by relevance (how often the terms occur in the indexed
+field), newest first among equally relevant documents.
+
 ## Filter fields
 
 Every column you want to filter by inside a search must be declared in
@@ -55,19 +112,122 @@ Every column you want to filter by inside a search must be declared in
 builder. They narrow the candidate set by an exact match before relevance
 scoring, so a per-channel or per-tenant search stays scoped.
 
-## Relevance ordering and `.take(n)`
+## Relevance ordering, `.take(n)` and pagination
 
 A search query returns rows **ordered by relevance** to the search term, best
-match first. You cannot re-`.order()` it, and `.paginate()` is not supported on
-a search query. Bound the result set with `.take(n)` instead:
+match first, so you cannot re-`.order()` it. Bound the result set with
+`.take(n)`:
 
 ```ts
 .withSearchIndex("search_text", (q) => q.search("text", term))
 .take(20);
 ```
 
-`.collect()` and `.first()` also work; reach for `.take(n)` to cap how many
-top-ranked hits you return.
+`.collect()`, `.first()` and `.unique()` also work. `.paginate({ numItems })`
+walks the ranked results page by page:
+
+```ts
+const page = await ctx.db
+    .query("messages")
+    .withSearchIndex("search_text", (q) => q.search("text", term))
+    .paginate({ cursor, numItems: 20 });
+```
+
+A search cursor addresses an offset into the ranked result set rather than a
+row, so a search page has no bounded (`endCursor`) form — pass `cursor` and
+`numItems` only.
+
+## Limits
+
+| Limit                                    | Value |
+| ---------------------------------------- | ----- |
+| Search terms per query (after de-duping) | 16    |
+| `.eq()` filters per query                | 8     |
+| `filterFields` per index                 | 16    |
+| Documents returned per search            | 1024  |
+
+All of them throw when exceeded. That includes `.collect()` over a result set
+larger than 1024 and `.take(n)` / `.paginate()` reaching past it — a truncated
+result set is never handed back as if it were the whole one. Narrow the query,
+or read it a page at a time.
+
+The 1024 bounds documents **returned**, not the work the engine does: ranking is
+an aggregate over every matching token row, so a very common term is expensive
+even when you only read the top 20. Narrow with `filterFields` where you can.
+
+One more consequence worth knowing: a `.filter()` applied on top of a search —
+including the one row-level security installs — runs over that 1024-row window
+rather than widening it, so a restrictive read policy can leave fewer rows than
+you asked for.
+
+## Backfill and `staged`
+
+Declaring a search index on a table that already holds rows indexes those rows
+too. That work is paged: each deploy — and, on `.global()` tables, each request
+until it finishes — indexes a bounded batch and records where it stopped, so a
+large table becomes searchable progressively instead of blocking behind a
+full-table scan. Rows written while the backfill is in flight are indexed
+immediately by the write path, as usual.
+
+To keep that work out of the request path entirely, declare the index `staged`
+and run the backfill yourself.
+
+```ts
+.searchIndex("search_text", { field: "text", staged: true })
+```
+
+A staged index is maintained on every write from the moment it is declared, but
+starts out empty — until it is backfilled it only finds documents written after
+the deploy. Run `backfillSearchIndexes` (sharded tables) or
+`backfillD1SearchIndexes` (`.global()` tables) from a one-shot admin path to
+complete it; both are resumable and safe to re-run.
+
+## Native engine indexes
+
+The default (`strategy: "portable"`) keeps one implementation everywhere, with
+identical matching **and** ordering across backends. That costs something at
+scale: ranking aggregates every matching token row, so a common term is
+expensive however few rows you ask for.
+
+Where the engine has its own full-text index, you can opt an index into it:
+
+```ts
+.searchIndex("search_text", { field: "text", strategy: "native" })
+```
+
+Today that means Postgres behind Hyperdrive (`tsvector` + GIN). Matching is
+answered by the index rather than by an aggregate, which is the difference
+between "linear in how common your terms are" and "an indexed lookup".
+
+Two things stay the same and one changes. **Matching** is identical — the stored
+vector is built from the tokens Lunora's analyzer already produced, under a
+config that adds no stemming or stopwords of its own, so the same query finds
+the same documents. **Analysis** is identical for the same reason, accent
+folding included. **Ordering** is not: the engine ranks with its own formula, so
+a `.global()` table using `native` will not return rows in the same order as its
+sharded twin. That is the whole trade, and it is why this is opt-in.
+
+On backends without a native index — D1, sharded Durable Objects, MySQL — the
+option is ignored and the portable path serves the query. Never a wrong answer,
+just not the faster one.
+
+## How each backend indexes
+
+You don't have to care, but it explains the operational cost:
+
+- **Sharded DO tables and `.global()` on D1** use an FTS5 shadow table, kept in
+  step with every row write.
+- **`.global()` on PlanetScale via Hyperdrive** (Postgres and MySQL, neither of
+  which has FTS5) uses a portable inverted table: one indexed row per distinct
+  token, holding the token, the document, and how often it occurs. A search is a
+  single indexed query, and ranking uses the same formula, so results match the
+  other backends.
+
+An index declared `strategy: "native"` stores one `tsvector` row per document
+instead, GIN-indexed, and lets Postgres match and rank.
+
+Either way a write updates only the companion rows for the document it touched,
+and a search never scans the source table.
 
 ## See also
 
