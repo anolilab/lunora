@@ -131,20 +131,19 @@ describe("withD1IndexIntrospection", () => {
         expect(results.find((row) => row.indexName === "p_idx")?.isPartial).toBe(1);
     });
 
-    it("skips constraint-backed indexes, which carry no CREATE statement", async () => {
-        expect.assertions(1);
+    it("reports constraint-backed indexes as opaque rather than dropping them", async () => {
+        expect.assertions(2);
 
         const { database } = fakeD1([{ name: "sqlite_autoindex_user_1", sql: null, tbl_name: "user" }]);
 
         const statement = withD1IndexIntrospection(database).prepare(UPSTREAM_INDEX_QUERY);
+        const { results } = await statement.bind().all();
 
-        // These back UNIQUE/PRIMARY KEY constraints; the migrator doesn't declare them,
-        // and reporting them column-less would only mark them uncomparable.
-        await expect(
-            statement
-                .bind()
-                .all()
-                .then((response) => response.results),
-        ).resolves.toEqual([]);
+        // Indexes backing UNIQUE / PRIMARY KEY constraints have no `CREATE INDEX` text, so
+        // their columns can't be read — but upstream's pragma query DOES return them, so
+        // dropping them would understate the schema. A row with no `columnName` makes the
+        // caller mark the index `validFullColumns: false`: present, but not comparable.
+        expect(results).toEqual([{ columnPosition: 0, indexName: "sqlite_autoindex_user_1", isPartial: 0, isUnique: 1, tableName: "user" }]);
+        expect(results[0]).not.toHaveProperty("columnName");
     });
 });

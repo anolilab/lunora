@@ -39,7 +39,8 @@
 
 /** One row of the shape `getDatabaseIndexes` expects back from its SQLite query. */
 interface IndexIntrospectionRow {
-    readonly columnName: string;
+    /** Absent for an index whose columns we cannot read; the caller then treats it as opaque. */
+    readonly columnName?: string;
     readonly columnPosition: number;
     readonly indexName: string;
     readonly isPartial: number;
@@ -139,10 +140,21 @@ const readIndexRows = async (database: D1Like): Promise<IndexIntrospectionRow[]>
         const tableName = definition["tbl_name"];
         const createSql = definition["sql"];
 
-        // Indexes backing UNIQUE / PRIMARY KEY constraints carry a NULL `sql`. They are
-        // not indexes the migrator declares, so leaving them out is correct — reporting
-        // them with no columns would only mark them unusable for comparison anyway.
-        if (typeof indexName !== "string" || typeof tableName !== "string" || typeof createSql !== "string") {
+        if (typeof indexName !== "string" || typeof tableName !== "string") {
+            continue;
+        }
+
+        // Indexes backing UNIQUE / PRIMARY KEY constraints carry a NULL `sql`, so their
+        // columns can't be parsed. Report them column-less rather than dropping them:
+        // upstream's pragma query returns them too (origin `u`/`pk`), and a row with no
+        // column makes the caller mark the index `validFullColumns: false` — "exists, but
+        // opaque" — which is the honest answer. Reconstructing the columns would mean
+        // parsing CREATE TABLE constraint syntax, and nothing needs them: the diff keys on
+        // better-auth's own index names, which never collide with `sqlite_autoindex_*`.
+        // Both origins are unique by definition, hence `isUnique: 1`.
+        if (typeof createSql !== "string") {
+            rows.push({ columnPosition: 0, indexName, isPartial: 0, isUnique: 1, tableName });
+
             continue;
         }
 
