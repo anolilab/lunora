@@ -132,6 +132,15 @@ const paymentConfig = (env: ShardEnv): PaymentsFromContextOptions => {
 };
 
 /**
+ * Deferred-dispatch DO for `@lunora/scheduler`. The control plane's own crons
+ * (`lunora/crons.ts`) ride Cloudflare cron triggers and don't need this, but the
+ * class must be exported for the `SCHEDULER` binding to be provisionable — so
+ * `ctx.scheduler.runAfter` / `runAt` work the first time a function reaches for
+ * them, instead of failing at runtime on a missing binding.
+ */
+export { SchedulerDO } from "@lunora/scheduler";
+
+/**
  * The control-plane shard DO. `.global()` tables (`cells`, `organizations`)
  * route through the D1 ctx-db; org-scoped tables (`projects`, `deployments`, …)
  * stay in the per-org shard's SQLite. `payment` assembles `ctx.payments` per
