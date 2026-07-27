@@ -15,6 +15,12 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 const AUTH_AUDIT_TABLE = "__lunora_auth_audit__";
 ```
 
+### `AUTH_DO_AUDIT_PATH` (const)
+
+```ts
+const READ_AUDIT_PATH = "/__lunora/auth/audit";
+```
+
 ### `AUTH_DO_SECRET_HEADER` (const)
 
 ```ts

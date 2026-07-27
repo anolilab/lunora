@@ -297,7 +297,8 @@ because SCIM reads-then-conditionally-writes — so `lunoraD1Adapter` and
 
 **Postgres or MySQL via [Hyperdrive](/docs/packages/hyperdrive)** is the conservative
 option: hand better-auth a kysely dialect with `transaction: true`. Your auth tables
-then live outside Cloudflare's first-party storage, away from `ctx.db`.
+then live outside Cloudflare's first-party storage, away from `ctx.db`. Walked through
+in [SCIM on Hyperdrive](#scim-on-hyperdrive) below.
 
 **`lunoraDoAdapter`** keeps them on Cloudflare. A Durable Object's storage _does_ have
 real transactions (`state.storage.transaction` — async, atomic, rolled back on throw,
@@ -385,11 +386,6 @@ at it.
     (there is one auth object). Measure it before moving an existing deployment.
 </Callout>
 
-Which to pick: if you already run Postgres, Hyperdrive is less new machinery. If you want
-to stay entirely on Cloudflare and can accept single-object writes for auth, the DO
-adapter avoids a second database. **SSO needs neither** — it has no transaction
-requirement and runs on `lunoraD1Adapter` as usual.
-
 ### SCIM on Hyperdrive
 
 SCIM's transaction requirement means its tables live in a real SQL database rather than
@@ -459,6 +455,11 @@ Practical notes:
   identities through `ctx.auth` instead.
 - **SSO can stay on D1.** If you want enterprise SSO without moving your auth tables,
   run `sso()` on `lunoraD1Adapter` and skip SCIM; only SCIM carries the requirement.
+
+Which to pick: if you already run Postgres, Hyperdrive is less new machinery. If you want
+to stay entirely on Cloudflare and can accept single-object writes for auth, the DO
+adapter avoids a second database. **SSO needs neither** — it has no transaction
+requirement and runs on `lunoraD1Adapter` as usual.
 
 ### SAML status
 
