@@ -28,7 +28,11 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 
 /** Add a member to an organization (owners/admins only). Idempotent per user. */
 export const add = mutation
-    .input({ organizationId: v.id("organizations"), role, userId: v.string() })
+    .input({
+        organizationId: v.id("organizations"),
+        role,
+        userId: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+    })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"members">> => {
         await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
@@ -47,7 +51,7 @@ export const add = mutation
         await assertWithinQuota(context, arguments_.organizationId, "members", (all.page as unknown as MemberRow[]).length);
 
         return context.db.insert("members", {
-            createdAt: Date.now(),
+            createdAt: context.now,
             organizationId: arguments_.organizationId,
             role: arguments_.role,
             userId: arguments_.userId,
@@ -95,7 +99,7 @@ export const setRole = mutation
         await context.db.insert("auditLog", {
             action: "member.set-role",
             actorUserId: caller.userId,
-            createdAt: Date.now(),
+            createdAt: context.now,
             organizationId,
             target: `${target.userId} → ${newRole}`,
         });
