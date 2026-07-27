@@ -207,6 +207,16 @@ const FANOUT_METRICS_RESULT_KEYS = [
 
 const FANOUT_METRICS_RESULT_KEY_GUARD: KeysMatch<keyof FanoutMetricsResult, (typeof FANOUT_METRICS_RESULT_KEYS)[number]> = true;
 
+/** Hand-mirror of the DO-internal `explainIssue` result (the type is not exported by `@lunora/do`). */
+interface ExplainIssueResultShape {
+    degraded: boolean;
+    explanation?: string;
+    groundedId?: string;
+    hint?: string;
+    model?: string;
+    reason?: string;
+}
+
 /**
  * A real-SQLite-backed ShardDO whose `handleRpc` throws — proving the admin
  * branch in `fetch` short-circuits before user dispatch is ever reached.
@@ -1499,6 +1509,152 @@ describe("shardDO admin introspection", () => {
         const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordContainerEvent, { event: { container: "c", event: "start" } }));
+
+        expect(response.status).toBe(403);
+    });
+
+    it("explainIssue degrades to the grounded hint when no AI binding is configured", async () => {
+        expect.assertions(4);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(
+            adminRequest(
+                ADMIN_FUNCTIONS.explainIssue,
+                { culprit: "worker", sampleMessage: "Error 1101: Worker threw exception", title: "Worker threw" },
+                ADMIN_TOKEN,
+            ),
+        );
+
+        expect(response.status).toBe(200);
+
+        const { result } = await response.json<{ result: ExplainIssueResultShape }>();
+
+        expect(result).toMatchObject({ degraded: true, groundedId: "cloudflare-error-1101", reason: "no-ai-binding" });
+        // The catalog hint is offline and always present when the message matches.
+        expect(result.hint).toContain("JavaScript exception");
+        // No binding → no AI explanation.
+        expect(result.explanation).toBeUndefined();
+    });
+
+    it("explainIssue degrades with no hint for an unrecognized message", async () => {
+        expect.assertions(3);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.explainIssue, { sampleMessage: "some totally novel app failure" }, ADMIN_TOKEN));
+
+        const { result } = await response.json<{ result: ExplainIssueResultShape }>();
+
+        expect(result).toMatchObject({ degraded: true, reason: "no-ai-binding" });
+        expect(result.hint).toBeUndefined();
+        expect(result.groundedId).toBeUndefined();
+    });
+
+    it("explainIssue returns a grounded AI explanation when env.AI is present", async () => {
+        expect.assertions(7);
+
+        const calls: { inputs: Record<string, unknown>; model: string }[] = [];
+        const AI = {
+            run: (model: string, inputs: Record<string, unknown>) => {
+                calls.push({ inputs, model });
+
+                // A leading/trailing-whitespace response proves the handler trims.
+                return Promise.resolve({ response: "  Your Worker threw an unhandled exception. Check the stack trace via wrangler tail.  " });
+            },
+        };
+
+        const shard = new AdminShard(state, { AI, LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(
+            adminRequest(
+                ADMIN_FUNCTIONS.explainIssue,
+                { culprit: "app:handler", sampleMessage: "Error 1101: Worker threw exception", title: "Worker threw" },
+                ADMIN_TOKEN,
+            ),
+        );
+
+        const { result } = await response.json<{ result: ExplainIssueResultShape }>();
+
+        expect(result.degraded).toBe(false);
+        expect(result.explanation).toBe("Your Worker threw an unhandled exception. Check the stack trace via wrangler tail.");
+        expect(result.model).toBe("@cf/meta/llama-3.1-8b-instruct");
+        // The grounded hint still rides along, so the client can show both.
+        expect(result.hint).toContain("JavaScript exception");
+
+        // The model was called once, with the default model and a facts-only user
+        // message carrying the raw error, the source, and the grounded guidance.
+        expect(calls).toHaveLength(1);
+
+        const messages = calls[0]?.inputs["messages"] as { content: string; role: string }[];
+        const userMessage = messages.find((message) => message.role === "user");
+
+        expect(userMessage?.content).toContain("Error 1101");
+        expect(userMessage?.content).toContain("app:handler");
+    });
+
+    it("explainIssue degrades to the hint when the AI call throws", async () => {
+        expect.assertions(2);
+
+        const AI = { run: () => Promise.reject(new Error("model unavailable")) };
+        const shard = new AdminShard(state, { AI, LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.explainIssue, { sampleMessage: "Error 522 from cloudflare" }, ADMIN_TOKEN));
+
+        const { result } = await response.json<{ result: ExplainIssueResultShape }>();
+
+        expect(result).toMatchObject({ degraded: true, groundedId: "cloudflare-error-522", reason: "ai-error" });
+        expect(result.hint).toBeDefined();
+    });
+
+    it("explainIssue degrades when the model yields no usable text", async () => {
+        expect.assertions(2);
+
+        const AI = { run: () => Promise.resolve({ notResponse: 1 }) };
+        const shard = new AdminShard(state, { AI, LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.explainIssue, { sampleMessage: "boom" }, ADMIN_TOKEN));
+
+        const { result } = await response.json<{ result: ExplainIssueResultShape }>();
+
+        expect(result.degraded).toBe(true);
+        expect(result.reason).toBe("empty-response");
+    });
+
+    it("explainIssue honors a model override", async () => {
+        expect.assertions(1);
+
+        const models: string[] = [];
+        const AI = {
+            run: (model: string) => {
+                models.push(model);
+
+                return Promise.resolve({ response: "ok" });
+            },
+        };
+        const shard = new AdminShard(state, { AI, LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(adminRequest(ADMIN_FUNCTIONS.explainIssue, { model: "@cf/custom/model", sampleMessage: "boom" }, ADMIN_TOKEN));
+
+        expect(models).toStrictEqual(["@cf/custom/model"]);
+    });
+
+    it("explainIssue rejects a missing sampleMessage with a 400", async () => {
+        expect.assertions(1);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.explainIssue, {}, ADMIN_TOKEN));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("admin-gates explainIssue (403 without the bearer)", async () => {
+        expect.assertions(1);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.explainIssue, { sampleMessage: "x" }));
 
         expect(response.status).toBe(403);
     });

@@ -1,5 +1,5 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
-import { LunoraError, toErrorBody } from "@lunora/errors";
+import { findSolutionByMessage, flattenHint, LunoraError, toErrorBody } from "@lunora/errors";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
@@ -1393,6 +1393,135 @@ const parseReplayQueueMessageArgs = (args: Record<string, unknown>): { id: strin
     const target = typeof args["target"] === "string" && args["target"].trim() !== "" ? args["target"].trim() : undefined;
 
     return { id, target };
+};
+
+/**
+ * The Workers AI text model the Issue explainer uses when the caller does not
+ * override it. A small, universally-available instruct model — the explainer is
+ * a short, grounded rewrite (not a reasoning task), so latency/cost beats size.
+ */
+const DEFAULT_EXPLAIN_ISSUE_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+
+/** Cap the raw error text fed to the model so a pathological message can't blow the prompt budget. */
+const EXPLAIN_ISSUE_MESSAGE_CAP = 2000;
+
+/**
+ * Structural projection of the Workers `AI` binding's `run` method — declared
+ * locally so `@lunora/do` needs no dependency edge on `@lunora/ai` (nor on
+ * `@cloudflare/workers-types`) to reach `env.AI`. Mirrors `AiBindingLike` in
+ * `@lunora/ai`.
+ */
+interface AiRunBinding {
+    run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
+}
+
+/** Parsed `__lunora_admin__:explainIssue` payload: the folded Issue's identifying facts, plus an optional model override. */
+interface ExplainIssueArgs {
+    /** The Issue's culprit (`&lt;file>:&lt;function>` or `container:&lt;name>`), for grounding context. */
+    culprit?: string;
+    /** Optional Workers AI model-id override; defaults to {@link DEFAULT_EXPLAIN_ISSUE_MODEL}. */
+    model?: string;
+    /** A representative raw error message for the Issue — the fact the explanation is grounded in. Required. */
+    sampleMessage: string;
+    /** The Issue's human-readable title (first line of the sample message), for grounding context. */
+    title?: string;
+}
+
+/**
+ * The `__lunora_admin__:explainIssue` result. The grounded `hint` (a catalog /
+ * Cloudflare-platform solution matched to the message) is always present when one
+ * exists — it is offline, deterministic, and the client already renders it. The
+ * AI `explanation` is best-effort: `degraded` is `true` (with a `reason`) when no
+ * `env.AI` binding is configured or the inference call failed, and the client
+ * falls back to the grounded `hint` alone.
+ */
+interface ExplainIssueResult {
+    /** True when the AI path was unavailable or failed — render the grounded `hint` instead. */
+    degraded: boolean;
+    /** The AI-generated plain-language explanation, present only on the non-degraded path. */
+    explanation?: string;
+    /** The id of the matched catalog/platform solution used to ground the prompt, when one matched. */
+    groundedId?: string;
+    /** The grounded Markdown hint (catalog or Cloudflare-platform solution) for the message, when one matched. */
+    hint?: string;
+    /** The Workers AI model-id used, present only on the non-degraded path. */
+    model?: string;
+    /** Why the AI path degraded (`"no-ai-binding"` | `"ai-error"` | `"empty-response"`), for the client to surface. */
+    reason?: string;
+}
+
+/**
+ * Validate the `__lunora_admin__:explainIssue` payload. Requires a non-empty
+ * `sampleMessage` (the grounding fact); `title`, `culprit`, and `model` are
+ * optional context/overrides. Throws a 400 `LunoraError` on a bad shape.
+ */
+const parseExplainIssueArgs = (args: Record<string, unknown>): ExplainIssueArgs => {
+    const sampleMessage = typeof args["sampleMessage"] === "string" ? args["sampleMessage"] : "";
+
+    if (sampleMessage.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "explainIssue: `sampleMessage` is required");
+    }
+
+    const model = typeof args["model"] === "string" && args["model"].trim() !== "" ? args["model"].trim() : undefined;
+
+    return {
+        culprit: typeof args["culprit"] === "string" && args["culprit"].trim() !== "" ? args["culprit"].trim() : undefined,
+        model,
+        // Cap defensively so a runaway message can't inflate the model prompt.
+        sampleMessage: sampleMessage.slice(0, EXPLAIN_ISSUE_MESSAGE_CAP),
+        title: typeof args["title"] === "string" && args["title"].trim() !== "" ? args["title"].trim() : undefined,
+    };
+};
+
+/**
+ * Run the Workers AI instruct model for the Issue explainer. Builds a facts-only
+ * prompt from the Issue (title, culprit, raw message) plus the grounded catalog
+ * `solution` (flattened to plain prose), under a system prompt that forbids
+ * inventing anything beyond those facts. Returns the model's text, or `undefined`
+ * when the binding yields no `{ response }` string. A free function (no instance
+ * state) so it stays a pure prompt-build-and-call unit.
+ */
+const runExplainIssueModel = async (
+    binding: AiRunBinding,
+    model: string,
+    issue: ExplainIssueArgs,
+    solution: ReturnType<typeof findSolutionByMessage>,
+): Promise<string | undefined> => {
+    const facts: string[] = [];
+
+    if (issue.title !== undefined) {
+        facts.push(`Title: ${issue.title}`);
+    }
+
+    if (issue.culprit !== undefined) {
+        facts.push(`Source: ${issue.culprit}`);
+    }
+
+    facts.push(`Error message: ${issue.sampleMessage}`);
+
+    if (solution !== undefined) {
+        // `flattenHint` strips Markdown emphasis / code fences so the model reads clean prose.
+        facts.push("", "Known guidance for this error:", solution.header, flattenHint(solution.body));
+    }
+
+    const system =
+        "You explain a backend error to the developer who owns it. Use ONLY the facts provided — do not invent causes, fixes, file names, or APIs beyond them. " +
+        "If the facts are thin, say plainly what the error means and what to check, without speculating. Be concise (2 to 4 short sentences), concrete, and practical. Plain text, no Markdown headings.";
+
+    const result = await binding.run(model, {
+        max_tokens: 400,
+        messages: [
+            { content: system, role: "system" },
+            { content: facts.join("\n"), role: "user" },
+        ],
+    });
+
+    // Workers AI text-generation returns `{ response: string }` (non-streaming).
+    if (typeof result === "object" && result !== null && typeof (result as { response?: unknown }).response === "string") {
+        return (result as { response: string }).response;
+    }
+
+    return undefined;
 };
 
 /**
@@ -6236,6 +6365,10 @@ abstract class ShardDO {
             return this.handleListFlags(args);
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.explainIssue) {
+            return this.handleExplainIssue(args);
+        }
+
         const triaged = await this.handleIssueTriageOp(functionPath, args);
 
         if (triaged !== undefined) {
@@ -6639,6 +6772,60 @@ abstract class ShardDO {
         this.recordAudit("sendQueueMessage", { detail: { count: sent, exportName: parsed.exportName } });
 
         return jsonResponse({ result: { sent } }, 200);
+    }
+
+    /**
+     * Serve `__lunora_admin__:explainIssue` — the Studio Issues panel's opt-in
+     * "Explain in plain language" action. Grounds strictly in Lunora's own error
+     * catalog: {@link findSolutionByMessage} matches the folded Issue's sample
+     * message to a catalog / Cloudflare-platform solution (offline, deterministic
+     * — the same hint the client already renders). When the app exposes an
+     * `env.AI` binding, that grounded fact plus the Issue's title/culprit is handed
+     * to a small Workers AI instruct model under a strict "use only these facts,
+     * invent nothing" system prompt, and the plain-language rewrite is returned.
+     * With no AI binding (or on an inference failure) the call degrades gracefully:
+     * `degraded: true` plus the grounded `hint`, so the client shows the catalog
+     * hint alone. A one-shot async action (never a subscription read) so the model
+     * call fires once per click, not on every write-flush. Admin-gated by
+     * `handleAdminRpc`'s caller.
+     */
+    private async handleExplainIssue(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseExplainIssueArgs(args);
+
+        // Ground on the canonical catalog fact, re-derived server-side (never trust
+        // a client-supplied hint). A match carries a header + Markdown body.
+        const solution = findSolutionByMessage(parsed.sampleMessage);
+        const groundedId = solution?.id;
+        const hint = solution?.body;
+
+        const degraded = (reason: ExplainIssueResult["reason"]): Response =>
+            jsonResponse({ result: { degraded: true, groundedId, hint, reason } satisfies ExplainIssueResult }, 200);
+
+        const binding = (this.env as Record<string, unknown> | undefined)?.["AI"];
+
+        // No AI binding on this deployment → the grounded hint is the whole answer.
+        if (typeof binding !== "object" || binding === null || typeof (binding as AiRunBinding).run !== "function") {
+            return degraded("no-ai-binding");
+        }
+
+        const model = parsed.model ?? DEFAULT_EXPLAIN_ISSUE_MODEL;
+
+        let explanation: string | undefined;
+
+        try {
+            explanation = await runExplainIssueModel(binding as AiRunBinding, model, parsed, solution);
+        } catch {
+            // Inference must never fail the call — the client still has the grounded hint.
+            return degraded("ai-error");
+        }
+
+        if (explanation === undefined || explanation.trim() === "") {
+            return degraded("empty-response");
+        }
+
+        this.recordAudit("explainIssue", { detail: { groundedId, model } });
+
+        return jsonResponse({ result: { degraded: false, explanation: explanation.trim(), groundedId, hint, model } satisfies ExplainIssueResult }, 200);
     }
 
     /**
@@ -8387,7 +8574,7 @@ abstract class ShardDO {
      * identity/args-specific), so only the shared op read is collapsed.
      */
     private readShapeOpRange(sql: SqlExec, table: string, sinceSeq: number, upTo: number, cache?: Map<string, Map<string, CdcChange>>): Map<string, CdcChange> {
-        const key = `${table} ${String(sinceSeq)} ${String(upTo)}`;
+        const key = `${table}\u0000${String(sinceSeq)}\u0000${String(upTo)}`;
         const cached = cache?.get(key);
 
         if (cached !== undefined) {
