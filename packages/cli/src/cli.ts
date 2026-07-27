@@ -24,6 +24,7 @@ import { initCommand } from "./commands/init";
 import { insightsCommand } from "./commands/insights";
 import { linkCommand } from "./commands/link";
 import { logsCommand } from "./commands/logs";
+import { mcpCommand } from "./commands/mcp";
 import { migrateCommand } from "./commands/migrate";
 import { prepareCommand } from "./commands/prepare";
 import { registryCommand } from "./commands/registry/command";
@@ -68,6 +69,7 @@ const COMMANDS = [
     "docs",
     "registry",
     "rules",
+    "mcp",
 ] as const;
 
 type CommandName = (typeof COMMANDS)[number];
@@ -122,6 +124,7 @@ const CLI_COMMANDS = [
     documentationCommand,
     registryCommand,
     rulesCommand,
+    mcpCommand,
 ];
 
 interface RunCliOptions {

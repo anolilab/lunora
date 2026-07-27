@@ -1,6 +1,9 @@
 import type { FunctionDescriptor, FunctionReference, LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 
+import type { McpTool } from "./compose";
+import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tool-types";
+
 /**
  * The tool surface this MCP server exposes. Each tool maps onto a method the
  * `LunoraClient` already provides, so an AI agent can introspect a deployment
@@ -9,25 +12,6 @@ import { LunoraError } from "@lunora/errors";
  * Definitions and dispatch live here — separate from the server wiring — so the
  * behaviour is unit-testable against a mock client without driving a transport.
  */
-
-/** A JSON-Schema object describing a tool's arguments, per the MCP spec. */
-interface ToolInputSchema {
-    properties: Record<string, unknown>;
-    required?: ReadonlyArray<string>;
-    type: "object";
-}
-
-interface ToolDefinition {
-    description: string;
-    inputSchema: ToolInputSchema;
-    name: string;
-}
-
-/** The MCP `CallToolResult` shape this server returns. */
-interface ToolResult {
-    content: { text: string; type: "text" }[];
-    isError?: boolean;
-}
 
 const RUN_INPUT_SCHEMA: ToolInputSchema = {
     properties: {
@@ -362,5 +346,21 @@ const callTool = async (client: LunoraClient, name: string, input: Record<string
     }
 };
 
-export type { ToolDefinition, ToolInputSchema, ToolResult };
-export { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS };
+/**
+ * The deployment tool surface as composable {@link McpTool}s — each definition
+ * paired with a handler bound to `client`. This is what a caller assembling a
+ * server out of several surfaces (deployment + docs + local dev) hands to
+ * `createToolServer`; `createLunoraMcpServer` keeps its own dispatch because it
+ * also has to route the dynamically-named `agent_&lt;name>` tools.
+ */
+const deploymentTools = (client: LunoraClient, allowWrites = false): ReadonlyArray<McpTool> =>
+    toolDefinitions(allowWrites).map((definition) => {
+        return {
+            definition,
+            handle: async (input: Record<string, unknown>): Promise<ToolResult> => callTool(client, definition.name, input, allowWrites),
+        };
+    });
+
+export { callTool, deploymentTools, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS };
+
+export { type ToolDefinition, type ToolInputSchema, type ToolResult } from "./tool-types";

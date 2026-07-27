@@ -73,6 +73,7 @@
         "@lunora/container": "1.0.0-alpha.16",
         "@lunora/d1": "1.0.0-alpha.47",
         "@lunora/errors": "1.0.0-alpha.8",
+        "@lunora/mcp": "1.0.0-alpha.43",
         "@lunora/runtime": "1.0.0-alpha.41",
         "@lunora/seed": "1.0.0-alpha.44",
         "@visulima/cerebro": "3.0.0",

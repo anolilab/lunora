@@ -34,7 +34,12 @@
 
 ---
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes a deployed Lunora app to AI agents. It registers tools for introspecting a deployment (`lunora_list_functions`, `lunora_list_tables`, `lunora_get_function_schema`) and invoking its functions (`lunora_run_query`, `lunora_run_mutation`, `lunora_run_action`), each backed by `@lunora/client` over HTTP RPC.
+[Model Context Protocol](https://modelcontextprotocol.io) servers for Lunora, in two flavours:
+
+- **Deployment** (the main entry) — exposes a deployed Lunora app to AI agents: introspection tools (`lunora_list_functions`, `lunora_list_tables`, `lunora_get_function_schema`) and invocation tools (`lunora_run_query`, `lunora_run_mutation`, `lunora_run_action`), each backed by `@lunora/client` over HTTP RPC. Needs an admin token.
+- **Documentation** ([`@lunora/mcp/docs`](#documentation-server)) — exposes the framework's _docs_ so an agent writing Lunora code can look up the real API instead of guessing. Credential-free, and safe to host publicly; Lunora runs it at `https://lunora.sh/mcp`.
+
+Most users never install this package directly — `lunora mcp install` wires both servers into their editor. See [`@lunora/cli`](https://www.npmjs.com/package/@lunora/cli).
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -136,6 +141,58 @@ Enable it with two env vars (or the matching `createLunoraMcpServer` options):
 Each exposed agent gets an `agent_<name>` tool taking `prompt` (required), an optional `threadKey` (reuse to continue a conversation; omit to start a new thread), and an optional `title`. The tool starts a durable run and awaits it up to the timeout budget; if the run outlasts the budget it returns a pending result whose `threadKey` you feed to the generic `lunora_agent_status` tool to poll for the final answer.
 
 Runs are **owner-scoped** to the identity the configured token resolves to. Grant a **least-privilege** token mapped to a bot identity so an agent's threads stay isolated per deployment — never the admin token.
+
+## Documentation server
+
+`@lunora/mcp/docs` is a second, independent surface: it serves **published documentation**, not a deployment. No credentials, no writes, no `@lunora/client` — and no Node built-ins, so it runs unchanged on Workers, Netlify/Vercel functions, Deno, and Bun.
+
+| Tool                 | Description                                                           |
+| -------------------- | --------------------------------------------------------------------- |
+| `lunora_search_docs` | Search the docs; returns matching pages and sections with their URLs. |
+| `lunora_get_doc`     | Return one page in full, as Markdown.                                 |
+| `lunora_list_docs`   | List every page with its title and description.                       |
+
+The tools read a `DocsIndex`, which has two implementations. A docs site wires up its own in-process index and mounts the server as an HTTP route:
+
+```ts
+import { createDocsMcpFetchHandler } from "@lunora/mcp/docs";
+
+const handle = createDocsMcpFetchHandler({ index: myDocsIndex });
+
+// e.g. in a Worker: export default { fetch: handle }
+```
+
+Anything else reads a published site over HTTP:
+
+```ts
+import { createDocsMcpServer, createRemoteDocsIndex } from "@lunora/mcp/docs";
+
+const server = createDocsMcpServer({ index: createRemoteDocsIndex({ baseUrl: "https://lunora.sh" }) });
+```
+
+Point a client at the hosted endpoint with no install at all:
+
+```sh
+claude mcp add --transport http lunora-docs https://lunora.sh/mcp
+```
+
+## Local development server
+
+`createLocalMcpServer` / `connectLocalStdio` compose the docs tools, the deployment tools, and any extra tools a host supplies into one stdio server — this is what `lunora mcp serve` runs.
+
+```ts
+import { connectLocalStdio } from "@lunora/mcp";
+
+await connectLocalStdio({
+    // Consulted per tool call, so a dev server started later is picked up
+    // without reconnecting.
+    deployment: () => readMyDevServer(),
+    docs: { baseUrl: "https://lunora.sh" },
+    extraTools: myLocalTools,
+});
+```
+
+The deployment tools are advertised even when the resolver currently returns nothing — MCP clients cache the tool list, so a surface that appeared only when the dev server happened to be up would stay invisible for the rest of the session. Calling one with nothing running returns an actionable error instead.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 

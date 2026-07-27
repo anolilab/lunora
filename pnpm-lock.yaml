@@ -920,6 +920,9 @@ importers:
       '@icons-pack/react-simple-icons':
         specifier: catalog:web
         version: 13.13.0(react@19.2.8)
+      '@lunora/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@radix-ui/react-icons':
         specifier: catalog:web
         version: 1.3.2(react@19.2.8)
@@ -2115,6 +2118,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/mcp':
+        specifier: workspace:*
+        version: link:../mcp
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime

@@ -1,14 +1,28 @@
 ---
 title: "@lunora/mcp"
-description: A Model Context Protocol server that exposes a Lunora deployment to AI agents.
+description: Model Context Protocol servers for Lunora — one exposing a deployment to AI agents, one exposing the framework's documentation.
 ---
 
-`@lunora/mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
-server that exposes a deployed Lunora app to AI agents. It registers tools for
-introspecting a deployment (`lunora_list_functions`, `lunora_list_tables`,
-`lunora_get_function_schema`) and invoking its functions (`lunora_run_query`,
-`lunora_run_mutation`, `lunora_run_action`), each backed by
-[`@lunora/client`](/docs/packages/client) over HTTP RPC.
+`@lunora/mcp` ships two [Model Context Protocol](https://modelcontextprotocol.io)
+surfaces.
+
+The **deployment** server (this package's main entry) exposes a deployed Lunora
+app to AI agents. It registers tools for introspecting a deployment
+(`lunora_list_functions`, `lunora_list_tables`, `lunora_get_function_schema`) and
+invoking its functions (`lunora_run_query`, `lunora_run_mutation`,
+`lunora_run_action`), each backed by [`@lunora/client`](/docs/packages/client)
+over HTTP RPC. It needs an admin token.
+
+The **documentation** server (`@lunora/mcp/docs`) exposes the framework's docs,
+so an agent writing Lunora code can look up the real API instead of inventing
+one. It reads published documentation only — no credentials, no writes — which
+is why it can be hosted unauthenticated; Lunora runs it at
+`https://lunora.sh/mcp`.
+
+<Callout>
+    Most users never install this package. `lunora mcp install` wires both servers into whichever editor they use — see [AI coding
+    agents](/docs/concepts/ai-tooling).
+</Callout>
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -161,6 +175,66 @@ above, an agent like Claude can call `lunora_list_functions` to discover the
 deployment's surface, then `lunora_run_query` / `lunora_run_mutation` /
 `lunora_run_action` to invoke it — passing `functionPath` (e.g.
 `"messages:list"`), an `args` object, and an optional `shardKey`.
+
+## The documentation server
+
+`@lunora/mcp/docs` is an independent surface with three tools:
+
+| Tool                 | Description                                                           |
+| -------------------- | --------------------------------------------------------------------- |
+| `lunora_search_docs` | Search the docs; returns matching pages and sections with their URLs. |
+| `lunora_get_doc`     | Return one page in full, as Markdown.                                 |
+| `lunora_list_docs`   | List every page with its title and description.                       |
+
+It touches no user data and needs no token, so it is safe to expose publicly.
+Nothing in the subpath imports `@lunora/client` or a Node built-in, so it runs
+unchanged on Workers, Netlify/Vercel functions, Deno, and Bun.
+
+The tools read a `DocsIndex`, and two implementations satisfy that contract. A
+docs site wires up its own in-process search index and mounts the server as a
+route:
+
+```ts
+import { createDocsMcpFetchHandler } from "@lunora/mcp/docs";
+
+const handle = createDocsMcpFetchHandler({ index: myDocsIndex });
+```
+
+Anything else — the CLI's `lunora mcp serve`, a script — reads a published site
+over its `/api/search`, `/llms.mdx/*`, and `/llms.txt` endpoints:
+
+```ts
+import { createDocsMcpServer, createRemoteDocsIndex } from "@lunora/mcp/docs";
+
+const server = createDocsMcpServer({ index: createRemoteDocsIndex({ baseUrl: "https://lunora.sh" }) });
+```
+
+Because both backends map results through the same helper, a model sees
+identical hits whichever one answered.
+
+## Composing a local server
+
+`createLocalMcpServer` / `connectLocalStdio` assemble the docs tools, the
+deployment tools, and any extra tools a host supplies into one stdio server.
+This is what `lunora mcp serve` runs, and it is why the CLI depends only on this
+package rather than on the protocol SDK.
+
+```ts
+import { connectLocalStdio } from "@lunora/mcp";
+
+await connectLocalStdio({
+    deployment: () => readMyDevServer(),
+    docs: { baseUrl: "https://lunora.sh" },
+    extraTools: myLocalTools,
+});
+```
+
+`deployment` accepts a **resolver**, consulted on every tool call. An editor
+spawns its MCP servers when the project opens — usually before a dev server is
+running — and keeps them alive across every restart, so a URL captured once at
+startup would be absent for the whole first session and stale after the first
+restart. The deployment tools are advertised either way (clients cache the tool
+list); calling one with nothing running returns an actionable error.
 
 ## Expose an agent
 

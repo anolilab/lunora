@@ -43,6 +43,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./docs": {
+            "types": "./dist/docs/index.d.ts",
+            "import": "./dist/docs/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

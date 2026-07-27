@@ -28,6 +28,7 @@
         "@fuma-comment/react": "catalog:web",
         "@fumadocs/mdx-remote": "catalog:web",
         "@icons-pack/react-simple-icons": "catalog:web",
+        "@lunora/mcp": "workspace:*",
         "@radix-ui/react-icons": "catalog:web",
         "@radix-ui/react-presence": "catalog:web",
         "@radix-ui/react-slot": "catalog:web",
