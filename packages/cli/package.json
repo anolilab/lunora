@@ -73,6 +73,7 @@
         "@lunora/container": "1.0.0-alpha.16",
         "@lunora/d1": "1.0.0-alpha.48",
         "@lunora/errors": "1.0.0-alpha.8",
+        "@lunora/mcp": "1.0.0-alpha.46",
         "@lunora/runtime": "1.0.0-alpha.42",
         "@lunora/seed": "1.0.0-alpha.47",
         "@visulima/cerebro": "3.0.0",
@@ -89,6 +90,7 @@
         "magic-string": "^1.1.0",
         "react": "catalog:frontend",
         "react-reconciler": "^0.33.0",
+        "smol-toml": "1.6.1",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
