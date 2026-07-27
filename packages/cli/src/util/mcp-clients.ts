@@ -12,6 +12,20 @@
  * Clients whose config is not JSON (Codex, which uses TOML) are listed as
  * `manual`: the command prints the exact snippet and the path to paste it into
  * rather than guessing at a format it cannot safely rewrite.
+ *
+ * ## On where these shapes come from
+ *
+ * The Gemini (`httpUrl`) and Windsurf (`serverUrl`) forms are verified against
+ * those tools' own documentation — a bare `url` means SSE to Gemini, which this
+ * server does not speak, so getting it wrong writes a config that silently
+ * never connects.
+ *
+ * The Zed, OpenCode and Cline forms are adapted from
+ * [`add-mcp`](https://www.npmjs.com/package/add-mcp) (Apache-2.0), which
+ * maintains this matrix across 16 agents. They are marked as such at each
+ * builder because they are NOT independently verified — and add-mcp is not
+ * infallible here: it writes `{type, url}` for Gemini, which that CLI reads as
+ * SSE. Verify against the client's docs before trusting one of these.
  */
 import { join } from "@visulima/path";
 import { stringify } from "smol-toml";
@@ -112,13 +126,49 @@ const geminiEntry = (spec: McpServerSpec): Record<string, unknown> => (spec.tran
 const windsurfEntry = (spec: McpServerSpec): Record<string, unknown> => (spec.transport === "http" ? { serverUrl: spec.url } : stdioEntry(spec));
 
 /**
+ * Bridge a remote server through `mcp-remote`, the documented stdio shim, for
+ * clients that only validate stdio entries.
+ */
+const bridgedEntry = (url: string): Record<string, unknown> => {
+    return { args: ["-y", "mcp-remote", url], command: "npx" };
+};
+
+/**
  * Claude Desktop validates stdio entries only — remote servers go through
  * Custom Connectors, not this file. Rather than write an entry it will ignore,
- * point it at the documented `mcp-remote` stdio bridge, which is how a desktop
- * client reaches a Streamable-HTTP server today.
+ * point it at the `mcp-remote` bridge.
  */
-const claudeDesktopEntry = (spec: McpServerSpec): Record<string, unknown> =>
-    spec.transport === "http" ? { args: ["-y", "mcp-remote", spec.url], command: "npx" } : stdioEntry(spec);
+const claudeDesktopEntry = (spec: McpServerSpec): Record<string, unknown> => (spec.transport === "http" ? bridgedEntry(spec.url) : stdioEntry(spec));
+
+/**
+ * Zed keys its servers under `context_servers` and tags each with `source`.
+ *
+ * Shape adapted from `add-mcp` (Apache-2.0), which maintains a client matrix
+ * across 16 agents; not independently verified against Zed's docs, unlike the
+ * Gemini and Windsurf shapes above.
+ */
+const zedEntry = (spec: McpServerSpec): Record<string, unknown> =>
+    spec.transport === "http" ? { source: "custom", type: "http", url: spec.url } : { source: "custom", ...stdioEntry(spec) };
+
+/**
+ * OpenCode discriminates on an explicit `type`, and takes the whole command
+ * line as one array rather than `command` + `args`.
+ *
+ * Shape adapted from `add-mcp` (Apache-2.0); not independently verified.
+ */
+const openCodeEntry = (spec: McpServerSpec): Record<string, unknown> =>
+    spec.transport === "http"
+        ? { enabled: true, type: "remote", url: spec.url }
+        : { command: [spec.command, ...spec.args], enabled: true, type: "local", ...(spec.env === undefined ? {} : { environment: spec.env }) };
+
+/**
+ * Cline spells Streamable HTTP `streamableHttp` and carries an explicit
+ * `disabled` flag.
+ *
+ * Shape adapted from `add-mcp` (Apache-2.0); not independently verified.
+ */
+const clineEntry = (spec: McpServerSpec): Record<string, unknown> =>
+    spec.transport === "http" ? { disabled: false, type: "streamableHttp", url: spec.url } : { disabled: false, ...stdioEntry(spec) };
 
 /**
  * Claude Desktop stores its config under the OS application-data directory,
@@ -225,6 +275,33 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
         id: "windsurf",
         key: "mcpServers",
         label: "Windsurf",
+        scope: "user",
+    },
+    {
+        buildEntry: openCodeEntry,
+        configPath: ({ projectRoot }) => join(projectRoot, "opencode.json"),
+        format: "json",
+        id: "opencode",
+        key: "mcp",
+        label: "OpenCode",
+        scope: "project",
+    },
+    {
+        buildEntry: clineEntry,
+        configPath: ({ projectRoot }) => join(projectRoot, ".cline", "mcp.json"),
+        format: "json",
+        id: "cline",
+        key: "mcpServers",
+        label: "Cline",
+        scope: "project",
+    },
+    {
+        buildEntry: zedEntry,
+        configPath: ({ home }) => join(home, ".config", "zed", "settings.json"),
+        format: "json",
+        id: "zed",
+        key: "context_servers",
+        label: "Zed",
         scope: "user",
     },
     {

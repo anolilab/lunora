@@ -367,6 +367,26 @@ describe("per-client remote entry shapes", () => {
         expect(entry.args).toStrictEqual(["-y", "mcp-remote", DEFAULT_DOCS_MCP_URL]);
     });
 
+    it("writes each newly supported client's own shape", () => {
+        expect.assertions(3);
+
+        const { logger } = captureLogger();
+
+        runMcpInstall(baseOptions(logger, { clients: ["opencode", "cline", "zed"] }));
+
+        expect(readJson(join(workdir, "opencode.json")).mcp["lunora-docs"]).toStrictEqual({ enabled: true, type: "remote", url: DEFAULT_DOCS_MCP_URL });
+        expect(readJson(join(workdir, ".cline", "mcp.json")).mcpServers["lunora-docs"]).toStrictEqual({
+            disabled: false,
+            type: "streamableHttp",
+            url: DEFAULT_DOCS_MCP_URL,
+        });
+        expect(readJson(join(home, ".config", "zed", "settings.json")).context_servers["lunora-docs"]).toStrictEqual({
+            source: "custom",
+            type: "http",
+            url: DEFAULT_DOCS_MCP_URL,
+        });
+    });
+
     it("keeps type/url for the clients that do read it", () => {
         expect.assertions(2);
 
