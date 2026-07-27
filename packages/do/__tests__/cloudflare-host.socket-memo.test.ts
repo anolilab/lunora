@@ -212,6 +212,52 @@ describe("createSocketHost getSockets memo", () => {
         expect(host.handleFor(socket)?.id).toBe(handle.id);
     });
 
+    it("answers ownership for a stream of unknown sockets without re-walking per call", () => {
+        expect.assertions(23);
+
+        const live: FakeSocket[] = [];
+        let iterations = 0;
+        // The runtime's array, instrumented: building the membership set iterates
+        // it, so a count of 1 across many lookups is the memo doing its job.
+        const instrumented = new Proxy(live, {
+            get(target, key, receiver) {
+                if (key === Symbol.iterator) {
+                    iterations += 1;
+                }
+
+                return Reflect.get(target, key, receiver) as unknown;
+            },
+        });
+        const host = createSocketHost({ acceptWebSocket() {}, getWebSockets: () => instrumented } as never);
+
+        // Seeded directly, never through `accept` — the case this fallback exists
+        // for, and the only one that reaches it.
+        const seeded = new FakeSocket();
+
+        live.push(seeded);
+
+        expect(host.handleFor(seeded)).toBeDefined();
+
+        // DISTINCT sockets, each seen once. That is the shape `webSocketMessage`
+        // actually produces on a fan-out — the sender rotates through a pool, so
+        // neither the handle cache nor the negative cache ever hits and every
+        // frame reaches this path. Walking the socket array here turned a question
+        // about ONE socket into O(live sockets) per message.
+        for (let index = 0; index < 20; index += 1) {
+            expect(host.handleFor(new FakeSocket())).toBeUndefined();
+        }
+
+        expect(iterations).toBe(1);
+
+        // A socket that joins later still resolves: the length change invalidates
+        // the memo, exactly as it does for the handle array.
+        const joined = new FakeSocket();
+
+        live.push(joined);
+
+        expect(host.handleFor(joined)).toBeDefined();
+    });
+
     it("memoizes each tag independently", () => {
         expect.assertions(3);
 

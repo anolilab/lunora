@@ -343,6 +343,29 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
      */
     const notOurs = new WeakSet<WebSocket>();
 
+    /**
+     * Membership set for the last-resort ownership test, memoized on the same
+     * (generation, length) pair as {@link mappedByTag}.
+     *
+     * The test itself is unavoidable — a test double can seed `getWebSockets()`
+     * without ever calling `accept`, so such a socket is genuinely live yet
+     * carries neither a tag nor a fallback id, and refusing it would hand back
+     * the raw socket and split the per-socket memo identity. What IS avoidable is
+     * re-deriving it: `includes` walked the whole array on every inbound frame,
+     * turning a question about one socket into O(live sockets) per message.
+     */
+    let membership: undefined | { generation: number; length: number; set: WeakSet<WebSocket> };
+
+    const liveSet = (): WeakSet<WebSocket> => {
+        const raw = state.getWebSockets();
+
+        if (membership?.generation !== generation || membership.length !== raw.length) {
+            membership = { generation, length: raw.length, set: new WeakSet(raw) };
+        }
+
+        return membership.set;
+    };
+
     const getHandle = (ws: WebSocket): CloudflareSocketHandle => {
         const existing = liveHandles.get(ws);
 
@@ -432,13 +455,11 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
                 return getHandle(ws);
             }
 
-            // Last resort, and the only path that scans. A test double can seed
-            // `getWebSockets()` directly without ever calling `accept`, so a
-            // socket can be genuinely live yet carry neither a tag nor a fallback
-            // id; refusing it here would hand back the raw socket and split the
-            // per-socket memo identity. Unreachable on a real runtime, where
-            // every live socket was accepted and matched above.
-            if (state.getWebSockets().includes(ws)) {
+            // Last resort: ownership by membership, answered from the memo above
+            // rather than by walking the socket array per frame. Unreachable on a
+            // real runtime, where every live socket was accepted and matched
+            // above — it exists for doubles that seed `getWebSockets()` directly.
+            if (liveSet().has(ws)) {
                 return getHandle(ws);
             }
 
