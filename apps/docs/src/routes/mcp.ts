@@ -1,5 +1,5 @@
 import { createDocsMcpFetchHandler } from "@lunora/mcp/docs";
-import type { RateLimitStore, RateLimitValue } from "@lunora/ratelimit";
+import type { RateLimitStatus, RateLimitStore, RateLimitValue } from "@lunora/ratelimit";
 import { RateLimiter } from "@lunora/ratelimit";
 import { createFileRoute } from "@tanstack/react-router";
 
@@ -83,19 +83,20 @@ const limiter = new RateLimiter({
 const IP_LIKE = /^[\d.:a-f]{3,45}$/iu;
 
 /**
- * Identify the caller from whichever proxy header the host sets.
+ * Identify the caller, using only a header the platform itself sets.
  *
- * The value is validated rather than trusted: only the platform's own header is
- * authoritative, `x-forwarded-for` is caller-controlled on any deployment that
- * isn't behind that platform, and an unvalidated value goes straight into a map
- * key. Anything that isn't address-shaped shares the `unidentified` bucket
- * instead of minting its own.
+ * `x-forwarded-for` is deliberately NOT consulted. On a deployment behind
+ * Netlify it is redundant, and anywhere else it is caller-controlled — so
+ * honouring it hands an attacker an unlimited number of private buckets simply
+ * by rotating the value. Validating its *shape* does not help: valid-looking
+ * addresses are free to invent. Anything we cannot attribute shares one bucket
+ * with a much larger allowance, which bounds the damage without letting a
+ * single unattributed caller lock the endpoint.
  */
 const callerKey = (request: Request): { key: string; limit: "mcp" | "unidentified" } => {
-    const forwarded = request.headers.get("x-nf-client-connection-ip") ?? request.headers.get("x-forwarded-for") ?? "";
-    const first = forwarded.split(",")[0]?.trim() ?? "";
+    const platformIp = request.headers.get("x-nf-client-connection-ip")?.trim() ?? "";
 
-    return IP_LIKE.test(first) ? { key: first, limit: "mcp" } : { key: "unidentified", limit: "unidentified" };
+    return IP_LIKE.test(platformIp) ? { key: platformIp, limit: "mcp" } : { key: "unidentified", limit: "unidentified" };
 };
 
 /**
@@ -145,10 +146,43 @@ const withCors = (response: Response): Response => {
     return new Response(response.body, { headers, status: response.status, statusText: response.statusText });
 };
 
+/**
+ * Serialize limiter calls per bucket.
+ *
+ * `RateLimiter.limit` reads the stored count, evaluates, then writes it back,
+ * with `await`s in between. Against this in-memory store that read-modify-write
+ * is not atomic: concurrent requests for one key can all observe the same prior
+ * count, all decide they are under budget, and then overwrite each other — so
+ * the limit is only enforced against sequential traffic, which is not the
+ * traffic it exists to bound. Chaining per key makes each bucket's updates
+ * observe the previous one.
+ */
+const pending = new Map<string, Promise<unknown>>();
+
+const consume = async (limit: "mcp" | "unidentified", key: string): Promise<RateLimitStatus> => {
+    const previous = pending.get(key) ?? Promise.resolve();
+    const next = previous.then(async () => limiter.limit(limit, { key }));
+
+    // Keep the chain from growing without bound, and never let one bucket's
+    // rejection break the next caller's link.
+    pending.set(
+        key,
+        next.catch(() => undefined),
+    );
+
+    try {
+        return await next;
+    } finally {
+        if (pending.get(key) === next) {
+            pending.delete(key);
+        }
+    }
+};
+
 /** Serve one MCP request, refusing it when the caller is over budget. */
 const serve = async (request: Request): Promise<Response> => {
     const caller = callerKey(request);
-    const status = await limiter.limit(caller.limit, { key: caller.key });
+    const status = await consume(caller.limit, caller.key);
 
     if (!status.ok) {
         return withCors(

@@ -132,22 +132,42 @@ const existingEntry = (value: unknown, key: string, name: string): unknown => {
 };
 
 /**
- * True when `path` already holds an entry at `[key][name]`.
+ * What a write to `path` would find there: the entry already present, nothing,
+ * or a file we would refuse to touch.
  *
- * Read-only counterpart to {@link upsertMcpEntry}, so a dry run can predict the
- * skip the real write would take rather than promising a change.
+ * Read-only counterpart to {@link upsertMcpEntry} and {@link removeMcpEntry}, so
+ * a dry run predicts what a real run would do. `"invalid"` is reported rather
+ * than folded into `"absent"`: a rehearsal that hides the one condition the user
+ * must fix first is worse than no rehearsal.
  */
-const hasMcpEntry = (options: { key: string; name: string; path: string }): boolean => {
+const inspectMcpEntry = (options: { key: string; name: string; path: string }): "absent" | "invalid" | "present" => {
     if (!existsSync(options.path)) {
-        return false;
+        return "absent";
     }
 
+    let text: string;
+
     try {
-        return existingEntry(parseConfig(readFileSync(options.path, "utf8")).value, options.key, options.name) !== undefined;
+        text = readFileSync(options.path, "utf8");
     } catch {
-        return false;
+        return "invalid";
     }
+
+    if (text.trim().length === 0) {
+        return "absent";
+    }
+
+    const { errors, value } = parseConfig(text);
+
+    if (errors.length > 0 || !isPlainObject(value)) {
+        return "invalid";
+    }
+
+    return existingEntry(value, options.key, options.name) === undefined ? "absent" : "present";
 };
+
+/** True when `path` already holds an entry at `[key][name]`. */
+const hasMcpEntry = (options: { key: string; name: string; path: string }): boolean => inspectMcpEntry(options) === "present";
 
 /**
  * Add (or replace) one server entry in an MCP client config, creating the file
@@ -278,4 +298,4 @@ const removeMcpEntry = (options: { key: string; name: string; path: string }): R
 };
 
 export type { RemoveAction, RemoveMcpEntryResult, UpsertAction, UpsertMcpEntryOptions, UpsertMcpEntryResult };
-export { hasMcpEntry, removeMcpEntry, upsertMcpEntry };
+export { hasMcpEntry, inspectMcpEntry, removeMcpEntry, upsertMcpEntry };

@@ -13,7 +13,7 @@ import type { Logger } from "../../util/logger";
 import type { JsonMcpClient, McpClient, McpPathContext, McpScope } from "../../util/mcp-clients";
 import { MCP_CLIENTS } from "../../util/mcp-clients";
 import type { RemoveAction } from "../../util/mcp-config-file";
-import { hasMcpEntry, removeMcpEntry } from "../../util/mcp-config-file";
+import { inspectMcpEntry, removeMcpEntry } from "../../util/mcp-config-file";
 import type { JsonMcpTarget } from "../../util/mcp-targets";
 import { displayPath, isJsonTarget, resolveClients, targetsFor } from "../../util/mcp-targets";
 import { DOCS_SERVER_NAME, LOCAL_SERVER_NAME } from "./install";
@@ -76,11 +76,22 @@ const removeOne = (client: JsonMcpClient, server: string, path: string, options:
  * to rehearse — `install` has `--print`, and this needs it more.
  */
 const previewOne = (client: JsonMcpClient, server: string, path: string, options: McpUninstallOptions): { action: RemoveAction; path: string } => {
-    if (!hasMcpEntry({ key: client.key, name: server, path })) {
+    const found = inspectMcpEntry({ key: client.key, name: server, path });
+    const shown = displayPath(path, options.cwd);
+
+    if (found === "invalid") {
+        // Surface it here or the rehearsal is a lie: a real run reports this
+        // file, logs an error and exits 1.
+        options.logger.error(`${client.label}: ${shown} is not valid JSON — a real run would report it and exit non-zero.`);
+
+        return { action: "invalid", path };
+    }
+
+    if (found === "absent") {
         return { action: "absent", path };
     }
 
-    options.logger.info(`${client.label}: would remove "${server}" from ${displayPath(path, options.cwd)}.`);
+    options.logger.info(`${client.label}: would remove "${server}" from ${shown}.`);
 
     return { action: "removed", path };
 };

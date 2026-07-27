@@ -248,6 +248,21 @@ describe("dry run and scope", () => {
         expect(readJson(join(home, ".cursor", "mcp.json")).mcpServers["lunora-docs"]).toBeDefined();
     });
 
+    it("--print reports an unparseable config, matching what a real run would do", () => {
+        expect.assertions(3);
+
+        writeFileSync(join(workdir, ".mcp.json"), "{ not json", "utf8");
+
+        const { logger, messages } = captureLogger();
+        const result = runMcpUninstall(options(logger, { clients: ["claude-code"], print: true }));
+
+        // A rehearsal that hides the one thing the user must fix first is worse
+        // than no rehearsal.
+        expect(result.code).toBe(1);
+        expect(result.removed[0]?.action).toBe("invalid");
+        expect(messages.join("\n")).toContain("not valid JSON");
+    });
+
     it("honours --project instead of silently ignoring it", () => {
         expect.assertions(2);
 
