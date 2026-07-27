@@ -1623,12 +1623,23 @@ type ShardMode = {
 };
 ```
 
+### `SpanEvaluation` (interface)
+
+```ts
+interface SpanEvaluation {
+    label?: string;
+    name: string;
+    score: number;
+}
+```
+
 ### `SpanHandle` (interface)
 
 ```ts
 interface SpanHandle {
     addEvent: (name: string, attributes?: LogFields) => void;
     addLink: (link: SpanLink) => void;
+    recordEvaluation: (evaluation: SpanEvaluation) => void;
     recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;
@@ -4592,12 +4603,23 @@ type ShardMode = {
 };
 ```
 
+### `SpanEvaluation` (interface)
+
+```ts
+interface SpanEvaluation {
+    label?: string;
+    name: string;
+    score: number;
+}
+```
+
 ### `SpanHandle` (interface)
 
 ```ts
 interface SpanHandle {
     addEvent: (name: string, attributes?: LogFields) => void;
     addLink: (link: SpanLink) => void;
+    recordEvaluation: (evaluation: SpanEvaluation) => void;
     recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;

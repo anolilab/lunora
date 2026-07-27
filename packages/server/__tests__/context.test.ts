@@ -95,6 +95,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
             span: {
                 addEvent: () => undefined,
                 addLink: () => undefined,
+                recordEvaluation: () => undefined,
                 recordException: () => undefined,
                 setAttribute: () => undefined,
                 setAttributes: () => undefined,

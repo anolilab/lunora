@@ -4837,6 +4837,9 @@ abstract class ShardDO {
             addLink: (link) => {
                 collector().handle.addLink(link);
             },
+            recordEvaluation: (evaluation) => {
+                collector().handle.recordEvaluation(evaluation);
+            },
             recordException: (error) => {
                 collector().handle.recordException(error);
             },

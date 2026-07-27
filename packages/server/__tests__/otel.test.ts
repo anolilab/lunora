@@ -37,6 +37,7 @@ const fakeContext = (): { ctx: LunoraTraceContext; recorded: Recorded[] } => {
     const dispatchSpan: SpanHandle = {
         addEvent: () => undefined,
         addLink: () => undefined,
+        recordEvaluation: () => undefined,
         recordException: () => undefined,
         setAttribute: () => undefined,
         setAttributes: () => undefined,
@@ -61,6 +62,9 @@ const fakeContext = (): { ctx: LunoraTraceContext; recorded: Recorded[] } => {
                 },
                 addLink: (link: { spanId: string }) => {
                     entry.links.push(link);
+                },
+                recordEvaluation: () => {
+                    entry.events.push("evaluation");
                 },
                 recordException: () => {
                     entry.events.push("exception");

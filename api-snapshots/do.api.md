@@ -2112,6 +2112,7 @@ type SourceRefresh = "manual" | {
 interface SpanHandle {
     addEvent: (name: string, attributes?: LogFields) => void;
     addLink: (link: SpanLink) => void;
+    recordEvaluation: (evaluation: EvaluationInput) => void;
     recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;

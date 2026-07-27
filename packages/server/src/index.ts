@@ -150,6 +150,7 @@ export type {
     SearchFilterBuilder,
     SearchIndexDefinition,
     ShardMode,
+    SpanEvaluation,
     SpanHandle,
     SpanKind,
     SpanLink,
