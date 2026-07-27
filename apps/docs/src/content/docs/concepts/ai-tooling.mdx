@@ -86,7 +86,12 @@ lunora mcp install                      # every MCP client already configured he
 lunora mcp install claude-code cursor   # or name them
 lunora mcp install --list               # supported clients and their config files
 lunora mcp install --print              # show the config without writing it
+lunora mcp uninstall                    # take them back out again
 ```
+
+The docs server goes in your editor's **machine-wide** config, since it's the
+same URL in every project; this project's local server goes in the **project**
+config. `--global` / `--project` override that.
 
 `install` knows where each client keeps its servers and what an entry looks like
 there — `.mcp.json` for Claude Code, `.cursor/mcp.json` for Cursor,

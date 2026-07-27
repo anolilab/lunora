@@ -15,17 +15,19 @@
  *
  * ## On where these shapes come from
  *
- * The Gemini (`httpUrl`) and Windsurf (`serverUrl`) forms are verified against
- * those tools' own documentation — a bare `url` means SSE to Gemini, which this
- * server does not speak, so getting it wrong writes a config that silently
- * never connects.
+ * Every remote form below is verified against that client's own documentation,
+ * because getting one wrong is the worst failure mode this command has: the
+ * config lands, we report success, and the server silently never connects.
+ * Gemini reads a bare `url` as SSE and needs `httpUrl`; Windsurf wants
+ * `serverUrl`; Zed discriminates on shape alone; Cline wants
+ * `type: "streamableHttp"`; Claude Desktop validates stdio entries only and has
+ * to be bridged.
  *
- * The Zed, OpenCode and Cline forms are adapted from
- * [`add-mcp`](https://www.npmjs.com/package/add-mcp) (Apache-2.0), which
- * maintains this matrix across 16 agents. They are marked as such at each
- * builder because they are NOT independently verified — and add-mcp is not
- * infallible here: it writes `{type, url}` for Gemini, which that CLI reads as
- * SSE. Verify against the client's docs before trusting one of these.
+ * The client list was widened using [`add-mcp`](https://www.npmjs.com/package/add-mcp)
+ * (Apache-2.0) as a starting point, but its shapes were checked rather than
+ * trusted — two of them are wrong. It writes `{type, url}` for Gemini (read as
+ * SSE) and `source: "custom"` for Zed (not a field Zed documents). Check the
+ * vendor's docs before adding a client here.
  */
 import { join } from "@visulima/path";
 import { stringify } from "smol-toml";
@@ -40,6 +42,15 @@ type McpServerSpec =
       }
     | { transport: "http"; url: string };
 
+/**
+ * Which of a client's two config files to target.
+ *
+ * The distinction matters because the two servers want different homes: the
+ * hosted docs server is the same URL in every project and belongs in the global
+ * config, while this project's local server only means anything inside it.
+ */
+type McpScope = "global" | "project";
+
 /** Inputs a client's config path depends on. */
 interface McpPathContext {
     /** The user's home directory. */
@@ -48,12 +59,16 @@ interface McpPathContext {
     platform: NodeJS.Platform;
     /** The project the command was run in. */
     projectRoot: string;
+    /** Which config file to resolve. */
+    scope: McpScope;
 }
 
 interface McpClientBase {
     /**
-     * Absolute path of the config file, or `undefined` on a platform whose
-     * convention we don't know.
+     * Absolute path of the requested config file, or `undefined` when this
+     * client has no such file — it doesn't support that scope, or we don't know
+     * the convention on this platform. Returning `undefined` rather than
+     * guessing is deliberate: a plausible-looking wrong path gets written to.
      *
      * Every client has one, including the ones we don't rewrite: detection ("is
      * this client actually set up here?") is the same question regardless of the
@@ -65,12 +80,6 @@ interface McpClientBase {
     id: string;
     /** Display name for messages. */
     label: string;
-
-    /**
-     * `"project"` configs live in the repository and are shared with the team
-     * (and should be committed); `"user"` configs are per-machine.
-     */
-    scope: "project" | "user";
 }
 
 /** A client whose config we can safely read-modify-write. */
@@ -141,32 +150,21 @@ const bridgedEntry = (url: string): Record<string, unknown> => {
 const claudeDesktopEntry = (spec: McpServerSpec): Record<string, unknown> => (spec.transport === "http" ? bridgedEntry(spec.url) : stdioEntry(spec));
 
 /**
- * Zed keys its servers under `context_servers` and tags each with `source`.
- *
- * Shape adapted from `add-mcp` (Apache-2.0), which maintains a client matrix
- * across 16 agents; not independently verified against Zed's docs, unlike the
- * Gemini and Windsurf shapes above.
+ * Zed keys its servers under `context_servers`, and distinguishes them purely by
+ * shape: a `url` is remote, a `command` is local. No discriminator field.
  */
-const zedEntry = (spec: McpServerSpec): Record<string, unknown> =>
-    spec.transport === "http" ? { source: "custom", type: "http", url: spec.url } : { source: "custom", ...stdioEntry(spec) };
+const zedEntry = (spec: McpServerSpec): Record<string, unknown> => (spec.transport === "http" ? { url: spec.url } : stdioEntry(spec));
 
 /**
- * OpenCode discriminates on an explicit `type`, and takes the whole command
- * line as one array rather than `command` + `args`.
- *
- * Shape adapted from `add-mcp` (Apache-2.0); not independently verified.
+ * OpenCode discriminates on an explicit `type`, and takes the whole command line
+ * as one array rather than `command` + `args`.
  */
 const openCodeEntry = (spec: McpServerSpec): Record<string, unknown> =>
     spec.transport === "http"
         ? { enabled: true, type: "remote", url: spec.url }
         : { command: [spec.command, ...spec.args], enabled: true, type: "local", ...(spec.env === undefined ? {} : { environment: spec.env }) };
 
-/**
- * Cline spells Streamable HTTP `streamableHttp` and carries an explicit
- * `disabled` flag.
- *
- * Shape adapted from `add-mcp` (Apache-2.0); not independently verified.
- */
+/** Cline spells Streamable HTTP `streamableHttp` and carries an explicit `disabled` flag. */
 const clineEntry = (spec: McpServerSpec): Record<string, unknown> =>
     spec.transport === "http" ? { disabled: false, type: "streamableHttp", url: spec.url } : { disabled: false, ...stdioEntry(spec) };
 
@@ -175,7 +173,12 @@ const clineEntry = (spec: McpServerSpec): Record<string, unknown> =>
  * which differs per platform. Returns `undefined` where we don't know the
  * convention rather than writing to a plausible-looking wrong path.
  */
-const claudeDesktopPath = ({ home, platform }: McpPathContext): string | undefined => {
+const claudeDesktopPath = ({ home, platform, scope }: McpPathContext): string | undefined => {
+    // Claude Desktop has no project-level config at all.
+    if (scope === "project") {
+        return undefined;
+    }
+
     if (platform === "darwin") {
         return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
     }
@@ -224,40 +227,38 @@ const codexSnippet = (name: string, spec: McpServerSpec): string =>
 const MCP_CLIENTS: ReadonlyArray<McpClient> = [
     {
         buildEntry: standardEntry,
-        configPath: ({ projectRoot }) => join(projectRoot, ".mcp.json"),
+        configPath: ({ home, projectRoot, scope }) => (scope === "project" ? join(projectRoot, ".mcp.json") : join(home, ".claude.json")),
         format: "json",
         id: "claude-code",
         key: "mcpServers",
         label: "Claude Code",
-        scope: "project",
     },
     {
         buildEntry: standardEntry,
-        configPath: ({ projectRoot }) => join(projectRoot, ".cursor", "mcp.json"),
+        configPath: ({ home, projectRoot, scope }) => join(scope === "project" ? projectRoot : home, ".cursor", "mcp.json"),
         format: "json",
         id: "cursor",
         key: "mcpServers",
         label: "Cursor",
-        scope: "project",
     },
     {
         buildEntry: standardEntry,
-        configPath: ({ projectRoot }) => join(projectRoot, ".vscode", "mcp.json"),
+        // Project-only: VS Code keeps user-level MCP config inside its per-OS
+        // user-settings directory, which we do not resolve confidently.
+        configPath: ({ projectRoot, scope }) => (scope === "project" ? join(projectRoot, ".vscode", "mcp.json") : undefined),
         format: "json",
         id: "vscode",
         // VS Code is the odd one out: `servers`, not `mcpServers`.
         key: "servers",
         label: "VS Code (GitHub Copilot)",
-        scope: "project",
     },
     {
         buildEntry: geminiEntry,
-        configPath: ({ projectRoot }) => join(projectRoot, ".gemini", "settings.json"),
+        configPath: ({ home, projectRoot, scope }) => join(scope === "project" ? projectRoot : home, ".gemini", "settings.json"),
         format: "json",
         id: "gemini",
         key: "mcpServers",
         label: "Gemini CLI",
-        scope: "project",
     },
     {
         buildEntry: claudeDesktopEntry,
@@ -266,51 +267,48 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
         id: "claude-desktop",
         key: "mcpServers",
         label: "Claude Desktop",
-        scope: "user",
     },
     {
         buildEntry: windsurfEntry,
-        configPath: ({ home }) => join(home, ".codeium", "windsurf", "mcp_config.json"),
+        configPath: ({ home, scope }) => (scope === "global" ? join(home, ".codeium", "windsurf", "mcp_config.json") : undefined),
         format: "json",
         id: "windsurf",
         key: "mcpServers",
         label: "Windsurf",
-        scope: "user",
     },
     {
         buildEntry: openCodeEntry,
-        configPath: ({ projectRoot }) => join(projectRoot, "opencode.json"),
+        configPath: ({ home, projectRoot, scope }) =>
+            scope === "project" ? join(projectRoot, "opencode.json") : join(home, ".config", "opencode", "opencode.json"),
         format: "json",
         id: "opencode",
         key: "mcp",
         label: "OpenCode",
-        scope: "project",
     },
     {
         buildEntry: clineEntry,
-        configPath: ({ projectRoot }) => join(projectRoot, ".cline", "mcp.json"),
+        // Global-only: Cline documents `~/.cline/mcp.json`; the IDE extension
+        // stores its own copy where we cannot resolve it.
+        configPath: ({ home, scope }) => (scope === "global" ? join(home, ".cline", "mcp.json") : undefined),
         format: "json",
         id: "cline",
         key: "mcpServers",
         label: "Cline",
-        scope: "project",
     },
     {
         buildEntry: zedEntry,
-        configPath: ({ home }) => join(home, ".config", "zed", "settings.json"),
+        configPath: ({ home, scope }) => (scope === "global" ? join(home, ".config", "zed", "settings.json") : undefined),
         format: "json",
         id: "zed",
         key: "context_servers",
         label: "Zed",
-        scope: "user",
     },
     {
-        configPath: ({ home }) => join(home, ".codex", "config.toml"),
+        configPath: ({ home, projectRoot, scope }) => (scope === "project" ? join(projectRoot, ".codex", "config.toml") : join(home, ".codex", "config.toml")),
         format: "manual",
         id: "codex",
         label: "Codex CLI",
         renderSnippet: codexSnippet,
-        scope: "user",
     },
 ];
 
@@ -318,5 +316,5 @@ const MCP_CLIENT_IDS: ReadonlyArray<string> = MCP_CLIENTS.map((client) => client
 
 const findMcpClient = (id: string): McpClient | undefined => MCP_CLIENTS.find((client) => client.id === id.toLowerCase());
 
-export type { JsonMcpClient, ManualMcpClient, McpClient, McpPathContext, McpServerSpec };
+export type { JsonMcpClient, ManualMcpClient, McpClient, McpPathContext, McpScope, McpServerSpec };
 export { claudeDesktopEntry, claudeDesktopPath, codexSnippet, findMcpClient, geminiEntry, MCP_CLIENT_IDS, MCP_CLIENTS, standardEntry, windsurfEntry };

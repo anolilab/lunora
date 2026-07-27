@@ -1,6 +1,7 @@
 import type { DocsIndex, DocsPage, DocsPageSummary, DocsSearchHit } from "@lunora/mcp/docs";
 import { toDocsSearchHits } from "@lunora/mcp/docs";
 
+import { slugsFor } from "@/lib/docs-slug";
 import { source } from "@/lib/docs-source";
 import { searchServer } from "@/lib/search-server";
 
@@ -10,19 +11,6 @@ import { searchServer } from "@/lib/search-server";
  * search box queries, and the same MDX the pages render. No HTTP hop, and no
  * second copy of the corpus to keep in sync.
  */
-
-/**
- * Turn a site-relative page URL into the slug array `source.getPage` expects:
- * `"/docs/guides/sharding"` → `["guides", "sharding"]`. The docs loader is
- * mounted at `/docs`, so that prefix is the base, not part of the slug.
- */
-const slugsFor = (url: string): string[] => {
-    // Segment match, not prefix: a hypothetical `/docsomething` must not be
-    // sliced into `["omething"]`.
-    const withoutBase = url === "/docs" || url.startsWith("/docs/") ? url.slice("/docs".length) : url;
-
-    return withoutBase.split("/").filter((segment) => segment.length > 0);
-};
 
 export const mcpDocsIndex: DocsIndex = {
     getPage: async (url: string): Promise<DocsPage | undefined> => {

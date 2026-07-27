@@ -182,5 +182,60 @@ const upsertMcpEntry = (options: UpsertMcpEntryOptions): UpsertMcpEntryResult =>
     return { action: "updated", path };
 };
 
-export type { UpsertAction, UpsertMcpEntryOptions, UpsertMcpEntryResult };
-export { hasMcpEntry, upsertMcpEntry };
+/** What {@link removeMcpEntry} did. */
+type RemoveAction =
+    /** The entry was deleted. */
+    | "removed"
+    /** No such file, or no such entry in it — nothing to do. */
+    | "absent"
+    /** The file exists but could not be parsed; nothing was written. */
+    | "invalid";
+
+interface RemoveMcpEntryResult {
+    action: RemoveAction;
+    error?: string;
+    path: string;
+}
+
+/**
+ * Delete one server entry from an MCP client config, leaving every other entry
+ * — and the file's comments and formatting — untouched.
+ *
+ * The counterpart to {@link upsertMcpEntry}, and the reason `install` is safe to
+ * try: a command that writes into files across a user's machine owes them a way
+ * to take it back out. `modify` with an `undefined` value is jsonc-parser's
+ * delete, so this reuses the same comment-preserving splice as the write path.
+ */
+const removeMcpEntry = (options: { key: string; name: string; path: string }): RemoveMcpEntryResult => {
+    const { key, name, path } = options;
+
+    if (!existsSync(path)) {
+        return { action: "absent", path };
+    }
+
+    const text = readFileSync(path, "utf8");
+    const { errors, value } = parseConfig(text);
+
+    if (errors.length > 0) {
+        return { action: "invalid", error: `parse error at offset ${String(errors[0]?.offset ?? 0)}`, path };
+    }
+
+    if (existingEntry(value, key, name) === undefined) {
+        return { action: "absent", path };
+    }
+
+    try {
+        const edits = modify(text, [key, name], undefined, FORMATTING);
+
+        if (edits.length > 0) {
+            writeAtomic(path, applyEdits(text, edits));
+        }
+    } catch (error: unknown) {
+        return { action: "invalid", error: error instanceof Error ? error.message : String(error), path };
+    }
+
+    return { action: "removed", path };
+};
+
+export type { RemoveAction, RemoveMcpEntryResult, UpsertAction, UpsertMcpEntryOptions, UpsertMcpEntryResult };
+export { hasMcpEntry, removeMcpEntry, upsertMcpEntry };

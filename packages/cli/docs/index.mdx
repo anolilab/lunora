@@ -26,6 +26,8 @@ lunora rules <install|check>            # install the AI agent skills into .agen
 lunora mcp install [client…]            # wire Lunora's MCP servers into your editor
             [--list] [--print] [--force]
             [--docs-only] [--local-only]
+            [--global | --project]
+lunora mcp uninstall [client…]          # remove them again
 lunora mcp serve [--allow-writes]       # the stdio MCP server your editor spawns
             [--no-docs] [--url u] [--token t]
 lunora dev [--port n] [--worker-port n] # wrangler worker + studio + codegen watch
@@ -503,9 +505,18 @@ lunora mcp install --force              # replace entries that already exist
 lunora mcp install --docs-only          # skip this project's local server
 ```
 
-`install` writes two servers: **`lunora-docs`**, the hosted documentation server
-at `https://lunora.sh/mcp` (no credentials), and — inside a Lunora project —
-**`lunora`**, which runs `lunora mcp serve` locally. It knows each client's own
+`install` writes two servers, and they go to different places by default:
+**`lunora-docs`**, the hosted documentation server at `https://lunora.sh/mcp`,
+is the same URL in every project, so it lands in the client's **machine-wide**
+config; **`lunora`**, which runs `lunora mcp serve` for this app, only means
+anything inside the project, so it lands in the **project** config. Pass
+`--global` or `--project` to force both one way. Where a client only has one of
+the two (Zed has no project config, VS Code no global one), it falls back rather
+than skipping the client.
+
+`lunora mcp uninstall` removes both again, from both scopes and every client by
+default — it touches only the two entries we wrote, leaving the rest of the file
+and its comments alone. It knows each client's own
 config file, top-level key, and entry shape, so you don't have to remember that
 VS Code says `servers` where Cursor says `mcpServers`:
 
