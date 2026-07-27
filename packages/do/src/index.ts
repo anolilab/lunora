@@ -291,6 +291,5 @@ export {
 } from "@lunora/shard-engine";
 export { NotFoundError } from "@lunora/shard-engine";
 export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "@lunora/shard-engine";
-export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "@lunora/shard-engine";
 export { createDependencyTracker, depKey, SCAN_DEP } from "@lunora/shard-engine";
 export { ConflictError } from "@lunora/shard-engine";

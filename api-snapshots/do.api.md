@@ -2295,12 +2295,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `buildFtsMatch` (unknown)
-
-```ts
-buildFtsMatch
-```
-
 ### `buildSecurityAudit` (const)
 
 ```ts
@@ -2498,12 +2492,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `foldAggregateTally` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ftsTableName` (unknown)
-
-```ts
-ftsTableName
-```
 
 ### `guardWriter` (const)
 
@@ -2804,12 +2792,6 @@ const runShardMigrations: (sql: SqlExec, schema: SchemaLike, options?: {
 const runTriggers: (options: RunTriggersOptions) => Promise<void>;
 ```
 
-### `scoreDocument` (unknown)
-
-```ts
-scoreDocument
-```
-
 ### `selectExpiredIds` (const)
 
 ```ts
@@ -2868,12 +2850,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `stringifySearchText` (unknown)
-
-```ts
-stringifySearchText
-```
-
 ### `subscriptionListDeltas` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2881,12 +2857,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `throwingScheduler` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `tokenizeSearch` (unknown)
-
-```ts
-tokenizeSearch
-```
 
 ### `trimCdcChanges` (const)
 

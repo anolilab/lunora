@@ -2809,10 +2809,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `buildFtsMatch` (unknown)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `buildSecurityAudit` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2952,10 +2948,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `foldAggregateTally` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ftsTableName` (unknown)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `guardWriter` (const)
 
@@ -3157,10 +3149,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `scoreDocument` (unknown)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `selectExpiredIds` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -3205,10 +3193,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `stringifySearchText` (unknown)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
-
 ### `subscriptionListDeltas` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -3216,10 +3200,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `throwingScheduler` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `tokenizeSearch` (unknown)
-
-Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `trimCdcChanges` (const)
 
