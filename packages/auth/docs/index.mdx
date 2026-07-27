@@ -267,9 +267,8 @@ Scope each credential to what the IdP actually needs: `scim.users.read`,
 `scim.users.write`, `scim.groups.read`, `scim.groups.write` (omitting `scopes` grants
 all four).
 
-**Two lifecycle semantics that surprise people** — both pinned by
-`__tests__/scim-provisioning.behaviour.test.ts`, so they are what the shipped version
-actually does rather than what the SCIM spec might imply:
+**Two lifecycle semantics that surprise people** — verified against the shipped plugin,
+so this is what it actually does rather than what the SCIM spec might imply:
 
 - **Deactivation does not lock the account.** A `PATCH` of `active: false` is recorded
   in SCIM's own projection; it does _not_ set `banned` or otherwise stop the user
