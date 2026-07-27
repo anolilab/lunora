@@ -55,7 +55,9 @@ describe("claudeDesktopPath", () => {
 
 describe("the client table", () => {
     it("gives every client at least one resolvable config location", () => {
-        expect.assertions(MCP_CLIENTS.length);
+        // Not a literal count: the assertion runs once per client, and the table
+        // grows.
+        expect.hasAssertions();
 
         for (const client of MCP_CLIENTS) {
             // A client that declares no file anywhere could never be installed
