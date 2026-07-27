@@ -1,4 +1,5 @@
-import { useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -7,10 +8,13 @@ import type { OrgId } from "./types";
 
 interface UsageSectionProps {
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.usage.summary>>;
 }
 
 /** Epoch ms for the first instant of the current UTC month. */
-const monthStart = (): number => {
+/** Start of the current UTC billing month — shared with the `usage` route loader so SSR and client agree on the period. */
+export const monthStart = (): number => {
     const now = new Date();
 
     return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
@@ -96,11 +100,11 @@ const UsageBars = ({ series }: { series: { day: number; requests: number }[] }):
  * Usage tab: plan-quota meters (included vs used, GAPS.md ring 3), the
  * period's daily request volume, and the raw totals — all live.
  */
-export const UsageSection = ({ organizationId }: UsageSectionProps): ReactElement => {
+export const UsageSection = ({ organizationId, preloaded }: UsageSectionProps): ReactElement => {
     // A primitive `number` that's stable within the month, so recomputing it per
     // render is fine — the query key dedupes on its value, not its reference.
     const periodStart = monthStart();
-    const summary = useQuery(api.usage.summary, { organizationId, periodStart });
+    const summary = usePreloadedQuery(preloaded);
     const series = useQuery(api.usage.series, { organizationId, periodStart });
     const organizations = useQuery(api.organizations.list, {});
     const plan = organizations?.find((entry) => entry._id === organizationId)?.plan ?? "free";

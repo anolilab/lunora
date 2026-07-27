@@ -9,10 +9,17 @@ import { authClient } from "./auth-client";
  * session cookie is set by the response — there's no token to plumb back into
  * client state.
  *
- * `authClient.useSession()` in {@link App.tsx} reactively flips to the
- * authenticated view on the next render once the cookie lands.
+ * Navigation is the caller's business: the `/login` route passes `onSignedIn`,
+ * which fires once the cookie has landed so the router can send the visitor on to
+ * whatever they were trying to reach. (Before routing, `authClient.useSession()`
+ * in the old `App.tsx` re-rendered into the authenticated view instead.)
  */
-export const Login = (): ReactElement => {
+interface LoginProps {
+    /** Called after a successful sign-in / sign-up, once the session cookie is set. */
+    onSignedIn?: () => void;
+}
+
+export const Login = ({ onSignedIn }: LoginProps = {}): ReactElement => {
     const [mode, setMode] = useState<"signin" | "signup">("signin");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -43,7 +50,11 @@ export const Login = (): ReactElement => {
 
                         if (result.error) {
                             setError(result.error.message ?? `${mode} failed`);
+
+                            return;
                         }
+
+                        onSignedIn?.();
                     };
 
                     void submit()

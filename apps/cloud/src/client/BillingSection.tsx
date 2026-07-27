@@ -1,4 +1,5 @@
-import { useLunora, useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { useLunora, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -8,6 +9,8 @@ import type { OrgId } from "./types";
 
 interface BillingSectionProps {
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.billing.entitlements>>;
 }
 
 /**
@@ -17,9 +20,9 @@ interface BillingSectionProps {
  * to the provider). Price ids are environment config; entered here rather than
  * hardcoded in the client.
  */
-export const BillingSection = ({ organizationId }: BillingSectionProps): ReactElement => {
+export const BillingSection = ({ organizationId, preloaded }: BillingSectionProps): ReactElement => {
     const client = useLunora();
-    const entitlements = useQuery(api.billing.entitlements, { organizationId });
+    const entitlements = usePreloadedQuery(preloaded);
     const subscriptions = useQuery(api.billing.subscription, { organizationId });
 
     const [priceId, setPriceId] = useState("");

@@ -1,4 +1,5 @@
-import { useLunora, useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { useLunora, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
@@ -9,8 +10,9 @@ import { CrossTabLink } from "./CrossTabLink";
 import type { OrgId } from "./types";
 
 interface IncidentsSectionProps {
-    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.billing.entitlements>>;
 }
 
 /** The structured investigation result the runner produces (mirrors the query view). */
@@ -36,17 +38,7 @@ const KIND_LABELS: Record<"crash_loop" | "error_spike" | "oom", string> = {
  * remediation, a confidence + provenance badge, and cross-tab links to the
  * related traces (the shared `CrossTabLink` deep-link, same as Issues/Logs).
  */
-const InvestigationPanel = ({
-    onDismiss,
-    onOpenTab,
-    result,
-    title,
-}: {
-    onDismiss: () => void;
-    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
-    result: InvestigationView;
-    title: string;
-}): ReactElement => (
+const InvestigationPanel = ({ onDismiss, result, title }: { onDismiss: () => void; result: InvestigationView; title: string }): ReactElement => (
     <div className="callout">
         <p>
             <strong>Investigation — {title}</strong> <span className="badge">{result.by === "llm" ? "AI" : "heuristic"}</span>{" "}
@@ -60,11 +52,11 @@ const InvestigationPanel = ({
             <strong>Suggested remediation:</strong> {result.suggestedRemediation}
         </p>
         <p className="muted">{result.evidenceNote}</p>
-        {result.relatedTraceIds.length > 0 && onOpenTab ? (
+        {result.relatedTraceIds.length > 0 ? (
             <p>
                 <strong>Related traces:</strong>{" "}
                 {result.relatedTraceIds.map((traceId) => (
-                    <CrossTabLink key={traceId} onOpenTab={onOpenTab} target="traces" traceId={traceId} variant="inline">
+                    <CrossTabLink key={traceId} target="traces" traceId={traceId} variant="inline">
                         {traceId.slice(0, 8)}
                     </CrossTabLink>
                 ))}
@@ -85,9 +77,9 @@ const InvestigationPanel = ({
  * structured result — summary, root-cause hypothesis, suggested remediation,
  * confidence, and related-trace links — which is also persisted on the incident.
  */
-export const IncidentsSection = ({ onOpenTab, organizationId }: IncidentsSectionProps): ReactElement => {
+export const IncidentsSection = ({ organizationId, preloaded }: IncidentsSectionProps): ReactElement => {
     const client = useLunora();
-    const entitlements = useQuery(api.billing.entitlements, { organizationId });
+    const entitlements = usePreloadedQuery(preloaded);
     const gated = entitlements ? !entitlements.features.includes("logStreams") : false;
     const incidents = useQuery(api.incidents.list, gated ? "skip" : { organizationId });
 
@@ -155,7 +147,7 @@ export const IncidentsSection = ({ onOpenTab, organizationId }: IncidentsSection
                     onDismiss={() => {
                         setInvestigation(null);
                     }}
-                    onOpenTab={onOpenTab}
+
                     result={investigation.result}
                     title={investigation.title}
                 />

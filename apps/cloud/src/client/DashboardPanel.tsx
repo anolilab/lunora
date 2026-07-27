@@ -1,3 +1,4 @@
+import { Link, useParams } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 
 import type { DashboardPanel } from "../telemetry/dashboards";
@@ -14,7 +15,6 @@ import type { MetricSeries } from "./use-metrics-series";
  */
 
 interface PanelBodyProps {
-    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
     panel: DashboardPanel;
     /** `undefined` while the metric read is loading; `[]` once resolved-empty. */
     series: MetricSeries[] | undefined;
@@ -63,22 +63,27 @@ const StatPanelBody = ({ panel, series }: { panel: DashboardPanel; series: Metri
     );
 };
 
-/** A Traces/Logs shortcut widget — its saved filter + a button that deep-links the tab. */
-const ShortcutPanelBody = ({ onOpenTab, panel }: PanelBodyProps): ReactElement => {
+/**
+ * A Traces/Logs shortcut widget — its saved filter + a link into the tab. Now a
+ * router `Link` (was a button firing the dashboard's `onOpenTab` callback), so the
+ * shortcut is an ordinary, shareable URL like every other tab link.
+ */
+const ShortcutPanelBody = ({ panel }: PanelBodyProps): ReactElement => {
     const tab = panel.kind === "logs" ? "logs" : "traces";
+    const { organizationId } = useParams({ from: "/_authed/orgs/$organizationId" });
 
     return (
         <div className="dash-shortcut">
             <p className="muted">{panel.config.filter ? <code>{panel.config.filter}</code> : `Open the ${tab} tab.`}</p>
-            <button className="link" disabled={onOpenTab === undefined} onClick={() => onOpenTab?.(tab)} type="button">
+            <Link className="link" params={{ organizationId }} to={tab === "logs" ? "/orgs/$organizationId/logs" : "/orgs/$organizationId/traces"}>
                 Open {tab} →
-            </button>
+            </Link>
         </div>
     );
 };
 
 /** Render a panel's body for its kind. */
-export const PanelWidget = ({ onOpenTab, panel, series }: PanelBodyProps): ReactElement => {
+export const PanelWidget = ({ panel, series }: PanelBodyProps): ReactElement => {
     if (panel.kind === "metric") {
         return <MetricPanelBody panel={panel} series={series} />;
     }
@@ -87,5 +92,5 @@ export const PanelWidget = ({ onOpenTab, panel, series }: PanelBodyProps): React
         return <StatPanelBody panel={panel} series={series} />;
     }
 
-    return <ShortcutPanelBody onOpenTab={onOpenTab} panel={panel} series={series} />;
+    return <ShortcutPanelBody panel={panel} series={series} />;
 };

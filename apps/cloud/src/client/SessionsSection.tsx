@@ -1,4 +1,5 @@
-import { useQuery } from "@lunora/react";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -8,9 +9,9 @@ import { formatMs } from "./format";
 import type { OrgId } from "./types";
 
 interface SessionsSectionProps {
-    /** Deep-link out to another tab (e.g. a turn → its trace). */
-    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
     organizationId: OrgId;
+    /** The section's primary query, resolved by its route loader on the edge. */
+    preloaded: Preloaded<ReturnOf<typeof api.sessions.list>>;
 }
 
 /** One turn as `sessions.get` returns it. */
@@ -33,15 +34,7 @@ const tokenSummary = (promptTokens: number | undefined, completionTokens: number
     promptTokens === undefined && completionTokens === undefined ? undefined : `${String(promptTokens ?? 0)}→${String(completionTokens ?? 0)} tok`;
 
 /** The turns of one open session: each a generation turn, deep-linking to its trace. */
-const SessionTurns = ({
-    onOpenTab,
-    organizationId,
-    sessionId,
-}: {
-    onOpenTab?: (tab: "logs" | "traces", context?: { traceId?: string }) => void;
-    organizationId: OrgId;
-    sessionId: string;
-}): ReactElement => {
+const SessionTurns = ({ organizationId, sessionId }: { organizationId: OrgId; sessionId: string }): ReactElement => {
     const turns = useQuery(api.sessions.get, { organizationId, sessionId }) as SessionTurn[] | undefined;
 
     if (turns === undefined) {
@@ -63,11 +56,9 @@ const SessionTurns = ({
                             <span className="session-turn-index">#{String(index + 1)}</span>
                             <span className="log-fn">{turn.name}</span>
                             <span className="muted"> {formatMs(turn.durationMs)}</span>
-                            {onOpenTab ? (
-                                <CrossTabLink onOpenTab={onOpenTab} target="traces" traceId={turn.traceId} variant="inline">
-                                    View trace
-                                </CrossTabLink>
-                            ) : null}
+                            <CrossTabLink target="traces" traceId={turn.traceId} variant="inline">
+                                View trace
+                            </CrossTabLink>
                         </div>
                         <div className="session-turn-meta">
                             <span className="trace-gen-meta">
@@ -98,8 +89,8 @@ const SessionTurns = ({
  * pattern. Both queries are live. Empty until the framework emits
  * `gen_ai.conversation.id` (no session id → no session grouping).
  */
-export const SessionsSection = ({ onOpenTab, organizationId }: SessionsSectionProps): ReactElement => {
-    const sessions = useQuery(api.sessions.list, { organizationId });
+export const SessionsSection = ({ organizationId, preloaded }: SessionsSectionProps): ReactElement => {
+    const sessions = usePreloadedQuery(preloaded);
     const [sessionId, setSessionId] = useState("");
 
     const selected = (sessions ?? []).find((session) => session.sessionId === sessionId);
@@ -133,7 +124,9 @@ export const SessionsSection = ({ onOpenTab, organizationId }: SessionsSectionPr
                                     aria-selected={session.sessionId === sessionId}
                                     className={`trace-clickable${session.errorCount > 0 ? " trace-error" : ""}${session.sessionId === sessionId ? " active" : ""}`}
                                     key={session.sessionId}
-                                    onClick={() => setSessionId(session.sessionId === sessionId ? "" : session.sessionId)}
+                                    onClick={() => {
+                                        setSessionId(session.sessionId === sessionId ? "" : session.sessionId);
+                                    }}
                                 >
                                     <td className="trace-id">{session.sessionId.slice(0, 16)}</td>
                                     <td>{session.turnCount}</td>
@@ -166,11 +159,17 @@ export const SessionsSection = ({ onOpenTab, organizationId }: SessionsSectionPr
                                 </span>
                             ) : null}
                         </div>
-                        <button className="trace-close" onClick={() => setSessionId("")} type="button">
+                        <button
+                            className="trace-close"
+                            onClick={() => {
+                                setSessionId("");
+                            }}
+                            type="button"
+                        >
                             Close
                         </button>
                     </header>
-                    <SessionTurns onOpenTab={onOpenTab} organizationId={organizationId} sessionId={sessionId} />
+                    <SessionTurns organizationId={organizationId} sessionId={sessionId} />
                 </section>
             ) : null}
         </div>
