@@ -102,8 +102,12 @@ interface LogEntry {
     userId?: string;
 }
 
-/** Insert one batch of already-authorized lines into `tenantLogs` (shared by both ingest paths). */
-const insertLines = async (context: MutationContext, organizationId: Id<"organizations">, scriptName: string, lines: LogEntry[]): Promise<void> => {
+/**
+ * Insert one batch of already-authorized lines into `tenantLogs` (shared by both
+ * ingest paths). Exported so codegen's write-side discovery — which only walks
+ * exported declarations — can attribute the `ctx.db.insert("tenantLogs", …)`.
+ */
+export const insertLines = async (context: MutationContext, organizationId: Id<"organizations">, scriptName: string, lines: LogEntry[]): Promise<void> => {
     const { now } = context;
 
     for (const entry of lines) {
