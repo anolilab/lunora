@@ -15,6 +15,24 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 const AUTH_AUDIT_TABLE = "__lunora_auth_audit__";
 ```
 
+### `AUTH_DO_AUDIT_PATH` (const)
+
+```ts
+const READ_AUDIT_PATH = "/__lunora/auth/audit";
+```
+
+### `AUTH_DO_SECRET_HEADER` (const)
+
+```ts
+const INTERNAL_SECRET_HEADER = "x-lunora-auth-do-secret";
+```
+
+### `AUTH_DO_SESSION_PATH` (const)
+
+```ts
+const RESOLVE_SESSION_PATH = "/__lunora/auth/session";
+```
+
 ### `AppendAuthAuditEntry` (interface)
 
 ```ts
@@ -339,6 +357,18 @@ interface AuthConfigInfo {
 }
 ```
 
+### `AuthDoOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AuthDoState` (interface)
+
+```ts
+interface AuthDoState {
+    storage: DoStorageLike;
+}
+```
+
 ### `AuthInvitation` (interface)
 
 ```ts
@@ -363,6 +393,17 @@ interface AuthMember {
     organizationId: string;
     role?: null | string;
     userId: string;
+}
+```
+
+### `AuthNamespaceLike` (interface)
+
+```ts
+interface AuthNamespaceLike {
+    get: (id: unknown) => {
+        fetch: (request: Request) => Promise<Response>;
+    };
+    idFromName: (name: string) => unknown;
 }
 ```
 
@@ -511,6 +552,29 @@ interface CreateAuthAdminOptions {
 const DEFAULT_AUTH_BASE_PATH: string;
 ```
 
+### `DoAuthWiring` (interface)
+
+```ts
+interface DoAuthWiring {
+    auditReader: AuthAuditReader;
+    authHandler: (request: Request) => Promise<Response | undefined>;
+    resolveIdentity: (request: Request) => Promise<null | {
+        userId: string;
+    }>;
+}
+```
+
+### `DoAuthWiringOptions` (interface)
+
+```ts
+interface DoAuthWiringOptions {
+    basePath?: string;
+    internalSecret: string | undefined;
+    namespace: AuthNamespaceLike | undefined;
+    objectName?: string;
+}
+```
+
 ### `EmailClass` (type)
 
 ```ts
@@ -614,6 +678,10 @@ interface LunoraAuthApiContext<Auth extends LunoraAuth> {
     } & Auth["api"];
 }
 ```
+
+### `LunoraAuthDO` (class)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `LunoraAuthHeadersError` (class)
 
@@ -739,6 +807,14 @@ const assertEmailAllowed: (email: string, config?: EmailGateConfig) => Promise<E
 const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAuthMiddleware>;
 ```
 
+### `authDoColumnAdditions` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `authDoSchemaStatements` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `authTables` (const)
 
 ```ts
@@ -780,6 +856,10 @@ const createAuthAdmin: (auth: LunoraAuth, options?: CreateAuthAdminOptions) => A
 ```ts
 const createAuthAuditReader: (executor: SqlExecutor) => AuthAuditReader;
 ```
+
+### `createDoAuthWiring` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `createMemoryAuthStore` (const)
 
@@ -846,7 +926,7 @@ const loadEmailDomainLists: () => Promise<void>;
 ### `lunoraAuthAdapter` (const)
 
 ```ts
-const lunoraAuthAdapter: (store: AuthStore) => ReturnType<typeof createAdapterFactory>;
+const lunoraAuthAdapter: (store: AuthStore, runInTransaction?: TransactionRunner) => ReturnType<typeof createAdapterFactory>;
 ```
 
 ### `lunoraD1Adapter` (const)
@@ -854,6 +934,10 @@ const lunoraAuthAdapter: (store: AuthStore) => ReturnType<typeof createAdapterFa
 ```ts
 const lunoraD1Adapter: (d1: Parameters<typeof d1Executor>[0]) => ReturnType<typeof lunoraAuthAdapter>;
 ```
+
+### `lunoraDoAdapter` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `matchesWhere` (const)
 
@@ -924,7 +1008,7 @@ const withEmailGate: (options: BetterAuthOptions, config?: EmailGateHookConfig) 
 ### `lunoraAuthAdapter` (const)
 
 ```ts
-const lunoraAuthAdapter: (store: AuthStore) => ReturnType<typeof createAdapterFactory>;
+const lunoraAuthAdapter: (store: AuthStore, runInTransaction?: TransactionRunner) => ReturnType<typeof createAdapterFactory>;
 ```
 
 ### `lunoraD1Adapter` (const)
@@ -932,6 +1016,10 @@ const lunoraAuthAdapter: (store: AuthStore) => ReturnType<typeof createAdapterFa
 ```ts
 const lunoraD1Adapter: (d1: Parameters<typeof d1Executor>[0]) => ReturnType<typeof lunoraAuthAdapter>;
 ```
+
+### `lunoraDoAdapter` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ## `@lunora/auth/audit`
 

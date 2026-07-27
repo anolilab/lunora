@@ -1,10 +1,13 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "dist",
-        "rootDir": ".",
         "moduleResolution": "bundler",
         "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types", "node"]
+        // Intentionally no `outDir`/`rootDir` (matching `@lunora/do`): `lint:types` is
+        // `tsc --noEmit` and the real build is packem (driven by package.json exports),
+        // so neither is load-bearing. A set `rootDir` would raise TS6059 for the inlined
+        // `../../../shared/constant-time-equal` import that `src/auth-do.ts` uses to
+        // check the auth DO's internal secret. See shared/constant-time-equal.ts.
     },
     "include": ["src/**/*", "__tests__/**/*"]
 }

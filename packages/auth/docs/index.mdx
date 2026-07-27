@@ -287,6 +287,105 @@ through. Note that auth routes bypass the runtime's request-body limits — the 
 `body-readers.ts` apply to Lunora's own routes, not to `/api/auth/*` — so a very large
 SCIM payload is bounded by the platform, not by Lunora.
 
+### SCIM's database requirement, and `lunoraDoAdapter`
+
+`scim()` refuses to serve unless its adapter exposes **native transactions**, failing
+with `The scim plugin requires a database adapter with native transaction support`. D1
+has none — its driver rejects interactive transactions, and `batch()` cannot substitute
+because SCIM reads-then-conditionally-writes — so `lunoraD1Adapter` and
+`lunoraAuthAdapter` are both refused. There are two ways round it.
+
+**Postgres or MySQL via [Hyperdrive](/docs/packages/hyperdrive)** is the conservative
+option: hand better-auth a kysely dialect with `transaction: true`. Your auth tables
+then live outside Cloudflare's first-party storage, away from `ctx.db`. Walked through
+in [SCIM on Hyperdrive](#scim-on-hyperdrive) below.
+
+**`lunoraDoAdapter`** keeps them on Cloudflare. A Durable Object's storage _does_ have
+real transactions (`state.storage.transaction` — async, atomic, rolled back on throw,
+isolated from concurrent dispatch), so better-auth can run inside an object on its own
+SQLite:
+
+```ts
+// lunora/auth-do.ts — a thin subclass; the base class owns everything else.
+import { LunoraAuthDO } from "@lunora/auth";
+import { admin, scim } from "@lunora/auth/plugins";
+
+export class AuthDO extends LunoraAuthDO {
+    constructor(state: DurableObjectState, env: Env) {
+        super(
+            state,
+            () => ({
+                secret: env.AUTH_SECRET,
+                plugins: [scim({ connections: [{ id: "okta-acme", credentials: [{ type: "bearer", id: "primary", token: env.SCIM_TOKEN }] }] }), admin()],
+            }),
+            { internalSecret: env.AUTH_DO_SECRET },
+        );
+    }
+}
+```
+
+`LunoraAuthDO` builds the instance lazily on the first request, **creates its own
+tables**, serves `/api/auth/*`, and answers one internal route the worker uses to
+resolve identity. Then point the builder at it:
+
+```ts
+app.auth({
+    namespace: (env) => env.AUTH_DO,
+    internalSecret: (env) => env.AUTH_DO_SECRET,
+    options: (env) => ({ secret: env.AUTH_SECRET, plugins: [scim({ ... }), admin()] }),
+});
+```
+
+Re-export `AuthDO` from your worker entry and the config layer adds the
+`durable_objects` binding and the `new_sqlite_classes` migration for you. Pass `d1` or
+`namespace`, never both — the builder throws on the ambiguous shape rather than letting
+one silently win, and `namespace` without `internalSecret` throws too (identity
+resolution is gated on that secret and would otherwise fail closed on every request).
+
+### Why the schema is created for you
+
+better-auth's migrator is kysely-only, so `ensureMigrated` cannot target DO storage.
+The object derives its DDL from better-auth's own resolved tables instead — which
+matters more than it sounds: better-auth expresses `unique: true` as a separate
+`CREATE UNIQUE INDEX`, not a column constraint. A materialiser that walks `fields` and
+writes columns produces tables that look correct and **silently accept duplicate
+emails**, duplicate session tokens, and duplicates across all twelve of SCIM's unique
+fields. If you hand-roll this, emit the indexes; or call `authDoSchemaStatements(options)`
+and execute what it returns.
+
+### What DO mode does not give you
+
+`ctx.authApi`, sign-in, sessions, SCIM, and the studio's **audit feed** all work — the
+audit log lives in the object like every other auth table, and the worker reads it back
+through an internal route.
+
+**The studio's auth admin pages do not.** `authAdmin` is a ~30-method surface that reads
+the auth tables directly from the worker, which DO storage does not permit, so it
+reports "not configured" rather than returning empty data.
+
+Identity resolution costs a round-trip to the object on requests that touch `ctx.auth`.
+Enable better-auth's `session.cookieCache` to serve most of them from the signed cookie
+instead, accepting a staleness window on revocation — the `vis generate lunora-auth-do`
+scaffold turns it on by default for that reason.
+
+### Scaffolding it
+
+```bash
+vis generate lunora-auth-do --name=AuthDO
+```
+
+Writes `lunora/auth-do.ts` and reminds you of the two things the file alone does not do:
+re-export the class from your worker entry (that is what makes the config layer add the
+`durable_objects` binding and the `new_sqlite_classes` migration), and point the builder
+at it.
+
+<Callout type="warn">
+    `lunoraDoAdapter` is `@experimental`, and the trade is architectural rather than cosmetic: `user`, `session` and the SCIM tables live inside **one** Durable
+    Object, so writes serialise through a single object, the object's storage limits apply, and backup/export follows the DO path rather than D1's. Two things
+    it does not do — `ensureMigrated` (better-auth's migrator is kysely-only, so the object materialises its schema from `authTables` itself), and sharding
+    (there is one auth object). Measure it before moving an existing deployment.
+</Callout>
+
 ### SCIM on Hyperdrive
 
 SCIM's transaction requirement means its tables live in a real SQL database rather than
@@ -356,6 +455,11 @@ Practical notes:
   identities through `ctx.auth` instead.
 - **SSO can stay on D1.** If you want enterprise SSO without moving your auth tables,
   run `sso()` on `lunoraD1Adapter` and skip SCIM; only SCIM carries the requirement.
+
+Which to pick: if you already run Postgres, Hyperdrive is less new machinery. If you want
+to stay entirely on Cloudflare and can accept single-object writes for auth, the DO
+adapter avoids a second database. **SSO needs neither** — it has no transaction
+requirement and runs on `lunoraD1Adapter` as usual.
 
 ### SAML status
 
