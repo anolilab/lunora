@@ -14,10 +14,12 @@
  * exported — are returned as warnings rather than written, since a binding
  * referencing an unexported class would make `wrangler deploy` fail.
  */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { containerBuildTag } from "@lunora/container";
 
+import { DEV_VARS_FILE, parseDevVariableEntries } from "./dev-variables-format";
 import type { DurableObjectSpec, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow } from "./infer-bindings";
 import { applyModify } from "./jsonc-edit";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
@@ -87,7 +89,7 @@ interface WranglerShape {
     name?: string;
     observability?: { enabled?: boolean; head_sampling_rate?: number; logs?: { enabled?: boolean; head_sampling_rate?: number } };
     // Hint-only: the `pipeline` name is a remote resource Lunora can't mint — warned, never written.
-    pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string }>;
+    pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string; stream?: string }>;
     // Cloudflare Queues — producers + consumers, both reconciled from `lunora/queues.ts`.
     queues?: QueuesShape;
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
@@ -256,7 +258,46 @@ const unexportedDeclarationWarnings = (
  *
  * Storage is silent once any `r2_buckets` binding exists (lunora can't pick the bucket name, but if one is already declared there's nothing to add). Auth is silent once sessions have a store — a `DB` D1 binding (the default, D1-backed) or an exported `SessionDO` (DO-backed); only a project with neither has nowhere to put sessions, so only that case warns. Scheduler keys on the `SchedulerDO` export, the safe binding signal. Payment has no binding at all — state rides the app's existing `ShardDO` via `ctx.db`; its only need is the provider secret pair, which lives in `.dev.vars` (not `wrangler.jsonc`), so the reminder fires whenever payment is used and nothing here can confirm it away.
  */
-const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
+
+/**
+ * Every `@lunora/payment` provider adapter and the `.dev.vars` secret pair that
+ * configures it. Mirrors the `@lunora/payment` entry in
+ * `package-secrets-registry.ts` and the adapters under
+ * `packages/payment/src/providers/` — a provider is "configured" when **both**
+ * of its keys carry a non-empty value.
+ */
+const PAYMENT_PROVIDER_SECRETS: ReadonlyArray<{ keys: readonly [string, string]; label: string }> = [
+    { keys: ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"], label: "Stripe" },
+    { keys: ["POLAR_ACCESS_TOKEN", "POLAR_WEBHOOK_SECRET"], label: "Polar" },
+    { keys: ["CREEM_API_KEY", "CREEM_WEBHOOK_SECRET"], label: "Creem" },
+    { keys: ["AUTUMN_SECRET_KEY", "AUTUMN_WEBHOOK_SECRET"], label: "Autumn" },
+    { keys: ["DODO_PAYMENTS_API_KEY", "DODO_PAYMENTS_WEBHOOK_KEY"], label: "Dodo Payments" },
+];
+
+/** Render the provider list for the reminder, e.g. `STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (Stripe) or …`. */
+const describePaymentProviders = (): string => PAYMENT_PROVIDER_SECRETS.map(({ keys, label }) => `${keys[0]} + ${keys[1]} (${label})`).join(" or ");
+
+/**
+ * True when `.dev.vars` already carries a complete secret pair for any supported
+ * payment provider — the reminder is then noise, so it is suppressed. A missing
+ * or unreadable `.dev.vars` counts as unconfigured (warn), which is the safe
+ * direction for a setup hint.
+ */
+const hasConfiguredPaymentProvider = (projectRoot: string): boolean => {
+    let content: string;
+
+    try {
+        content = readFileSync(join(projectRoot, DEV_VARS_FILE), "utf8");
+    } catch {
+        return false;
+    }
+
+    const values = new Map(parseDevVariableEntries(content).map((entry) => [entry.key, entry.value]));
+
+    return PAYMENT_PROVIDER_SECRETS.some(({ keys }) => keys.every((key) => (values.get(key) ?? "") !== ""));
+};
+
+const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed?: WranglerShape): string[] => {
     const exported = new Set(inferred.durableObjects.map((object) => object.className));
     const warnings: string[] = [];
 
@@ -294,14 +335,13 @@ const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): st
         warnings.push("containers are declared but observability is explicitly disabled in wrangler.jsonc — container logs will not be captured.");
     }
 
-    if (inferred.usesPayment) {
+    if (inferred.usesPayment && !hasConfiguredPaymentProvider(projectRoot)) {
         // Payment state rides the app's existing ShardDO via ctx.db, so there is
         // no wrangler binding to provision — only the provider secrets, which
         // live in .dev.vars (not wrangler.jsonc) and the scaffolder can't
-        // fabricate. We always remind, since wrangler.jsonc can't confirm them.
-        warnings.push(
-            "@lunora/payment is used; set the provider secrets in .dev.vars — STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (Stripe) or POLAR_ACCESS_TOKEN + POLAR_WEBHOOK_SECRET (Polar).",
-        );
+        // fabricate. Unlike the binding hints there is nothing in wrangler.jsonc
+        // to confirm against, so this reads .dev.vars directly.
+        warnings.push(`@lunora/payment is used; set one provider's secret pair in .dev.vars — ${describePaymentProviders()}.`);
     }
 
     warnings.push(...collectX402Warnings(inferred), ...collectHintBindingWarnings(inferred, parsed));
@@ -655,17 +695,24 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
 
     if (!wranglerPath) {
         // No config to inspect — emit the raw capability hints unfiltered.
-        return { added: [], changed: false, exportGaps, reason: "wrangler.jsonc not found", warnings: collectWarnings(inferred) };
+        return { added: [], changed: false, exportGaps, reason: "wrangler.jsonc not found", warnings: collectWarnings(inferred, projectRoot) };
     }
 
     const { parsed, text: original } = readWranglerJsonc<WranglerShape>(wranglerPath);
 
     if (parsed === undefined) {
-        return { added: [], changed: false, exportGaps, reason: `failed to parse ${wranglerPath} as JSONC`, warnings: collectWarnings(inferred), wranglerPath };
+        return {
+            added: [],
+            changed: false,
+            exportGaps,
+            reason: `failed to parse ${wranglerPath} as JSONC`,
+            warnings: collectWarnings(inferred, projectRoot),
+            wranglerPath,
+        };
     }
 
     // Hints are filtered against the existing config so a wired-up project is quiet.
-    const warnings = collectWarnings(inferred, parsed);
+    const warnings = collectWarnings(inferred, projectRoot, parsed);
 
     // Only exported container classes are provisionable — wrangler rejects a
     // class_name the worker doesn't export. Their DO bindings + migration

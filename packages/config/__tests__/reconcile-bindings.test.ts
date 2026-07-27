@@ -260,6 +260,32 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().durable_objects.bindings.map((binding: { name: string }) => binding.name)).toEqual(["SHARD"]);
     });
 
+    it("suppresses the payment reminder once any provider's secret pair is set in .dev.vars", () => {
+        expect.assertions(2);
+
+        // Creem, not Stripe — the reminder must clear for every supported adapter,
+        // not just the two it used to name.
+        const devVars = ["CREEM_API_KEY=set", "CREEM_WEBHOOK_SECRET=set", ""].join("\n");
+
+        writeFileSync(join(root, ".dev.vars"), devVars);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesPayment: true }));
+
+        expect(result.warnings.join(" ")).not.toMatch(/@lunora\/payment is used/u);
+        expect(result.changed).toBe(false);
+    });
+
+    it("still reminds when .dev.vars declares a provider key with an empty value", () => {
+        expect.assertions(1);
+
+        // A scaffolded-but-unfilled pair is not configured.
+        writeFileSync(join(root, ".dev.vars"), "CREEM_API_KEY=\nCREEM_WEBHOOK_SECRET=\n");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesPayment: true }));
+
+        expect(result.warnings.join(" ")).toMatch(/@lunora\/payment is used/u);
+    });
+
     it("reminds to add a recipient [vars] entry when @lunora/x402/charge is used, without writing a binding", () => {
         expect.assertions(2);
 

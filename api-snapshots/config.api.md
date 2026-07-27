@@ -1233,6 +1233,7 @@ interface WranglerConfig {
     pipelines?: ReadonlyArray<{
         binding?: string;
         pipeline?: string;
+        stream?: string;
     } | null | undefined>;
     placement?: {
         mode?: string;

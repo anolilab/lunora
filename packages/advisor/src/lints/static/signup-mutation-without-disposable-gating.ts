@@ -15,6 +15,13 @@ import { isPublicWrite } from "../helpers";
  * lint (a CAPTCHA stops bots; the email gate stops throwaway domains — both are
  * worth having).
  *
+ * A procedure that declares **no email-shaped argument** is skipped: the gate
+ * needs a selector onto an address, so there is nothing to action. Without that
+ * check the lint fired on B2B membership writes — `members.add(userId, role)`,
+ * `organizations.create(name, slug)` — whose only tie to the user table is the
+ * word "member", and told the developer to write `email: (ctx) => ctx.args.email`
+ * for an argument that does not exist.
+ *
  * Runs only when the codegen feeder supplies protection evidence
  * (`context.procedureProtections`); a runtime caller with no evidence flags
  * nothing.
@@ -37,6 +44,16 @@ const signupMutationWithoutDisposableGating: Lint = {
 
         for (const procedure of context.procedureProtections) {
             if (!isPublicWrite(procedure) || !procedure.writesUserTable || procedure.usesEmailGate) {
+                continue;
+            }
+
+            // `emailGateMiddleware` gates an address selected off the args, so a
+            // procedure that declares none cannot action this lint — a B2B
+            // `members.add(userId, role)` or `organizations.create(name, slug)`
+            // writes a membership row with no email anywhere in sight. Only an
+            // explicit `false` skips: an older feeder leaves the field undefined,
+            // and this lint stays fail-closed on unknown.
+            if (procedure.hasEmailArg === false) {
                 continue;
             }
 
