@@ -316,4 +316,104 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
             TEST_TIMEOUT,
         );
     });
+
+    describe("full-text search (portable inverted index)", () => {
+        const searchSchema: SchemaLike = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body" }],
+                    shape: { body: col("string"), channel: col("string"), title: col("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        };
+
+        // Distinct creation times so the documented `_creationTime DESC` then
+        // id tiebreak is exercised rather than collapsing into engine row order.
+        const notesWriter = (): DatabaseWriterLike => {
+            let now = FIXED_CLOCK;
+
+            return createHyperdriveGlobalCtxDb({
+                clock: () => {
+                    now += 1000;
+
+                    return now;
+                },
+                engine: "mysql",
+                exec: harness.exec,
+                schema: searchSchema,
+            });
+        };
+
+        const seedNotes = async (writer: DatabaseWriterLike): Promise<void> => {
+            await writer.insert("notes", { _id: "n1", body: "hello world", channel: "general", title: "one" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n2", body: "hello hello wonderful world", channel: "general", title: "two" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n3", body: "goodbye world", channel: "general", title: "three" }, { allowExplicitId: true });
+            await writer.insert("notes", { _id: "n4", body: "hello world", channel: "other", title: "four" }, { allowExplicitId: true });
+        };
+
+        it(
+            "creates the companion within the 3072-byte key limit and ranks by occurrences",
+            async () => {
+                expect.assertions(2);
+
+                await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
+                await harness.query("DROP TABLE IF EXISTS `notes`");
+                await runSqlGlobalTableMigrations(harness.exec, searchSchema, mysqlDialect);
+
+                const writer = notesWriter();
+
+                await seedNotes(writer);
+
+                const results = await writer
+                    .query("notes")
+                    .withSearchIndex("by_body", (q) => q.search("body", "hello wor"))
+                    .collect();
+
+                // Both companion columns carry the dialect's VARCHAR(768) `key`
+                // type — 3072 bytes each under utf8mb4 — so the (token, id)
+                // btree only fits InnoDB's 3072-byte key limit under a prefix.
+                // `Sub_part` is that prefix length, and asserting it is what
+                // proves the mechanism rather than merely that an index exists.
+                const indexes = await harness.query("SHOW INDEX FROM `notes__fts_by_body`");
+                const btree = indexes.filter((row) => row["Key_name"] === "notes__fts_by_body__btree");
+
+                expect(btree.map((row) => row["Sub_part"])).toStrictEqual([191, 191]);
+                expect(ids(results)).toEqual(["n2", "n4", "n1"]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "narrows by an .eq() filter field and follows updates",
+            async () => {
+                expect.assertions(2);
+
+                await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
+                await harness.query("DROP TABLE IF EXISTS `notes`");
+                await runSqlGlobalTableMigrations(harness.exec, searchSchema, mysqlDialect);
+
+                const writer = notesWriter();
+
+                await seedNotes(writer);
+
+                const scoped = await writer
+                    .query("notes")
+                    .withSearchIndex("by_body", (q) => q.search("body", "hello").eq("channel", "other"))
+                    .collect();
+
+                await writer.patch("n2", { body: "totally rewritten" });
+
+                const fresh = await writer
+                    .query("notes")
+                    .withSearchIndex("by_body", (q) => q.search("body", "rewritten"))
+                    .collect();
+
+                expect(ids(scoped)).toEqual(["n4"]);
+                expect(ids(fresh)).toEqual(["n2"]);
+            },
+            TEST_TIMEOUT,
+        );
+    });
 });

@@ -89,7 +89,6 @@ export type {
     ValidatorLike,
     WithInput,
 } from "./schema-types";
-export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
 export { serializeSqlValue } from "./serialize-sql";
 export type { ShardRunnerOptions } from "./shard-runner";
 export { ShardRunner } from "./shard-runner";

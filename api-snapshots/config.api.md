@@ -1007,6 +1007,7 @@ interface SchemaIndex {
 interface SchemaInfo {
     hasGlobalTable: boolean;
     vectorIndexNames?: ReadonlyArray<string>;
+    vectorMetadata?: ReadonlyArray<VectorMetadataDeclaration>;
 }
 ```
 

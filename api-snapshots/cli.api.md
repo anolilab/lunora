@@ -503,6 +503,7 @@ interface SchemaSnapshot {
 ```ts
 interface SpawnDescriptor {
     args: ReadonlyArray<string>;
+    captureStderr?: boolean;
     captureStdout?: boolean;
     command: string;
     cwd?: string;
@@ -517,6 +518,7 @@ interface SpawnDescriptor {
 ```ts
 interface SpawnResult {
     code: number;
+    stderr?: string;
     stdout?: string;
 }
 ```

@@ -1128,12 +1128,6 @@ const boundingBoxCenter: (box: GeoBoundingBox) => GeoPoint;
 const boundingBoxGeohashes: (box: GeoBoundingBox) => string[];
 ```
 
-### `buildFtsMatch` (const)
-
-```ts
-const buildFtsMatch: (tokens: ReadonlyArray<string>) => string;
-```
-
 ### `buildSeekBeforeWhere` (const)
 
 ```ts
@@ -1228,12 +1222,6 @@ const fanOutScalarCounts: (counter: (tableName: string, where?: WhereInput) => P
 
 ```ts
 const foldAggregateTally: (tallies: Map<string, AggregateTally>, encoded: string, index: AggregateIndexDefinitionLike, record: Record<string, unknown>) => void;
-```
-
-### `ftsTableName` (const)
-
-```ts
-const ftsTableName: (table: string, indexName: string) => string;
 ```
 
 ### `guardWriter` (const)
@@ -1369,12 +1357,6 @@ const runRowValidators: (definition: TableDefinitionLike, document: Record<strin
 const runSocketPool: <T>(items: ReadonlyArray<T>, processOne: (item: T) => Promise<void>, concurrency?: number) => Promise<void>;
 ```
 
-### `scoreDocument` (const)
-
-```ts
-const scoreDocument: (text: string, tokens: ReadonlyArray<string>) => number;
-```
-
 ### `selectIndexForAggregate` (const)
 
 ```ts
@@ -1440,12 +1422,6 @@ const stableStringify: (value: unknown) => string;
 const stableWireKey: (value: unknown) => string;
 ```
 
-### `stringifySearchText` (const)
-
-```ts
-const stringifySearchText: (value: unknown) => string;
-```
-
 ### `subscriptionListDeltas` (const)
 
 ```ts
@@ -1462,12 +1438,6 @@ const tableFromDepKey: (dep: string) => string;
 
 ```ts
 const throwingScheduler: SchedulerLike;
-```
-
-### `tokenizeSearch` (const)
-
-```ts
-const tokenizeSearch: (query: string) => string[];
 ```
 
 ### `trySendFrame` (const)

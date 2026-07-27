@@ -106,6 +106,9 @@
 "package: scheduler":
     - changed-files:
           - any-glob-to-any-file: "packages/scheduler/**/*"
+"package: search-core":
+    - changed-files:
+          - any-glob-to-any-file: "packages/search-core/**/*"
 "package: seed":
     - changed-files:
           - any-glob-to-any-file: "packages/seed/**/*"

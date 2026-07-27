@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { WranglerConfig } from "@lunora/config";
 import {
     DEV_VARS_FILE,
+    discoverSchemaInfo,
     findWranglerFile,
     inferLunoraBindings,
     isPlaceholderValue,
@@ -15,6 +16,7 @@ import {
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import type { DoctorOptions } from "./index";
 
 /** Severity of a single doctor check. `fail` drives a non-zero exit; `warn`/`info`/`pass` don't. */
@@ -97,6 +99,39 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
         findings.push({ level: "pass", message: "wrangler.jsonc present with a SHARD durable-object binding." });
     } else {
         findings.push({ fix: "Run `lunora dev` to auto-reconcile, or add the binding manually.", level: "fail", message: shardError });
+    }
+};
+
+/**
+ * A `.vectorize({ metadata })` declaration without its Vectorize metadata index
+ * → WARN.
+ *
+ * Cloudflare only filters on a metadata property that has been indexed, and a
+ * missing index is silent: `filter` simply matches nothing. `lunora deploy`
+ * provisions them, so this exists for the case where someone deploys with
+ * wrangler directly — and to name the exact command.
+ */
+const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
+    const { info } = discoverSchemaInfo(cwd, "lunora");
+
+    for (const declaration of info?.vectorMetadata ?? []) {
+        const type = metadataTypeFor(declaration.kind);
+
+        if (type === undefined) {
+            findings.push({
+                fix: "Filter on a string, number or boolean column, or drop it from `metadata`.",
+                level: "warn",
+                message: `vector index "${declaration.index}" declares metadata "${declaration.property}", whose type Vectorize cannot filter on.`,
+            });
+
+            continue;
+        }
+
+        findings.push({
+            fix: `wrangler ${createMetadataIndexArgs({ index: declaration.index, property: declaration.property, type }).join(" ")}`,
+            level: "info",
+            message: `vector index "${declaration.index}" filters on metadata "${declaration.property}" — that needs a Vectorize metadata index (\`lunora deploy\` creates it).`,
+        });
     }
 };
 
@@ -364,6 +399,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkDevVariables(cwd, findings);
     checkAdminToken(findings);
     checkVersionSkew(cwd, findings);
+    checkVectorMetadataIndexes(cwd, findings);
     await checkContainers(cwd, findings);
 
     const code = findings.some((finding) => finding.level === "fail") ? 1 : 0;

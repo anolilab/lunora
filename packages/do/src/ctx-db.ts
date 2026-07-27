@@ -30,81 +30,44 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @lunora/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
 import { LunoraError } from "@lunora/errors";
-import type {
-    BroadcastDelta,
-    DatabaseWriterLike,
-    GeoFilterBuilderLike,
-    GeoIndexDefinitionLike,
-    GroupByEntry,
-    IndexRangeBuilderLike,
-    OrderKey,
-    PaginationOptions,
-    QueryArgs,
-    QueryPage,
-    RankIndexDefinitionLike,
-    ReactiveCache,
-    ReadHook,
-    RelationDefinitionLike,
-    RelationExistsMarker,
-    RestrictableQueryOptions,
-    SchemaLike,
-    SearchFilterBuilderLike,
-    SearchIndexDefinitionLike,
-    ServerDefaultContextLike,
-    TableDefinitionLike,
-    TableReaderLike,
-    WhereInput,
-    WhereSqlStrategy,
-} from "@lunora/shard-engine";
 import {
-    aggregateSqlFunction,
-    aggregateTableName,
-    applyOnDelete,
-    applySelect,
-    assertFlatPredicate as assertFlatRelationPredicate,
-    boundingBoxGeohashes,
-    buildFtsMatch,
-    buildSeekBeforeWhere,
-    buildSeekWhere,
-    compileWhereSql,
-    ConflictError,
-    CountRlsUnsupportedError,
-    coveringGeohashes,
-    decodeCursor,
-    encodeAggregateKey,
-    encodeCursor,
-    encodePartitionKey,
-    fanOutScalarCounts,
+    analyzedSearchText,
+    assertSearchWithinCap,
+    createSearchAnalyzer,
+    createSearchBuilder,
+    finishSearchPage,
+    FTS_ID_COLUMN,
     ftsTableName,
-    guardWriter,
-    haversineMeters,
-    mergeWhere,
-    normalizeCountArgument,
-    normalizeOrderKeys,
-    NotFoundError,
-    pointInBoundingBox,
-    RANK_TIEBREAK,
-    rankTableName,
-    readAggregateValue,
-    resolveRankPartition,
-    resolveRelationPredicates,
-    resolveWith,
-    runRowValidators,
-    SCAN_DEP,
+    MAX_SEARCH_SCAN,
+    planSearchPage,
+    resolveSearchScan,
     scoreDocument,
-    selectIndexForAggregate,
-    selectIndexForCount,
-    selectIndexForGroupBy,
-    softDeleteScope,
-    sortColumnName,
-    stringifySearchText,
-    throwingScheduler,
+    searchPageScan,
+    searchTermRange,
     tokenizeSearch,
-} from "@lunora/shard-engine";
+} from "@lunora/search-core";
+import type {
+    AggregateIndexDefinitionLike,
+    AggregateOptions,
+    AggregateResult,
+    GroupByEntry,
+    GroupByOptions,
+MutationDelta , OrderKey, QueryArgs, QueryPage ,
+    RankBeforeOptions,
+    RankBeforeResult,
+    RankIndexDefinitionLike,
+    RankOptions,
+    RankPage,
+    RankPageOptions,
+    RankResult,
+ReactiveCache , RelationDefinitionLike , RelationExistsMarker , RestrictableQueryOptions, ShardRankPageResult, WhereInput, 
+WhereSqlStrategy } from "@lunora/shard-engine";
+import { aggregateSqlFunction, aggregateTableName, applyOnDelete, applySelect, assertFlatPredicate as assertFlatRelationPredicate, boundingBoxGeohashes, buildSeekBeforeWhere, buildSeekWhere, compileWhereSql,ConflictError , CountRlsUnsupportedError, coveringGeohashes, decodeCursor, encodeAggregateKey, encodeCursor, encodePartitionKey, fanOutScalarCounts, guardWriter , haversineMeters, mergeWhere, normalizeCountArgument, normalizeOrderKeys, NotFoundError , pointInBoundingBox , RANK_TIEBREAK, rankTableName, readAggregateValue , resolveRankPartition, resolveRelationPredicates , resolveWith, runRowValidators , SCAN_DEP , selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy , softDeleteScope , sortColumnName , throwingScheduler } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 // Aliased: this module already uses `sql` for the workerd `SqlExec` (see `runSql`), so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
 
+import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange } from "./ctx-db-cdc";
 import { createCompanionSync } from "./ctx-db-companions";
@@ -124,10 +87,11 @@ import {
     rowToDocument,
     serializeSqlValue,
     tableColumns,
+    tryRowToDocument,
 } from "./do-sql";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
-import type { SchedulerLike, TriggerContextLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
+import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
 import { runTriggers } from "./triggers";
 
 /**
@@ -143,6 +107,168 @@ interface SqlCursor<Row> extends Iterable<Row> {
     one: () => Row;
     toArray: () => Row[];
 }
+
+/**
+ * Minimal subset of `@lunora/server`'s `Schema&lt;T>` the adapter actually
+ * reads. Kept structural so this package doesn't pull in `@lunora/server`
+ * (which would create a dependency cycle — server consumes ShardDO types).
+ */
+interface SchemaLike {
+    /**
+     * Secure-by-default RLS mode (mirror of `@lunora/server`'s `Schema.rlsMode`,
+     * set by `defineSchema(...).rls("required")`). When `"required"`, the write
+     * path returns a GUARDED `ctx.db`: a raw handler that never engaged RLS is
+     * denied on every non-`isPublic` table so a forgotten `.use(rls(...))` fails
+     * closed instead of silently exposing the table. The RLS middleware unwraps
+     * the guard (via the `RLS_UNWRAP_SYMBOL` seam) before applying policies.
+     */
+    readonly rlsMode?: "required";
+    readonly tables: Record<string, TableDefinitionLike>;
+}
+
+interface TableDefinitionLike {
+    readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
+
+    /**
+     * Mirror of `@lunora/server`'s `TableDefinition.geoIndexes` (set by
+     * `.geoIndex()`). Each declares a geohash companion over a `v.geoPoint()`
+     * column so `withGeoIndex(name, q => q.near(...) | q.within(...))` resolves
+     * proximity / bounding-box reads. Empty/absent ⇒ the table has no geo index.
+     */
+    readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
+    readonly indexes: ReadonlyArray<IndexDefinitionLike>;
+
+    /**
+     * `true` when `.public()` opted this table OUT of secure-by-default RLS
+     * (mirror of `@lunora/server`'s `TableDefinition.isPublic`). Under a
+     * `.rls("required")` schema the write-path guard lets a public table through
+     * to a raw handler; every other table is denied. No effect otherwise.
+     */
+    readonly isPublic?: boolean;
+    readonly rankIndexes?: ReadonlyArray<RankIndexDefinitionLike>;
+    readonly relationMap?: Record<string, RelationDefinitionLike>;
+    readonly searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;
+    readonly shape: Record<string, ValidatorLike>;
+
+    // Mirror of `@lunora/server`'s `ShardMode`. The `shardBy` variant carries
+    // a `field` (the column the runtime hashes on) but most consumers only
+    // read `kind`, so `field` is left optional here to keep the structural
+    // mirror narrow without forcing every callsite to spread the variant.
+    readonly shardMode?: { field?: string; kind: "global" | "root" | "shardBy" };
+
+    /**
+     * Mirror of `@lunora/server`'s `TableDefinition.softDeleteMode` (set by
+     * `.softDelete()`). When present, `delete()` flips the `field` column to a
+     * timestamp instead of physically removing the row (cascading as a soft
+     * delete), and list reads scope out rows whose `field` is set unless
+     * `includeDeleted` is passed. By-id reads/writes are unaffected.
+     */
+    readonly softDeleteMode?: { field: string };
+    readonly triggerMap?: Record<string, TriggerDefinitionLike>;
+
+    /**
+     * Mirror of `@lunora/server`'s `TableDefinition.ttlPolicy` (set by `.ttl()`).
+     * Drives the DO alarm-driven expiry sweep — see `ttl-sweep.ts`. Absent ⇒ rows
+     * never auto-expire.
+     */
+    readonly ttlPolicy?: { after?: number; field: string };
+}
+
+interface IndexDefinitionLike {
+    readonly fields: ReadonlyArray<string>;
+    readonly name: string;
+    readonly unique?: boolean;
+}
+
+interface SearchIndexDefinitionLike {
+    /** Indexed text column; a dot-separated path reads a nested field. */
+    readonly field: string;
+    readonly filterFields?: ReadonlyArray<string>;
+    /** Analysis profile (folding + stopwords) — see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly language?: string;
+    readonly name: string;
+    /** Skip the migration-time backfill of the search companion — see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly staged?: boolean;
+    /** `"native"` opts into the engine's own full-text index where it has one; see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly strategy?: string;
+}
+
+/** Mirror of `@lunora/server`'s `GeoIndexDefinition` — a geohash companion over a `v.geoPoint()` column. */
+interface GeoIndexDefinitionLike {
+    readonly field: string;
+    readonly name: string;
+    readonly precision?: number;
+}
+
+/**
+ * Column constraints/defaults the write layer honors, mirrored structurally
+ * from `@lunora/values`' `ColumnMeta` (kept local so this package doesn't take
+ * a runtime dependency on the validator package — same reasoning as
+ * {@link SchemaLike}). Populated on the live validator's `_meta.column` and
+ * read through here when the generated `shard.ts` hands us the real schema.
+ */
+interface ColumnMetaLike {
+    readonly defaultFn?: () => unknown;
+    readonly defaultValue?: unknown;
+    readonly notNull?: boolean;
+    readonly onUpdateFn?: () => unknown;
+
+    /**
+     * SERVER-trusted value factory. When present the write layer runs it on
+     * every insert/update with the resolved request auth and OVERWRITES any
+     * client-supplied value (server wins), so owner/tenant columns are never
+     * client-controllable. Mirrors `ColumnMeta.serverDefault` in `@lunora/values`.
+     */
+    readonly serverDefault?: (context: ServerDefaultContextLike) => unknown;
+    readonly unique?: boolean;
+}
+
+/**
+ * Auth slice handed to a `.serverDefault(fn)` factory at write time. Mirrors
+ * `ServerDefaultContext` in `@lunora/values` (kept local for the same
+ * no-runtime-dependency reason as {@link ColumnMetaLike}).
+ */
+interface ServerDefaultContextLike {
+    readonly auth: {
+        readonly identity: Record<string, unknown> | null;
+        readonly userId: null | string;
+    };
+}
+
+interface ValidatorLike {
+    readonly _meta?: { readonly column?: ColumnMetaLike };
+    readonly kind?: string;
+
+    /**
+     * Optional runtime parser. Real validators from `@lunora/values` always
+     * supply this; the structural fakes used in DO unit tests typically don't.
+     * The write layer calls it (when present) on each field before persisting
+     * so refinements declared via `.check(predicate)` fire on insert / patch /
+     * replace as well as on argument validation.
+     */
+    readonly parse?: (value: unknown) => unknown;
+}
+
+/** Notifies hibernated subscribers that a row in `table` changed. */
+type BroadcastDelta = (delta: MutationDelta) => void;
+
+/**
+ * Records that a query touched `table`. Wired during subscription re-execution
+ * so the DO learns which tables a query depends on, AND by the reactive query
+ * cache so it can index entries by the rows they read.
+ *
+ * The optional `idOrScan` parameter is the row id when the read resolved a
+ * single row (via `get` / `findFirst` / `findFirstOrThrow`) or fell out of a
+ * `findMany` page, and the literal `"*scan"` sentinel (from
+ * `dependency-tracker.ts`) when the read swept the whole table (no index, no
+ * `where` reducing it to a small set). Callers that only care about
+ * table-level granularity (the legacy subscription bridge) ignore the second
+ * argument.
+ *
+ * The normal mutation path leaves the hook unset (default no-op) to avoid
+ * spurious reads.
+ */
+type ReadHook = (table: string, idOrScan?: string) => void;
 
 /**
  * Telemetry hook fired when a read explicitly names a declared index
@@ -313,6 +439,70 @@ interface CtxDbOptions {
 /** Upper bound on nested trigger re-entry (a handler's `ctx.db` write refires triggers). */
 const MAX_TRIGGER_DEPTH = 50;
 
+interface IndexRangeBuilderLike {
+    eq: (field: string, value: unknown) => IndexRangeBuilderLike;
+    gt: (field: string, value: unknown) => IndexRangeBuilderLike;
+    gte: (field: string, value: unknown) => IndexRangeBuilderLike;
+    lt: (field: string, value: unknown) => IndexRangeBuilderLike;
+    lte: (field: string, value: unknown) => IndexRangeBuilderLike;
+}
+
+interface SearchFilterBuilderLike {
+    eq: (field: string, value: unknown) => SearchFilterBuilderLike;
+    search: (field: string, query: string) => SearchFilterBuilderLike;
+}
+
+interface GeoFilterBuilderLike {
+    near: (point: { lat: number; lng: number }, radiusMeters: number) => GeoFilterBuilderLike;
+    within: (box: { ne: { lat: number; lng: number }; sw: { lat: number; lng: number } }) => GeoFilterBuilderLike;
+}
+
+/** Options accepted by {@link TableReaderLike.paginate} — Convex-compatible. */
+interface PaginationOptions {
+    /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
+    cursor?: null | string;
+
+    /**
+     * Optional inclusive upper bound for reactive pagination. When supplied the
+     * page covers the fixed half-open range `(cursor, endCursor]` — every row
+     * strictly after `cursor` up to and including the boundary row `endCursor`
+     * encodes, ignoring `numItems`. `isDone` is always `true` for a bounded page
+     * (its end is fixed) and `continueCursor` is the unchanged `endCursor`, so a
+     * following page keeps starting exactly where this one ends even as rows are
+     * inserted or deleted inside the range.
+     *
+     * Omit (or pass `null`) for the legacy single-cursor behaviour: the first
+     * `numItems` rows after `cursor`, with a fresh `continueCursor`/`isDone`.
+     */
+    endCursor?: null | string;
+    /** Maximum rows to return for this page. */
+    numItems: number;
+}
+
+interface TableReaderLike {
+    collect: () => Promise<Record<string, unknown>[]>;
+    filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
+    first: () => Promise<Record<string, unknown> | null>;
+
+    /**
+     * Set the result order: by the active `.withIndex()` (or `_creationTime`
+     * when none is staged), `"asc"` by default; `"desc"` reverses it. Composes
+     * with `.withIndex()`, `.filter()`, and every terminal. Mirrors Convex.
+     */
+    order: (direction: "asc" | "desc") => TableReaderLike;
+    paginate: (options: PaginationOptions) => Promise<QueryPage>;
+    take: (limit: number) => Promise<Record<string, unknown>[]>;
+
+    /**
+     * Return the single matching row, `null` when none match, throwing when
+     * more than one matches. Mirrors Convex's `.unique()`.
+     */
+    unique: () => Promise<Record<string, unknown> | null>;
+    withGeoIndex: (indexName: string, build: (q: GeoFilterBuilderLike) => GeoFilterBuilderLike) => TableReaderLike;
+    withIndex: (indexName: string, range?: (q: IndexRangeBuilderLike) => IndexRangeBuilderLike) => TableReaderLike;
+    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => TableReaderLike;
+}
+
 /* eslint-disable no-secrets/no-secrets -- JSDoc names a stable error-kind constant, not a secret */
 
 /**
@@ -357,6 +547,304 @@ const assertBatchLimit = (count: number, limit: number | undefined, op: string):
         );
     }
 };
+
+interface DatabaseWriterLike {
+    /**
+     * Reduce rows in `tableName` matching `options.where` to a scalar
+     * (`avg`/`max`/`min`/`sum` — `count` lives on its own method). Routes
+     * through a matching `aggregateIndex` when one is declared for `op`/`field`
+     * and `options.where` keys all participate in its `by` set; otherwise scans
+     * the table.
+     */
+    aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
+
+    /**
+     * The throwing sibling of `normalizeId`: returns the id when it is
+     * structurally an id, and throws `BAD_REQUEST` otherwise. Pure — it never reads
+     * the database. Same check as `normalizeId` (ids are opaque strings, so empty /
+     * whitespace-bearing / NUL-bearing values are rejected), just non-nullable.
+     *
+     * This is the parse boundary for an id that arrived as a plain `string` (a wire
+     * payload, a mutator's args, a change plan). Without it every such call site
+     * writes `value as Id&lt;"table">`, which asserts rather than checks.
+     *
+     * Optional on the interface (like the batch methods): the DO writer — the only one
+     * ever assigned to `ctx.db` — always implements it, while the `.global()` (D1 /
+     * Hyperdrive) twins that also satisfy this shape structurally do not.
+     */
+    asId?: (tableName: string, id: string) => string;
+
+    /**
+     * Count rows in `tableName`. Uses a declared `aggregateIndex` when one
+     * covers the `where` keys (no scan); otherwise scans. Throws
+     * `COUNT_RLS_UNSUPPORTED` when `options.restrictsCounts` is `true` (the
+     * RLS-aware ctx seam from §3.2).
+     */
+    count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
+
+    /**
+     * Delete a row by id. On a `.softDelete()` table this flips the marker column
+     * (cascading as a soft delete) instead of removing the row; pass
+     * `options.hard` to force a physical removal (which cascades as a physical
+     * delete, reaching already-soft-deleted children too). Non-soft tables ignore
+     * `options.hard` — they always delete physically.
+     */
+    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
+
+    /**
+     * Delete EVERY row in `tableName`, chunking internally until the table is
+     * empty. Unlike `deleteWhere(tableName, {})` there is no batch cap — the whole
+     * point is a table of unknown size (GDPR erasure, a tenant teardown), where a
+     * `BATCH_LIMIT_EXCEEDED` at row 501 is a bug rather than a safety rail. Every
+     * row still goes through the single-row delete pipeline so triggers, cascades,
+     * companions, CDC, and broadcast stay correct.
+     *
+     * Optional on the interface (like `deleteMany`): the DO writer implements it.
+     */
+    deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
+
+    /**
+     * Delete many rows by id in one call (a loop over `delete()`). The returned
+     * `deleted` is the number of ids **requested**, not rows actually removed (an
+     * unknown/duplicate id is a silent no-op). **Atomic within a mutation** — the
+     * DO wraps a mutation's dispatch in a storage transaction, so a mid-batch throw
+     * rolls the whole mutation back. (An action has no transaction span — there,
+     * the prior deletes persist; the in-memory test harness mirrors the span.) Rejects a batch larger than
+     * `options.limit` (default {@link DEFAULT_BATCH_LIMIT}).
+     *
+     * Optional on the interface (like `rankBefore`): the DO writer implements it;
+     * the `.global()` (D1/Hyperdrive) twins omit it — a `.global()` table is
+     * batched per-row through the DO writer's loop, which routes each `delete()`
+     * to the global writer, so no global batch method is needed.
+     */
+    deleteMany?: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
+
+    /**
+     * Delete every row matching `where` in one call. Matching rows are resolved
+     * first, then each row is deleted through the single-row delete pipeline so
+     * companions, CDC, and broadcast stay correct. **Atomic within a mutation** —
+     * the DO wraps a mutation's dispatch in a storage transaction, so a mid-batch
+     * throw rolls the whole mutation back. (An action has no transaction span.)
+     */
+    deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
+    findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
+    findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
+    findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
+
+    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+
+    /**
+     * Group rows in `tableName` by the named keys and apply `options.agg` per
+     * group (defaults to `count`). When a declared aggregate index's `by` set
+     * matches `options.by` exactly and no extra `where` keys fall outside it,
+     * answered from the counter table.
+     */
+    groupBy: (tableName: string, options: GroupByOptions) => Promise<ReadonlyArray<GroupByEntry>>;
+
+    /**
+     * Insert a document, returning its generated id.
+     *
+     * Security: a client-chosen `_id` is **ignored** by default — a caller
+     * able to pick its own id could collide with peer rows, defeat unique
+     * constraints, or forge cross-table references.
+     *
+     * Two opt-ins override the default fresh-id behavior:
+     * - `options.clientId` — the **public, validated** path: a UUID supplied by
+     * the caller (e.g. an optimistic client) becomes the row's primary key.
+     * Validated for shape via {@link assertValidClientId}; uniqueness is still
+     * enforced by the primary-key constraint.
+     * - `options.allowExplicitId` — the internal **trusted-import** path (dev/admin
+     * snapshot round-trip), which honors a string `_id` on `document` verbatim,
+     * no shape check.
+     */
+    insert: (tableName: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean; clientId?: string }) => Promise<string>;
+
+    /**
+     * Insert many documents into one table (a loop over `insert()`),
+     * returning the minted ids in input order. Each row gets defaults,
+     * validators, triggers, companion sync, CDC, and broadcast exactly as a
+     * single insert; the caller pays one round-trip instead of N. Pass
+     * `options.skipDuplicates: true` to turn UNIQUE-constraint breaches into
+     * `null` results for that row instead of failing the whole batch.
+     * **Atomic within a mutation** — the DO wraps a mutation's dispatch in a
+     * storage transaction, so a mid-batch throw rolls the whole mutation back. (An
+     * action has no transaction span — there, the prior inserts persist; the
+     * in-memory test harness mirrors the span.)
+     * Rejects a batch larger than `options.limit` (default {@link DEFAULT_BATCH_LIMIT}).
+     *
+     * Optional on the interface (like `rankBefore`): the DO writer implements it;
+     * the `.global()` (D1/Hyperdrive) twins omit it — a `.global()` table is
+     * batched per-row through the DO writer's loop, which routes each `insert()`
+     * to the global writer, so no global batch method is needed.
+     */
+    insertMany?: (
+        tableName: string,
+        documents: ReadonlyArray<Record<string, unknown>>,
+        options?: { limit?: number; skipDuplicates?: boolean },
+    ) => Promise<(string | null)[]>;
+
+    /**
+     * Trusted bulk insert: one multi-row `INSERT` that **skips per-row `.check()`
+     * validators and before/after triggers** for throughput on data the caller
+     * vouches for (seed, migration, admin import). Defaults, ids, and every
+     * companion (search/aggregate/rank/CDC/broadcast) are still applied, so reads
+     * stay correct. RLS is **not** bypassed — the guard + middleware still enforce
+     * secure-by-default and the table's insert policy (the framework ships no
+     * RLS-bypassing writer). `allowExplicitId` preserves a supplied `_id`.
+     *
+     * Optional like `insertMany`: the DO writer implements it; the `.global()`
+     * twins omit it (a global table falls back to the per-row global insert).
+     */
+    insertManyUnsafe?: (
+        tableName: string,
+        documents: ReadonlyArray<Record<string, unknown>>,
+        options?: { allowExplicitId?: boolean; limit?: number },
+    ) => Promise<string[]>;
+
+    /**
+     * Optional fast-path seam for the RLS/mask membership probe: resolve a row by
+     * id straight to `{ row, tableName }` (the writer knows the owning table from
+     * its internal index) so the middleware skips the `get` + per-policy-table
+     * `findFirst` fan-out. Shard-local only — a global row returns `null`. Fires
+     * `onRead` exactly as `get`, so read-dependency tracking is preserved.
+     */
+    lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
+
+    /**
+     * Validate an untrusted `id` against the structural shape of an id for
+     * `tableName`, returning it when well-formed and `null` otherwise. Pure —
+     * it never reads the database (a valid id for an absent row still returns
+     * the id), matching Convex's `db.normalizeId`. Throws on an unknown table.
+     */
+    normalizeId: (tableName: string, id: string) => null | string;
+    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+
+    /**
+     * Patch many rows by id in one call (a loop over `patch()`). **Atomic within a
+     * mutation** — the DO wraps a mutation's dispatch in a storage transaction, so a
+     * mid-batch throw rolls the whole mutation back. (An action has no transaction
+     * span — there, the prior patches persist; the in-memory test harness mirrors
+     * the span.)
+     * Rejects a batch
+     * larger than `options.limit` (default {@link DEFAULT_BATCH_LIMIT}).
+     *
+     * Optional on the interface (like `rankBefore`): the DO writer implements it;
+     * the `.global()` (D1/Hyperdrive) twins omit it — a `.global()` table is
+     * batched per-row through the DO writer's loop, which routes each `patch()`
+     * to the global writer, so no global batch method is needed.
+     */
+    patchMany?: (
+        patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
+        options?: { limit?: number },
+        expectedTable?: string,
+    ) => Promise<{ patched: number }>;
+
+    /**
+     * Patch every row matching `where` with the same `patch` in one call.
+     * Matching rows are resolved first, then each row is patched through the
+     * single-row patch pipeline so companions, CDC, and broadcast stay correct.
+     * **Atomic within a mutation** — the DO wraps a mutation's dispatch in a
+     * storage transaction, so a mid-batch throw rolls the whole mutation back. (An
+     * action has no transaction span.)
+     */
+    patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
+    query: (tableName: string) => TableReaderLike;
+
+    /**
+     * Return the 1-based position of `options.row` within its partition under
+     * the declared rank index, plus the partition's total row count. Returns
+     * `null` when the row isn't in the index (either it doesn't exist, or it
+     * fails the index's static `where`/the `options.where` partition selector).
+     *
+     * Honors the `baseWhere` / `restrictsCounts` RLS seam identically to
+     * `count()` — the position is a count-of-rows-strictly-before, so a
+     * restricted-count ctx throws `COUNT_RLS_UNSUPPORTED` here too.
+     */
+    rank: (tableName: string, indexName: string, options: RankOptions) => Promise<null | RankResult>;
+
+    /**
+     * Per-shard primitive behind the cross-shard `rank()` fan-out. Counts this
+     * shard's rows strictly-before the EXPLICIT key in `options` (built off a
+     * row doc via `rankKeyFromDoc`), plus the local partition total — so a peer
+     * shard that doesn't own the row still contributes a correct count. The
+     * coordinator sums `{before, total}` across shards into `{position, total}`.
+     *
+     * Unlike `rank()` there is no by-id companion lookup: the caller already
+     * holds the row, and a rankIndex partition can span shards (e.g. a global
+     * leaderboard `.shardBy("userId")` with `partitionBy: []`). Honors the
+     * `restrictsCounts` RLS seam identically to `rank()`.
+     *
+     * Optional on the interface: the DO writer (this file) implements it; the
+     * D1 twin (`@lunora/d1`) omits it for now — cross-shard rank over a
+     * `.global()` table is a follow-up, so a D1 writer that doesn't supply it
+     * still structurally satisfies `DatabaseWriterLike`.
+     */
+    rankBefore?: (tableName: string, indexName: string, options: RankBeforeOptions) => Promise<RankBeforeResult>;
+
+    /**
+     * Walk the rank companion in declared sort order — sorted pagination
+     * accelerator. `options.where` may pin the partition (`partitionBy` keys),
+     * in which case only that partition is walked; otherwise we walk every
+     * partition in `(__partition__, __sort_k0__, …)` order. `cursor`/`take`
+     * follow the same Convex-style keyset shape as `paginate`.
+     */
+    rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;
+
+    /**
+     * Cross-shard companion to `rankPage`: the same shard-local ranked
+     * slice, but each row keeps its rank-key tuple so the query coordinator's
+     * k-way merge can order rows across shards (`orchestrateRankPage`). The
+     * shard's `__lunora_admin__:rankPage` admin RPC forwards this verbatim as
+     * the `ShardRankPageResult` the coordinator consumes.
+     *
+     * Optional on the interface for the same reason as `rankBefore`: the
+     * DO writer (this file) implements it; the D1 (`.global()`) twin omits it,
+     * since a global table has no shard boundaries to merge across.
+     */
+    rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
+    replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: { allowExplicitId?: boolean }) => Promise<void>;
+
+    /**
+     * Un-soft-delete a row: clears the `.softDelete()` marker column (a by-id
+     * UPDATE, so it works on a row that list reads currently hide). Throws when
+     * the row's table isn't `.softDelete()`. Optional on the interface — the DO
+     * writer implements it; the `.global()` twin does too, so a restore on a
+     * global table routes through the DO writer's global fallback.
+     */
+    restore?: (id: string, expectedTable?: string) => Promise<void>;
+
+    /**
+     * Best-effort, read-only reader over Lunora's system tables
+     * (`_scheduled_functions`, `_storage`). Eventually consistent and **not**
+     * part of the shard's transaction snapshot — see {@link SystemDatabaseReader}.
+     * Reaches across to the `SchedulerDO` / R2 on every call rather than the
+     * local SQLite.
+     *
+     * Optional on this structural interface: the DO writer ({@link createShardCtxDb})
+     * always sets it, and it's what backs `ctx.db.system` (which the public
+     * `@lunora/server` `DatabaseReader.system` types as required). The D1 twin
+     * (`@lunora/d1`), used only for `.global()` table routing and never assigned
+     * to `ctx.db`, omits it — same pattern as the optional `rankBefore` above.
+     */
+    system?: SystemDatabaseReader;
+
+    /**
+     * Erase every shard-local table in the schema — the account-deletion /
+     * tenant-teardown primitive. Iterates the non-`.global()` tables and
+     * `deleteAll`s each, returning the per-table counts.
+     *
+     * `.global()` tables are deliberately skipped: their rows live in D1 and are
+     * shared across shards, so "wipe this shard" must not touch them. Pass
+     * `options.tables` to restrict the sweep, or `options.exclude` to spare a table
+     * (e.g. an audit log that must outlive the data).
+     *
+     * Optional on the interface, like the other batch primitives.
+     */
+    wipeShard?: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => Promise<{
+        deleted: number;
+        tables: Record<string, number>;
+    }>;
+}
 
 interface SearchStage {
     definition: SearchIndexDefinitionLike;
@@ -427,90 +915,95 @@ const createRangeBuilder = (stage: QueryStage): IndexRangeBuilderLike => {
     return builder;
 };
 
-const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilterBuilderLike => {
-    const builder: SearchFilterBuilderLike = {
-        eq: (field, value) => {
-            if (!search.definition.filterFields?.includes(field)) {
-                throw new LunoraError("INTERNAL", `field "${field}" is not a filter field of search index "${search.indexName}" on table "${tableName}"`);
-            }
-
-            search.filters.push({ field, value });
-
-            return builder;
-        },
-        search: (field, query) => {
-            if (field !== search.definition.field) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `search index "${search.indexName}" on table "${tableName}" indexes "${search.definition.field}", not "${field}"`,
-                );
-            }
-
-            // Mutate the caller-owned stage in place (same object the query
-            // planner reads back); alias to a local so the param itself isn't
-            // reassigned.
-            const stage = search;
-
-            stage.field = field;
-            stage.query = query;
-            stage.hasQuery = true;
-
-            return builder;
-        },
-    };
-
-    return builder;
-};
+/**
+ * How many rows the scan fallback fetches to serve a read bounded by `limit`.
+ *
+ * The FTS5 and `.global()` layouts order by the true score in SQL, so their
+ * `LIMIT` is exact and none of them needs a window. This path has no index to
+ * order by relevance — it scores every row it fetched, in memory — so cutting
+ * at `limit` in SQL would discard rows before they were scored. It takes the
+ * cap's worth instead, and never less than the cap, because an unbounded read
+ * resolves to one row *past* it so {@link assertSearchWithinCap} can tell
+ * "exactly the cap" from "more than the cap".
+ */
+const scanCandidateWindow = (limit: number): number => Math.max(limit, MAX_SEARCH_SCAN);
 
 /**
- * Run a search via the FTS5 shadow table: MATCH the query against the indexed
- * text column, JOIN back to the document table on the stored id, narrow by any
- * `.eq()` filter fields, and order by FTS5's `rank` (bm25 — best first).
+ * Run a search via the FTS5 shadow table, scoring in SQL from the index's own
+ * vocabulary view.
+ *
+ * FTS5 orders by bm25, which penalises document length and common terms; our
+ * contract orders by summed occurrences. The two are unrelated, so selecting a
+ * window with bm25 and re-ranking it in memory is not the contract's top-N —
+ * on a corpus where more documents match than the window holds, the documents
+ * the contract ranks highest can sit outside it entirely. `.take(3)` returned
+ * three arbitrary rows that claimed to be the best three.
+ *
+ * `fts5vocab(…, instance)` exposes one row per term instance, so a term's
+ * frequency in a document is a `COUNT`, and the query becomes the same shape
+ * the `.global()` layouts use — one `SUM(CASE …)` per term, added. Same answer
+ * by construction rather than by test, and `LIMIT` is exact, so an unbounded
+ * read's over-cap probe row survives to `assertSearchWithinCap`.
+ *
+ * One branch per term rather than one `WHERE … OR …`: SQLite's planner silently
+ * drops a range constraint OR'd with an equality on this module, returning no
+ * rows for the range half rather than an error.
  */
-const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined, scopeCondition?: SQL): Record<string, unknown>[] => {
-    const tokens = tokenizeSearch(search.query);
+const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number, scopeCondition?: SQL): Record<string, unknown>[] => {
+    const tokens = tokenizeSearch(search.query, createSearchAnalyzer(search.definition.language));
 
     if (tokens.length === 0) {
         return [];
     }
 
     const ftName = ftsTableName(tableName, search.indexName);
-    // MATCH must target the FTS table (by name or an indexed column), never the
-    // bare alias `f` — `f MATCH ?` is a "no such column: f" error in SQLite.
-    // We match the indexed `__text__` column so the alias join still works.
-    const whereClauses: SQL[] = [dsql`f.${dsql.identifier("__text__")} MATCH ${buildFtsMatch(tokens)}`];
+    const vocabulary = `${ftName}__vocab`;
+    const lastIndex = tokens.length - 1;
+    const branches = tokens.map((token, index) => {
+        const range = searchTermRange(token, index === lastIndex);
+        const predicate = range.exact
+            ? dsql`${dsql.identifier("term")} = ${range.lower}`
+            : dsql`${dsql.identifier("term")} >= ${range.lower} AND ${dsql.identifier("term")} < ${range.upper}`;
+
+        return dsql`SELECT ${dsql.identifier("doc")}, ${dsql.raw(String(index))} AS ${dsql.identifier("__term__")}, COUNT(*) AS ${dsql.identifier("__n__")} FROM ${dsql.identifier(vocabulary)} WHERE ${predicate} GROUP BY ${dsql.identifier("doc")}`;
+    });
+    const perTerm = tokens.map(
+        (_, index) => dsql`SUM(CASE WHEN u.${dsql.identifier("__term__")} = ${dsql.raw(String(index))} THEN u.${dsql.identifier("__n__")} ELSE 0 END)`,
+    );
+    const scored = dsql`SELECT f.${dsql.identifier(FTS_ID_COLUMN)} AS ${dsql.identifier(FTS_ID_COLUMN)}, ${dsql.join(perTerm, dsql` + `)} AS ${dsql.identifier("__score__")} FROM (${dsql.join(branches, dsql` UNION ALL `)}) u JOIN ${dsql.identifier(ftName)} f ON f.rowid = u.${dsql.identifier("doc")} GROUP BY f.${dsql.identifier(FTS_ID_COLUMN)} HAVING ${dsql.join(
+        perTerm.map((term) => dsql`${term} > 0`),
+        dsql` AND `,
+    )}`;
+
+    const whereClauses: SQL[] = [];
 
     for (const filter of search.filters) {
         whereClauses.push(dsql`${jsonPathSql(filter.field)} = ${serializeSqlValue(filter.value)}`);
     }
 
-    // Soft delete: the unqualified `__doc__` in the scope predicate resolves to
-    // the joined doc table `m` (the FTS table `f` has no `__doc__`).
     if (scopeCondition) {
         whereClauses.push(scopeCondition);
     }
 
-    // `f.rank` is FTS5's bm25 relevance (best first); the `_creationTime DESC`
-    // tiebreak matches the scan fallback so equal-rank rows order newest-first
-    // on both engines.
-    let query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(ftName)} f JOIN ${dsql.identifier(tableName)} m ON m.id = f.${dsql.identifier("__id__")} WHERE ${dsql.join(whereClauses, dsql` AND `)} ORDER BY f.rank, m._creationTime DESC`;
+    let query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)} FROM (${scored}) s JOIN ${dsql.identifier(tableName)} m ON m.id = s.${dsql.identifier(FTS_ID_COLUMN)}`;
 
-    if (typeof limit === "number") {
-        query = dsql`${query} LIMIT ${dsql.raw(String(Math.max(0, Math.floor(limit))))}`;
+    if (whereClauses.length > 0) {
+        query = dsql`${query} WHERE ${dsql.join(whereClauses, dsql` AND `)}`;
     }
 
-    const rows = runDrizzle(sql, query).toArray();
-    const docs: Record<string, unknown>[] = [];
+    query = dsql`${query} ORDER BY s.${dsql.identifier("__score__")} DESC, m._creationTime DESC, m.id ASC LIMIT ${dsql.raw(String(limit))}`;
 
-    for (const row of rows) {
-        const record = rowToDocument(row);
+    const documents: Record<string, unknown>[] = [];
+
+    for (const row of runDrizzle(sql, query)) {
+        const record = tryRowToDocument(row);
 
         if (record) {
-            docs.push(record);
+            documents.push(record);
         }
     }
 
-    return docs;
+    return documents;
 };
 
 /**
@@ -520,8 +1013,9 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
  * prefix-on-last-token semantics; relevance order is term-frequency, ties broken
  * by creation time (newest first).
  */
-const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined, scopeCondition?: SQL): Record<string, unknown>[] => {
-    const tokens = tokenizeSearch(search.query);
+const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, limit: number, scopeCondition?: SQL): Record<string, unknown>[] => {
+    const analyzer = createSearchAnalyzer(search.definition.language);
+    const tokens = tokenizeSearch(search.query, analyzer);
 
     if (tokens.length === 0) {
         return [];
@@ -543,28 +1037,47 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
         query = dsql`${query} WHERE ${dsql.join(whereClauses, dsql` AND `)}`;
     }
 
+    // Bounded like every other search read. This path has no index to order by
+    // relevance, so the window is taken newest-first — deterministic, and the
+    // same order the tiebreak uses — rather than left to the engine. Past the
+    // cap the fallback is therefore approximate, which the FTS5 paths are not;
+    // it only runs on an engine without FTS5, which no Durable Object is.
+    query = dsql`${query} ORDER BY _creationTime DESC, id ASC LIMIT ${dsql.raw(String(scanCandidateWindow(limit)))}`;
+
     const rows = runDrizzle(sql, query).toArray();
-    const scored: { creationTime: number; doc: Record<string, unknown>; score: number }[] = [];
+    const scored: { creationTime: number; doc: Record<string, unknown>; id: string; score: number }[] = [];
 
     for (const row of rows) {
-        const record = rowToDocument(row);
+        // Safe-parsing, not `rowToDocument`: this scan reads every row of the
+        // table, so one unparseable document would otherwise turn *every*
+        // search on it into an error. Unsearchable, not fatal.
+        const record = tryRowToDocument(row);
 
         if (!record) {
             continue;
         }
 
-        const score = scoreDocument(stringifySearchText(record[search.field]), tokens);
+        // The *analyzed* text, not the raw field: every other layout stores and
+        // scores a token stream capped at `MAX_INDEXED_TOKENS`, so scoring the
+        // raw value here would make this path find matches past the cap that
+        // the others cannot — a divergence in the one direction no parity gate
+        // covers, since this path only runs where FTS5 is absent.
+        const score = scoreDocument(analyzedSearchText(record, search.definition), tokens, analyzer);
 
         if (score > 0) {
-            scored.push({ creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0, doc: record, score });
+            scored.push({
+                creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0,
+                doc: record,
+                id: typeof record["_id"] === "string" ? record["_id"] : "",
+                score,
+            });
         }
     }
 
-    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime);
+    // Same total order the FTS path sorts by, id-terminated (see `searchViaFts`).
+    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime || a.id.localeCompare(b.id));
 
-    const docs = scored.map((entry) => entry.doc);
-
-    return typeof limit === "number" ? docs.slice(0, Math.max(0, Math.floor(limit))) : docs;
+    return scored.slice(0, limit).map((entry) => entry.doc);
 };
 
 /** Builder for `withGeoIndex(name, q => q.near(...) | q.within(...))`; mutates the staged geo query in place. */
@@ -1049,13 +1562,30 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
             throw new LunoraError("INTERNAL", "runSearchFetch called without a staged search");
         }
 
+        // Advance the backfill on read. `runShardMigrations` runs once per
+        // isolate, so a warm DO would otherwise index one page and then stop —
+        // a large table stays permanently half-indexed, serving partial results
+        // with no error and no signal. The page is bounded and a completed
+        // index costs one indexed state lookup, so reads pay almost nothing.
+        backfillSearchIndexesForTable(sql, tableName, tableDefinition);
+
         const filtered = stage.inMemoryFilters.length > 0;
-        const engineLimit = filtered ? undefined : limit;
+        // Relevance order means the engine read is always bounded: the caller's
+        // limit when there is one, `MAX_SEARCH_SCAN` otherwise — including when a
+        // `.filter()` runs on top, which narrows *within* that window rather than
+        // widening the read.
+        const engineLimit = resolveSearchScan(filtered ? undefined : limit);
         const docs = isFtsAvailable(sql)
             ? searchViaFts(sql, tableName, search, engineLimit, scopeCondition)
             : searchViaScan(sql, tableName, search, engineLimit, scopeCondition);
 
         if (!filtered) {
+            // An unbounded read asked for one row past the cap; if it came back
+            // full, the caller would otherwise receive a prefix that looks whole.
+            if (limit === undefined) {
+                assertSearchWithinCap(docs);
+            }
+
             return docs;
         }
 
@@ -1072,6 +1602,18 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         }
 
         return result;
+    };
+
+    /**
+     * One page of a relevance-ordered search. The window is fetched one row
+     * past the page so `hasMore` is observed rather than guessed; everything
+     * else — cursor decoding, the bounded-page refusal, the cap — is the shared
+     * policy in `search-query`, so the two backends page identically.
+     */
+    const paginateSearchStage = (options: PaginationOptions): QueryPage => {
+        const plan = planSearchPage(options);
+
+        return finishSearchPage(runSearchFetch(searchPageScan(plan)), plan);
     };
 
     const buildOrderClause = (): SQL => {
@@ -1121,7 +1663,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async paginate(options) {
             if (stage.search) {
-                throw new LunoraError("INTERNAL", "pagination is not supported on search queries; use .take(n) or .collect()");
+                return paginateSearchStage(options);
             }
 
             if (stage.geo) {
@@ -1203,7 +1745,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
             };
 
             stage.search = searchStage;
-            search(createSearchBuilder(searchStage, tableName));
+            search(createSearchBuilder(searchStage, tableName, createSearchAnalyzer(definition.language)));
 
             if (!searchStage.hasQuery) {
                 throw new LunoraError("INTERNAL", `search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);
@@ -2127,7 +2669,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // Vectorize query can't be scoped — so a soft delete REMOVES the row
                 // from them (passing `undefined`/`op: "delete"`), exactly like a
                 // physical delete. `restore()` re-adds both via the patch path.
-                syncSearch(tableName, id, merged);
+                syncSearch(tableName, id, merged, existing);
                 // Like rank, the geo companion has no read-time marker filter, so a
                 // soft delete removes the row from it (restore re-adds via patch).
                 syncGeo(tableName, id, undefined);
@@ -2895,7 +3437,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${JSON.stringify(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
             );
 
-            syncSearch(tableName, id, merged);
+            syncSearch(tableName, id, merged, existing);
             syncGeo(tableName, id, merged);
             syncAggregates(tableName, existing, merged);
             syncRanks(tableName, id, existing, merged);
@@ -3297,7 +3839,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 dsql`UPDATE ${dsql.identifier(tableName)} SET _creationTime = ${creationTime}, ${dsql.identifier(DOC_COLUMN)} = ${JSON.stringify(replaced)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
             );
 
-            syncSearch(tableName, id, replaced);
+            syncSearch(tableName, id, replaced, previous);
             syncGeo(tableName, id, replaced);
             syncAggregates(tableName, previous, replaced);
             syncRanks(tableName, id, previous, replaced);
@@ -3381,7 +3923,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 };
 
 export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
-export { backfillAggregateIndexes, backfillRankIndexes } from "./ctx-db-backfill";
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes } from "./ctx-db-backfill";
 export type { CdcChange } from "./ctx-db-cdc";
 export { applyCdcChanges, bumpCdcEpoch, CDC_LOG_TABLE, minCdcSeq, readCdcChanges, readCdcCursor, readCdcEpoch, trimCdcChanges } from "./ctx-db-cdc";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
@@ -3395,26 +3937,33 @@ export {
 } from "./ctx-db-global-shape-snapshot";
 export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db-idempotency";
 export { runShardMigrations } from "./ctx-db-migrations";
+export { SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { ShapeRow } from "./ctx-db-shapes";
 export { selectShapeMemberIds, selectShapeRows } from "./ctx-db-shapes";
 export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike } from "./triggers";
-export type { Clock, CountArgs, CtxDbOptions, IdGenerator, SqlCursor, SqlExec, WriteEvent, WriteHook };
-
-export {
-    type BroadcastDelta,
-    type ColumnMetaLike,
-    type DatabaseWriterLike,
-    type GeoFilterBuilderLike,
-    type GeoIndexDefinitionLike,
-    type IndexDefinitionLike,
-    type IndexRangeBuilderLike,
-    type PaginationOptions,
-    type ReadHook,
-    type SchemaLike,
-    type SearchFilterBuilderLike,
-    type SearchIndexDefinitionLike,
-    type ServerDefaultContextLike,
-    type TableDefinitionLike,
-    type TableReaderLike,
-    type ValidatorLike,
-} from "@lunora/shard-engine";
+export type {
+    BroadcastDelta,
+    Clock,
+    ColumnMetaLike,
+    CountArgs,
+    CtxDbOptions,
+    DatabaseWriterLike,
+    GeoFilterBuilderLike,
+    GeoIndexDefinitionLike,
+    IdGenerator,
+    IndexDefinitionLike,
+    IndexRangeBuilderLike,
+    PaginationOptions,
+    ReadHook,
+    SchemaLike,
+    SearchFilterBuilderLike,
+    SearchIndexDefinitionLike,
+    ServerDefaultContextLike,
+    SqlCursor,
+    SqlExec,
+    TableDefinitionLike,
+    TableReaderLike,
+    ValidatorLike,
+    WriteEvent,
+    WriteHook,
+};

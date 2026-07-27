@@ -144,13 +144,23 @@ requirement to unlock the framework.
 
 ## Also deliberately absent
 
-A few smaller boundaries, covered in depth on
+A few smaller boundaries, most of them covered in depth on
 [Architecture → Non-goals](/docs/architecture#non-goals):
 
 - **No external message broker** (MQTT / Pub/Sub / Redis) — real-time fan-out is
   entirely DO-based hibernatable WebSockets, so a delta never leaves the process.
 - **No OCC-retry loop on mutations** — serialized writes make a retry pointless; a
   `ConflictError` is a deterministic self-conflict, not a race.
+- **No serialized client mutation queue.** Plain `client.mutation` calls are
+  concurrent and may commit out of call order; optimistic state reconciles by
+  commit cursor instead of a per-client sequence number. Serializing a
+  general-purpose write API would cost head-of-line blocking (one slow write
+  stalls every write behind it), cap a client at one outstanding write per shard,
+  and force chain-failure semantics — a rejected A has to halt and roll back
+  everything queued behind it. Causally dependent writes have three cheaper
+  answers: await the first, combine both into one mutation, or use
+  [`@lunora/db`](/docs/packages/db) mutators, whose outbox is strictly ordered.
+  See [Write ordering](/docs/concepts/offline-first#write-ordering).
 - **No runtime enforcement of query/mutation determinism yet** — it's an advisor
   lint today, not a hard runtime guard.
 

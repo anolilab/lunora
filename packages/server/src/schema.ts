@@ -1,4 +1,5 @@
 import { LunoraError } from "@lunora/errors";
+import { isSearchLanguage, isSearchStrategy, SEARCH_LANGUAGES, SEARCH_STRATEGIES } from "@lunora/search-core";
 import type { Validator } from "@lunora/values";
 import { isOrWrapsFromValidator, v } from "@lunora/values";
 
@@ -18,6 +19,8 @@ import type {
     RelationDefinition,
     Schema,
     SearchIndexDefinition,
+    SearchLanguage,
+    SearchStrategy,
     ShardMode,
     TableDefinition,
     TableVectorIndex,
@@ -32,6 +35,14 @@ import type {
     VectorIndexDefinition,
     VectorMetric,
 } from "./types";
+
+/**
+ * Most `filterFields` one `.searchIndex()` may declare. Mirrors Convex. Lives
+ * here because this is where it is enforceable — the engines read the declared
+ * list, they never re-validate its length — so there is one home rather than a
+ * copy on each side of a package boundary.
+ */
+const MAX_SEARCH_FILTER_FIELDS = 16;
 
 /** Options for `.vectorize(field, opts)` (DSL Shape A). */
 interface VectorizeOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
@@ -157,8 +168,22 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     rankIndex: (name: string, options: InlineRankIndexOptions<Shape>) => TableBuilder<Shape>;
     /** Declare relations to other tables, loaded via `findMany({ with })`. */
     relations: (build: (r: RelationBuilder) => Record<string, RelationDefinition>) => TableBuilder<Shape>;
-    /** Add a search index over a field with optional filter fields. */
-    searchIndex: (name: string, options: { field: string; filterFields?: ReadonlyArray<string> }) => TableBuilder<Shape>;
+
+    /**
+     * Add a full-text search index over `field`, queried with
+     * `.withSearchIndex(name, q => q.search(field, term))`. `field` may be a
+     * dot-separated path into a nested object (`"properties.name"`).
+     * `filterFields` (at most 16) lists the columns `.eq()` may narrow by inside
+     * the search. `language` selects the text analysis (accent folding always,
+     * plus that language's stopwords). `staged: true` skips the migration-time
+     * backfill on a large existing table. `strategy: "native"` uses the engine's
+     * own full-text index where it has one (Postgres) — faster on large corpora,
+     * at the cost of the engine ranking rather than the shared scorer.
+     */
+    searchIndex: (
+        name: string,
+        options: { field: string; filterFields?: ReadonlyArray<string>; language?: SearchLanguage; staged?: boolean; strategy?: SearchStrategy },
+    ) => TableBuilder<Shape>;
     /** Route storage by the named field — one DO per distinct value. */
     shardBy: (field: keyof Shape & string) => TableBuilder<Shape>;
 
@@ -395,7 +420,44 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
             return builder;
         },
         searchIndex(name, options) {
-            searchIndexes.push({ field: options.field, filterFields: options.filterFields, name });
+            if (options.filterFields && options.filterFields.length > MAX_SEARCH_FILTER_FIELDS) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `searchIndex "${name}": at most ${String(MAX_SEARCH_FILTER_FIELDS)} filterFields are supported (got ${String(options.filterFields.length)})`,
+                );
+            }
+
+            // A typo'd language silently falling back to folding-only is
+            // exactly the kind of quiet wrong answer a schema-time check should
+            // catch, so it is rejected here rather than shrugged off at read
+            // time by the analyzer.
+            // Widened to `string` deliberately: the option is typed, so TS
+            // narrows the failing branch to `never` — but the check exists for
+            // the callers TS can't reach (JS, or a schema built from config).
+            const { language }: { language?: string } = options;
+
+            if (language !== undefined && !isSearchLanguage(language)) {
+                throw new LunoraError("INTERNAL", `searchIndex "${name}": unknown language "${language}" (supported: ${SEARCH_LANGUAGES.join(", ")})`);
+            }
+
+            // Same reasoning, bigger blast radius: `strategy` selects the
+            // *physical* companion layout, so a typo does not degrade the search
+            // — it silently gives you a different storage engine than you asked
+            // for, with no error at any point.
+            const { strategy }: { strategy?: string } = options;
+
+            if (strategy !== undefined && !isSearchStrategy(strategy)) {
+                throw new LunoraError("INTERNAL", `searchIndex "${name}": unknown strategy "${strategy}" (supported: ${SEARCH_STRATEGIES.join(", ")})`);
+            }
+
+            searchIndexes.push({
+                field: options.field,
+                filterFields: options.filterFields,
+                language: options.language,
+                name,
+                staged: options.staged,
+                strategy: options.strategy,
+            });
 
             return builder;
         },

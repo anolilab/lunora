@@ -164,6 +164,22 @@ describe("discoverSchema", () => {
         });
     });
 
+    it("captures searchIndex staged: true", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                docs: defineTable({ body: v.string() }).searchIndex("by_body", { field: "body", staged: true }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables[0]?.searchIndexes[0]).toMatchObject({ field: "body", name: "by_body", staged: true });
+    });
+
     it("searchIndex without filterFields leaves the field undefined (not an empty array)", () => {
         expect.assertions(2);
 

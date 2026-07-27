@@ -15,25 +15,17 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
 
-import type { AggregateIndexDefinitionLike, AggregateTally, RankIndexDefinitionLike } from "@lunora/shard-engine";
-import {
-    aggregateTableName,
-    encodeAggregateKey,
-    encodePartitionKey,
-    foldAggregateTally,
-    matchesRankStaticWhere,
-    matchesStaticWhere,
-    param,
-    rankTableName,
-    sortColumnName,
-} from "@lunora/shard-engine";
+import { analyzedSearchText, createSearchAnalyzer, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass } from "@lunora/search-core";
+import type { AggregateIndexDefinitionLike , AggregateTally, RankIndexDefinitionLike } from "@lunora/shard-engine";
+import { aggregateTableName, encodeAggregateKey, encodePartitionKey, foldAggregateTally , matchesRankStaticWhere, matchesStaticWhere, param , rankTableName, sortColumnName } from "@lunora/shard-engine";
 import { sql as dsql } from "drizzle-orm";
 
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
-import type { SchemaLike, SqlExec } from "./ctx-db";
+import type { SchemaLike, SearchIndexDefinitionLike, SqlExec } from "./ctx-db";
+import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
-import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, rowToDocument, serializeSqlValue } from "./do-sql";
+import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, serializeSqlValue, tryRowToDocument } from "./do-sql";
 
 /**
  * Backfill one aggregate counter table by scanning the source rows once and
@@ -148,4 +140,154 @@ const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     }
 };
 
-export { backfillAggregateIndexes, backfillRankIndexes };
+/**
+ * One page of a search backfill: `SEARCH_BACKFILL_BATCH_ROWS` documents in `id`
+ * order, starting after `cursor`.
+ *
+ * Bounded on purpose. A DO cold start runs `runShardMigrations` synchronously
+ * inside a 128 MB isolate, so materialising a whole table there is how a large
+ * table turns into an eviction loop. Instead each pass indexes a page and
+ * records where it stopped; the next pass resumes. The index is usable
+ * throughout — it simply covers a growing prefix of the table.
+ */
+const SEARCH_BACKFILL_BATCH_ROWS = 500;
+
+/**
+ * Index one page of `tableName` into a search companion, resuming from the
+ * recorded cursor. Returns `true` when the table is fully indexed.
+ *
+ * Each document is written DELETE-then-INSERT, so re-running a page (a retry
+ * after a crash, two cold starts racing) converges instead of duplicating —
+ * which on the FTS5 path would otherwise surface as the *same document twice*
+ * in a result set, since that query has no `GROUP BY` to collapse it.
+ */
+const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): boolean => {
+    const ftName = ftsTableName(tableName, index.name);
+    const { profile } = createSearchAnalyzer(index.language);
+    const pass = planSearchBackfillPass(readSearchBackfillState(sql, ftName), profile);
+
+    if (pass.finished) {
+        return true;
+    }
+
+    if (pass.wipe) {
+        // Stored text was analyzed by rules the query side no longer uses (a
+        // changed `language`, a new analyzer version) — discard and re-walk.
+        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)}`);
+    }
+
+    const { cursor } = pass;
+    const rows = runDrizzle(
+        sql,
+        cursor === undefined
+            ? dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} ORDER BY id ASC LIMIT ${dsql.raw(String(SEARCH_BACKFILL_BATCH_ROWS))}`
+            : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id > ${cursor} ORDER BY id ASC LIMIT ${dsql.raw(String(SEARCH_BACKFILL_BATCH_ROWS))}`,
+    ).toArray();
+
+    // Seeded from the resume point, never from nothing: a page whose rows all
+    // fail the id check would otherwise write back an empty cursor and send the
+    // next pass to the start of the table — forever, since a full page also
+    // reports "not done".
+    let lastId = cursor;
+
+    for (const row of rows) {
+        const { id } = row;
+
+        if (typeof id !== "string") {
+            continue;
+        }
+
+        lastId = id;
+
+        // Safe-parsing, not `rowToDocument`: this runs inside
+        // `runShardMigrations`, so an unparseable document would brick the
+        // whole shard's cold start. The cursor still advances past it, so the
+        // pass makes progress.
+        const record = tryRowToDocument(row);
+
+        if (!record) {
+            // Drop whatever the companion still holds for this id. Skipping
+            // outright would leave a stale row serving text the document no
+            // longer has — worse than the row being unsearchable.
+            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
+
+            continue;
+        }
+
+        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
+        runDrizzle(
+            sql,
+            dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(record, index)}, ${id})`,
+        );
+    }
+
+    const done = rows.length < SEARCH_BACKFILL_BATCH_ROWS;
+
+    writeSearchBackfillState(sql, ftName, lastId, done, profile);
+
+    return done;
+};
+
+/**
+ * Index one page of every declared search index on `tableName`, unless the
+ * index is `staged`. Called by `runShardMigrations` right after the shadow
+ * tables exist, which is what makes `.searchIndex()` on a table that already
+ * holds data searchable — and again on every search read, so a warm DO keeps
+ * advancing a large table's backfill instead of stopping after one page.
+ *
+ * The FTS5 guard is load-bearing on that second call site. Migration only
+ * creates the shadow tables where the engine has FTS5, so on an engine without
+ * it (searches fall back to a LIKE scan over the document table) there is no
+ * companion to write to and every statement below would raise "no such table"
+ * — turning a working fallback into a search surface that throws on every read.
+ */
+const backfillSearchIndexesForTable = (sql: SqlExec, tableName: string, definition: { searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike> }): void => {
+    if (!isFtsAvailable(sql)) {
+        return;
+    }
+
+    for (const index of definition.searchIndexes ?? []) {
+        if (index.staged) {
+            continue;
+        }
+
+        backfillSearchIndexPage(sql, tableName, index);
+    }
+};
+
+/**
+ * Run every declared search index — including the `staged: true` ones the
+ * migration pass skips — through to completion. The entry point a host calls
+ * out-of-band (a one-shot admin RPC, a migration step) after deploying a search
+ * index over a table too large to index a page at a time.
+ *
+ * Idempotent and resumable: an index already recorded as complete is skipped,
+ * and an interrupted run picks up from its recorded cursor.
+ */
+const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike): void => {
+    if (!isFtsAvailable(sql)) {
+        return;
+    }
+
+    // The page backfill records its progress in the state table, and this is the
+    // entry point a host calls directly — so it cannot assume `runShardMigrations`
+    // already ran. "The documented remedy throws unless you happened to migrate
+    // first" is not a remedy; the sql-store twin provisions for the same reason.
+    migrateSearchState(sql);
+
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        if (definition.shardMode?.kind === "global" || !definition.searchIndexes) {
+            continue;
+        }
+
+        for (const index of definition.searchIndexes) {
+            let done = false;
+
+            while (!done) {
+                done = backfillSearchIndexPage(sql, tableName, index);
+            }
+        }
+    }
+};
+
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable };

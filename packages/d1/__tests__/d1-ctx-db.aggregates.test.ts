@@ -2,7 +2,7 @@ import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, Vali
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations } from "../src/d1-ctx-db";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
 /**
  * Mirror of `@lunora/do`'s ctx-db.aggregates suite against the D1 column

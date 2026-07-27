@@ -18,8 +18,16 @@ interface Recorded {
     sql: string;
 }
 
+/**
+ * A row the MATCH query returns. `__text__` is the analyzed token stream the
+ * companion stored, and it is required rather than optional: the real query
+ * selects it and the shared scorer ranks on it, so a double that omitted it
+ * would score every row zero and quietly exercise a path production never
+ * takes.
+ */
 interface MatchRow {
     __doc__: string;
+    __text__: string;
     _creationTime: number;
     id: string;
 }
@@ -51,8 +59,9 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
         statements.push({ params, sql });
 
         // The FTS5 probe (`CREATE VIRTUAL TABLE … fts5`) and all DDL/DML succeed
-        // by returning no rows. A MATCH search returns the canned result set so
-        // the reader can decode and order it. The id-probe and by-id reads
+        // by returning no rows. A search reads the vocabulary view and joins
+        // back to the document table; the canned rows stand in for that join's
+        // result so the reader can decode it. The id-probe and by-id reads
         // resolve to the canned rows so the patch/delete table-resolution path
         // (`tableNameFromId` + `get`) reaches the FTS write-sync.
         //
@@ -61,7 +70,13 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
         // snapshot, so report one changed row.
         const routes: { pattern: RegExp; rows: () => Row[] }[] = [
             { pattern: /^SELECT changes\(\) AS changed$/u, rows: () => [{ changed: 1 }] as unknown as Row[] },
-            { pattern: / MATCH /u, rows: () => matchRows as unknown as Row[] },
+            // The migration-time backfill probes whether the shadow already
+            // carries rows (always "no" here, so the backfill runs) and then
+            // scans the source table — the canned rows stand in for a table that
+            // already held data when the search index was declared.
+            { pattern: /^SELECT COUNT\(\*\) AS count FROM /u, rows: () => [{ count: 0 }] as unknown as Row[] },
+            { pattern: /^SELECT id, _creationTime, "__doc__" FROM "docs" ORDER BY id ASC/u, rows: () => matchRows as unknown as Row[] },
+            { pattern: /__fts_by_body__vocab/u, rows: () => matchRows as unknown as Row[] },
             // `lookupById` folds every table into one UNION-ALL probe tagged
             // with `AS __t__`; resolve it to the canned rows (more specific
             // than the generic `LIMIT 1` probe below, so it must come first)
@@ -115,6 +130,50 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         ).toBe(true);
     });
 
+    it("backfills rows that predate the search index into the fresh shadow", () => {
+        expect.assertions(2);
+
+        const { sql, statements } = createRecordingFts([
+            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), __text__: "hello world", _creationTime: 1, id: "d1" },
+            { __doc__: JSON.stringify({ body: "hello words", channel: "x", title: "second" }), __text__: "hello words", _creationTime: 2, id: "d2" },
+        ]);
+
+        runShardMigrations(sql, searchSchema);
+
+        const inserts = statements.filter((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+
+        expect(inserts).toHaveLength(2);
+        expect(inserts.map((statement) => statement.params)).toStrictEqual([
+            ["hello world", "d1"],
+            ["hello words", "d2"],
+        ]);
+    });
+
+    it("leaves a staged search index empty for an out-of-band backfill", () => {
+        expect.assertions(2);
+
+        const stagedSchema: SchemaLike = {
+            tables: {
+                docs: {
+                    ...searchSchema.tables["docs"]!,
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body", staged: true }],
+                },
+            },
+        };
+        const { sql, statements } = createRecordingFts([
+            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), __text__: "hello world", _creationTime: 1, id: "d1" },
+        ]);
+
+        runShardMigrations(sql, stagedSchema);
+
+        expect(
+            statements.some(
+                (statement) => statement.sql === 'CREATE VIRTUAL TABLE IF NOT EXISTS "docs__fts_by_body" USING fts5("__text__", "__id__" UNINDEXED)',
+            ),
+        ).toBe(true);
+        expect(statements.some((statement) => statement.sql.startsWith('INSERT INTO "docs__fts_by_body"'))).toBe(false);
+    });
+
     it("syncs indexed text on insert via delete-then-insert", async () => {
         expect.assertions(2);
 
@@ -136,7 +195,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
     it("clears the FTS row on delete (no re-insert)", async () => {
         expect.assertions(2);
 
-        const { sql, statements } = createRecordingFts([{ __doc__: JSON.stringify({ body: "bye", title: "a" }), _creationTime: 1, id: "d1" }]);
+        const { sql, statements } = createRecordingFts([{ __doc__: JSON.stringify({ body: "bye", title: "a" }), __text__: "bye", _creationTime: 1, id: "d1" }]);
 
         runShardMigrations(sql, searchSchema);
 
@@ -154,12 +213,12 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         expect(ftsWritesAfter[0]?.params).toStrictEqual(["d1"]);
     });
 
-    it("emits a MATCH query joined to the document table, ordered by rank", async () => {
-        expect.assertions(3);
+    it("scores in SQL from the vocabulary view, bounded by the caller's limit", async () => {
+        expect.assertions(4);
 
         const matchRows: MatchRow[] = [
-            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), _creationTime: 1, id: "d1" },
-            { __doc__: JSON.stringify({ body: "hello words", channel: "x", title: "second" }), _creationTime: 2, id: "d2" },
+            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), __text__: "hello world", _creationTime: 1, id: "d1" },
+            { __doc__: JSON.stringify({ body: "hello words", channel: "x", title: "second" }), __text__: "hello words", _creationTime: 2, id: "d2" },
         ];
         const { sql, statements } = createRecordingFts(matchRows);
 
@@ -167,19 +226,23 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const writer = createShardContextDatabase({ schema: searchSchema, sql });
 
-        const results = await writer
+        await writer
             .query("docs")
             .withSearchIndex("by_body", (q) => q.search("body", "hello wor").eq("channel", "x"))
             .take(5);
 
-        const matchStatement = statements.find((statement) => statement.sql.includes(" MATCH "));
+        const read = statements.find((statement) => statement.sql.includes("__vocab") && statement.sql.startsWith("SELECT"));
 
-        expect(matchStatement?.sql).toBe(
-            'SELECT m.id, m._creationTime, m."__doc__" FROM "docs__fts_by_body" f JOIN "docs" m ON m.id = f."__id__" WHERE f."__text__" MATCH ? AND json_extract(__doc__, \'$.channel\') = ? ORDER BY f.rank, m._creationTime DESC LIMIT 5',
-        );
-        expect(matchStatement?.params).toStrictEqual(['"hello" AND "wor"*', "x"]);
-
-        // The reader preserves the DB's rank ordering and decodes the rows.
-        expect(results.map((document) => document["_id"])).toStrictEqual(["d1", "d2"]);
+        // One branch per term — an exact equality for every term but the last,
+        // a half-open range for the one the user is still typing — UNION'd
+        // rather than OR'd, because SQLite silently drops a range constraint
+        // OR'd with an equality on this module.
+        expect(read?.sql).toContain('FROM "docs__fts_by_body__vocab" WHERE "term" = ?');
+        expect(read?.sql).toContain('WHERE "term" >= ? AND "term" < ?');
+        // The score is summed per term in SQL and the caller's limit bounds the
+        // read directly: no bm25 window, nothing re-ranked in memory. `wor` is
+        // bounded above by `wos`, its last character incremented.
+        expect(read?.sql).toContain('ORDER BY s."__score__" DESC, m._creationTime DESC, m.id ASC LIMIT 5');
+        expect(read?.params).toStrictEqual(["hello", "wor", "wos", "x"]);
     });
 });

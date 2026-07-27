@@ -49,6 +49,7 @@ export type {
     ReadHook,
     SchemaLike,
     SearchFilterBuilderLike,
+    SearchIndexDefinitionLike,
     ServerDefaultContextLike,
     SqlCursor,
     SqlExec,
@@ -63,6 +64,7 @@ export {
     assertValidClientId,
     backfillAggregateIndexes,
     backfillRankIndexes,
+    backfillSearchIndexes,
     CDC_LOG_TABLE,
     createShardCtxDb,
     normalizeIdStructurally,
@@ -165,6 +167,11 @@ export type { ShardPlatform, WorkerPlatform, WorkerPlatformOptions } from "./pla
 export { createShardPlatform, createWorkerPlatform } from "./platform";
 export { serveRelationFanout } from "./relation-fanout";
 export type { LogEventInput } from "./request-log";
+// The search core moved out of this package. It used to be re-exported from
+// here so `@lunora/sql-store` could reuse it, which turned two dozen internal
+// contracts into permanent public API for no reason other than cross-package
+// reach. `guardWriter` left for the same reason and now lives in
+// `@lunora/shard-engine`, which re-exports it.
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
 export type { SessionRecord } from "./session-do";

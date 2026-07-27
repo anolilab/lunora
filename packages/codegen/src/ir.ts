@@ -56,11 +56,17 @@ export interface IndexIR {
 }
 
 export interface SearchIndexIR {
-    /** Primary text-search field. */
+    /** Primary text-search field; a dot-separated path reads a nested field. */
     field: string;
     /** Optional filter fields surfaced alongside the FTS column. */
     filterFields?: ReadonlyArray<string>;
+    /** Text-analysis profile (accent folding + that language's stopwords). */
+    language?: string;
     name: string;
+    /** Skip the migration-time backfill of the search companion (large tables index out-of-band). */
+    staged?: boolean;
+    /** `"native"` opts into the engine's own full-text index where it has one (Postgres). */
+    strategy?: string;
 }
 
 /** A `.geoIndex(name, { field, precision? })` declaration — a geohash companion over a `v.geoPoint()` column. */

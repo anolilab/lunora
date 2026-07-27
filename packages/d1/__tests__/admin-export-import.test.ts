@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { exportGlobalRows, importGlobalRows, selectGlobalTables } from "../src/admin-export-import";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
 const FIXED_CLOCK = 1_700_000_000_000;
 

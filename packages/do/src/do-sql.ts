@@ -142,6 +142,24 @@ const rowToDocument = (row: Record<string, unknown> | undefined): Record<string,
 };
 
 /**
+ * Parse a stored row into a document, yielding `undefined` for an unparseable
+ * blob rather than throwing — the tolerant twin of {@link rowToDocument}.
+ *
+ * Every caller that walks *many* rows wants this one: the search backfill and
+ * the LIKE-scan search both read whole pages, and one corrupt document there
+ * would otherwise take down a shard's cold start or every search on the table,
+ * rather than costing the single row it belongs to. Callers reading one row by
+ * id want the throw, so this is a separate function rather than a flag.
+ */
+const tryRowToDocument = (row: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
+    try {
+        return rowToDocument(row);
+    } catch {
+        return undefined;
+    }
+};
+
+/**
  * Memoized per-`SqlExec` FTS5 capability probe. Cloudflare Durable Objects ship
  * SQLite with FTS5; `node:sqlite` (used in tests) does not. We create and drop a
  * throwaway virtual table once per handle and cache the result — the DO's `sql`
@@ -198,4 +216,5 @@ export {
     quoteIdentifier,
     rowToDocument,
     tableColumns,
+    tryRowToDocument,
 };

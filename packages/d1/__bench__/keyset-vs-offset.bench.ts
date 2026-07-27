@@ -1,7 +1,7 @@
 import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { beforeAll, bench, describe } from "vitest";
 
-import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
+import { createD1Exec } from "../__tests__/_helpers/node-sqlite-d1";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
 
 /**

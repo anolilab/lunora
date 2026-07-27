@@ -16,17 +16,20 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-migrations" mirrors its parent "ctx-db.ts" (the established public module name). */
 
-import { aggregateTableName, ftsTableName, rankTableName, sortColumnName } from "@lunora/shard-engine";
+import { FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName } from "@lunora/search-core";
+import { aggregateTableName, rankTableName, sortColumnName } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
+import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import { migrateCdcLog, migrateCdcMeta } from "./ctx-db-cdc";
 import { migrateClientWatermark } from "./ctx-db-client-watermark";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
+import { migrateSearchState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
 
@@ -60,6 +63,12 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
  * only on engines that ship FTS5 (Cloudflare DOs do; the `node:sqlite` test
  * runner doesn't, where `.search()` transparently falls back to a scan).
  * `__text__` holds the indexed field; `__id__` (UNINDEXED) joins back to the row.
+ *
+ * A freshly created shadow is then backfilled from the rows already in the
+ * table, so declaring a search index on a table that already holds data makes
+ * that data searchable — without it the index would only ever see rows written
+ * after* the deploy. `staged: true` opts out for large tables; a host populates
+ * those out-of-band with `backfillSearchIndexes`.
  */
 const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
     if (!definition.searchIndexes || definition.searchIndexes.length === 0 || !isFtsAvailable(sql)) {
@@ -71,9 +80,19 @@ const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: Table
 
         runDrizzle(
             sql,
-            dsql`CREATE VIRTUAL TABLE IF NOT EXISTS ${dsql.identifier(ftName)} USING fts5(${dsql.identifier("__text__")}, ${dsql.identifier("__id__")} UNINDEXED)`,
+            dsql`CREATE VIRTUAL TABLE IF NOT EXISTS ${dsql.identifier(ftName)} USING fts5(${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)} UNINDEXED)`,
+        );
+        // The vocabulary view over that index: one row per term *instance*, so a
+        // term's frequency in a document is a COUNT. It is what lets the reader
+        // rank by the shared scorer in SQL instead of approximating it over a
+        // bm25-selected window — see `searchViaFts`.
+        runDrizzle(
+            sql,
+            dsql`CREATE VIRTUAL TABLE IF NOT EXISTS ${dsql.identifier(`${ftName}__vocab`)} USING fts5vocab(${dsql.identifier(ftName)}, ${dsql.raw("instance")})`,
         );
     }
+
+    backfillSearchIndexesForTable(sql, tableName, definition);
 };
 
 /**
@@ -188,6 +207,10 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
  */
 // eslint-disable-next-line import/prefer-default-export -- named export: import sites stay uniform (`import { runShardMigrations }`), per the repo's no-default-mixing convention
 export const runShardMigrations = (sql: SqlExec, schema: SchemaLike, options: { cdc?: boolean } = {}): void => {
+    // Before any table: the search backfill records its progress here, and it
+    // runs inside the per-table pass below.
+    migrateSearchState(sql);
+
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind === "global") {
             continue;
