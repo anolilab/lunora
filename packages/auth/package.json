@@ -127,6 +127,7 @@
         "better-auth": "catalog:auth"
     },
     "devDependencies": {
+        "@better-auth/kysely-adapter": "catalog:auth",
         "@better-auth/sso": "catalog:auth",
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",

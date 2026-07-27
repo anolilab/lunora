@@ -466,6 +466,10 @@ catalogs:
     # password account) lives in `@better-auth/core/db`, not the `better-auth` barrel.
     "@better-auth/core": 1.7.0-rc.2
     "@better-auth/expo": 1.7.0-rc.2
+    # Test-only: the SCIM plugin demands an adapter with native transactions, which
+    # Lunora's own store cannot offer — the provisioning suite drives it over kysely +
+    # node:sqlite instead. See __tests__/scim-provisioning.behaviour.test.ts.
+    "@better-auth/kysely-adapter": 1.7.0-rc.2
     # `mcp` / `withMcpAuth` and `oidcProvider` left better-auth's core barrel in 1.7
     # (the latter was already `@deprecated` in 1.6 in favour of the oauth-provider
     # package). They live in these two packages now, on the same prerelease.

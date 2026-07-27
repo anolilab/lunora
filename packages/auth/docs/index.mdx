@@ -142,7 +142,7 @@ pnpm add @better-auth/sso
 
 ```ts
 import { createAuth, lunoraD1Adapter } from "@lunora/auth";
-import { admin, organization, scim } from "@lunora/auth/plugins";
+import { admin, organization } from "@lunora/auth/plugins";
 import { sso } from "@lunora/auth/plugins/enterprise";
 
 export const auth = createAuth({
@@ -150,16 +150,14 @@ export const auth = createAuth({
     database: lunoraD1Adapter(env.DB),
     // The IdP's origin must be trusted before a provider can be registered — see below.
     trustedOrigins: ["https://acme.okta.com"],
-    plugins: [
-        sso({ domainVerification: { enabled: true } }),
-        scim({
-            connections: [{ id: "okta-acme", credentials: [{ type: "bearer", id: "primary", token: env.SCIM_TOKEN }] }],
-        }),
-        admin(),
-        organization(),
-    ],
+    plugins: [sso({ domainVerification: { enabled: true } }), admin(), organization()],
 });
 ```
+
+SSO runs on any database Lunora supports, D1 included. **SCIM does not** — it needs an
+adapter with native transactions, which rules out D1. See
+[SCIM's database requirement](#scim--directory-driven-provisioning) before planning
+around it.
 
 The tables come for free: `authTables` derives them from the plugin list, so
 `lunora migrate` picks them up with no schema edits — `ssoProvider` for SSO, and seven
@@ -220,7 +218,29 @@ Use `provisionUser` / `organizationProvisioning` to shape the just-in-time accou
 
 `scim()` serves SCIM 2.0 under `/api/auth/scim/v2/` — `Users`, `Groups`, `Schemas`,
 `ResourceTypes`, and `ServiceProviderConfig` — so an IdP can create, update, and
-deactivate accounts (and sync groups) without anyone signing in.
+deactivate directory users (and sync groups) without anyone signing in.
+
+<Callout type="warn">
+  **SCIM needs a database adapter with native transactions, so it does not run on D1.**
+  The plugin refuses to serve a request otherwise, with `The scim plugin requires a
+  database adapter with native transaction support`.
+
+That rules out `lunoraD1Adapter` and `lunoraAuthAdapter` — both are single-table CRUD
+over `ctx.db` — and D1 itself, whose driver has no interactive transactions. Use a
+transactional database reached through better-auth's kysely adapter with
+`transaction: true`, e.g. Postgres or MySQL via
+[`@lunora/hyperdrive`](/docs/packages/hyperdrive):
+
+```ts
+createAuth({
+    database: { dialect: myPostgresDialect, type: "postgres", transaction: true },
+    plugins: [scim({ connections: [...] })],
+});
+```
+
+SSO has no such constraint and runs fine on D1.
+
+</Callout>
 
 **Connections are declared in code, not minted at runtime.** Each connection carries
 its own bearer credentials, and you hand the IdP the token you configured:
@@ -252,6 +272,21 @@ rest — keep your tokens in `ctx.secrets` / `.dev.vars`, never in the source.
 Scope each credential to what the IdP actually needs: `scim.users.read`,
 `scim.users.write`, `scim.groups.read`, `scim.groups.write` (omitting `scopes` grants
 all four).
+
+**Two lifecycle semantics that surprise people** — both pinned by
+`__tests__/scim-provisioning.behaviour.test.ts`, so they are what the shipped version
+actually does rather than what the SCIM spec might imply:
+
+- **Deactivation does not lock the account.** A `PATCH` of `active: false` is recorded
+  in SCIM's own projection; it does _not_ set `banned` or otherwise stop the user
+  signing in, and loading the `admin` plugin does not change that. If disabling a user
+  in the IdP must revoke access, act on the projection yourself.
+- **`DELETE` unlinks, it does not erase.** It removes the SCIM resource and leaves the
+  underlying account row in place. Treating it as an off-boarding guarantee would be
+  wrong.
+
+Both `PATCH` and `DELETE` answer `204` with no body; re-read the resource with `GET` if
+you need the resulting state.
 
 The IdP drives these endpoints with `PUT`, `PATCH`, and `DELETE`. Lunora's dispatch is
 method-agnostic and runs auth ahead of function routing, so those pass straight
