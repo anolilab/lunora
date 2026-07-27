@@ -109,7 +109,7 @@ export const recent = query
 
 /** Prune probe rows past the retention window so the time series stays bounded. */
 export const prune = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
-    const cutoff = Date.now() - CHECK_RETENTION_MS;
+    const cutoff = context.now - CHECK_RETENTION_MS;
     // Oldest-first, bounded: the stale rows (if any) sort to the front, so this page
     // holds them without materializing the whole table.
     const { page } = await context.db.uptimeChecks.findMany({ limit: PRUNE_SCAN_LIMIT, orderBy: [{ createdAt: "asc" }] });

@@ -17,7 +17,11 @@ interface AuditRow {
  * did what.
  */
 export const record = mutation
-    .input({ action: v.string(), organizationId: v.id("organizations"), target: v.optional(v.string()) })
+    .input({
+        action: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        organizationId: v.id("organizations"),
+        target: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+    })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"auditLog">> => {
         // Restricted to owner/admin: the `action`/`target` are free-form, so a plain
         // member (esp. a viewer) could otherwise forge security-relevant entries
@@ -28,7 +32,7 @@ export const record = mutation
         return context.db.insert("auditLog", {
             action: arguments_.action,
             actorUserId: userId,
-            createdAt: Date.now(),
+            createdAt: context.now,
             organizationId: arguments_.organizationId,
             target: arguments_.target,
         });

@@ -85,7 +85,7 @@ export const list = query
         deploymentId: v.optional(v.id("deployments")),
         errorOnly: v.optional(v.boolean()),
         from: v.optional(v.number()),
-        functionPath: v.optional(v.string()),
+        functionPath: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
         limit: v.optional(v.number()),
         minDurationMs: v.optional(v.number()),
         organizationId: v.id("organizations"),
@@ -191,7 +191,7 @@ const toSpanView = (span: ObservationRow | SpanObservation): SpanView => ({
 export const get = query
     .input({
         organizationId: v.id("organizations"),
-        traceId: v.string(),
+        traceId: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
     })
     .query(async ({ ctx: context, args }): Promise<SpanView[]> => {
         await assertMember(context, args.organizationId);
@@ -220,7 +220,7 @@ export const get = query
 export const getArchived = action
     .input({
         organizationId: v.id("organizations"),
-        traceId: v.string(),
+        traceId: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
     })
     .action(async ({ ctx: context, args }): Promise<SpanView[]> => {
         await assertMember(context, args.organizationId);

@@ -63,10 +63,10 @@ export const createRule = mutation
         channel: v.union(v.literal("email"), v.literal("webhook"), v.literal("slack"), v.literal("pagerduty")),
         // Metric targets only: how the window value is compared to `threshold`. Default `gt`.
         comparator: v.optional(v.union(v.literal("gt"), v.literal("lt"))),
-        destination: v.string(),
+        destination: v.string().check((value) => value.length <= 2_048, { message: "must be at most 2_048 characters", schema: { maxLength: 2_048 } }),
         // Metric targets only: optional function-path scope for the window.
-        functionPath: v.optional(v.string()),
-        name: v.string(),
+        functionPath: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
         organizationId: v.id("organizations"),
         target: v.union(
             v.literal("issue"),
@@ -107,7 +107,7 @@ export const createRule = mutation
             throw new LunoraError("BAD_REQUEST", "pagerduty destination must be an integration (routing) key");
         }
 
-        const now = Date.now();
+        const now = context.now;
 
         return context.db.insert("alertRules", {
             channel: args.channel,
@@ -133,7 +133,7 @@ export const setRuleEnabled = mutation
     .mutation(async ({ ctx: context, args: { enabled, id, organizationId } }): Promise<Id<"alertRules">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, id, organizationId, "alert rule");
-        await context.db.patch(id, { enabled, updatedAt: Date.now() });
+        await context.db.patch(id, { enabled, updatedAt: context.now });
 
         return id;
     });
@@ -164,11 +164,15 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
  * close the cross-org IDOR on a shared-key call.
  */
 export const markDelivered = mutation
-    .input({ deployKey: v.string(), ids: v.array(v.id("alerts")), organizationId: v.id("organizations") })
+    .input({
+        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+        ids: v.array(v.id("alerts")),
+        organizationId: v.id("organizations"),
+    })
     .mutation(async ({ ctx: context, args: { deployKey, ids, organizationId } }): Promise<{ delivered: number }> => {
         await authorizeDeployKey(context, organizationId, deployKey);
 
-        const now = Date.now();
+        const now = context.now;
 
         for (const id of ids) {
             // eslint-disable-next-line no-await-in-loop -- small bounded set; the global mutation is serialized

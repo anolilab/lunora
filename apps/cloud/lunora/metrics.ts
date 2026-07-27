@@ -114,7 +114,7 @@ const metricPointInput = v.object({
  */
 export const ingest = mutation
     .input({
-        deployKey: v.string(),
+        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
         deploymentId: v.optional(v.id("deployments")),
         organizationId: v.id("organizations"),
         points: v.array(metricPointInput),
@@ -126,7 +126,7 @@ export const ingest = mutation
             throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_METRIC_POINTS)} points)`);
         }
 
-        const now = Date.now();
+        const now = context.now;
 
         for (const point of args.points) {
             // eslint-disable-next-line no-await-in-loop -- bounded batch; sequential keeps the writer simple
@@ -161,8 +161,8 @@ export const series = query
     .query(async ({ ctx: context, args }): Promise<MetricSeriesView[]> => {
         await assertMember(context, args.organizationId);
 
-        const from = args.from ?? Date.now() - DEFAULT_METRICS_WINDOW_MS;
-        const to = args.to ?? Date.now();
+        const from = args.from ?? context.now - DEFAULT_METRICS_WINDOW_MS;
+        const to = args.to ?? context.now;
 
         const { page } = await context.db.metricPoints.findMany({
             limit: METRIC_SCAN_LIMIT,
@@ -186,7 +186,7 @@ interface MetricRetentionRow {
 
 /** Delete exact metric points past retention. SYSTEM only (cron dispatch). */
 export const prune = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
-    const cutoff = Date.now() - METRIC_POINT_RETENTION_MS;
+    const cutoff = context.now - METRIC_POINT_RETENTION_MS;
     const { page } = await context.db.metricPoints.findMany({});
     const stale = (page as unknown as MetricRetentionRow[]).filter((row) => row.at < cutoff);
 

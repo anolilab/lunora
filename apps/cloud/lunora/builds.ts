@@ -46,7 +46,12 @@ export const LEASE_STALE_MS = 30 * 60 * 1000;
  * as-is (`reused: true`) instead of queuing a rebuild.
  */
 export const recordPush = mutation
-    .input({ branch: v.string(), commitSha: v.string(), installationId: v.number(), repository: v.string() })
+    .input({
+        branch: v.string().check((value) => value.length <= 255, { message: "must be at most 255 characters", schema: { maxLength: 255 } }),
+        commitSha: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
+        installationId: v.number(),
+        repository: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+    })
     .mutation(async ({ ctx: context, args: { branch, commitSha, installationId, repository } }): Promise<null | { buildId: Id<"builds">; reused: boolean }> => {
         const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
         const project = (page as unknown as ProjectRow[])[0];
@@ -81,7 +86,7 @@ export const recordPush = mutation
             throw new LunoraError("TOO_MANY_REQUESTS", "too many unfinished builds for this project");
         }
 
-        const now = Date.now();
+        const now = context.now;
         const buildId = await context.db.insert("builds", {
             branch,
             commitSha,
@@ -103,7 +108,7 @@ export const recordPush = mutation
 export const claimNext = internalMutation
     .input({ runnerId: v.string() })
     .mutation(async ({ ctx: context, args: { runnerId } }): Promise<null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects"> }> => {
-        const now = Date.now();
+        const now = context.now;
         const { page } = await context.db.builds.findMany({});
         const claimable = (page as unknown as BuildRow[])
             .filter(
@@ -147,7 +152,7 @@ export const appendLog = internalMutation
     .mutation(async ({ ctx: context, args: { buildId, level, line, runnerId } }): Promise<void> => {
         const build = assertLease(await context.db.get(buildId), runnerId);
 
-        await context.db.insert("buildLogs", { buildId, createdAt: Date.now(), level, line, organizationId: build.organizationId });
+        await context.db.insert("buildLogs", { buildId, createdAt: context.now, level, line, organizationId: build.organizationId });
     });
 
 /** Mark a claimed build successful with its bundle hash. SYSTEM only. */
@@ -156,7 +161,7 @@ export const complete = internalMutation
     .mutation(async ({ ctx: context, args: { buildId, bundleHash, deploymentId, runnerId } }): Promise<void> => {
         assertLease(await context.db.get(buildId), runnerId);
 
-        const now = Date.now();
+        const now = context.now;
 
         await context.db.patch(buildId, {
             bundleHash,
@@ -175,7 +180,7 @@ export const fail = internalMutation
     .mutation(async ({ ctx: context, args: { buildId, error, runnerId } }): Promise<void> => {
         assertLease(await context.db.get(buildId), runnerId);
 
-        const now = Date.now();
+        const now = context.now;
 
         await context.db.patch(buildId, {
             error,
@@ -236,7 +241,7 @@ export const PENDING_EXPIRY_MS = 24 * 60 * 60 * 1000;
  * forever — a fresh push can always re-queue). SYSTEM only (cron dispatch).
  */
 export const expireStale = internalMutation.mutation(async ({ ctx: context }): Promise<{ expired: number }> => {
-    const now = Date.now();
+    const now = context.now;
     const { page } = await context.db.builds.findMany({});
     const stale = (page as unknown as BuildRow[]).filter(
         (build) =>

@@ -108,7 +108,7 @@ export const list = query
 export const get = query
     .input({
         organizationId: v.id("organizations"),
-        sessionId: v.string(),
+        sessionId: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
     })
     .query(async ({ ctx: context, args }): Promise<SessionTurnView[]> => {
         await assertMember(context, args.organizationId);
