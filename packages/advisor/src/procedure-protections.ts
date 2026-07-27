@@ -16,6 +16,16 @@ export interface AdvisorProcedureProtection {
     fanOut: boolean;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
+    /**
+     * `true` when the procedure declares an email-shaped argument. Read by the
+     * `signup_mutation_without_disposable_gating` lint: `emailGateMiddleware`
+     * gates an address selected off the args, so a procedure that never receives
+     * one cannot action the lint no matter what table it writes.
+     *
+     * Optional so a feeder predating this field (or a runtime caller) is treated
+     * as "unknown" rather than silently clearing every finding.
+     */
+    hasEmailArg?: boolean;
     /** Registration kind — `query` is read-only; `mutation`/`action` are write-shaped. */
     kind: "action" | "mutation" | "query";
     /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound. Read by the `ai_unbounded_generation_public` lint (paired with public visibility). */

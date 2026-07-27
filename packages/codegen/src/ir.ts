@@ -1012,6 +1012,8 @@ export interface ProcedureMiddlewareIR {
     exportName: string;
     /** `true` when the handler fans work out to a privileged, cost-bearing dispatch surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow create). Feeds the privileged-fanout lint. */
     fanOut: boolean;
+    /** `true` when the procedure declares an email-shaped argument (`email`, `emailAddress`, `userEmail`, …). Feeds `signup_mutation_without_disposable_gating`, which can only be actioned when there is an address to gate. */
+    hasEmailArg: boolean;
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
     /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
