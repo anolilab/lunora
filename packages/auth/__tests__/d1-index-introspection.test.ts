@@ -71,6 +71,30 @@ describe("withD1IndexIntrospection", () => {
         expect(prepared).toEqual(["SELECT 1"]);
     });
 
+    it("keeps other methods callable, bound to the real binding", () => {
+        expect.assertions(1);
+
+        // Regression guard: `Reflect.get` hands back unbound methods, so calling one on
+        // the proxy runs it with `this` set to the proxy. An implementation that
+        // brand-checks `this` then throws `Cannot read private member`. better-auth's D1
+        // introspector calls `.batch()` on this object, so it is on the live path.
+        class BrandChecked {
+            #state = "real";
+
+            public batch(statements: unknown[]) {
+                return { batched: statements.length, owner: this.#state };
+            }
+
+            public prepare(query: string) {
+                return { owner: this.#state, query };
+            }
+        }
+
+        const proxied = withD1IndexIntrospection(new BrandChecked());
+
+        expect(proxied.batch([1, 2])).toEqual({ batched: 2, owner: "real" });
+    });
+
     it("answers the pragma-join query from sqlite_master instead", async () => {
         expect.assertions(2);
 

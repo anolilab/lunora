@@ -188,11 +188,20 @@ const introspectionStatement = (database: D1Like): unknown => {
 export const withD1IndexIntrospection = <T extends D1Like>(database: T): T =>
     new Proxy(database, {
         get(target, property, receiver) {
-            if (property !== "prepare") {
-                return Reflect.get(target, property, receiver) as unknown;
+            if (property === "prepare") {
+                return (query: string): unknown => (isIndexIntrospectionQuery(query) ? introspectionStatement(target) : target.prepare(query));
             }
 
-            return (query: string): unknown => (isIndexIntrospectionQuery(query) ? introspectionStatement(target) : target.prepare(query));
+            const value = Reflect.get(target, property, receiver) as unknown;
+
+            // Bind methods to the real binding. Handed back unbound, they would run with
+            // `this` set to the proxy, and any implementation that brand-checks `this`
+            // (a `#private` field, a native slot) throws `Cannot read private member`.
+            // better-auth's own D1 introspector calls `.batch()` on the object we return
+            // here, so this is on the live path, not hypothetical. workerd's current D1
+            // happens to use `_`-prefixed state and survives either way — which is
+            // exactly why the bug would surface later, somewhere else, as a mystery.
+            return typeof value === "function" ? (value as (...arguments_: unknown[]) => unknown).bind(target) : value;
         },
     });
 
