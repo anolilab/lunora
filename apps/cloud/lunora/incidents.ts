@@ -68,7 +68,7 @@ export const setStatus = mutation
         await assertMember(context, organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, id, organizationId, "incident");
 
-        const now = Date.now();
+        const now = context.now;
 
         await context.db.patch(id, status === "resolved" ? { closedAt: now, status, updatedAt: now } : { closedAt: undefined, status, updatedAt: now });
 

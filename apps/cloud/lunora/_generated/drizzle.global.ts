@@ -173,7 +173,6 @@ export const tenantLogs = sqliteTable("tenantLogs", {
 }, (t) => ({
     by_trace: index("by_trace").on(t.organizationId, t.traceId),
     by_script_time: index("by_script_time").on(t.scriptName, t.createdAt),
-    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const observations = sqliteTable("observations", {
@@ -207,7 +206,6 @@ export const observations = sqliteTable("observations", {
     by_org_session: index("by_org_session").on(t.organizationId, t.sessionId),
     by_org_started: index("by_org_started").on(t.organizationId, t.startedAt),
     by_trace: index("by_trace").on(t.organizationId, t.traceId),
-    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const githubInstallations = sqliteTable("githubInstallations", {
@@ -243,7 +241,6 @@ export const builds = sqliteTable("builds", {
     failedAt: real("failedAt"),
 }, (t) => ({
     by_project_commit: index("by_project_commit").on(t.projectId, t.commitSha),
-    by_project: index("by_project").on(t.projectId),
 }));
 
 export const buildLogs = sqliteTable("buildLogs", {
@@ -336,7 +333,6 @@ export const issues = sqliteTable("issues", {
 }, (t) => ({
     by_org_culprit: index("by_org_culprit").on(t.organizationId, t.culprit),
     by_org_hash: uniqueIndex("by_org_hash").on(t.organizationId, t.hash),
-    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const incidents = sqliteTable("incidents", {
@@ -360,7 +356,6 @@ export const incidents = sqliteTable("incidents", {
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_org_hash: uniqueIndex("by_org_hash").on(t.organizationId, t.hash),
-    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const alertRules = sqliteTable("alertRules", {
@@ -429,7 +424,6 @@ export const uptimeChecks = sqliteTable("uptimeChecks", {
     statusCode: real("statusCode"),
 }, (t) => ({
     by_org_deployment: index("by_org_deployment").on(t.organizationId, t.deploymentId),
-    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const uptimeState = sqliteTable("uptimeState", {
@@ -460,7 +454,6 @@ export const secrets = sqliteTable("secrets", {
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_project_env_name: uniqueIndex("by_project_env_name").on(t.projectId, t.environment, t.name),
-    by_project: index("by_project").on(t.projectId),
 }));
 
 export const dashboards = sqliteTable("dashboards", {

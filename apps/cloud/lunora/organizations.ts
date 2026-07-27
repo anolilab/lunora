@@ -45,27 +45,29 @@ export const list = query.query(async ({ ctx: context }): Promise<OrganizationRo
  * we read through the facade and match in memory — org volume is tiny, and the
  * `by_slug` unique index still enforces correctness on insert.
  */
-export const getBySlug = query.input({ slug: v.string() }).query(async ({ ctx: context, args: { slug } }): Promise<OrganizationRow | null> => {
-    const { userId } = context.auth;
+export const getBySlug = query
+    .input({ slug: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }) })
+    .query(async ({ ctx: context, args: { slug } }): Promise<OrganizationRow | null> => {
+        const { userId } = context.auth;
 
-    if (!userId) {
-        return null;
-    }
+        if (!userId) {
+            return null;
+        }
 
-    const { page } = await context.db.organizations.findMany();
-    const organization = (page as unknown as OrganizationRow[]).find((row) => row.slug === slug) ?? null;
+        const { page } = await context.db.organizations.findMany();
+        const organization = (page as unknown as OrganizationRow[]).find((row) => row.slug === slug) ?? null;
 
-    if (!organization) {
-        return null;
-    }
+        if (!organization) {
+            return null;
+        }
 
-    // Only reveal the org to its own members. A non-member (or signed-out caller)
-    // gets `null` — identical to not-found — so this can neither leak cross-tenant
-    // org metadata nor act as a slug-enumeration oracle.
-    const { page: membership } = await context.db.members.findMany({ where: { organizationId: organization._id, userId } });
+        // Only reveal the org to its own members. A non-member (or signed-out caller)
+        // gets `null` — identical to not-found — so this can neither leak cross-tenant
+        // org metadata nor act as a slug-enumeration oracle.
+        const { page: membership } = await context.db.members.findMany({ where: { organizationId: organization._id, userId } });
 
-    return membership.length > 0 ? organization : null;
-});
+        return membership.length > 0 ? organization : null;
+    });
 
 /**
  * Create an organization on a given cell, seed its creator as `owner`, and
@@ -78,14 +80,14 @@ export const create = mutation
         // pool) pick an active cell (GAPS.md F data-residency).
         cellId: v.optional(v.id("cells")),
         // "eu" | "fedramp" — restricts placement to cells in that jurisdiction.
-        jurisdiction: v.optional(v.string()),
-        name: v.string(),
+        jurisdiction: v.optional(v.string().check((value) => value.length <= 32, { message: "must be at most 32 characters", schema: { maxLength: 32 } })),
+        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
         plan: v.optional(v.union(v.literal("free"), v.literal("pro"), v.literal("enterprise"))),
-        slug: v.string(),
+        slug: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"organizations">> => {
         const userId = assertSignedIn(context.auth.userId);
-        const now = Date.now();
+        const now = context.now;
 
         let { cellId } = arguments_;
 
@@ -134,10 +136,13 @@ export const create = mutation
 
 /** Rename an organization (owner only). The slug is immutable (it's the URL identity). */
 export const rename = mutation
-    .input({ name: v.string(), organizationId: v.id("organizations") })
+    .input({
+        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        organizationId: v.id("organizations"),
+    })
     .mutation(async ({ ctx: context, args: { name, organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner"]);
-        const now = Date.now();
+        const now = context.now;
 
         await context.db.patch(organizationId, { name });
         await context.db.insert("auditLog", { action: "organization.rename", actorUserId: member.userId, createdAt: now, organizationId, target: name });
@@ -155,7 +160,7 @@ export const requestDeletion = mutation
     .input({ organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner"]);
-        const now = Date.now();
+        const now = context.now;
 
         await context.db.patch(organizationId, { deletionRequestedAt: now });
         await context.db.insert("auditLog", { action: "organization.deletion.request", actorUserId: member.userId, createdAt: now, organizationId });
@@ -166,7 +171,7 @@ export const cancelDeletion = mutation
     .input({ organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner"]);
-        const now = Date.now();
+        const now = context.now;
 
         await context.db.patch(organizationId, { deletionRequestedAt: undefined });
         await context.db.insert("auditLog", { action: "organization.deletion.cancel", actorUserId: member.userId, createdAt: now, organizationId });
@@ -180,7 +185,7 @@ export const cancelDeletion = mutation
  * status), and finally deletes the org row itself. SYSTEM only (cron).
  */
 export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): Promise<{ purged: number }> => {
-    const cutoff = Date.now() - DELETION_RETENTION_MS;
+    const cutoff = context.now - DELETION_RETENTION_MS;
     const { page } = await context.db.organizations.findMany({});
     const due = (page as unknown as (OrganizationRow & { deletionRequestedAt?: number })[]).filter(
         (organization) => organization.deletionRequestedAt !== undefined && organization.deletionRequestedAt < cutoff,
@@ -224,7 +229,7 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
 
         for (const deployment of deployments as unknown as { _id: string; status: string }[]) {
             // eslint-disable-next-line no-await-in-loop -- sequential patches; volumes are small
-            await context.db.patch(deployment._id as never, { destroyedAt: Date.now(), status: "destroyed", updatedAt: Date.now() });
+            await context.db.patch(deployment._id as never, { destroyedAt: context.now, status: "destroyed", updatedAt: context.now });
         }
 
         // eslint-disable-next-line no-await-in-loop -- one delete per org

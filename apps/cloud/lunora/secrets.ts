@@ -25,11 +25,11 @@ interface SecretRow {
 /** Persist an already-encrypted secret (owner/admin). Upserts by project+name. */
 export const store = mutation
     .input({
-        ciphertext: v.string(),
+        ciphertext: v.string().check((value) => value.length <= 8_192, { message: "must be at most 8_192 characters", schema: { maxLength: 8_192 } }),
         // Deployment kind this secret applies to; defaults to "all" (shared).
         environment: v.optional(v.union(v.literal("all"), v.literal("production"), v.literal("preview"), v.literal("dev"))),
-        iv: v.string(),
-        name: v.string(),
+        iv: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
+        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
     })
@@ -42,7 +42,7 @@ export const store = mutation
             where: { environment, name: arguments_.name, organizationId: arguments_.organizationId, projectId: arguments_.projectId }, // secret-scanner:allow -- domain field name
         });
         const existing = (page as unknown as SecretRow[])[0];
-        const now = Date.now();
+        const now = context.now;
 
         if (existing) {
             await context.db.patch(existing._id, { ciphertext: arguments_.ciphertext, iv: arguments_.iv, updatedAt: now });
@@ -88,7 +88,7 @@ export const list = query
  */
 export const listEncrypted = query
     .input({
-        deployKey: v.optional(v.string()),
+        deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
         // Deployment kind being provisioned; kind-specific secrets override
         // same-named "all" (shared) rows. Defaults to production.
         environment: v.optional(v.union(v.literal("production"), v.literal("preview"), v.literal("dev"))),

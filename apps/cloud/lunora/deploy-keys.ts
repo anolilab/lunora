@@ -56,7 +56,7 @@ export const issue = mutation
     .input({
         // `ingest` mints a telemetry-only key (OTLP push, no deploy); omitted/`deploy` is a full deploy key.
         capability: v.optional(v.union(v.literal("deploy"), v.literal("ingest"))),
-        name: v.string(),
+        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
         organizationId: v.id("organizations"),
         projectId: v.optional(v.id("projects")),
         type: v.union(v.literal("production"), v.literal("dev"), v.literal("preview")),
@@ -76,7 +76,7 @@ export const issue = mutation
             // Store the capability only for ingest keys, so existing/default deploy
             // rows stay byte-identical (absent = deploy).
             ...(arguments_.capability === "ingest" ? { capability: "ingest" as const } : {}),
-            createdAt: Date.now(),
+            createdAt: context.now,
             hashedKey,
             name: arguments_.name,
             organizationId: arguments_.organizationId,
@@ -94,7 +94,7 @@ export const revoke = mutation
         await assertMember(context, organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, id, organizationId, "deploy key");
 
-        await context.db.patch(id, { revokedAt: Date.now() });
+        await context.db.patch(id, { revokedAt: context.now });
     });
 
 /**
@@ -110,38 +110,40 @@ export const revoke = mutation
  * (an attacker must already hold a valid key), and the only side effect is the
  * `lastUsedAt` bump on a genuine match.
  */
-export const verify = mutation.input({ key: v.string() }).mutation(
-    async ({
-        ctx: context,
-        args: { key },
-    }): Promise<null | {
-        deployKeyId: Id<"deployKeys">;
-        organizationId: Id<"organizations">;
-        projectId?: Id<"projects">;
-        type: "dev" | "preview" | "production";
-    }> => {
-        if (!parseDeployKey(key)) {
-            return null;
-        }
+export const verify = mutation
+    .input({ key: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }) })
+    .mutation(
+        async ({
+            ctx: context,
+            args: { key },
+        }): Promise<null | {
+            deployKeyId: Id<"deployKeys">;
+            organizationId: Id<"organizations">;
+            projectId?: Id<"projects">;
+            type: "dev" | "preview" | "production";
+        }> => {
+            if (!parseDeployKey(key)) {
+                return null;
+            }
 
-        const hashedKey = await hashDeployKey(key);
-        const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
-        const row = (page as unknown as DeployKeyRow[])[0];
+            const hashedKey = await hashDeployKey(key);
+            const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
+            const row = (page as unknown as DeployKeyRow[])[0];
 
-        // Reject a telemetry `ingest` key here too — this is the guard the deploy
-        // route actually runs (`verifyKey`), so without it a scoped ingest token
-        // would still be able to deploy. `authorizeDeployKey` blocks it on the
-        // per-mutation paths; this blocks it at the deploy entrypoint (same
-        // predicate, so they can't disagree).
-        if (!row || row.revokedAt !== undefined || !isDeployCapable(row)) {
-            return null;
-        }
+            // Reject a telemetry `ingest` key here too — this is the guard the deploy
+            // route actually runs (`verifyKey`), so without it a scoped ingest token
+            // would still be able to deploy. `authorizeDeployKey` blocks it on the
+            // per-mutation paths; this blocks it at the deploy entrypoint (same
+            // predicate, so they can't disagree).
+            if (!row || row.revokedAt !== undefined || !isDeployCapable(row)) {
+                return null;
+            }
 
-        await context.db.patch(row._id, { lastUsedAt: Date.now() });
+            await context.db.patch(row._id, { lastUsedAt: context.now });
 
-        return { deployKeyId: row._id, organizationId: row.organizationId, projectId: row.projectId, type: row.type };
-    },
-);
+            return { deployKeyId: row._id, organizationId: row.organizationId, projectId: row.projectId, type: row.type };
+        },
+    );
 
 /** The shape of an envelope-encrypted secret (mirrors `src/secrets/crypto` `EncryptedSecret`). */
 interface CipherEnvelope {
@@ -172,7 +174,10 @@ const findActiveIngestKey = (rows: IngestKeyRow[]): IngestKeyRow | undefined =>
  * without the master key, so exposing it to the deploy edge is safe.
  */
 export const ingestKeyCipher = query
-    .input({ deployKey: v.string(), organizationId: v.id("organizations") })
+    .input({
+        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+        organizationId: v.id("organizations"),
+    })
     .query(async ({ ctx: context, args: { deployKey, organizationId } }): Promise<CipherEnvelope | null> => {
         await authorizeDeployKey(context, organizationId, deployKey);
 
@@ -189,9 +194,12 @@ export const ingestKeyCipher = query
  */
 export const recordIngestKey = mutation
     .input({
-        deployKey: v.string(),
-        encryptedSecret: v.object({ ciphertext: v.string(), iv: v.string() }),
-        hashedKey: v.string(),
+        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+        encryptedSecret: v.object({
+            ciphertext: v.string().check((value) => value.length <= 8192, { message: "must be at most 8192 characters", schema: { maxLength: 8192 } }),
+            iv: v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } }),
+        }),
+        hashedKey: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
         organizationId: v.id("organizations"),
     })
     .mutation(async ({ ctx: context, args: { deployKey, encryptedSecret, hashedKey, organizationId } }): Promise<CipherEnvelope> => {
@@ -206,7 +214,7 @@ export const recordIngestKey = mutation
 
         await context.db.insert("deployKeys", {
             capability: "ingest",
-            createdAt: Date.now(),
+            createdAt: context.now,
             encryptedSecret,
             hashedKey,
             name: "Telemetry ingest (auto)",
