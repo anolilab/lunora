@@ -8,6 +8,9 @@ import type { PaymentsFromContextOptions } from "@lunora/payment";
 import { createCreemAdapter } from "@lunora/payment/creem";
 import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@lunora/runtime";
 import { createWorker } from "@lunora/runtime";
+// TanStack Start's server entry default-exports a `{ fetch }` handler — the same
+// expression `@lunora/vite`'s class-A composition table emits for this framework.
+import ssrHandler from "@tanstack/react-start/server-entry";
 import { Creem } from "creem";
 
 import { LUNORA_CRONS } from "../lunora/_generated/crons.js";
@@ -15,27 +18,27 @@ import { LUNORA_FUNCTIONS } from "../lunora/_generated/functions.js";
 import { openApiSpec } from "../lunora/_generated/openapi.js";
 import { createShardDO } from "../lunora/_generated/shard.js";
 import schema from "../lunora/schema.js";
-import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import type { CreemCreditsClientLike } from "./billing/creem-credits";
 import { createCreemCreditsLedger } from "./billing/creem-credits";
 import { reconcileAllOverages } from "./billing/overage";
+import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcile";
 import { createHttpCloudflareApi } from "./cloudflare/api";
 import { resolveAdminToken } from "./deploy/admin-token";
 import { createDeployRouter } from "./deploy/router";
-import type { ControlPlaneDb } from "./store";
 import { teardownPorts, usageRollbackPorts } from "./deploy/sweeps";
 import { createResourceTeardown, runTeardownSweep } from "./deploy/teardown";
-import { createHttpAnalyticsReader } from "./metering/analytics";
-import { runUsageRollback } from "./metering/rollback";
 import type { CronTarget } from "./fanout/cron";
 import { fanOutCron } from "./fanout/cron";
+import type { QueueMessage, TenantQueueGroup } from "./fanout/queue";
+import { fanOutQueue, groupByTenant } from "./fanout/queue";
 import { deliverAlert } from "./mail/notify";
+import { createHttpAnalyticsReader } from "./metering/analytics";
+import { runUsageRollback } from "./metering/rollback";
+import type { ControlPlaneDb } from "./store";
 import type { AlertDelivery } from "./telemetry/alerts";
 import { runAlertSweep } from "./telemetry/sweep";
 import { runUptimeSweep } from "./uptime/sweep";
-import type { QueueMessage, TenantQueueGroup } from "./fanout/queue";
-import { fanOutQueue, groupByTenant } from "./fanout/queue";
 
 /**
  * Lunora Cloud control-plane Worker — the platform itself, dogfooded on Lunora
@@ -179,12 +182,6 @@ interface Env {
     DB: unknown;
     /** Dispatch namespace — used by the cron fan-out to tick tenants (§2.4). */
     DISPATCHER?: { get: (scriptName: string) => { fetch: (request: Request) => Promise<Response> } };
-    /** This cell's name (`cells.name`) — keys the metering readback checkpoint. */
-    LUNORA_CELL?: string;
-    /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
-    SECRET_ENCRYPTION_KEY?: string;
-    /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
-    USAGE_ANALYTICS_DATASET?: string;
     /** Optional GitHub OAuth app for studio social sign-in. */
     GITHUB_CLIENT_ID?: string;
     GITHUB_CLIENT_SECRET?: string;
@@ -193,9 +190,15 @@ interface Env {
     GOOGLE_CLIENT_SECRET?: string;
     /** Bearer token gating the admin endpoints the studio + platform tools call. */
     LUNORA_ADMIN_TOKEN?: string;
+    /** This cell's name (`cells.name`) — keys the metering readback checkpoint. */
+    LUNORA_CELL?: string;
     /** Sender address for auth (verification / reset) email; captured in dev. */
     MAIL_FROM?: string;
+    /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
+    SECRET_ENCRYPTION_KEY?: string;
     SHARD: ShardNamespaceLike;
+    /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
+    USAGE_ANALYTICS_DATASET?: string;
 }
 
 /** Build the OAuth provider map from env — only providers with creds are enabled. */
@@ -219,6 +222,34 @@ let auth: LunoraAuth | null = null;
 // The deploy API (`POST /v1/deploy`), mounted as the lowest-priority matcher.
 // Created once so its per-cell scheduler persists across requests.
 const deployRouter = createDeployRouter();
+
+/**
+ * The `httpRouter` seam, shared by two consumers.
+ *
+ * `createWorker` treats `httpRouter` as its LOWEST-priority matcher — it runs only
+ * after auth (`/api/auth/*`), the explicit routes, and the reserved `/_lunora/*`
+ * endpoints have all declined. That is what makes this composition safe: the
+ * studio's SSR loaders reach Lunora over `POST /_lunora/rpc` and better-auth over
+ * `/api/auth/get-session`, both of which are dispatched ahead of here, so a render
+ * can never recurse into itself.
+ *
+ * `/v1/*` is the machine-facing deploy/telemetry API and keeps its own router —
+ * which 404s anything outside `/v1/`, so it cannot be the fallback. Everything
+ * else is a browser navigation and belongs to the TanStack Start SSR handler.
+ * Ordering, not overlap: the two never contend for a path.
+ */
+const httpRouter = {
+    fetch: async (request: Request, environment?: unknown): Promise<Response> => {
+        if (new URL(request.url).pathname.startsWith("/v1/")) {
+            return deployRouter.fetch(request, environment);
+        }
+
+        // Only the request: TanStack Start's `fetch` takes its OWN options object
+        // second (`{ context, onEarlyHints, … }`), not the Cloudflare env. The
+        // loaders reach Lunora and better-auth over HTTP, so they need no bindings.
+        return ssrHandler.fetch(request);
+    },
+};
 
 // The control plane runs an every-minute trigger; tenant crons are matched to it
 // by due-evaluation in the fan-out (§2.4). Its own code crons still fire on their
@@ -263,11 +294,13 @@ const readLiveDeployments = async (env: Env): Promise<LiveDeploymentRow[]> => {
 const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
     const live = await readLiveDeployments(env);
     const resolved = await Promise.all(
-        live.map(async (row) => ({
-            adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY),
-            cronSpecs: row.cronSpecs,
-            scriptName: row.scriptName,
-        })),
+        live.map(async (row) => {
+            return {
+                adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY),
+                cronSpecs: row.cronSpecs,
+                scriptName: row.scriptName,
+            };
+        }),
     );
     const targets: CronTarget[] = [];
 
@@ -281,8 +314,8 @@ const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
 };
 
 /** The control-plane D1 as the structural {@link ControlPlaneDb} the sweeps use. */
-const controlPlaneDb = (database: D1DatabaseLike): ControlPlaneDb =>
-    createD1CtxDb({ exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] }) as unknown as ControlPlaneDb;
+const controlPlaneDatabase = (database: D1DatabaseLike): ControlPlaneDb =>
+    createD1CtxDb({ exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] });
 
 /**
  * Delete the Cloudflare dispatch scripts (+ tenant D1 / best-effort R2) of
@@ -295,7 +328,7 @@ const sweepTeardown = async (env: Env): Promise<void> => {
         return;
     }
 
-    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const api = createHttpCloudflareApi({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.CLOUDFLARE_API_TOKEN });
 
     // script + tenant D1 + tenant R2 (best-effort; a non-empty bucket is logged
@@ -326,7 +359,7 @@ const sweepUsageRollback = async (env: Env): Promise<void> => {
         return;
     }
 
-    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const reader = createHttpAnalyticsReader({
         accountId: env.CLOUDFLARE_ACCOUNT_ID,
         apiToken: env.CLOUDFLARE_API_TOKEN,
@@ -351,7 +384,7 @@ const sweepOverageReconciliation = async (env: Env): Promise<void> => {
         return;
     }
 
-    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const periodStart = currentPeriodStart();
     const { accounts, inputs, suspension } = await buildOverageReconcileData(database, periodStart);
 
@@ -372,7 +405,7 @@ const sweepOverageReconciliation = async (env: Env): Promise<void> => {
  * `markDelivered` path which only ever records `delivered`; a sweep runs in a
  * trusted system context, so it patches directly.
  */
-const deliverFiredAlerts = async (env: Env, database: ControlPlaneDb, deliveries: readonly AlertDelivery[], now: number): Promise<void> => {
+const deliverFiredAlerts = async (env: Env, database: ControlPlaneDb, deliveries: ReadonlyArray<AlertDelivery>, now: number): Promise<void> => {
     if (deliveries.length === 0) {
         return;
     }
@@ -404,7 +437,7 @@ const sweepUptime = async (env: Env): Promise<void> => {
         return;
     }
 
-    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const now = Date.now();
     const { deliveries } = await runUptimeSweep(database, { fetch: globalThis.fetch, now });
 
@@ -423,7 +456,7 @@ const sweepAlerts = async (env: Env): Promise<void> => {
         return;
     }
 
-    const database = controlPlaneDb(env.DB as D1DatabaseLike);
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const now = Date.now();
     const { deliveries } = await runAlertSweep(database, { now });
 
@@ -456,7 +489,9 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
 const readDeploymentTokens = async (env: Env): Promise<Map<string, string>> => {
     const live = await readLiveDeployments(env);
     const resolved = await Promise.all(
-        live.map(async (row) => ({ adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY), scriptName: row.scriptName })),
+        live.map(async (row) => {
+            return { adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY), scriptName: row.scriptName };
+        }),
     );
     const tokens = new Map<string, string>();
 
@@ -624,7 +659,7 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         d1: env.DB,
         functions: LUNORA_FUNCTIONS,
         globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
-        httpRouter: deployRouter,
+        httpRouter,
         openApiSpec,
         resolveIdentity: async (request) => {
             if (!auth) {
