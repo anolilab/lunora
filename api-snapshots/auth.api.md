@@ -846,7 +846,7 @@ const loadEmailDomainLists: () => Promise<void>;
 ### `lunoraAuthAdapter` (const)
 
 ```ts
-const lunoraAuthAdapter: (store: AuthStore) => ReturnType<typeof createAdapterFactory>;
+const lunoraAuthAdapter: (store: AuthStore, runInTransaction?: TransactionRunner) => ReturnType<typeof createAdapterFactory>;
 ```
 
 ### `lunoraD1Adapter` (const)
@@ -924,7 +924,7 @@ const withEmailGate: (options: BetterAuthOptions, config?: EmailGateHookConfig) 
 ### `lunoraAuthAdapter` (const)
 
 ```ts
-const lunoraAuthAdapter: (store: AuthStore) => ReturnType<typeof createAdapterFactory>;
+const lunoraAuthAdapter: (store: AuthStore, runInTransaction?: TransactionRunner) => ReturnType<typeof createAdapterFactory>;
 ```
 
 ### `lunoraD1Adapter` (const)
@@ -932,6 +932,10 @@ const lunoraAuthAdapter: (store: AuthStore) => ReturnType<typeof createAdapterFa
 ```ts
 const lunoraD1Adapter: (d1: Parameters<typeof d1Executor>[0]) => ReturnType<typeof lunoraAuthAdapter>;
 ```
+
+### `lunoraDoAdapter` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ## `@lunora/auth/audit`
 
