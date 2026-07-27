@@ -47,12 +47,16 @@ const execute: CommandHandler<McpOptions> = defineHandler<McpOptions>(async ({ a
     }
 
     if (subcommand === "uninstall") {
+        const uninstallScope = resolveScope(options);
+
         const { code } = runMcpUninstall({
             clients: rest,
             cwd,
             docsOnly: options.docsOnly === true,
             localOnly: options.localOnly === true,
             logger,
+            print: options.print === true,
+            ...(uninstallScope === undefined ? {} : { scope: uninstallScope }),
         });
 
         return { code };

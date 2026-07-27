@@ -46,20 +46,18 @@ describe("lunora mcp install", () => {
         rmSync(home, { force: true, recursive: true });
     });
 
-    it("writes the hosted docs server into the client's GLOBAL config", () => {
+    it("writes the hosted docs server into the client's GLOBAL config where it has one", () => {
         expect.assertions(3);
 
         const { logger } = captureLogger();
-        const result = runMcpInstall(baseOptions(logger, { clients: ["claude-code"] }));
+        const result = runMcpInstall(baseOptions(logger, { clients: ["cursor"] }));
 
         expect(result.code).toBe(0);
 
         // The docs server is the same hosted URL in every project, so its home
         // is the machine-wide config — not a copy in each repository.
-        const config = readJson(join(home, ".claude.json"));
-
-        expect(config.mcpServers["lunora-docs"]).toStrictEqual({ type: "http", url: DEFAULT_DOCS_MCP_URL });
-        expect(existsSync(join(workdir, ".mcp.json"))).toBe(false);
+        expect(readJson(join(home, ".cursor", "mcp.json")).mcpServers["lunora-docs"]).toStrictEqual({ type: "http", url: DEFAULT_DOCS_MCP_URL });
+        expect(existsSync(join(workdir, ".cursor", "mcp.json"))).toBe(false);
     });
 
     it("puts this project's local server in the PROJECT config, and the docs server globally", () => {
@@ -69,10 +67,26 @@ describe("lunora mcp install", () => {
 
         const { logger } = captureLogger();
 
-        runMcpInstall(baseOptions(logger, { clients: ["claude-code"] }));
+        runMcpInstall(baseOptions(logger, { clients: ["cursor"] }));
 
-        expect(readJson(join(workdir, ".mcp.json")).mcpServers.lunora).toBeDefined();
-        expect(readJson(join(home, ".claude.json")).mcpServers["lunora-docs"]).toBeDefined();
+        expect(readJson(join(workdir, ".cursor", "mcp.json")).mcpServers.lunora).toBeDefined();
+        expect(readJson(join(home, ".cursor", "mcp.json")).mcpServers["lunora-docs"]).toBeDefined();
+    });
+
+    it("never writes this project's local server into a machine-wide config", () => {
+        expect.assertions(2);
+
+        makeProject();
+
+        const { logger, messages } = captureLogger();
+
+        // Zed has no project config. A `lunora` entry there would be spawned
+        // with whatever cwd the editor has — the stdio spec carries no cwd — and
+        // every other project would then be told it is "already configured".
+        runMcpInstall(baseOptions(logger, { clients: ["zed"] }));
+
+        expect(readJson(join(home, ".config", "zed", "settings.json")).context_servers.lunora).toBeUndefined();
+        expect(messages.join("\n")).toContain("no project-scoped config");
     });
 
     it("--project forces both servers into the project config", () => {
@@ -228,9 +242,9 @@ describe("lunora mcp install", () => {
 
         const { logger } = captureLogger();
 
-        runMcpInstall(baseOptions(logger, { clients: ["claude-code"], docsOnly: true, docsUrl: "http://localhost:5173/mcp" }));
+        runMcpInstall(baseOptions(logger, { clients: ["cursor"], docsOnly: true, docsUrl: "http://localhost:5173/mcp" }));
 
-        const servers = readJson(join(home, ".claude.json")).mcpServers;
+        const servers = readJson(join(home, ".cursor", "mcp.json")).mcpServers;
 
         expect(servers["lunora-docs"].url).toBe("http://localhost:5173/mcp");
         expect(servers.lunora).toBeUndefined();
@@ -438,7 +452,7 @@ describe("per-client remote entry shapes", () => {
 
         runMcpInstall(baseOptions(logger, { clients: ["claude-code", "vscode"] }));
 
-        expect(readJson(join(home, ".claude.json")).mcpServers["lunora-docs"]).toStrictEqual({ type: "http", url: DEFAULT_DOCS_MCP_URL });
+        expect(readJson(join(workdir, ".mcp.json")).mcpServers["lunora-docs"]).toStrictEqual({ type: "http", url: DEFAULT_DOCS_MCP_URL });
         expect(readJson(join(workdir, ".vscode", "mcp.json")).servers["lunora-docs"]).toStrictEqual({ type: "http", url: DEFAULT_DOCS_MCP_URL });
     });
 

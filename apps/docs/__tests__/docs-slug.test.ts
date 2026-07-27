@@ -2,12 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import { slugsFor } from "@/lib/docs-slug";
 
-/**
- * `slugsFor` feeds every `lunora_get_doc` lookup and hard-codes the `/docs`
- * mount point, so it is the thing that breaks silently if the fumadocs base
- * path ever moves — and the only part of this module that can be tested without
- * standing up the whole content pipeline.
- */
 describe("slugsFor", () => {
     it.each([
         ["/docs/sharding", ["sharding"]],

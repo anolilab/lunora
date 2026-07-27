@@ -11,7 +11,7 @@
  * A file we cannot parse is left strictly alone — reporting `"invalid"` beats
  * overwriting a config whose syntax error is probably a work in progress.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
 import { dirname } from "@visulima/path";
 import type { ParseError } from "jsonc-parser";
@@ -21,19 +21,49 @@ import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
  * Write `contents` to `path` atomically: a sibling temp file, then a rename.
  *
  * These paths include files this CLI does not own and did not create —
- * `~/Library/Application Support/Claude/claude_desktop_config.json`,
+ * `~/.claude.json`, `~/Library/Application Support/Claude/…`,
  * `~/.codeium/windsurf/mcp_config.json` — holding every other MCP server the
  * user has configured. `writeFileSync` truncates before it writes, so a crash,
  * a Ctrl-C, or a full disk in between leaves that file empty, with no backup.
  * `rename` within a directory is atomic, so a reader sees the old file or the
  * new one and never a half-written one.
+ *
+ * Two things the naive temp-then-rename gets wrong, both silent:
+ *
+ * - **Mode.** A fresh temp file is `0666 & ~umask`, normally `0644`. Renaming it
+ * over a `0600` config — which is what Zed's `settings.json` and Claude
+ * Desktop's are, because they hold `env` blocks full of API tokens — makes
+ * those secrets world-readable. Carry the original mode across.
+ * - **Symlinks.** `rename` replaces the *link*, not its target, so a config
+ * managed by stow/chezmoi silently becomes a regular file and the dotfiles repo
+ * keeps a stale copy that still reads as clean. Resolve first.
  */
 const writeAtomic = (path: string, contents: string): void => {
-    const temporaryPath = `${path}.lunora-tmp`;
+    // Resolve through any symlink so both the mode we copy and the file we
+    // replace are the real one.
+    let target = path;
+    let mode: number | undefined;
+
+    try {
+        target = realpathSync(path);
+        mode = statSync(target).mode;
+    } catch {
+        // New file (or an unreadable one): nothing to preserve, create fresh.
+    }
+
+    // A random suffix, so two concurrent runs cannot clobber each other's temp
+    // file and a crash cannot leave one that the next run silently reuses.
+    // eslint-disable-next-line sonarjs/pseudo-random -- a temp-file suffix, not a security token: it only needs to differ between concurrent runs
+    const temporaryPath = `${target}.lunora-${Math.random().toString(36).slice(2, 10)}.tmp`;
 
     try {
         writeFileSync(temporaryPath, contents, "utf8");
-        renameSync(temporaryPath, path);
+
+        if (mode !== undefined) {
+            chmodSync(temporaryPath, mode);
+        }
+
+        renameSync(temporaryPath, target);
     } catch (error: unknown) {
         try {
             unlinkSync(temporaryPath);
@@ -213,7 +243,17 @@ const removeMcpEntry = (options: { key: string; name: string; path: string }): R
         return { action: "absent", path };
     }
 
-    const text = readFileSync(path, "utf8");
+    let text: string;
+
+    try {
+        text = readFileSync(path, "utf8");
+    } catch (error: unknown) {
+        // `uninstall` walks every client's every scope, so one unreadable path
+        // (a directory, a permission error) must be reported, not thrown out of
+        // the caller's loop leaving earlier clients half-done.
+        return { action: "invalid", error: error instanceof Error ? error.message : String(error), path };
+    }
+
     const { errors, value } = parseConfig(text);
 
     if (errors.length > 0) {

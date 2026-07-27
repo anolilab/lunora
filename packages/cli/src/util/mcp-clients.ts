@@ -13,21 +13,13 @@
  * `manual`: the command prints the exact snippet and the path to paste it into
  * rather than guessing at a format it cannot safely rewrite.
  *
- * ## On where these shapes come from
- *
- * Every remote form below is verified against that client's own documentation,
- * because getting one wrong is the worst failure mode this command has: the
- * config lands, we report success, and the server silently never connects.
- * Gemini reads a bare `url` as SSE and needs `httpUrl`; Windsurf wants
- * `serverUrl`; Zed discriminates on shape alone; Cline wants
- * `type: "streamableHttp"`; Claude Desktop validates stdio entries only and has
- * to be bridged.
- *
- * The client list was widened using [`add-mcp`](https://www.npmjs.com/package/add-mcp)
- * (Apache-2.0) as a starting point, but its shapes were checked rather than
- * trusted — two of them are wrong. It writes `{type, url}` for Gemini (read as
- * SSE) and `source: "custom"` for Zed (not a field Zed documents). Check the
- * vendor's docs before adding a client here.
+ * **Rule for adding a client: verify its remote shape against that vendor's own
+ * docs.** Getting one wrong is the worst failure this command has — the config
+ * lands, we report success, and the server silently never connects. The list was
+ * widened using [`add-mcp`](https://www.npmjs.com/package/add-mcp) (Apache-2.0)
+ * as a starting point, but two of its shapes are wrong (`{type, url}` for
+ * Gemini, `source: "custom"` for Zed), so it is a lead, not a source of truth.
+ * Each builder below records what its own vendor documents.
  */
 import { join } from "@visulima/path";
 import { stringify } from "smol-toml";
@@ -51,7 +43,7 @@ type McpServerSpec =
  */
 type McpScope = "global" | "project";
 
-/** Inputs a client's config path depends on. */
+/** Inputs a client's config paths depend on. */
 interface McpPathContext {
     /** The user's home directory. */
     home: string;
@@ -59,27 +51,24 @@ interface McpPathContext {
     platform: NodeJS.Platform;
     /** The project the command was run in. */
     projectRoot: string;
-    /** Which config file to resolve. */
-    scope: McpScope;
 }
 
 interface McpClientBase {
-    /**
-     * Absolute path of the requested config file, or `undefined` when this
-     * client has no such file — it doesn't support that scope, or we don't know
-     * the convention on this platform. Returning `undefined` rather than
-     * guessing is deliberate: a plausible-looking wrong path gets written to.
-     *
-     * Every client has one, including the ones we don't rewrite: detection ("is
-     * this client actually set up here?") is the same question regardless of the
-     * file's format, and hanging it off the format discriminant is what made
-     * Codex undetectable.
-     */
-    configPath: (context: McpPathContext) => string | undefined;
     /** Stable id the user types: `lunora mcp install cursor`. */
     id: string;
     /** Display name for messages. */
     label: string;
+
+    /**
+     * The config files this client has, keyed by scope. A scope is absent when
+     * the client has no such file, or when we don't know the convention on this
+     * platform — left out rather than guessed, because a plausible-looking wrong
+     * path is one that gets written to.
+     *
+     * Manual (TOML) clients declare theirs too: "is this client set up here?" is
+     * the same question regardless of the file's format.
+     */
+    paths: (context: McpPathContext) => Partial<Record<McpScope, string>>;
 }
 
 /** A client whose config we can safely read-modify-write. */
@@ -116,11 +105,7 @@ const stdioEntry = (spec: Extract<McpServerSpec, { transport: "stdio" }>): Recor
 
 /**
  * Claude Code, Cursor and VS Code: a remote server is `{ type: "http", url }`.
- *
- * This is NOT the universal shape it looks like. Getting it wrong is worse than
- * failing to write anything, because the config lands, we report success, and
- * the user discovers months later that the server never connected — so each
- * client below spells out its own remote form rather than sharing this one.
+ * Not the universal shape it looks like — see the builders below.
  */
 const standardEntry = (spec: McpServerSpec): Record<string, unknown> => (spec.transport === "http" ? { type: "http", url: spec.url } : stdioEntry(spec));
 
@@ -170,30 +155,26 @@ const clineEntry = (spec: McpServerSpec): Record<string, unknown> =>
 
 /**
  * Claude Desktop stores its config under the OS application-data directory,
- * which differs per platform. Returns `undefined` where we don't know the
- * convention rather than writing to a plausible-looking wrong path.
+ * which differs per platform. Returns no path where we don't know the
+ * convention, rather than a plausible-looking wrong one to write to.
  */
-const claudeDesktopPath = ({ home, platform, scope }: McpPathContext): string | undefined => {
+const claudeDesktopPaths = ({ home, platform }: McpPathContext): Partial<Record<McpScope, string>> => {
     // Claude Desktop has no project-level config at all.
-    if (scope === "project") {
-        return undefined;
-    }
-
     if (platform === "darwin") {
-        return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+        return { global: join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json") };
     }
 
     if (platform === "win32") {
         const appData = process.env["APPDATA"];
 
-        return appData === undefined || appData === "" ? undefined : join(appData, "Claude", "claude_desktop_config.json");
+        return appData === undefined || appData === "" ? {} : { global: join(appData, "Claude", "claude_desktop_config.json") };
     }
 
     if (platform === "linux") {
-        return join(home, ".config", "Claude", "claude_desktop_config.json");
+        return { global: join(home, ".config", "Claude", "claude_desktop_config.json") };
     }
 
-    return undefined;
+    return {};
 };
 
 /**
@@ -216,9 +197,7 @@ const codexSnippet = (name: string, spec: McpServerSpec): string =>
     });
 
 /**
- * The supported clients, in the order `lunora mcp install --list` prints them:
- * project-scoped first (a teammate gets them by checking out the repo), then
- * per-machine ones.
+ * The supported clients, in the order `lunora mcp install --list` prints them.
  *
  * Codex is `manual` because its config is TOML: merging into it would mean
  * carrying a TOML parser that preserves formatting, and a bad merge silently
@@ -227,7 +206,14 @@ const codexSnippet = (name: string, spec: McpServerSpec): string =>
 const MCP_CLIENTS: ReadonlyArray<McpClient> = [
     {
         buildEntry: standardEntry,
-        configPath: ({ home, projectRoot, scope }) => (scope === "project" ? join(projectRoot, ".mcp.json") : join(home, ".claude.json")),
+        // Project-only on purpose. Claude Code's user-scoped servers live in
+        // `~/.claude.json`, but that file is its entire application state —
+        // projects, history, account — and it rewrites it continuously while
+        // running, so our read-modify-write would drop whatever it wrote in
+        // between. `claude mcp add -s user` is the safe way to reach that file.
+        paths: ({ projectRoot }: McpPathContext): Partial<Record<McpScope, string>> => {
+            return { project: join(projectRoot, ".mcp.json") };
+        },
         format: "json",
         id: "claude-code",
         key: "mcpServers",
@@ -235,7 +221,9 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
     },
     {
         buildEntry: standardEntry,
-        configPath: ({ home, projectRoot, scope }) => join(scope === "project" ? projectRoot : home, ".cursor", "mcp.json"),
+        paths: ({ home, projectRoot }: McpPathContext): Partial<Record<McpScope, string>> => {
+            return { global: join(home, ".cursor", "mcp.json"), project: join(projectRoot, ".cursor", "mcp.json") };
+        },
         format: "json",
         id: "cursor",
         key: "mcpServers",
@@ -245,7 +233,11 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
         buildEntry: standardEntry,
         // Project-only: VS Code keeps user-level MCP config inside its per-OS
         // user-settings directory, which we do not resolve confidently.
-        configPath: ({ projectRoot, scope }) => (scope === "project" ? join(projectRoot, ".vscode", "mcp.json") : undefined),
+        // No global entry: VS Code keeps user-level MCP config inside its per-OS
+        // user-settings directory, which we do not resolve confidently.
+        paths: ({ projectRoot }: McpPathContext): Partial<Record<McpScope, string>> => {
+            return { project: join(projectRoot, ".vscode", "mcp.json") };
+        },
         format: "json",
         id: "vscode",
         // VS Code is the odd one out: `servers`, not `mcpServers`.
@@ -254,7 +246,9 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
     },
     {
         buildEntry: geminiEntry,
-        configPath: ({ home, projectRoot, scope }) => join(scope === "project" ? projectRoot : home, ".gemini", "settings.json"),
+        paths: ({ home, projectRoot }: McpPathContext): Partial<Record<McpScope, string>> => {
+            return { global: join(home, ".gemini", "settings.json"), project: join(projectRoot, ".gemini", "settings.json") };
+        },
         format: "json",
         id: "gemini",
         key: "mcpServers",
@@ -262,7 +256,7 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
     },
     {
         buildEntry: claudeDesktopEntry,
-        configPath: claudeDesktopPath,
+        paths: claudeDesktopPaths,
         format: "json",
         id: "claude-desktop",
         key: "mcpServers",
@@ -270,7 +264,9 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
     },
     {
         buildEntry: windsurfEntry,
-        configPath: ({ home, scope }) => (scope === "global" ? join(home, ".codeium", "windsurf", "mcp_config.json") : undefined),
+        paths: ({ home }: McpPathContext): Partial<Record<McpScope, string>> => {
+            return { global: join(home, ".codeium", "windsurf", "mcp_config.json") };
+        },
         format: "json",
         id: "windsurf",
         key: "mcpServers",
@@ -278,8 +274,9 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
     },
     {
         buildEntry: openCodeEntry,
-        configPath: ({ home, projectRoot, scope }) =>
-            scope === "project" ? join(projectRoot, "opencode.json") : join(home, ".config", "opencode", "opencode.json"),
+        paths: ({ home, projectRoot }: McpPathContext): Partial<Record<McpScope, string>> => {
+            return { global: join(home, ".config", "opencode", "opencode.json"), project: join(projectRoot, "opencode.json") };
+        },
         format: "json",
         id: "opencode",
         key: "mcp",
@@ -289,7 +286,11 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
         buildEntry: clineEntry,
         // Global-only: Cline documents `~/.cline/mcp.json`; the IDE extension
         // stores its own copy where we cannot resolve it.
-        configPath: ({ home, scope }) => (scope === "global" ? join(home, ".cline", "mcp.json") : undefined),
+        // Cline documents `~/.cline/mcp.json`; the IDE extension keeps its own
+        // copy where we cannot resolve it.
+        paths: ({ home }: McpPathContext): Partial<Record<McpScope, string>> => {
+            return { global: join(home, ".cline", "mcp.json") };
+        },
         format: "json",
         id: "cline",
         key: "mcpServers",
@@ -297,14 +298,18 @@ const MCP_CLIENTS: ReadonlyArray<McpClient> = [
     },
     {
         buildEntry: zedEntry,
-        configPath: ({ home, scope }) => (scope === "global" ? join(home, ".config", "zed", "settings.json") : undefined),
+        paths: ({ home }: McpPathContext): Partial<Record<McpScope, string>> => {
+            return { global: join(home, ".config", "zed", "settings.json") };
+        },
         format: "json",
         id: "zed",
         key: "context_servers",
         label: "Zed",
     },
     {
-        configPath: ({ home, projectRoot, scope }) => (scope === "project" ? join(projectRoot, ".codex", "config.toml") : join(home, ".codex", "config.toml")),
+        paths: ({ home, projectRoot }: McpPathContext): Partial<Record<McpScope, string>> => {
+            return { global: join(home, ".codex", "config.toml"), project: join(projectRoot, ".codex", "config.toml") };
+        },
         format: "manual",
         id: "codex",
         label: "Codex CLI",
@@ -317,4 +322,4 @@ const MCP_CLIENT_IDS: ReadonlyArray<string> = MCP_CLIENTS.map((client) => client
 const findMcpClient = (id: string): McpClient | undefined => MCP_CLIENTS.find((client) => client.id === id.toLowerCase());
 
 export type { JsonMcpClient, ManualMcpClient, McpClient, McpPathContext, McpScope, McpServerSpec };
-export { claudeDesktopEntry, claudeDesktopPath, codexSnippet, findMcpClient, geminiEntry, MCP_CLIENT_IDS, MCP_CLIENTS, standardEntry, windsurfEntry };
+export { claudeDesktopPaths, findMcpClient, MCP_CLIENT_IDS, MCP_CLIENTS };

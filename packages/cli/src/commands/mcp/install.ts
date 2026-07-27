@@ -3,30 +3,24 @@
 /**
  * `lunora mcp install` — wire Lunora's MCP servers into an editor's config.
  *
- * Two servers get installed:
- *
- * - `lunora-docs` — the hosted documentation server. No credentials, no project
- * needed, useful in any repository that talks to Lunora.
- * - `lunora` — this project's local server (`lunora mcp serve`), which adds the
- * dev-server tools and typed access to the app's own functions. Only installed
- * inside a Lunora project, since it has nothing to point at otherwise.
- *
- * The command's whole job is knowing each client's file, key, and entry shape
- * (see `../../util/mcp-clients`) so the user doesn't have to.
+ * The command's whole job is knowing each client's file, key and entry shape
+ * (see `../../util/mcp-clients`) so the user doesn't have to; the traversal it
+ * shares with `uninstall` lives in `../../util/mcp-targets`.
  */
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 
 import { findWranglerFile } from "@lunora/config";
-import { join, relative } from "@visulima/path";
+import { join } from "@visulima/path";
 
 import type { PackageManager } from "../../util/detect-package-manager";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
-import type { JsonMcpClient, ManualMcpClient, McpClient, McpScope, McpServerSpec } from "../../util/mcp-clients";
-import { findMcpClient, MCP_CLIENT_IDS, MCP_CLIENTS } from "../../util/mcp-clients";
+import type { JsonMcpClient, ManualMcpClient, McpClient, McpPathContext, McpScope, McpServerSpec } from "../../util/mcp-clients";
+import { MCP_CLIENT_IDS, MCP_CLIENTS } from "../../util/mcp-clients";
 import type { UpsertAction } from "../../util/mcp-config-file";
 import { hasMcpEntry, upsertMcpEntry } from "../../util/mcp-config-file";
+import { detectInstalledClients, displayPath, preferredTarget, resolveClients } from "../../util/mcp-targets";
 
 /** The hosted documentation MCP endpoint. */
 const DEFAULT_DOCS_MCP_URL = "https://lunora.sh/mcp";
@@ -37,6 +31,18 @@ const LOCAL_SERVER_NAME = "lunora";
 
 /** A server to install, and which of a client's config files it belongs in. */
 interface McpServerPlan {
+    /**
+     * Whether this server may be written to the client's other scope when its
+     * preferred one is absent.
+     *
+     * True for the docs server: it is the same hosted URL everywhere, so a
+     * client with only a global config still gets something correct. False for
+     * the local server: it is defined by the project it runs in, the stdio spec
+     * carries no `cwd`, and a machine-wide `lunora` entry would serve whichever
+     * directory the editor started in — then silently report "already
+     * configured" for every other project.
+     */
+    allowScopeFallback: boolean;
     name: string;
 
     /**
@@ -97,51 +103,14 @@ const docsServerSpec = (url: string): McpServerSpec => {
     return { transport: "http", url };
 };
 
-/** Clients whose config file already exists — the ones the user demonstrably uses. */
-const detectInstalledClients = (context: { home: string; platform: NodeJS.Platform; projectRoot: string }): ReadonlyArray<McpClient> =>
-    MCP_CLIENTS.filter((client) =>
-        // Configured in EITHER scope counts as "the user uses this client".
-        (["global", "project"] as const).some((scope) => {
-            const path = client.configPath({ ...context, scope });
-
-            return path !== undefined && existsSync(path);
-        }),
-    );
-
-/**
- * The config file this server should go in for this client, and the scope that
- * resolved to.
- *
- * Falls back to the other scope when the preferred one has no file — Zed has no
- * project config, VS Code no global one — so "install the docs server into
- * every detected client" still does something sensible everywhere rather than
- * skipping half the list.
- */
-const resolveTarget = (
-    client: McpClient,
-    server: McpServerPlan,
-    options: McpInstallOptions & { home: string; platform: NodeJS.Platform },
-): { path: string; scope: McpScope } | undefined => {
-    const wanted = options.scope ?? server.preferredScope;
-    const order: McpScope[] = wanted === "global" ? ["global", "project"] : ["project", "global"];
-
-    for (const scope of options.scope === undefined ? order : [wanted]) {
-        const path = client.configPath({ home: options.home, platform: options.platform, projectRoot: options.cwd, scope });
-
-        if (path !== undefined) {
-            return { path, scope };
-        }
-    }
-
-    return undefined;
+/** The inputs a client's paths depend on, drawn from this command's options. */
+const pathContext = (options: McpInstallOptions & { home: string; platform: NodeJS.Platform }): McpPathContext => {
+    return { home: options.home, platform: options.platform, projectRoot: options.cwd };
 };
 
-/** A path relative to the project when it sits inside it, else the absolute path. */
-const displayPath = (path: string, projectRoot: string): string => {
-    const relativePath = relative(projectRoot, path);
-
-    return relativePath.length > 0 && !relativePath.startsWith("..") ? relativePath : path;
-};
+/** The config file a server should be written to, honouring an explicit `--global`/`--project`. */
+const targetFor = (client: McpClient, server: McpServerPlan, options: McpInstallOptions & { home: string; platform: NodeJS.Platform }) =>
+    preferredTarget(client, pathContext(options), options.scope ?? server.preferredScope, options.scope !== undefined || !server.allowScopeFallback);
 
 /** Write (or print) one server entry into one JSON client, reporting what happened. */
 const installIntoJsonClient = (
@@ -149,10 +118,10 @@ const installIntoJsonClient = (
     server: McpServerPlan,
     options: McpInstallOptions & { home: string; platform: NodeJS.Platform },
 ): { action: UpsertAction | "printed"; path: string } | undefined => {
-    const target = resolveTarget(client, server, options);
+    const target = targetFor(client, server, options);
 
     if (target === undefined) {
-        options.logger.warn(`${client.label}: no ${options.scope ?? server.preferredScope} config location known on ${options.platform} — skipped.`);
+        options.logger.warn(`${client.label}: has no ${options.scope ?? server.preferredScope}-scoped config — skipped "${server.name}".`);
 
         return undefined;
     }
@@ -200,7 +169,7 @@ const installIntoManualClient = (
     server: McpServerPlan,
     options: McpInstallOptions & { home: string; platform: NodeJS.Platform },
 ): { action: "printed"; path: string } | undefined => {
-    const path = resolveTarget(client, server, options)?.path;
+    const path = targetFor(client, server, options)?.path;
 
     if (path === undefined) {
         options.logger.warn(`${client.label}: no known config location on ${options.platform} — skipped.`);
@@ -213,41 +182,6 @@ const installIntoManualClient = (
     return { action: "printed", path };
 };
 
-/** Resolve which clients to act on, or `undefined` after reporting why none could be. */
-const resolveClients = (options: McpInstallOptions, context: { home: string; platform: NodeJS.Platform }): ReadonlyArray<McpClient> | undefined => {
-    if (options.clients.length > 0) {
-        const resolved: McpClient[] = [];
-
-        for (const id of options.clients) {
-            const client = findMcpClient(id);
-
-            if (client === undefined) {
-                options.logger.error(`mcp install: unknown client "${id}". Known clients: ${MCP_CLIENT_IDS.join(", ")}.`);
-
-                return undefined;
-            }
-
-            resolved.push(client);
-        }
-
-        return resolved;
-    }
-
-    const detected = detectInstalledClients({ ...context, projectRoot: options.cwd });
-
-    if (detected.length > 0) {
-        options.logger.info(`Detected ${String(detected.length)} configured client(s): ${detected.map((client) => client.label).join(", ")}.`);
-
-        return detected;
-    }
-
-    options.logger.error(
-        `mcp install: no MCP client config found — name one explicitly, e.g. \`lunora mcp install claude-code\`. Known clients: ${MCP_CLIENT_IDS.join(", ")}.`,
-    );
-
-    return undefined;
-};
-
 /**
  * Which servers to install, given the flags and whether `cwd` is a Lunora
  * project. Returns empty when the flags select nothing — {@link runMcpInstall}
@@ -257,11 +191,21 @@ const resolveServers = (options: McpInstallOptions): ReadonlyArray<McpServerPlan
     const servers: McpServerPlan[] = [];
 
     if (options.localOnly !== true) {
-        servers.push({ name: DOCS_SERVER_NAME, preferredScope: "global", spec: docsServerSpec(options.docsUrl ?? DEFAULT_DOCS_MCP_URL) });
+        servers.push({
+            allowScopeFallback: true,
+            name: DOCS_SERVER_NAME,
+            preferredScope: "global",
+            spec: docsServerSpec(options.docsUrl ?? DEFAULT_DOCS_MCP_URL),
+        });
     }
 
     if (options.docsOnly !== true && isLunoraProject(options.cwd)) {
-        servers.push({ name: LOCAL_SERVER_NAME, preferredScope: "project", spec: localServerSpec(detectPackageManager(options.cwd)) });
+        servers.push({
+            allowScopeFallback: false,
+            name: LOCAL_SERVER_NAME,
+            preferredScope: "project",
+            spec: localServerSpec(detectPackageManager(options.cwd)),
+        });
     }
 
     return servers;
@@ -275,13 +219,14 @@ const runMcpInstallList = (options: Pick<McpInstallOptions, "cwd" | "logger"> & 
     options.logger.info("Supported MCP clients:");
 
     for (const client of MCP_CLIENTS) {
-        const forScope = (scope: McpScope): string => {
-            const path = client.configPath({ home, platform, projectRoot: options.cwd, scope });
+        const paths = client.paths({ home, platform, projectRoot: options.cwd });
+        const show = (scope: McpScope): string => {
+            const path = paths[scope];
 
             return path === undefined ? "—" : displayPath(path, options.cwd);
         };
 
-        options.logger.info(`  ${client.id.padEnd(15)} ${client.label.padEnd(24)} project: ${forScope("project").padEnd(30)} global: ${forScope("global")}`);
+        options.logger.info(`  ${client.id.padEnd(15)} ${client.label.padEnd(24)} project: ${show("project").padEnd(30)} global: ${show("global")}`);
     }
 
     return { code: 0, written: [] };
@@ -321,10 +266,24 @@ const installAll = (
 const runMcpInstall = (options: McpInstallOptions): McpInstallResult => {
     const home = options.home ?? homedir();
     const platform = options.platform ?? process.platform;
-    const clients = resolveClients(options, { home, platform });
+    const clients = resolveClients(options.clients, () => detectInstalledClients({ home, platform, projectRoot: options.cwd }), options.logger, "install");
 
     if (clients === undefined) {
         return { code: 1, written: [] };
+    }
+
+    if (clients.length === 0) {
+        // Detection found nothing, so there is no sensible default. Naming a
+        // client is better than silently doing nothing and exiting 0.
+        options.logger.error(
+            `mcp install: no MCP client config found — name one explicitly, e.g. \`lunora mcp install claude-code\`. Known clients: ${MCP_CLIENT_IDS.join(", ")}.`,
+        );
+
+        return { code: 1, written: [] };
+    }
+
+    if (options.clients.length === 0) {
+        options.logger.info(`Detected ${String(clients.length)} configured client(s): ${clients.map((client) => client.label).join(", ")}.`);
     }
 
     const servers = resolveServers(options);
@@ -346,5 +305,5 @@ const runMcpInstall = (options: McpInstallOptions): McpInstallResult => {
     return { code: written.some((entry) => entry.action === "invalid") ? 1 : 0, written };
 };
 
-export type { McpInstallOptions, McpInstallResult };
-export { DEFAULT_DOCS_MCP_URL, detectInstalledClients, DOCS_SERVER_NAME, isLunoraProject, LOCAL_SERVER_NAME, resolveTarget, runMcpInstall, runMcpInstallList };
+export type { McpInstallOptions, McpInstallResult, McpServerPlan };
+export { DEFAULT_DOCS_MCP_URL, DOCS_SERVER_NAME, LOCAL_SERVER_NAME, runMcpInstall, runMcpInstallList };

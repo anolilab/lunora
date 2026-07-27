@@ -9,13 +9,13 @@
  */
 import { homedir } from "node:os";
 
-import { relative } from "@visulima/path";
-
 import type { Logger } from "../../util/logger";
-import type { McpClient, McpScope } from "../../util/mcp-clients";
-import { findMcpClient, MCP_CLIENT_IDS, MCP_CLIENTS } from "../../util/mcp-clients";
+import type { JsonMcpClient, McpClient, McpPathContext, McpScope } from "../../util/mcp-clients";
+import { MCP_CLIENTS } from "../../util/mcp-clients";
 import type { RemoveAction } from "../../util/mcp-config-file";
-import { removeMcpEntry } from "../../util/mcp-config-file";
+import { hasMcpEntry, removeMcpEntry } from "../../util/mcp-config-file";
+import type { JsonMcpTarget } from "../../util/mcp-targets";
+import { displayPath, isJsonTarget, resolveClients, targetsFor } from "../../util/mcp-targets";
 import { DOCS_SERVER_NAME, LOCAL_SERVER_NAME } from "./install";
 
 interface McpUninstallOptions {
@@ -29,21 +29,16 @@ interface McpUninstallOptions {
     localOnly?: boolean;
     logger: Logger;
     platform?: NodeJS.Platform;
+    /** Report what would be removed without touching any file. */
+    print?: boolean;
+    /** Restrict to one scope; default is both, since `install` may have used either. */
+    scope?: McpScope;
 }
 
 interface McpUninstallResult {
     code: number;
     removed: ReadonlyArray<{ action: RemoveAction; client: string; path: string; server: string }>;
 }
-
-/** Both scopes, because `install` may have written to either. */
-const SCOPES: ReadonlyArray<McpScope> = ["project", "global"];
-
-const displayPath = (path: string, projectRoot: string): string => {
-    const relativePath = relative(projectRoot, path);
-
-    return relativePath.length > 0 && !relativePath.startsWith("..") ? relativePath : path;
-};
 
 /** Server names to remove, given the flags. */
 const targetServers = (options: McpUninstallOptions): ReadonlyArray<string> => {
@@ -60,39 +55,8 @@ const targetServers = (options: McpUninstallOptions): ReadonlyArray<string> => {
     return names;
 };
 
-/** Resolve the clients to clean, or `undefined` after reporting an unknown id. */
-const resolveClients = (options: McpUninstallOptions): ReadonlyArray<McpClient> | undefined => {
-    if (options.clients.length === 0) {
-        // Unlike `install`, the default is EVERY client: the user is trying to
-        // get rid of these, and a leftover entry in a client we didn't think to
-        // check is exactly the failure they'd notice later.
-        return MCP_CLIENTS;
-    }
-
-    const resolved: McpClient[] = [];
-
-    for (const id of options.clients) {
-        const client = findMcpClient(id);
-
-        if (client === undefined) {
-            options.logger.error(`mcp uninstall: unknown client "${id}". Known clients: ${MCP_CLIENT_IDS.join(", ")}.`);
-
-            return undefined;
-        }
-
-        resolved.push(client);
-    }
-
-    return resolved;
-};
-
 /** Remove one server from one config file, reporting what happened. */
-const removeOne = (
-    client: Extract<McpClient, { format: "json" }>,
-    server: string,
-    path: string,
-    options: McpUninstallOptions,
-): { action: RemoveAction; path: string } => {
+const removeOne = (client: JsonMcpClient, server: string, path: string, options: McpUninstallOptions): { action: RemoveAction; path: string } => {
     const result = removeMcpEntry({ key: client.key, name: server, path });
     const shown = displayPath(path, options.cwd);
 
@@ -105,38 +69,73 @@ const removeOne = (
     return { action: result.action, path };
 };
 
+/**
+ * Report what a real run would remove, without touching the file.
+ *
+ * The command with the widest blast radius in the CLI is the one you most want
+ * to rehearse — `install` has `--print`, and this needs it more.
+ */
+const previewOne = (client: JsonMcpClient, server: string, path: string, options: McpUninstallOptions): { action: RemoveAction; path: string } => {
+    if (!hasMcpEntry({ key: client.key, name: server, path })) {
+        return { action: "absent", path };
+    }
+
+    options.logger.info(`${client.label}: would remove "${server}" from ${displayPath(path, options.cwd)}.`);
+
+    return { action: "removed", path };
+};
+
+/** The config files a run will touch, honouring `--global`/`--project`. */
+const resolveTargets = (clients: ReadonlyArray<McpClient>, context: McpPathContext, scope: McpScope | undefined): ReadonlyArray<JsonMcpTarget> =>
+    clients
+        // Manual (TOML) clients were never written to, so there is nothing to undo.
+        .flatMap((client) => targetsFor(client, context))
+        .filter(isJsonTarget)
+        .filter((target) => scope === undefined || target.scope === scope);
+
 /** `lunora mcp uninstall [client…]`. */
 const runMcpUninstall = (options: McpUninstallOptions): McpUninstallResult => {
     const home = options.home ?? homedir();
     const platform = options.platform ?? process.platform;
-    const clients = resolveClients(options);
+    // Every client by default: a leftover entry in one we didn't think to check
+    // is exactly the failure a user notices later.
+    const clients = resolveClients(options.clients, () => MCP_CLIENTS, options.logger, "uninstall");
 
     if (clients === undefined) {
         return { code: 1, removed: [] };
     }
 
     const servers = targetServers(options);
+
+    if (servers.length === 0) {
+        // Both flags cancel out. Saying "nothing was configured" here would be a
+        // lie — the servers may well be installed everywhere.
+        options.logger.error("mcp uninstall: nothing to remove — `--docs-only` and `--local-only` are mutually exclusive, pass at most one.");
+
+        return { code: 1, removed: [] };
+    }
+
     const removed: { action: RemoveAction; client: string; path: string; server: string }[] = [];
+    const context = { home, platform, projectRoot: options.cwd };
 
-    // Manual (TOML) clients were never written to, so there is nothing to undo.
-    const writable = clients.filter((client): client is Extract<McpClient, { format: "json" }> => client.format === "json");
+    for (const target of resolveTargets(clients, context, options.scope)) {
+        for (const server of servers) {
+            const result =
+                options.print === true ? previewOne(target.client, server, target.path, options) : removeOne(target.client, server, target.path, options);
 
-    for (const client of writable) {
-        for (const scope of SCOPES) {
-            const path = client.configPath({ home, platform, projectRoot: options.cwd, scope });
-
-            if (path === undefined) {
-                continue;
-            }
-
-            for (const server of servers) {
-                removed.push({ ...removeOne(client, server, path, options), client: client.id, server });
+            // Only report files we actually changed: a run walks ~36
+            // (client, scope, server) triples and all but one are typically
+            // absent, which would make the result a debug log.
+            if (result.action !== "absent") {
+                removed.push({ ...result, client: target.client.id, server });
             }
         }
     }
 
-    if (!removed.some((entry) => entry.action === "removed")) {
+    if (removed.length === 0) {
         options.logger.info("Nothing to remove — no Lunora MCP servers were configured in the clients checked.");
+    } else if (options.print === true) {
+        options.logger.info("Nothing was changed — re-run without --print to remove these.");
     }
 
     return { code: removed.some((entry) => entry.action === "invalid") ? 1 : 0, removed };

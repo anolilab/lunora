@@ -1,4 +1,5 @@
 import { createDocsMcpFetchHandler } from "@lunora/mcp/docs";
+import type { RateLimitStore, RateLimitValue } from "@lunora/ratelimit";
 import { RateLimiter } from "@lunora/ratelimit";
 import { createFileRoute } from "@tanstack/react-router";
 
@@ -16,36 +17,85 @@ import { mcpDocsIndex } from "@/lib/mcp-docs-index";
  */
 const handle = createDocsMcpFetchHandler({ index: mcpDocsIndex });
 
+/** Most distinct callers tracked at once. Past this the oldest key is dropped. */
+const MAX_TRACKED_CALLERS = 10_000;
+
+/**
+ * A bounded in-memory store.
+ *
+ * `@lunora/ratelimit`'s default memory store is a bare `Map` with no eviction,
+ * and this route keys it on a value the caller can influence. Unbounded, the
+ * limiter becomes a cheaper denial of service than the endpoint it protects:
+ * rotate the header and every request adds a permanent entry. Capping it and
+ * evicting oldest-first bounds the damage to a fixed footprint, at the cost of
+ * an attacker being able to flush honest callers' counters — the lesser of the
+ * two, since that only returns them to an unlimited-but-bounded-memory state.
+ */
+const createBoundedStore = (): RateLimitStore => {
+    const entries = new Map<string, RateLimitValue>();
+
+    return {
+        delete: (key) => {
+            entries.delete(key);
+        },
+        get: (key) => entries.get(key),
+        set: (key, value) => {
+            // Re-insert so iteration order tracks recency, making the first key
+            // the least recently written.
+            entries.delete(key);
+            entries.set(key, value);
+
+            if (entries.size > MAX_TRACKED_CALLERS) {
+                const oldest = entries.keys().next().value;
+
+                if (oldest !== undefined) {
+                    entries.delete(oldest);
+                }
+            }
+        },
+    };
+};
+
 /**
  * Per-caller request budget.
  *
  * The handler already bounds what a single request can cost — bodies are
- * capped, batches refused — but nothing bounded how MANY. This is the other
- * half: an anonymous caller gets a generous allowance for real agent use
- * (search, read a page, read another) and no more.
+ * capped, batches refused — but nothing bounded how MANY. A sliding window, so
+ * a caller can't spend the allowance twice by straddling a fixed boundary.
+ * 120/min is far above real agent use (search, read, read again) and far below
+ * what makes the endpoint a resource.
  *
- * Uses `@lunora/ratelimit`'s default in-memory store, which is per-isolate. On a
- * platform that fans requests across isolates that makes this a speed bump
- * rather than a wall — the real ceiling belongs at the CDN — but a speed bump
- * that costs one Map is worth having, and it is exact for the single-instance
- * case.
+ * Per-isolate, so on a platform that fans requests across isolates this is a
+ * speed bump and the real ceiling belongs at the CDN.
  */
 const limiter = new RateLimiter({
-    // A sliding window, so a caller can't spend the whole allowance twice by
-    // straddling a fixed boundary. 120/min is far above real agent use — search,
-    // read, read again — and far below what makes the endpoint a resource.
-    config: { mcp: { kind: "sliding window", period: 60_000, rate: 120 } },
+    config: {
+        mcp: { kind: "sliding window", period: 60_000, rate: 120 },
+        // Callers we cannot tell apart share one bucket, so it gets a much
+        // larger allowance: at the per-caller rate, one busy agent behind a
+        // proxy that strips the header would lock out everyone else.
+        unidentified: { kind: "sliding window", period: 60_000, rate: 1200 },
+    },
+    store: createBoundedStore(),
 });
 
-/**
- * The caller's address, from whichever proxy header the host sets. Falls back to
- * one shared bucket rather than to "unlimited": if we cannot tell callers apart,
- * the safe reading is that they might be one caller.
- */
-const callerKey = (request: Request): string => {
-    const forwarded = request.headers.get("x-nf-client-connection-ip") ?? request.headers.get("x-forwarded-for") ?? "";
+/** An IPv4 or IPv6 address, loosely — enough to reject a value that is not one. */
+const IP_LIKE = /^[\d.:a-f]{3,45}$/iu;
 
-    return forwarded.split(",")[0]?.trim() || "unknown";
+/**
+ * Identify the caller from whichever proxy header the host sets.
+ *
+ * The value is validated rather than trusted: only the platform's own header is
+ * authoritative, `x-forwarded-for` is caller-controlled on any deployment that
+ * isn't behind that platform, and an unvalidated value goes straight into a map
+ * key. Anything that isn't address-shaped shares the `unidentified` bucket
+ * instead of minting its own.
+ */
+const callerKey = (request: Request): { key: string; limit: "mcp" | "unidentified" } => {
+    const forwarded = request.headers.get("x-nf-client-connection-ip") ?? request.headers.get("x-forwarded-for") ?? "";
+    const first = forwarded.split(",")[0]?.trim() ?? "";
+
+    return IP_LIKE.test(first) ? { key: first, limit: "mcp" } : { key: "unidentified", limit: "unidentified" };
 };
 
 /**
@@ -97,7 +147,8 @@ const withCors = (response: Response): Response => {
 
 /** Serve one MCP request, refusing it when the caller is over budget. */
 const serve = async (request: Request): Promise<Response> => {
-    const status = await limiter.limit("mcp", { key: callerKey(request) });
+    const caller = callerKey(request);
+    const status = await limiter.limit(caller.limit, { key: caller.key });
 
     if (!status.ok) {
         return withCors(

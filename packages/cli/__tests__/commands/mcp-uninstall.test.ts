@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -107,7 +107,7 @@ describe("lunora mcp uninstall", () => {
         runMcpUninstall(options(logger));
 
         expect(readJson(join(home, ".cursor", "mcp.json")).mcpServers["lunora-docs"]).toBeUndefined();
-        expect(readJson(join(home, ".claude.json")).mcpServers["lunora-docs"]).toBeUndefined();
+        expect(readJson(join(workdir, ".mcp.json")).mcpServers["lunora-docs"]).toBeUndefined();
     });
 
     it("honours --docs-only", () => {
@@ -122,7 +122,7 @@ describe("lunora mcp uninstall", () => {
         runMcpInstall(options(logger, { clients: ["claude-code"] }));
         runMcpUninstall(options(logger, { clients: ["claude-code"], docsOnly: true }));
 
-        expect(readJson(join(home, ".claude.json")).mcpServers["lunora-docs"]).toBeUndefined();
+        expect(readJson(join(workdir, ".mcp.json")).mcpServers["lunora-docs"]).toBeUndefined();
         // The project-scoped local server survives.
         expect(readJson(join(workdir, ".mcp.json")).mcpServers.lunora).toBeDefined();
     });
@@ -157,6 +157,118 @@ describe("lunora mcp uninstall", () => {
         runMcpInstall(options(logger, { clients: ["claude-code"] }));
         runMcpUninstall(options(logger, { clients: ["claude-code"] }));
 
-        expect(existsSync(join(home, ".claude.json.lunora-tmp"))).toBe(false);
+        expect(existsSync(join(workdir, ".mcp.json.lunora-tmp"))).toBe(false);
+    });
+});
+
+describe("config-file safety", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-mcp-safe-"));
+        home = mkdtempSync(join(tmpdir(), "lunora-cli-home-safe-"));
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+        rmSync(home, { force: true, recursive: true });
+    });
+
+    it("preserves a private config's mode instead of widening it", () => {
+        expect.assertions(2);
+
+        const path = join(workdir, ".mcp.json");
+
+        writeFileSync(path, JSON.stringify({ mcpServers: {} }), { mode: 0o600 });
+        chmodSync(path, 0o600);
+
+        const { logger } = captureLogger();
+
+        runMcpInstall(options(logger, { clients: ["claude-code"], scope: "project" }));
+
+        // These files hold `env` blocks full of API tokens, which is why they
+        // are 0600. A temp-file-then-rename that forgets the mode publishes them.
+        // eslint-disable-next-line no-bitwise -- masking the permission bits out of a stat mode is what the check is
+        expect(statSync(path).mode & 0o777).toBe(0o600);
+        expect(readJson(path).mcpServers["lunora-docs"]).toBeDefined();
+    });
+
+    it("writes through a symlinked config rather than replacing the link", () => {
+        expect.assertions(3);
+
+        const real = join(home, "dotfiles-mcp.json");
+        const link = join(workdir, ".mcp.json");
+
+        writeFileSync(real, JSON.stringify({ mcpServers: {} }), "utf8");
+        symlinkSync(real, link);
+
+        const { logger } = captureLogger();
+
+        runMcpInstall(options(logger, { clients: ["claude-code"], scope: "project" }));
+
+        // Dotfile managers symlink exactly these paths; replacing the link
+        // leaves the repo copy stale while still reading as clean.
+        expect(lstatSync(link).isSymbolicLink()).toBe(true);
+        expect(readJson(real).mcpServers["lunora-docs"]).toBeDefined();
+        expect(readJson(link).mcpServers["lunora-docs"]).toBeDefined();
+    });
+
+    it("leaves no temp file behind, and does not reuse a predictable one", () => {
+        expect.assertions(2);
+
+        const { logger } = captureLogger();
+
+        runMcpInstall(options(logger, { clients: ["claude-code"], scope: "project" }));
+
+        expect(existsSync(join(workdir, ".mcp.json.lunora-tmp"))).toBe(false);
+        expect(readdirSync(workdir).filter((name) => name.includes(".tmp"))).toHaveLength(0);
+    });
+});
+
+describe("dry run and scope", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-mcp-dry-"));
+        home = mkdtempSync(join(tmpdir(), "lunora-cli-home-dry-"));
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+        rmSync(home, { force: true, recursive: true });
+    });
+
+    it("--print reports what it would remove and changes nothing", () => {
+        expect.assertions(3);
+
+        const { logger, messages } = captureLogger();
+
+        runMcpInstall(options(logger, { clients: ["cursor"] }));
+        const result = runMcpUninstall(options(logger, { clients: ["cursor"], print: true }));
+
+        expect(result.removed).toHaveLength(1);
+        expect(messages.join("\n")).toContain("would remove");
+        // The command with the widest blast radius must be rehearsable.
+        expect(readJson(join(home, ".cursor", "mcp.json")).mcpServers["lunora-docs"]).toBeDefined();
+    });
+
+    it("honours --project instead of silently ignoring it", () => {
+        expect.assertions(2);
+
+        const { logger } = captureLogger();
+
+        runMcpInstall(options(logger, { clients: ["cursor"] }));
+        runMcpInstall(options(logger, { clients: ["cursor"], scope: "project" }));
+        runMcpUninstall(options(logger, { clients: ["cursor"], scope: "project" }));
+
+        expect(readJson(join(workdir, ".cursor", "mcp.json")).mcpServers["lunora-docs"]).toBeUndefined();
+        // The global copy is untouched by a project-scoped removal.
+        expect(readJson(join(home, ".cursor", "mcp.json")).mcpServers["lunora-docs"]).toBeDefined();
+    });
+
+    it("refuses --docs-only with --local-only rather than reporting a false 'nothing to remove'", () => {
+        expect.assertions(2);
+
+        const { logger, messages } = captureLogger();
+        const result = runMcpUninstall(options(logger, { docsOnly: true, localOnly: true }));
+
+        expect(result.code).toBe(1);
+        expect(messages.join("\n")).toContain("mutually exclusive");
     });
 });

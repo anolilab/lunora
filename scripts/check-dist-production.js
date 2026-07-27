@@ -160,10 +160,35 @@ const checkCliVersion = () => {
  *
  * So assert it where it is actually observable: in the emitted chunk graph.
  */
-const EDGE_UNSAFE_SPECIFIERS = [
-    { specifier: "node:", why: "a Node built-in — unavailable on Workers and most edge runtimes" },
-    { specifier: "@lunora/client", why: "the deployment client — the docs surface must not depend on it" },
-];
+const BARE_NODE_BUILTINS = new Set([
+    "assert",
+    "buffer",
+    "child_process",
+    "crypto",
+    "events",
+    "fs",
+    "http",
+    "https",
+    "net",
+    "os",
+    "path",
+    "stream",
+    "tls",
+    "url",
+    "util",
+    "zlib",
+]);
+
+/** Why a given import specifier disqualifies the chunk graph from running on an edge runtime. */
+const edgeUnsafeReason = (specifier) => {
+    if (specifier.startsWith("node:") || BARE_NODE_BUILTINS.has(specifier)) {
+        // The bare form matters: `import "fs"` is legal Node and NOT edge-safe —
+        // Workers requires the `node:` prefix even with nodejs_compat.
+        return "a Node built-in — unavailable on Workers and most edge runtimes";
+    }
+
+    return specifier === "@lunora/client" ? "the deployment client — the docs surface must not depend on it" : undefined;
+};
 
 /**
  * Every file `entry` pulls in, following relative imports transitively.
@@ -223,11 +248,16 @@ const checkDocsEntryIsEdgeSafe = async () => {
     const found = [];
 
     for (const file of files) {
-        const source = readFileSync(file, "utf8");
+        // Parsed records, not a substring scan: the literal `node:` in a comment
+        // or a data string is not an import, and a real one can be written with
+        // either quote style.
+        const [imports] = parse(readFileSync(file, "utf8"), file);
 
-        for (const { specifier, why } of EDGE_UNSAFE_SPECIFIERS) {
-            if (source.includes(`"${specifier}`) || source.includes(`'${specifier}`)) {
-                found.push({ file: relative(rootDir, file), specifier, why });
+        for (const record of imports) {
+            const why = record.n === undefined ? undefined : edgeUnsafeReason(record.n);
+
+            if (why !== undefined) {
+                found.push({ file: relative(rootDir, file), specifier: record.n, why });
             }
         }
     }

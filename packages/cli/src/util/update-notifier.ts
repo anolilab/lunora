@@ -28,8 +28,15 @@ const FETCH_TIMEOUT_MS = 1500;
 const DEV_VERSION = "0.0.0";
 /** Optional leading `v` stripped from a version string before parsing. */
 const LEADING_V = /^v/u;
-/** A dist-tag-shaped channel name (`alpha`, `beta`, `next`) — anything else falls back to `latest`. */
-const CHANNEL_NAME = /^[a-z]+$/u;
+
+/**
+ * The prerelease channels this project actually publishes (see the branch
+ * strategy in CLAUDE.md). An allowlist rather than a shape test: `1.0.0-rc.1`
+ * is lowercase-word-shaped but there is no `rc` tag on the registry, so
+ * accepting it would produce exactly the silent no-op {@link distTagFor} exists
+ * to avoid.
+ */
+const PUBLISHED_CHANNELS: ReadonlySet<string> = new Set(["alpha", "beta", "next"]);
 
 interface UpdateCache {
     checkedAt: number;
@@ -59,13 +66,7 @@ const versionParts = (version: string): [number, number, number] => {
     return [major ?? 0, minor ?? 0, patch ?? 0];
 };
 
-/**
- * Compare two prerelease tails by semver precedence: dot-separated identifiers,
- * numeric ones numerically and the rest lexically, and a longer tail wins when
- * it is otherwise a prefix. An absent tail outranks any tail — `1.0.0` is newer
- * than `1.0.0-alpha.9`.
- */
-/** Compare one dot-separated prerelease identifier: numeric pairs numerically, everything else lexically. */
+/** Compare one dot-separated prerelease identifier. */
 const compareIdentifier = (x: string, y: string): number => {
     const nx = Number.parseInt(x, 10);
     const ny = Number.parseInt(y, 10);
@@ -74,9 +75,18 @@ const compareIdentifier = (x: string, y: string): number => {
         return nx > ny ? 1 : -1;
     }
 
+    // Semver ranks a numeric identifier BELOW an alphanumeric one. The plain
+    // string compare gets that right only because ASCII digits sort below
+    // letters — which is the one thing here worth knowing before editing it.
     return x > y ? 1 : -1;
 };
 
+/**
+ * Compare two prerelease tails by semver precedence: dot-separated identifiers,
+ * numeric ones numerically and the rest lexically, and a longer tail wins when
+ * it is otherwise a prefix. An absent tail outranks any tail — `1.0.0` is newer
+ * than `1.0.0-alpha.9`.
+ */
 const comparePrerelease = (a: string, b: string): number => {
     if (a === b) {
         return 0;
@@ -110,11 +120,9 @@ const comparePrerelease = (a: string, b: string): number => {
 /**
  * Full semver precedence: -1, 0, or 1.
  *
- * The prerelease tail is load-bearing here, not decoration. This package spends
- * its whole pre-1.0 life on versions like `1.0.0-alpha.119`, so a comparison
- * that stopped at `major.minor.patch` would rate every alpha equal to every
- * other and never report an update — a notifier that runs, costs a request, and
- * can never fire.
+ * The prerelease tail is load-bearing: this package spends its whole pre-1.0
+ * life on `1.0.0-alpha.N`, so a comparison that stopped at `major.minor.patch`
+ * would rate every alpha equal to every other and never report an update.
  */
 const compareVersions = (a: string, b: string): number => {
     const pa = versionParts(a);
@@ -138,10 +146,9 @@ const compareVersions = (a: string, b: string): number => {
  * telling that user to install `@latest` moves them off the channel they chose.
  */
 const distTagFor = (version: string): string => {
-    const { prerelease } = splitVersion(version);
-    const channel = prerelease.split(".")[0] ?? "";
+    const channel = splitVersion(version).prerelease.split(".")[0] ?? "";
 
-    return CHANNEL_NAME.test(channel) ? channel : "latest";
+    return PUBLISHED_CHANNELS.has(channel) ? channel : "latest";
 };
 
 /** True when `latest` is a strictly newer release than `current`. */
@@ -291,7 +298,13 @@ const maybeNotifyUpdate = async (deps: NotifyUpdateDeps): Promise<void> => {
     if (usable === undefined || !isCacheFresh(usable.checkedAt, nowMs, ttlMs)) {
         const fetched = await fetchLatestVersion(deps.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch, tag);
 
-        if (fetched !== undefined) {
+        if (fetched === undefined) {
+            // Cache the miss too, with the current version as the answer. An
+            // unknown channel or an offline machine would otherwise re-fetch on
+            // EVERY command and block on the 1.5s timeout each time — the module
+            // promises at most one network call a day, misses included.
+            writeCache(cacheDirectory, { checkedAt: nowMs, latest: deps.current, tag });
+        } else {
             latest = fetched;
             writeCache(cacheDirectory, { checkedAt: nowMs, latest: fetched, tag });
         }

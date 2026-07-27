@@ -40,7 +40,7 @@ describe("update-notifier helpers", () => {
     });
 
     it("distTagFor keeps a prerelease user on their own channel", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         // Checking an alpha user against `latest` is worse than not checking:
         // the tag may not exist, and installing it moves them off the channel.
@@ -48,6 +48,9 @@ describe("update-notifier helpers", () => {
         expect(distTagFor("1.0.0-beta.2")).toBe("beta");
         expect(distTagFor("1.2.3")).toBe("latest");
         expect(distTagFor("1.2.3-0")).toBe("latest");
+        // Lowercase-word-shaped, but this project publishes no `rc` tag — a
+        // request for it would 404 and the notifier would go quiet forever.
+        expect(distTagFor("1.0.0-rc.1")).toBe("latest");
     });
 
     it("isNewer is true only for a strictly greater release", () => {
