@@ -1020,8 +1020,18 @@ export interface ProcedureMiddlewareIR {
     fanOut: boolean;
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
-    /** `true` when the procedure declares an email-shaped argument (`email`, `emailAddress`, `userEmail`, …). Feeds `signup_mutation_without_disposable_gating`, which can only be actioned when there is an address to gate. */
-    hasEmailArg: boolean;
+
+    /**
+     * `true` when the procedure declares an email-shaped argument (`email`,
+     * `emailAddress`, `userEmail`, …), `false` when it provably declares none,
+     * and **absent** when the argument list can't be read statically (a
+     * `.input(sharedSchema)`, a spread, or a factory whose `args` comes from a
+     * variable). Feeds `signup_mutation_without_disposable_gating`, which can
+     * only be actioned when there is an address to gate — so "unreadable" must
+     * stay distinguishable from "none", or the lint would clear itself on a
+     * registration that may well expose one.
+     */
+    hasEmailArg?: boolean;
     /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
     kind: "action" | "mutation" | "query";
     /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound in its config literal. Feeds the `ai_unbounded_generation_public` lint. */

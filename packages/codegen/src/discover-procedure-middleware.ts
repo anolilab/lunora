@@ -1,8 +1,9 @@
-import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { ProcedureMiddlewareIR } from "./ir";
+import { argumentNames, procedureArgumentObjects } from "./procedure-argument-objects";
 
 /**
  * Middleware factory names mapped to the protection flag they set. Matched by the
@@ -24,49 +25,41 @@ const MIDDLEWARE_FLAGS: Record<string, "usesCaptcha" | "usesEmailGate" | "usesMa
 const USER_TABLE_RE = /account|credential|member|passkey|session|user/iu;
 
 /**
- * Argument names that carry an email address. Matched against the keys of the
- * builder's `.input({...})` literals so `signup_mutation_without_disposable_gating`
- * only fires where there is actually an address to gate — `emailGateMiddleware`
- * needs a selector onto one, so a procedure that never receives an email cannot
- * action that lint.
+ * True for an argument name that carries an email **address**.
+ *
+ * Separators are folded away and the name is matched on its terminal word, so
+ * `email`, `e_mail`, `userEmail`, `billing_contact_email` and `emailAddress` all
+ * count, while `emailVerified`, `emailOptIn` and `emailTemplateId` — which hold a
+ * flag or an id, not an address `emailGateMiddleware` could select — do not.
+ * Folding first (rather than one regex) keeps snake_case, kebab-case and
+ * camelCase on the same path without a nested quantifier.
  */
-const EMAIL_ARG_RE = /^(?:.*_)?e-?mail(?:_?address)?$|email/iu;
+const isEmailArgumentName = (name: string): boolean => {
+    const folded = name.replaceAll(/[^a-z0-9]/giu, "").toLowerCase();
 
-/** Every `.input({...})` object literal walked leftward out of a builder chain. */
-const inputObjectsInChain = (receiver: TsNode): ObjectLiteralExpression[] => {
-    const objects: ObjectLiteralExpression[] = [];
-    let node: TsNode = receiver;
-
-    while (Node.isCallExpression(node)) {
-        const chainCallee = node.getExpression();
-
-        if (!Node.isPropertyAccessExpression(chainCallee)) {
-            break;
-        }
-
-        if (chainCallee.getName() === "input") {
-            const argument = node.getArguments()[0];
-
-            if (argument && Node.isObjectLiteralExpression(argument)) {
-                objects.push(argument);
-            }
-        }
-
-        node = chainCallee.getExpression();
-    }
-
-    return objects;
+    return folded.endsWith("email") || folded.endsWith("emailaddress");
 };
 
-/** True when any `.input({...})` in the chain declares an email-shaped argument. */
-const declaresEmailArgument = (receiver: TsNode | undefined): boolean => {
-    if (!receiver) {
-        return false;
+/**
+ * Whether the procedure declares an email-shaped argument, or `undefined` when
+ * its argument list can't be read statically (`.input(sharedSchema)`, a spread,
+ * or a factory whose `args` comes from a variable).
+ *
+ * Tri-state on purpose. This feeds `signup_mutation_without_disposable_gating`,
+ * which skips a procedure known to take no email — so collapsing "unreadable"
+ * into `false` would silently clear the lint on a registration that may well
+ * expose one. Unknown stays unknown and the lint keeps firing.
+ */
+const declaresEmailArgument = (call: CallExpression, receiver: TsNode | undefined): boolean | undefined => {
+    const { objects, opaque } = procedureArgumentObjects(call, receiver);
+
+    // A definite hit wins over opacity: finding the argument is enough, whatever
+    // else the declaration hides.
+    if (argumentNames(objects).some((name) => isEmailArgumentName(name))) {
+        return true;
     }
 
-    return inputObjectsInChain(receiver).some((object) =>
-        object.getProperties().some((property) => Node.isPropertyAssignment(property) && EMAIL_ARG_RE.test(property.getName())),
-    );
+    return opaque ? undefined : false;
 };
 
 /** The set of protections a builder chain carries. */
@@ -379,7 +372,7 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         exportName: declaration.getName(),
         fanOut,
         file: relativePath,
-        hasEmailArg: declaresEmailArgument(classified.receiver),
+        hasEmailArg: declaresEmailArgument(initializer, classified.receiver),
         kind: classified.kind,
         unboundedAiGeneration,
         usesCaptcha: protections.usesCaptcha,
