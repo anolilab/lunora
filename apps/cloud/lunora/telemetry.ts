@@ -272,7 +272,7 @@ const upsertIncident = async (
  */
 export const ingest = mutation
     .input({
-        deployKey: v.string(),
+        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
         deploymentId: v.optional(v.id("deployments")),
         events: v.array(telemetryEvent),
         observations: v.optional(v.array(observationInput)),
@@ -300,7 +300,7 @@ export const ingest = mutation
                 throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_OBSERVATIONS)} observations)`);
             }
 
-            const now = Date.now();
+            const now = context.now;
 
             // Persist every span as an observation (Traces). Additive to the error
             // fold below — the same OTLP payload feeds both. Best-effort per row so
@@ -465,7 +465,7 @@ interface ObservationRow {
 
 /** Delete span observations past retention (Traces). SYSTEM only (cron dispatch). */
 export const pruneObservations = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
-    const cutoff = Date.now() - OBSERVATION_RETENTION_MS;
+    const cutoff = context.now - OBSERVATION_RETENTION_MS;
     const { page } = await context.db.observations.findMany({});
     const stale = (page as unknown as ObservationRow[]).filter((row) => row.startedAt < cutoff);
 
@@ -484,7 +484,7 @@ export const pruneObservations = internalMutation.mutation(async ({ ctx: context
  * key before delegating to the deploy-key-authorized ingest. SYSTEM only.
  */
 export const orgForDeployKey = internalQuery
-    .input({ deployKey: v.string() })
+    .input({ deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }) })
     .query(async ({ ctx: context, args }): Promise<{ organizationId: Id<"organizations"> } | null> => {
         const organizationId = await resolveDeployKeyOrg(context, args.deployKey);
 

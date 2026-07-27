@@ -42,7 +42,7 @@ export const setStatus = mutation
     .mutation(async ({ ctx: context, args: { id, organizationId, status } }): Promise<Id<"issues">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, id, organizationId, "issue");
-        await context.db.patch(id, { status, updatedAt: Date.now() });
+        await context.db.patch(id, { status, updatedAt: context.now });
 
         return id;
     });

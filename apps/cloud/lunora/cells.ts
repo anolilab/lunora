@@ -71,7 +71,7 @@ export const register = internalMutation
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"cells">> => {
         return context.db.insert("cells", {
             cloudflareAccountId: arguments_.cloudflareAccountId,
-            createdAt: Date.now(),
+            createdAt: context.now,
             dispatchNamespacePrefix: arguments_.dispatchNamespacePrefix,
             jurisdiction: arguments_.jurisdiction,
             name: arguments_.name,

@@ -39,7 +39,7 @@ export const record = internalMutation
 
         return context.db.insert("githubInstallations", {
             accountLogin: accountLogin.toLowerCase(),
-            createdAt: Date.now(),
+            createdAt: context.now,
             installationId,
         });
     });
@@ -65,11 +65,11 @@ export const claim = mutation
             throw new LunoraError("CONFLICT", "installation is already claimed by another organization");
         }
 
-        await context.db.patch(installation._id, { claimedAt: Date.now(), organizationId });
+        await context.db.patch(installation._id, { claimedAt: context.now, organizationId });
         await context.db.insert("auditLog", {
             action: "github.installation.claim",
             actorUserId: userId,
-            createdAt: Date.now(),
+            createdAt: context.now,
             organizationId,
             target: `${installation.accountLogin}#${String(installationId)}`,
         });
