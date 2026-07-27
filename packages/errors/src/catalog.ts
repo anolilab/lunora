@@ -497,6 +497,9 @@ export const CLOUDFLARE_PLATFORM_ERRORS: ReadonlyArray<CloudflarePlatformError> 
     },
 ];
 
+/** True when `character` is an ASCII digit — the token boundary both matchers below test. */
+const isDigit = (character: string | undefined): boolean => character !== undefined && character >= "0" && character <= "9";
+
 /**
  * True when `code` appears in `haystack` as a standalone numeric token (not part
  * of a longer number like `5200` or a version `1.1011`). A boundary-checked
@@ -504,8 +507,6 @@ export const CLOUDFLARE_PLATFORM_ERRORS: ReadonlyArray<CloudflarePlatformError> 
  * from a (here trusted, but conventionally avoided) dynamic string.
  */
 const hasStandaloneNumber = (haystack: string, code: string): boolean => {
-    const isDigit = (character: string | undefined): boolean => character !== undefined && character >= "0" && character <= "9";
-
     for (let from = haystack.indexOf(code); from !== -1; from = haystack.indexOf(code, from + code.length)) {
         if (!isDigit(haystack[from - 1]) && !isDigit(haystack[from + code.length])) {
             return true;
@@ -516,12 +517,34 @@ const hasStandaloneNumber = (haystack: string, code: string): boolean => {
 };
 
 /**
- * Cheap pre-filter over the RAW message. Every match in
- * {@link findCloudflarePlatformSolution} needs one of these two words, and a
- * static case-insensitive pattern settles that without allocating a lowercased
- * copy of the message. That matters: this table is a fallback, so the
- * overwhelmingly common call is a message that matches nothing, and it sits on
- * `resolveHint` — the error path of every transport surface.
+ * True when `haystack` carries Cloudflare's own `Error &lt;code>` / `Error: &lt;code>`
+ * phrasing for `code`, with `code` a whole token.
+ *
+ * The trailing-digit check matters as much here as in the loose matcher. Without
+ * it a plain `includes` matches a longer number by prefix, and the two most common
+ * socket errors in the wild collide with real Cloudflare codes: `"Error 10061:
+ * connect ECONNREFUSED"` (WSAECONNREFUSED) resolved to `1006` — "your IP has been
+ * banned" — and `"Error 10060"` (WSAETIMEDOUT) did the same. The wrong hint then
+ * became the wrong grounding facts in the explainer prompt.
+ */
+const hasCodePhrase = (haystack: string, code: string): boolean => {
+    for (const phrase of [`error ${code}`, `error: ${code}`]) {
+        for (let from = haystack.indexOf(phrase); from !== -1; from = haystack.indexOf(phrase, from + phrase.length)) {
+            if (!isDigit(haystack[from + phrase.length])) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Pre-filter over the RAW message, matching what both passes below require. Its
+ * only job is speed: it lets a non-matching message skip the `toLowerCase()`
+ * allocation as well as the scans. This table is a fallback on `resolveHint`, so
+ * the overwhelmingly common call is a message that matches nothing — scanning it
+ * unconditionally regressed the `unmatched message (worst case)` benchmark ~1.7x.
  */
 const CF_PLATFORM_PREFILTER = /error|cloudflare/iu;
 
@@ -571,7 +594,7 @@ export const findCloudflarePlatformSolution = (message: string): Solution | unde
     // Pass 1 — Cloudflare's own `Error <code>` phrasing is unambiguous.
     if (mentionsError) {
         for (const entry of CLOUDFLARE_PLATFORM_ERRORS) {
-            if (lower.includes(`error ${entry.code}`) || lower.includes(`error: ${entry.code}`)) {
+            if (hasCodePhrase(lower, entry.code)) {
                 return cloudflarePlatformSolution(entry);
             }
         }
@@ -613,12 +636,27 @@ export const findSolutionByMessage = (message: string): Solution | undefined => 
         }
     }
 
-    // Fall back to the curated Cloudflare platform-error table (a fetched-origin
-    // 52x or a Worker/DNS 1xxx surfaced as message text). Kept separate from
-    // MESSAGE_SOLUTIONS so codegen's re-exported build-error solutions stay
-    // Lunora-only, while `resolveHint({ message })` still grounds these.
-    return findCloudflarePlatformSolution(message);
+    return undefined;
 };
+
+/**
+ * Find a solution for `message` across BOTH Lunora's own rules and the curated
+ * Cloudflare platform-error table — the lookup the Studio Issues panel and the
+ * `explainIssue` grounding use.
+ *
+ * Deliberately separate from {@link findSolutionByMessage} rather than folded into
+ * it. That function is on `resolveHint`, and therefore on `toErrorBody` — the
+ * envelope builder for every failed request. Most `ERROR_CATALOG` entries
+ * carry no `hint`, so folding the platform table in there meant an ordinary
+ * `BAD_REQUEST` whose message merely mentioned "cloudflare" near a number shipped
+ * zone-configuration guidance ("review the zone's Firewall/WAF and IP Access
+ * Rules") to unauthenticated browsers. The same fold put the table on the CLI
+ * renderer and the Vite overlay, and on `toErrorBody`'s hot path.
+ *
+ * Platform errors are operator-facing context for an already-persisted Issue, so
+ * the operator-facing surfaces opt in here and the wire path stays Lunora-only.
+ */
+export const findIssueSolution = (message: string): Solution | undefined => findSolutionByMessage(message) ?? findCloudflarePlatformSolution(message);
 
 /**
  * Resolve an actionable hint for an error: prefer a hint carried on the error

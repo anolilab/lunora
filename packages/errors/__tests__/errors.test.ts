@@ -4,6 +4,7 @@ import {
     CLOUDFLARE_PLATFORM_ERRORS,
     ERROR_CATALOG,
     findCloudflarePlatformSolution,
+    findIssueSolution,
     findSolutionByMessage,
     flattenHint,
     invariant,
@@ -313,19 +314,38 @@ describe("cloudflare platform errors", () => {
         expect(findCloudflarePlatformSolution("cloudflare gave up after 524 ms")?.id).toBe("cloudflare-error-524");
     });
 
-    it("resolveHint grounds a CF platform error from a message", () => {
-        expect.assertions(2);
+    it("does not match a code that merely prefixes a longer number", () => {
+        expect.assertions(5);
 
-        const hint = resolveHint({ message: "Error 524: A timeout occurred" });
-
-        expect(typeof hint).toBe("string");
-        expect(hint as string).toContain("did not respond in time");
+        // `10061`/`10060` are WSAECONNREFUSED / WSAETIMEDOUT — the most common socket
+        // error text in the wild — and both begin with the real Cloudflare code 1006.
+        // Matching them fed "your IP has been banned" into the explainer's grounding.
+        expect(findCloudflarePlatformSolution("Error 10061: connect ECONNREFUSED 127.0.0.1:8787")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("Error 10060: connection timed out")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("Error 5200 while parsing")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("Error 11011: internal")).toBeUndefined();
+        expect(findCloudflarePlatformSolution("Error: 5221 not found")).toBeUndefined();
     });
 
-    it("resolveHint from a bare string also grounds a CF platform error", () => {
-        expect.assertions(1);
+    it("keeps the platform table OFF the wire-facing hint path", () => {
+        expect.assertions(3);
 
-        expect(resolveHint("Error 1102: Worker exceeded resource limits")).toContain("CPU-time");
+        // `resolveHint` feeds `toErrorBody`, i.e. the envelope of every failed request.
+        // Most catalog codes carry no `hint`, so folding the platform table into the
+        // Lunora-only message finder shipped operator-only zone guidance ("review the
+        // zone's Firewall/WAF and IP Access Rules") to unauthenticated browsers.
+        expect(resolveHint({ code: "BAD_REQUEST", message: "invalid arg for cloudflare tenant 1006" })).toBeUndefined();
+        expect(resolveHint({ message: "Error 524: A timeout occurred" })).toBeUndefined();
+        expect(resolveHint("Error 1102: Worker exceeded resource limits")).toBeUndefined();
+    });
+
+    it("findIssueSolution opts the operator-facing surfaces into the platform table", () => {
+        expect.assertions(3);
+
+        // A Lunora message-solution still takes precedence over the CF fallback.
+        expect(findIssueSolution("defineSchema() not found in schema.ts")?.id).toBe("lunora-schema-missing");
+        expect(findIssueSolution("Error 1102: Worker exceeded resource limits")?.body).toContain("CPU-time");
+        expect(findIssueSolution("Error 524: A timeout occurred")?.body).toContain("did not respond in time");
     });
 
     it("every catalog code resolves via its `Error <code>` phrasing", () => {
@@ -338,13 +358,13 @@ describe("cloudflare platform errors", () => {
         }
     });
 
-    it("findSolutionByMessage falls back to the CF table but Lunora solutions win", () => {
+    it("findSolutionByMessage stays Lunora-only", () => {
         expect.assertions(2);
 
-        // A Lunora message-solution still takes precedence over the CF fallback.
         expect(findSolutionByMessage("defineSchema() not found in schema.ts")?.id).toBe("lunora-schema-missing");
-        // A message no Lunora rule recognizes falls through to the CF table.
-        expect(findSolutionByMessage("Error 1101: boom")?.id).toBe("cloudflare-error-1101");
+        // The platform table is reachable only through `findIssueSolution`, so codegen's
+        // re-exported finder, the Vite overlay, and `toErrorBody` never see it.
+        expect(findSolutionByMessage("Error 1101: boom")).toBeUndefined();
     });
 });
 

@@ -1163,7 +1163,8 @@ export interface MetricHistoryResult {
  * This and {@link ExplainIssueResult} are hand-mirrored — `@lunora/studio` must not
  * take a dependency edge on `@lunora/do` — so nothing type-checks the two sides
  * against each other. Change either shape here and in `packages/do/src/shard-do.ts`
- * (`ExplainIssueArgs` / `ExplainIssueResult` / `ExplainIssueDegradedReason`) together.
+ * (`ExplainIssueArgs` / `ExplainIssueResult` / `ExplainIssueGrounding` /
+ * `ExplainIssueDegradedReason`) together.
  */
 export interface ExplainIssueArgs {
     culprit?: string;
@@ -1180,22 +1181,37 @@ export interface ExplainIssueArgs {
 export type ExplainIssueDegradedReason = "ai-error" | "empty-response" | "no-ai-binding";
 
 /**
- * Payload of a `__lunora_admin__:explainIssue` call, mirroring `@lunora/do`'s
- * `ExplainIssueResult`. When the app wires an `AI` binding and the model returns
- * text, `degraded` is `false` and `explanation` holds the plain-language write-up
- * (grounded strictly in the catalog `hint`, whose `groundedId` names the matched
- * solution). Otherwise `degraded` is `true` and `reason` says why — the studio
- * then falls back to rendering the always-available grounded `hint` alone.
- * `model` echoes the model that produced a successful explanation.
+ * The grounding facts both `explainIssue` outcomes carry, mirroring `@lunora/do`'s
+ * `ExplainIssueGrounding`. `groundedId` names the matched catalog solution and is
+ * absent when nothing recognized the message — the studio renders a caveat on
+ * absence. The hint body is not on the wire: the studio derives it from the same
+ * catalog offline, which is the point of the grounded layer.
  */
-export interface ExplainIssueResult {
-    degraded: boolean;
-    explanation?: string;
+export interface ExplainIssueGrounding {
     groundedId?: string;
-    hint?: string;
-    model?: string;
-    reason?: ExplainIssueDegradedReason;
 }
+
+/**
+ * Payload of a `__lunora_admin__:explainIssue` call, mirroring `@lunora/do`'s
+ * `ExplainIssueResult`. A discriminated union on `degraded`: when the app wires an
+ * `AI` binding and the model returns text, `explanation` holds the plain-language
+ * write-up and `model` echoes the model that produced it. Otherwise `reason` says why the AI path degraded — the studio
+ * then falls back to rendering the always-available grounded hint alone.
+ */
+/** The arm returned when no inference happened, or it failed, mirroring `@lunora/do`'s `ExplainIssueDegraded`. */
+export interface ExplainIssueDegraded extends ExplainIssueGrounding {
+    degraded: true;
+    reason: ExplainIssueDegradedReason;
+}
+
+/** The arm returned when the model ran and produced text, mirroring `@lunora/do`'s `ExplainIssueSuccess`. */
+export interface ExplainIssueSuccess extends ExplainIssueGrounding {
+    degraded: false;
+    explanation: string;
+    model: string;
+}
+
+export type ExplainIssueResult = ExplainIssueDegraded | ExplainIssueSuccess;
 
 /**
  * How a deployment binding/var classifies, mirroring `@lunora/do`'s `SettingKind`.

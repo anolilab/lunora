@@ -358,6 +358,12 @@ interface ToErrorBodyResult {
 const findCloudflarePlatformSolution: (message: string) => Solution | undefined;
 ```
 
+### `findIssueSolution` (const)
+
+```ts
+const findIssueSolution: (message: string) => Solution | undefined;
+```
+
 ### `findSolutionByMessage` (const)
 
 ```ts

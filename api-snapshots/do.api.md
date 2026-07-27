@@ -183,6 +183,14 @@ interface AggregateTally {
 }
 ```
 
+### `AiRunBinding` (interface)
+
+```ts
+interface AiRunBinding {
+    run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
+}
+```
+
 ### `ApplyOnDeleteOptions` (interface)
 
 ```ts
@@ -399,6 +407,12 @@ interface CtxDbOptions {
 const DATA_MIGRATION_STATE_TABLE = "__lunora_migrations";
 ```
 
+### `DEFAULT_EXPLAIN_ISSUE_MODEL` (const)
+
+```ts
+const DEFAULT_EXPLAIN_ISSUE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+```
+
 ### `DEFAULT_MAX_RELATION_KEYS` (const)
 
 ```ts
@@ -533,6 +547,37 @@ interface DeployInfo {
     versionTag?: string;
     workerUrl?: string;
 }
+```
+
+### `ExplainIssueArgs` (interface)
+
+```ts
+interface ExplainIssueArgs {
+    culprit?: string;
+    model?: string;
+    sampleMessage: string;
+    title?: string;
+}
+```
+
+### `ExplainIssueDegradedReason` (type)
+
+```ts
+type ExplainIssueDegradedReason = "ai-error" | "empty-response" | "no-ai-binding";
+```
+
+### `ExplainIssueGrounding` (interface)
+
+```ts
+interface ExplainIssueGrounding {
+    groundedId?: string;
+}
+```
+
+### `ExplainIssueResult` (type)
+
+```ts
+type ExplainIssueResult = ExplainIssueDegraded | ExplainIssueSuccess;
 ```
 
 ### `ExportRow` (interface)
@@ -2828,6 +2873,12 @@ const ensureFunctionMetricsTables: (sql: SqlExec) => void;
 const ensureMailTable: (sql: SqlExec) => void;
 ```
 
+### `explainIssue` (const)
+
+```ts
+const explainIssue: (binding: unknown, args: Record<string, unknown>) => Promise<ExplainIssueResult>;
+```
+
 ### `exportShardRows` (const)
 
 ```ts
@@ -2970,6 +3021,12 @@ const normalizeIdStructurally: (schema: SchemaLike, tableName: string, id: strin
 
 ```ts
 const normalizeOrderKeys: (orderBy: OrderByInput[] | undefined) => OrderKey[];
+```
+
+### `parseExplainIssueArgs` (const)
+
+```ts
+const parseExplainIssueArgs: (args: Record<string, unknown>) => ExplainIssueArgs;
 ```
 
 ### `parseExportShardArgs` (const)

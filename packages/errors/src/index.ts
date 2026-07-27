@@ -14,6 +14,7 @@ export {
     CLOUDFLARE_PLATFORM_ERRORS,
     ERROR_CATALOG,
     findCloudflarePlatformSolution,
+    findIssueSolution,
     findSolutionByMessage,
     flattenHint,
     isInternalCode,

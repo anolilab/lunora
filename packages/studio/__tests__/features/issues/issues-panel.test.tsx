@@ -274,7 +274,7 @@ describe("issuesPanel explainer", () => {
     it("expands a row to the offline grounded fix from the error catalog", async () => {
         expect.assertions(2);
 
-        const mock = createExplainClient({ degraded: false, explanation: "unused", model: "test" });
+        const mock = createExplainClient({ degraded: false, explanation: "unused", groundedId: "cloudflare-error-1101", model: "test" });
 
         render(renderPanel(mock));
 
@@ -296,7 +296,7 @@ describe("issuesPanel explainer", () => {
             degraded: false,
             explanation: "This error means the Worker script threw before responding.",
             groundedId: "cloudflare-error-1101",
-            model: "@cf/meta/llama-3.1-8b-instruct",
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
         });
 
         render(renderPanel(mock));
@@ -316,7 +316,7 @@ describe("issuesPanel explainer", () => {
     it("degrades to the grounded fix when no AI binding is configured", async () => {
         expect.assertions(2);
 
-        const mock = createExplainClient({ degraded: true, groundedId: "cloudflare-error-1101", hint: "…", reason: "no-ai-binding" });
+        const mock = createExplainClient({ degraded: true, groundedId: "cloudflare-error-1101", reason: "no-ai-binding" });
 
         render(renderPanel(mock));
 
@@ -335,13 +335,73 @@ describe("issuesPanel explainer", () => {
         expect.assertions(1);
 
         const unknown = ISSUE({ hash: "deadbeefcafe0009", sampleMessage: "totally novel failure with no catalog match" });
-        const mock = createExplainClient({ degraded: false, explanation: "unused", model: "test" }, unknown);
+        const mock = createExplainClient({ degraded: false, explanation: "unused", groundedId: "cloudflare-error-1101", model: "test" }, unknown);
 
         render(renderPanel(mock));
 
         fireEvent.click(await screen.findByTestId("issues-toggle-deadbeefcafe0009"));
 
         expect(screen.getByTestId("issues-hint-empty-deadbeefcafe0009")).toBeDefined();
+    });
+
+    it("keeps an explanation across a collapse so the inference is not paid for twice", async () => {
+        expect.assertions(2);
+
+        const mock = createExplainClient({
+            degraded: false,
+            explanation: "This error means the Worker script threw before responding.",
+            groundedId: "cloudflare-error-1101",
+            model: "test",
+        });
+
+        render(renderPanel(mock));
+
+        const toggle = await screen.findByTestId("issues-toggle-deadbeefcafe0001");
+
+        fireEvent.click(toggle);
+        fireEvent.click(screen.getByTestId("issues-explain-deadbeefcafe0001"));
+
+        await screen.findByTestId("issues-explanation-deadbeefcafe0001");
+
+        // Collapse, then re-expand: the answer is still there and no second call fired.
+        fireEvent.click(toggle);
+        fireEvent.click(toggle);
+
+        expect(screen.getByTestId("issues-explanation-deadbeefcafe0001").textContent).toContain("threw before responding");
+
+        const explainCalls = mock.query.mock.calls.filter(([reference]) => (reference as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.explainIssue);
+
+        expect(explainCalls).toHaveLength(1);
+    });
+
+    it("flags an explanation that no catalog fix grounded", async () => {
+        expect.assertions(2);
+
+        // No `groundedId` — the model had only the raw error text to go on, so the
+        // answer must not read like a catalog-backed fix.
+        const unknown = ISSUE({ hash: "deadbeefcafe0007", sampleMessage: "totally novel failure with no catalog match" });
+        const mock = createExplainClient({ degraded: false, explanation: "Probably a null deref.", model: "test" }, unknown);
+
+        render(renderPanel(mock));
+
+        fireEvent.click(await screen.findByTestId("issues-toggle-deadbeefcafe0007"));
+        fireEvent.click(screen.getByTestId("issues-explain-deadbeefcafe0007"));
+
+        await screen.findByTestId("issues-explanation-deadbeefcafe0007");
+
+        expect(screen.getByTestId("issues-ungrounded-deadbeefcafe0007")).toBeDefined();
+
+        // A grounded explanation carries no such caveat.
+        const grounded = createExplainClient({ degraded: false, explanation: "x", groundedId: "cloudflare-error-1101", model: "test" });
+
+        render(renderPanel(grounded));
+
+        fireEvent.click(await screen.findByTestId("issues-toggle-deadbeefcafe0001"));
+        fireEvent.click(screen.getByTestId("issues-explain-deadbeefcafe0001"));
+
+        await screen.findByTestId("issues-explanation-deadbeefcafe0001");
+
+        expect(screen.queryByTestId("issues-ungrounded-deadbeefcafe0001")).toBeNull();
     });
 
     it("drops an explanation once a live re-fold changes the message it was grounded in", async () => {

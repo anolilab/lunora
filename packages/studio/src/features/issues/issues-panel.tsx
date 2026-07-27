@@ -1,4 +1,4 @@
-import { findSolutionByMessage, flattenHint } from "@lunora/errors";
+import { findIssueSolution, flattenHint } from "@lunora/errors";
 import { useLunora } from "@lunora/react";
 import type { KeyboardEvent, ReactElement } from "react";
 import { useState } from "react";
@@ -83,64 +83,162 @@ const severityVariant = (severity: IssueSeverity): "destructive" | "info" | "sec
     return severity === "medium" ? "info" : "secondary";
 };
 
+interface IssueDetailProps {
+    /** `false` while the row is collapsed — renders nothing, but keeps the explanation alive. */
+    readonly expanded: boolean;
+    /** The Issue this detail explains. */
+    readonly issue: ErrorIssue;
+    /** Shard the Issue was read from — the `explainIssue` action targets the same DO. */
+    readonly shardKey: string;
+}
+
 /**
- * One Issue's triage row plus its expandable detail. The row itself carries the
- * full triage workflow — status badge, severity select, assignee input, and the
- * resolve / ignore / reopen actions (each a `runTriage` write owned by the parent,
- * disabled while this row's write is in flight). A chevron toggles a detail row
- * that surfaces two layers of help for the error.
+ * The expanded detail under one Issue row: the raw sample message, then two
+ * layers of help for the error.
  *
  * The first is a grounded fix derived entirely client-side from `@lunora/errors`
- * (`findSolutionByMessage` over the sample message) — offline, instant, and always
+ * (`findIssueSolution` over the sample message) — offline, instant, and always
  * shown when the catalog recognizes the error (a Lunora code, a codegen build
- * error, or a folded-in Cloudflare platform error).
+ * error, or a Cloudflare platform error).
  *
  * The second is an opt-in plain-language explanation behind a button that invokes
  * the `__lunora_admin__:explainIssue` action. That action re-derives the same
- * grounded fix server-side and asks the app's `AI` binding to explain the error
- * strictly from those facts. With no binding wired (or a model error) it degrades
- * to a note pointing back at the grounded fix — the AI layer is additive, never
- * the only help.
+ * lookup server-side and asks the app's `AI` binding to explain the error from
+ * those facts. With no binding wired (or a model error) it degrades to a note
+ * pointing back at the grounded fix — the AI layer is additive, never the only
+ * help. The call fires once per click (a one-shot `client.query`, not a live
+ * subscription).
  *
- * Each row owns its own expand + explanation state so opening or explaining one
- * Issue never touches another, and the AI call fires once per click (a one-shot
- * `client.query`, not a live subscription).
+ * Two lifetime rules explain why this owns the state and takes `expanded`, rather
+ * than being conditionally mounted by the caller.
+ *
+ * First, every piece of state here belongs to ONE sample message, so the caller
+ * keys this component on `issue.sampleMessage`. The Issues read is live, and a
+ * re-fold can swap the message under a row whose `hash` is unchanged; remounting
+ * drops the stale explanation, the stale error, and an in-flight request's busy
+ * flag together, where gating the render alone would leave the latter two behind.
+ *
+ * Second, collapsing must NOT discard an explanation. Unmounting on collapse would
+ * throw away an inference the operator already paid for, and silently drop the
+ * result of one still in flight. So this stays mounted and renders `null` instead.
  */
-const IssueRow = ({ busy, issue, rowError, runTriage, shardKey }: IssueRowProps): ReactElement => {
+const IssueDetail = ({ expanded, issue, shardKey }: IssueDetailProps): null | ReactElement => {
     const client = useLunora();
     const t = useT();
 
-    const [expanded, setExpanded] = useState<boolean>(false);
     const [explanation, setExplanation] = useState<ExplainIssueResult | undefined>(undefined);
-    // The sample message `explanation` was grounded in. The Issues read is live, so
-    // a re-fold can swap `issue.sampleMessage` under a row whose `hash` is unchanged
-    // — an explanation of the old text (and its "grounded in the suggested fix
-    // above" framing) must not survive next to the new one, nor may a late response
-    // for the old text land on the new. Rendering is gated on this matching.
-    const [explainedFor, setExplainedFor] = useState<string | undefined>(undefined);
     const { busy: explaining, error: explainError, run } = useAsyncSubmit();
 
-    // Grounded fix, computed client-side from the catalog — offline and instant.
-    // Flattened to plain text (markdown emphasis stripped) to match ErrorAlert.
-    // Not memoized: the React Compiler already caches this per `issue.sampleMessage`.
-    const solution = findSolutionByMessage(issue.sampleMessage);
-    const groundedHint = solution === undefined ? undefined : flattenHint(solution.body);
-
-    const toggle = (): void => {
-        setExpanded((previous) => !previous);
-    };
-
     const onExplain = (): void => {
-        const requestedFor = issue.sampleMessage;
+        // Drop the previous answer up front, so a failed retry shows its error
+        // alone rather than beside the explanation it was meant to replace.
+        setExplanation(undefined);
 
         run(async () => {
-            const args: ExplainIssueArgs = { culprit: issue.culprit, sampleMessage: requestedFor, title: issue.title };
+            const args: ExplainIssueArgs = { culprit: issue.culprit, sampleMessage: issue.sampleMessage, title: issue.title };
 
             const result = (await client.query(EXPLAIN_ISSUE, args, callOptions(shardKey))) as ExplainIssueResult;
 
             setExplanation(result);
-            setExplainedFor(requestedFor);
         });
+    };
+
+    if (!expanded) {
+        return null;
+    }
+
+    // Grounded fix, computed client-side from the catalog — offline and instant.
+    // Flattened to plain text (markdown emphasis stripped) to match ErrorAlert.
+    // Not memoized: the React Compiler already caches this per `issue.sampleMessage`.
+    const solution = findIssueSolution(issue.sampleMessage);
+    const groundedHint = solution === undefined ? undefined : flattenHint(solution.body);
+
+    return (
+        <TableRow data-testid={`issues-detail-${issue.hash}`}>
+            <TableCell className="bg-muted/30" colSpan={7}>
+                <div className="flex flex-col gap-3 py-1">
+                    <p className="whitespace-pre-wrap font-mono text-xs text-muted-foreground">{issue.sampleMessage}</p>
+
+                    <div>
+                        <div className="text-xs font-medium text-muted-foreground">{t("Suggested fix")}</div>
+                        {groundedHint === undefined ? (
+                            <p className="mt-1 text-sm text-muted-foreground" data-testid={`issues-hint-empty-${issue.hash}`}>
+                                {t("No known fix for this error yet.")}
+                            </p>
+                        ) : (
+                            <p className="mt-1 whitespace-pre-wrap text-sm" data-testid={`issues-hint-${issue.hash}`}>
+                                {groundedHint}
+                            </p>
+                        )}
+                    </div>
+
+                    <div>
+                        <Button
+                            data-testid={`issues-explain-${issue.hash}`}
+                            disabled={explaining}
+                            onClick={onExplain}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                        >
+                            {explaining ? t("Explaining…") : t("Explain in plain language")}
+                        </Button>
+                    </div>
+
+                    {explainError !== null && (
+                        <p className="text-xs text-destructive" data-testid={`issues-explain-error-${issue.hash}`} role="alert">
+                            {explainError}
+                        </p>
+                    )}
+
+                    {explanation !== undefined &&
+                        (explanation.degraded ? (
+                            <p className="text-xs text-muted-foreground" data-testid={`issues-degraded-${issue.hash}`}>
+                                {explanation.reason === "no-ai-binding"
+                                    ? t(
+                                          "No AI binding is configured. Wire an AI binding to enable plain-language explanations — the suggested fix above is always available.",
+                                      )
+                                    : t("The AI model could not explain this error right now. The suggested fix above still applies.")}
+                            </p>
+                        ) : (
+                            <div data-testid={`issues-explanation-${issue.hash}`}>
+                                <div className="text-xs font-medium text-muted-foreground">{t("AI explanation")}</div>
+                                <p className="mt-1 whitespace-pre-wrap text-sm">{explanation.explanation}</p>
+                                {/* No `groundedId` means nothing in the catalog matched, so the model
+                                    had only the raw error to go on. Say so — an ungrounded guess must
+                                    not read like a catalog-backed fix. */}
+                                {explanation.groundedId === undefined && (
+                                    <p className="mt-1 text-xs text-muted-foreground" data-testid={`issues-ungrounded-${issue.hash}`}>
+                                        {t(
+                                            "No catalog fix matched this error, so this explanation is the model's own reading of the message. Verify before acting on it.",
+                                        )}
+                                    </p>
+                                )}
+                                <p className="mt-1 text-[0.7rem] text-muted-foreground">{t("Generated by {model}", { model: explanation.model })}</p>
+                            </div>
+                        ))}
+                </div>
+            </TableCell>
+        </TableRow>
+    );
+};
+
+/**
+ * One Issue's triage row plus its expandable detail. The row carries the full
+ * triage workflow — status badge, severity select, assignee input, and the
+ * resolve / ignore / reopen actions (each a `runTriage` write owned by the parent,
+ * disabled while this row's write is in flight). A chevron toggles the
+ * {@link IssueDetail} row that surfaces the grounded fix and the AI explainer.
+ *
+ * Each row owns its own expand state, so opening one Issue never touches another.
+ */
+const IssueRow = ({ busy, issue, rowError, runTriage, shardKey }: IssueRowProps): ReactElement => {
+    const t = useT();
+
+    const [expanded, setExpanded] = useState<boolean>(false);
+
+    const toggle = (): void => {
+        setExpanded((previous) => !previous);
     };
 
     const onSeverityChange = (value: null | string): void => {
@@ -293,69 +391,10 @@ const IssueRow = ({ busy, issue, rowError, runTriage, shardKey }: IssueRowProps)
                 </TableCell>
             </TableRow>
 
-            {expanded ? (
-                <TableRow data-testid={`issues-detail-${issue.hash}`}>
-                    <TableCell className="bg-muted/30" colSpan={7}>
-                        <div className="flex flex-col gap-3 py-1">
-                            <p className="whitespace-pre-wrap font-mono text-xs text-muted-foreground">{issue.sampleMessage}</p>
-
-                            <div>
-                                <div className="text-xs font-medium text-muted-foreground">{t("Suggested fix")}</div>
-                                {groundedHint === undefined ? (
-                                    <p className="mt-1 text-sm text-muted-foreground" data-testid={`issues-hint-empty-${issue.hash}`}>
-                                        {t("No known fix for this error yet.")}
-                                    </p>
-                                ) : (
-                                    <p className="mt-1 whitespace-pre-wrap text-sm" data-testid={`issues-hint-${issue.hash}`}>
-                                        {groundedHint}
-                                    </p>
-                                )}
-                            </div>
-
-                            <div>
-                                <Button
-                                    data-testid={`issues-explain-${issue.hash}`}
-                                    disabled={explaining}
-                                    onClick={onExplain}
-                                    size="sm"
-                                    type="button"
-                                    variant="outline"
-                                >
-                                    {explaining ? t("Explaining…") : t("Explain in plain language")}
-                                </Button>
-                            </div>
-
-                            {explainError !== null && (
-                                <p className="text-xs text-destructive" data-testid={`issues-explain-error-${issue.hash}`} role="alert">
-                                    {explainError}
-                                </p>
-                            )}
-
-                            {explanation !== undefined &&
-                                explainedFor === issue.sampleMessage &&
-                                (explanation.degraded ? (
-                                    <p className="text-xs text-muted-foreground" data-testid={`issues-degraded-${issue.hash}`}>
-                                        {explanation.reason === "no-ai-binding"
-                                            ? t(
-                                                  "No AI binding is configured. Wire an AI binding to enable plain-language explanations — the suggested fix above is always available.",
-                                              )
-                                            : t("The AI model could not explain this error right now. The suggested fix above still applies.")}
-                                    </p>
-                                ) : (
-                                    <div data-testid={`issues-explanation-${issue.hash}`}>
-                                        <div className="text-xs font-medium text-muted-foreground">{t("AI explanation")}</div>
-                                        <p className="mt-1 whitespace-pre-wrap text-sm">{explanation.explanation}</p>
-                                        {explanation.model !== undefined && (
-                                            <p className="mt-1 text-[0.7rem] text-muted-foreground">
-                                                {t("Generated by {model}", { model: explanation.model })}
-                                            </p>
-                                        )}
-                                    </div>
-                                ))}
-                        </div>
-                    </TableCell>
-                </TableRow>
-            ) : null}
+            {/* Always mounted so collapsing keeps an already-paid-for explanation, but
+                keyed on the sample message so a live re-fold under an unchanged hash
+                remounts rather than carrying the old text's explanation over. */}
+            <IssueDetail expanded={expanded} issue={issue} key={issue.sampleMessage} shardKey={shardKey} />
         </>
     );
 };
