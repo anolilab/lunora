@@ -28,6 +28,8 @@ const FETCH_TIMEOUT_MS = 1500;
 const DEV_VERSION = "0.0.0";
 /** Optional leading `v` stripped from a version string before parsing. */
 const LEADING_V = /^v/u;
+/** A dist-tag-shaped channel name (`alpha`, `beta`, `next`) — anything else falls back to `latest`. */
+const CHANNEL_NAME = /^[a-z]+$/u;
 
 interface UpdateCache {
     checkedAt: number;
@@ -63,11 +65,24 @@ const versionParts = (version: string): [number, number, number] => {
  * it is otherwise a prefix. An absent tail outranks any tail — `1.0.0` is newer
  * than `1.0.0-alpha.9`.
  */
+/** Compare one dot-separated prerelease identifier: numeric pairs numerically, everything else lexically. */
+const compareIdentifier = (x: string, y: string): number => {
+    const nx = Number.parseInt(x, 10);
+    const ny = Number.parseInt(y, 10);
+
+    if (String(nx) === x && String(ny) === y) {
+        return nx > ny ? 1 : -1;
+    }
+
+    return x > y ? 1 : -1;
+};
+
 const comparePrerelease = (a: string, b: string): number => {
     if (a === b) {
         return 0;
     }
 
+    // An absent tail outranks any tail: `1.0.0` is newer than `1.0.0-alpha.9`.
     if (a === "" || b === "") {
         return a === "" ? 1 : -1;
     }
@@ -80,15 +95,12 @@ const comparePrerelease = (a: string, b: string): number => {
         const y = right[index];
 
         if (x === undefined || y === undefined) {
+            // The shorter tail is a prefix of the longer, so the longer wins.
             return x === undefined ? -1 : 1;
         }
 
         if (x !== y) {
-            const nx = Number.parseInt(x, 10);
-            const ny = Number.parseInt(y, 10);
-            const bothNumeric = String(nx) === x && String(ny) === y;
-
-            return (bothNumeric ? nx > ny : x > y) ? 1 : -1;
+            return compareIdentifier(x, y);
         }
     }
 
@@ -129,7 +141,7 @@ const distTagFor = (version: string): string => {
     const { prerelease } = splitVersion(version);
     const channel = prerelease.split(".")[0] ?? "";
 
-    return /^[a-z]+$/u.test(channel) ? channel : "latest";
+    return CHANNEL_NAME.test(channel) ? channel : "latest";
 };
 
 /** True when `latest` is a strictly newer release than `current`. */
@@ -271,7 +283,8 @@ const maybeNotifyUpdate = async (deps: NotifyUpdateDeps): Promise<void> => {
     const cache = readCache(cacheDirectory);
     // A cache entry from another channel answers a different question, so treat
     // it as absent rather than comparing an alpha against a `latest`.
-    const usable = cache !== undefined && (cache.tag ?? "latest") === tag ? cache : undefined;
+    const cachedTag = cache?.tag ?? "latest";
+    const usable = cache !== undefined && cachedTag === tag ? cache : undefined;
 
     let latest = usable?.latest;
 
