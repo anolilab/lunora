@@ -291,7 +291,6 @@ export default defineSchema({
         userId: v.optional(v.string()),
     })
         .global()
-        .index("by_org", ["organizationId"])
         // Primary tail/list index: page a script's lines by time without an
         // in-isolate sort of the whole window.
         .index("by_script_time", ["scriptName", "createdAt"])
@@ -350,7 +349,6 @@ export default defineSchema({
         traceId: v.string(),
     })
         .global()
-        .index("by_org", ["organizationId"])
         // The drill-in: every span in one trace (the waterfall / tree), org-scoped.
         .index("by_trace", ["organizationId", "traceId"])
         // Recent spans, org-scoped, to roll up into the trace list newest-first.
@@ -403,7 +401,6 @@ export default defineSchema({
         failedAt: v.optional(v.number()),
     })
         .global()
-        .index("by_project", ["projectId"])
         .index("by_project_commit", ["projectId", "commitSha"]),
 
     // Streamed build output, one row per line (GAPS.md A3); the dashboard tails
@@ -508,7 +505,6 @@ export default defineSchema({
         updatedAt: v.number(),
     })
         .global()
-        .index("by_org", ["organizationId"])
         // One issue per (org, hash); the ingest upserts through this index.
         .index("by_org_hash", ["organizationId", "hash"], { unique: true })
         // Errors grouped by what raised them — lets `incidents.triage` pull the
@@ -557,7 +553,6 @@ export default defineSchema({
         updatedAt: v.number(),
     })
         .global()
-        .index("by_org", ["organizationId"])
         .index("by_org_hash", ["organizationId", "hash"], { unique: true }),
 
     // Alert rules (Observability "watches while you sleep"). Two firing models:
@@ -683,7 +678,6 @@ export default defineSchema({
         statusCode: v.optional(v.number()),
     })
         .global()
-        .index("by_org", ["organizationId"])
         .index("by_org_deployment", ["organizationId", "deploymentId"]),
 
     // Per-deployment uptime state — the running consecutive-failure counter the
@@ -720,7 +714,6 @@ export default defineSchema({
         updatedAt: v.number(),
     })
         .global()
-        .index("by_project", ["projectId"])
         .index("by_project_env_name", ["projectId", "environment", "name"], { unique: true }),
 
     // User-defined custom dashboards (Tier 2 observability). A named, per-org

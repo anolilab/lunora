@@ -39,10 +39,10 @@ interface SubscriptionRow {
  */
 export const checkout = action
     .input({
-        cancelUrl: v.string(),
+        cancelUrl: v.string().check((value) => value.length <= 2_048, { message: "must be at most 2_048 characters", schema: { maxLength: 2_048 } }),
         organizationId: v.id("organizations"),
-        priceId: v.string(),
-        successUrl: v.string(),
+        priceId: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        successUrl: v.string().check((value) => value.length <= 2_048, { message: "must be at most 2_048 characters", schema: { maxLength: 2_048 } }),
     })
     .action(async ({ ctx: context, args: { cancelUrl, organizationId, priceId, successUrl } }): Promise<{ url: string }> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
@@ -60,7 +60,10 @@ export const checkout = action
 
 /** Open the provider billing portal for the org (owners/admins only). */
 export const portal = action
-    .input({ organizationId: v.id("organizations"), returnUrl: v.string() })
+    .input({
+        organizationId: v.id("organizations"),
+        returnUrl: v.string().check((value) => value.length <= 2_048, { message: "must be at most 2_048 characters", schema: { maxLength: 2_048 } }),
+    })
     .action(async ({ ctx: context, args: { organizationId, returnUrl } }): Promise<{ url: string }> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
 
@@ -114,7 +117,10 @@ export const subscription = query
  * verification + store write happen where `ctx.payments` exists.
  */
 export const processWebhook = action
-    .input({ body: v.string(), signature: v.string() })
+    .input({
+        body: v.string().check((value) => value.length <= 262_144, { message: "must be at most 262_144 characters", schema: { maxLength: 262_144 } }),
+        signature: v.string().check((value) => value.length <= 512, { message: "must be at most 512 characters", schema: { maxLength: 512 } }),
+    })
     .action(async ({ ctx: context, args: { body, signature } }): Promise<{ applied: boolean; status: number }> => {
         const request = new Request("https://internal/billing/webhook", {
             body,
@@ -135,7 +141,7 @@ export const processWebhook = action
  * stay). SYSTEM only (cron dispatch).
  */
 export const enforceDunning = internalMutation.mutation(async ({ ctx: context }): Promise<{ graced: number; recovered: number; suspended: number }> => {
-    const now = Date.now();
+    const now = context.now;
     const { page: subscriptionPage } = await context.db.subscriptions.findMany({});
     const statesByOrg = new Map<string, string[]>();
 

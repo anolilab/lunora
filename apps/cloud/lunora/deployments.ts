@@ -69,7 +69,7 @@ export const claimAlias = async (context: MutationCtx, alias: string, organizati
     }
 
     try {
-        await context.db.insert("aliasOwnership", { alias, createdAt: Date.now(), organizationId, projectId });
+        await context.db.insert("aliasOwnership", { alias, createdAt: context.now, organizationId, projectId });
     } catch (error) {
         // Lost a concurrent first-claim race — the `by_alias` unique index rejected
         // the insert. Re-read the winner: if it is us, the claim stands; if it is
@@ -143,27 +143,29 @@ export const adminTarget = query
  * (returns only a non-sensitive plan tier); the dispatcher reaches it through a
  * bearer-gated control-plane endpoint. Unknown scripts resolve to `free`.
  */
-export const planForScript = query.input({ scriptName: v.string() }).query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string }> => {
-    const { page } = await context.db.deployments.findMany({ where: { scriptName } });
-    const deployment = (page as unknown as DeploymentRow[])[0];
+export const planForScript = query
+    .input({ scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }) })
+    .query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string }> => {
+        const { page } = await context.db.deployments.findMany({ where: { scriptName } });
+        const deployment = (page as unknown as DeploymentRow[])[0];
 
-    if (!deployment) {
-        return { plan: "free" };
-    }
+        if (!deployment) {
+            return { plan: "free" };
+        }
 
-    // A suspended org (spend cap breached / abuse, GAPS.md C1) resolves to the
-    // sentinel plan "suspended" — the dispatcher serves 503 for it. Encoded in
-    // the plan string so the dispatcher's existing TTL cache carries it.
-    const organization = (await context.db.get(deployment.organizationId)) as { suspendedAt?: number } | null;
+        // A suspended org (spend cap breached / abuse, GAPS.md C1) resolves to the
+        // sentinel plan "suspended" — the dispatcher serves 503 for it. Encoded in
+        // the plan string so the dispatcher's existing TTL cache carries it.
+        const organization = (await context.db.get(deployment.organizationId)) as { suspendedAt?: number } | null;
 
-    if (organization?.suspendedAt !== undefined) {
-        return { plan: "suspended" };
-    }
+        if (organization?.suspendedAt !== undefined) {
+            return { plan: "suspended" };
+        }
 
-    const entitlements = await orgEntitlements(context, deployment.organizationId);
+        const entitlements = await orgEntitlements(context, deployment.organizationId);
 
-    return { plan: highestPlan(entitlements.plans) };
-});
+        return { plan: highestPlan(entitlements.plans) };
+    });
 
 /** A project's deployments, newest first. Caller must be a member of the org. */
 export const listByProject = query
@@ -188,20 +190,26 @@ export const create = mutation
         // Tenant admin token the platform set on the worker (for the admin proxy).
         // Sealed at the edge before it reaches here: the encrypted fields are the
         // norm; `adminToken` (plaintext) is only the no-master-key dev fallback.
-        adminToken: v.optional(v.string()),
-        adminTokenCiphertext: v.optional(v.string()),
-        adminTokenIv: v.optional(v.string()),
-        branch: v.optional(v.string()),
+        adminToken: v.optional(
+            v.string().check((value) => value.length <= 1_024, { message: "must be at most 1_024 characters", schema: { maxLength: 1_024 } }),
+        ),
+        adminTokenCiphertext: v.optional(
+            v.string().check((value) => value.length <= 4_096, { message: "must be at most 4_096 characters", schema: { maxLength: 4_096 } }),
+        ),
+        adminTokenIv: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
+        branch: v.optional(v.string().check((value) => value.length <= 255, { message: "must be at most 255 characters", schema: { maxLength: 255 } })),
         // The tenant's compiled cron expressions (for the WfP cron fan-out, §2.4).
-        cronSpecs: v.optional(v.array(v.string())),
+        cronSpecs: v.optional(
+            v.array(v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } })),
+        ),
         // CI deploy path: a valid deploy key authorizes in lieu of a member session.
-        deployKey: v.optional(v.string()),
+        deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
         kind: v.union(v.literal("production"), v.literal("preview"), v.literal("dev")),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
         // @lunora/runtime version bundled into this release (fleet-upgrade planner input, GAPS.md E4).
-        runtimeVersion: v.optional(v.string()),
-        scriptName: v.string(),
+        runtimeVersion: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
+        scriptName: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number }> => {
         let createdBy: string;
@@ -240,7 +248,7 @@ export const create = mutation
         const { page: existing } = await context.db.deployments.findMany({ where: { projectId: arguments_.projectId } }); // secret-scanner:allow -- domain field name
         const version = 1 + Math.max(0, ...(existing as unknown as DeploymentRow[]).filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
 
-        const now = Date.now();
+        const now = context.now;
         const deploymentId = await context.db.insert("deployments", {
             ...(arguments_.adminToken ? { adminToken: arguments_.adminToken } : {}),
             ...(arguments_.adminTokenCiphertext && arguments_.adminTokenIv
@@ -274,7 +282,10 @@ export const create = mutation
  * the deploy key (CI) or an owner/admin member session.
  */
 export const activate = mutation
-    .input({ deployKey: v.optional(v.string()), id: v.id("deployments") })
+    .input({
+        deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        id: v.id("deployments"),
+    })
     .mutation(async ({ ctx: context, args: { deployKey, id } }): Promise<void> => {
         const deployment = (await context.db.get(id)) as DeploymentRow | null;
 
@@ -290,7 +301,7 @@ export const activate = mutation
             throw new LunoraError("CONFLICT", `cannot activate a ${deployment.status} deployment`);
         }
 
-        const now = Date.now();
+        const now = context.now;
         const { page } = await context.db.deployments.findMany({ where: { projectId: deployment.projectId } }); // secret-scanner:allow -- domain field name
         const others = (page as unknown as DeploymentRow[]).filter((d) => d._id !== id && d.kind === deployment.kind && d.status === "live");
 
@@ -309,7 +320,11 @@ export const activate = mutation
  * active deployment is marked `superseded`.
  */
 export const rollback = mutation
-    .input({ deployKey: v.optional(v.string()), id: v.id("deployments"), organizationId: v.id("organizations") })
+    .input({
+        deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        id: v.id("deployments"),
+        organizationId: v.id("organizations"),
+    })
     .mutation(async ({ ctx: context, args: { deployKey, id, organizationId } }): Promise<{ scriptName: string; version?: number }> => {
         const target = (await context.db.get(id)) as DeploymentRow | null;
 
@@ -329,7 +344,7 @@ export const rollback = mutation
             throw new LunoraError("CONFLICT", `cannot roll back to a ${target.status} deployment`);
         }
 
-        const now = Date.now();
+        const now = context.now;
         const project = (await context.db.get(target.projectId)) as ProjectRow | null;
 
         if (project?.activeDeploymentId && project.activeDeploymentId !== id) {
@@ -356,25 +371,27 @@ export const rollback = mutation
  * control-plane endpoint. Falls back to the newest live deployment when the
  * pointer was never set (pre-blue/green rows).
  */
-export const routeForAlias = query.input({ alias: v.string() }).query(async ({ ctx: context, args: { alias } }): Promise<{ scriptName: string } | null> => {
-    const { page } = await context.db.deployments.findMany({ where: { alias } });
-    const rows = page as unknown as DeploymentRow[];
-    const first = rows[0];
+export const routeForAlias = query
+    .input({ alias: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }) })
+    .query(async ({ ctx: context, args: { alias } }): Promise<{ scriptName: string } | null> => {
+        const { page } = await context.db.deployments.findMany({ where: { alias } });
+        const rows = page as unknown as DeploymentRow[];
+        const first = rows[0];
 
-    if (!first) {
-        return null;
-    }
+        if (!first) {
+            return null;
+        }
 
-    const project = (await context.db.get(first.projectId)) as ProjectRow | null;
+        const project = (await context.db.get(first.projectId)) as ProjectRow | null;
 
-    if (project?.activeScriptName) {
-        return { scriptName: project.activeScriptName };
-    }
+        if (project?.activeScriptName) {
+            return { scriptName: project.activeScriptName };
+        }
 
-    const live = rows.filter((d) => d.status === "live").toSorted((a, b) => b.createdAt - a.createdAt)[0];
+        const live = rows.filter((d) => d.status === "live").toSorted((a, b) => b.createdAt - a.createdAt)[0];
 
-    return live ? { scriptName: live.scriptName } : null;
-});
+        return live ? { scriptName: live.scriptName } : null;
+    });
 
 /** Superseded production releases retained per project for rollback (GAPS.md A1). */
 export const SUPERSEDED_RETENTION = 3;
@@ -387,7 +404,7 @@ export const SUPERSEDED_RETENTION = 3;
  * unboundedly. SYSTEM only (cron dispatch).
  */
 export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
-    const now = Date.now();
+    const now = context.now;
     const { page } = await context.db.deployments.findMany({});
     const superseded = (page as unknown as DeploymentRow[]).filter((deployment) => deployment.status === "superseded");
 
@@ -424,7 +441,7 @@ export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }
  * Alchemy lands; this records the lifecycle transition.
  */
 export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: context }): Promise<{ destroyed: number }> => {
-    const now = Date.now();
+    const now = context.now;
     const { page } = await context.db.deployments.findMany({ where: { kind: "preview" } });
 
     const expired = (page as unknown as DeploymentRow[]).filter(
@@ -453,8 +470,8 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
  */
 export const updateStatus = mutation
     .input({
-        bundleHash: v.optional(v.string()),
-        deployKey: v.optional(v.string()),
+        bundleHash: v.optional(v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } })),
+        deployKey: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
         id: v.id("deployments"),
         status: v.union(
             v.literal("queued"),
@@ -466,7 +483,7 @@ export const updateStatus = mutation
             v.literal("failed"),
             v.literal("destroyed"),
         ),
-        url: v.optional(v.string()),
+        url: v.optional(v.string().check((value) => value.length <= 2_048, { message: "must be at most 2_048 characters", schema: { maxLength: 2_048 } })),
     })
     .mutation(async ({ ctx: context, args: { bundleHash, deployKey, id, status, url } }): Promise<void> => {
         const existing = (await context.db.get(id)) as DeploymentRow | null;
@@ -479,7 +496,7 @@ export const updateStatus = mutation
             ? authorizeDeployKey(context, existing.organizationId, deployKey, existing.projectId)
             : assertMember(context, existing.organizationId));
 
-        const now = Date.now();
+        const now = context.now;
         const phaseColumn = PHASE_TIMESTAMP[status];
 
         await context.db.patch(id, {

@@ -47,10 +47,14 @@ export const list = query
  * single-use token **once** — the caller mails it; only its hash is persisted.
  */
 export const invite = mutation
-    .input({ email: v.string(), organizationId: v.id("organizations"), role })
+    .input({
+        email: v.string().check((value) => value.length <= 320, { message: "must be at most 320 characters", schema: { maxLength: 320 } }),
+        organizationId: v.id("organizations"),
+        role,
+    })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"invitations">; token: string }> => {
         const { userId } = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
-        const now = Date.now();
+        const now = context.now;
         const token = randomSecret();
 
         const id = await context.db.insert("invitations", {
@@ -83,7 +87,7 @@ export const revoke = mutation
  * member with the invited role and marks the invitation accepted.
  */
 export const accept = mutation
-    .input({ token: v.string() })
+    .input({ token: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }) })
     .mutation(async ({ ctx: context, args: { token } }): Promise<{ organizationId: Id<"organizations"> }> => {
         const { userId } = context.auth;
 
@@ -95,7 +99,7 @@ export const accept = mutation
         const { page } = await context.db.invitations.findMany({ where: { tokenHash } });
         const invitation = (page as unknown as InvitationRow[])[0];
 
-        if (invitation?.status !== "pending" || invitation.expiresAt < Date.now()) {
+        if (invitation?.status !== "pending" || invitation.expiresAt < context.now) {
             throw new LunoraError("FORBIDDEN", "invitation is invalid, revoked, or expired");
         }
 
@@ -103,7 +107,7 @@ export const accept = mutation
 
         if ((members.page as unknown as unknown[]).length === 0) {
             await context.db.insert("members", {
-                createdAt: Date.now(),
+                createdAt: context.now,
                 organizationId: invitation.organizationId,
                 role: invitation.role,
                 userId,

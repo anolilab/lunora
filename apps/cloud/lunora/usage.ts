@@ -27,7 +27,7 @@ export const record = internalMutation
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> =>
         context.db.insert("platformUsage", {
-            createdAt: Date.now(),
+            createdAt: context.now,
             deploymentId: arguments_.deploymentId,
             kind: arguments_.kind,
             organizationId: arguments_.organizationId,
@@ -44,7 +44,7 @@ export const record = internalMutation
  */
 export const ingest = mutation
     .input({
-        deployKey: v.string(),
+        deployKey: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
         deploymentId: v.optional(v.id("deployments")),
         kind,
         organizationId: v.id("organizations"),
@@ -67,7 +67,7 @@ export const ingest = mutation
         }
 
         return context.db.insert("platformUsage", {
-            createdAt: Date.now(),
+            createdAt: context.now,
             deploymentId: arguments_.deploymentId,
             kind: arguments_.kind,
             organizationId: arguments_.organizationId,
@@ -200,12 +200,12 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
 
         if (decision.suspend && organization.suspendedAt === undefined) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: Date.now(), suspendedReason: "spend-cap" });
+            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: context.now, suspendedReason: "spend-cap" });
             // eslint-disable-next-line no-await-in-loop -- one audit row per transition
             await context.db.insert("auditLog", {
                 action: "organization.suspend",
                 actorUserId: "system:spend-cap",
-                createdAt: Date.now(),
+                createdAt: context.now,
                 organizationId: organization._id,
                 target: `spend ${String(decision.spendMinor)} >= cap ${String(decision.capMinor)}`,
             });
@@ -252,7 +252,7 @@ export const recordOverageDebit = internalMutation
     .mutation(async ({ ctx: context, args: { debitedCredits, organizationId, periodStart } }): Promise<void> => {
         const { page } = await context.db.overageDebits.findMany({ where: { organizationId, periodStart } });
         const row = (page as unknown as OverageDebitRow[])[0];
-        const now = Date.now();
+        const now = context.now;
 
         if (!row) {
             await context.db.insert("overageDebits", { debitedCredits, organizationId, periodStart, updatedAt: now });
