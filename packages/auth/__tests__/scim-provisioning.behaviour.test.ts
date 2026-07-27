@@ -39,6 +39,9 @@ const SECRET = "lunora-scim-lifecycle-secret-lunora-scim-xx";
 /** The bearer credential the IdP presents. Config-declared — 1.7 stores no token at rest. */
 const SCIM_TOKEN = "scim-lifecycle-token"; // secret-scanner:allow
 
+/** A second credential, scoped to reads only, for the authorization test below. */
+const READ_ONLY_TOKEN = "scim-read-only-token"; // secret-scanner:allow
+
 const CONNECTION_ID = "okta-acme";
 
 const scimOptions = {
@@ -326,7 +329,9 @@ describe("scim provisioning lifecycle", () => {
             database: lunoraDoAdapter(doStorage()),
             plugins: [
                 scim({
-                    connections: [{ credentials: [{ id: "ro", scopes: ["scim.users.read"], token: "read-only", type: "bearer" as const }], id: CONNECTION_ID }],
+                    connections: [
+                        { credentials: [{ id: "ro", scopes: ["scim.users.read"], token: READ_ONLY_TOKEN, type: "bearer" as const }], id: CONNECTION_ID },
+                    ],
                 }),
                 admin(),
             ],
@@ -337,7 +342,7 @@ describe("scim provisioning lifecycle", () => {
             readOnly,
             new Request("http://localhost/api/auth/scim/v2/Users", {
                 body: JSON.stringify({ schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"], userName: "mallory@acme.test" }),
-                headers: { authorization: "Bearer read-only", "content-type": "application/scim+json" },
+                headers: { authorization: `Bearer ${READ_ONLY_TOKEN}`, "content-type": "application/scim+json" },
                 method: "POST",
             }),
         );
