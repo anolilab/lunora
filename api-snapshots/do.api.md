@@ -594,6 +594,30 @@ interface ExternalSourceLike {
 const FLAGS_FUNCTION_PREFIX = "__lunora_flags__:";
 ```
 
+### `FTS_COUNT_COLUMN` (const)
+
+```ts
+const FTS_COUNT_COLUMN = "__n__";
+```
+
+### `FTS_ID_COLUMN` (const)
+
+```ts
+const FTS_ID_COLUMN = "__id__";
+```
+
+### `FTS_TEXT_COLUMN` (const)
+
+```ts
+const FTS_TEXT_COLUMN = "__text__";
+```
+
+### `FTS_TOKEN_COLUMN` (const)
+
+```ts
+const FTS_TOKEN_COLUMN = "__token__";
+```
+
 ### `FUNCTION_METRICS_BUCKETS_TABLE` (const)
 
 ```ts
@@ -954,6 +978,30 @@ const MAIL_RETENTION = 500;
 
 ```ts
 const MAIL_TABLE = "__lunora_mail";
+```
+
+### `MAX_INDEXED_TOKENS` (const)
+
+```ts
+const MAX_INDEXED_TOKENS = 1e3;
+```
+
+### `MAX_SEARCH_FILTERS` (const)
+
+```ts
+const MAX_SEARCH_FILTERS = 8;
+```
+
+### `MAX_SEARCH_SCAN` (const)
+
+```ts
+const MAX_SEARCH_SCAN = 1024;
+```
+
+### `MAX_SEARCH_TERMS` (const)
+
+```ts
+const MAX_SEARCH_TERMS = 16;
 ```
 
 ### `MAX_SQL_ROWS` (const)
@@ -1690,6 +1738,21 @@ interface RunTriggersOptions {
 const SCAN_DEP = "*scan";
 ```
 
+### `SEARCH_LANGUAGES` (const)
+
+```ts
+const SEARCH_LANGUAGES: readonly [
+    "de",
+    "en",
+    "es",
+    "fr",
+    "it",
+    "nl",
+    "none",
+    "pt"
+];
+```
+
 ### `SESSION_DO_TTL_DEFAULT` (const)
 
 ```ts
@@ -1744,12 +1807,99 @@ interface SchemaLike {
 }
 ```
 
+### `SearchAnalyzer` (interface)
+
+```ts
+interface SearchAnalyzer {
+    document: (text: string) => string[];
+    profile: string;
+    query: (query: string) => string[];
+}
+```
+
+### `SearchBackfillPass` (interface)
+
+```ts
+interface SearchBackfillPass {
+    cursor: string | undefined;
+    finished: boolean;
+    wipe: boolean;
+}
+```
+
+### `SearchBackfillState` (interface)
+
+```ts
+interface SearchBackfillState {
+    cursor: string | undefined;
+    done: boolean;
+    profile: string | undefined;
+}
+```
+
+### `SearchBuilderLike` (interface)
+
+```ts
+interface SearchBuilderLike {
+    eq: (field: string, value: unknown) => SearchBuilderLike;
+    search: (field: string, query: string) => SearchBuilderLike;
+}
+```
+
 ### `SearchFilterBuilderLike` (interface)
 
 ```ts
 interface SearchFilterBuilderLike {
     eq: (field: string, value: unknown) => SearchFilterBuilderLike;
     search: (field: string, query: string) => SearchFilterBuilderLike;
+}
+```
+
+### `SearchIndexDefinitionLike` (interface)
+
+```ts
+interface SearchIndexDefinitionLike {
+    readonly field: string;
+    readonly filterFields?: ReadonlyArray<string>;
+    readonly language?: string;
+    readonly name: string;
+    readonly staged?: boolean;
+    readonly strategy?: string;
+}
+```
+
+### `SearchLanguage` (type)
+
+```ts
+type SearchLanguage = (typeof SEARCH_LANGUAGES)[number];
+```
+
+### `SearchPagePlan` (interface)
+
+```ts
+interface SearchPagePlan {
+    numItems: number;
+    offset: number;
+}
+```
+
+### `SearchStageLike` (interface)
+
+```ts
+interface SearchStageLike {
+    definition: {
+        field: string;
+        filterFields?: ReadonlyArray<string>;
+        language?: string;
+    };
+    field: string;
+    filters: {
+        field: string;
+        value: unknown;
+    }[];
+    hasQuery: boolean;
+    indexName: string;
+    query: string;
 }
 ```
 
@@ -2588,6 +2738,15 @@ const aggregateSqlFunction: (op: string) => string;
 const aggregateTableName: (table: string, indexName: string) => string;
 ```
 
+### `analyzedSearchText` (const)
+
+```ts
+const analyzedSearchText: (document: Record<string, unknown>, index: {
+    field: string;
+    language?: string;
+}) => string;
+```
+
 ### `applyCdcChanges` (const)
 
 ```ts
@@ -2624,6 +2783,12 @@ const assertFlatPredicate: (where: WhereInput | undefined, schema: ResolveContex
 const assertReadonly: (query: string) => void;
 ```
 
+### `assertSearchWithinCap` (const)
+
+```ts
+const assertSearchWithinCap: (rows: ReadonlyArray<unknown>) => void;
+```
+
 ### `assertShapeShardable` (const)
 
 ```ts
@@ -2646,6 +2811,12 @@ const backfillAggregateIndexes: (sql: SqlExec, schema: SchemaLike) => void;
 
 ```ts
 const backfillRankIndexes: (sql: SqlExec, schema: SchemaLike) => void;
+```
+
+### `backfillSearchIndexes` (const)
+
+```ts
+const backfillSearchIndexes: (sql: SqlExec, schema: SchemaLike) => void;
 ```
 
 ### `boundingBoxGeohashes` (const)
@@ -2698,6 +2869,12 @@ const compileWhereSql: (where: WhereInput | undefined, strategy: WhereSqlStrateg
 const containsRelationPredicate: (where: WhereInput, schema: ResolveContext["schema"], tableName: string) => boolean;
 ```
 
+### `countSearchTokens` (const)
+
+```ts
+const countSearchTokens: (text: string, analyzer: SearchAnalyzer) => Map<string, number>;
+```
+
 ### `coveringGeohashes` (const)
 
 ```ts
@@ -2714,6 +2891,18 @@ const createDependencyTracker: () => DependencyTracker;
 
 ```ts
 const createMetrics: (deps: MetricsDeps) => ContextMetrics;
+```
+
+### `createSearchAnalyzer` (const)
+
+```ts
+const createSearchAnalyzer: (language: string | undefined) => SearchAnalyzer;
+```
+
+### `createSearchBuilder` (const)
+
+```ts
+const createSearchBuilder: (stage: SearchStageLike, tableName: string, analyzer: SearchAnalyzer) => SearchBuilderLike;
 ```
 
 ### `createShardCtxDb` (const)
@@ -2796,6 +2985,12 @@ const encodeGeohash: (point: GeoPoint, precision: number) => string;
 const encodePartitionKey: (partitionBy: ReadonlyArray<string>, source: Record<string, unknown>) => string;
 ```
 
+### `encodeSearchCursor` (const)
+
+```ts
+const encodeSearchCursor: (offset: number) => string;
+```
+
 ### `ensureAuthMetricsTables` (const)
 
 ```ts
@@ -2836,6 +3031,12 @@ const facetColumn: (sql: SqlExec, options: FacetColumnOptions) => FacetColumnRes
 
 ```ts
 const fanOutScalarCounts: (counter: (tableName: string, where?: WhereInput) => Promise<number>, tableName: string, whereField: string, values: unknown[], policyWhere: WhereInput | undefined) => Promise<Map<unknown, number>>;
+```
+
+### `finishSearchPage` (const)
+
+```ts
+const finishSearchPage: (window: ReadonlyArray<Record<string, unknown>>, plan: SearchPagePlan) => QueryPage;
 ```
 
 ### `foldAggregateTally` (const)
@@ -2976,10 +3177,32 @@ const parseExportShardArgs: (args: Record<string, unknown>) => ExportShardAdminA
 const parseImportShardArgs: (args: Record<string, unknown>) => ImportShardAdminArgs;
 ```
 
+### `parseSearchCursor` (const)
+
+```ts
+const parseSearchCursor: (cursor: string) => number | undefined;
+```
+
 ### `planAggregateLookup` (const)
 
 ```ts
 const planAggregateLookup: (index: AggregateIndexDefinitionLike, requestedWhere: Record<string, unknown> | undefined) => Record<string, unknown> | undefined;
+```
+
+### `planSearchBackfillPass` (const)
+
+```ts
+const planSearchBackfillPass: (state: SearchBackfillState, profile: string) => SearchBackfillPass;
+```
+
+### `planSearchPage` (const)
+
+```ts
+const planSearchPage: (options: {
+    cursor?: null | string;
+    endCursor?: null | string;
+    numItems: number;
+}) => SearchPagePlan;
 ```
 
 ### `pointInBoundingBox` (const)
@@ -3143,6 +3366,18 @@ const resolveRankPartition: (index: RankIndexDefinitionLike, where: Record<strin
 const resolveRelationPredicates: (where: WhereInput | undefined, options: ResolveRelationPredicatesOptions) => Promise<WhereInput | undefined>;
 ```
 
+### `resolveSearchField` (const)
+
+```ts
+const resolveSearchField: (document: Record<string, unknown>, field: string) => unknown;
+```
+
+### `resolveSearchScan` (const)
+
+```ts
+const resolveSearchScan: (limit: number | undefined) => number;
+```
+
 ### `resolveWith` (const)
 
 ```ts
@@ -3193,7 +3428,21 @@ const runTriggers: (options: RunTriggersOptions) => Promise<void>;
 ### `scoreDocument` (const)
 
 ```ts
-const scoreDocument: (text: string, tokens: ReadonlyArray<string>) => number;
+const scoreDocument: (text: string, tokens: ReadonlyArray<string>, analyzer: SearchAnalyzer) => number;
+```
+
+### `searchPageScan` (const)
+
+```ts
+const searchPageScan: (plan: SearchPagePlan) => number;
+```
+
+### `searchTextUnchanged` (const)
+
+```ts
+const searchTextUnchanged: (previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined, index: {
+    field: string;
+}) => boolean;
 ```
 
 ### `selectExpiredIds` (const)
@@ -3267,6 +3516,12 @@ const softDeleteScope: (softDeleteMode: {
 const sortColumnName: (i: number) => string;
 ```
 
+### `splitSearchTokens` (const)
+
+```ts
+const splitSearchTokens: (text: string, analyzer: SearchAnalyzer) => string[];
+```
+
 ### `stableStringify` (const)
 
 ```ts
@@ -3300,7 +3555,7 @@ const throwingScheduler: SchedulerLike;
 ### `tokenizeSearch` (const)
 
 ```ts
-const tokenizeSearch: (query: string) => string[];
+const tokenizeSearch: (query: string, analyzer: SearchAnalyzer) => string[];
 ```
 
 ### `trimCdcChanges` (const)
