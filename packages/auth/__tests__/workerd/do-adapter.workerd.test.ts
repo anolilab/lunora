@@ -1,7 +1,8 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { SCIM_TOKEN } from "./test-worker";
+import { AUTH_DO_SECRET_HEADER, AUTH_DO_SESSION_PATH } from "../../src/index";
+import { INTERNAL_SECRET, SCIM_TOKEN } from "./test-worker";
 
 /**
  * `lunoraDoAdapter` against a **real** Durable Object in workerd.
@@ -99,5 +100,26 @@ describe("lunoraDoAdapter in workerd", () => {
         const reactivated = await scimFetch(`/Users/${id}`, "GET");
 
         await expect(reactivated.json()).resolves.toMatchObject({ active: true });
+    });
+
+    it("answers the worker's identity question, but only with the internal secret", async () => {
+        expect.assertions(3);
+
+        const ask = async (headers: Record<string, string>): Promise<Response> => SELF.fetch(`https://example.test${AUTH_DO_SESSION_PATH}`, { headers });
+
+        // This route is how `resolveIdentity` works in DO mode, so it is reachable
+        // from any worker bound to the namespace — the binding is not the boundary,
+        // the secret is. Assert both sides of it in the real runtime, not just Node.
+        const anonymous = await ask({});
+        const wrongSecret = await ask({ [AUTH_DO_SECRET_HEADER]: "wrong" });
+
+        expect(anonymous.status).toBe(401);
+        expect(wrongSecret.status).toBe(401);
+
+        const allowed = await ask({ [AUTH_DO_SECRET_HEADER]: INTERNAL_SECRET });
+
+        // No cookie on this request, so the object reports no user — the point is
+        // that it answered at all.
+        await expect(allowed.json()).resolves.toStrictEqual({});
     });
 });

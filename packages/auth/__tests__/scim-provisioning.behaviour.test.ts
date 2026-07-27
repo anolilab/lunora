@@ -1,13 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 
-import { getAuthTables } from "better-auth/db";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { lunoraD1Adapter, lunoraDoAdapter } from "../src/adapter";
-import { createAuth } from "../src/create-auth";
-import type { DoStorageLike } from "../src/do-store";
+import { createAuth, resolveAuthOptions } from "../src/create-auth";
+import { authDoSchemaStatements } from "../src/do-schema";
 import { handleAuthRequest } from "../src/handler";
 import { admin, scim } from "../src/plugins";
+import createDoStorage from "./helpers/do-storage";
 
 /**
  * The SCIM **provisioning lifecycle**, driven through the real endpoints against a
@@ -66,62 +66,18 @@ type ScimPayload = ScimList | ScimUser | undefined;
 let database: DatabaseSync;
 let auth: ReturnType<typeof createAuth>;
 
-/** SQLite affinity for a better-auth field type. */
-const affinity = (type: ReadonlyArray<string> | string): string => {
-    if (type === "number") {
-        return "REAL";
-    }
-
-    return type === "boolean" ? "INTEGER" : "TEXT";
-};
-
 /**
  * Create the auth tables for `options`.
  *
- * better-auth's migrator is kysely-only, so a DO-backed store materialises its schema
- * from `authTables` — exactly what an app's auth object would do on first use.
+ * Uses the package's own DDL rather than a local mirror of it — that helper emits the
+ * UNIQUE indexes better-auth expresses outside the column definitions, so this suite
+ * runs against the same constraints a real deployment has. An earlier local copy here
+ * created columns only, which would have let a duplicate-provisioning bug pass.
  */
-const materialiseSchema = (options: Parameters<typeof getAuthTables>[0]): void => {
-    for (const table of Object.values(getAuthTables(options))) {
-        const columns = [
-            `"id" TEXT PRIMARY KEY`,
-            ...Object.entries(table.fields).map(([field, attribute]) => `"${attribute.fieldName ?? field}" ${affinity(attribute.type)}`),
-        ];
-
-        database.exec(`CREATE TABLE IF NOT EXISTS "${table.modelName}" (${columns.join(", ")})`);
+const materialiseSchema = (options: Parameters<typeof authDoSchemaStatements>[0]): void => {
+    for (const statement of authDoSchemaStatements(resolveAuthOptions(options))) {
+        database.exec(statement);
     }
-
-    database.exec('CREATE TABLE IF NOT EXISTS "rateLimit" ("id" TEXT PRIMARY KEY, "key" TEXT, "count" REAL, "lastRequest" REAL)');
-};
-
-/**
- * A `DurableObjectStorage` double over `node:sqlite`, with real BEGIN/COMMIT.
- *
- * workerd forbids that SQL inside a real object (hence the platform primitive there), but
- * the observable contract is the same: atomic, and rolled back when the closure throws.
- * The workerd suite covers the genuine primitive.
- */
-const doStorage = (): DoStorageLike => {
-    return {
-        sql: {
-            exec: (query: string, ...bindings: unknown[]) => database.prepare(query).all(...(bindings as never[])),
-        },
-        transaction: async <R>(closure: () => Promise<R>): Promise<R> => {
-            database.exec("BEGIN");
-
-            try {
-                const result = await closure();
-
-                database.exec("COMMIT");
-
-                return result;
-            } catch (error) {
-                database.exec("ROLLBACK");
-
-                throw error;
-            }
-        },
-    };
 };
 
 /** A SCIM request carrying the configured credential. */
@@ -213,7 +169,7 @@ describe("scim provisioning lifecycle", () => {
         materialiseSchema(options);
 
         // `lunoraDoAdapter` is what satisfies the SCIM plugin's transaction requirement.
-        auth = createAuth({ ...options, database: lunoraDoAdapter(doStorage()) });
+        auth = createAuth({ ...options, database: lunoraDoAdapter(createDoStorage(database)) });
     });
 
     it("creates an account in the database from a SCIM POST", async () => {
@@ -326,7 +282,7 @@ describe("scim provisioning lifecycle", () => {
 
         const readOnly = createAuth({
             baseURL: "http://localhost",
-            database: lunoraDoAdapter(doStorage()),
+            database: lunoraDoAdapter(createDoStorage(database)),
             plugins: [
                 scim({
                     connections: [
