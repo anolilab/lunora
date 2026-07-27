@@ -7,9 +7,27 @@
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            {
+                "name": "SHARD",
+                "class_name": "ShardDO",
+            },
+            {
+                "class_name": "SchedulerDO",
+                "name": "SCHEDULER",
+            },
+        ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [
+        {
+            "tag": "v1",
+            "new_sqlite_classes": ["ShardDO"],
+        },
+        {
+            "new_sqlite_classes": ["SchedulerDO"],
+            "tag": "v2",
+        },
+    ],
     "d1_databases": [
         {
             // Control-plane DB: cells + organizations (the `.global()` tables).
@@ -20,6 +38,14 @@
     ],
     // Bind the dispatch namespace so the every-minute tick can fan tenant cron
     // jobs out to namespaced workers (WfP drops their own triggers.crons; §2.4).
+    //
+    // Deliberately NOT `remote: true`, despite the dev-server warning that
+    // dispatch namespaces have no local emulation. Setting it makes `lunora dev`
+    // open a remote proxy session at startup, which hard-fails with API code
+    // 10121 ("you do not have access to dispatch namespaces") on any account
+    // without Workers for Platforms — i.e. it trades an advisory warning for a
+    // dev server that won't boot. Tenant fan-out is inert locally either way;
+    // exercise it against a WfP-enabled account.
     "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
     // Platform-owned queue consumer (§2.4): tenants can't be queue consumers under
     // WfP, so the control plane drains a shared queue and forwards each message to
@@ -69,9 +95,13 @@
     ],
     // Workers AI — powers the on-demand incident AI-triage action
     // (`incidents.triage`). Inference is billed per call; the action only runs
-    // when a member clicks "Triage" in the dashboard.
+    // when a member clicks "Triage" in the dashboard. AI has no local emulation
+    // and always reaches the remote account, so `remote: true` states that
+    // explicitly — dev triage calls do bill, which is why the `ai` rate-limit
+    // bucket in `lunora/guards.ts` is metered per hour.
     "ai": {
         "binding": "AI",
+        "remote": true,
     },
     "observability": {
         "enabled": true,

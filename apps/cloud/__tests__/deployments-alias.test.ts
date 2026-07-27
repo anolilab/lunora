@@ -19,6 +19,9 @@ const makeCtx = (
     const inserts: { row: Record<string, unknown>; table: string }[] = [];
 
     const ctx = {
+        // `claimAlias` stamps `createdAt: ctx.now`; without it the ledger row
+        // would be written with an undefined timestamp.
+        now: Date.now(),
         db: {
             aliasOwnership: {
                 findMany: ({ where }: { where: { alias: string } }) => Promise.resolve({ page: store.filter((row) => row.alias === where.alias) }),
