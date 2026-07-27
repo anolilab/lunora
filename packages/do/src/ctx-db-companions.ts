@@ -26,8 +26,22 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-companions" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
 import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, searchTextUnchanged } from "@lunora/search-core";
-import type { AggregateIndexDefinitionLike , AggregateTally, MutationDelta,RankIndexDefinitionLike } from "@lunora/shard-engine";
-import { aggregateSqlFunction, aggregateTableName, coerceAggregateNumber, encodeAggregateKey, encodeGeohash, encodePartitionKey, foldAggregateTally , GEO_DEFAULT_PRECISION , matchesRankStaticWhere, matchesStaticWhere, param , rankTableName, sortColumnName } from "@lunora/shard-engine";
+import type { AggregateIndexDefinitionLike, AggregateTally, MutationDelta, RankIndexDefinitionLike } from "@lunora/shard-engine";
+import {
+    aggregateSqlFunction,
+    aggregateTableName,
+    coerceAggregateNumber,
+    encodeAggregateKey,
+    encodeGeohash,
+    encodePartitionKey,
+    foldAggregateTally,
+    GEO_DEFAULT_PRECISION,
+    matchesRankStaticWhere,
+    matchesStaticWhere,
+    param,
+    rankTableName,
+    sortColumnName,
+} from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 

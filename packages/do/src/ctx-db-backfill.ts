@@ -16,8 +16,18 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
 
 import { analyzedSearchText, createSearchAnalyzer, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass } from "@lunora/search-core";
-import type { AggregateIndexDefinitionLike , AggregateTally, RankIndexDefinitionLike } from "@lunora/shard-engine";
-import { aggregateTableName, encodeAggregateKey, encodePartitionKey, foldAggregateTally , matchesRankStaticWhere, matchesStaticWhere, param , rankTableName, sortColumnName } from "@lunora/shard-engine";
+import type { AggregateIndexDefinitionLike, AggregateTally, RankIndexDefinitionLike } from "@lunora/shard-engine";
+import {
+    aggregateTableName,
+    encodeAggregateKey,
+    encodePartitionKey,
+    foldAggregateTally,
+    matchesRankStaticWhere,
+    matchesStaticWhere,
+    param,
+    rankTableName,
+    sortColumnName,
+} from "@lunora/shard-engine";
 import { sql as dsql } from "drizzle-orm";
 
 // Type-only imports for the structural surfaces threaded in — value imports
