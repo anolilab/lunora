@@ -9,6 +9,12 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/sql-store`
 
+### `SEARCH_STATE_TABLE` (const)
+
+```ts
+const SEARCH_STATE_TABLE = "__lunora_search_state";
+```
+
 ### `SqlCtxDbOptions` (interface)
 
 ```ts
@@ -58,8 +64,17 @@ interface SqlDialect {
     indexKeyPrefix?: (kind: string | undefined) => number | undefined;
     isUniqueViolation: (error: unknown) => boolean;
     readonly name: "mysql" | "postgres" | "sqlite";
+    nativeTextSearch?: {
+        createCompanion: (companion: string, keyType: string) => SQL;
+        createIndexes: (companion: string) => SQL[];
+        indexDocument: (companion: string, id: string, analyzed: string) => SQL;
+        matches: (companion: string, terms: ReadonlyArray<string>) => SQL;
+        rank: (companion: string, terms: ReadonlyArray<string>) => SQL;
+    };
+    supportsFts5: boolean;
     supportsReturning: boolean;
     tableExists: (table: string) => SQL;
+    textPatternOperatorClass?: string;
 }
 ```
 
@@ -78,6 +93,12 @@ interface SqlExec {
 interface SqlRunResult {
     rowsAffected: number;
 }
+```
+
+### `backfillSqlSearchIndexes` (const)
+
+```ts
+const backfillSqlSearchIndexes: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect) => Promise<void>;
 ```
 
 ### `createSqlCtxDb` (const)
@@ -102,6 +123,12 @@ const decodeGlobalRow: (definition: TableDefinitionLike, row: Record<string, unk
 
 ```ts
 const effectiveColumnKind: (validator: ValidatorLike) => string | undefined;
+```
+
+### `migrateSearchState` (const)
+
+```ts
+const migrateSearchState: (exec: SqlCtxExec, dialect: SqlDialect) => Promise<void>;
 ```
 
 ### `readSqlCdcChanges` (const)
@@ -194,8 +221,17 @@ interface SqlDialect {
     indexKeyPrefix?: (kind: string | undefined) => number | undefined;
     isUniqueViolation: (error: unknown) => boolean;
     readonly name: "mysql" | "postgres" | "sqlite";
+    nativeTextSearch?: {
+        createCompanion: (companion: string, keyType: string) => SQL;
+        createIndexes: (companion: string) => SQL[];
+        indexDocument: (companion: string, id: string, analyzed: string) => SQL;
+        matches: (companion: string, terms: ReadonlyArray<string>) => SQL;
+        rank: (companion: string, terms: ReadonlyArray<string>) => SQL;
+    };
+    supportsFts5: boolean;
     supportsReturning: boolean;
     tableExists: (table: string) => SQL;
+    textPatternOperatorClass?: string;
 }
 ```
 

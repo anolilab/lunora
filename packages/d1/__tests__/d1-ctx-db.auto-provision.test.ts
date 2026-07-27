@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb } from "../src/d1-ctx-db";
 import { listGlobalTables } from "../src/introspect";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
 /**
  * Auto-provisioning of `.global()` D1 tables. Mirrors how `@lunora/do`'s

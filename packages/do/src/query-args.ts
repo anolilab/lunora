@@ -316,5 +316,16 @@ const applySelect = (
 const softDeleteScope = (softDeleteMode: { field: string } | undefined, includeDeleted: boolean | undefined): undefined | WhereInput =>
     softDeleteMode && includeDeleted !== true ? { [softDeleteMode.field]: { isNull: true } } : undefined;
 
-export { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope };
+export {
+    applySelect,
+    buildSeekBeforeWhere,
+    buildSeekWhere,
+    decodeCursor,
+    encodeCursor,
+    fromBase64,
+    invalidCursor,
+    normalizeOrderKeys,
+    softDeleteScope,
+    toBase64,
+};
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection };

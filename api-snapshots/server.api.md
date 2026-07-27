@@ -1578,7 +1578,10 @@ interface SearchFilterBuilder {
 interface SearchIndexDefinition {
     field: string;
     filterFields?: ReadonlyArray<string>;
+    language?: SearchLanguage;
     name: string;
+    staged?: boolean;
+    strategy?: SearchStrategy;
 }
 ```
 
@@ -1809,6 +1812,9 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     searchIndex: (name: string, options: {
         field: string;
         filterFields?: ReadonlyArray<string>;
+        language?: SearchLanguage;
+        staged?: boolean;
+        strategy?: SearchStrategy;
     }) => TableBuilder<Shape>;
     shardBy: (field: keyof Shape & string) => TableBuilder<Shape>;
     softDelete: (options?: {
@@ -2218,19 +2224,19 @@ interface VectorRecord {
 ### `VectorSearch` (interface)
 
 ```ts
-interface VectorSearch extends VectorSearchReader {
-    deleteByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<void>;
-    upsert: (indexName: string, input: VectorUpsertInput) => Promise<void>;
-    upsertNow: (indexName: string, input: VectorUpsertInput) => Promise<void>;
+interface VectorSearch<IndexName extends string = string> extends VectorSearchReader<IndexName> {
+    deleteByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<void>;
+    upsert: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
+    upsertNow: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
 }
 ```
 
 ### `VectorSearchReader` (interface)
 
 ```ts
-interface VectorSearchReader {
-    getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
-    query: (indexName: string, input: VectorQueryInput) => Promise<VectorMatches>;
+interface VectorSearchReader<IndexName extends string = string> {
+    getByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
+    query: (indexName: IndexName, input: VectorQueryInput) => Promise<VectorMatches>;
 }
 ```
 
@@ -4569,9 +4575,20 @@ interface SearchFilterBuilder {
 interface SearchIndexDefinition {
     field: string;
     filterFields?: ReadonlyArray<string>;
+    language?: SearchLanguage;
     name: string;
+    staged?: boolean;
+    strategy?: SearchStrategy;
 }
 ```
+
+### `SearchLanguage` (type)
+
+Re-exported from `@lunora/search-core` — signature tracked at its source.
+
+### `SearchStrategy` (type)
+
+Re-exported from `@lunora/search-core` — signature tracked at its source.
 
 ### `Secrets` (interface)
 
@@ -5066,19 +5083,19 @@ interface VectorRecord {
 ### `VectorSearch` (interface)
 
 ```ts
-interface VectorSearch extends VectorSearchReader {
-    deleteByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<void>;
-    upsert: (indexName: string, input: VectorUpsertInput) => Promise<void>;
-    upsertNow: (indexName: string, input: VectorUpsertInput) => Promise<void>;
+interface VectorSearch<IndexName extends string = string> extends VectorSearchReader<IndexName> {
+    deleteByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<void>;
+    upsert: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
+    upsertNow: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
 }
 ```
 
 ### `VectorSearchReader` (interface)
 
 ```ts
-interface VectorSearchReader {
-    getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
-    query: (indexName: string, input: VectorQueryInput) => Promise<VectorMatches>;
+interface VectorSearchReader<IndexName extends string = string> {
+    getByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
+    query: (indexName: IndexName, input: VectorQueryInput) => Promise<VectorMatches>;
 }
 ```
 

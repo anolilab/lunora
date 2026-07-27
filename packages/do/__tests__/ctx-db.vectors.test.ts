@@ -2,7 +2,7 @@ import type { SchemaLike as VectorSchemaLike, VectorSearchLike } from "@lunora/b
 import { createVectorSyncHook } from "@lunora/bindings/vectors";
 import { describe, expect, it, vi } from "vitest";
 
-import type { WriteHook } from "../src/ctx-db";
+import type { SchemaLike, WriteHook } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -109,5 +109,38 @@ describe("createShardCtxDb + createVectorSyncHook (composed write path)", () => 
 
         expect(vectors.upserts).toEqual([]);
         expect(vectors.deletes).toEqual([]);
+    });
+
+    it("reads a dot-separated source path out of a nested object", async () => {
+        expect.assertions(1);
+
+        // `.vectorize("properties.name", …)` used to read a flat `row["properties.name"]`,
+        // which is always undefined — the index silently embedded nothing.
+        const nestedSchema: VectorSchemaLike = {
+            tables: {
+                notes: { vectorIndexes: [{ embed, field: "properties.name", name: "notes-nested" }] },
+            },
+            vectorIndexes: {},
+        };
+        const nestedStoreSchema: SchemaLike = {
+            tables: { notes: { indexes: [], shape: { properties: { kind: "object" } } } },
+        };
+        const search = fakeVectorSearch();
+        const harness = createSqliteExec();
+
+        runShardMigrations(harness.sql, nestedStoreSchema);
+
+        const writer = createShardContextDatabase({
+            clock: () => fixedTime,
+            onWrite: createVectorSyncHook({ schema: nestedSchema, vectors: search }),
+            schema: nestedStoreSchema,
+            sql: harness.sql,
+        });
+
+        await writer.insert("notes", { properties: { name: "nested source" } });
+
+        expect(search.upserts.map(([index, input]) => [index, (input as { input: unknown }).input])).toStrictEqual([["notes-nested", "nested source"]]);
+
+        harness.close();
     });
 });

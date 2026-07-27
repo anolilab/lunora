@@ -2,7 +2,7 @@ import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "../src/introspect";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
 const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
     return {

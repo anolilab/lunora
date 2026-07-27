@@ -1,9 +1,11 @@
 import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
+import { createSqlCtxDb } from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { D1Exec } from "../src/d1-ctx-db";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import sqliteDialect from "../src/sqlite-dialect";
+import { createD1Exec, FTS5_IN_BUILD } from "./_helpers/node-sqlite-d1";
 
 /**
  * Audit-fix coverage for the D1 column dialect.
@@ -117,7 +119,7 @@ describe("d1 ctx-db lazy companion migration", () => {
         harness.close();
     });
 
-    it("creates the fts companion lazily so search writes and reads work without an explicit migration", async () => {
+    it.skipIf(!FTS5_IN_BUILD)("creates the fts companion lazily so search writes and reads work without an explicit migration", async () => {
         expect.assertions(2);
 
         // Works on both engine variants: where fts5 is present, ensureMigrated
@@ -140,7 +142,7 @@ describe("d1 ctx-db lazy companion migration", () => {
         expect(results.map((document) => document["title"])).toStrictEqual(["a"]);
     });
 
-    it("patch and delete do not throw against a lazily-created fts companion", async () => {
+    it.skipIf(!FTS5_IN_BUILD)("patch and delete do not throw against a lazily-created fts companion", async () => {
         expect.assertions(2);
 
         await createDocsTable(harness.exec);
@@ -301,27 +303,6 @@ describe("d1 ctx-db avg divisor excludes non-numeric fields", () => {
     });
 });
 
-/**
- * `D1Exec` decorator that forces the fts5-availability probe to report "not
- * available" — the probe creates a `__lunora_fts_probe` virtual table, so we
- * make that one CREATE throw while passing every other statement through to the
- * underlying engine. This deterministically routes `.search()` down the
- * LIKE-scan fallback (`searchViaScan`) regardless of whether the test runner's
- * `node:sqlite` ships fts5.
- */
-const withoutFts5 = (inner: D1Exec): D1Exec => {
-    return {
-        all: (sql, parameters) => inner.all(sql, parameters),
-        run: (sql, parameters) => {
-            if (sql.includes("__lunora_fts_probe") && sql.includes("CREATE")) {
-                return Promise.reject(new Error("fts5 unavailable (forced)"));
-            }
-
-            return inner.run(sql, parameters);
-        },
-    };
-};
-
 describe("d1 ctx-db search forced scan path", () => {
     beforeEach(() => {
         harness = createD1Exec();
@@ -331,10 +312,10 @@ describe("d1 ctx-db search forced scan path", () => {
         harness.close();
     });
 
-    it("uses the LIKE-scan fallback when fts5 is unavailable", async () => {
+    it("uses the portable inverted index when fts5 is unavailable", async () => {
         expect.assertions(2);
 
-        const exec = withoutFts5(harness.exec);
+        const { exec } = harness;
 
         await createDocsTable(exec);
 
@@ -345,10 +326,10 @@ describe("d1 ctx-db search forced scan path", () => {
             return `d${String(counter)}`;
         };
 
-        // ensureMigrated() runs runD1SearchMigrations, which short-circuits when
-        // fts5 is unavailable — so no fts table is created, and the writes/reads
-        // must transparently use the live-table scan.
-        const writer = createD1ContextDatabase({ exec, idGenerator, schema: searchSchema });
+        // ensureMigrated() runs runD1SearchMigrations, which materializes the
+        // portable `(token, id, occurrences)` companion on an engine without
+        // fts5 — the shape Postgres and MySQL behind Hyperdrive use.
+        const writer = createSqlCtxDb({ dialect: { ...sqliteDialect, supportsFts5: false }, exec, idGenerator, schema: searchSchema });
 
         await writer.insert("docs", { body: "alpha beta", channel: "x", title: "low" });
         await writer.insert("docs", { body: "alpha alpha alpha", channel: "x", title: "high" });
@@ -358,12 +339,22 @@ describe("d1 ctx-db search forced scan path", () => {
             .withSearchIndex("by_body", (q) => q.search("body", "alpha"))
             .collect();
 
-        // Term-frequency ranking from the scan scorer: "high" outranks "low".
+        // Term-frequency ranking, identical to the fts5 path: "high" outranks "low".
         expect(results.map((document) => document["title"])).toStrictEqual(["high", "low"]);
 
-        // No fts shadow table was created (proves the scan path, not fts).
-        const ftsTables = await harness.exec.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, ["docs__fts_by_body"]);
+        // The companion holds one row per (token, document) — three for
+        // "alpha beta" / "alpha alpha alpha".
+        const tokens = await harness.exec.all(`SELECT "__token__", "__id__", "__n__" FROM "docs__fts_by_body" ORDER BY "__token__", "__id__"`, []);
 
-        expect(ftsTables).toHaveLength(0);
+        // Re-shaped into plain objects: `node:sqlite` hands back null-prototype rows.
+        expect(
+            tokens.map((row) => {
+                return { id: row["__id__"], n: row["__n__"], token: row["__token__"] };
+            }),
+        ).toStrictEqual([
+            { id: "d1", n: 1, token: "alpha" },
+            { id: "d2", n: 3, token: "alpha" },
+            { id: "d1", n: 1, token: "beta" },
+        ]);
     });
 });

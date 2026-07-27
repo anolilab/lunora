@@ -1753,6 +1753,19 @@ interface SearchFilterBuilderLike {
 }
 ```
 
+### `SearchIndexDefinitionLike` (interface)
+
+```ts
+interface SearchIndexDefinitionLike {
+    readonly field: string;
+    readonly filterFields?: ReadonlyArray<string>;
+    readonly language?: string;
+    readonly name: string;
+    readonly staged?: boolean;
+    readonly strategy?: string;
+}
+```
+
 ### `SecurityAuditResult` (interface)
 
 ```ts
@@ -2648,16 +2661,16 @@ const backfillAggregateIndexes: (sql: SqlExec, schema: SchemaLike) => void;
 const backfillRankIndexes: (sql: SqlExec, schema: SchemaLike) => void;
 ```
 
+### `backfillSearchIndexes` (const)
+
+```ts
+const backfillSearchIndexes: (sql: SqlExec, schema: SchemaLike) => void;
+```
+
 ### `boundingBoxGeohashes` (const)
 
 ```ts
 const boundingBoxGeohashes: (box: GeoBoundingBox) => string[];
-```
-
-### `buildFtsMatch` (const)
-
-```ts
-const buildFtsMatch: (tokens: ReadonlyArray<string>) => string;
 ```
 
 ### `buildSecurityAudit` (const)
@@ -2842,12 +2855,6 @@ const fanOutScalarCounts: (counter: (tableName: string, where?: WhereInput) => P
 
 ```ts
 const foldAggregateTally: (tallies: Map<string, AggregateTally>, encoded: string, index: AggregateIndexDefinitionLike, record: Record<string, unknown>) => void;
-```
-
-### `ftsTableName` (const)
-
-```ts
-const ftsTableName: (table: string, indexName: string) => string;
 ```
 
 ### `guardWriter` (const)
@@ -3190,12 +3197,6 @@ const runShardMigrations: (sql: SqlExec, schema: SchemaLike, options?: {
 const runTriggers: (options: RunTriggersOptions) => Promise<void>;
 ```
 
-### `scoreDocument` (const)
-
-```ts
-const scoreDocument: (text: string, tokens: ReadonlyArray<string>) => number;
-```
-
 ### `selectExpiredIds` (const)
 
 ```ts
@@ -3279,12 +3280,6 @@ const stableStringify: (value: unknown) => string;
 const stableWireKey: (value: unknown) => string;
 ```
 
-### `stringifySearchText` (const)
-
-```ts
-const stringifySearchText: (value: unknown) => string;
-```
-
 ### `subscriptionListDeltas` (const)
 
 ```ts
@@ -3295,12 +3290,6 @@ const subscriptionListDeltas: (previousJson: string, nextResult: unknown, table:
 
 ```ts
 const throwingScheduler: SchedulerLike;
-```
-
-### `tokenizeSearch` (const)
-
-```ts
-const tokenizeSearch: (query: string) => string[];
 ```
 
 ### `trimCdcChanges` (const)

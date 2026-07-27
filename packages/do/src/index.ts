@@ -59,6 +59,7 @@ export type {
     ReadHook,
     SchemaLike,
     SearchFilterBuilderLike,
+    SearchIndexDefinitionLike,
     ServerDefaultContextLike,
     SqlCursor,
     SqlExec,
@@ -73,6 +74,7 @@ export {
     assertValidClientId,
     backfillAggregateIndexes,
     backfillRankIndexes,
+    backfillSearchIndexes,
     CDC_LOG_TABLE,
     createShardCtxDb,
     normalizeIdStructurally,
@@ -207,7 +209,10 @@ export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefi
 export { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 export type { LogEventInput } from "./request-log";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
-export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
+// The search core lives in `shared/search` now. It used to be re-exported from
+// here so `@lunora/sql-store` could reuse it, which turned two dozen internal
+// contracts into permanent public API of this package for no reason other than
+// cross-package reach; both engines inline it by relative path instead.
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
 export type { SessionRecord } from "./session-do";
