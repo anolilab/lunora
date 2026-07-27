@@ -1,3 +1,57 @@
+## @lunora/agent [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/%40lunora%2Fagent%401.0.0-alpha.23...%40lunora%2Fagent%401.0.0-alpha.24) (2026-07-27)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.37
+* **@lunora/mail:** upgraded to 1.0.0-alpha.30
+* **@lunora/server:** upgraded to 1.0.0-alpha.45
+
+## @lunora/agent [1.0.0-alpha.23](https://github.com/anolilab/lunora/compare/%40lunora%2Fagent%401.0.0-alpha.22...%40lunora%2Fagent%401.0.0-alpha.23) (2026-07-27)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.36
+* **@lunora/mail:** upgraded to 1.0.0-alpha.29
+* **@lunora/server:** upgraded to 1.0.0-alpha.44
+
+## @lunora/agent [1.0.0-alpha.22](https://github.com/anolilab/lunora/compare/%40lunora%2Fagent%401.0.0-alpha.21...%40lunora%2Fagent%401.0.0-alpha.22) (2026-07-27)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.35
+* **@lunora/mail:** upgraded to 1.0.0-alpha.28
+* **@lunora/server:** upgraded to 1.0.0-alpha.43
+
+## @lunora/agent [1.0.0-alpha.21](https://github.com/anolilab/lunora/compare/%40lunora%2Fagent%401.0.0-alpha.20...%40lunora%2Fagent%401.0.0-alpha.21) (2026-07-27)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.34
+* **@lunora/mail:** upgraded to 1.0.0-alpha.27
+* **@lunora/server:** upgraded to 1.0.0-alpha.42
+
+## @lunora/agent [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/%40lunora%2Fagent%401.0.0-alpha.19...%40lunora%2Fagent%401.0.0-alpha.20) (2026-07-27)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.33
+* **@lunora/mail:** upgraded to 1.0.0-alpha.26
+* **@lunora/server:** upgraded to 1.0.0-alpha.41
+
+## @lunora/agent [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/%40lunora%2Fagent%401.0.0-alpha.18...%40lunora%2Fagent%401.0.0-alpha.19) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.32
+* **@lunora/mail:** upgraded to 1.0.0-alpha.25
+* **@lunora/server:** upgraded to 1.0.0-alpha.40
+
 ## @lunora/agent [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/%40lunora%2Fagent%401.0.0-alpha.17...%40lunora%2Fagent%401.0.0-alpha.18) (2026-07-26)
 
 

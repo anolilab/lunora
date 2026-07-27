@@ -9,6 +9,7 @@
  * cross-package `onSpan` call structurally guaranteed rather than coincidentally
  * compatible. Keep genuinely zero-dependency so inlining stays sound.
  */
+import type { EvaluationInput } from "./evaluation-attributes";
 import type { LogFields } from "./log-fields";
 import type { OtlpSpanKind } from "./otlp";
 
@@ -83,6 +84,17 @@ export interface SpanHandle {
      * collapsing every producer into one giant trace.
      */
     addLink: (link: SpanLink) => void;
+
+    /**
+     * Attach an AI **evaluation** verdict to this (generation) span as the
+     * `gen_ai.evaluation.<name>.score` / `.label` OpenTelemetry attributes, so a
+     * scorer's grade rides the same trace as the generation it graded and the
+     * collector reads it straight off the span. Convenience over
+     * {@link SpanHandle.setAttributes} that owns the key format; privacy-safe —
+     * only the name, score, and optional label are emitted, never the graded
+     * prompt or completion. Throws on an empty name or a non-finite score.
+     */
+    recordEvaluation: (evaluation: EvaluationInput) => void;
 
     /**
      * Record a caught exception as the OTel-conventional `exception` span event

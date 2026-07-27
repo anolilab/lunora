@@ -32,9 +32,13 @@ export class ConflictError extends LunoraError {
 
 /**
  * Minimal projection of the SQLite handle that the transaction helper needs.
- * `state.storage.sql` in the Workers runtime exposes a query runner for
- * BEGIN / COMMIT / ROLLBACK; declared structurally so unit tests can pass a
- * stub without depending on the workers runtime.
+ *
+ * `ShardDO.runInTransaction` uses it as an availability probe: the transaction
+ * itself is opened with `state.storage.transaction(closure)` (workerd forbids raw
+ * BEGIN/COMMIT inside a Durable Object), but a handler's SQL still needs a
+ * connection, so a state whose `storage.sql` has no `exec` is rejected up front
+ * rather than failing mid-transaction. Declared structurally so unit tests can
+ * pass a stub without depending on the workers runtime.
  */
 export interface TransactionSqlLike {
     exec: (query: string) => unknown;

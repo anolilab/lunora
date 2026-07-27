@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { createAuth, createAuthAdmin, createAuthAuditReader, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
@@ -52,10 +52,16 @@ interface GlobalDeclaration<Env> {
     origin?: Selector<Env, string>;
 }
 
-/** `.auth(...)` declaration — better-auth options plus the D1 binding its SQL adapter reads. The builder owns the lazy build + `ensureMigrated` dance and wires `authHandler` / `resolveIdentity` / `authAdmin`. */
+/** `.auth(...)` declaration — better-auth options plus the storage the adapter reads. Give it `d1` (the default) or `namespace` (a Durable Object that hosts the auth tables), never both. The builder owns the lazy build + `ensureMigrated` dance and wires `authHandler` / `resolveIdentity` / `authAdmin`. */
 interface AuthDeclaration<Env> {
-    /** The D1 binding the auth SQL adapter is wired over (via `lunoraD1Adapter`). */
-    d1: Selector<Env, unknown>;
+    /** The D1 binding the auth SQL adapter is wired over (via `lunoraD1Adapter`). Omit only when using `namespace`. */
+    d1?: Selector<Env, unknown>;
+    /** Shared secret the worker presents on the object's internal session route. REQUIRED with `namespace`: the binding is reachable from any worker bound to it, so the secret — not the binding — is the authorization boundary. Without it identity resolution fails closed. */
+    internalSecret?: Selector<Env, string>;
+    /** Name of the Durable Object instance holding the auth tables. Defaults to `"auth"`. Set it to run separate auth objects (per deployment, per tenant) off one namespace. */
+    objectName?: Selector<Env, string>;
+    /** The auth Durable Object namespace — the DO-backed mode. Needed for `@better-auth/scim`, which requires native transactions that D1 has none of. The object owns the auth tables, so `/api/auth/*` and identity resolution both go through it. */
+    namespace?: Selector<Env, ShardNamespaceLike>;
     /** Build the better-auth options from `env` (secret, plugins, email/password, …). */
     options: (env: Env) => LunoraAuthOptions;
 }
@@ -94,8 +100,25 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
-    /** Wire better-auth — the builder lazily builds the instance, runs `ensureMigrated`, and dispatches `/api/auth/*` inside the worker (instrumented for the auth-failure SLO). */
+    /** Wire better-auth — the builder lazily builds the instance, runs `ensureMigrated`, and dispatches `/api/auth/*` inside the worker (instrumented for the auth-failure SLO). Pass `d1` for the D1-backed default, or `namespace` + `internalSecret` to host the auth tables in a Durable Object (what `@better-auth/scim` needs). */
     public auth(declaration: AuthDeclaration<Env>): this {
+        // Reject the ambiguous and the empty shapes here rather than at the first
+        // request: with neither storage set, auth would silently never answer, and
+        // with both it is unclear which one owns the tables.
+        if (declaration.d1 && declaration.namespace) {
+            throw new Error(".auth(): pass either `d1` or `namespace`, not both — they are two different homes for the same tables.");
+        }
+
+        if (!declaration.d1 && !declaration.namespace) {
+            throw new Error(".auth(): needs `d1` (D1-backed) or `namespace` (Durable-Object-backed) to know where the auth tables live.");
+        }
+
+        if (declaration.namespace && !declaration.internalSecret) {
+            throw new Error(
+                ".auth(): `namespace` requires `internalSecret` — the auth DO binding is reachable from any worker bound to it, so identity resolution is gated on a shared secret and would otherwise fail closed on every request.",
+            );
+        }
+
         this.authDeclaration = declaration;
 
         return this;
@@ -215,10 +238,19 @@ class AppBuilder<Env extends object> {
                 return;
             }
 
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(this.authDeclaration.d1(env) as never) });
+            const d1 = this.authDeclaration.d1;
+
+            // DO-backed mode builds no instance here: better-auth runs inside the
+            // object, which materialises its own schema (the Kysely migrator below is
+            // dialect-bound and cannot target DO storage).
+            if (!d1) {
+                return;
+            }
+
+            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
             // Apply the better-auth schema lazily on first request (raw-D1 Kysely
             // migrator). For production run the migrate command ahead of deploy.
-            await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: this.authDeclaration.d1(env) as never }));
+            await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
         };
 
         const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth));
@@ -359,7 +391,34 @@ class AppBuilder<Env extends object> {
 
         options.logArchive = resolveLogArchiveFromEnv(env);
 
-        if (this.authDeclaration) {
+        // Captured before the branch so the narrowing survives — reading
+        // `this.authDeclaration.namespace` again below would be optional all over again.
+        const authDeclaration = this.authDeclaration;
+        const authNamespace = authDeclaration?.namespace;
+        const authD1 = authDeclaration?.d1;
+
+        if (authDeclaration && authNamespace) {
+            // DO-backed mode. The auth tables live inside the object and DO storage is
+            // unreachable from here, so better-auth runs in there and this worker talks
+            // to it. `createDoAuthWiring` is a tested function in `@lunora/auth` rather
+            // than more emitted code: request-path logic in generated output can only be
+            // typechecked, never unit-tested.
+            const authWiring = createDoAuthWiring({
+                internalSecret: authDeclaration.internalSecret?.(env),
+                namespace: authNamespace(env),
+                objectName: authDeclaration.objectName?.(env),
+            });
+
+            options.authHandler = authWiring.authHandler;
+            options.resolveIdentity = authWiring.resolveIdentity;
+            // The audit log lives in the object like every other auth table, so the feed
+            // reads through it rather than querying D1.
+            options.authAuditReader = authWiring.auditReader;
+            // `authAdmin` stays D1-only: its ~30 methods read the auth tables directly
+            // from the worker, which DO storage does not allow. The studio's auth pages
+            // therefore report "not configured" in this mode rather than silently
+            // returning empty data.
+        } else if (authDeclaration && authD1) {
             options.authHandler = (request) => {
                 const auth = getAuth();
 
@@ -379,7 +438,7 @@ class AppBuilder<Env extends object> {
             const authInstance = getAuth();
 
             options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
-            options.authAuditReader = createAuthAuditReader(d1Executor(this.authDeclaration.d1(env) as never));
+            options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));
         }
 
         for (const fn of this.extendFns) {

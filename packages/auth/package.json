@@ -1,6 +1,6 @@
 {
     "name": "@lunora/auth",
-    "version": "1.0.0-alpha.45",
+    "version": "1.0.0-alpha.51",
     "description": "Auth for Lunora — a thin better-auth wrapper: email/password, OAuth, plugins, D1-backed",
     "keywords": [
         "auth",
@@ -47,6 +47,14 @@
         "./plugins/client": {
             "types": "./dist/plugins-client.d.ts",
             "import": "./dist/plugins-client.mjs"
+        },
+        "./plugins/enterprise": {
+            "types": "./dist/plugins-enterprise.d.ts",
+            "import": "./dist/plugins-enterprise.mjs"
+        },
+        "./plugins/enterprise/client": {
+            "types": "./dist/plugins-enterprise-client.d.ts",
+            "import": "./dist/plugins-enterprise-client.mjs"
         },
         "./middleware": {
             "types": "./dist/middleware.d.ts",
@@ -104,9 +112,13 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@better-auth/core": "catalog:auth",
+        "@better-auth/mcp": "catalog:auth",
+        "@better-auth/oauth-provider": "catalog:auth",
         "@better-auth/passkey": "catalog:auth",
+        "@better-auth/scim": "catalog:auth",
         "@lunora/errors": "1.0.0-alpha.8",
-        "@lunora/server": "1.0.0-alpha.39",
+        "@lunora/server": "1.0.0-alpha.45",
         "@lunora/values": "1.0.0-alpha.11",
         "@visulima/disposable-email-domains": "catalog:email",
         "@visulima/email-verifier": "catalog:email",
@@ -115,14 +127,28 @@
         "better-auth": "catalog:auth"
     },
     "devDependencies": {
+        "@better-auth/sso": "catalog:auth",
+        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@types/better-sqlite3": "^7.6.13",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "better-sqlite3": "^12.11.1",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "kysely": "^0.28.17",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
+    },
+    "peerDependencies": {
+        "@better-auth/sso": "catalog:auth"
+    },
+    "peerDependenciesMeta": {
+        "@better-auth/sso": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

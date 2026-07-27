@@ -22,6 +22,7 @@ import authCsrfCheckDisabled from "./lints/static/auth-csrf-check-disabled";
 import authEmailVerificationDisabled from "./lints/static/auth-email-verification-disabled";
 import authSecureCookiesDisabled from "./lints/static/auth-secure-cookies-disabled";
 import authSessionFreshageZero from "./lints/static/auth-session-freshage-zero";
+import authScimWithoutTransactions from "./lints/static/auth-scim-without-transactions";
 import authTrustedOriginsWildcard from "./lints/static/auth-trusted-origins-wildcard";
 import browserAllowPrivateTargets from "./lints/static/browser-allow-private-targets";
 import browserUserUrlWithoutAllowlist from "./lints/static/browser-user-url-without-allowlist";
@@ -143,6 +144,7 @@ export { default as authCsrfCheckDisabled } from "./lints/static/auth-csrf-check
 export { default as authEmailVerificationDisabled } from "./lints/static/auth-email-verification-disabled";
 export { default as authSecureCookiesDisabled } from "./lints/static/auth-secure-cookies-disabled";
 export { default as authSessionFreshageZero } from "./lints/static/auth-session-freshage-zero";
+export { default as authScimWithoutTransactions } from "./lints/static/auth-scim-without-transactions";
 export { default as authTrustedOriginsWildcard } from "./lints/static/auth-trusted-origins-wildcard";
 export { default as browserAllowPrivateTargets } from "./lints/static/browser-allow-private-targets";
 export { default as browserUserUrlWithoutAllowlist } from "./lints/static/browser-user-url-without-allowlist";
@@ -323,6 +325,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     privilegedDispatchUnvalidatedPayload,
     containerStartEnableInternetOverride,
     containerRuntimeEgressRelaxation,
+    authScimWithoutTransactions,
     authTrustedOriginsWildcard,
     authCsrfCheckDisabled,
     authSecureCookiesDisabled,

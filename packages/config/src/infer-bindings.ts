@@ -754,7 +754,7 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
         [capabilities.usesAi, "AI (@lunora/ai imported or env.AI used)"],
         [
             capabilities.usesAuth && !exported.has("SessionDO"),
-            "hint: @lunora/auth is imported but no SessionDO is exported (sessions are D1-backed, or export SessionDO for DO-backed sessions)",
+            "hint: @lunora/auth is imported; its tables are D1-backed by default. For DO-backed auth (what @better-auth/scim needs), pass `namespace` to .auth() and export the generated auth DO class",
         ],
         [capabilities.usesScheduler && !exported.has("SchedulerDO"), "hint: @lunora/scheduler is imported but no SchedulerDO is exported by the worker entry"],
         [capabilities.usesStorage, "hint: @lunora/storage is imported; add an r2_buckets binding (bucket binding names are user-defined)"],

@@ -15,6 +15,7 @@ const makeQueryContext = (): QueryContext => {
         span: {
             addEvent: () => undefined,
             addLink: () => undefined,
+            recordEvaluation: () => undefined,
             recordException: () => undefined,
             setAttribute: () => undefined,
             setAttributes: () => undefined,
@@ -40,6 +41,7 @@ const makeMutationContext = (): MutationContext => {
         span: {
             addEvent: () => undefined,
             addLink: () => undefined,
+            recordEvaluation: () => undefined,
             recordException: () => undefined,
             setAttribute: () => undefined,
             setAttributes: () => undefined,
@@ -70,6 +72,7 @@ const makeActionContext = (): ActionContext => {
         span: {
             addEvent: () => undefined,
             addLink: () => undefined,
+            recordEvaluation: () => undefined,
             recordException: () => undefined,
             setAttribute: () => undefined,
             setAttributes: () => undefined,

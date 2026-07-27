@@ -2240,7 +2240,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // full delete pipeline (triggers, companion sync, CDC, broadcast,
             // global fallback). `expectedTable` (the facade's bound table) scopes
             // every id to that table — same IDOR guard as the single delete. In a
-            // mutation the DO's BEGIN/COMMIT span rolls the whole batch back on a
+            // mutation the DO's storage transaction rolls the whole batch back on a
             // mid-loop throw; in an action (no span) prior deletes persist.
             for (const id of ids) {
                 // eslint-disable-next-line no-await-in-loop -- sequential by design: single-threaded SQLite, one row at a time
@@ -2803,7 +2803,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // A sequential loop over the single-row path so every row reuses the
             // full insert pipeline (defaults, validators, triggers, companion
             // sync, CDC, broadcast) with no risk of skipping an invariant. In a
-            // mutation the DO's BEGIN/COMMIT span rolls the whole batch back on a
+            // mutation the DO's storage transaction rolls the whole batch back on a
             // mid-loop throw; in an action (no span) prior inserts persist.
             // The win is one caller round-trip, not fewer SQLite writes. Order is
             // preserved so an FK reference to an earlier row in the same batch resolves.
@@ -2922,7 +2922,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // full update pipeline (OCC, triggers, companion sync, CDC,
             // broadcast). `expectedTable` (the facade's bound table) scopes every
             // id to that table — same IDOR guard as the single patch. In a mutation
-            // the DO's BEGIN/COMMIT span rolls the whole batch back on a mid-loop
+            // the DO's storage transaction rolls the whole batch back on a mid-loop
             // throw; in an action (no span) prior patches persist.
             for (const entry of patches) {
                 // eslint-disable-next-line no-await-in-loop -- sequential by design: single-threaded SQLite transaction

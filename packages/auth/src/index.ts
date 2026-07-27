@@ -1,4 +1,4 @@
-export { lunoraAuthAdapter, lunoraD1Adapter } from "./adapter";
+export { lunoraAuthAdapter, lunoraD1Adapter, lunoraDoAdapter } from "./adapter";
 export type {
     AuthAccount,
     AuthAdmin,
@@ -33,8 +33,18 @@ export type {
 export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable, readAuthAuditLog } from "./audit";
 export type { AuthAuditHookConfig } from "./audit-hooks";
 export { authAuditHook, buildAuditEntry, eventForPath, withAuthAudit } from "./audit-hooks";
+export type { AuthDoOptions, AuthDoState } from "./auth-do";
+export {
+    READ_AUDIT_PATH as AUTH_DO_AUDIT_PATH,
+    INTERNAL_SECRET_HEADER as AUTH_DO_SECRET_HEADER,
+    RESOLVE_SESSION_PATH as AUTH_DO_SESSION_PATH,
+    LunoraAuthDO,
+} from "./auth-do";
 export type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 export { createAuth, resolveAuthOptions } from "./create-auth";
+export { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
+export type { AuthNamespaceLike, DoAuthWiring, DoAuthWiringOptions } from "./do-wiring";
+export { createDoAuthWiring } from "./do-wiring";
 export type { EmailGateHookConfig } from "./email-gate";
 export { emailGateDatabaseHooks, withEmailGate } from "./email-gate";
 export type { EmailClass, EmailClassification, EmailGateConfig, EmailGateMiddlewareOptions } from "./email-guard";

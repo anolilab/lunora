@@ -2,6 +2,17 @@ import { getMigrations } from "better-auth/db/migration";
 
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { resolveAuthOptions } from "./create-auth";
+import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
+
+/**
+ * Swap a D1 binding for one that can answer better-auth's index introspection.
+ *
+ * Only the migration path needs this — `getDatabaseIndexes()` runs inside
+ * `getMigrations()` — so request-time queries keep the untouched binding. See
+ * `d1-index-introspection.ts` for why D1 rejects the upstream query.
+ */
+const withD1MigrationSupport = (options: LunoraAuthOptions): LunoraAuthOptions =>
+    isD1Database(options.database) ? { ...options, database: withD1IndexIntrospection(options.database) } : options;
 
 /**
  * Single-flight cache of in-flight (and completed) migration runs, keyed by the
@@ -45,7 +56,7 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
     }
 
     const run = (async (): Promise<void> => {
-        const { runMigrations } = await getMigrations(options);
+        const { runMigrations } = await getMigrations(withD1MigrationSupport(options));
 
         await runMigrations();
     })();
@@ -76,7 +87,7 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
  * a table the migration never created.
  */
 export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<string> => {
-    const { compileMigrations } = await getMigrations(resolveAuthOptions(options));
+    const { compileMigrations } = await getMigrations(withD1MigrationSupport(resolveAuthOptions(options)));
 
     return compileMigrations();
 };

@@ -597,6 +597,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanEvaluation` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SpanHandle` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5043,6 +5047,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanEvaluation` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SpanHandle` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6720,6 +6728,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ShardMode` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanEvaluation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

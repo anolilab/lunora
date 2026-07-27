@@ -1394,11 +1394,13 @@ export interface AuthConfigIR {
     // eslint-disable-next-line no-secrets/no-secrets -- the dotted config-path in the doc comment, not a credential
     /** `emailAndPassword.requireEmailVerification === true` present. */
     requireEmailVerification: boolean;
+    /** `trustedOrigins` array literal contains a `"*"` element. */
+    /** `plugins` includes `scim(...)` while `database` is a non-transactional Lunora adapter — a combination that throws at runtime. */
+    scimOnNonTransactionalAdapter: boolean;
     /** `advanced.useSecureCookies === false`. */
     secureCookiesDisabled: boolean;
     /** `session.freshAge === 0` (explicit literal). */
     sessionFreshAgeZero: boolean;
-    /** `trustedOrigins` array literal contains a `"*"` element. */
     trustedOriginsWildcard: boolean;
 }
 

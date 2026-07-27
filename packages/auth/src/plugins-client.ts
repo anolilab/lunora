@@ -30,15 +30,21 @@
  * those actions untyped/unavailable, and vice-versa.
  */
 
+// Client half of the `oauthProvider` plugin. Replaces `oidcClient`, which went with
+// the `oidcProvider` plugin better-auth removed in 1.7.
+export { oauthProviderClient } from "@better-auth/oauth-provider/client";
 // Passkey/WebAuthn ships its client half under `@better-auth/passkey/client`,
 // mirroring the server `passkey` re-export from `@lunora/auth/plugins`.
 export { passkeyClient } from "@better-auth/passkey/client";
+// `ssoClient` lives in `@lunora/auth/plugins/enterprise/client` — it resolves from
+// the same optional peer as the server half. `@better-auth/scim` no longer ships a
+// client half at all (an IdP drives its `/Users` endpoints server-to-server with a
+// bearer token, so there was nothing for a browser client to do).
 export { adminClient } from "better-auth/client/plugins";
 export { anonymousClient } from "better-auth/client/plugins";
 export { customSessionClient } from "better-auth/client/plugins";
 export { deviceAuthorizationClient } from "better-auth/client/plugins";
 export { emailOTPClient } from "better-auth/client/plugins";
-export { genericOAuthClient } from "better-auth/client/plugins";
 // `inferAdditionalFields` / `inferOrgAdditionalFields` — type helpers that
 // re-sync custom server fields onto the client so `authClient` stays typed.
 export { inferAdditionalFields, inferOrgAdditionalFields } from "better-auth/client/plugins";
@@ -46,7 +52,6 @@ export { jwtClient } from "better-auth/client/plugins";
 export { lastLoginMethodClient } from "better-auth/client/plugins";
 export { magicLinkClient } from "better-auth/client/plugins";
 export { multiSessionClient } from "better-auth/client/plugins";
-export { oidcClient } from "better-auth/client/plugins";
 export { oneTimeTokenClient } from "better-auth/client/plugins";
 export { organizationClient } from "better-auth/client/plugins";
 export { phoneNumberClient } from "better-auth/client/plugins";

@@ -116,6 +116,7 @@ interface AdvisorAuthConfig {
     file: string;
     line: number;
     requireEmailVerification: boolean;
+    scimOnNonTransactionalAdapter: boolean;
     secureCookiesDisabled: boolean;
     sessionFreshAgeZero: boolean;
     trustedOriginsWildcard: boolean;
@@ -1008,6 +1009,12 @@ const authCsrfCheckDisabled: Lint;
 
 ```ts
 const authEmailVerificationDisabled: Lint;
+```
+
+### `authScimWithoutTransactions` (const)
+
+```ts
+const authScimWithoutTransactions: Lint;
 ```
 
 ### `authSecureCookiesDisabled` (const)
