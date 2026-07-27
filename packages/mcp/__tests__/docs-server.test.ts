@@ -1,6 +1,6 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult, ListToolsResult } from "@modelcontextprotocol/sdk/types.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { McpTool } from "../src/compose";
@@ -275,5 +275,61 @@ describe("createDocsMcpFetchHandler request screening", () => {
 
         await expect(response.text()).resolves.toContain("/docs/sharding");
         expect(calls()).toBe(1);
+    });
+});
+
+describe("documentation resources", () => {
+    /**
+     * Resources are the other half of the same corpus: tools are what a model
+     * calls when it decides it needs something, resources are what a client can
+     * enumerate and attach on the user's behalf.
+     */
+    it("advertises the resources capability only when a provider is present", async () => {
+        expect.assertions(2);
+
+        const withResources = createDocsMcpServer({ index });
+        const toolsOnly = createToolServer({ name: "t", version: "1.0.0" }, []);
+
+        // eslint-disable-next-line no-underscore-dangle -- the SDK exposes registered capabilities nowhere else
+        expect((withResources as unknown as { _capabilities: Record<string, unknown> })._capabilities.resources).toBeDefined();
+        // eslint-disable-next-line no-underscore-dangle -- as above
+        expect((toolsOnly as unknown as { _capabilities: Record<string, unknown> })._capabilities.resources).toBeUndefined();
+    });
+
+    it("lists every page as a resource with a stable uri", async () => {
+        expect.assertions(2);
+
+        const server = createDocsMcpServer({ index });
+        const listed = (await handlerFor(server, ListResourcesRequestSchema.shape.method.value)({ params: {} })) as {
+            resources: { mimeType?: string; name: string; uri: string }[];
+        };
+
+        expect(listed.resources).toStrictEqual([{ mimeType: "text/markdown", name: "Sharding", uri: "lunora-docs:/docs/sharding" }]);
+        expect(listed.resources[0]?.uri.startsWith("http")).toBe(false);
+    });
+
+    it("reads a page back through its uri", async () => {
+        expect.assertions(2);
+
+        const server = createDocsMcpServer({ index });
+        const read = (await handlerFor(
+            server,
+            ReadResourceRequestSchema.shape.method.value,
+        )({
+            params: { uri: "lunora-docs:/docs/sharding" },
+        })) as { contents: { mimeType?: string; text: string }[] };
+
+        expect(read.contents[0]?.text).toContain("Partition state.");
+        expect(read.contents[0]?.mimeType).toBe("text/markdown");
+    });
+
+    it("rejects a uri it does not own", async () => {
+        expect.assertions(1);
+
+        const server = createDocsMcpServer({ index });
+
+        await expect(handlerFor(server, ReadResourceRequestSchema.shape.method.value)({ params: { uri: "file:///etc/passwd" } })).rejects.toThrow(
+            /unknown resource/,
+        );
     });
 });

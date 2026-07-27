@@ -22,13 +22,14 @@
  * (`createToolServer`) is exported from the package root, so a consumer using
  * both entries gets one implementation rather than two copies.
  */
-export type { McpServerInfo, McpTool } from "../compose";
+export type { McpResourceProvider, McpResourceSummary, McpServerInfo, McpTool } from "../compose";
 export type { McpFetchHandler } from "../serve-stateless";
 export type { ToolDefinition, ToolInputSchema, ToolResult } from "../tool-types";
 export type { FumadocsSearchResult } from "./fumadocs-hits";
 export { toDocsSearchHits } from "./fumadocs-hits";
 export type { RemoteDocsIndexOptions } from "./remote-index";
 export { createRemoteDocsIndex, DEFAULT_DOCS_BASE_URL } from "./remote-index";
+export { DOCS_URI_SCHEME, docsResources, fromDocsUri, toDocsUri } from "./resources";
 export type { DocsMcpServerOptions } from "./server";
 export { createDocsMcpFetchHandler, createDocsMcpServer, DOCS_SERVER_NAME } from "./server";
 export { DEFAULT_SEARCH_LIMIT, DOCS_TOOL_DEFINITIONS, docsTools, MAX_SEARCH_LIMIT, normalizeDocUrl } from "./tools";

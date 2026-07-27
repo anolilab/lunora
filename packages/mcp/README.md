@@ -144,6 +144,12 @@ Each exposed agent gets an `agent_<name>` tool taking `prompt` (required), an op
 
 Runs are **owner-scoped** to the identity the configured token resolves to. Grant a **least-privilege** token mapped to a bot identity so an agent's threads stay isolated per deployment — never the admin token.
 
+## Resources and annotations
+
+Both servers implement MCP **tools**; the documentation server additionally exposes every page as an MCP **resource** (`lunora-docs:/docs/…`, `text/markdown`), so a client can enumerate and attach a page directly instead of the model having to guess a search query first.
+
+Every tool carries **annotations** — `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` and a human-facing `title` — so a client can badge the read-only surface and confirm before a write. They are hints; the actual guarantee is still made at dispatch, where a write tool is refused unless writes are enabled.
+
 ## Documentation server
 
 `@lunora/mcp/docs` is a second, independent surface: it serves **published documentation**, not a deployment. No credentials, no writes, no `@lunora/client` — and no Node built-ins, so it runs unchanged on Workers, Netlify/Vercel functions, Deno, and Bun.

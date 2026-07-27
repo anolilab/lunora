@@ -24,6 +24,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { McpTool } from "./compose";
 import { createToolServer } from "./compose";
 import { createRemoteDocsIndex } from "./docs/remote-index";
+import { docsResources } from "./docs/resources";
 import { docsTools } from "./docs/tools";
 import type { ToolResult } from "./tool-types";
 import { callTool, toolDefinitions } from "./tools";
@@ -173,8 +174,23 @@ const localTools = (options: LocalMcpServerOptions): ReadonlyArray<McpTool> => {
 };
 
 /** Build the composed local server without connecting a transport. */
-const createLocalMcpServer = (options: LocalMcpServerOptions = {}): Server =>
-    createToolServer({ name: LOCAL_SERVER_NAME, version: options.version ?? "0.0.0" }, localTools(options));
+const createLocalMcpServer = (options: LocalMcpServerOptions = {}): Server => {
+    // Resources come from the same docs index the tools read, so they appear
+    // only when the documentation surface is enabled.
+    const index =
+        options.docs === false
+            ? undefined
+            : createRemoteDocsIndex({
+                  ...(options.docs?.baseUrl === undefined ? {} : { baseUrl: options.docs.baseUrl }),
+                  ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+              });
+
+    return createToolServer(
+        { name: LOCAL_SERVER_NAME, version: options.version ?? "0.0.0" },
+        localTools(options),
+        index === undefined ? undefined : docsResources(index),
+    );
+};
 
 /**
  * Build the composed local server and connect it over stdio — the transport an

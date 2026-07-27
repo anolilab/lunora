@@ -21,6 +21,7 @@ import type { McpServerInfo } from "../compose";
 import { createToolServer } from "../compose";
 import type { McpFetchHandler } from "../serve-stateless";
 import { serveStateless } from "../serve-stateless";
+import { docsResources } from "./resources";
 import { docsTools } from "./tools";
 import type { DocsIndex } from "./types";
 
@@ -58,7 +59,8 @@ const serverInfo = (version: string | undefined): McpServerInfo => {
  * Connect it yourself, or use {@link createDocsMcpFetchHandler} for the remote
  * HTTP case.
  */
-const createDocsMcpServer = (options: DocsMcpServerOptions): Server => createToolServer(serverInfo(options.version), docsTools(options.index));
+const createDocsMcpServer = (options: DocsMcpServerOptions): Server =>
+    createToolServer(serverInfo(options.version), docsTools(options.index), docsResources(options.index));
 
 /** UTF-8 byte length of `value` — what a byte limit must actually measure. */
 const byteLength = (value: string): number => new TextEncoder().encode(value).length;

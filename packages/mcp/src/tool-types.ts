@@ -16,7 +16,30 @@ interface ToolInputSchema {
     type: "object";
 }
 
+/**
+ * MCP tool annotations — hints a client may use to decide how to present a tool
+ * (badge it read-only, confirm before a destructive call).
+ *
+ * They are hints, not enforcement: this package's actual guarantees are made at
+ * dispatch, where a write tool is refused unless `allowWrites` is set. These
+ * exist so a client can *show* the user what the server already enforces,
+ * instead of every tool looking equally dangerous.
+ */
+interface ToolAnnotations {
+    /** The tool may perform irreversible changes. Only meaningful when `readOnlyHint` is false. */
+    destructiveHint?: boolean;
+    /** Repeating the call with the same arguments has no additional effect. */
+    idempotentHint?: boolean;
+    /** The tool reaches systems beyond this server (the network, external services). */
+    openWorldHint?: boolean;
+    /** The tool does not modify anything. */
+    readOnlyHint?: boolean;
+    /** Human-facing title, shown instead of the raw tool name. */
+    title?: string;
+}
+
 interface ToolDefinition {
+    annotations?: ToolAnnotations;
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
@@ -28,4 +51,4 @@ interface ToolResult {
     isError?: boolean;
 }
 
-export type { ToolDefinition, ToolInputSchema, ToolResult };
+export type { ToolAnnotations, ToolDefinition, ToolInputSchema, ToolResult };

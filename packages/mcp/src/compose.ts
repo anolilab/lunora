@@ -14,8 +14,8 @@
  * built on it (notably `./docs`) runs unchanged on Workers and in the browser.
  */
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ListResourcesResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import type { ToolDefinition, ToolResult } from "./tool-types";
 
@@ -31,6 +31,29 @@ interface McpServerInfo {
     version: string;
 }
 
+/** One addressable document a client can list and read directly. */
+interface McpResourceSummary {
+    description?: string;
+    mimeType?: string;
+    name: string;
+    uri: string;
+}
+
+/**
+ * A set of resources the server exposes alongside its tools.
+ *
+ * Tools are calls a model chooses to make; resources are documents a *client*
+ * can enumerate and attach on its own — the user picking a page to put in
+ * context, without the model having to guess a search query first. The same
+ * corpus is worth offering both ways.
+ */
+interface McpResourceProvider {
+    /** Every resource, for `resources/list`. */
+    list: () => Promise<ReadonlyArray<McpResourceSummary>>;
+    /** One resource's body, or `undefined` when the uri is unknown. */
+    read: (uri: string) => Promise<{ mimeType?: string; text: string } | undefined>;
+}
+
 /**
  * Build an MCP `Server` that advertises and dispatches `tools`.
  *
@@ -40,7 +63,7 @@ interface McpServerInfo {
  * convention that a tool failure is output the model can read and react to,
  * not a protocol-level fault.
  */
-const createToolServer = (info: McpServerInfo, tools: ReadonlyArray<McpTool>): Server => {
+const createToolServer = (info: McpServerInfo, tools: ReadonlyArray<McpTool>, resources?: McpResourceProvider): Server => {
     const dispatch = new Map<string, McpTool>();
 
     for (const tool of tools) {
@@ -50,7 +73,10 @@ const createToolServer = (info: McpServerInfo, tools: ReadonlyArray<McpTool>): S
     }
 
     const definitions = [...dispatch.values()].map((tool) => tool.definition);
-    const server = new Server(info, { capabilities: { tools: {} } });
+    // Only advertise what we actually serve: a client that sees a `resources`
+    // capability will call `resources/list`, and answering that with an error
+    // is worse than never claiming it.
+    const server = new Server(info, { capabilities: resources === undefined ? { tools: {} } : { resources: {}, tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
         return { tools: definitions };
@@ -76,8 +102,25 @@ const createToolServer = (info: McpServerInfo, tools: ReadonlyArray<McpTool>): S
         }
     });
 
+    if (resources !== undefined) {
+        server.setRequestHandler(ListResourcesRequestSchema, async (): Promise<ListResourcesResult> => {
+            return { resources: [...(await resources.list())] };
+        });
+
+        server.setRequestHandler(ReadResourceRequestSchema, async (request): Promise<ReadResourceResult> => {
+            const { uri } = request.params;
+            const found = await resources.read(uri);
+
+            if (found === undefined) {
+                throw new Error(`unknown resource: ${uri}`);
+            }
+
+            return { contents: [{ mimeType: found.mimeType ?? "text/plain", text: found.text, uri }] };
+        });
+    }
+
     return server;
 };
 
-export type { McpServerInfo, McpTool };
+export type { McpResourceProvider, McpResourceSummary, McpServerInfo, McpTool };
 export { createToolServer };

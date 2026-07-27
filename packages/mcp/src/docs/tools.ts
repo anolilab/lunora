@@ -49,7 +49,11 @@ const GET_DOC_INPUT_SCHEMA: ToolInputSchema = {
 
 const NO_INPUT_SCHEMA: ToolInputSchema = { properties: {}, type: "object" };
 
+/** Every documentation tool reads published docs over the network and changes nothing. */
+const READ_ONLY_DOCS_ANNOTATIONS = { destructiveHint: false, idempotentHint: true, openWorldHint: true, readOnlyHint: true } as const;
+
 const SEARCH_TOOL_DEFINITION: ToolDefinition = {
+    annotations: { ...READ_ONLY_DOCS_ANNOTATIONS, title: "Search the Lunora documentation" },
     description:
         "Search the Lunora documentation and return matching pages and sections. Use this before writing Lunora code (schema, queries, mutations, actions, sharding, .global(), client hooks) so the answer reflects the framework's current API rather than a guess. Follow a hit with lunora_get_doc to read the full page.",
     inputSchema: SEARCH_INPUT_SCHEMA,
@@ -57,12 +61,14 @@ const SEARCH_TOOL_DEFINITION: ToolDefinition = {
 };
 
 const GET_DOC_TOOL_DEFINITION: ToolDefinition = {
+    annotations: { ...READ_ONLY_DOCS_ANNOTATIONS, title: "Read a Lunora documentation page" },
     description: "Return one Lunora documentation page in full, as Markdown. Takes the `url` of a lunora_search_docs hit or a lunora_list_docs entry.",
     inputSchema: GET_DOC_INPUT_SCHEMA,
     name: "lunora_get_doc",
 };
 
 const LIST_DOCS_TOOL_DEFINITION: ToolDefinition = {
+    annotations: { ...READ_ONLY_DOCS_ANNOTATIONS, title: "List the Lunora documentation pages" },
     description: "List every Lunora documentation page with its title and description. Prefer lunora_search_docs when you know what you're looking for.",
     inputSchema: NO_INPUT_SCHEMA,
     name: "lunora_list_docs",

@@ -32,25 +32,32 @@ const FUNCTION_PATH_INPUT_SCHEMA: ToolInputSchema = {
     type: "object",
 };
 
+/** Introspection and queries touch no state; every call goes to the deployment. */
+const READ_ONLY_ANNOTATIONS = { destructiveHint: false, idempotentHint: true, openWorldHint: true, readOnlyHint: true } as const;
+
 /** The read-only tool surface: introspection + query. Always exposed. */
 const READ_ONLY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     {
+        annotations: { ...READ_ONLY_ANNOTATIONS, title: "List deployment functions" },
         description: "List the deployment's public functions (queries, mutations, actions) with their kinds.",
         inputSchema: NO_INPUT_SCHEMA,
         name: "lunora_list_functions",
     },
     {
+        annotations: { ...READ_ONLY_ANNOTATIONS, title: "List global tables" },
         description: "List the deployment's .global() tables and their column shapes.",
         inputSchema: NO_INPUT_SCHEMA,
         name: "lunora_list_tables",
     },
     {
+        annotations: { ...READ_ONLY_ANNOTATIONS, title: "Describe a function's arguments" },
         description:
             "Return a function's argument JSON Schema and kind, so a caller can construct a valid arguments object. Call lunora_list_functions first to discover available function paths.",
         inputSchema: FUNCTION_PATH_INPUT_SCHEMA,
         name: "lunora_get_function_schema",
     },
     {
+        annotations: { ...READ_ONLY_ANNOTATIONS, title: "Run a query" },
         description: "Run a query and return its result. Read-only.",
         inputSchema: RUN_INPUT_SCHEMA,
         name: "lunora_run_query",
@@ -60,11 +67,21 @@ const READ_ONLY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
 /** The write tool surface (mutations + actions). Exposed ONLY when writes are enabled. */
 const WRITE_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     {
+        // Not idempotent and not read-only: this is the distinction the whole
+        // `allowWrites` gate exists for, now legible to a client's UI.
+        annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: false, title: "Run a mutation (writes data)" },
         description: "Run a mutation and return its result. Writes data — use with care.",
         inputSchema: RUN_INPUT_SCHEMA,
         name: "lunora_run_mutation",
     },
     {
+        annotations: {
+            destructiveHint: true,
+            idempotentHint: false,
+            openWorldHint: true,
+            readOnlyHint: false,
+            title: "Run an action (may call external services)",
+        },
         description: "Run an action and return its result. May call external services.",
         inputSchema: RUN_INPUT_SCHEMA,
         name: "lunora_run_action",

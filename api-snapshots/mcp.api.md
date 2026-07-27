@@ -182,6 +182,7 @@ interface RegisterToolOptions {
 
 ```ts
 interface ToolDefinition {
+    annotations?: ToolAnnotations;
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
@@ -279,7 +280,7 @@ const createPaidMcpServer: (config: PaidMcpServerConfig) => PaidMcpServer;
 ### `createToolServer` (const)
 
 ```ts
-const createToolServer: (info: McpServerInfo, tools: ReadonlyArray<McpTool>) => Server;
+const createToolServer: (info: McpServerInfo, tools: ReadonlyArray<McpTool>, resources?: McpResourceProvider) => Server;
 ```
 
 ### `localTools` (const)
@@ -330,6 +331,12 @@ const DOCS_SERVER_NAME = "lunora-docs";
 
 ```ts
 const DOCS_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition>;
+```
+
+### `DOCS_URI_SCHEME` (const)
+
+```ts
+const DOCS_URI_SCHEME = "lunora-docs:";
 ```
 
 ### `DocsIndex` (interface)
@@ -404,6 +411,29 @@ const MAX_SEARCH_LIMIT = 50;
 type McpFetchHandler = (request: Request) => Promise<Response>;
 ```
 
+### `McpResourceProvider` (interface)
+
+```ts
+interface McpResourceProvider {
+    list: () => Promise<ReadonlyArray<McpResourceSummary>>;
+    read: (uri: string) => Promise<{
+        mimeType?: string;
+        text: string;
+    } | undefined>;
+}
+```
+
+### `McpResourceSummary` (interface)
+
+```ts
+interface McpResourceSummary {
+    description?: string;
+    mimeType?: string;
+    name: string;
+    uri: string;
+}
+```
+
 ### `McpServerInfo` (interface)
 
 ```ts
@@ -436,6 +466,7 @@ interface RemoteDocsIndexOptions {
 
 ```ts
 interface ToolDefinition {
+    annotations?: ToolAnnotations;
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
@@ -482,10 +513,22 @@ const createDocsMcpServer: (options: DocsMcpServerOptions) => Server;
 const createRemoteDocsIndex: (options?: RemoteDocsIndexOptions) => DocsIndex;
 ```
 
+### `docsResources` (const)
+
+```ts
+const docsResources: (index: DocsIndex) => McpResourceProvider;
+```
+
 ### `docsTools` (const)
 
 ```ts
 const docsTools: (index: DocsIndex) => ReadonlyArray<McpTool>;
+```
+
+### `fromDocsUri` (const)
+
+```ts
+const fromDocsUri: (uri: string) => string | undefined;
 ```
 
 ### `normalizeDocUrl` (const)
@@ -498,4 +541,10 @@ const normalizeDocUrl: (raw: string) => string;
 
 ```ts
 const toDocsSearchHits: (results: ReadonlyArray<unknown>) => DocsSearchHit[];
+```
+
+### `toDocsUri` (const)
+
+```ts
+const toDocsUri: (url: string) => string;
 ```

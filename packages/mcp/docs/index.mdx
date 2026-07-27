@@ -176,6 +176,18 @@ deployment's surface, then `lunora_run_query` / `lunora_run_mutation` /
 `lunora_run_action` to invoke it — passing `functionPath` (e.g.
 `"messages:list"`), an `args` object, and an optional `shardKey`.
 
+## Resources and annotations
+
+Both servers implement MCP **tools**. The documentation server additionally
+exposes every page as an MCP **resource** (`lunora-docs:/docs/…`,
+`text/markdown`), so a client can list and attach a page on the user's behalf —
+the moment before the model knows what to search for.
+
+Every tool carries **annotations** (`readOnlyHint`, `destructiveHint`,
+`idempotentHint`, `openWorldHint`, `title`), so a client can badge the read-only
+surface and prompt before a write. These are hints for presentation; the
+guarantee itself is still enforced at dispatch.
+
 ## The documentation server
 
 `@lunora/mcp/docs` is an independent surface with three tools:
