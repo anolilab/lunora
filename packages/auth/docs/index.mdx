@@ -142,7 +142,7 @@ pnpm add @better-auth/sso
 
 ```ts
 import { createAuth, lunoraD1Adapter } from "@lunora/auth";
-import { admin, organization, scim } from "@lunora/auth/plugins";
+import { admin, organization } from "@lunora/auth/plugins";
 import { sso } from "@lunora/auth/plugins/enterprise";
 
 export const auth = createAuth({
@@ -150,16 +150,14 @@ export const auth = createAuth({
     database: lunoraD1Adapter(env.DB),
     // The IdP's origin must be trusted before a provider can be registered — see below.
     trustedOrigins: ["https://acme.okta.com"],
-    plugins: [
-        sso({ domainVerification: { enabled: true } }),
-        scim({
-            connections: [{ id: "okta-acme", credentials: [{ type: "bearer", id: "primary", token: env.SCIM_TOKEN }] }],
-        }),
-        admin(),
-        organization(),
-    ],
+    plugins: [sso({ domainVerification: { enabled: true } }), admin(), organization()],
 });
 ```
+
+SSO runs on any database Lunora supports, D1 included. **SCIM does not** — it needs an
+adapter with native transactions, which rules out D1. See
+[SCIM's database requirement](#scim--directory-driven-provisioning) before planning
+around it.
 
 The tables come for free: `authTables` derives them from the plugin list, so
 `lunora migrate` picks them up with no schema edits — `ssoProvider` for SSO, and seven
@@ -220,7 +218,23 @@ Use `provisionUser` / `organizationProvisioning` to shape the just-in-time accou
 
 `scim()` serves SCIM 2.0 under `/api/auth/scim/v2/` — `Users`, `Groups`, `Schemas`,
 `ResourceTypes`, and `ServiceProviderConfig` — so an IdP can create, update, and
-deactivate accounts (and sync groups) without anyone signing in.
+deactivate directory users (and sync groups) without anyone signing in.
+
+<Callout type="warn">
+  **SCIM needs a database adapter with native transactions, so it does not run on D1.**
+  The plugin refuses to serve a request otherwise, with `The scim plugin requires a
+  database adapter with native transaction support`.
+
+That rules out `lunoraD1Adapter` and `lunoraAuthAdapter` — both are single-table CRUD
+over `ctx.db` — and D1 itself, whose driver has no interactive transactions at all.
+
+Run SCIM against a transactional database instead. The supported route on Cloudflare
+is Postgres or MySQL through [`@lunora/hyperdrive`](/docs/packages/hyperdrive) — see
+[SCIM on Hyperdrive](#scim-on-hyperdrive) below for the wiring.
+
+SSO has no such constraint and runs fine on D1.
+
+</Callout>
 
 **Connections are declared in code, not minted at runtime.** Each connection carries
 its own bearer credentials, and you hand the IdP the token you configured:
@@ -253,11 +267,95 @@ Scope each credential to what the IdP actually needs: `scim.users.read`,
 `scim.users.write`, `scim.groups.read`, `scim.groups.write` (omitting `scopes` grants
 all four).
 
+**Two lifecycle semantics that surprise people** — verified against the shipped plugin,
+so this is what it actually does rather than what the SCIM spec might imply:
+
+- **Deactivation does not lock the account.** A `PATCH` of `active: false` is recorded
+  in SCIM's own projection; it does _not_ set `banned` or otherwise stop the user
+  signing in, and loading the `admin` plugin does not change that. If disabling a user
+  in the IdP must revoke access, act on the projection yourself.
+- **`DELETE` unlinks, it does not erase.** It removes the SCIM resource and leaves the
+  underlying account row in place. Treating it as an off-boarding guarantee would be
+  wrong.
+
+Both `PATCH` and `DELETE` answer `204` with no body; re-read the resource with `GET` if
+you need the resulting state.
+
 The IdP drives these endpoints with `PUT`, `PATCH`, and `DELETE`. Lunora's dispatch is
 method-agnostic and runs auth ahead of function routing, so those pass straight
 through. Note that auth routes bypass the runtime's request-body limits — the caps in
 `body-readers.ts` apply to Lunora's own routes, not to `/api/auth/*` — so a very large
 SCIM payload is bounded by the platform, not by Lunora.
+
+### SCIM on Hyperdrive
+
+SCIM's transaction requirement means its tables live in a real SQL database rather than
+D1. [Hyperdrive](/docs/packages/hyperdrive) is how a Worker reaches one: it pools and
+routes the connection so a Worker isn't opening a fresh TCP session per request.
+
+Note this is a _different_ use of Hyperdrive from `ctx.sql`. `@lunora/hyperdrive`'s
+`ctx.sql` is an action-only escape hatch for querying an existing database; here you are
+giving better-auth a kysely dialect to own its own tables. Only `createHyperdrive`'s
+connection details are shared between the two.
+
+Create the binding, pointed at your database:
+
+```bash
+# Pass the URL through the environment rather than typing it inline — an inline
+# connection string lands in your shell history.
+export LUNORA_AUTH_DATABASE_URL='postgres://…'
+wrangler hyperdrive create lunora-auth --connection-string="$LUNORA_AUTH_DATABASE_URL"
+```
+
+```jsonc
+// wrangler.jsonc
+{
+    "hyperdrive": [{ "binding": "AUTH_DB", "id": "<id from the create command>" }],
+}
+```
+
+Then hand better-auth a kysely dialect over it, with `transaction: true`:
+
+```ts
+import { createAuth } from "@lunora/auth";
+import { admin, scim } from "@lunora/auth/plugins";
+import { createHyperdrive } from "@lunora/hyperdrive";
+import { PostgresDialect } from "kysely";
+import { Pool } from "pg";
+
+const authFor = (env: Env) => {
+    const { connectionString } = createHyperdrive(env.AUTH_DB);
+
+    return createAuth({
+        secret: env.AUTH_SECRET,
+        database: {
+            // `transaction: true` is the whole point — without it the kysely adapter
+            // exposes no transaction and `scim()` refuses to serve.
+            dialect: new PostgresDialect({ pool: new Pool({ connectionString, max: 5 }) }),
+            transaction: true,
+            type: "postgres",
+        },
+        plugins: [scim({ connections: [{ id: "okta-acme", credentials: [{ type: "bearer", id: "primary", token: env.SCIM_TOKEN }] }] }), admin()],
+    });
+};
+```
+
+`pg` and `kysely` are app-level installs (`pnpm add pg kysely`), and `pg` needs
+`nodejs_compat` in `compatibility_flags`. Keep `max` small — Hyperdrive is already
+pooling, so a large per-isolate pool just multiplies connections.
+
+Practical notes:
+
+- **Build the auth instance per request, not at module scope.** The pool closes over a
+  binding from `env`, which only exists inside a request.
+- **Apply the schema at deploy time.** `ensureMigrated` is convenient in dev, but on a
+  real Postgres prefer `compileMigrationsSql` output applied as a deploy step, so the
+  first request isn't racing DDL.
+- **This splits your data.** Auth tables live in Postgres while your app's tables stay
+  in Durable Objects / D1, so `ctx.db` joins across the two are not available — resolve
+  identities through `ctx.auth` instead.
+- **SSO can stay on D1.** If you want enterprise SSO without moving your auth tables,
+  run `sso()` on `lunoraD1Adapter` and skip SCIM; only SCIM carries the requirement.
 
 ### SAML status
 
@@ -438,5 +536,6 @@ configurable via `retention` and defaults to unbounded.
 ## See also
 
 - [@lunora/auth plugins](/docs/packages/auth/plugins) — passkeys, org, admin, 2FA, and the studio dashboard.
+- [@lunora/hyperdrive](/docs/packages/hyperdrive) — the Postgres/MySQL route SCIM needs (D1 has no transactions).
 - [Getting started](/docs/getting-started)
 - [@lunora/server](/docs/packages/server)

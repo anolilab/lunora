@@ -341,9 +341,9 @@ interface ShardDOState {
     /**
      * Concurrency-blocking gate — `state.blockConcurrencyWhile(fn)` delays
      * the next fetch dispatch until `fn` resolves. Used by
-     * {@link ShardDO.runInTransaction} to serialize the BEGIN/COMMIT span
-     * against concurrent RPCs so a raw-SQL transaction is isolated from
-     * other in-flight handlers on the same DO.
+     * {@link ShardDO.runInTransaction} to serialize the whole transaction span
+     * against concurrent RPCs, so the handler's reads and writes are isolated
+     * from other in-flight handlers on the same DO.
      */
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
     getWebSockets: (tag?: string) => WebSocket[];
@@ -382,9 +382,9 @@ interface ShardDOState {
             readonly databaseSize?: number;
 
             /**
-             * Run a SQL statement without parameters — used by the
-             * transaction helper for BEGIN / COMMIT / ROLLBACK. The runtime
-             * exposes this as `state.storage.sql.exec(...)`.
+             * Run a SQL statement without parameters. The runtime exposes this as
+             * `state.storage.sql.exec(...)`; {@link ShardDO.runInTransaction} also
+             * probes for it to confirm the handler will have a SQL connection.
              */
             exec?: (query: string) => unknown;
         };
@@ -1915,7 +1915,7 @@ abstract class ShardDO {
     private drizzleHandle: DrizzleSqliteDODatabase<Record<string, unknown>> | undefined;
 
     /**
-     * Tracks BEGIN/COMMIT nesting so we can reject nested transactions —
+     * Tracks transaction nesting so we can reject nested transactions —
      * SQLite-in-DO does not support them and the runtime would crash with
      * "cannot start a transaction within a transaction".
      */
@@ -2990,31 +2990,28 @@ abstract class ShardDO {
      * loudly rather than silently flattening them.
      *
      * Drizzle queries issued via `db` inside the handler participate
-     * in this transaction implicitly — drizzle and the BEGIN/COMMIT below
-     * both write through the same `state.storage.sql` handle, so the tx
-     * boundary is shared. Do **not** call `this.db.transaction(...)` from
-     * inside a handler; that would attempt a nested SQLite transaction.
+     * in this transaction implicitly — drizzle writes through the same
+     * `state.storage.sql` handle the transaction below is opened on, and that
+     * transaction is connection-scoped, so the boundary is shared without any
+     * handle being threaded through. Do **not** call `this.db.transaction(...)`
+     * from inside a handler; that would attempt a nested SQLite transaction.
      *
-     * Why raw BEGIN/COMMIT/ROLLBACK strings instead of `this.db.transaction(handler)`?
-     * Two reasons, both verified against drizzle-orm 0.45.2's
-     * `durable-sqlite/session.js`:
+     * Why `state.storage.transaction(closure)` and not raw BEGIN/COMMIT SQL, and
+     * not `this.db.transaction(handler)` either:
      *
-     * 1. The DO driver does NOT issue BEGIN/COMMIT/ROLLBACK SQL — it
-     * delegates to `state.storage.transactionSync(callback)`, the
-     * DO platform's native transaction primitive. Swapping in
-     * `db.transaction()` would silently change the wire-level
-     * contract observed by tests and any tooling that intercepts
-     * `storage.sql`.
+     * 1. workerd FORBIDS raw `BEGIN`/`COMMIT`/`SAVEPOINT` inside a Durable Object
+     * — it answers "please use the state.storage.transaction() … APIs
+     * instead", so issuing them fails every transactional mutation. (An
+     * earlier revision of this method did use raw SQL; do not go back.)
      *
-     * 2. `transactionSync` invokes the callback synchronously and does
-     * not await its return value. Drizzle's `transaction()` matches
-     * that — it passes the tx handle through and then returns.
-     * Handing it an async handler would let the transaction commit
-     * before the handler resolves, breaking the `() => Promise&lt;T> | T`
-     * contract.
+     * 2. `transactionSync` is synchronous: it invokes the callback and does not
+     * await its return value, so an async handler would let the transaction
+     * commit before the handler resolves. Drizzle's `db.transaction()` has the
+     * same shape and the same problem.
      *
-     * The raw-SQL approach below is async-safe and gives the
-     * connection-scoped semantics SQLite-in-DO is designed for.
+     * The async `state.storage.transaction(closure)` is the platform primitive
+     * that fits: atomic, rolled back automatically when the closure throws, and
+     * isolated from concurrent dispatch.
      */
     protected async runInTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
         if (this.transactionDepth > 0) {

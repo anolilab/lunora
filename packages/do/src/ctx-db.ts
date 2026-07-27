@@ -597,7 +597,7 @@ interface DatabaseWriterLike {
      * Delete many rows by id in one call (a loop over `delete()`). The returned
      * `deleted` is the number of ids **requested**, not rows actually removed (an
      * unknown/duplicate id is a silent no-op). **Atomic within a mutation** — the
-     * DO wraps a mutation's dispatch in a BEGIN/COMMIT span, so a mid-batch throw
+     * DO wraps a mutation's dispatch in a storage transaction, so a mid-batch throw
      * rolls the whole mutation back. (An action has no transaction span — there,
      * the prior deletes persist; the in-memory test harness mirrors the span.) Rejects a batch larger than
      * `options.limit` (default {@link DEFAULT_BATCH_LIMIT}).
@@ -613,7 +613,7 @@ interface DatabaseWriterLike {
      * Delete every row matching `where` in one call. Matching rows are resolved
      * first, then each row is deleted through the single-row delete pipeline so
      * companions, CDC, and broadcast stay correct. **Atomic within a mutation** —
-     * the DO wraps a mutation's dispatch in a BEGIN/COMMIT span, so a mid-batch
+     * the DO wraps a mutation's dispatch in a storage transaction, so a mid-batch
      * throw rolls the whole mutation back. (An action has no transaction span.)
      */
     deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
@@ -657,7 +657,7 @@ interface DatabaseWriterLike {
      * `options.skipDuplicates: true` to turn UNIQUE-constraint breaches into
      * `null` results for that row instead of failing the whole batch.
      * **Atomic within a mutation** — the DO wraps a mutation's dispatch in a
-     * BEGIN/COMMIT span, so a mid-batch throw rolls the whole mutation back. (An
+     * storage transaction, so a mid-batch throw rolls the whole mutation back. (An
      * action has no transaction span — there, the prior inserts persist; the
      * in-memory test harness mirrors the span.)
      * Rejects a batch larger than `options.limit` (default {@link DEFAULT_BATCH_LIMIT}).
@@ -711,7 +711,7 @@ interface DatabaseWriterLike {
 
     /**
      * Patch many rows by id in one call (a loop over `patch()`). **Atomic within a
-     * mutation** — the DO wraps a mutation's dispatch in a BEGIN/COMMIT span, so a
+     * mutation** — the DO wraps a mutation's dispatch in a storage transaction, so a
      * mid-batch throw rolls the whole mutation back. (An action has no transaction
      * span — there, the prior patches persist; the in-memory test harness mirrors
      * the span.)
@@ -734,7 +734,7 @@ interface DatabaseWriterLike {
      * Matching rows are resolved first, then each row is patched through the
      * single-row patch pipeline so companions, CDC, and broadcast stay correct.
      * **Atomic within a mutation** — the DO wraps a mutation's dispatch in a
-     * BEGIN/COMMIT span, so a mid-batch throw rolls the whole mutation back. (An
+     * storage transaction, so a mid-batch throw rolls the whole mutation back. (An
      * action has no transaction span.)
      */
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
@@ -2718,7 +2718,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // full delete pipeline (triggers, companion sync, CDC, broadcast,
             // global fallback). `expectedTable` (the facade's bound table) scopes
             // every id to that table — same IDOR guard as the single delete. In a
-            // mutation the DO's BEGIN/COMMIT span rolls the whole batch back on a
+            // mutation the DO's storage transaction rolls the whole batch back on a
             // mid-loop throw; in an action (no span) prior deletes persist.
             for (const id of ids) {
                 // eslint-disable-next-line no-await-in-loop -- sequential by design: single-threaded SQLite, one row at a time
@@ -3281,7 +3281,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // A sequential loop over the single-row path so every row reuses the
             // full insert pipeline (defaults, validators, triggers, companion
             // sync, CDC, broadcast) with no risk of skipping an invariant. In a
-            // mutation the DO's BEGIN/COMMIT span rolls the whole batch back on a
+            // mutation the DO's storage transaction rolls the whole batch back on a
             // mid-loop throw; in an action (no span) prior inserts persist.
             // The win is one caller round-trip, not fewer SQLite writes. Order is
             // preserved so an FK reference to an earlier row in the same batch resolves.
@@ -3400,7 +3400,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // full update pipeline (OCC, triggers, companion sync, CDC,
             // broadcast). `expectedTable` (the facade's bound table) scopes every
             // id to that table — same IDOR guard as the single patch. In a mutation
-            // the DO's BEGIN/COMMIT span rolls the whole batch back on a mid-loop
+            // the DO's storage transaction rolls the whole batch back on a mid-loop
             // throw; in an action (no span) prior patches persist.
             for (const entry of patches) {
                 // eslint-disable-next-line no-await-in-loop -- sequential by design: single-threaded SQLite transaction
